@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_PATH=$(readlink -f "$0")
+ROOT=$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+if [[ -f /etc/vertep/node.conf ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source /etc/vertep/node.conf
+  set +a
+fi
+role=${ROLE:-unknown}
+core_url=${VERTEP_CORE_URL:-${CORE_ADDRESS:-http://localhost:8080}}
+[[ "$core_url" == http://* || "$core_url" == https://* ]] || core_url="http://$core_url"
+case "${1:-status}" in
+  status)
+    if [[ "$role" == "worker" ]]; then
+      payload=$(curl -fsS --connect-timeout 3 -H "X-Vertep-Token: ${NODE_API_TOKEN:-}" "$core_url/api/node/status/${NODE_NAME:-unknown}" 2>/dev/null || printf '{}')
+    else
+      payload=$(curl -fsS --connect-timeout 3 -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/status" 2>/dev/null || printf '{}')
+    fi
+    printf '%s' "$payload" | python3 "$ROOT/scripts/status.py"
+    ;;
+  update)
+    mkdir -p "$ROOT/backups"
+    git -C "$ROOT" rev-parse HEAD > "$ROOT/.vertep-last-good"
+    stamp=$(date +%Y%m%d-%H%M%S)
+    if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
+      docker compose -f "$ROOT/docker-compose.yml" exec -T core tar -czf - /data/jobs > "$ROOT/backups/jobs-$stamp.tar.gz" 2>/dev/null || true
+      docker compose -f "$ROOT/docker-compose.yml" exec -T postgres pg_dump -U vertep vertep > "$ROOT/backups/postgres-$stamp.sql" 2>/dev/null || true
+    fi
+    git -C "$ROOT" pull --ff-only
+    if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
+      docker compose -f "$ROOT/docker-compose.yml" up -d postgres redis
+      database_ready=false
+      for attempt in {1..30}; do
+        if docker compose -f "$ROOT/docker-compose.yml" exec -T postgres pg_isready -U vertep -d vertep >/dev/null 2>&1; then
+          database_ready=true
+          break
+        fi
+        sleep 2
+      done
+      [[ "$database_ready" == true ]] || { echo "PostgreSQL did not become ready; CORE was not restarted." >&2; exit 1; }
+      docker compose -f "$ROOT/docker-compose.yml" exec -T postgres psql -v ON_ERROR_STOP=1 -U vertep -d vertep \
+        -c "CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+      for migration in "$ROOT"/db/[0-9][0-9][0-9]_*.sql; do
+        [[ -f "$migration" ]] || continue
+        version=$(basename "$migration")
+        applied=$(docker compose -f "$ROOT/docker-compose.yml" exec -T postgres \
+          psql -U vertep -d vertep -tAc "SELECT 1 FROM schema_migrations WHERE version='$version'")
+        [[ "$applied" == "1" ]] && continue
+        docker compose -f "$ROOT/docker-compose.yml" exec -T postgres \
+          psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$migration"
+        docker compose -f "$ROOT/docker-compose.yml" exec -T postgres \
+          psql -v ON_ERROR_STOP=1 -U vertep -d vertep -c "INSERT INTO schema_migrations(version) VALUES('$version')"
+      done
+    fi
+    case "$role" in
+      worker) docker compose -f "$ROOT/docker-compose.worker.yml" up -d --build worker ;;
+      core) docker compose -f "$ROOT/docker-compose.yml" up -d --build core redis postgres ;;
+      core-worker) docker compose -f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.gpu.yml" up -d --build ;;
+      *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
+    esac
+    if [[ "$role" == "core" || "$role" == "core-worker" ]] && command -v systemctl >/dev/null 2>&1; then
+      sed "s|@VERTEP_ROOT@|$ROOT|g" "$ROOT/installer/vertep-update.service" > /etc/systemd/system/vertep-update.service
+      sed "s|@VERTEP_ROOT@|$ROOT|g" "$ROOT/installer/vertep-update.path" > /etc/systemd/system/vertep-update.path
+      systemctl daemon-reload
+      systemctl enable --now vertep-update.path
+    fi
+    for attempt in {1..15}; do
+      if [[ "$role" == "worker" ]]; then
+        docker compose -f "$ROOT/docker-compose.worker.yml" ps --status running --services | grep -qx worker && exit 0
+      elif curl -fsS -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health"; then
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "Update health check failed. Run 'vertep rollback' to restore the recorded revision." >&2
+    exit 1
+    ;;
+  rollback)
+    [[ -f "$ROOT/.vertep-last-good" ]] || { echo "No rollback revision recorded" >&2; exit 1; }
+    revision=$(cat "$ROOT/.vertep-last-good")
+    git -C "$ROOT" switch --detach "$revision"
+    case "$role" in
+      worker) docker compose -f "$ROOT/docker-compose.worker.yml" up -d --build worker ;;
+      core) docker compose -f "$ROOT/docker-compose.yml" up -d --build core redis postgres ;;
+      core-worker) docker compose -f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.gpu.yml" up -d --build ;;
+      *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
+    esac
+    ;;
+  *) echo "Usage: vertep {status|update|rollback}"; exit 2 ;;
+esac

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Vertep Web update requests
+
+[Path]
+PathExistsGlob=@VERTEP_ROOT@/runtime/update/requests/*.json
+Unit=vertep-update.service
+
+[Install]
+WantedBy=multi-user.target

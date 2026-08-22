@@ -1,0 +1,7 @@
+{
+  "id": "did_samogon",
+  "name": "Did Samohonshchyk",
+  "language": "uk",
+  "enabled": true,
+  "workflow": "workflows/image/demo.json"
+}

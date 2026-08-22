@@ -1,0 +1,17 @@
+[Unit]
+Description=Vertep trusted GitHub update agent
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@VERTEP_ROOT@
+EnvironmentFile=-@VERTEP_ROOT@/.env
+EnvironmentFile=-/etc/vertep/node.conf
+ExecStart=/usr/bin/python3 @VERTEP_ROOT@/scripts/update-agent.py --root @VERTEP_ROOT@ --state-dir @VERTEP_ROOT@/runtime/update
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true

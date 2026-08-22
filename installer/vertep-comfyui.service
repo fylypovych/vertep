@@ -1,0 +1,15 @@
+[Unit]
+Description=ComfyUI for Vertep Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ComfyUI
+EnvironmentFile=-/etc/vertep/gpu.env
+ExecStart=/bin/sh -c 'exec /opt/ComfyUI/.venv/bin/python main.py --listen 127.0.0.1 --port 8188 $COMFYUI_ARGS'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

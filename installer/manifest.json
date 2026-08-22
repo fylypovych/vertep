@@ -1,0 +1,12 @@
+{
+  "platform": "ubuntu:24.04",
+  "profiles": {
+    "core": {"includes": ["core"]},
+    "worker": {"includes": ["worker"]},
+    "core-worker": {"includes": ["core", "worker"]}
+  },
+  "roles": {
+    "core": {"packages": ["docker.io", "docker-compose-v2", "git", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "ufw"], "services": ["docker", "ssh", "ollama", "vertep-core", "vertep-update.path"]},
+    "worker": {"packages": ["docker.io", "docker-compose-v2", "git", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "ufw", "ubuntu-drivers-common"], "services": ["docker", "ssh", "vertep-comfyui", "vertep-worker"]}
+  }
+}

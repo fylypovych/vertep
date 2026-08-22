@@ -1,0 +1,15 @@
+[Unit]
+Description=Vertep CORE
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@VERTEP_ROOT@
+EnvironmentFile=-/etc/vertep/node.conf
+ExecStart=/usr/bin/docker compose up -d core redis postgres
+ExecStop=/usr/bin/docker compose stop core redis postgres
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
