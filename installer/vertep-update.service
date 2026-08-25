@@ -1,5 +1,5 @@
 [Unit]
-Description=Vertep trusted GitHub update agent
+Description=Vertep signed-package safe update agent
 After=docker.service network-online.target
 Wants=network-online.target
 

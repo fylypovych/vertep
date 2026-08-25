@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class JobStatus(str, Enum):
     NEW = "NEW"
+    WAITING_FOR_SYSTEM = "WAITING_FOR_SYSTEM"
     SCRIPTING = "SCRIPTING"
     SCRIPT_READY = "SCRIPT_READY"
     ASSET_GENERATION = "ASSET_GENERATION"
@@ -148,6 +149,12 @@ class WorkerHeartbeat(BaseModel):
     last_seen: str | None = None
     supported_tasks: list[str] = Field(default_factory=lambda: ["image"])
     supported_workflows: list[str] = Field(default_factory=lambda: ["*"])
+    role: str = "gpu"
+    capabilities: list[str] = Field(default_factory=lambda: ["image_generation"])
+    version: str | None = None
+    ram_mb: int | None = None
+    disk_free_mb: int | None = None
+    self_test: dict[str, Any] = Field(default_factory=dict)
 
 class TaskClaim(BaseModel):
     node_name: str
@@ -156,6 +163,7 @@ class TaskClaim(BaseModel):
     free_vram_mb: int | None = None
     supported_tasks: list[str] = Field(default_factory=lambda: ["image"])
     supported_workflows: list[str] = Field(default_factory=lambda: ["*"])
+    capabilities: list[str] = Field(default_factory=lambda: ["image_generation"])
 
 class TaskRenew(BaseModel):
     node_name: str
