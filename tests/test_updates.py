@@ -37,19 +37,22 @@ def test_web_update_is_disabled_by_default(monkeypatch, tmp_path):
         request_update("check")
 
 
-def test_update_agent_accepts_only_configured_github_remote(monkeypatch):
-    agent = load_update_agent()
-    agent.validate_remote("git@github.com:owner/vertep.git", "github.com")
-    agent.validate_remote("ssh://git@github.com/owner/vertep.git", "github.com")
-    agent.validate_remote("https://github.com/owner/vertep.git", "github.com")
-    with pytest.raises(RuntimeError, match="embedded credentials"):
-        agent.validate_remote("https://token:secret@github.com/owner/vertep.git", "github.com")
-    with pytest.raises(RuntimeError, match="not allowed"):
-        agent.validate_remote("https://example.com/owner/vertep.git", "github.com")
+def test_update_server_must_be_a_credential_free_https_origin(monkeypatch):
+    from core.update_protocol import update_server_url
+
+    monkeypatch.setenv("VERTEP_UPDATE_SERVER", "https://update.vertep.ai")
+    assert update_server_url() == "https://update.vertep.ai/"
+    monkeypatch.setenv("VERTEP_UPDATE_SERVER", "https://token:secret@example.com")
+    with pytest.raises(RuntimeError, match="without credentials"):
+        update_server_url()
+    monkeypatch.setenv("VERTEP_UPDATE_SERVER", "http://update.vertep.ai")
+    with pytest.raises(RuntimeError, match="HTTPS"):
+        update_server_url()
 
 
-def test_update_agent_persists_check_result_and_removes_request(monkeypatch, tmp_path):
+def test_update_agent_persists_signed_check_result_and_removes_request(monkeypatch, tmp_path):
     agent = load_update_agent()
+    import core.update_protocol as protocol
     root = tmp_path / "repo"
     state = tmp_path / "state"
     root.mkdir()
@@ -57,13 +60,15 @@ def test_update_agent_persists_check_result_and_removes_request(monkeypatch, tmp
     requests.mkdir(parents=True)
     request_path = requests / ("a" * 32 + ".json")
     request_path.write_text(json.dumps({"request_id": "a" * 32, "action": "check"}), encoding="utf-8")
-    monkeypatch.setattr(agent, "repository_status", lambda root, fetch=True: {
-        "current_revision": "1" * 40, "remote_revision": "2" * 40, "ahead": 0, "behind": 1,
-        "update_available": True, "dirty": False, "remote": "git@github.com:owner/vertep.git"})
+    monkeypatch.setattr(protocol, "fetch_manifest", lambda channel: {
+        "version": "99.0.0", "required": False, "package": "packages/vertep.tar.gz",
+        "sha256": "1" * 64, "signature": "signed"})
+    monkeypatch.setattr(protocol, "validate_manifest", lambda manifest, public_key: manifest)
     agent.process_request(root, state, request_path)
     result = json.loads((state / "status.json").read_text(encoding="utf-8"))
     assert result["state"] == "SUCCEEDED"
     assert result["update_available"] is True
+    assert result["available_version"] == "99.0.0"
     assert not request_path.exists()
 
 

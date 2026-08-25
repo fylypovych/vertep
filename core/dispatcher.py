@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import os
 
 from .models import Job, JobStatus
 
@@ -11,14 +12,23 @@ def available_worker(workers: list[dict], job: Job) -> dict | None:
             continue
         if (now - datetime.fromisoformat(last_seen)).total_seconds() > 45:
             continue
-        if worker.get("status") != "ONLINE":
+        if worker.get("status") not in {"ONLINE", "FREE", "READY"}:
+            continue
+        if (worker.get("self_test", {}).get("status") != "PASSED"
+                and os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"):
             continue
         available_vram = worker.get("free_vram_mb")
         if available_vram is None:
             available_vram = worker.get("vram_mb", 0)
         if available_vram < job.min_vram_mb:
             continue
-        if job.task_type not in worker.get("supported_tasks", ["image"]):
+        required_capability = {"image": "image_generation", "video": "video_generation",
+                               "text": "text_generation", "voice": "speech_synthesis",
+                               "publish": "publishing"}.get(job.task_type, job.task_type)
+        capabilities = worker.get("capabilities") or []
+        if capabilities and required_capability not in capabilities:
+            continue
+        if not capabilities and job.task_type not in worker.get("supported_tasks", ["image"]):
             continue
         supported_workflows = worker.get("supported_workflows", ["*"])
         if "*" not in supported_workflows and (job.workflow or "") not in supported_workflows:

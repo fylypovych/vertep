@@ -6,7 +6,7 @@
     "core-worker": {"includes": ["core", "worker"]}
   },
   "roles": {
-    "core": {"packages": ["docker.io", "docker-compose-v2", "git", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "ufw"], "services": ["docker", "ssh", "ollama", "vertep-core", "vertep-update.path"]},
+    "core": {"packages": ["docker.io", "docker-compose-v2", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "openssl", "ufw"], "services": ["docker", "ssh", "ollama", "vertep-core", "vertep-update.path", "vertep-update.timer"]},
     "worker": {"packages": ["docker.io", "docker-compose-v2", "git", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "ufw", "ubuntu-drivers-common"], "services": ["docker", "ssh", "vertep-comfyui", "vertep-worker"]}
   }
 }
