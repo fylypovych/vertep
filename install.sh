@@ -137,6 +137,8 @@ if command -v systemctl >/dev/null 2>&1; then
     sed "s|@VERTEP_ROOT@|$ROOT_DIR|g" "$ROOT_DIR/installer/vertep-core.service" > /etc/systemd/system/vertep-core.service
     sed "s|@VERTEP_ROOT@|$ROOT_DIR|g" "$ROOT_DIR/installer/vertep-update.service" > /etc/systemd/system/vertep-update.service
     sed "s|@VERTEP_ROOT@|$ROOT_DIR|g" "$ROOT_DIR/installer/vertep-update.path" > /etc/systemd/system/vertep-update.path
+    sed "s|@VERTEP_ROOT@|$ROOT_DIR|g" "$ROOT_DIR/installer/vertep-update-check.service" > /etc/systemd/system/vertep-update-check.service
+    cp "$ROOT_DIR/installer/vertep-update.timer" /etc/systemd/system/vertep-update.timer
   fi
   if [[ "$role_name" == "worker" || "$role_name" == "core-worker" ]]; then
     sed "s|@VERTEP_ROOT@|$ROOT_DIR|g" "$ROOT_DIR/installer/vertep-worker.service" > /etc/systemd/system/vertep-worker.service
@@ -144,6 +146,7 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload
   [[ "$role_name" == "core" || "$role_name" == "core-worker" ]] && systemctl enable --now vertep-core.service
   [[ "$role_name" == "core" || "$role_name" == "core-worker" ]] && systemctl enable --now vertep-update.path
+  [[ "$role_name" == "core" || "$role_name" == "core-worker" ]] && systemctl enable --now vertep-update.timer
   if [[ "$role_name" == "worker" || "$role_name" == "core-worker" ]]; then
     if [[ "$worker_ready" == true ]]; then
       systemctl enable --now vertep-worker.service

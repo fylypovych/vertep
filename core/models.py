@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class JobStatus(str, Enum):
     NEW = "NEW"
+    WAITING_FOR_SYSTEM = "WAITING_FOR_SYSTEM"
     SCRIPTING = "SCRIPTING"
     SCRIPT_READY = "SCRIPT_READY"
     ASSET_GENERATION = "ASSET_GENERATION"
@@ -18,6 +19,55 @@ class JobStatus(str, Enum):
     FAILED = "FAILED"
     PAUSED = "PAUSED"
     CANCELLED = "CANCELLED"
+
+
+class WorkerState(str, Enum):
+    ENROLLING = "ENROLLING"
+    SELF_TESTING = "SELF_TESTING"
+    READY = "READY"
+    BUSY = "BUSY"
+    DRAINING = "DRAINING"
+    UPDATING = "UPDATING"
+    RECOVERING = "RECOVERING"
+    OFFLINE = "OFFLINE"
+    ERROR = "ERROR"
+    QUARANTINED = "QUARANTINED"
+    REVOKED = "REVOKED"
+    # Accepted during the rolling protocol migration; Core normalizes both to READY.
+    ONLINE = "ONLINE"
+    FREE = "FREE"
+
+
+WORKER_STATE_TRANSITIONS: dict[WorkerState, set[WorkerState]] = {
+    WorkerState.ENROLLING: {WorkerState.SELF_TESTING, WorkerState.READY, WorkerState.ERROR},
+    WorkerState.SELF_TESTING: {WorkerState.SELF_TESTING, WorkerState.READY, WorkerState.ERROR},
+    WorkerState.READY: {WorkerState.READY, WorkerState.BUSY, WorkerState.DRAINING,
+                        WorkerState.UPDATING, WorkerState.ERROR},
+    WorkerState.BUSY: {WorkerState.BUSY, WorkerState.READY, WorkerState.DRAINING, WorkerState.ERROR},
+    WorkerState.DRAINING: {WorkerState.DRAINING, WorkerState.READY, WorkerState.UPDATING,
+                           WorkerState.ERROR},
+    WorkerState.UPDATING: {WorkerState.UPDATING, WorkerState.RECOVERING,
+                           WorkerState.SELF_TESTING, WorkerState.ERROR},
+    WorkerState.RECOVERING: {WorkerState.RECOVERING, WorkerState.SELF_TESTING,
+                             WorkerState.READY, WorkerState.ERROR},
+    WorkerState.OFFLINE: {WorkerState.ENROLLING, WorkerState.SELF_TESTING,
+                          WorkerState.READY, WorkerState.ERROR},
+    WorkerState.ERROR: {WorkerState.ERROR, WorkerState.SELF_TESTING, WorkerState.READY,
+                        WorkerState.UPDATING},
+    WorkerState.QUARANTINED: {WorkerState.QUARANTINED},
+    WorkerState.REVOKED: {WorkerState.REVOKED},
+}
+
+
+def normalized_worker_state(value: WorkerState | str) -> WorkerState:
+    state = WorkerState(value)
+    return WorkerState.READY if state in {WorkerState.ONLINE, WorkerState.FREE} else state
+
+
+def worker_transition_allowed(previous: WorkerState | str, current: WorkerState | str) -> bool:
+    previous_state = normalized_worker_state(previous)
+    current_state = normalized_worker_state(current)
+    return current_state in WORKER_STATE_TRANSITIONS.get(previous_state, set())
 
 class StageName(str, Enum):
     SCRIPT = "SCRIPT"
@@ -139,7 +189,7 @@ class WorkerHeartbeat(BaseModel):
     compute_capability: str | None = None
     gpu_architecture: str | None = None
     gpu_profile: str | None = None
-    status: str = "ONLINE"
+    status: WorkerState = WorkerState.READY
     current_job: str | None = None
     current_task: str | None = None
     temperature: float | None = None
@@ -148,6 +198,15 @@ class WorkerHeartbeat(BaseModel):
     last_seen: str | None = None
     supported_tasks: list[str] = Field(default_factory=lambda: ["image"])
     supported_workflows: list[str] = Field(default_factory=lambda: ["*"])
+    role: str = "gpu"
+    capabilities: list[str] = Field(default_factory=lambda: ["image_generation"])
+    tested_capabilities: list[str] = Field(default_factory=list)
+    version: str | None = None
+    ram_mb: int | None = None
+    disk_free_mb: int | None = None
+    cpu_load: float | None = None
+    runtime_version: str | None = None
+    self_test: dict[str, Any] = Field(default_factory=dict)
 
 class TaskClaim(BaseModel):
     node_name: str
@@ -156,6 +215,16 @@ class TaskClaim(BaseModel):
     free_vram_mb: int | None = None
     supported_tasks: list[str] = Field(default_factory=lambda: ["image"])
     supported_workflows: list[str] = Field(default_factory=lambda: ["*"])
+    capabilities: list[str] = Field(default_factory=lambda: ["image_generation"])
+
+
+class NodeAction(BaseModel):
+    action: str = Field(pattern="^(drain|resume|quarantine|unquarantine|self-test)$")
+    reason: str = Field(default="", max_length=500)
+
+
+class IntegrationSecretUpdate(BaseModel):
+    value: str = Field(min_length=1, max_length=16_384)
 
 class TaskRenew(BaseModel):
     node_name: str

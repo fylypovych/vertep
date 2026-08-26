@@ -1,0 +1,44 @@
+{
+  "core": {
+    "label": "Core Node",
+    "services": ["proxy", "core", "migrate", "postgres", "redis", "ollama", "monitoring", "update-agent"],
+    "capabilities": ["orchestration", "scheduling", "publishing", "license_management"],
+    "modules": ["core", "api", "dispatcher", "scheduler", "publisher", "redis", "postgresql", "web_ui", "license_manager", "update_agent", "monitoring"]
+  },
+  "gpu": {
+    "label": "GPU Node",
+    "services": ["worker", "comfyui", "update-agent"],
+    "capabilities": ["image_generation", "image_upscale", "controlnet", "inpainting"],
+    "modules": ["worker", "comfyui", "cuda_runtime", "update_agent"]
+  },
+  "text": {
+    "label": "Text Node",
+    "services": ["worker", "ollama", "update-agent"],
+    "capabilities": ["text_generation"],
+    "modules": ["worker", "ollama", "llm_runtime", "update_agent"]
+  },
+  "voice": {
+    "label": "Voice Node",
+    "services": ["worker", "tts", "update-agent"],
+    "capabilities": ["speech_synthesis"],
+    "modules": ["worker", "tts_runtime", "voice_models", "update_agent"]
+  },
+  "publisher": {
+    "label": "Publisher Node",
+    "services": ["worker", "publisher-worker", "update-agent"],
+    "capabilities": ["publishing", "telegram", "youtube", "facebook", "tiktok"],
+    "modules": ["publisher_worker", "publishing_adapters", "update_agent"]
+  },
+  "backup": {
+    "label": "Backup Node",
+    "services": ["worker", "backup-service", "update-agent"],
+    "capabilities": ["backup", "snapshot", "archive"],
+    "modules": ["backup_service", "snapshot_manager", "archive_service", "update_agent"]
+  },
+  "monitoring": {
+    "label": "Monitoring Node",
+    "services": ["worker", "monitoring", "grafana", "update-agent"],
+    "capabilities": ["metrics", "logs", "alerting"],
+    "modules": ["grafana", "prometheus", "log_store", "update_agent"]
+  }
+}

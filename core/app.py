@@ -13,6 +13,7 @@ import hashlib
 import io
 import zipfile
 import threading
+import re
 from functools import wraps
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -26,8 +27,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from .models import (JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
-                     WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult,
-                     WorkerLogBatch, utc_now)
+                     WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
+                     WorkerLogBatch, NodeAction, IntegrationSecretUpdate, utc_now)
 from .dispatcher import available_worker, can_retry
 from .pipeline import JobStore, prepare_job_safe, finalize_job_safe
 from .queue import TaskQueue
@@ -41,6 +42,13 @@ from .logging_config import configure_logging, read_logs
 from .workflows import WorkflowRegistry
 from .maintenance import cleanup_jobs, cleanup_temporary_files
 from .update_manager import request_update, update_status
+from .system_state import dispatch_allowed, get_system_state, jobs_may_be_created
+from .first_run import (complete_setup, configured_user, is_configured, session_secret,
+                        setup_status, config_root, integration_secret_status,
+                        set_integration_secret)
+from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
+                            registered_nodes, renew_node, revoke_node, verify_node_certificate,
+                            verify_node_token)
 from .version import application_version
 from adapters.telegram import TelegramAdapter
 from adapters.publisher import PUBLISHERS
@@ -48,7 +56,10 @@ from adapters.publisher import PUBLISHERS
 @asynccontextmanager
 async def lifespan(_app):
     for recovered_job in list(store.jobs.values()):
-        if recovered_job.status == JobStatus.NEW and _job_is_due(recovered_job):
+        if (recovered_job.status in {JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM}
+                and dispatch_allowed() and _job_is_due(recovered_job)):
+            if recovered_job.status == JobStatus.WAITING_FOR_SYSTEM:
+                store.update(recovered_job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
             executor.submit(_prepare_and_dispatch, recovered_job)
     watchdog_task = asyncio.create_task(_watchdog())
     yield
@@ -104,7 +115,15 @@ def _verify_hash(value: str, encoded: str) -> bool:
     except ValueError:
         return False
 
-def _valid_worker_token(node_name: str, supplied: str) -> bool:
+def _valid_worker_token(node_name: str, supplied: str, client_dn: str = "",
+                        client_serial: str = "") -> bool:
+    if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
+        common_names = re.findall(r"(?:^|[,/])\s*CN=([^,/]+)", client_dn)
+        if (not common_names or not secrets.compare_digest(common_names[-1], node_name)
+                or not verify_node_certificate(node_name, client_serial)):
+            return False
+    if supplied and verify_node_token(supplied, node_name):
+        return True
     if _hash_secret(supplied) in {item.strip() for item in os.getenv("REVOKED_TOKEN_HASHES", "").split(",") if item.strip()}:
         return False
     for item in os.getenv("WORKER_TOKEN_HASHES", "").split(","):
@@ -115,22 +134,31 @@ def _valid_worker_token(node_name: str, supplied: str) -> bool:
     expected = _worker_tokens().get(node_name) or os.getenv("NODE_API_TOKEN", "")
     return not expected or secrets.compare_digest(supplied, expected)
 
+
+def _valid_worker_request(node_name: str, request: Request) -> bool:
+    return _valid_worker_token(node_name, request.headers.get("x-vertep-token", ""),
+                               request.headers.get("x-vertep-client-dn", ""),
+                               request.headers.get("x-vertep-client-serial", ""))
+
 def _session_token(user: str = "admin", role: str = "admin") -> str:
     expiry = str(int(time.time()) + int(os.getenv("SESSION_TTL", "28800")))
     payload = f"{expiry}:{user}:{role}"
-    signature = hmac.new(os.getenv("ADMIN_PASSWORD", "").encode(), payload.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{signature}"
 
 def _valid_session(token: str) -> tuple[str, str] | None:
     try:
         payload, signature = token.rsplit(".", 1)
         expiry, user, role = payload.split(":", 2)
-        expected = hmac.new(os.getenv("ADMIN_PASSWORD", "").encode(), payload.encode(), hashlib.sha256).hexdigest()
+        expected = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
         return (user, role) if int(expiry) > time.time() and secrets.compare_digest(signature, expected) else None
     except (ValueError, TypeError):
         return None
 
 def _authenticate_user(user: str, password: str) -> str | None:
+    configured = configured_user()
+    if configured and secrets.compare_digest(user, configured[0]) and _verify_hash(password, configured[1]["password_hash"]):
+        return str(configured[1].get("role", "admin"))
     try:
         users = json.loads(os.getenv("USERS_JSON", "{}"))
     except ValueError:
@@ -144,6 +172,20 @@ def _authenticate_user(user: str, password: str) -> str | None:
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        setup_route = request.url.path.startswith(("/api/setup", "/setup.html", "/api/health"))
+        if not is_configured() and not setup_route:
+            if request.url.path == "/":
+                return Response(status_code=307, headers={"Location": "/setup.html"})
+            return Response("Complete the First Run Wizard", 503,
+                            {"Retry-After": "30", "X-Vertep-Setup": "required"})
+        if not is_configured() and setup_route:
+            expected_setup = os.getenv("SETUP_TOKEN_HASH", "")
+            if (expected_setup and request.url.path.startswith("/api/setup")
+                    and not secrets.compare_digest(
+                        hashlib.sha256(request.headers.get("x-vertep-setup-token", "").encode()).hexdigest(),
+                        expected_setup)):
+                return Response("Invalid setup code", 401)
+            return self._secure(await call_next(request))
         client = request.client.host if request.client else "unknown"
         window = request_windows[client]
         now = time.time()
@@ -158,13 +200,14 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         machine = ("/api/workers/heartbeat", "/api/tasks/claim", "/api/tasks/renew",
                    "/api/tasks/cancellations", "/api/tasks/result", "/api/logs/ingest",
                    "/api/node/status")
-        if request.url.path.startswith(machine):
+        if request.url.path.startswith(machine) or re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", request.url.path):
             # Machine routes validate and bind the token to node_name themselves.
             # Keeping that check in one place also supports hashed per-worker tokens.
             response = await call_next(request)
             return self._secure(response)
         public = ("/api/health", "/api/telegram/webhook")
-        if (not password and not os.getenv("USERS_JSON", "").strip(" {}")) or request.url.path.startswith(public):
+        if ((not configured_user() and not password and not os.getenv("USERS_JSON", "").strip(" {}"))
+                or request.url.path.startswith(public) or request.url.path == "/api/nodes/register"):
             response = await call_next(request)
             return self._secure(response)
         expected_user = os.getenv("ADMIN_USER", "admin")
@@ -185,6 +228,11 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return Response("Administrator role required", 403)
         if request.method != "GET" and request.url.path.startswith("/api/system/update") and role != "admin":
             return Response("Administrator role required", 403)
+        if request.method != "GET" and request.url.path.startswith("/api/settings") and role != "admin":
+            return Response("Administrator role required", 403)
+        if (request.method != "GET" and request.url.path.startswith("/api/nodes")
+                and request.url.path != "/api/nodes/register" and role != "admin"):
+            return Response("Administrator role required", 403)
         if session_identity and not basic_role and request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path != "/api/session":
             csrf = request.cookies.get("vertep_csrf", "")
             if not csrf or not secrets.compare_digest(csrf, request.headers.get("x-csrf-token", "")):
@@ -204,6 +252,81 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(AdminAuthMiddleware)
+
+@app.get("/api/setup")
+def first_run_status():
+    return {**setup_status(), "roles": node_roles()}
+
+@app.get("/api/setup/health")
+def first_run_health():
+    checks = {"core": "OK", "api": "OK", "web_ui": "OK"}
+    try:
+        with socket.create_connection((os.getenv("POSTGRES_HOST", "postgres"), 5432), timeout=1):
+            checks["postgresql"] = "OK"
+    except OSError:
+        checks["postgresql"] = "OFFLINE"
+    checks["redis"] = "OK" if task_queue.backend == "redis" else "OFFLINE"
+    checks["worker"] = "OK" if any(item.get("status") not in {"OFFLINE", "ERROR"}
+                                          for item in store.workers.values()) else "OPTIONAL"
+    hardware = setup_status()["hardware"]
+    gpu = hardware.get("gpu") or {}
+    checks["gpu"] = "OPTIONAL" if gpu.get("vendor") in {None, "none"} else (
+        "OK" if gpu.get("driver") not in {None, "unavailable"} else "DRIVER_REQUIRED")
+    checks["cuda"] = "OPTIONAL" if gpu.get("vendor") != "nvidia" else (
+        "OK" if gpu.get("cuda") not in {None, "unavailable"} else "UNAVAILABLE")
+    checks["ollama"] = "CONFIGURED" if os.getenv("OLLAMA_URL") else "OPTIONAL"
+    checks["docker"] = "OK" if hardware.get("docker_version") else "UNKNOWN"
+    return {"ready": all(value not in {"OFFLINE", "UNAVAILABLE"} for value in checks.values()),
+            "checks": checks}
+
+@app.post("/api/setup/complete")
+async def first_run_complete(request: Request):
+    payload = await request.json()
+    try:
+        role = str(payload.get("node_role", "core"))
+        core_url = str(payload.get("core_url") or "").rstrip("/")
+        credentials = None
+        if role != "core":
+            role_definition = node_roles().get(role)
+            if not role_definition or not core_url.startswith("https://"):
+                raise ValueError("A valid HTTPS Core URL is required")
+            node_id = re.sub(r"[^a-z0-9-]", "-", str(payload.get("installation_name", "")).lower()).strip("-")
+            csr = create_node_csr(node_id)
+            core_certificate = str(payload.get("core_certificate") or "")
+            verify: str | bool = True
+            if core_certificate:
+                if len(core_certificate) > 32768 or "BEGIN CERTIFICATE" not in core_certificate:
+                    raise ValueError("Core certificate must be PEM encoded")
+                pinned = config_root() / "core-onboarding.crt"
+                pinned.write_text(core_certificate, encoding="utf-8")
+                os.chmod(pinned, 0o600)
+                verify = str(pinned)
+            async with httpx.AsyncClient(timeout=30, verify=verify) as enrollment_client:
+                response = await enrollment_client.post(f"{core_url}/api/nodes/register", json={
+                    "registration_token": payload.get("registration_token"), "node_id": node_id,
+                    "capabilities": role_definition["capabilities"], "hardware": setup_status()["hardware"],
+                    "version": application_version(), "csr": csr})
+            if response.status_code != 200:
+                raise ValueError(f"Core registration failed: {response.text[:300]}")
+            credentials = response.json()
+        completed = complete_setup(str(payload.get("installation_name", "")), str(payload.get("username", "")),
+                                   str(payload.get("password", "")), str(payload.get("password_confirmation", "")),
+                                   str(payload.get("ai_backend", "skip")), payload.get("backend_url"),
+                                   role, core_url or None, credentials)
+        if role == "core":
+            completed["core_url"] = os.getenv("PUBLIC_URL") or str(request.base_url).rstrip("/")
+            completed["core_certificate"] = (Path(os.getenv("CORE_CERTIFICATE_PATH", "/data/config/pki/ca.crt"))
+                                               .read_text(encoding="utf-8")
+                                               if Path(os.getenv("CORE_CERTIFICATE_PATH", "/data/config/pki/ca.crt")).is_file()
+                                               else None)
+            completed["registration_token"] = create_registration_token("gpu", 900)
+        return completed
+    except FileExistsError as error:
+        raise HTTPException(409, str(error)) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(502, f"Core registration is unavailable: {error}") from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 def _scene_for_task(job, task_id: str):
     scene_id = job.active_task_ids.get(task_id)
@@ -272,10 +395,14 @@ async def _watchdog() -> None:
     global last_maintenance
     while True:
         await asyncio.sleep(float(os.getenv("WATCHDOG_INTERVAL", "5")))
+        if not dispatch_allowed():
+            continue
         if not task_queue.acquire_watchdog_lock(max(2, int(float(os.getenv("WATCHDOG_INTERVAL", "5")) * 2))):
             continue
         _recover_stale_workers()
         for job in list(store.jobs.values()):
+            if job.status == JobStatus.WAITING_FOR_SYSTEM:
+                store.update(job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
             if job.status == JobStatus.NEW and _job_is_due(job):
                 store.update(job, JobStatus.SCRIPTING, "SCHEDULED JOB STARTED")
                 job.status = JobStatus.NEW
@@ -435,7 +562,7 @@ def logs(limit: int = 200, level: str | None = None, job_id: str | None = None):
 
 @app.post("/api/logs/ingest")
 def ingest_logs(batch: WorkerLogBatch, request: Request):
-    if not _valid_worker_token(batch.node_name, request.headers.get("x-vertep-token", "")):
+    if not _valid_worker_request(batch.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     for entry in batch.entries:
         level = str(entry.get("level", "INFO")).upper()
@@ -509,6 +636,8 @@ def put_workflow(kind: str, name: str, workflow: dict):
 
 @app.post("/api/jobs")
 def create_job(request: JobCreate):
+    if not jobs_may_be_created():
+        raise HTTPException(503, f"New jobs are disabled while system is {get_system_state()['state']}")
     try:
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), request.character_id)
     except Exception as error:
@@ -527,15 +656,18 @@ def create_job(request: JobCreate):
     job = store.create(request.topic, request.character_id, request.priority, request.source,
                        request.task_type, request.min_vram_mb, request.brand_id, request.workflow,
                        request.aspect_ratio, request.output_preset, request.scheduled_for)
+    if not dispatch_allowed():
+        store.update(job, JobStatus.WAITING_FOR_SYSTEM,
+                     f"WAITING FOR SYSTEM: {get_system_state()['state']}")
     if request.scheduled_for:
         try:
             datetime.fromisoformat(request.scheduled_for.replace("Z", "+00:00"))
         except ValueError as error:
             store.delete(job.job_id)
             raise HTTPException(422, "scheduled_for must be an ISO-8601 datetime") from error
-    if _job_is_due(job):
+    if job.status == JobStatus.NEW and _job_is_due(job):
         executor.submit(_prepare_and_dispatch, job)
-    else:
+    elif job.status == JobStatus.NEW:
         store.event(job, f"SCHEDULED FOR {job.scheduled_for}")
     return job
 
@@ -705,13 +837,44 @@ def delete_job(job_id: str):
 
 @app.post("/api/workers/heartbeat")
 def heartbeat(payload: WorkerHeartbeat, request: Request):
-    if not _valid_worker_token(payload.node_name, request.headers.get("x-vertep-token", "")):
+    if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     data = payload.model_dump()
+    if data["status"] in {"ONLINE", "FREE"}:
+        data["status"] = "READY"
+    role = node_roles().get(data["role"], {})
+    allowed = set(role.get("capabilities", []))
+    declared = set(data.get("capabilities", [])) & allowed
+    self_test = data.get("self_test") or {}
+    data["capabilities"] = sorted(declared)
+    data["tested_capabilities"] = (sorted(declared) if self_test.get("status") == "PASSED"
+                                    and self_test.get("role") == data["role"] else [])
+    if (os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"
+            and data["status"] == "READY" and not data["tested_capabilities"]):
+        data["status"] = "ERROR"
+    previous = store.workers.get(payload.node_name)
+    desired = (previous or {}).get("desired_state")
+    if desired == "QUARANTINED":
+        data["status"] = "QUARANTINED"
+        data["desired_state"] = desired
+    elif desired == "DRAINING":
+        data["desired_state"] = desired
+        if data["status"] != "BUSY" and not data.get("current_task"):
+            data["status"] = "DRAINING"
+    if previous and previous.get("self_test_requested_at"):
+        checked_at = str((data.get("self_test") or {}).get("checked_at", ""))
+        if checked_at > previous["self_test_requested_at"]:
+            data["self_test_requested_at"] = None
+        else:
+            data["self_test_requested_at"] = previous["self_test_requested_at"]
+    if previous and not worker_transition_allowed(previous.get("status", "OFFLINE"), data["status"]):
+        raise HTTPException(409, f"Illegal worker state transition: {previous.get('status')} -> {data['status']}")
     data["last_seen"] = utc_now()
     store.workers[payload.node_name] = data
     store.save_worker(data)
-    return {"accepted": True, "workers": len(store.workers)}
+    return {"accepted": True, "workers": len(store.workers),
+            "desired_state": data.get("desired_state"),
+            "self_test_requested_at": data.get("self_test_requested_at")}
 
 @app.get("/api/workers")
 def workers():
@@ -950,7 +1113,7 @@ def system_status():
         postgres = "OFFLINE"
     scheduled = sorted((job.scheduled_for for job in store.jobs.values()
                         if job.status == JobStatus.NEW and job.scheduled_for and not _job_is_due(job)))
-    return {"core": "OK", "version": application_version(), "storage": "OK", "redis": "OK" if task_queue.backend == "redis" else "OFFLINE",
+    return {"core": "OK", "version": application_version(), "system": get_system_state(), "storage": "OK", "redis": "OK" if task_queue.backend == "redis" else "OFFLINE",
             "postgres": postgres,
             "queue": {"backend": task_queue.backend, "depth": task_queue.depth(),
                       "inflight": task_queue.inflight_depth(),
@@ -964,9 +1127,108 @@ def system_status():
             "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
             "telegram": "CONFIGURED" if os.getenv("TELEGRAM_BOT_TOKEN") else "NOT CONFIGURED", "workers": workers()}
 
+@app.post("/api/nodes/registration-tokens")
+async def registration_token(request: Request):
+    payload = await request.json()
+    try:
+        return create_registration_token(str(payload.get("role", "")), int(payload.get("ttl_seconds", 900)))
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+@app.post("/api/nodes/register")
+async def register_node(request: Request):
+    payload = await request.json()
+    try:
+        if (not isinstance(payload, dict) or len(str(payload.get("registration_token", ""))) > 64
+                or len(str(payload.get("node_id", ""))) > 64 or len(str(payload.get("version", ""))) > 64
+                or len(str(payload.get("csr", ""))) > 16384
+                or not isinstance(payload.get("capabilities", []), list)
+                or len(payload.get("capabilities", [])) > 32
+                or not isinstance(payload.get("hardware", {}), dict)
+                or len(json.dumps(payload.get("hardware", {}))) > 65536):
+            raise ValueError("Node registration payload exceeds allowed limits")
+        return enroll_node(str(payload.get("registration_token", "")), str(payload.get("node_id", "")),
+                           payload.get("capabilities") or [], payload.get("hardware") or {},
+                           str(payload.get("version", "unknown")), str(payload.get("csr", "")))
+    except PermissionError as error:
+        raise HTTPException(401, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+@app.get("/api/nodes")
+def nodes():
+    live = {item.get("node_name"): item for item in workers()}
+    return [{**node, "runtime": live.get(node["node_id"]),
+             "status": (live.get(node["node_id"]) or {}).get("status", "OFFLINE")}
+            for node in registered_nodes()]
+
+
+@app.post("/api/nodes/{node_id}/actions")
+def control_node(node_id: str, command: NodeAction):
+    worker = store.workers.get(node_id)
+    if not worker:
+        raise HTTPException(404, "Worker runtime is not available")
+    timestamp = utc_now()
+    if command.action == "drain":
+        worker["desired_state"] = "DRAINING"
+        if worker.get("status") != "BUSY" and not worker.get("current_task"):
+            worker["status"] = "DRAINING"
+    elif command.action == "resume":
+        if worker.get("desired_state") == "QUARANTINED":
+            raise HTTPException(409, "Quarantined worker must be explicitly unquarantined")
+        worker.pop("desired_state", None)
+        worker["status"] = "READY" if (worker.get("self_test") or {}).get("status") == "PASSED" else "ERROR"
+    elif command.action == "quarantine":
+        worker.update({"desired_state": "QUARANTINED", "status": "QUARANTINED"})
+    elif command.action == "unquarantine":
+        if worker.get("desired_state") != "QUARANTINED":
+            raise HTTPException(409, "Worker is not quarantined")
+        worker.pop("desired_state", None)
+        worker["status"] = "SELF_TESTING"
+        worker["self_test_requested_at"] = timestamp
+    elif command.action == "self-test":
+        if worker.get("status") == "BUSY":
+            raise HTTPException(409, "Busy worker cannot start a self-test")
+        worker["self_test_requested_at"] = timestamp
+        worker["status"] = "SELF_TESTING"
+    worker["state_reason"] = command.reason
+    worker["state_changed_at"] = timestamp
+    store.save_worker(worker)
+    return worker
+
+@app.post("/api/nodes/{node_id}/revoke")
+def disable_node(node_id: str):
+    try:
+        return revoke_node(node_id)
+    except KeyError as error:
+        raise HTTPException(404, "Node not found") from error
+
+@app.post("/api/nodes/{node_id}/renew")
+async def renew_node_credentials(node_id: str, request: Request):
+    if not _valid_worker_request(node_id, request):
+        raise HTTPException(401, "Node credentials are not valid")
+    payload = await request.json()
+    try:
+        return renew_node(node_id, str(payload.get("csr", "")))
+    except KeyError as error:
+        raise HTTPException(404, "Node is missing or revoked") from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
 @app.get("/api/system/update")
 def web_update_status():
-    return update_status()
+    return {**update_status(), "system": get_system_state()}
+
+@app.get("/api/system/update/readiness")
+def update_readiness():
+    active = [job.job_id for job in store.jobs.values() if job.status not in {
+        JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM, JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED,
+        JobStatus.PAUSED, JobStatus.CANCELLED}]
+    busy = [worker.get("node_name") for worker in store.workers.values()
+            if worker.get("status") == "BUSY" or worker.get("current_task")]
+    return {"ready": not active and not busy and task_queue.inflight_depth() == 0,
+            "active_jobs": active, "busy_workers": busy,
+            "queue_paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth()}
 
 @app.post("/api/system/update/check")
 def web_update_check():
@@ -988,7 +1250,7 @@ def web_update_run():
 
 @app.get("/api/node/status/{node_name}")
 def node_system_status(node_name: str, request: Request):
-    if not _valid_worker_token(node_name, request.headers.get("x-vertep-token", "")):
+    if not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     return system_status()
 
@@ -1007,12 +1269,39 @@ def integrations():
             result[name] = {"status": "OFFLINE", "error": str(error)}
     return result
 
+
+@app.get("/api/settings/secrets")
+def secret_settings():
+    return {"secrets": integration_secret_status(), "values_exposed": False}
+
+
+@app.put("/api/settings/secrets/{name}")
+def update_secret_setting(name: str, payload: IntegrationSecretUpdate):
+    try:
+        return {"secrets": set_integration_secret(name, payload.value), "values_exposed": False}
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.delete("/api/settings/secrets/{name}")
+def delete_secret_setting(name: str):
+    try:
+        return {"secrets": set_integration_secret(name, None), "values_exposed": False}
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
 @app.post("/api/tasks/claim")
 def claim_task(payload: TaskClaim, request: Request):
-    if not _valid_worker_token(payload.node_name, request.headers.get("x-vertep-token", "")):
+    if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
-    worker_data = payload.model_dump()
-    worker_data.update({"status": "ONLINE", "last_seen": utc_now()})
+    if not dispatch_allowed():
+        return {"task": None, "system_state": get_system_state()["state"]}
+    registered_worker = store.workers.get(payload.node_name)
+    if not registered_worker:
+        return {"task": None, "worker_state": "HEARTBEAT_REQUIRED"}
+    worker_data = dict(registered_worker)
+    claim_metrics = payload.model_dump(exclude={"node_name", "capabilities"})
+    worker_data.update(claim_metrics)
     held_tasks = []
     scan_limit = max(1, task_queue.depth())
     for _ in range(scan_limit):
@@ -1038,6 +1327,7 @@ def claim_task(payload: TaskClaim, request: Request):
         store.workers[payload.node_name]["status"] = "BUSY"
         store.workers[payload.node_name]["current_job"] = job.job_id
         store.workers[payload.node_name]["current_task"] = task["task_id"]
+        store.save_worker(store.workers[payload.node_name])
         store.event(job, f"{payload.node_name} ASSIGNED TO {scene.scene_id}")
         store.repository.record_task(task, "CLAIMED", payload.node_name)
         return {"task": task}
@@ -1047,7 +1337,7 @@ def claim_task(payload: TaskClaim, request: Request):
 
 @app.post("/api/tasks/renew")
 def renew_task(payload: TaskRenew, request: Request):
-    if not _valid_worker_token(payload.node_name, request.headers.get("x-vertep-token", "")):
+    if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     job = next((job for job in store.jobs.values() if payload.task_id in job.active_task_ids), None)
     scene = _scene_for_task(job, payload.task_id) if job else None
@@ -1057,7 +1347,7 @@ def renew_task(payload: TaskRenew, request: Request):
 
 @app.get("/api/tasks/cancellations/{node_name}")
 def task_cancellations(node_name: str, request: Request):
-    if not _valid_worker_token(node_name, request.headers.get("x-vertep-token", "")):
+    if not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     return task_queue.pop_cancellations(node_name)
 
@@ -1089,7 +1379,7 @@ def retry_dead_letter_task(task_id: str):
 @app.post("/api/tasks/result")
 @_serialize_job_result
 def task_result(result: TaskResult, request: Request):
-    if not _valid_worker_token(result.node_name, request.headers.get("x-vertep-token", "")):
+    if not _valid_worker_request(result.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     job = store.jobs.get(result.job_id)
     if not job:
@@ -1109,7 +1399,11 @@ def task_result(result: TaskResult, request: Request):
         raise HTTPException(409, f"Job is {job.status.value}")
     worker = store.workers.get(result.node_name)
     if worker:
-        worker.update({"status": "ONLINE", "current_job": None, "current_task": None, "last_seen": utc_now()})
+        desired_status = worker.get("desired_state")
+        next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+        worker.update({"status": next_status, "current_job": None,
+                       "current_task": None, "last_seen": utc_now()})
+        store.save_worker(worker)
     if not result.success:
         task_queue.ack(result.task_id)
         store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id}, "FAILED", result.node_name, result.error)
@@ -1160,7 +1454,15 @@ def task_result(result: TaskResult, request: Request):
             raise HTTPException(413, "Artifacts are too large")
         supplied_name = Path(artifact.get("filename", f"{scene.scene_id}.png")).name
         suffix = Path(supplied_name).suffix.lower()
-        allowed_suffixes = {".mp4", ".webm", ".mov"} if job.task_type == "video" else {".png", ".jpg", ".jpeg", ".webp", ".ppm"}
+        artifact_contracts = {
+            "video": ({".mp4", ".webm", ".mov"}, "video"),
+            "text": ({".txt"}, "text"),
+            "voice": ({".wav", ".ogg", ".mp3", ".aac", ".m4a"}, "audio"),
+            "publish": ({".json"}, "receipts"),
+            "backup": ({".json"}, "receipts"),
+        }
+        allowed_suffixes, folder = artifact_contracts.get(
+            job.task_type, ({".png", ".jpg", ".jpeg", ".webp", ".ppm"}, "images"))
         if suffix not in allowed_suffixes:
             raise HTTPException(400, f"Unsupported {job.task_type} artifact type")
         try:
@@ -1168,7 +1470,6 @@ def task_result(result: TaskResult, request: Request):
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
         filename = f"{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"{scene.scene_id}-{artifact_index:03d}{suffix}"
-        folder = "video" if job.task_type == "video" else "images"
         image_path = store.root / job.job_id / folder / filename
         prepared_images.append((image_path, data))
     temporary_images = []
@@ -1185,8 +1486,10 @@ def task_result(result: TaskResult, request: Request):
         raise HTTPException(500, "Could not persist worker artifacts") from error
     for image_path, _ in prepared_images:
         saved_images.append(image_path)
-        saved_artifacts.append(register_artifact(job, store.root, image_path,
-                                                 "video_scene" if job.task_type == "video" else "image",
+        artifact_kind = {"video": "video_scene", "text": "text", "voice": "audio",
+                         "publish": "publication_receipt", "backup": "backup_receipt"}.get(
+                             job.task_type, "image")
+        saved_artifacts.append(register_artifact(job, store.root, image_path, artifact_kind,
                                                  scene_id=scene.scene_id, task_id=result.task_id,
                                                  node_name=result.node_name, workflow=job.workflow))
     task_queue.ack(result.task_id)
@@ -1198,6 +1501,9 @@ def task_result(result: TaskResult, request: Request):
     job.assigned_worker = None
     if all_scenes_ready(job):
         transition_stage(job, StageName.ASSETS, StageStatus.READY)
+        if job.task_type in {"text", "voice", "backup", "publish"}:
+            terminal = JobStatus.PUBLISHED if job.task_type == "publish" else JobStatus.READY
+            return store.update(job, terminal, f"{job.task_type.upper()} TASK COMPLETED")
         ordered_images = _ordered_scene_files(job)
         executor.submit(_finalize_and_notify, job, ordered_images)
     return store.event(job, f"RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")

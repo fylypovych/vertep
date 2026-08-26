@@ -1,5 +1,5 @@
 [Unit]
-Description=Vertep trusted GitHub update agent
+Description=Vertep signed-package safe update agent
 After=docker.service network-online.target
 Wants=network-online.target
 
@@ -15,3 +15,12 @@ IOSchedulingPriority=7
 UMask=0077
 PrivateTmp=true
 NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=@VERTEP_ROOT@

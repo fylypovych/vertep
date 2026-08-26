@@ -68,7 +68,7 @@ On an installed CORE node, open **Система → Оновлення з GitHu
 
 The Web API never receives a command, repository URL or branch. It can enqueue only `check` or `update`. A root-owned systemd path unit processes the request on the host and invokes the existing role-aware `vertep update`, which creates backups, performs a fast-forward-only pull, applies migrations and runs health checks. The CORE container receives no Docker socket.
 
-Web updates are enabled by the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. The configured `origin` must use `github.com` by default and must not contain embedded credentials. For a private repository, configure a host credential helper or a read-only SSH deploy key for the account running the system service. Set `UPDATE_ALLOWED_GIT_HOST` only if a different trusted GitHub host is intentionally used. Tracked local changes or a branch ahead of upstream block Web updates; resolve them manually instead of enabling `VERTEP_ALLOW_DIRTY_UPDATE` unless the consequences are understood.
+Web updates are enabled by the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. Releases are fetched only from `VERTEP_UPDATE_SERVER` (default `https://update.vertep.ai`) and their detached signature is verified with `UPDATE_PUBLIC_KEY` before a package is accepted. The updater enters maintenance mode, drains active work, creates application, job, configuration, migration, and PostgreSQL backups, then applies the package. Failed health checks trigger an automatic rollback; a durable update phase permits recovery after a power loss. The systemd timer checks for releases every six hours. GitHub credentials and repository access are never required on an installed node.
 
 After upgrading an older installation to a release that first contains the Web updater, run `sudo ./install.sh` once to install and enable `vertep-update.path`. If an update fails its health check, use `vertep rollback` from the server console; database backups and the last known Git revision are retained under the project directory.
 
@@ -124,3 +124,25 @@ Set `scheduled_for` to an ISO-8601 timestamp in `POST /api/jobs` to defer proces
 The CORE also provides priority/leased tasks with watchdog recovery, structured rotating logs, Character and Brand APIs, multi-scene FFmpeg assembly, Telegram commands, per-worker tokens, administrative sessions and mock-safe publisher contracts. Live social-network upload methods still require platform-specific API credentials and implementations.
 
 Use `sudo ./install.sh --dry-run` for a read-only preflight, `python scripts/generate-env.py` to create unique local secrets, and `python scripts/upgrade-config.py` after upgrades to add new configuration keys without overwriting existing values. Current release metadata is stored in `VERSION` and `CHANGELOG.md`.
+## Appliance installation
+
+On a clean Ubuntu Server 24.04 host, the supported production installation is a single bootstrap command:
+
+```bash
+curl -fsSL https://download.vertep.ai/bootstrap.sh | sudo bash
+```
+
+Bootstrap validates hardware and connectivity, installs the container runtime, downloads checksum-verified immutable runtime metadata from Vertep, generates all local credentials and TLS material, starts the complete stack, and waits for its health endpoint. Open the printed `https://SERVER-IP:8443` address to finish the seven-step First Run Wizard. After that, routine administration and signed updates are performed from the Web UI; bootstrap is not used again. The source-oriented `install.sh` remains available for development and advanced node deployments.
+
+The Deployment Wizard obtains its role list from `config/node_roles.json`; adding a role does not require changing token or enrollment logic. Core nodes can create 15-minute, one-use registration tokens from **Workers → Add Worker**. Non-Core nodes initiate the HTTPS enrollment request themselves and receive a node-bound JWT, per-node secret, certificate attestation, configuration, and capability set. Dispatch is capability-driven rather than role-driven, so installing a new engine only requires the node to advertise its new capability.
+
+Production readiness and the traceability status of all three deployment/update specifications are tracked in [`docs/REQUIREMENTS_GAP_ANALYSIS_UK.md`](docs/REQUIREMENTS_GAP_ANALYSIS_UK.md). Items marked as partial or missing there must not be presented as completed appliance functionality.
+
+Release candidates must pass the reproducible appliance gates; CI uploads the resulting JSON evidence:
+
+```bash
+python scripts/qualify-release.py --root . --docker --output qualification.json
+```
+
+Integration credentials are managed from **System → Protected integrations**. Values are write-only
+through the API and remain inside the authenticated encrypted secret envelope.

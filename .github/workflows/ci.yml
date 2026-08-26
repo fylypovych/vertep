@@ -28,9 +28,19 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
       - name: Validate shell syntax
-        run: bash -n install.sh installer/*.sh scripts/vertep
+        run: bash -n bootstrap.sh install.sh installer/*.sh scripts/vertep scripts/restore.sh
       - name: Validate Compose configurations
         run: |
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.worker.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
+          docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
+      - name: Run appliance release qualification gates
+        run: python scripts/qualify-release.py --root . --docker --output qualification.json
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appliance-qualification
+          path: qualification.json
+          if-no-files-found: error
