@@ -36,3 +36,6 @@ def test_update_agent_has_no_docker_socket():
     compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
     assert "/var/run/docker.sock" not in compose
     assert "no-new-privileges:true" in compose
+    proxy = Path("deploy/proxy.conf").read_text(encoding="utf-8")
+    assert "ssl_crl /etc/vertep/revocation/node-ca.crl;" in proxy
+    assert "nginx -s reload" in compose

@@ -46,10 +46,17 @@ def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch
     assert renewed["jwt"] != enrolled["jwt"]
     assert not verify_node_token(enrolled["jwt"], "gpu-01")
     assert verify_node_token(renewed["jwt"], "gpu-01")
+    crl = tmp_path / "node-ca.crl"
+    crl_text = subprocess.run(["openssl", "crl", "-in", str(crl), "-text", "-noout"],
+                              check=True, capture_output=True, text=True).stdout
+    assert original_serial.lower().lstrip("0") in crl_text.lower().replace(":", "").lstrip("0")
     revoke_node("gpu-01")
     assert not verify_node_certificate("gpu-01", renewed_serial)
     assert not verify_node_token(renewed["jwt"], "gpu-01")
     assert not verify_node_token(renewed["worker_secret"], "gpu-01")
+    crl_text = subprocess.run(["openssl", "crl", "-in", str(crl), "-text", "-noout"],
+                              check=True, capture_output=True, text=True).stdout.lower().replace(":", "")
+    assert renewed_serial.lower().lstrip("0") in crl_text
 
 
 def test_role_catalog_is_extensible_without_registry_changes(monkeypatch, tmp_path):

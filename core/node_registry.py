@@ -11,8 +11,11 @@ import threading
 import time
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 
 from .first_run import config_root, ensure_secret_store
 
@@ -41,9 +44,9 @@ def _path() -> Path:
 def _load() -> dict:
     try:
         value = json.loads(_path().read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {"tokens": {}, "nodes": {}}
+        return value if isinstance(value, dict) else {"tokens": {}, "nodes": {}, "revoked_serials": []}
     except (OSError, ValueError):
-        return {"tokens": {}, "nodes": {}}
+        return {"tokens": {}, "nodes": {}, "revoked_serials": []}
 
 
 def _save(value: dict) -> None:
@@ -191,9 +194,13 @@ def revoke_node(node_id: str) -> dict:
                     RETURNING node_id,role,capabilities,hardware,version,status,credential_generation,
                     certificate_serial,certificate_expires_at,registered_at,revoked_at""",
                     (node_id,)).fetchone()
+                if row:
+                    _record_revoked_serial(row.get("certificate_serial"), row.get("revoked_at"), connection)
         if not row:
             raise KeyError(node_id)
-        return dict(row)
+        value = dict(row)
+        write_node_crl()
+        return value
     with _lock:
         registry = _load()
         node = registry.get("nodes", {}).get(node_id)
@@ -202,8 +209,12 @@ def revoke_node(node_id: str) -> dict:
         node["status"] = "REVOKED"
         node["credential_generation"] = int(node.get("credential_generation", 1)) + 1
         node["revoked_at"] = datetime.now(timezone.utc).isoformat()
+        registry.setdefault("revoked_serials", []).append({"serial": node.get("certificate_serial"),
+                                                            "revoked_at": node["revoked_at"]})
         _save(registry)
-        return {key: value for key, value in node.items() if key != "secret_hash"}
+        result = {key: value for key, value in node.items() if key != "secret_hash"}
+    write_node_crl()
+    return result
 
 
 def renew_node(node_id: str, csr: str) -> dict:
@@ -213,11 +224,15 @@ def renew_node(node_id: str, csr: str) -> dict:
     node_secret = secrets.token_urlsafe(48)
     if _postgres_enabled():
         with _connect() as connection:
+            previous = connection.execute("SELECT certificate_serial FROM registered_nodes WHERE node_id=%s",
+                                          (node_id,)).fetchone()
             row = connection.execute("""UPDATE registered_nodes SET secret_hash=%s,
                 credential_generation=credential_generation+1,certificate_serial=%s,
                 certificate_expires_at=%s WHERE node_id=%s AND status<>'REVOKED'
                 RETURNING role,credential_generation,capabilities""",
                 (_token_hash(node_secret), serial, expires, node_id)).fetchone()
+            if row and previous and previous[0]:
+                _record_revoked_serial(previous[0], datetime.now(timezone.utc), connection)
         if not row:
             raise KeyError(node_id)
         role, generation, capabilities = row
@@ -227,12 +242,17 @@ def renew_node(node_id: str, csr: str) -> dict:
             node = registry.get("nodes", {}).get(node_id)
             if not node or node.get("status") == "REVOKED":
                 raise KeyError(node_id)
+            previous_serial = node.get("certificate_serial")
             node["secret_hash"] = _token_hash(node_secret)
             node["credential_generation"] = int(node.get("credential_generation", 1)) + 1
             node["certificate_serial"] = serial
             node["certificate_expires_at"] = expires
+            if previous_serial:
+                registry.setdefault("revoked_serials", []).append({
+                    "serial": previous_serial, "revoked_at": datetime.now(timezone.utc).isoformat()})
             _save(registry)
             role, generation, capabilities = node["role"], node["credential_generation"], node["capabilities"]
+    write_node_crl()
     return {"worker_id": node_id, "role": role, "status": "READY",
             "jwt": issue_node_token(node_id, role, generation), "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": ca_certificate,
@@ -334,10 +354,60 @@ def _issue_certificate(node_id: str, csr_pem: str) -> tuple[str, str, str, str]:
                                   f"extendedKeyUsage=clientAuth\nsubjectAltName=URI:spiffe://vertep/node/{node_id}\n",
                                   encoding="utf-8")
             subprocess.run(["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca_cert),
-                            "-CAkey", str(ca_key), "-CAcreateserial", "-days", "397", "-sha256",
+                            "-CAkey", str(ca_key), "-set_serial", str(secrets.randbits(159) or 1),
+                            "-days", "397", "-sha256",
                             "-extfile", str(extensions), "-out", str(certificate)], check=True, capture_output=True)
             metadata = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", "-serial", "-enddate"],
                                       check=True, capture_output=True, text=True).stdout.splitlines()
             serial = metadata[0].split("=", 1)[1]
             expires = metadata[1].split("=", 1)[1]
             return certificate.read_text(), ca_cert.read_text(), serial, expires
+
+
+def _record_revoked_serial(serial: str | None, revoked_at, connection=None) -> None:
+    if not serial:
+        return
+    if connection is not None:
+        connection.execute("""INSERT INTO node_revoked_certificates(serial,revoked_at)
+                            VALUES(%s,%s) ON CONFLICT(serial) DO NOTHING""", (serial, revoked_at))
+        return
+    with _connect() as local:
+        local.execute("""INSERT INTO node_revoked_certificates(serial,revoked_at)
+                       VALUES(%s,%s) ON CONFLICT(serial) DO NOTHING""", (serial, revoked_at))
+
+
+def _revoked_certificates() -> list[dict]:
+    if _postgres_enabled():
+        with _connect() as connection:
+            rows = connection.execute("SELECT serial,revoked_at FROM node_revoked_certificates").fetchall()
+        return [{"serial": row[0], "revoked_at": row[1]} for row in rows]
+    return _load().get("revoked_serials", [])
+
+
+def write_node_crl() -> Path:
+    """Atomically publish a CA-signed CRL consumed by the TLS proxy."""
+    ca_key_path = Path(os.getenv("NODE_CA_KEY_PATH", str(config_root() / "pki/ca.key")))
+    ca_cert_path = Path(os.getenv("NODE_CA_CERT_PATH", str(config_root() / "pki/ca.crt")))
+    output_path = Path(os.getenv("NODE_CRL_PATH", str(config_root() / "node-ca.crl")))
+    certificate = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
+    private_key = serialization.load_pem_private_key(ca_key_path.read_bytes(), password=None)
+    now = datetime.now(timezone.utc)
+    builder = x509.CertificateRevocationListBuilder().issuer_name(certificate.subject)
+    builder = builder.last_update(now).next_update(now + timedelta(days=1))
+    for item in _revoked_certificates():
+        try:
+            revoked_at = item["revoked_at"]
+            if isinstance(revoked_at, str):
+                revoked_at = datetime.fromisoformat(revoked_at.replace("Z", "+00:00"))
+            revoked = x509.RevokedCertificateBuilder().serial_number(
+                int(str(item["serial"]), 16)).revocation_date(revoked_at).build()
+            builder = builder.add_revoked_certificate(revoked)
+        except (KeyError, TypeError, ValueError):
+            continue
+    encoded = builder.sign(private_key, hashes.SHA256()).public_bytes(serialization.Encoding.PEM)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output_path.with_name(f".{output_path.name}.{os.getpid()}.tmp")
+    temporary.write_bytes(encoded)
+    os.chmod(temporary, 0o644)
+    temporary.replace(output_path)
+    return output_path

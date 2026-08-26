@@ -2,10 +2,12 @@ name: vertep
 services:
   proxy:
     image: nginx:1.27-alpine
+    command: ["/bin/sh", "-c", "last=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); (while sleep 5; do current=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); if [ \"$$current\" != \"$$last\" ]; then nginx -s reload; last=$$current; fi; done) & exec nginx -g 'daemon off;' "]
     ports: ["8443:8443"]
     volumes:
       - ./runtime/proxy.conf:/etc/nginx/conf.d/default.conf:ro
       - ./tls:/etc/vertep/tls:ro
+      - ./config:/etc/vertep/revocation:ro
     depends_on:
       core: {condition: service_healthy}
     healthcheck:
@@ -27,6 +29,7 @@ services:
       NODE_CA_KEY_PATH: /data/tls/node-ca.key
       NODE_CA_CERT_PATH: /data/tls/node-ca.crt
       NODE_MTLS_REQUIRED: "true"
+      NODE_CRL_PATH: /data/config/node-ca.crl
       NODE_REGISTRY_BACKEND: postgres
       REQUIRE_WORKER_SELF_TEST: "true"
       WORKER_SELF_TEST_MAX_AGE_SECONDS: "900"

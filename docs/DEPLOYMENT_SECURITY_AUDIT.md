@@ -58,10 +58,10 @@ proxy-level CRL/OCSP remains required to reject it before forwarding.
 
 ## P1 — correctness and security before beta
 
-1. **Certificate revocation needs proxy-level enforcement.** Enrollment and automatic renewal use
-   node-generated keys, CSR, URI SAN, clientAuth EKU, tracked serials, rotated JWT/secret generations,
-   and proxy-enforced mTLS. Core rejects revoked identities, but Nginx still needs CRL/OCSP-style
-   serial rejection before forwarding a revoked certificate.
+1. **Certificate revocation is enforced at both layers.** Enrollment and renewal use node-generated
+   keys, CSR, URI SAN, clientAuth EKU and tracked serials. Renewal and revoke append the old serial
+   to durable revocation state, Core atomically signs a CRL, and the proxy watches its digest and
+   reloads Nginx after replacement. Production qualification still needs failover and expiry tests.
 2. **Role self-tests need production qualification.** Worker now runs periodic GPU workflow,
    Ollama inference, runtime HTTP, Prometheus, and backup read/write checks, and appliance dispatch
    requires a fresh role-matched pass. Tested capabilities are persisted with heartbeat state and

@@ -49,7 +49,7 @@ from .first_run import (complete_setup, configured_user, is_configured, session_
                         set_integration_secret)
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
-                            verify_node_token)
+                            verify_node_token, write_node_crl)
 from .version import application_version
 from .rolling_update import reconcile_rollout, rollout_status, start_rollout
 from adapters.telegram import TelegramAdapter
@@ -57,6 +57,8 @@ from adapters.publisher import PUBLISHERS
 
 @asynccontextmanager
 async def lifespan(_app):
+    if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
+        write_node_crl()
     for recovered_job in list(store.jobs.values()):
         if (recovered_job.status in {JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM}
                 and dispatch_allowed() and _job_is_due(recovered_job)):
