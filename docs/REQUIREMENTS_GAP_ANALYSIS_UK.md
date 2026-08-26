@@ -43,18 +43,18 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Вимога | Стан | Що залишилось |
 |---|---|---|
 | Одна команда на Ubuntu 24.04 | Частково | Core має default flow. Non-Core потребує environment variables для role/Core URL/token/CA, тобто це ще не повний zero-shell Web Wizard. |
-| CPU/RAM/disk/internet preflight | Є базово | Додати proxy/DNS/NTP/ports checks, supported CPU flags, filesystem type, clock skew і зрозумілий remediation report. |
+| CPU/RAM/disk/internet preflight | Є базово | Є DNS, NTP, port 8443 і filesystem checks; ще потрібні proxy diagnostics, CPU flags, IOPS та structured remediation report. |
 | NVIDIA/AMD/no-GPU detection | Частково | Detection є. Bootstrap не встановлює NVIDIA Container Toolkit/CUDA runtime повністю; AMD runtime/ROCm не реалізований. |
 | Docker/Compose install та autostart | Є базово | Потрібні pinned supported versions, repository signature policy та upgrade compatibility matrix. |
 | `/opt/vertep` layout і volumes | Частково | Основні каталоги є. Потрібні ownership per service, quotas, SELinux/AppArmor policy, backup retention і disk-pressure behavior. |
 | Signed runtime download | Є базово | Додати offline-root key lifecycle, mirror policy, resumable download та rollback при partial image pull. |
 | Усі контейнери `HEALTHY` | Частково | Role services мають health checks і Worker self-test, але потрібна перевірка реальних published images та dependency/failure matrix. |
 | HTTPS `:8443` | Є | Сертифікат self-signed. Потрібні SAN для IP/DNS, ACME/custom certificate flow, renewal та browser-friendly onboarding. |
-| First Run недоступність системи до завершення | Є базово | Setup code захищає ownership. Потрібні rate limit окремо для setup, expiry setup code і browser E2E tests. |
+| First Run недоступність системи до завершення | Є базово | Setup code має TTL, окремий failed-attempt rate limit і ownership protection; ще потрібні browser E2E tests. |
 | Назва та перший admin | Є | Потрібні password policy, recovery codes, MFA/WebAuthn, forced credential rotation і audit event. |
 | Автогенерація секретів | Частково | Генерація криптографічна, але secret store — plaintext JSON/`.env`; encryption key генерується, однак не використовується для authenticated encryption. |
 | AI backend selection | Частково | Вибір записується, але немає перевірки credentials/connectivity/model, secure API-key entry та runtime reconciliation. |
-| Installation Manifest | Частково | Є ID/name/version/hardware/modules. Docker version, фактично запущені images/digests, network, storage, certificate fingerprints і module health не фіксуються повністю. |
+| Installation Manifest | Частково | Є ID/name/version/hardware/modules, deployment-plan hash, services/capabilities, Docker version, storage, channel і certificate fingerprints; ще потрібні live image digests/network/module health. |
 | Повний containerized runtime | Немає як заявлено | API/Dispatcher/Scheduler/Publisher досі об'єднані в Core process; License Manager, Backup Service, Grafana, TTS runtime та окремі role engines не реалізовані як заявлені сервіси. |
 | Internal secrets UI | Частково | Додано write-only Web/API керування SMTP/Telegram/YouTube/Facebook/TikTok/SSH/license/AI secrets з AES-GCM persistence; потрібні OAuth-specific flows і key sealing. |
 | Zero Shell operations | Частково | Fleet controls, updates та write-only integration secrets доступні у Web UI; ще потрібні users/MFA, models, backup restore, ACME і повна health remediation. |
@@ -68,7 +68,7 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Встановлювати лише потрібні компоненти | Є на service allowlist рівні | Додати image/package allowlist tests на реальній VM; зараз modules у catalog не доводять, що відповідний runtime існує. |
 | Core Node stack | Частково | Основні Core/DB/Redis/UI/Monitoring є. License Manager не реалізований окремо; Publisher/Dispatcher/Scheduler не ізольовані services. |
 | GPU Node | Частково | Role plan містить ComfyUI та GPU workflow self-test. Bootstrap ще не завершує NVIDIA Container Toolkit/CUDA compatibility flow і немає physical-GPU release test. |
-| Text Node | Частково | Додано окремий Ollama executor і UTF-8 artifact contract; model pull/cache, streaming та lifecycle ще потрібні. |
+| Text Node | Частково | Є Ollama executor, UTF-8 artifact contract і bootstrap model pull; ще потрібні cache placement, streaming, cancellation та version lifecycle. |
 | Voice Node | Частково | Додано TTS synthesis executor і перевірюваний audio artifact contract; voice model management ще не завершений. |
 | Publisher Node | Частково | Додано publisher executor із обов'язковим publication receipt; credential UI, OAuth і platform-specific idempotency ще потрібні. |
 | Monitoring Node | Частково | Prometheus і Grafana заявлені з health checks; немає log store/collector, provisioned dashboards і alert rules. |

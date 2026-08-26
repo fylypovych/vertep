@@ -43,7 +43,7 @@ from .logging_config import configure_logging, read_logs
 from .workflows import WorkflowRegistry
 from .maintenance import cleanup_jobs, cleanup_temporary_files
 from .update_manager import request_update, update_status
-from .system_state import dispatch_allowed, get_system_state, jobs_may_be_created
+from .system_state import dispatch_allowed, get_system_state, jobs_may_be_created, operation_allowed
 from .first_run import (complete_setup, configured_user, is_configured, session_secret,
                         setup_status, config_root, integration_secret_status,
                         set_integration_secret)
@@ -74,6 +74,7 @@ task_queue = TaskQueue()
 logger = configure_logging("core")
 workflow_registry = WorkflowRegistry(os.getenv("WORKFLOWS_ROOT", "workflows"))
 request_windows: dict[str, deque[float]] = defaultdict(deque)
+setup_request_windows: dict[str, deque[float]] = defaultdict(deque)
 last_maintenance = 0.0
 result_locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
 
@@ -182,12 +183,45 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                             {"Retry-After": "30", "X-Vertep-Setup": "required"})
         if not is_configured() and setup_route:
             expected_setup = os.getenv("SETUP_TOKEN_HASH", "")
-            if (expected_setup and request.url.path.startswith("/api/setup")
-                    and not secrets.compare_digest(
-                        hashlib.sha256(request.headers.get("x-vertep-setup-token", "").encode()).hexdigest(),
-                        expected_setup)):
-                return Response("Invalid setup code", 401)
+            if expected_setup and request.url.path.startswith("/api/setup"):
+                client = request.client.host if request.client else "unknown"
+                window = setup_request_windows[client]
+                timestamp = time.time()
+                while window and window[0] < timestamp - 600:
+                    window.popleft()
+                expires = os.getenv("SETUP_TOKEN_EXPIRES_AT", "")
+                try:
+                    expired = bool(expires) and datetime.fromisoformat(
+                        expires.replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+                except ValueError:
+                    return Response("Setup token expiry configuration is invalid", 503)
+                if expired:
+                    return Response("Setup code has expired", 410)
+                valid_setup_code = secrets.compare_digest(
+                    hashlib.sha256(request.headers.get("x-vertep-setup-token", "").encode()).hexdigest(),
+                    expected_setup)
+                if not valid_setup_code:
+                    if len(window) >= int(os.getenv("SETUP_RATE_LIMIT_PER_10_MINUTES", "10")):
+                        return Response("Setup attempts are temporarily locked", 429, {"Retry-After": "600"})
+                    window.append(timestamp)
+                    return Response("Invalid setup code", 401)
             return self._secure(await call_next(request))
+        if request.method != "GET":
+            path = request.url.path
+            operation = None
+            if path == "/api/jobs" and request.method == "POST":
+                operation = "create_job"
+            elif path.startswith("/api/jobs"):
+                operation = "mutate_job"
+            elif (path.startswith("/api/nodes") and path != "/api/nodes/register"
+                  and not re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", path)):
+                operation = "node_control"
+            elif path.startswith("/api/settings"):
+                operation = "configuration"
+            elif path.startswith("/api/system/update"):
+                operation = "update"
+            if operation and not operation_allowed(operation):
+                return Response(f"Operation {operation} is blocked by system state", 423)
         client = request.client.host if request.client else "unknown"
         window = request_windows[client]
         now = time.time()

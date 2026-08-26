@@ -119,3 +119,13 @@ def test_bootstrap_installs_only_checksum_verified_host_update_executor():
         assert f'.files["{artifact}"].sha256' in bootstrap or 'unit_sha=$(jq' in bootstrap
     assert 'sha256sum -c -' in bootstrap
     assert 'systemctl enable --now vertep-update.path vertep-update.timer' in bootstrap
+    assert "SETUP_TOKEN_EXPIRES_AT=" in bootstrap
+
+
+def test_bootstrap_preflight_and_text_model_provisioning_contract():
+    bootstrap = (Path(__file__).parents[1] / "bootstrap.sh").read_text()
+    assert "getent ahosts" in bootstrap
+    assert "NTPSynchronized" in bootstrap
+    assert "TCP port 8443 is already in use" in bootstrap
+    assert "unsupported /opt filesystem" in bootstrap
+    assert 'ollama pull "${VERTEP_OLLAMA_MODEL:-llama3.2}"' in bootstrap

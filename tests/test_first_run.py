@@ -10,6 +10,8 @@ from core.first_run import (complete_setup, configured_user, ensure_secret_store
 def test_first_run_creates_manifest_and_secret_store(monkeypatch, tmp_path):
     monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
     monkeypatch.setenv("VERTEP_VERSION", "1.2.3")
+    (tmp_path / "deployment-plan.json").write_text(json.dumps({
+        "sha256": "a" * 64, "services": ["core", "postgres"], "capabilities": ["scheduling"]}))
     assert not is_configured()
     status = setup_status()
     assert status["configured"] is False
@@ -19,6 +21,8 @@ def test_first_run_creates_manifest_and_secret_store(monkeypatch, tmp_path):
                             "very-secure-password", "ollama")
     assert result["version"] == "1.2.3"
     assert result["node_role"] == "core"
+    assert result["runtime"]["deployment_plan_sha256"] == "a" * 64
+    assert result["runtime"]["services"] == ["core", "postgres"]
     assert is_configured()
     username, record = configured_user()
     assert username == "operator"

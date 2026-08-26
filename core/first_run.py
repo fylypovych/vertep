@@ -210,6 +210,25 @@ def runtime_hardware() -> dict:
             **{key: value for key, value in detected.items() if key not in {"ram_mb", "gpu"}}}
 
 
+def _runtime_inventory() -> dict:
+    root = config_root()
+    plan = _read("deployment-plan.json")
+    fingerprints = {}
+    for name, path in {"server_certificate": Path(os.getenv("CORE_CERTIFICATE_PATH", "/data/tls/vertep.crt")),
+                       "node_ca": Path(os.getenv("NODE_CA_CERT_PATH", "/data/tls/node-ca.crt"))}.items():
+        try:
+            fingerprints[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            fingerprints[name] = None
+    hardware = runtime_hardware()
+    return {"deployment_plan_sha256": plan.get("sha256"),
+            "services": plan.get("services", []), "capabilities": plan.get("capabilities", []),
+            "docker_version": hardware.get("docker_version"),
+            "certificate_fingerprints": fingerprints,
+            "storage_root": str(Path(os.getenv("STORAGE_ROOT", "/data/storage"))),
+            "update_channel": os.getenv("UPDATE_CHANNEL", "stable")}
+
+
 def setup_status() -> dict:
     ensure_secret_store()
     return {"configured": is_configured(), "installation": installation() if is_configured() else None,
@@ -247,6 +266,7 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
              "version": os.getenv("VERTEP_VERSION", "unknown"), "created_at": datetime.now(timezone.utc).isoformat(),
              "completed_at": datetime.now(timezone.utc).isoformat(), "hardware": runtime_hardware(),
              "node_role": node_role, "modules": roles[node_role]["modules"],
+             "runtime": _runtime_inventory(),
              "core_url": core_url if node_role != "core" else None,
              "worker_count": int(os.getenv("BOOTSTRAP_WORKER_COUNT", "0")),
              "ai_backend": {"type": backend, "url": backend_url},

@@ -21,6 +21,16 @@ disk_mb=$(df -Pm /opt 2>/dev/null | awk 'NR==2{print $4}' || df -Pm / | awk 'NR=
 (( ram_mb >= MIN_RAM_MB )) || fail "at least ${MIN_RAM_MB} MB RAM is required (found ${ram_mb})"
 (( disk_mb >= MIN_DISK_MB )) || fail "at least ${MIN_DISK_MB} MB free disk is required (found ${disk_mb})"
 curl -fsS --connect-timeout 10 "$DOWNLOAD_ORIGIN/health" >/dev/null || fail "Vertep download service is unreachable"
+getent ahosts "${DOWNLOAD_ORIGIN#*://}" | head -1 >/dev/null 2>&1 \
+  || fail "DNS cannot resolve the Vertep download service"
+if command -v timedatectl >/dev/null && [[ $(timedatectl show -p NTPSynchronized --value 2>/dev/null) != yes ]]; then
+  fail "system clock is not synchronized; configure NTP before installing signed releases"
+fi
+if command -v ss >/dev/null && ss -H -ltn 'sport = :8443' | grep -q .; then
+  fail "TCP port 8443 is already in use"
+fi
+filesystem=$(findmnt -n -o FSTYPE /opt 2>/dev/null || findmnt -n -o FSTYPE /)
+[[ $filesystem =~ ^(ext4|xfs|btrfs|zfs)$ ]] || fail "unsupported /opt filesystem: $filesystem"
 
 progress "Detecting hardware"
 gpu_vendor=none; gpu_name="GPU not found"; gpu_vram_mb=0; driver=unavailable; cuda=unavailable
@@ -114,6 +124,7 @@ worker_secret=$(secret 48); encryption_key=$(secret 32); internal_api_key=$(secr
 secret_store_passphrase=$(secret 48)
 setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
 setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
+setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
 cat > "$INSTALL_ROOT/.env" <<EOF
 VERTEP_VERSION=$version
 VERTEP_IMAGE_REPOSITORY=${VERTEP_IMAGE_REPOSITORY:-registry.vertep.ai/vertep}
@@ -134,6 +145,7 @@ CORE_URL=${VERTEP_CORE_URL:-}
 REGISTRATION_TOKEN=${VERTEP_REGISTRATION_TOKEN:-}
 CORE_CA_PATH=$([[ $NODE_ROLE == core ]] && echo '' || echo /data/config/core-ca.crt)
 SETUP_TOKEN_HASH=$setup_token_hash
+SETUP_TOKEN_EXPIRES_AT=$setup_token_expires_at
 COOKIE_SECURE=true
 CONFIG_ROOT=/data/config
 WEB_UPDATE_ENABLED=true
@@ -179,6 +191,19 @@ systemctl enable --now vertep-update.path vertep-update.timer
 progress "Starting Vertep $version"
 docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" pull "${role_services[@]}"
 docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" up -d --remove-orphans "${role_services[@]}"
+if [[ $NODE_ROLE == text ]]; then
+  ollama_ready=false
+  for attempt in {1..60}; do
+    if docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" \
+        exec -T ollama ollama list >/dev/null 2>&1; then
+      ollama_ready=true; break
+    fi
+    sleep 2
+  done
+  [[ $ollama_ready == true ]] || fail "Ollama did not become ready for model provisioning"
+  docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" \
+    exec -T ollama ollama pull "${VERTEP_OLLAMA_MODEL:-llama3.2}"
+fi
 deadline=$((SECONDS+600))
 service_count=${#role_services[@]}
 until [[ $(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" ps --services --filter status=running | wc -l) -eq $service_count ]] \

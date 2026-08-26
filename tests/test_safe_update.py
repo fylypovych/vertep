@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from core.system_state import (SystemState, dispatch_allowed, get_system_state, jobs_may_be_created,
-                               new_job_status, set_system_state)
+                               new_job_status, operation_allowed, set_system_state)
 from core.update_protocol import (canonical_manifest, validate_manifest, validate_replay_state,
                                   version_tuple)
 
@@ -28,6 +28,22 @@ def test_system_state_controls_job_admission(monkeypatch, tmp_path):
     assert new_job_status() == "WAITING_FOR_SYSTEM"
     set_system_state(SystemState.READ_ONLY, "operator lock")
     assert not jobs_may_be_created()
+    assert not operation_allowed("recovery")
+    set_system_state(SystemState.EMERGENCY, "recovery only")
+    assert not jobs_may_be_created()
+    assert operation_allowed("recovery")
+    assert not operation_allowed("update")
+
+
+def test_central_state_policy_blocks_mutation_during_update(monkeypatch, tmp_path):
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    set_system_state(SystemState.UPDATING, "installing")
+    assert operation_allowed("read")
+    assert operation_allowed("create_job")
+    assert not operation_allowed("mutate_job")
+    assert not operation_allowed("node_control")
+    set_system_state(SystemState.NORMAL, "done")
+    assert operation_allowed("configuration")
     set_system_state(SystemState.EMERGENCY, "recovery only")
     assert not jobs_may_be_created()
 

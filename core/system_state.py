@@ -69,3 +69,19 @@ def jobs_may_be_created() -> bool:
 def new_job_status() -> str:
     """Return the durable initial status without allowing non-NORMAL dispatch."""
     return "NEW" if dispatch_allowed() else "WAITING_FOR_SYSTEM"
+
+
+STATE_OPERATION_POLICY = {
+    SystemState.NORMAL: {"read", "create_job", "mutate_job", "node_control", "configuration", "update"},
+    SystemState.MAINTENANCE: {"read", "create_job", "mutate_job", "node_control", "update"},
+    SystemState.UPDATING: {"read", "create_job"},
+    SystemState.RECOVERING: {"read", "create_job"},
+    SystemState.READ_ONLY: {"read"},
+    SystemState.EMERGENCY: {"read", "recovery"},
+}
+
+
+def operation_allowed(operation: str) -> bool:
+    """Central policy used by API modules instead of scattered state checks."""
+    state = SystemState(get_system_state()["state"])
+    return operation in STATE_OPERATION_POLICY[state]
