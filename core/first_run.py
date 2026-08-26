@@ -49,6 +49,12 @@ def _write(name: str, value: dict) -> None:
 
 def _key_encryption_key(salt: bytes) -> bytes | None:
     passphrase = os.getenv("SECRET_STORE_PASSPHRASE", "")
+    passphrase_file = os.getenv("SECRET_STORE_PASSPHRASE_FILE", "")
+    if passphrase_file:
+        try:
+            passphrase = Path(passphrase_file).read_text(encoding="utf-8").strip()
+        except OSError as error:
+            raise RuntimeError("Secret-store passphrase file is unavailable") from error
     if not passphrase:
         if os.getenv("REQUIRE_SECRET_KEY_SEALING", "false").lower() == "true":
             raise RuntimeError("Secret-store key sealing is required but no passphrase is configured")
@@ -90,7 +96,7 @@ def _decode_key(encoded: str) -> bytes:
             raise ValueError("secret-store key failed authentication") from error
     key = base64.urlsafe_b64decode(encoded)
     # Transparently seal an existing raw data key when a KEK becomes available.
-    if os.getenv("SECRET_STORE_PASSPHRASE"):
+    if os.getenv("SECRET_STORE_PASSPHRASE") or os.getenv("SECRET_STORE_PASSPHRASE_FILE"):
         temporary = config_root() / f".secret-store.key.seal.{os.getpid()}.tmp"
         _write_sealed_key(temporary, key)
         temporary.replace(config_root() / "secret-store.key")

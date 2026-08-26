@@ -6,6 +6,7 @@ import json
 import shutil
 import tempfile
 import platform
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -211,6 +212,24 @@ def host_metrics() -> dict:
     return {"ram_mb": memory_mb, "disk_free_mb": shutil.disk_usage("/").free // 1024 // 1024,
             "cpu_load": cpu_load, "runtime_version": platform.python_version()}
 
+
+def request_local_update(target_version: str) -> None:
+    request_root = os.getenv("UPDATE_REQUEST_DIR", "")
+    if not request_root:
+        raise RuntimeError("UPDATE_REQUEST_DIR is required for coordinated rolling updates")
+    root = Path(request_root)
+    root.mkdir(parents=True, exist_ok=True)
+    marker = root.parent / "worker-update-target"
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == target_version:
+        return
+    request_id = secrets.token_hex(16)
+    temporary = root / f".{request_id}.tmp"
+    temporary.write_text(json.dumps({"request_id": request_id, "action": "update",
+                                     "target_version": target_version}), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(root / f"{request_id}.json")
+    marker.write_text(target_version, encoding="utf-8")
+
 def worker_status(metrics: dict, require_gpu: bool, busy: bool = False) -> str:
     if require_gpu and not metrics.get("gpu_available", False):
         return "ERROR"
@@ -336,6 +355,11 @@ def main() -> None:
                 heartbeat_response.raise_for_status()
                 control = heartbeat_response.json()
                 desired_state = control.get("desired_state")
+                update_target = control.get("update_target_version")
+                if update_target and future is None:
+                    request_local_update(update_target)
+                    desired_state = "UPDATING"
+                    payload["status"] = "UPDATING"
                 if control.get("self_test_requested_at") and future is None:
                     next_self_test = 0
                 if pending_logs:

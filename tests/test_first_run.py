@@ -70,11 +70,13 @@ def test_integration_secrets_are_write_only_and_removable(monkeypatch, tmp_path)
 
 def test_data_key_is_sealed_and_wrong_passphrase_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
-    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "correct horse battery staple")
+    passphrase = tmp_path / "passphrase"
+    passphrase.write_text("correct horse battery staple")
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE_FILE", str(passphrase))
     ensure_secret_store()
     key_envelope = json.loads((tmp_path / "secret-store.key").read_text())
     assert key_envelope["algorithm"] == "scrypt+A256GCM"
     assert "correct horse" not in json.dumps(key_envelope)
-    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "wrong passphrase value")
+    passphrase.write_text("wrong passphrase value")
     with pytest.raises(ValueError, match="authentication"):
         ensure_secret_store()

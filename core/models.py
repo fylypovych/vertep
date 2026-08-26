@@ -226,6 +226,11 @@ class NodeAction(BaseModel):
 class IntegrationSecretUpdate(BaseModel):
     value: str = Field(min_length=1, max_length=16_384)
 
+
+class RollingUpdateRequest(BaseModel):
+    target_version: str = Field(min_length=1, max_length=64, pattern=r"^[0-9][0-9A-Za-z.+-]*$")
+    node_ids: list[str] = Field(min_length=1, max_length=1000)
+
 class TaskRenew(BaseModel):
     node_name: str
     task_id: str

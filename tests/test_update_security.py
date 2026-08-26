@@ -110,3 +110,12 @@ def test_rollback_contract_verifies_backup_and_restores_database():
     assert 'release-layout.py" activate' in script
     assert 'release-layout.py" rollback' in script
     assert 'cp -a "$payload"/. "$ROOT"/' not in script
+
+
+def test_bootstrap_installs_only_checksum_verified_host_update_executor():
+    bootstrap = (Path(__file__).parents[1] / "bootstrap.sh").read_text()
+    for artifact in ("update-agent.py", "vertep", "safe-extract.py", "release-layout.py",
+                     "vertep-update.service", "vertep-update.path"):
+        assert f'.files["{artifact}"].sha256' in bootstrap or 'unit_sha=$(jq' in bootstrap
+    assert 'sha256sum -c -' in bootstrap
+    assert 'systemctl enable --now vertep-update.path vertep-update.timer' in bootstrap

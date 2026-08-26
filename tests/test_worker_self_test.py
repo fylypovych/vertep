@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from adapters.comfyui import ComfyUIAdapter
 from core.dispatcher import available_worker, current_tested_capabilities
 from core.models import Job, JobStatus, worker_transition_allowed
-from worker.service import role_self_test
+from worker.service import request_local_update, role_self_test
 
 
 def job() -> Job:
@@ -60,3 +60,12 @@ def test_scheduler_scores_healthy_candidates(monkeypatch):
     idle_gpu = {**common, "node_name": "gpu-idle", "vram_mb": 16000,
                 "free_vram_mb": 12000, "gpu_load": 10}
     assert available_worker([busy_gpu, idle_gpu], job())["node_name"] == "gpu-idle"
+
+
+def test_coordinated_update_request_is_idempotent(monkeypatch, tmp_path):
+    request_root = tmp_path / "update" / "requests"
+    monkeypatch.setenv("UPDATE_REQUEST_DIR", str(request_root))
+    request_local_update("1.2.3")
+    request_local_update("1.2.3")
+    assert len(list(request_root.glob("*.json"))) == 1
+    assert (request_root.parent / "worker-update-target").read_text() == "1.2.3"

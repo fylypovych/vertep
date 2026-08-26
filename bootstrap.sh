@@ -76,12 +76,26 @@ compose_sha=$(jq -er '.files["docker-compose.yml"].sha256' "$manifest_tmp")
 proxy_sha=$(jq -er '.files["proxy.conf"].sha256' "$manifest_tmp")
 roles_sha=$(jq -er '.files["node_roles.json"].sha256' "$manifest_tmp")
 planner_sha=$(jq -er '.files["deployment-plan.py"].sha256' "$manifest_tmp")
+update_agent_sha=$(jq -er '.files["update-agent.py"].sha256' "$manifest_tmp")
+vertep_cli_sha=$(jq -er '.files["vertep"].sha256' "$manifest_tmp")
+safe_extract_sha=$(jq -er '.files["safe-extract.py"].sha256' "$manifest_tmp")
+release_layout_sha=$(jq -er '.files["release-layout.py"].sha256' "$manifest_tmp")
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.yml" -o "$INSTALL_ROOT/docker-compose.yml"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/proxy.conf" -o "$INSTALL_ROOT/runtime/proxy.conf"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/node_roles.json" -o "$INSTALL_ROOT/config/node_roles.json"
+install -d -m 0750 "$INSTALL_ROOT/scripts"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/update-agent.py" -o "$INSTALL_ROOT/scripts/update-agent.py"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/vertep" -o "$INSTALL_ROOT/scripts/vertep"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/safe-extract.py" -o "$INSTALL_ROOT/scripts/safe-extract.py"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/release-layout.py" -o "$INSTALL_ROOT/scripts/release-layout.py"
 printf '%s  %s\n' "$compose_sha" "$INSTALL_ROOT/docker-compose.yml" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$proxy_sha" "$INSTALL_ROOT/runtime/proxy.conf" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$roles_sha" "$INSTALL_ROOT/config/node_roles.json" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$update_agent_sha" "$INSTALL_ROOT/scripts/update-agent.py" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$vertep_cli_sha" "$INSTALL_ROOT/scripts/vertep" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$safe_extract_sha" "$INSTALL_ROOT/scripts/safe-extract.py" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$release_layout_sha" "$INSTALL_ROOT/scripts/release-layout.py" | sha256sum -c - >/dev/null
+chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
 mapfile -t role_services < <(jq -er --arg role "$NODE_ROLE" '.[$role].services[]' "$INSTALL_ROOT/config/node_roles.json") \
   || fail "unsupported node role: $NODE_ROLE"
 [[ ${#role_services[@]} -gt 0 ]] || fail "node role has no services: $NODE_ROLE"
@@ -110,7 +124,7 @@ WORKER_SECRET=$worker_secret
 ENCRYPTION_KEY=$encryption_key
 INTERNAL_API_KEY=$internal_api_key
 SESSION_SECRET=$session_secret
-SECRET_STORE_PASSPHRASE=$secret_store_passphrase
+SECRET_STORE_PASSPHRASE_FILE=/run/secrets/secret_store_passphrase
 REQUIRE_SECRET_KEY_SEALING=true
 NODE_API_TOKEN=$(secret 48)
 NODE_ROLE=$NODE_ROLE
@@ -129,6 +143,8 @@ UPDATE_RELEASE_RETENTION=3
 GPU_ENABLED=$([[ $gpu_vendor == nvidia ]] && echo true || echo false)
 EOF
 chmod 0600 "$INSTALL_ROOT/.env"
+printf '%s' "$secret_store_passphrase" > "$INSTALL_ROOT/config/secret-store.passphrase"
+chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
 printf '%s  %s\n' "$planner_sha" "$INSTALL_ROOT/runtime/deployment-plan.py" | sha256sum -c - >/dev/null
 python3 "$INSTALL_ROOT/runtime/deployment-plan.py" "$INSTALL_ROOT/config/node_roles.json" "$NODE_ROLE" \
@@ -148,6 +164,17 @@ openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=Vertep Installat
   -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
   -keyout "$INSTALL_ROOT/tls/node-ca.key" -out "$INSTALL_ROOT/tls/node-ca.crt" >/dev/null 2>&1
 chmod 0600 "$INSTALL_ROOT/tls/node-ca.key"
+
+progress "Installing privileged update executor"
+for unit in vertep-update.service vertep-update.path vertep-update-check.service vertep-update.timer; do
+  unit_sha=$(jq -er --arg name "$unit" '.files[$name].sha256' "$manifest_tmp")
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$unit" -o "/tmp/$unit"
+  printf '%s  %s\n' "$unit_sha" "/tmp/$unit" | sha256sum -c - >/dev/null
+  sed "s|@VERTEP_ROOT@|$INSTALL_ROOT|g" "/tmp/$unit" > "/etc/systemd/system/$unit"
+  rm -f "/tmp/$unit"
+done
+systemctl daemon-reload
+systemctl enable --now vertep-update.path vertep-update.timer
 
 progress "Starting Vertep $version"
 docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" pull "${role_services[@]}"

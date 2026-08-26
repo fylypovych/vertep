@@ -35,9 +35,10 @@ proxy-level CRL/OCSP remains required to reject it before forwarding.
    and expiry, online-key digest/channel scope/revocation, plus manifest validity and monotonic sequence.
    Bootstrap distribution, root-key ceremony/escrow, threshold rotation drills and an end-to-end
    compromised-key recovery test remain required before release.
-2. **The container update agent no longer mounts the Docker socket.** It is read-only, capability-free
-   and uses `no-new-privileges`. Complete image reconciliation through a narrowly scoped host service
-   with signed-plan enforcement and an audit record for every privileged operation.
+2. **The container update agent no longer mounts the Docker socket.** Bootstrap now checksum-verifies
+   and installs the host-side systemd executor before enabling its path/timer, while the container is
+   read-only, capability-free and uses `no-new-privileges`. The remaining qualification work is to
+   narrow the host executor API further and exercise its sandbox on disposable Ubuntu hosts.
 3. **Bootstrap environment secrets still need sealing.** Core records are now migrated from
    plaintext JSON into a versioned AES-256-GCM envelope with a random nonce and a separate
    installation data key; authenticated reads fail closed after tampering. The data key is now
@@ -49,7 +50,9 @@ proxy-level CRL/OCSP remains required to reject it before forwarding.
    pre-update PostgreSQL dump. Release payloads are now installed in immutable version directories;
    an atomic `current` symlink selects the active release and rollback switches that pointer before
    restoring the database. Multiple Core replicas still require a database-backed fencing epoch;
-   rolling/canary coordination and phase-by-phase power-loss tests remain open. Manifests now
+   rolling coordination now drains and advances one node at a time with target-version pinning,
+   self-test gating and stop-on-first-failure. Multi-host execution, canary rollback and
+   phase-by-phase power-loss tests remain open. Manifests now
    declare database schema/strategy/rollback safety, rolling mode rejects contract migrations,
    and retention pruning preserves both active and rollback releases.
 

@@ -149,6 +149,9 @@ def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
     with UpdateLease(state_dir, request_id):
         try:
             manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
+            requested_version = request.get("target_version")
+            if requested_version and manifest.get("version") != requested_version:
+                raise RuntimeError("Update server did not return the coordinated target version")
             public_key = Path(os.getenv(
                 "UPDATE_PUBLIC_KEY", str(root / "installer" / "update-public.pem")))
             channel = os.getenv("UPDATE_CHANNEL", "stable")

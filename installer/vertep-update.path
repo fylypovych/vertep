@@ -2,7 +2,7 @@
 Description=Watch for Vertep Web update requests
 
 [Path]
-PathExistsGlob=@VERTEP_ROOT@/runtime/update/requests/*.json
+PathExistsGlob=@VERTEP_ROOT@/config/update/requests/*.json
 Unit=vertep-update.service
 
 [Install]

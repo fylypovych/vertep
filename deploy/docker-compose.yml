@@ -32,6 +32,8 @@ services:
       WORKER_SELF_TEST_MAX_AGE_SECONDS: "900"
       WORKER_CLOCK_SKEW_SECONDS: "300"
       REQUIRE_SECRET_KEY_SEALING: "true"
+      SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
+    secrets: [secret_store_passphrase]
     volumes:
       - ./config:/data/config
       - ./logs:/data/logs
@@ -72,6 +74,7 @@ services:
       PUBLISHER_HEALTH_URL: http://publisher-worker:8091/health
       PROMETHEUS_URL: http://monitoring:9090/-/healthy
       BACKUP_ROOT: /data/backups
+      UPDATE_REQUEST_DIR: /data/config/update/requests
     volumes: ["./models:/data/models", "./logs:/data/logs", "./config:/data/config", "./backups:/data/backups"]
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import worker.service' >/dev/null"]
@@ -191,3 +194,6 @@ volumes:
   models: {}
   monitoring-data: {}
   grafana-data: {}
+secrets:
+  secret_store_passphrase:
+    file: ${SECRET_STORE_PASSPHRASE_FILE_HOST:-./config/secret-store.passphrase}

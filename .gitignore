@@ -1,4 +1,5 @@
 .env
+config/secret-store.passphrase
 .venv/
 __pycache__/
 .pytest_cache/

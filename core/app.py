@@ -28,7 +28,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from .models import (JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
                      WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
-                     WorkerLogBatch, NodeAction, IntegrationSecretUpdate, utc_now)
+                     WorkerLogBatch, NodeAction, IntegrationSecretUpdate,
+                     RollingUpdateRequest, utc_now)
 from .dispatcher import available_worker, can_retry
 from .pipeline import JobStore, prepare_job_safe, finalize_job_safe
 from .queue import TaskQueue
@@ -50,6 +51,7 @@ from .node_registry import (create_node_csr, create_registration_token, enroll_n
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token)
 from .version import application_version
+from .rolling_update import reconcile_rollout, rollout_status, start_rollout
 from adapters.telegram import TelegramAdapter
 from adapters.publisher import PUBLISHERS
 
@@ -872,9 +874,13 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     data["last_seen"] = utc_now()
     store.workers[payload.node_name] = data
     store.save_worker(data)
+    reconcile_rollout(store.workers)
+    data = store.workers[payload.node_name]
+    store.save_worker(data)
     return {"accepted": True, "workers": len(store.workers),
             "desired_state": data.get("desired_state"),
-            "self_test_requested_at": data.get("self_test_requested_at")}
+            "self_test_requested_at": data.get("self_test_requested_at"),
+            "update_target_version": data.get("update_target_version")}
 
 @app.get("/api/workers")
 def workers():
@@ -1247,6 +1253,27 @@ def web_update_run():
         raise HTTPException(409, str(error)) from error
     except OSError as error:
         raise HTTPException(503, f"Update agent state directory is unavailable: {error}") from error
+
+
+@app.get("/api/system/update/rolling")
+def rolling_update_status():
+    return rollout_status()
+
+
+@app.post("/api/system/update/rolling")
+def begin_rolling_update(payload: RollingUpdateRequest):
+    registered = {node["node_id"] for node in registered_nodes() if not node.get("revoked_at")}
+    unknown = sorted(set(payload.node_ids) - registered)
+    if unknown:
+        raise HTTPException(422, f"Unknown or revoked nodes: {', '.join(unknown)}")
+    try:
+        rollout = start_rollout(payload.target_version, payload.node_ids)
+        reconcile_rollout(store.workers)
+        return rollout
+    except RuntimeError as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 @app.get("/api/node/status/{node_name}")
 def node_system_status(node_name: str, request: Request):

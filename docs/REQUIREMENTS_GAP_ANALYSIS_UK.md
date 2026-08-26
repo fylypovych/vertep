@@ -35,7 +35,7 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Автоматичний rollback | Частково | Application rollback атомарно повертає immutable release, перевіряє backup checksums і автоматично відновлює PostgreSQL dump; compatibility рішення та повний health check старої версії ще потребують integration qualification. |
 | Recovery після power loss | Частково | Agent вміє побачити перервану фазу при старті, але немає гарантованого boot trigger для recovery та fault-injection тестів кожної фази. |
 | Окремий update journal | Є для прототипу | Потрібні append-only/audit semantics, rotation, export у monitoring та correlation ID на всіх вузлах. |
-| Rolling update Worker-вузлів | Немає | Відсутні порядок, drain одного вузла, self-test, canary, max-unavailable і stop-on-first-failure orchestration. |
+| Rolling update Worker-вузлів | Частково | Є durable coordinator з drain, `maxUnavailable=1`, target-version pinning, self-test gate і stop-on-first-failure; потрібні multi-host/host-executor integration та canary rollback tests. |
 | Глобальні `READ_ONLY`/`EMERGENCY` semantics | Частково | Стани оголошені, але більшість API не визначає дозволені операції для кожного стану. |
 
 ## 2. Bootstrap Installer та First Run Wizard
@@ -79,7 +79,7 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Capability-driven dispatch | Частково | Dispatcher використовує persisted `tested_capabilities`, вимагає свіжий role-matched self-test і відхиляє capability поза role allowlist. Ще потрібні model/module attestation, load score, locality та fair scheduling. |
 | Worker states | Частково | Є `WorkerState`, legal transitions та admin actions drain/resume/quarantine/unquarantine/self-test; ще потрібен окремий PostgreSQL transition audit. |
 | Worker health | Частково | Heartbeat має GPU, available RAM, disk, CPU load і runtime version; ще потрібні Docker/model status, latency та production role qualification. |
-| Однаковий Update Agent на ролях | Частково | Service є у role plans, але per-node autonomous update, Core notification, coordinated compatibility і rolling policy не завершені. |
+| Однаковий Update Agent на ролях | Частково | Worker створює idempotent local signed-update request для coordinated target version; потрібен production host-executor integration на кожній ролі. |
 | Core Dashboard fleet view | Частково | Є basic Worker list/token generation. Немає повного registered-node inventory, role/capability filters, cert expiry, update state, drain/revoke/rotate/self-test actions. |
 
 ## Критичні технічні дефекти поточної реалізації
@@ -87,9 +87,9 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 1. **Role catalog перебільшує фактичну функціональність.** `modules` містить ComfyUI,
    CUDA, TTS, backup, Grafana та publisher adapters, хоча service allowlist часто запускає
    лише generic `worker`. UI повинен показувати `planned`, `installed`, `healthy` окремо.
-2. **Container Update Agent більше не має Docker socket.** Він запускається read-only без
-   capabilities та `no-new-privileges`. Для повного container-update lifecycle ще потрібен
-   окремий host-side вузький RPC з allowlist і audit замість повернення socket mount.
+2. **Container Update Agent більше не має Docker socket.** Bootstrap checksum-перевіряє та
+   встановлює host-side systemd executor/path/timer, а контейнер запускається read-only без
+   capabilities. Ще потрібні disposable-host sandbox tests і подальше звуження privileged API.
 3. **Secret store завершено частково.** Core secrets мігруються у versioned AES-256-GCM
    envelope та проходять authentication під час читання. Installation data key і bootstrap
    `.env` поки залишаються локальними mode-`0600` файлами; потрібні TPM/KMS/passphrase sealing,
