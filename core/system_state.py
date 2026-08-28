@@ -53,6 +53,8 @@ def set_system_state(state: SystemState | str, reason: str, operation_id: str | 
             os.fsync(directory)
         finally:
             os.close(directory)
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
     return value
 
 

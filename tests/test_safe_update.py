@@ -10,6 +10,11 @@ from core.system_state import (SystemState, dispatch_allowed, get_system_state, 
 from core.update_protocol import (canonical_manifest, validate_manifest, validate_replay_state,
                                   version_tuple)
 
+import pytest
+
+from core.system_state import SystemState, dispatch_allowed, get_system_state, set_system_state
+from core.update_protocol import canonical_manifest, validate_manifest, version_tuple
+
 
 def test_global_state_is_durable_and_blocks_dispatch(monkeypatch, tmp_path):
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))

@@ -37,6 +37,8 @@ services:
       REQUIRE_SECRET_KEY_SEALING: "true"
       SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
     secrets: [secret_store_passphrase]
+      NODE_REGISTRY_BACKEND: postgres
+      REQUIRE_WORKER_SELF_TEST: "true"
     volumes:
       - ./config:/data/config
       - ./logs:/data/logs
@@ -185,6 +187,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
     tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD-SHELL", "test -d /data/config"]
       interval: 30s

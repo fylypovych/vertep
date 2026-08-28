@@ -4,6 +4,10 @@ from adapters.comfyui import ComfyUIAdapter
 from core.dispatcher import available_worker, current_tested_capabilities
 from core.models import Job, JobStatus, worker_transition_allowed
 from worker.service import request_local_update, role_self_test
+from adapters.comfyui import ComfyUIAdapter
+from core.dispatcher import available_worker
+from core.models import Job, JobStatus
+from worker.service import role_self_test
 
 
 def job() -> Job:
@@ -69,3 +73,10 @@ def test_coordinated_update_request_is_idempotent(monkeypatch, tmp_path):
     request_local_update("1.2.3")
     assert len(list(request_root.glob("*.json"))) == 1
     assert (request_root.parent / "worker-update-target").read_text() == "1.2.3"
+    base = {"node_name": "gpu-01", "status": "FREE", "last_seen": "2026-08-25T00:00:00+00:00",
+            "vram_mb": 16000, "capabilities": ["image_generation"], "supported_workflows": ["*"]}
+    # Patch the timestamp into the future so heartbeat expiry is not the subject of this test.
+    base["last_seen"] = "2999-08-25T00:00:00+00:00"
+    assert available_worker([base], job()) is None
+    base["self_test"] = {"status": "PASSED"}
+    assert available_worker([base], job())["node_name"] == "gpu-01"

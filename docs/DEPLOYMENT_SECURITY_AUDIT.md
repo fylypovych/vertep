@@ -68,6 +68,32 @@ proxy-level CRL/OCSP remains required to reject it before forwarding.
    intersected with the role allowlist. Real model/module attestations, publisher assertions, and
    physical-GPU failure/recovery tests are still required.
 
+## P0 — release blockers
+
+1. **The shipped update public key has no documented release-key lifecycle.** Define separate
+   offline root and online release keys, key IDs, validity windows, revocation, and an offline
+   root-signed key rotation document. Do not publish a generated placeholder as a production
+   trust anchor.
+2. **The update agent mounts the unrestricted Docker socket.** A compromised agent becomes root
+   on the host. Put updates behind a narrowly scoped host service or a socket proxy that permits
+   only required image/compose operations, run it with a signed deployment plan, and audit every
+   operation.
+3. **Secrets are plaintext JSON and `.env` files.** Mode `0600` is necessary but does not meet the
+   stated encrypted secret-store requirement. Encrypt records with an installation data key
+   sealed by TPM 2.0 or a passphrase/KMS, use per-record nonces and authenticated encryption,
+   redact backup/log output, and support rotation without reinstalling nodes.
+
+## P1 — correctness and security before beta
+
+1. **Certificate revocation needs proxy-level enforcement.** Enrollment and automatic renewal use
+   node-generated keys, CSR, URI SAN, clientAuth EKU, tracked serials, rotated JWT/secret generations,
+   and proxy-enforced mTLS. Core rejects revoked identities, but Nginx still needs CRL/OCSP-style
+   serial rejection before forwarding a revoked certificate.
+2. **Role self-tests need production qualification.** Worker now runs periodic GPU workflow,
+   Ollama inference, runtime HTTP, Prometheus, and backup read/write checks, and appliance dispatch
+   requires a pass. Real model fixtures, durable attestation, publisher assertions, and physical-GPU
+   failure/recovery tests are still required.
+
 ## P2 — architecture and operations
 
 1. Split the current monolithic/minified Web files into versioned JS/CSS modules with accessible
@@ -92,6 +118,7 @@ proxy-level CRL/OCSP remains required to reject it before forwarding.
 4. **Capability attestation:** allowlists, role-specific self-tests, health-aware scheduling.
 5. **Secret store:** encrypted-at-rest records are implemented; add key sealing, Docker secrets,
    backup redaction, and key/credential rotation.
+5. **Secret store:** encrypted-at-rest records, backup redaction, key/credential rotation.
 6. **Operational UI:** node inventory/actions, backup/restore, health, certificates, logs, updates.
 7. **Release qualification:** disposable-VM and physical-GPU end-to-end matrix before calling the
    workflow production-ready.

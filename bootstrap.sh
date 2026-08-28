@@ -106,6 +106,12 @@ printf '%s  %s\n' "$vertep_cli_sha" "$INSTALL_ROOT/scripts/vertep" | sha256sum -
 printf '%s  %s\n' "$safe_extract_sha" "$INSTALL_ROOT/scripts/safe-extract.py" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$release_layout_sha" "$INSTALL_ROOT/scripts/release-layout.py" | sha256sum -c - >/dev/null
 chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.yml" -o "$INSTALL_ROOT/docker-compose.yml"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/proxy.conf" -o "$INSTALL_ROOT/runtime/proxy.conf"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/node_roles.json" -o "$INSTALL_ROOT/config/node_roles.json"
+printf '%s  %s\n' "$compose_sha" "$INSTALL_ROOT/docker-compose.yml" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$proxy_sha" "$INSTALL_ROOT/runtime/proxy.conf" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$roles_sha" "$INSTALL_ROOT/config/node_roles.json" | sha256sum -c - >/dev/null
 mapfile -t role_services < <(jq -er --arg role "$NODE_ROLE" '.[$role].services[]' "$INSTALL_ROOT/config/node_roles.json") \
   || fail "unsupported node role: $NODE_ROLE"
 [[ ${#role_services[@]} -gt 0 ]] || fail "node role has no services: $NODE_ROLE"
@@ -125,6 +131,8 @@ secret_store_passphrase=$(secret 48)
 setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
 setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
 setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
+setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
+setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
 cat > "$INSTALL_ROOT/.env" <<EOF
 VERTEP_VERSION=$version
 VERTEP_IMAGE_REPOSITORY=${VERTEP_IMAGE_REPOSITORY:-registry.vertep.ai/vertep}
@@ -157,6 +165,9 @@ EOF
 chmod 0600 "$INSTALL_ROOT/.env"
 printf '%s' "$secret_store_passphrase" > "$INSTALL_ROOT/config/secret-store.passphrase"
 chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase"
+GPU_ENABLED=$([[ $gpu_vendor == nvidia ]] && echo true || echo false)
+EOF
+chmod 0600 "$INSTALL_ROOT/.env"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
 printf '%s  %s\n' "$planner_sha" "$INSTALL_ROOT/runtime/deployment-plan.py" | sha256sum -c - >/dev/null
 python3 "$INSTALL_ROOT/runtime/deployment-plan.py" "$INSTALL_ROOT/config/node_roles.json" "$NODE_ROLE" \
@@ -204,6 +215,9 @@ if [[ $NODE_ROLE == text ]]; then
   docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" \
     exec -T ollama ollama pull "${VERTEP_OLLAMA_MODEL:-llama3.2}"
 fi
+progress "Starting Vertep $version"
+docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" pull "${role_services[@]}"
+docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" up -d --remove-orphans "${role_services[@]}"
 deadline=$((SECONDS+600))
 service_count=${#role_services[@]}
 until [[ $(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" ps --services --filter status=running | wc -l) -eq $service_count ]] \

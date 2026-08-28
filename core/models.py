@@ -206,6 +206,9 @@ class WorkerHeartbeat(BaseModel):
     disk_free_mb: int | None = None
     cpu_load: float | None = None
     runtime_version: str | None = None
+    version: str | None = None
+    ram_mb: int | None = None
+    disk_free_mb: int | None = None
     self_test: dict[str, Any] = Field(default_factory=dict)
 
 class TaskClaim(BaseModel):

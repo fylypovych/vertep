@@ -5,6 +5,7 @@ import pytest
 from core.first_run import (complete_setup, configured_user, ensure_secret_store,
                             integration_secret_status, is_configured,
                             set_integration_secret, setup_status)
+from core.first_run import complete_setup, configured_user, is_configured, setup_status
 
 
 def test_first_run_creates_manifest_and_secret_store(monkeypatch, tmp_path):
@@ -17,6 +18,10 @@ def test_first_run_creates_manifest_and_secret_store(monkeypatch, tmp_path):
     assert status["configured"] is False
     assert (tmp_path / "secrets.enc.json").stat().st_mode & 0o777 == 0o600
     assert (tmp_path / "secret-store.key").stat().st_mode & 0o777 == 0o600
+    assert not is_configured()
+    status = setup_status()
+    assert status["configured"] is False
+    assert (tmp_path / "secrets.json").stat().st_mode & 0o777 == 0o600
     result = complete_setup("Vertep Production", "operator", "very-secure-password",
                             "very-secure-password", "ollama")
     assert result["version"] == "1.2.3"

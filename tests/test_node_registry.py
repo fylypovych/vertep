@@ -6,6 +6,7 @@ import pytest
 from core.node_registry import (create_registration_token, enroll_node, registered_nodes,
                                 create_node_csr, renew_node, revoke_node,
                                 verify_node_certificate, verify_node_token)
+                                create_node_csr, renew_node, revoke_node, verify_node_token)
 
 
 def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch, tmp_path):
@@ -57,6 +58,12 @@ def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch
     crl_text = subprocess.run(["openssl", "crl", "-in", str(crl), "-text", "-noout"],
                               check=True, capture_output=True, text=True).stdout.lower().replace(":", "")
     assert renewed_serial.lower().lstrip("0") in crl_text
+    assert renewed["jwt"] != enrolled["jwt"]
+    assert not verify_node_token(enrolled["jwt"], "gpu-01")
+    assert verify_node_token(renewed["jwt"], "gpu-01")
+    revoke_node("gpu-01")
+    assert not verify_node_token(renewed["jwt"], "gpu-01")
+    assert not verify_node_token(renewed["worker_secret"], "gpu-01")
 
 
 def test_role_catalog_is_extensible_without_registry_changes(monkeypatch, tmp_path):

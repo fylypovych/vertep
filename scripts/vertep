@@ -79,6 +79,14 @@ case "${1:-status}" in
     # Compose interpolation must use the persistent environment, while the
     # signed compose definition and application files come from the release.
     compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
+    fi
+    staging=$(mktemp -d "$ROOT/.update-staging.XXXXXX")
+    trap 'rm -rf "$staging"' EXIT
+    python3 "$ROOT/scripts/safe-extract.py" "$package" "$staging"
+    payload="$staging"
+    [[ $(find "$staging" -mindepth 1 -maxdepth 1 -type d | wc -l) == 1 && ! -f "$staging/VERSION" ]] && payload=$(find "$staging" -mindepth 1 -maxdepth 1 -type d | head -1)
+    [[ -f "$payload/VERSION" && "$(tr -d '[:space:]' < "$payload/VERSION")" == "$target_version" ]] || { echo "Package VERSION does not match manifest" >&2; exit 1; }
+    cp -a "$payload"/. "$ROOT"/
     if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
       "${compose[@]}" up -d postgres redis
       database_ready=false
@@ -159,6 +167,7 @@ case "${1:-status}" in
       "${compose[@]}" exec -T postgres \
         psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$backup/postgres.sql"
     fi
+    tar -xzf "$backup/application.tar.gz" -C "$ROOT"
     case "$role" in
       worker) "${compose[@]}" up -d worker ;;
       core) "${compose[@]}" up -d core redis postgres ;;

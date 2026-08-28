@@ -86,6 +86,19 @@ def core_json(path: str) -> dict:
         return json.load(response)
 
 
+
+
+def core_json(path: str) -> dict:
+    url = os.getenv("VERTEP_CORE_URL", "http://127.0.0.1:8080").rstrip("/") + path
+    request = Request(url)
+    password = os.getenv("ADMIN_PASSWORD")
+    if password:
+        credentials = f"{os.getenv('ADMIN_USER', 'admin')}:{password}"
+        request.add_header("Authorization", "Basic " + base64.b64encode(credentials.encode()).decode())
+    with urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
 def transition(state_dir: Path, state: dict, phase: str, message: str) -> None:
     from core.system_state import SystemState, set_system_state
     state.update({"phase": phase, "message": message, "updated_at": now()})
@@ -136,6 +149,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
                                       validate_replay_state, version_tuple)
     from core.update_lease import UpdateLease
     from core.update_trust import authorize_release_key, validate_root_metadata
+                                      version_tuple)
     from core.version import application_version
 
     request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -237,6 +251,46 @@ def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
             state["log"] = state.get("log", [])[-500:]
             atomic_json(state_dir / "status.json", state)
             request_path.unlink(missing_ok=True)
+    try:
+        manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
+        public_key = Path(os.getenv("UPDATE_PUBLIC_KEY", str(root / "installer" / "update-public.pem")))
+        validate_manifest(manifest, public_key)
+        current = application_version()
+        state.update({"current_version": current, "available_version": manifest["version"],
+                      "required": bool(manifest.get("required", False)),
+                      "update_available": version_tuple(manifest["version"]) > version_tuple(current)})
+        transition(state_dir, state, "CHECKING", "Signed release manifest verified")
+        if action == "update" and state["update_available"]:
+            wait_for_drain(state_dir, state)
+            package = download_package(manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
+            transition(state_dir, state, "UPDATING", "Backup and package installation started")
+            output = run(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
+                          str(package), manifest["version"]], root)
+            state["log"].extend(output.splitlines()[-200:])
+        state.update({"state": "SUCCEEDED", "phase": "NORMAL",
+                      "message": "Update completed" if action == "update" else "Update check completed",
+                      "updated_at": now()})
+        set_system_state(SystemState.NORMAL, state["message"], request_id)
+    except Exception as error:
+        state.setdefault("log", []).append(f"{now()} {error}")
+        if state.get("phase") == "UPDATING":
+            try:
+                transition(state_dir, state, "RECOVERING", "Health check failed; rolling back")
+                state["log"].extend(run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root).splitlines()[-100:])
+                state["state"] = "ROLLED_BACK"
+                set_system_state(SystemState.NORMAL, "Automatic rollback completed", request_id)
+            except Exception as rollback_error:
+                state.update({"state": "FAILED", "phase": "EMERGENCY"})
+                state["log"].append(f"{now()} rollback failed: {rollback_error}")
+                set_system_state(SystemState.EMERGENCY, "Update and rollback failed", request_id)
+        else:
+            state.update({"state": "FAILED", "phase": "NORMAL"})
+            set_system_state(SystemState.NORMAL, "Update stopped before installation", request_id)
+        state.update({"message": str(error), "updated_at": now()})
+    finally:
+        state["log"] = state.get("log", [])[-500:]
+        atomic_json(state_dir / "status.json", state)
+        request_path.unlink(missing_ok=True)
 
 
 def main() -> None:

@@ -17,6 +17,9 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 
+from datetime import datetime, timezone
+from pathlib import Path
+
 from .first_run import config_root, ensure_secret_store
 
 
@@ -47,6 +50,9 @@ def _load() -> dict:
         return value if isinstance(value, dict) else {"tokens": {}, "nodes": {}, "revoked_serials": []}
     except (OSError, ValueError):
         return {"tokens": {}, "nodes": {}, "revoked_serials": []}
+        return value if isinstance(value, dict) else {"tokens": {}, "nodes": {}}
+    except (OSError, ValueError):
+        return {"tokens": {}, "nodes": {}}
 
 
 def _save(value: dict) -> None:
@@ -201,6 +207,9 @@ def revoke_node(node_id: str) -> dict:
         value = dict(row)
         write_node_crl()
         return value
+        if not row:
+            raise KeyError(node_id)
+        return dict(row)
     with _lock:
         registry = _load()
         node = registry.get("nodes", {}).get(node_id)
@@ -215,6 +224,8 @@ def revoke_node(node_id: str) -> dict:
         result = {key: value for key, value in node.items() if key != "secret_hash"}
     write_node_crl()
     return result
+        _save(registry)
+        return {key: value for key, value in node.items() if key != "secret_hash"}
 
 
 def renew_node(node_id: str, csr: str) -> dict:
@@ -253,6 +264,8 @@ def renew_node(node_id: str, csr: str) -> dict:
             _save(registry)
             role, generation, capabilities = node["role"], node["credential_generation"], node["capabilities"]
     write_node_crl()
+            _save(registry)
+            role, generation, capabilities = node["role"], node["credential_generation"], node["capabilities"]
     return {"worker_id": node_id, "role": role, "status": "READY",
             "jwt": issue_node_token(node_id, role, generation), "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": ca_certificate,
@@ -276,6 +289,7 @@ def _node_record(node_id: str) -> dict:
         with connection.cursor(row_factory=dict_row) as cursor:
             row = cursor.execute("""SELECT node_id,status,credential_generation,secret_hash,
                 certificate_serial,certificate_expires_at
+            row = cursor.execute("""SELECT node_id,status,credential_generation,secret_hash
                 FROM registered_nodes WHERE node_id=%s""", (node_id,)).fetchone()
     return dict(row) if row else {}
 
@@ -356,6 +370,7 @@ def _issue_certificate(node_id: str, csr_pem: str) -> tuple[str, str, str, str]:
             subprocess.run(["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca_cert),
                             "-CAkey", str(ca_key), "-set_serial", str(secrets.randbits(159) or 1),
                             "-days", "397", "-sha256",
+                            "-CAkey", str(ca_key), "-CAcreateserial", "-days", "397", "-sha256",
                             "-extfile", str(extensions), "-out", str(certificate)], check=True, capture_output=True)
             metadata = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", "-serial", "-enddate"],
                                       check=True, capture_output=True, text=True).stdout.splitlines()

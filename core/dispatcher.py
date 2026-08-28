@@ -39,6 +39,8 @@ def available_worker(workers: list[dict], job: Job) -> dict | None:
         require_self_test = os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"
         tested_capabilities = current_tested_capabilities(worker, now)
         if require_self_test and not tested_capabilities:
+        if (worker.get("self_test", {}).get("status") != "PASSED"
+                and os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"):
             continue
         available_vram = worker.get("free_vram_mb")
         if available_vram is None:
@@ -49,6 +51,7 @@ def available_worker(workers: list[dict], job: Job) -> dict | None:
                                "text": "text_generation", "voice": "speech_synthesis",
                                "publish": "publishing"}.get(job.task_type, job.task_type)
         capabilities = tested_capabilities if require_self_test else set(worker.get("capabilities") or [])
+        capabilities = worker.get("capabilities") or []
         if capabilities and required_capability not in capabilities:
             continue
         if not capabilities and job.task_type not in worker.get("supported_tasks", ["image"]):

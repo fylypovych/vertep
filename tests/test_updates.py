@@ -64,6 +64,7 @@ def test_update_agent_persists_signed_check_result_and_removes_request(monkeypat
         "version": "99.0.0", "required": False, "package": "packages/vertep.tar.gz",
         "sha256": "1" * 64, "signature": "signed"})
     monkeypatch.setattr(protocol, "validate_manifest", lambda manifest, public_key, **kwargs: manifest)
+    monkeypatch.setattr(protocol, "validate_manifest", lambda manifest, public_key: manifest)
     agent.process_request(root, state, request_path)
     result = json.loads((state / "status.json").read_text(encoding="utf-8"))
     assert result["state"] == "SUCCEEDED"

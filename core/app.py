@@ -50,6 +50,11 @@ from .first_run import (complete_setup, configured_user, is_configured, session_
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
+from .system_state import dispatch_allowed, get_system_state
+from .first_run import (complete_setup, configured_user, is_configured, session_secret,
+                        setup_status, config_root)
+from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
+                            registered_nodes, renew_node, revoke_node, verify_node_token)
 from .version import application_version
 from .rolling_update import reconcile_rollout, rollout_status, start_rollout
 from adapters.telegram import TelegramAdapter
@@ -126,6 +131,10 @@ def _valid_worker_token(node_name: str, supplied: str, client_dn: str = "",
         common_names = re.findall(r"(?:^|[,/])\s*CN=([^,/]+)", client_dn)
         if (not common_names or not secrets.compare_digest(common_names[-1], node_name)
                 or not verify_node_certificate(node_name, client_serial)):
+def _valid_worker_token(node_name: str, supplied: str, client_dn: str = "") -> bool:
+    if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
+        common_names = re.findall(r"(?:^|[,/])\s*CN=([^,/]+)", client_dn)
+        if not common_names or not secrets.compare_digest(common_names[-1], node_name):
             return False
     if supplied and verify_node_token(supplied, node_name):
         return True
@@ -224,6 +233,12 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 operation = "update"
             if operation and not operation_allowed(operation):
                 return Response(f"Operation {operation} is blocked by system state", 423)
+            if (expected_setup and request.url.path.startswith("/api/setup")
+                    and not secrets.compare_digest(
+                        hashlib.sha256(request.headers.get("x-vertep-setup-token", "").encode()).hexdigest(),
+                        expected_setup)):
+                return Response("Invalid setup code", 401)
+            return self._secure(await call_next(request))
         client = request.client.host if request.client else "unknown"
         window = request_windows[client]
         now = time.time()
@@ -601,6 +616,7 @@ def logs(limit: int = 200, level: str | None = None, job_id: str | None = None):
 @app.post("/api/logs/ingest")
 def ingest_logs(batch: WorkerLogBatch, request: Request):
     if not _valid_worker_request(batch.node_name, request):
+    if not _valid_worker_token(batch.node_name, request.headers.get("x-vertep-token", ""), request.headers.get("x-vertep-client-dn", "")):
         raise HTTPException(401, "Token is not valid for this worker")
     for entry in batch.entries:
         level = str(entry.get("level", "INFO")).upper()
@@ -876,6 +892,7 @@ def delete_job(job_id: str):
 @app.post("/api/workers/heartbeat")
 def heartbeat(payload: WorkerHeartbeat, request: Request):
     if not _valid_worker_request(payload.node_name, request):
+    if not _valid_worker_token(payload.node_name, request.headers.get("x-vertep-token", ""), request.headers.get("x-vertep-client-dn", "")):
         raise HTTPException(401, "Token is not valid for this worker")
     data = payload.model_dump()
     if data["status"] in {"ONLINE", "FREE"}:
@@ -1248,6 +1265,8 @@ def disable_node(node_id: str):
 @app.post("/api/nodes/{node_id}/renew")
 async def renew_node_credentials(node_id: str, request: Request):
     if not _valid_worker_request(node_id, request):
+    if not _valid_worker_token(node_id, request.headers.get("x-vertep-token", ""),
+                               request.headers.get("x-vertep-client-dn", "")):
         raise HTTPException(401, "Node credentials are not valid")
     payload = await request.json()
     try:
@@ -1265,6 +1284,7 @@ def web_update_status():
 def update_readiness():
     active = [job.job_id for job in store.jobs.values() if job.status not in {
         JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM, JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED,
+        JobStatus.NEW, JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED,
         JobStatus.PAUSED, JobStatus.CANCELLED}]
     busy = [worker.get("node_name") for worker in store.workers.values()
             if worker.get("status") == "BUSY" or worker.get("current_task")]
@@ -1314,6 +1334,7 @@ def begin_rolling_update(payload: RollingUpdateRequest):
 @app.get("/api/node/status/{node_name}")
 def node_system_status(node_name: str, request: Request):
     if not _valid_worker_request(node_name, request):
+    if not _valid_worker_token(node_name, request.headers.get("x-vertep-token", ""), request.headers.get("x-vertep-client-dn", "")):
         raise HTTPException(401, "Token is not valid for this worker")
     return system_status()
 
@@ -1365,6 +1386,12 @@ def claim_task(payload: TaskClaim, request: Request):
     worker_data = dict(registered_worker)
     claim_metrics = payload.model_dump(exclude={"node_name", "capabilities"})
     worker_data.update(claim_metrics)
+    if not _valid_worker_token(payload.node_name, request.headers.get("x-vertep-token", ""), request.headers.get("x-vertep-client-dn", "")):
+        raise HTTPException(401, "Token is not valid for this worker")
+    if not dispatch_allowed():
+        return {"task": None, "system_state": get_system_state()["state"]}
+    worker_data = payload.model_dump()
+    worker_data.update({"status": "ONLINE", "last_seen": utc_now()})
     held_tasks = []
     scan_limit = max(1, task_queue.depth())
     for _ in range(scan_limit):
@@ -1401,6 +1428,7 @@ def claim_task(payload: TaskClaim, request: Request):
 @app.post("/api/tasks/renew")
 def renew_task(payload: TaskRenew, request: Request):
     if not _valid_worker_request(payload.node_name, request):
+    if not _valid_worker_token(payload.node_name, request.headers.get("x-vertep-token", ""), request.headers.get("x-vertep-client-dn", "")):
         raise HTTPException(401, "Token is not valid for this worker")
     job = next((job for job in store.jobs.values() if payload.task_id in job.active_task_ids), None)
     scene = _scene_for_task(job, payload.task_id) if job else None
@@ -1411,6 +1439,7 @@ def renew_task(payload: TaskRenew, request: Request):
 @app.get("/api/tasks/cancellations/{node_name}")
 def task_cancellations(node_name: str, request: Request):
     if not _valid_worker_request(node_name, request):
+    if not _valid_worker_token(node_name, request.headers.get("x-vertep-token", ""), request.headers.get("x-vertep-client-dn", "")):
         raise HTTPException(401, "Token is not valid for this worker")
     return task_queue.pop_cancellations(node_name)
 
@@ -1443,6 +1472,7 @@ def retry_dead_letter_task(task_id: str):
 @_serialize_job_result
 def task_result(result: TaskResult, request: Request):
     if not _valid_worker_request(result.node_name, request):
+    if not _valid_worker_token(result.node_name, request.headers.get("x-vertep-token", ""), request.headers.get("x-vertep-client-dn", "")):
         raise HTTPException(401, "Token is not valid for this worker")
     job = store.jobs.get(result.job_id)
     if not job:

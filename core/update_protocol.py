@@ -52,6 +52,7 @@ def _parse_utc(value: object, field: str) -> datetime:
 
 def validate_manifest(manifest: dict, public_key: Path, current: str | None = None,
                       expected_channel: str | None = None, now: datetime | None = None) -> dict:
+def validate_manifest(manifest: dict, public_key: Path, current: str | None = None) -> dict:
     required = {"version", "package", "sha256", "signature"}
     if not required.issubset(manifest):
         raise ValueError(f"Manifest is missing: {', '.join(sorted(required - manifest.keys()))}")
