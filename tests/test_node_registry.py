@@ -4,7 +4,8 @@ import subprocess
 import pytest
 
 from core.node_registry import (create_registration_token, enroll_node, registered_nodes,
-                                create_node_csr, renew_node, revoke_node, verify_node_token)
+                                create_node_csr, renew_node, revoke_node,
+                                verify_node_certificate, verify_node_token)
 
 
 def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch, tmp_path):
@@ -26,6 +27,10 @@ def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch
     assert "TLS Web Client Authentication" in details
     assert "spiffe://vertep/node/gpu-01" in details
     assert verify_node_token(enrolled["jwt"], "gpu-01")
+    original_serial = registered_nodes()[0]["certificate_serial"]
+    assert verify_node_certificate("gpu-01", original_serial)
+    assert verify_node_certificate("gpu-01", "0x00" + original_serial.lower())
+    assert not verify_node_certificate("gpu-01", "DEADBEEF")
     assert not verify_node_token(enrolled["jwt"], "gpu-02")
     assert verify_node_token(enrolled["worker_secret"], "gpu-01")
     with pytest.raises(PermissionError, match="already used"):
@@ -34,12 +39,24 @@ def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch
     assert "secret_hash" not in registered_nodes()[0]
     assert token["token"] not in (tmp_path / "node-registry.json").read_text()
     renewed = renew_node("gpu-01", csr)
+    renewed_serial = registered_nodes()[0]["certificate_serial"]
+    assert renewed_serial != original_serial
+    assert not verify_node_certificate("gpu-01", original_serial)
+    assert verify_node_certificate("gpu-01", renewed_serial)
     assert renewed["jwt"] != enrolled["jwt"]
     assert not verify_node_token(enrolled["jwt"], "gpu-01")
     assert verify_node_token(renewed["jwt"], "gpu-01")
+    crl = tmp_path / "node-ca.crl"
+    crl_text = subprocess.run(["openssl", "crl", "-in", str(crl), "-text", "-noout"],
+                              check=True, capture_output=True, text=True).stdout
+    assert original_serial.lower().lstrip("0") in crl_text.lower().replace(":", "").lstrip("0")
     revoke_node("gpu-01")
+    assert not verify_node_certificate("gpu-01", renewed_serial)
     assert not verify_node_token(renewed["jwt"], "gpu-01")
     assert not verify_node_token(renewed["worker_secret"], "gpu-01")
+    crl_text = subprocess.run(["openssl", "crl", "-in", str(crl), "-text", "-noout"],
+                              check=True, capture_output=True, text=True).stdout.lower().replace(":", "")
+    assert renewed_serial.lower().lstrip("0") in crl_text
 
 
 def test_role_catalog_is_extensible_without_registry_changes(monkeypatch, tmp_path):

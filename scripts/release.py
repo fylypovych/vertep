@@ -34,6 +34,28 @@ def next_version(tags: list[str]) -> str:
     return f"0.0.0.{max(numbers, default=0) + 1}"
 
 
+def known_versions(root: Path) -> list[str]:
+    """Return every release number recorded by repository metadata.
+
+    Older releases were merged without tags, so tags alone are not a reliable
+    source for the next sequence number.
+    """
+    versions = git(root, "tag", "--list").splitlines()
+    version_path = root / "VERSION"
+    if version_path.exists():
+        versions.append(version_path.read_text(encoding="utf-8").strip())
+    changelog_path = root / "CHANGELOG.md"
+    if changelog_path.exists():
+        versions.extend(re.findall(
+            r"(?m)^## (0\.0\.0\.\d+)(?:\s+-|$)",
+            changelog_path.read_text(encoding="utf-8"),
+        ))
+    release_dir = root / "releases"
+    if release_dir.exists():
+        versions.extend(path.stem for path in release_dir.glob("0.0.0.*.md"))
+    return versions
+
+
 def unreleased_notes(changelog: str) -> list[str]:
     match = re.search(r"(?ms)^## Unreleased\s*\n(.*?)(?=^## |\Z)", changelog)
     if not match:
@@ -66,10 +88,14 @@ def generated_notes(root: Path, files: list[tuple[str, str]]) -> list[str]:
             notes.append(f"- {title}: {count} file(s) changed.")
     if not notes:
         notes.append(f"- Repository maintenance: {len(files)} file(s) changed.")
-    tags = [tag for tag in git(root, "tag", "--list", "v0.0.0.*", "--sort=-version:refname").splitlines() if tag]
-    revision_range = f"{tags[0]}..HEAD" if tags else "HEAD"
+    release_commits = git(root, "log", "--format=%H%x09%s").splitlines()
+    baseline = next((row.split("\t", 1)[0] for row in release_commits
+                     if len(row.split("\t", 1)) == 2
+                     and (VERSION_RE.fullmatch(row.split("\t", 1)[1])
+                          or row.split("\t", 1)[1].startswith("Release 0.0.0."))), "")
+    revision_range = f"{baseline}..HEAD" if baseline else "HEAD"
     subjects = [line for line in git(root, "log", "--format=%s", "--no-merges", revision_range).splitlines()
-                if line and not line.startswith("Release 0.0.0.")]
+                if line and not line.startswith("Release 0.0.0.") and not VERSION_RE.fullmatch(line)]
     notes.extend(f"- Commit: {subject}" for subject in subjects[:20])
     return notes
 
@@ -108,7 +134,7 @@ def prepare_release(root: Path, *, push: bool, skip_tests: bool) -> str:
     if "github.com" not in remote:
         raise RuntimeError("origin is not a GitHub repository")
     git(root, "fetch", "--tags", "origin")
-    version = next_version(git(root, "tag", "--list").splitlines())
+    version = next_version(known_versions(root))
     git(root, "add", "-A")
     files = changed_files(root)
     changelog_path = root / "CHANGELOG.md"
@@ -151,7 +177,7 @@ def main() -> None:
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     if args.show_next:
-        print(next_version(git(root, "tag", "--list").splitlines()))
+        print(next_version(known_versions(root)))
         return
     try:
         version = prepare_release(root, push=not args.no_push, skip_tests=args.skip_tests)

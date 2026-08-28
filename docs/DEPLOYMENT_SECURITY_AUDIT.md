@@ -24,32 +24,49 @@ only as a single-process development fallback.
 Bootstrap now downloads the signed role catalog, creates a hashed immutable deployment plan, and
 starts only that role's explicit service allowlist. Core plans exclude Worker; GPU plans exclude
 Core, PostgreSQL, Redis, Ollama, and Monitoring. The setup UI cannot change a bootstrap-locked role.
+Machine requests are also bound to the currently registered certificate serial, so renewal or
+revocation immediately invalidates an older client certificate at the Core authorization layer;
+proxy-level CRL/OCSP remains required to reject it before forwarding.
 
 ## P0 — release blockers
 
-1. **The shipped update public key has no documented release-key lifecycle.** Define separate
-   offline root and online release keys, key IDs, validity windows, revocation, and an offline
-   root-signed key rotation document. Do not publish a generated placeholder as a production
-   trust anchor.
-2. **The update agent mounts the unrestricted Docker socket.** A compromised agent becomes root
-   on the host. Put updates behind a narrowly scoped host service or a socket proxy that permits
-   only required image/compose operations, run it with a signed deployment plan, and audit every
-   operation.
-3. **Secrets are plaintext JSON and `.env` files.** Mode `0600` is necessary but does not meet the
-   stated encrypted secret-store requirement. Encrypt records with an installation data key
-   sealed by TPM 2.0 or a passphrase/KMS, use per-record nonces and authenticated encryption,
-   redact backup/log output, and support rotation without reinstalling nodes.
+1. **The release-key lifecycle is implemented at the client validation layer but still needs release
+   operations.** The Update Agent validates threshold-signed offline-root metadata, metadata rollback
+   and expiry, online-key digest/channel scope/revocation, plus manifest validity and monotonic sequence.
+   Bootstrap distribution, root-key ceremony/escrow, threshold rotation drills and an end-to-end
+   compromised-key recovery test remain required before release.
+2. **The container update agent no longer mounts the Docker socket.** Bootstrap now checksum-verifies
+   and installs the host-side systemd executor before enabling its path/timer, while the container is
+   read-only, capability-free and uses `no-new-privileges`. The remaining qualification work is to
+   narrow the host executor API further and exercise its sandbox on disposable Ubuntu hosts.
+3. **Bootstrap environment secrets still need sealing.** Core records are now migrated from
+   plaintext JSON into a versioned AES-256-GCM envelope with a random nonce and a separate
+   installation data key; authenticated reads fail closed after tampering. The data key is now
+   sealed with a scrypt-derived KEK and AES-GCM when `SECRET_STORE_PASSPHRASE` is configured, and
+   hardened mode fails closed without it. The bootstrap `.env` remains a mode-`0600` host file;
+   TPM/KMS sealing, Docker secrets, redaction and online key rotation remain open.
+4. **Update recovery is not yet HA-complete.** A local process lease fences concurrent agents,
+   audit events are hash-chained, backups are checksum-verified, and Core rollback restores the
+   pre-update PostgreSQL dump. Release payloads are now installed in immutable version directories;
+   an atomic `current` symlink selects the active release and rollback switches that pointer before
+   restoring the database. Multiple Core replicas still require a database-backed fencing epoch;
+   rolling coordination now drains and advances one node at a time with target-version pinning,
+   self-test gating and stop-on-first-failure. Multi-host execution, canary rollback and
+   phase-by-phase power-loss tests remain open. Manifests now
+   declare database schema/strategy/rollback safety, rolling mode rejects contract migrations,
+   and retention pruning preserves both active and rollback releases.
 
 ## P1 — correctness and security before beta
 
-1. **Certificate revocation needs proxy-level enforcement.** Enrollment and automatic renewal use
-   node-generated keys, CSR, URI SAN, clientAuth EKU, tracked serials, rotated JWT/secret generations,
-   and proxy-enforced mTLS. Core rejects revoked identities, but Nginx still needs CRL/OCSP-style
-   serial rejection before forwarding a revoked certificate.
+1. **Certificate revocation is enforced at both layers.** Enrollment and renewal use node-generated
+   keys, CSR, URI SAN, clientAuth EKU and tracked serials. Renewal and revoke append the old serial
+   to durable revocation state, Core atomically signs a CRL, and the proxy watches its digest and
+   reloads Nginx after replacement. Production qualification still needs failover and expiry tests.
 2. **Role self-tests need production qualification.** Worker now runs periodic GPU workflow,
    Ollama inference, runtime HTTP, Prometheus, and backup read/write checks, and appliance dispatch
-   requires a pass. Real model fixtures, durable attestation, publisher assertions, and physical-GPU
-   failure/recovery tests are still required.
+   requires a fresh role-matched pass. Tested capabilities are persisted with heartbeat state and
+   intersected with the role allowlist. Real model/module attestations, publisher assertions, and
+   physical-GPU failure/recovery tests are still required.
 
 ## P2 — architecture and operations
 
@@ -73,7 +90,8 @@ Core, PostgreSQL, Redis, Ollama, and Monitoring. The setup UI cannot change a bo
 3. **Enrollment v2:** PostgreSQL token transaction, CSR/mTLS, expiring/revocable credentials,
    pinned Core identity.
 4. **Capability attestation:** allowlists, role-specific self-tests, health-aware scheduling.
-5. **Secret store:** encrypted-at-rest records, backup redaction, key/credential rotation.
+5. **Secret store:** encrypted-at-rest records are implemented; add key sealing, Docker secrets,
+   backup redaction, and key/credential rotation.
 6. **Operational UI:** node inventory/actions, backup/restore, health, certificates, logs, updates.
 7. **Release qualification:** disposable-VM and physical-GPU end-to-end matrix before calling the
    workflow production-ready.

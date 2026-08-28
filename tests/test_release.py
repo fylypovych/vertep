@@ -20,6 +20,23 @@ def test_release_version_is_strictly_sequential():
     assert release.next_version(["v0.0.0.1", "0.0.0.3", "unrelated"]) == "0.0.0.4"
 
 
+def test_known_versions_include_untagged_release_metadata(tmp_path, monkeypatch):
+    release = load_release_module()
+    (tmp_path / "VERSION").write_text("0.0.0.5\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## 0.0.0.3 - 2026-08-25\n", encoding="utf-8"
+    )
+    release_dir = tmp_path / "releases"
+    release_dir.mkdir()
+    (release_dir / "0.0.0.4.md").write_text("release", encoding="utf-8")
+    monkeypatch.setattr(release, "git", lambda *_args: "v0.0.0.1")
+
+    versions = release.known_versions(tmp_path)
+
+    assert set(versions) == {"v0.0.0.1", "0.0.0.3", "0.0.0.4", "0.0.0.5"}
+    assert release.next_version(versions) == "0.0.0.6"
+
+
 def test_release_moves_unreleased_notes_to_version_section():
     release = load_release_module()
     source = "# Changelog\n\n## Unreleased\n\n- Added feature.\n- Fixed bug.\n\n## Older\n\n- Old.\n"

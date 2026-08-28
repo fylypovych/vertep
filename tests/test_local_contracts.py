@@ -200,7 +200,7 @@ def test_worker_converts_rejected_artifact_to_failed_result():
 
 def test_worker_reports_error_when_required_gpu_is_unavailable():
     assert worker_status({"gpu_available": False}, require_gpu=True) == "ERROR"
-    assert worker_status({"gpu_available": False}, require_gpu=False) == "ONLINE"
+    assert worker_status({"gpu_available": False}, require_gpu=False) == "READY"
     assert worker_status({"gpu_available": True}, require_gpu=True, busy=True) == "BUSY"
 
 

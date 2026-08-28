@@ -109,7 +109,7 @@ Release versions are strictly sequential: `0.0.0.1`, `0.0.0.2`, `0.0.0.3`, and s
 python scripts/release.py
 ```
 
-The command fetches tags, selects one greater than the highest `v0.0.0.N` tag, stages the repository, scans staged files for common secrets, moves notes from `CHANGELOG.md` → `Unreleased` into the new version section, generates `releases/<version>.md`, runs compilation and all tests, creates a release commit and annotated tag, and atomically pushes both to `origin`.
+The command fetches tags, selects one greater than the highest release number recorded in tags, `VERSION`, `CHANGELOG.md`, or `releases/`, stages the repository, scans staged files for common secrets, moves notes from `CHANGELOG.md` → `Unreleased` into the new version section, generates `releases/<version>.md`, runs compilation and all tests, creates a release commit and annotated tag, and atomically pushes both to `origin`.
 
 If `Unreleased` is empty, the description is generated automatically from commit subjects and changed project areas. Use `python scripts/release.py --show-next` to inspect the next number or `--no-push` to create the commit and tag locally. GitHub also provides **Actions → Create sequential release → Run workflow**, which executes the same process with serialized concurrency.
 
@@ -137,3 +137,12 @@ Bootstrap validates hardware and connectivity, installs the container runtime, d
 The Deployment Wizard obtains its role list from `config/node_roles.json`; adding a role does not require changing token or enrollment logic. Core nodes can create 15-minute, one-use registration tokens from **Workers → Add Worker**. Non-Core nodes initiate the HTTPS enrollment request themselves and receive a node-bound JWT, per-node secret, certificate attestation, configuration, and capability set. Dispatch is capability-driven rather than role-driven, so installing a new engine only requires the node to advertise its new capability.
 
 Production readiness and the traceability status of all three deployment/update specifications are tracked in [`docs/REQUIREMENTS_GAP_ANALYSIS_UK.md`](docs/REQUIREMENTS_GAP_ANALYSIS_UK.md). Items marked as partial or missing there must not be presented as completed appliance functionality.
+
+Release candidates must pass the reproducible appliance gates; CI uploads the resulting JSON evidence:
+
+```bash
+python scripts/qualify-release.py --root . --docker --output qualification.json
+```
+
+Integration credentials are managed from **System → Protected integrations**. Values are write-only
+through the API and remain inside the authenticated encrypted secret envelope.

@@ -21,8 +21,46 @@ def now() -> str:
 def atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    with temporary.open("w", encoding="utf-8") as output:
+        json.dump(value, output, ensure_ascii=False, indent=2)
+        output.flush()
+        os.fsync(output.fileno())
     temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def append_audit(state_dir: Path, event: dict) -> None:
+    """Append a tamper-evident update event and durably chain it to the previous event."""
+    import hashlib
+    audit_path = state_dir / "audit.jsonl"
+    previous_hash = "0" * 64
+    try:
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            previous = json.loads(line)
+            event_hash = previous.pop("event_hash")
+            if previous.get("previous_hash") != previous_hash:
+                raise RuntimeError("Update audit log hash chain is invalid")
+            canonical_previous = json.dumps(
+                previous, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            if hashlib.sha256(canonical_previous.encode()).hexdigest() != event_hash:
+                raise RuntimeError("Update audit log hash chain is invalid")
+            previous_hash = event_hash
+    except (FileNotFoundError, IndexError):
+        pass
+    except (OSError, ValueError, KeyError) as error:
+        raise RuntimeError("Update audit log is unreadable") from error
+    record = {**event, "timestamp": now(), "previous_hash": previous_hash}
+    canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    record["event_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    with audit_path.open("a", encoding="utf-8") as output:
+        output.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        output.flush()
+        os.fsync(output.fileno())
 
 
 def run(command: list[str], root: Path) -> str:
@@ -54,6 +92,8 @@ def transition(state_dir: Path, state: dict, phase: str, message: str) -> None:
     state.setdefault("log", []).append(f"{now()} {message}")
     state["log"] = state["log"][-500:]
     atomic_json(state_dir / "status.json", state)
+    append_audit(state_dir, {"operation_id": state.get("request_id"), "phase": phase,
+                             "message": message, "action": state.get("action")})
     if phase in SystemState.__members__:
         set_system_state(SystemState[phase], message, state.get("request_id"))
 
@@ -93,7 +133,9 @@ def recover_if_interrupted(root: Path, state_dir: Path) -> None:
 def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
     from core.system_state import SystemState, set_system_state
     from core.update_protocol import (download_package, fetch_manifest, validate_manifest,
-                                      version_tuple)
+                                      validate_replay_state, version_tuple)
+    from core.update_lease import UpdateLease
+    from core.update_trust import authorize_release_key, validate_root_metadata
     from core.version import application_version
 
     request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -104,46 +146,97 @@ def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
              "request_id": request_id, "message": "Checking signed release manifest",
              "updated_at": now(), "log": []}
     atomic_json(state_dir / "status.json", state)
-    try:
-        manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
-        public_key = Path(os.getenv("UPDATE_PUBLIC_KEY", str(root / "installer" / "update-public.pem")))
-        validate_manifest(manifest, public_key)
-        current = application_version()
-        state.update({"current_version": current, "available_version": manifest["version"],
-                      "required": bool(manifest.get("required", False)),
-                      "update_available": version_tuple(manifest["version"]) > version_tuple(current)})
-        transition(state_dir, state, "CHECKING", "Signed release manifest verified")
-        if action == "update" and state["update_available"]:
-            wait_for_drain(state_dir, state)
-            package = download_package(manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
-            transition(state_dir, state, "UPDATING", "Backup and package installation started")
-            output = run(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
-                          str(package), manifest["version"]], root)
-            state["log"].extend(output.splitlines()[-200:])
-        state.update({"state": "SUCCEEDED", "phase": "NORMAL",
-                      "message": "Update completed" if action == "update" else "Update check completed",
-                      "updated_at": now()})
-        set_system_state(SystemState.NORMAL, state["message"], request_id)
-    except Exception as error:
-        state.setdefault("log", []).append(f"{now()} {error}")
-        if state.get("phase") == "UPDATING":
+    with UpdateLease(state_dir, request_id):
+        try:
+            manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
+            requested_version = request.get("target_version")
+            if requested_version and manifest.get("version") != requested_version:
+                raise RuntimeError("Update server did not return the coordinated target version")
+            public_key = Path(os.getenv(
+                "UPDATE_PUBLIC_KEY", str(root / "installer" / "update-public.pem")))
+            channel = os.getenv("UPDATE_CHANNEL", "stable")
+            root_metadata_path = os.getenv("UPDATE_ROOT_METADATA")
+            root_keys_path = os.getenv("UPDATE_ROOT_KEYS")
+            if root_metadata_path or root_keys_path:
+                if not root_metadata_path or not root_keys_path or not public_key.is_dir():
+                    raise RuntimeError(
+                        "Root metadata, root keys and release keyring must be configured together")
+                metadata_document = json.loads(
+                    Path(root_metadata_path).read_text(encoding="utf-8"))
+                trusted_metadata_path = state_dir / "trusted-root.json"
+                try:
+                    trusted_metadata = json.loads(
+                        trusted_metadata_path.read_text(encoding="utf-8"))
+                    trusted_version = int(trusted_metadata["version"])
+                    trusted_sha256 = str(trusted_metadata["metadata_sha256"])
+                except FileNotFoundError:
+                    trusted_version = 0
+                    trusted_sha256 = None
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    raise RuntimeError("Stored root metadata state is unreadable") from error
+                validated_metadata = validate_root_metadata(
+                    metadata_document, Path(root_keys_path), trusted_version=trusted_version,
+                    trusted_sha256=trusted_sha256)
+                authorize_release_key(manifest, validated_metadata, public_key, channel)
+                atomic_json(trusted_metadata_path, validated_metadata)
+            elif os.getenv("REQUIRE_OFFLINE_ROOT", "false").lower() == "true":
+                raise RuntimeError("Offline-root-signed update metadata is required")
+            validate_manifest(manifest, public_key, expected_channel=channel)
+            current = application_version()
+            if version_tuple(manifest["version"]) < version_tuple(current):
+                raise RuntimeError("Update server attempted to offer a downgrade")
+            replay_path = state_dir / "trusted-release.json"
             try:
-                transition(state_dir, state, "RECOVERING", "Health check failed; rolling back")
-                state["log"].extend(run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root).splitlines()[-100:])
-                state["state"] = "ROLLED_BACK"
-                set_system_state(SystemState.NORMAL, "Automatic rollback completed", request_id)
-            except Exception as rollback_error:
-                state.update({"state": "FAILED", "phase": "EMERGENCY"})
-                state["log"].append(f"{now()} rollback failed: {rollback_error}")
-                set_system_state(SystemState.EMERGENCY, "Update and rollback failed", request_id)
-        else:
-            state.update({"state": "FAILED", "phase": "NORMAL"})
-            set_system_state(SystemState.NORMAL, "Update stopped before installation", request_id)
-        state.update({"message": str(error), "updated_at": now()})
-    finally:
-        state["log"] = state.get("log", [])[-500:]
-        atomic_json(state_dir / "status.json", state)
-        request_path.unlink(missing_ok=True)
+                trusted_release = json.loads(replay_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                trusted_release = None
+            except (OSError, ValueError) as error:
+                raise RuntimeError("Stored update replay state is unreadable") from error
+            next_trusted_release = validate_replay_state(manifest, trusted_release)
+            if next_trusted_release and next_trusted_release != trusted_release:
+                atomic_json(replay_path, next_trusted_release)
+            state.update({"current_version": current, "available_version": manifest["version"],
+                          "required": bool(manifest.get("required", False)),
+                          "update_available": version_tuple(manifest["version"]) > version_tuple(current)})
+            transition(state_dir, state, "CHECKING", "Signed release manifest verified")
+            if action == "update" and state["update_available"]:
+                wait_for_drain(state_dir, state)
+                package = download_package(
+                    manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
+                transition(state_dir, state, "UPDATING", "Backup and package installation started")
+                output = run(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
+                              str(package), manifest["version"]], root)
+                state["log"].extend(output.splitlines()[-200:])
+                retention = os.getenv("UPDATE_RELEASE_RETENTION", "3")
+                prune_output = run([sys.executable, str(root / "scripts" / "release-layout.py"),
+                                    "prune", str(root), retention], root)
+                state["log"].append(f"Immutable release retention: {prune_output}")
+            state.update({"state": "SUCCEEDED", "phase": "NORMAL",
+                          "message": "Update completed" if action == "update" else "Update check completed",
+                          "updated_at": now()})
+            set_system_state(SystemState.NORMAL, state["message"], request_id)
+        except Exception as error:
+            state.setdefault("log", []).append(f"{now()} {error}")
+            if state.get("phase") == "UPDATING":
+                try:
+                    transition(state_dir, state, "RECOVERING", "Health check failed; rolling back")
+                    state["log"].extend(run(
+                        ["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root
+                    ).splitlines()[-100:])
+                    state["state"] = "ROLLED_BACK"
+                    set_system_state(SystemState.NORMAL, "Automatic rollback completed", request_id)
+                except Exception as rollback_error:
+                    state.update({"state": "FAILED", "phase": "EMERGENCY"})
+                    state["log"].append(f"{now()} rollback failed: {rollback_error}")
+                    set_system_state(SystemState.EMERGENCY, "Update and rollback failed", request_id)
+            else:
+                state.update({"state": "FAILED", "phase": "NORMAL"})
+                set_system_state(SystemState.NORMAL, "Update stopped before installation", request_id)
+            state.update({"message": str(error), "updated_at": now()})
+        finally:
+            state["log"] = state.get("log", [])[-500:]
+            atomic_json(state_dir / "status.json", state)
+            request_path.unlink(missing_ok=True)
 
 
 def main() -> None:

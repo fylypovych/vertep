@@ -5,6 +5,8 @@ import subprocess
 import json
 import shutil
 import tempfile
+import platform
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +14,7 @@ import httpx
 from adapters.comfyui import ComfyUIAdapter
 from core.gpu_profiles import gpu_profile
 from core.logging_config import configure_logging
+from worker.role_executor import execute_role_task
 
 logger = configure_logging("worker")
 pending_logs: list[dict] = []
@@ -193,13 +196,52 @@ def gpu_info() -> dict:
         logger.warning("nvidia-smi metrics unavailable")
     return info
 
+
+def host_metrics() -> dict:
+    memory_mb = None
+    try:
+        values = Path("/proc/meminfo").read_text(encoding="utf-8").splitlines()
+        memory_mb = int(next(line for line in values if line.startswith("MemAvailable:"))
+                        .split()[1]) // 1024
+    except (OSError, StopIteration, ValueError, IndexError):
+        pass
+    try:
+        cpu_load = os.getloadavg()[0]
+    except OSError:
+        cpu_load = None
+    return {"ram_mb": memory_mb, "disk_free_mb": shutil.disk_usage("/").free // 1024 // 1024,
+            "cpu_load": cpu_load, "runtime_version": platform.python_version()}
+
+
+def request_local_update(target_version: str) -> None:
+    request_root = os.getenv("UPDATE_REQUEST_DIR", "")
+    if not request_root:
+        raise RuntimeError("UPDATE_REQUEST_DIR is required for coordinated rolling updates")
+    root = Path(request_root)
+    root.mkdir(parents=True, exist_ok=True)
+    marker = root.parent / "worker-update-target"
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == target_version:
+        return
+    request_id = secrets.token_hex(16)
+    temporary = root / f".{request_id}.tmp"
+    temporary.write_text(json.dumps({"request_id": request_id, "action": "update",
+                                     "target_version": target_version}), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(root / f"{request_id}.json")
+    marker.write_text(target_version, encoding="utf-8")
+
 def worker_status(metrics: dict, require_gpu: bool, busy: bool = False) -> str:
     if require_gpu and not metrics.get("gpu_available", False):
         return "ERROR"
-    return "BUSY" if busy else "ONLINE"
+    return "BUSY" if busy else "READY"
 
 def execute_task(adapter: ComfyUIAdapter, task: dict, node_name: str) -> dict:
     try:
+        if task.get("task", "image") in {"text", "voice", "publish", "backup"}:
+            artifacts = execute_role_task(configured_role(), task)
+            return {"job_id": task["job_id"], "task_id": task["task_id"],
+                    "node_name": node_name, "success": True,
+                    "filename": artifacts[0]["filename"], "artifacts": artifacts}
         scenes = (task.get("script") or {}).get("scenes") or [{"prompt": task["topic"]}]
         artifacts = []
         for index, scene in enumerate(scenes, 1):
@@ -232,7 +274,7 @@ def main() -> None:
     metrics = gpu_info()
     require_gpu = os.getenv("WORKER_REQUIRE_GPU", "true").lower() == "true" and os.getenv("DEMO_MODE", "true").lower() != "true"
     capabilities = node_capabilities()
-    payload = {"node_name": os.getenv("NODE_NAME", "gpu-01"), **metrics,
+    payload = {"node_name": os.getenv("NODE_NAME", "gpu-01"), **metrics, **host_metrics(),
                "status": worker_status(metrics, require_gpu),
                "supported_tasks": supported_tasks, "supported_workflows": supported_workflows,
                "role": configured_role(), "capabilities": capabilities,
@@ -259,12 +301,14 @@ def main() -> None:
         client_options.update({"verify": enrollment_verify or True,
                                "cert": (str(pki / "node.crt"), str(pki / "node.key"))})
     with httpx.Client(**client_options) as client:
+        desired_state = None
         next_self_test = time.monotonic() + (15 if self_test["status"] != "PASSED"
                                              else float(os.getenv("SELF_TEST_INTERVAL_SECONDS", "300")))
         while True:
             try:
                 metrics = gpu_info()
                 payload.update(metrics)
+                payload.update(host_metrics())
                 if future is None and time.monotonic() >= next_self_test:
                     payload["self_test"] = role_self_test(configured_role(), metrics, adapter)
                     next_self_test = time.monotonic() + (15 if payload["self_test"]["status"] != "PASSED"
@@ -284,11 +328,11 @@ def main() -> None:
                 if future and future.done():
                     result = future.result()
                     submit_result(client, core, result)
-                    payload.update({"current_job": None, "status": "ONLINE"})
+                    payload.update({"current_job": None, "status": "READY"})
                     payload["current_task"] = None
                     future = None
                     active_task = None
-                if future is None:
+                if future is None and desired_state not in {"DRAINING", "QUARANTINED"}:
                     task = client.post(f"{core}/api/tasks/claim", json={"node_name": payload["node_name"],
                                                                          "gpu_name": payload["gpu_name"],
                                                                          "vram_mb": payload["vram_mb"],
@@ -307,7 +351,17 @@ def main() -> None:
                     cancellations = client.get(f"{core}/api/tasks/cancellations/{payload['node_name']}").json()
                     if any(item["task_id"] == active_task["task_id"] for item in cancellations):
                         adapter.cancel()
-                client.post(f"{core}/api/workers/heartbeat", json=payload)
+                heartbeat_response = client.post(f"{core}/api/workers/heartbeat", json=payload)
+                heartbeat_response.raise_for_status()
+                control = heartbeat_response.json()
+                desired_state = control.get("desired_state")
+                update_target = control.get("update_target_version")
+                if update_target and future is None:
+                    request_local_update(update_target)
+                    desired_state = "UPDATING"
+                    payload["status"] = "UPDATING"
+                if control.get("self_test_requested_at") and future is None:
+                    next_self_test = 0
                 if pending_logs:
                     response = client.post(f"{core}/api/logs/ingest", json={"node_name": payload["node_name"],
                                                                             "entries": pending_logs[:]})

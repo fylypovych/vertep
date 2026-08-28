@@ -53,43 +53,61 @@ case "${1:-status}" in
       docker compose -f "$ROOT/docker-compose.yml" exec -T postgres pg_dump -U vertep vertep > "$backup/postgres.sql"
       docker compose -f "$ROOT/docker-compose.yml" exec -T postgres psql -U vertep -d vertep \
         -Atc 'SELECT version, applied_at FROM schema_migrations ORDER BY applied_at' > "$backup/migrations.log" 2>/dev/null || true
+      touch "$backup/database-restore-required"
     fi
+    (cd "$backup" && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+      | sort -z | xargs -0 sha256sum > SHA256SUMS)
     staging=$(mktemp -d "$ROOT/.update-staging.XXXXXX")
     trap 'rm -rf "$staging"' EXIT
     python3 "$ROOT/scripts/safe-extract.py" "$package" "$staging"
     payload="$staging"
     [[ $(find "$staging" -mindepth 1 -maxdepth 1 -type d | wc -l) == 1 && ! -f "$staging/VERSION" ]] && payload=$(find "$staging" -mindepth 1 -maxdepth 1 -type d | head -1)
     [[ -f "$payload/VERSION" && "$(tr -d '[:space:]' < "$payload/VERSION")" == "$target_version" ]] || { echo "Package VERSION does not match manifest" >&2; exit 1; }
-    cp -a "$payload"/. "$ROOT"/
+    # Migrate an older mutable installation into the release layout once.  The
+    # backup archive is already verified during rollback and excludes releases.
+    if [[ ! -L "$ROOT/current" ]]; then
+      legacy_staging=$(mktemp -d "$ROOT/.legacy-release.XXXXXX")
+      tar -xzf "$backup/application.tar.gz" -C "$legacy_staging"
+      legacy_version=$(tr -d '[:space:]' < "$legacy_staging/VERSION")
+      python3 "$ROOT/scripts/release-layout.py" prepare "$ROOT" "$legacy_staging::$legacy_version" >/dev/null
+      python3 "$ROOT/scripts/release-layout.py" activate "$ROOT" "$legacy_version"
+      rm -rf "$legacy_staging"
+    fi
+    python3 "$ROOT/scripts/release-layout.py" prepare "$ROOT" "$payload::$target_version" >/dev/null
+    python3 "$ROOT/scripts/release-layout.py" activate "$ROOT" "$target_version"
+    release_root="$ROOT/current"
+    # Compose interpolation must use the persistent environment, while the
+    # signed compose definition and application files come from the release.
+    compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
     if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
-      docker compose -f "$ROOT/docker-compose.yml" up -d postgres redis
+      "${compose[@]}" up -d postgres redis
       database_ready=false
       for attempt in {1..30}; do
-        if docker compose -f "$ROOT/docker-compose.yml" exec -T postgres pg_isready -U vertep -d vertep >/dev/null 2>&1; then
+        if "${compose[@]}" exec -T postgres pg_isready -U vertep -d vertep >/dev/null 2>&1; then
           database_ready=true
           break
         fi
         sleep 2
       done
       [[ "$database_ready" == true ]] || { echo "PostgreSQL did not become ready; CORE was not restarted." >&2; exit 1; }
-      docker compose -f "$ROOT/docker-compose.yml" exec -T postgres psql -v ON_ERROR_STOP=1 -U vertep -d vertep \
+      "${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U vertep -d vertep \
         -c "CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
-      for migration in "$ROOT"/db/[0-9][0-9][0-9]_*.sql; do
+      for migration in "$release_root"/db/[0-9][0-9][0-9]_*.sql; do
         [[ -f "$migration" ]] || continue
         version=$(basename "$migration")
-        applied=$(docker compose -f "$ROOT/docker-compose.yml" exec -T postgres \
+        applied=$("${compose[@]}" exec -T postgres \
           psql -U vertep -d vertep -tAc "SELECT 1 FROM schema_migrations WHERE version='$version'")
         [[ "$applied" == "1" ]] && continue
-        docker compose -f "$ROOT/docker-compose.yml" exec -T postgres \
+        "${compose[@]}" exec -T postgres \
           psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$migration"
-        docker compose -f "$ROOT/docker-compose.yml" exec -T postgres \
+        "${compose[@]}" exec -T postgres \
           psql -v ON_ERROR_STOP=1 -U vertep -d vertep -c "INSERT INTO schema_migrations(version) VALUES('$version')"
       done
     fi
     case "$role" in
-      worker) docker compose -f "$ROOT/docker-compose.worker.yml" up -d --build worker ;;
-      core) docker compose -f "$ROOT/docker-compose.yml" up -d --build core redis postgres ;;
-      core-worker) docker compose -f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.gpu.yml" up -d --build ;;
+      worker) "${compose[@]}" up -d worker ;;
+      core) "${compose[@]}" up -d core redis postgres ;;
+      core-worker) "${compose[@]}" up -d ;;
       *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
     esac
     if [[ "$role" == "core" || "$role" == "core-worker" ]] && command -v systemctl >/dev/null 2>&1; then
@@ -103,7 +121,7 @@ case "${1:-status}" in
     fi
     for attempt in {1..15}; do
       if [[ "$role" == "worker" ]]; then
-        docker compose -f "$ROOT/docker-compose.worker.yml" ps --status running --services | grep -qx worker && exit 0
+        "${compose[@]}" ps --status running --services | grep -qx worker && exit 0
       elif curl -fsS -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health"; then
         exit 0
       fi
@@ -116,11 +134,35 @@ case "${1:-status}" in
     [[ -f "$ROOT/.vertep-last-good" ]] || { echo "No rollback revision recorded" >&2; exit 1; }
     backup=$(cat "$ROOT/.vertep-last-good")
     [[ -f "$backup/application.tar.gz" ]] || { echo "Last-good application backup is missing" >&2; exit 1; }
-    tar -xzf "$backup/application.tar.gz" -C "$ROOT"
+    [[ -f "$backup/SHA256SUMS" ]] || { echo "Last-good backup has no checksum manifest" >&2; exit 1; }
+    (cd "$backup" && sha256sum -c SHA256SUMS)
+    python3 "$ROOT/scripts/release-layout.py" rollback "$ROOT"
+    release_root="$ROOT/current"
+    compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
+    if [[ ( "$role" == "core" || "$role" == "core-worker" ) \
+          && -f "$backup/database-restore-required" && -s "$backup/postgres.sql" ]]; then
+      "${compose[@]}" stop core || true
+      "${compose[@]}" up -d postgres
+      database_ready=false
+      for attempt in {1..30}; do
+        if "${compose[@]}" exec -T postgres \
+          pg_isready -U vertep -d vertep >/dev/null 2>&1; then
+          database_ready=true
+          break
+        fi
+        sleep 2
+      done
+      [[ "$database_ready" == true ]] || { echo "PostgreSQL did not become ready for rollback" >&2; exit 1; }
+      "${compose[@]}" exec -T postgres \
+        psql -v ON_ERROR_STOP=1 -U vertep -d vertep \
+        -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+      "${compose[@]}" exec -T postgres \
+        psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$backup/postgres.sql"
+    fi
     case "$role" in
-      worker) docker compose -f "$ROOT/docker-compose.worker.yml" up -d --build worker ;;
-      core) docker compose -f "$ROOT/docker-compose.yml" up -d --build core redis postgres ;;
-      core-worker) docker compose -f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.gpu.yml" up -d --build ;;
+      worker) "${compose[@]}" up -d worker ;;
+      core) "${compose[@]}" up -d core redis postgres ;;
+      core-worker) "${compose[@]}" up -d ;;
       *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
     esac
     ;;

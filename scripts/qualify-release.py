@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Deterministic preflight gates for a Vertep appliance release artifact."""
+
+import argparse
+import json
+import subprocess
+from pathlib import Path
+
+
+FORBIDDEN_BY_ROLE = {
+    "core": {"worker", "comfyui", "tts", "backup-service", "publisher-worker", "grafana"},
+    "gpu": {"core", "migrate", "postgres", "redis", "ollama", "tts"},
+    "text": {"core", "migrate", "postgres", "redis", "comfyui", "tts"},
+    "voice": {"core", "migrate", "postgres", "redis", "comfyui", "ollama"},
+    "publisher": {"core", "migrate", "postgres", "redis", "comfyui", "ollama", "tts"},
+    "backup": {"core", "migrate", "postgres", "redis", "comfyui", "ollama", "tts"},
+    "monitoring": {"core", "migrate", "postgres", "redis", "comfyui", "ollama", "tts"},
+}
+
+
+def qualify(root: Path, run_compose: bool = False) -> dict:
+    checks: list[dict] = []
+
+    def record(name: str, passed: bool, detail: str = "") -> None:
+        checks.append({"name": name, "passed": bool(passed), "detail": detail})
+
+    required = ["bootstrap.sh", "deploy/docker-compose.yml", "config/node_roles.json",
+                "scripts/update-agent.py", "scripts/release-layout.py", "installer/update-public.pem"]
+    missing = [name for name in required if not (root / name).is_file()]
+    record("required_release_files", not missing, ", ".join(missing))
+    try:
+        roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
+        for role, forbidden in FORBIDDEN_BY_ROLE.items():
+            services = set(roles[role]["services"])
+            unexpected = sorted(services & forbidden)
+            record(f"role_isolation:{role}", not unexpected, ", ".join(unexpected))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        record("role_catalog", False, str(error))
+    compose = (root / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    record("no_docker_socket", "/var/run/docker.sock" not in compose)
+    record("machine_mtls_proxy", "ssl_verify_client optional" in
+           (root / "deploy/proxy.conf").read_text(encoding="utf-8"))
+    if run_compose:
+        result = subprocess.run(["docker", "compose", "-f", str(root / "deploy/docker-compose.yml"),
+                                 "config", "--quiet"], capture_output=True, text=True, check=False)
+        record("docker_compose_config", result.returncode == 0, result.stderr[-1000:])
+    passed = all(item["passed"] for item in checks)
+    return {"schema": 1, "passed": passed, "checks": checks}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).parents[1])
+    parser.add_argument("--docker", action="store_true", help="also run Docker Compose validation")
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    report = qualify(args.root.resolve(), args.docker)
+    encoded = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.output:
+        args.output.write_text(encoded + "\n", encoding="utf-8")
+    print(encoded)
+    raise SystemExit(0 if report["passed"] else 1)
+
+
+if __name__ == "__main__":
+    main()

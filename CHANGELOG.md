@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Repaired malformed merge resolutions that duplicated security checks, updater logic, bootstrap steps, deployment configuration, Web UI sections, and tests; the repository compiles again and the hardened branch behavior is preserved.
+- Reconciled `VERSION`, changelog entries, and release notes with the published `0.0.0.3` and `0.0.0.5` commits.
+- Made release numbering discover untagged release metadata so the next release remains monotonic, and added a Windows-compatible local update lease for development and tests.
+
+## 0.0.0.5 - 2026-08-28
+
+- Added coordinated rolling updates with maintenance leases, workload draining, durable phases, health checks, and automatic rollback.
+- Added threshold-signed root metadata, release-key authorization, replay protection, and node-certificate revocation enforcement at the proxy.
+- Added immutable release preparation, atomic activation, rollback, and retention tooling.
+- Added encrypted write-only integration secrets and tightened secret-update authorization and role isolation.
+- Added capability-scoped worker role execution and expanded node enrollment, certificate rotation, and self-test behavior.
+- Added reproducible appliance qualification gates and CI evidence generation.
+- Hardened bootstrap host validation, runtime dependencies, updater service isolation, and recovery after interrupted updates.
+
+## 0.0.0.3 - 2026-08-25
+
+- Added the production appliance bootstrap flow and the seven-step First Run Wizard.
+- Added signed, checksum-verified update packages, periodic release checks, backups, health checks, and rollback support.
+- Added the node registry, one-use worker enrollment tokens, node-bound credentials, certificate attestation, and capability-driven dispatch.
+- Added extensible node roles and deployment planning from `config/node_roles.json`.
+- Added the production proxy and Compose topology with persistent services and TLS termination.
+- Added database migrations for the node registry and certificate lifecycle.
+- Added Worker hardware self-tests and automatic rotation of expiring node certificates.
+- Added deployment security and requirements-gap documentation with integration coverage.
+
 ## 0.0.0.1 - 2026-08-22
 
 - Added stage/scene DAG state, attempt history and per-scene fan-out/fan-in dispatch.
@@ -32,7 +57,11 @@
 - Added a GTX 1660 6 GB/Turing Worker profile with pinned CUDA 12.4 PyTorch wheels, ComfyUI low-VRAM mode, CUDA verification and heartbeat metadata.
 - Added administrator-only GitHub update checks and installation from the Web UI through a persistent host-side systemd agent without exposing the Docker socket.
 
-## 0.5.0
+## Legacy development history
+
+The following headings predate the sequential `0.0.0.N` release series and are retained for historical context; they were not releases in the current version sequence.
+
+### 0.5.0 (pre-release)
 
 - Added atomic Redis Lua claim/requeue, lease renewal and distributed watchdog locking.
 - Added CORE-to-WORKER cancellation and ComfyUI interrupt handling.
@@ -41,7 +70,7 @@
 - Added presets, watermarks, ffprobe validation and Telegram attachment downloads.
 - Added SSE progress, previews, pagination, Brand UI, cleanup API, CLI and JSON schemas.
 
-## 0.4.0
+### 0.4.0 (pre-release)
 
 - Added repository abstraction and PostgreSQL-ready persistence contracts.
 - Added leased priority tasks, watchdog recovery and idempotent results.

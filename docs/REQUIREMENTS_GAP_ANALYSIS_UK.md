@@ -25,17 +25,17 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Автоперевірка, Web UI, CLI | Частково | Усі три entry points існують. Потрібен end-to-end тест systemd timer, authentication і поведінки після reboot. |
 | Перевірка версії, підпису, сумісності | Є | Додати key ID, release channel policy, expiry, rollback compatibility та anti-downgrade policy. |
 | `MAINTENANCE` і припинення dispatch | Частково | Watchdog і claim блокуються. Немає формальної distributed queue pause/ack між кількома Core replicas. |
-| Нові Job не губляться | Частково | Вони залишаються `NEW`; `WAITING_FOR_SYSTEM` оголошено, але фактично не використовується і не тестується lifecycle повернення. |
+| Нові Job не губляться | Є базово | Під час maintenance/update нові Job переходять у `WAITING_FOR_SYSTEM`, а Watchdog атомарно повертає їх у `NEW` після `NORMAL`. Ще потрібні PostgreSQL/reboot integration tests. |
 | Drain активних Job/Worker | Частково | Readiness рахує jobs, busy workers та inflight. Немає distributed barrier, fencing token і захисту від Worker, що перестав відповідати під час drain. |
 | Повний backup | Частково | Є app/jobs/PostgreSQL/config backup. Немає формального inventory licenses, encrypted secrets, external object storage, Redis state та перевірки відновлюваності backup. |
-| Immutable container update | Частково | Appliance використовує versioned images, але host update path досі копіює release поверх робочого дерева і частково зберігає стару source-oriented логіку. |
-| DB migrations | Частково | Є idempotent runner. Немає expand/contract policy, backward-compatible schema window та автоматичного migration rollback/forward recovery. |
+| Immutable container update | Є базово | Package розгортається в `releases/<version>`, activation/rollback перемикають `current`, retention захищає active/previous releases; потрібні Docker/power-loss integration tests. |
+| DB migrations | Частково | Manifest декларує schema/strategy/rollback safety, а rolling mode забороняє contract migration; ще потрібні backfill orchestration і багаторелізні compatibility tests. |
 | Core/Worker health checks | Частково | Role self-tests тепер виконують GPU demo/workflow, Ollama inference, runtime HTTP checks та backup read/write; ще потрібні end-to-end API/Redis/publisher/artifact assertions і production image tests. |
 | Worker self-test | Частково | Є періодичний role-specific protocol і dispatch gate. Потрібні реальні model fixtures, attestation persistence та failure/recovery integration tests на кожній production role. |
-| Автоматичний rollback | Частково | Application rollback є, але PostgreSQL dump автоматично не відновлюється, compatibility рішення не формалізоване, health check старої версії неповний. |
+| Автоматичний rollback | Частково | Application rollback атомарно повертає immutable release, перевіряє backup checksums і автоматично відновлює PostgreSQL dump; compatibility рішення та повний health check старої версії ще потребують integration qualification. |
 | Recovery після power loss | Частково | Agent вміє побачити перервану фазу при старті, але немає гарантованого boot trigger для recovery та fault-injection тестів кожної фази. |
 | Окремий update journal | Є для прототипу | Потрібні append-only/audit semantics, rotation, export у monitoring та correlation ID на всіх вузлах. |
-| Rolling update Worker-вузлів | Немає | Відсутні порядок, drain одного вузла, self-test, canary, max-unavailable і stop-on-first-failure orchestration. |
+| Rolling update Worker-вузлів | Частково | Є durable coordinator з drain, `maxUnavailable=1`, target-version pinning, self-test gate і stop-on-first-failure; потрібні multi-host/host-executor integration та canary rollback tests. |
 | Глобальні `READ_ONLY`/`EMERGENCY` semantics | Частково | Стани оголошені, але більшість API не визначає дозволені операції для кожного стану. |
 
 ## 2. Bootstrap Installer та First Run Wizard
@@ -43,21 +43,21 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Вимога | Стан | Що залишилось |
 |---|---|---|
 | Одна команда на Ubuntu 24.04 | Частково | Core має default flow. Non-Core потребує environment variables для role/Core URL/token/CA, тобто це ще не повний zero-shell Web Wizard. |
-| CPU/RAM/disk/internet preflight | Є базово | Додати proxy/DNS/NTP/ports checks, supported CPU flags, filesystem type, clock skew і зрозумілий remediation report. |
+| CPU/RAM/disk/internet preflight | Є базово | Є DNS, NTP, port 8443 і filesystem checks; ще потрібні proxy diagnostics, CPU flags, IOPS та structured remediation report. |
 | NVIDIA/AMD/no-GPU detection | Частково | Detection є. Bootstrap не встановлює NVIDIA Container Toolkit/CUDA runtime повністю; AMD runtime/ROCm не реалізований. |
 | Docker/Compose install та autostart | Є базово | Потрібні pinned supported versions, repository signature policy та upgrade compatibility matrix. |
 | `/opt/vertep` layout і volumes | Частково | Основні каталоги є. Потрібні ownership per service, quotas, SELinux/AppArmor policy, backup retention і disk-pressure behavior. |
 | Signed runtime download | Є базово | Додати offline-root key lifecycle, mirror policy, resumable download та rollback при partial image pull. |
 | Усі контейнери `HEALTHY` | Частково | Role services мають health checks і Worker self-test, але потрібна перевірка реальних published images та dependency/failure matrix. |
 | HTTPS `:8443` | Є | Сертифікат self-signed. Потрібні SAN для IP/DNS, ACME/custom certificate flow, renewal та browser-friendly onboarding. |
-| First Run недоступність системи до завершення | Є базово | Setup code захищає ownership. Потрібні rate limit окремо для setup, expiry setup code і browser E2E tests. |
+| First Run недоступність системи до завершення | Є базово | Setup code має TTL, окремий failed-attempt rate limit і ownership protection; ще потрібні browser E2E tests. |
 | Назва та перший admin | Є | Потрібні password policy, recovery codes, MFA/WebAuthn, forced credential rotation і audit event. |
 | Автогенерація секретів | Частково | Генерація криптографічна, але secret store — plaintext JSON/`.env`; encryption key генерується, однак не використовується для authenticated encryption. |
 | AI backend selection | Частково | Вибір записується, але немає перевірки credentials/connectivity/model, secure API-key entry та runtime reconciliation. |
-| Installation Manifest | Частково | Є ID/name/version/hardware/modules. Docker version, фактично запущені images/digests, network, storage, certificate fingerprints і module health не фіксуються повністю. |
+| Installation Manifest | Частково | Є ID/name/version/hardware/modules, deployment-plan hash, services/capabilities, Docker version, storage, channel і certificate fingerprints; ще потрібні live image digests/network/module health. |
 | Повний containerized runtime | Немає як заявлено | API/Dispatcher/Scheduler/Publisher досі об'єднані в Core process; License Manager, Backup Service, Grafana, TTS runtime та окремі role engines не реалізовані як заявлені сервіси. |
-| Internal secrets UI | Немає | Немає повного Web UI для SMTP/Telegram/YouTube/SSH/license secrets, rotation і encrypted persistence. |
-| Zero Shell operations | Немає | Немає завершених Web UI flows для users, licenses, models, backup/restore, certificate renewal, node revoke/rotate, full health remediation. |
+| Internal secrets UI | Частково | Додано write-only Web/API керування SMTP/Telegram/YouTube/Facebook/TikTok/SSH/license/AI secrets з AES-GCM persistence; потрібні OAuth-specific flows і key sealing. |
+| Zero Shell operations | Частково | Fleet controls, updates та write-only integration secrets доступні у Web UI; ще потрібні users/MFA, models, backup restore, ACME і повна health remediation. |
 | Immutable runtime | Частково | Role plan та versioned images є; update path і локальні bind-mounted runtime/config файли ще дозволяють mutable overlay behavior. |
 
 ## 3. Deployment Wizard та Node Roles
@@ -68,18 +68,18 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Встановлювати лише потрібні компоненти | Є на service allowlist рівні | Додати image/package allowlist tests на реальній VM; зараз modules у catalog не доводять, що відповідний runtime існує. |
 | Core Node stack | Частково | Основні Core/DB/Redis/UI/Monitoring є. License Manager не реалізований окремо; Publisher/Dispatcher/Scheduler не ізольовані services. |
 | GPU Node | Частково | Role plan містить ComfyUI та GPU workflow self-test. Bootstrap ще не завершує NVIDIA Container Toolkit/CUDA compatibility flow і немає physical-GPU release test. |
-| Text Node | Частково | Ollama inference self-test є, але немає окремого text task executor/model lifecycle. |
-| Voice Node | Частково | TTS service contract і health self-test є; voice model management та synthesis executor ще не реалізовані в цьому repo. |
-| Publisher Node | Частково | Окремий service contract і health self-test є; credential UI, platform connectivity semantics та publisher task executor не завершені. |
+| Text Node | Частково | Є Ollama executor, UTF-8 artifact contract і bootstrap model pull; ще потрібні cache placement, streaming, cancellation та version lifecycle. |
+| Voice Node | Частково | Додано TTS synthesis executor і перевірюваний audio artifact contract; voice model management ще не завершений. |
+| Publisher Node | Частково | Додано publisher executor із обов'язковим publication receipt; credential UI, OAuth і platform-specific idempotency ще потрібні. |
 | Monitoring Node | Частково | Prometheus і Grafana заявлені з health checks; немає log store/collector, provisioned dashboards і alert rules. |
 | Backup Node | Частково | Backup service contract і storage read/write self-test є; snapshot/archive executor, remote retention і restore verification не завершені. |
 | Add Worker одноразовий token | Є базово | PostgreSQL atomic consume є. Потрібні token naming/audit, cancellation, explicit capability scope UI та rate limiting. |
-| Автоматична реєстрація | Є базово | CSR/mTLS/JWT, automatic certificate renewal і credential generation rotation працюють. Потрібні proxy-level CRL/OCSP і retry-safe enrollment state machine. |
+| Автоматична реєстрація | Є базово | CSR/mTLS/JWT, renewal, serial binding і CA-signed CRL із proxy enforcement працюють. Потрібні retry-safe enrollment та proxy failover/expiry integration tests. |
 | NAT/VPN outbound connection | Є архітектурно | Потрібні integration tests через NAT, proxy, clock skew, TLS renewal і Core failover. |
-| Capability-driven dispatch | Частково | Dispatcher фільтрує capability/VRAM/workflow і в appliance mode вимагає успішний self-test. Немає durable attestation, load score, locality та fair scheduling. |
-| Worker states | Частково | `ONLINE`, `FREE`, `READY`, `BUSY`, `UPDATING`, `OFFLINE`, `ERROR` не зведені до одного enum/state machine. |
-| Worker health | Частково | Heartbeat має частину GPU metrics. Немає standardized RAM/disk/Docker/version/latency checks та role-specific health contract. |
-| Однаковий Update Agent на ролях | Частково | Service є у role plans, але per-node autonomous update, Core notification, coordinated compatibility і rolling policy не завершені. |
+| Capability-driven dispatch | Частково | Dispatcher використовує persisted `tested_capabilities`, вимагає свіжий role-matched self-test і відхиляє capability поза role allowlist. Ще потрібні model/module attestation, load score, locality та fair scheduling. |
+| Worker states | Частково | Є `WorkerState`, legal transitions та admin actions drain/resume/quarantine/unquarantine/self-test; ще потрібен окремий PostgreSQL transition audit. |
+| Worker health | Частково | Heartbeat має GPU, available RAM, disk, CPU load і runtime version; ще потрібні Docker/model status, latency та production role qualification. |
+| Однаковий Update Agent на ролях | Частково | Worker створює idempotent local signed-update request для coordinated target version; потрібен production host-executor integration на кожній ролі. |
 | Core Dashboard fleet view | Частково | Є basic Worker list/token generation. Немає повного registered-node inventory, role/capability filters, cert expiry, update state, drain/revoke/rotate/self-test actions. |
 
 ## Критичні технічні дефекти поточної реалізації
@@ -87,13 +87,22 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 1. **Role catalog перебільшує фактичну функціональність.** `modules` містить ComfyUI,
    CUDA, TTS, backup, Grafana та publisher adapters, хоча service allowlist часто запускає
    лише generic `worker`. UI повинен показувати `planned`, `installed`, `healthy` окремо.
-2. **Update Agent має unrestricted Docker socket.** Компрометація контейнера дорівнює
-   root compromise host. Потрібен host-side вузький RPC або socket proxy allowlist.
-3. **Secret store не зашифрований.** `ENCRYPTION_KEY` існує, але secrets залишаються
-   plaintext. Потрібен AEAD, key sealing, rotation і redaction.
-4. **Release key lifecycle не визначено.** Потрібні offline root, online release keys,
-   `key_id`, validity, revocation і root-signed rotation metadata.
-5. **Немає end-to-end production test matrix.** Unit tests не замінюють fresh Ubuntu VM,
+2. **Container Update Agent більше не має Docker socket.** Bootstrap checksum-перевіряє та
+   встановлює host-side systemd executor/path/timer, а контейнер запускається read-only без
+   capabilities. Ще потрібні disposable-host sandbox tests і подальше звуження privileged API.
+3. **Secret store завершено частково.** Core secrets мігруються у versioned AES-256-GCM
+   envelope та проходять authentication під час читання. Installation data key і bootstrap
+   `.env` поки залишаються локальними mode-`0600` файлами; потрібні TPM/KMS/passphrase sealing,
+   Docker secrets, rotation і redaction.
+4. **Release key lifecycle реалізовано частково.** Update Agent перевіряє threshold-signed offline-root
+   metadata, її version/expiry, channel scope, revocation state та digest online release key. Manifest
+   також має durable monotonic `release_sequence`. Ще потрібно підключити root metadata до bootstrap
+   distribution, визначити ceremony/escrow root-ключів і перевірити rotation end-to-end.
+5. **Safe Update correctness посилено, але не завершено.** Локальний crash-safe lease відхиляє другий
+   Update Agent, update audit має перевірюваний hash chain, backup отримав checksum manifest, а rollback
+   Core автоматично відновлює PostgreSQL після початку update. Для HA ще потрібні PostgreSQL fencing,
+   immutable release activation, expand/contract migrations, rolling coordinator і fault injection.
+6. **Немає end-to-end production test matrix.** Unit tests не замінюють fresh Ubuntu VM,
    real PostgreSQL concurrency, Docker Compose, Nginx mTLS і physical GPU tests.
 
 ## Рекомендований порядок наступних робіт
@@ -108,7 +117,8 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 
 ### Етап 2 — secrets і privileged operations
 
-1. Реалізувати encrypted secret store з AEAD і versioned key envelope.
+1. Завершити secret lifecycle: sealing data key, Docker secrets, rotation і redaction
+   (AEAD та versioned envelope вже реалізовані).
 2. Прибрати Docker socket із контейнера Update Agent.
 3. Додати credential/certificate/key rotation та backup redaction.
 
