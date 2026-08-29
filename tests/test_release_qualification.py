@@ -25,6 +25,8 @@ def test_role_isolation_failure_is_reported(tmp_path):
     for name in ("bootstrap.sh", "deploy/docker-compose.yml", "deploy/proxy.conf",
                  "config/schemas/release-contract.schema.json", "scripts/runtime-contract.py",
                  "scripts/generate-sbom.py",
+                 "services/tts_service.py", "services/publisher_service.py", "services/backup_service.py",
+                 "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
                  "scripts/update-agent.py", "scripts/release-layout.py", "installer/update-public.pem"):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)

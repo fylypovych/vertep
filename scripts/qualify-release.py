@@ -27,6 +27,8 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
     required = ["bootstrap.sh", "deploy/docker-compose.yml", "config/node_roles.json",
                 "config/schemas/release-contract.schema.json", "scripts/runtime-contract.py",
                 "scripts/generate-sbom.py",
+                "services/tts_service.py", "services/publisher_service.py", "services/backup_service.py",
+                "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
                 "scripts/update-agent.py", "scripts/release-layout.py", "installer/update-public.pem"]
     missing = [name for name in required if not (root / name).is_file()]
     record("required_release_files", not missing, ", ".join(missing))

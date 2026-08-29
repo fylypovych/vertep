@@ -107,6 +107,10 @@ services:
       timeout: 10s
       retries: 30
     restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
   publisher-worker:
     image: ${VERTEP_PUBLISHER_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/publisher-worker:${VERTEP_VERSION}}
     env_file: .env
@@ -117,16 +121,26 @@ services:
       timeout: 10s
       retries: 30
     restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
   backup-service:
     image: ${VERTEP_BACKUP_SERVICE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/backup:${VERTEP_VERSION}}
     env_file: .env
     volumes: ["./config:/data/config:ro", "./storage:/data/storage:ro", "./backups:/data/backups"]
+    environment:
+      BACKUP_ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
     healthcheck:
-      test: ["CMD", "test", "-w", "/data/backups"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8092/health"]
       interval: 30s
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
   postgres:
     image: ${VERTEP_POSTGRES_IMAGE:-postgres:16-alpine}
     environment: {POSTGRES_DB: vertep, POSTGRES_USER: vertep, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"}
