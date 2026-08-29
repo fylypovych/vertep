@@ -1,0 +1,13 @@
+services:
+  worker:
+    network_mode: host
+    environment:
+      CORE_ADDRESS: http://127.0.0.1:8080
+      COMFYUI_URL: http://127.0.0.1:8188
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

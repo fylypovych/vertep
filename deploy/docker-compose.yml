@@ -1,0 +1,270 @@
+name: vertep
+services:
+  proxy:
+    image: ${VERTEP_PROXY_IMAGE:-nginx:1.27-alpine}
+    entrypoint: ["/bin/sh", "-c", "envsubst '$$WEB_DOMAIN' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec /bin/sh -c 'last=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); (while sleep 5; do current=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); if [ \"$$current\" != \"$$last\" ]; then nginx -s reload; last=$$current; fi; done) & exec nginx -g 'daemon off;' '"]
+    ports: ["8443:8443"]
+    volumes:
+      - ./runtime/proxy.conf.template:/etc/nginx/conf.d/default.conf.template:ro
+      - ./tls:/etc/vertep/tls:ro
+      - ./config:/etc/vertep/revocation:ro
+    depends_on:
+      core: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://localhost:8443/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  core:
+    image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JOB_ROOT: /data/storage/jobs
+      LOG_ROOT: /data/logs
+      UPDATE_STATE_DIR: /data/config/update
+      CORE_CERTIFICATE_PATH: /data/tls/vertep.crt
+      NODE_CA_KEY_PATH: /data/tls/node-ca.key
+      NODE_CA_CERT_PATH: /data/tls/node-ca.crt
+      NODE_MTLS_REQUIRED: "true"
+      NODE_CRL_PATH: /data/config/node-ca.crl
+      NODE_ROLES_FILE: /data/config/node_roles.json
+      NODE_REGISTRY_BACKEND: postgres
+      REQUIRE_WORKER_SELF_TEST: "true"
+      WORKER_SELF_TEST_MAX_AGE_SECONDS: "900"
+      WORKER_CLOCK_SKEW_SECONDS: "300"
+      REQUIRE_SECRET_KEY_SEALING: "true"
+      SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
+    secrets: [secret_store_passphrase]
+    volumes:
+      - ./config:/data/config
+      - ./logs:/data/logs
+      - ./storage:/data/storage
+      - ./backups:/data/backups
+      - ./tls:/data/tls:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  migrate:
+    image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
+    command: ["python", "/app/scripts/migrate.py"]
+    environment:
+      DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+  worker:
+    image: ${VERTEP_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/worker:${VERTEP_VERSION}}
+    env_file: .env
+    environment:
+      CORE_ADDRESS: "${CORE_URL:-http://core:8080}"
+      NODE_NAME: "${NODE_NAME:-local-worker}"
+      NODE_ROLE: "${NODE_ROLE:-gpu}"
+      NODE_CAPABILITIES: "${NODE_CAPABILITIES:-image_generation,image_upscale,controlnet,inpainting}"
+      REGISTRATION_TOKEN: "${REGISTRATION_TOKEN:-}"
+      CORE_CA_PATH: "${CORE_CA_PATH:-}"
+      NODE_CONFIG_PATH: /data/config/node-credentials.json
+      COMFYUI_URL: http://comfyui:8188
+      OLLAMA_URL: http://ollama:11434
+      TTS_HEALTH_URL: http://tts:8090/health
+      PUBLISHER_HEALTH_URL: http://publisher-worker:8091/health
+      PROMETHEUS_URL: http://monitoring:9090/-/healthy
+      BACKUP_ROOT: /data/backups
+      UPDATE_REQUEST_DIR: /data/config/update/requests
+    volumes: ["./models:/data/models", "./logs:/data/logs", "./config:/data/config", "./backups:/data/backups"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import worker.service' >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+  comfyui:
+    image: ${VERTEP_COMFYUI_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/comfyui:${VERTEP_VERSION}}
+    volumes: ["./models:/data/models", "./storage:/data/output"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8188/system_stats"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+  tts:
+    image: ${VERTEP_TTS_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/tts:${VERTEP_VERSION}}
+    volumes: ["./models:/data/models", "./storage:/data/output"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8090/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  publisher-worker:
+    image: ${VERTEP_PUBLISHER_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/publisher-worker:${VERTEP_VERSION}}
+    env_file: .env
+    volumes: ["./config:/data/config", "./logs:/data/logs", "./storage:/data/storage"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8091/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  backup-service:
+    image: ${VERTEP_BACKUP_SERVICE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/backup:${VERTEP_VERSION}}
+    env_file: .env
+    volumes: ["./config:/data/config:ro", "./storage:/data/storage:ro", "./backups:/data/backups"]
+    environment:
+      BACKUP_ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8092/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  postgres:
+    image: ${VERTEP_POSTGRES_IMAGE:-postgres:16-alpine}
+    environment: {POSTGRES_DB: vertep, POSTGRES_USER: vertep, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"}
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vertep -d vertep"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+  redis:
+    image: ${VERTEP_REDIS_IMAGE:-redis:7-alpine}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    environment: {REDIS_PASSWORD: "${REDIS_PASSWORD}"}
+    restart: unless-stopped
+  ollama:
+    image: ${VERTEP_OLLAMA_IMAGE:-ollama/ollama:0.11.4}
+    volumes: ["models:/root/.ollama"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+  monitoring:
+    image: ${VERTEP_MONITORING_IMAGE:-prom/prometheus:v3.5.0}
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus",
+              "--web.enable-lifecycle"]
+    volumes:
+      - monitoring-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  log-store:
+    image: ${VERTEP_LOG_STORE_IMAGE:-grafana/loki:3.5.2}
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - log-store-data:/loki
+      - ./monitoring/loki.yml:/etc/loki/config.yml:ro
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-verify-config=true", "-config.file=/etc/loki/config.yml"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  log-collector:
+    image: ${VERTEP_LOG_COLLECTOR_IMAGE:-grafana/promtail:3.5.2}
+    command: ["-config.file=/etc/promtail/config.yml", "-config.expand-env=true"]
+    volumes:
+      - ./logs:/var/log/vertep:ro
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - log-collector-data:/run/promtail
+    depends_on:
+      log-store: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/usr/bin/promtail", "-check-syntax", "-config.file=/etc/promtail/config.yml"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  grafana:
+    image: ${VERTEP_GRAFANA_IMAGE:-grafana/grafana:12.1.1}
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+  update-agent:
+    image: ${VERTEP_UPDATE_AGENT_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/update-agent:${VERTEP_VERSION}}
+    env_file: .env
+    volumes:
+      - ./config:/data/config
+      - ./backups:/data/backups
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /data/config"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+volumes:
+  postgres-data: {}
+  redis-data: {}
+  models: {}
+  monitoring-data: {}
+  grafana-data: {}
+  log-store-data: {}
+  log-collector-data: {}
+secrets:
+  secret_store_passphrase:
+    file: ${SECRET_STORE_PASSPHRASE_FILE_HOST:-./config/secret-store.passphrase}

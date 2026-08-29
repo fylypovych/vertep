@@ -1,0 +1,25 @@
+services:
+  worker:
+    build: .
+    command: python -m worker.service
+    env_file: .env
+    network_mode: host
+    environment:
+      NODE_NAME: ${NODE_NAME:?NODE_NAME must be configured}
+      CORE_ADDRESS: ${CORE_ADDRESS:?CORE_ADDRESS must point to Vertep CORE}
+      COMFYUI_URL: http://127.0.0.1:8188
+      WORKFLOWS_ROOT: /app/workflows
+    volumes:
+      - ./workflows:/app/workflows:ro
+      - logs:/data/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  logs:

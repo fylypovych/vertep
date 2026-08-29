@@ -1,0 +1,26 @@
+[Unit]
+Description=Vertep worker update processor
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@VERTEP_ROOT@
+EnvironmentFile=-@VERTEP_ROOT@/.env
+EnvironmentFile=-/etc/vertep/node.conf
+ExecStart=/usr/bin/python3 @VERTEP_ROOT@/scripts/worker_update.py --root @VERTEP_ROOT@ --state-dir @VERTEP_ROOT@/config/update --request %i
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=@VERTEP_ROOT@

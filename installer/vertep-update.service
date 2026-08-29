@@ -1,0 +1,26 @@
+[Unit]
+Description=Vertep signed-package safe update agent
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@VERTEP_ROOT@
+EnvironmentFile=-@VERTEP_ROOT@/.env
+EnvironmentFile=-/etc/vertep/node.conf
+ExecStart=/usr/bin/python3 @VERTEP_ROOT@/scripts/update-agent.py --root @VERTEP_ROOT@ --state-dir @VERTEP_ROOT@/config/update
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=@VERTEP_ROOT@

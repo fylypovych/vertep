@@ -1,0 +1,17 @@
+[Unit]
+Description=Vertep GPU Worker
+After=docker.service
+Requires=docker.service
+Wants=vertep-comfyui.service
+After=vertep-comfyui.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@VERTEP_ROOT@
+EnvironmentFile=-/etc/vertep/node.conf
+ExecStart=/usr/bin/docker compose -f docker-compose.worker.yml up -d worker
+ExecStop=/usr/bin/docker compose -f docker-compose.worker.yml stop worker
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

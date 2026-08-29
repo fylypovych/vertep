@@ -1,0 +1,17 @@
+groups:
+  - name: vertep-runtime
+    rules:
+      - alert: VertepLogStoreUnavailable
+        expr: up{job="loki"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сховище журналів Vertep недоступне"
+      - alert: VertepPrometheusRuleEvaluationFailures
+        expr: increase(prometheus_rule_evaluation_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus не може обчислити правила Vertep"

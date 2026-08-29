@@ -1,0 +1,10 @@
+[Unit]
+Description=Request a periodic Vertep update check
+After=network-online.target vertep-update.path
+
+[Service]
+Type=oneshot
+EnvironmentFile=-@VERTEP_ROOT@/.env
+ExecStart=/usr/bin/curl --fail --silent --show-error -u ${ADMIN_USER}:${ADMIN_PASSWORD} -X POST http://127.0.0.1:8080/api/system/update/check
+PrivateTmp=true
+NoNewPrivileges=true

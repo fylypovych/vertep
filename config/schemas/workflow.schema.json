@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","minProperties":1,"additionalProperties":{"type":"object","required":["class_type"],"properties":{"class_type":{"type":"string"},"inputs":{"type":"object"}}}}

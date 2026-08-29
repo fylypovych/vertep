@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+pytest==8.3.4
+redis==5.2.1
+imageio-ffmpeg>=0.5,<1
+psycopg[binary]==3.2.3
+cryptography>=41.0.7,<47

@@ -1,0 +1,21 @@
+[Unit]
+Description=Застосування підписаного плану розгортання Vertep
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@VERTEP_ROOT@
+ExecStart=/usr/bin/python3 @VERTEP_ROOT@/scripts/apply-deployment.py --root @VERTEP_ROOT@
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=@VERTEP_ROOT@

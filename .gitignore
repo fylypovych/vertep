@@ -1,0 +1,11 @@
+.env
+config/secret-store.passphrase
+.venv/
+__pycache__/
+.pytest_cache/
+jobs/
+logs/
+backups/
+runtime/
+.vertep-last-good
+*.pyc

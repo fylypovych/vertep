@@ -1,0 +1,9 @@
+[Unit]
+Description=Очікування вибору ролі у Vertep Web Wizard
+
+[Path]
+PathExists=@VERTEP_ROOT@/config/deployment-request.json
+Unit=vertep-deployment.service
+
+[Install]
+WantedBy=multi-user.target

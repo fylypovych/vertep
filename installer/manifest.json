@@ -1,0 +1,43 @@
+{
+  "platform": "ubuntu:24.04",
+  "profiles": {
+    "core": {"includes": ["core"]},
+    "worker": {"includes": ["gpu"]},
+    "core-worker": {"includes": ["core", "gpu"]},
+    "text": {"includes": ["text"]},
+    "voice": {"includes": ["voice"]},
+    "publisher": {"includes": ["publisher"]},
+    "backup": {"includes": ["backup"]},
+    "monitoring": {"includes": ["monitoring"]}
+  },
+  "roles": {
+    "core": {
+      "packages": ["docker.io", "docker-compose-v2", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "openssl", "ufw"],
+      "services": ["docker", "ssh", "ollama", "vertep-core", "vertep-update.path", "vertep-update.timer"]
+    },
+    "gpu": {
+      "packages": ["docker.io", "docker-compose-v2", "git", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "ufw", "ubuntu-drivers-common"],
+      "services": ["docker", "ssh", "vertep-comfyui", "vertep-worker", "vertep-update.path", "vertep-update.timer"]
+    },
+    "text": {
+      "packages": ["docker.io", "docker-compose-v2", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "openssl", "ufw"],
+      "services": ["docker", "ssh", "vertep-worker", "ollama", "vertep-update.path", "vertep-update.timer"]
+    },
+    "voice": {
+      "packages": ["docker.io", "docker-compose-v2", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "openssl", "ufw"],
+      "services": ["docker", "ssh", "vertep-worker", "tts", "vertep-update.path", "vertep-update.timer"]
+    },
+    "publisher": {
+      "packages": ["docker.io", "docker-compose-v2", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "openssl", "ufw"],
+      "services": ["docker", "ssh", "vertep-worker", "publisher-worker", "vertep-update.path", "vertep-update.timer"]
+    },
+    "backup": {
+      "packages": ["docker.io", "docker-compose-v2", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "openssl", "ufw"],
+      "services": ["docker", "ssh", "vertep-worker", "backup-service", "vertep-update.path", "vertep-update.timer"]
+    },
+    "monitoring": {
+      "packages": ["docker.io", "docker-compose-v2", "python3", "python3-venv", "ffmpeg", "curl", "openssh-server", "gnupg", "openssl", "ufw"],
+      "services": ["docker", "ssh", "vertep-worker", "monitoring", "grafana", "log-store", "log-collector", "vertep-update.path", "vertep-update.timer"]
+    }
+  }
+}

@@ -1,0 +1,18 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /run/promtail/positions.yml
+
+clients:
+  - url: http://log-store:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: vertep-files
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: vertep
+          node: $${HOSTNAME}
+          __path__: /var/log/vertep/**/*
