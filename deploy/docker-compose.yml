@@ -1,7 +1,7 @@
 name: vertep
 services:
   proxy:
-    image: nginx:1.27-alpine
+    image: ${VERTEP_PROXY_IMAGE:-nginx:1.27-alpine}
     command: ["/bin/sh", "-c", "last=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); (while sleep 5; do current=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); if [ \"$$current\" != \"$$last\" ]; then nginx -s reload; last=$$current; fi; done) & exec nginx -g 'daemon off;' "]
     ports: ["8443:8443"]
     volumes:
@@ -17,7 +17,7 @@ services:
       retries: 30
     restart: unless-stopped
   core:
-    image: ${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}
+    image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
     env_file: .env
     environment:
       DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
@@ -53,7 +53,7 @@ services:
       retries: 30
     restart: unless-stopped
   migrate:
-    image: ${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}
+    image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
     command: ["python", "/app/scripts/migrate.py"]
     environment:
       DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
@@ -61,7 +61,7 @@ services:
       postgres: {condition: service_healthy}
     restart: "no"
   worker:
-    image: ${VERTEP_IMAGE_REPOSITORY}/worker:${VERTEP_VERSION}
+    image: ${VERTEP_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/worker:${VERTEP_VERSION}}
     env_file: .env
     environment:
       CORE_ADDRESS: "${CORE_URL:-http://core:8080}"
@@ -86,7 +86,7 @@ services:
       retries: 10
     restart: unless-stopped
   comfyui:
-    image: ${VERTEP_IMAGE_REPOSITORY}/comfyui:${VERTEP_VERSION}
+    image: ${VERTEP_COMFYUI_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/comfyui:${VERTEP_VERSION}}
     volumes: ["./models:/data/models", "./storage:/data/output"]
     deploy:
       resources:
@@ -99,7 +99,7 @@ services:
       retries: 30
     restart: unless-stopped
   tts:
-    image: ${VERTEP_IMAGE_REPOSITORY}/tts:${VERTEP_VERSION}
+    image: ${VERTEP_TTS_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/tts:${VERTEP_VERSION}}
     volumes: ["./models:/data/models", "./storage:/data/output"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8090/health"]
@@ -108,7 +108,7 @@ services:
       retries: 30
     restart: unless-stopped
   publisher-worker:
-    image: ${VERTEP_IMAGE_REPOSITORY}/publisher-worker:${VERTEP_VERSION}
+    image: ${VERTEP_PUBLISHER_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/publisher-worker:${VERTEP_VERSION}}
     env_file: .env
     volumes: ["./config:/data/config", "./logs:/data/logs", "./storage:/data/storage"]
     healthcheck:
@@ -118,7 +118,7 @@ services:
       retries: 30
     restart: unless-stopped
   backup-service:
-    image: ${VERTEP_IMAGE_REPOSITORY}/backup:${VERTEP_VERSION}
+    image: ${VERTEP_BACKUP_SERVICE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/backup:${VERTEP_VERSION}}
     env_file: .env
     volumes: ["./config:/data/config:ro", "./storage:/data/storage:ro", "./backups:/data/backups"]
     healthcheck:
@@ -128,7 +128,7 @@ services:
       retries: 10
     restart: unless-stopped
   postgres:
-    image: postgres:16-alpine
+    image: ${VERTEP_POSTGRES_IMAGE:-postgres:16-alpine}
     environment: {POSTGRES_DB: vertep, POSTGRES_USER: vertep, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"}
     volumes: ["postgres-data:/var/lib/postgresql/data"]
     healthcheck:
@@ -138,7 +138,7 @@ services:
       retries: 40
     restart: unless-stopped
   redis:
-    image: redis:7-alpine
+    image: ${VERTEP_REDIS_IMAGE:-redis:7-alpine}
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
     volumes: ["redis-data:/data"]
     healthcheck:
@@ -149,7 +149,7 @@ services:
     environment: {REDIS_PASSWORD: "${REDIS_PASSWORD}"}
     restart: unless-stopped
   ollama:
-    image: ollama/ollama:0.11.4
+    image: ${VERTEP_OLLAMA_IMAGE:-ollama/ollama:0.11.4}
     volumes: ["models:/root/.ollama"]
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -158,7 +158,7 @@ services:
       retries: 20
     restart: unless-stopped
   monitoring:
-    image: prom/prometheus:v3.5.0
+    image: ${VERTEP_MONITORING_IMAGE:-prom/prometheus:v3.5.0}
     volumes: ["monitoring-data:/prometheus"]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
@@ -167,7 +167,7 @@ services:
       retries: 10
     restart: unless-stopped
   grafana:
-    image: grafana/grafana:12.1.1
+    image: ${VERTEP_GRAFANA_IMAGE:-grafana/grafana:12.1.1}
     volumes: ["grafana-data:/var/lib/grafana"]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
@@ -176,7 +176,7 @@ services:
       retries: 20
     restart: unless-stopped
   update-agent:
-    image: ${VERTEP_IMAGE_REPOSITORY}/update-agent:${VERTEP_VERSION}
+    image: ${VERTEP_UPDATE_AGENT_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/update-agent:${VERTEP_VERSION}}
     env_file: .env
     volumes:
       - ./config:/data/config

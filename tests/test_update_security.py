@@ -127,6 +127,10 @@ def test_bootstrap_installs_only_checksum_verified_host_update_executor():
     assert 'sha256sum -c -' in bootstrap
     assert 'systemctl enable --now vertep-update.path vertep-update.timer' in bootstrap
     assert "SETUP_TOKEN_EXPIRES_AT=" in bootstrap
+    assert '.schema == 2 and .product == "vertep"' in bootstrap
+    assert '.roles.catalog_sha256' in bootstrap
+    assert 'release-sbom.cdx.json' in bootstrap
+    assert 'resolved_image(){' in bootstrap
 
 
 def test_bootstrap_preflight_and_text_model_provisioning_contract():

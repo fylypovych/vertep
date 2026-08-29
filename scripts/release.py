@@ -74,20 +74,20 @@ def changed_files(root: Path) -> list[tuple[str, str]]:
 
 def generated_notes(root: Path, files: list[tuple[str, str]]) -> list[str]:
     categories = {
-        "CORE, API and orchestration": ("core/", "agents/"),
-        "Workers and media adapters": ("worker/", "adapters/", "workflows/", "publishers/", "telegram/"),
-        "Web interface": ("web/",),
-        "Installation and operations": ("installer/", "scripts/", "docker-compose", "Dockerfile", "install.sh"),
-        "Tests and continuous integration": ("tests/", ".github/"),
-        "Configuration and documentation": ("config/", "characters/", "brands/", "prompts/", "README", "CHANGELOG", "TZ_", ".env.example"),
+        "CORE, API та оркестрація": ("core/", "agents/"),
+        "Worker і медіаадаптери": ("worker/", "adapters/", "workflows/", "publishers/", "telegram/"),
+        "Вебінтерфейс": ("web/",),
+        "Встановлення й експлуатація": ("installer/", "scripts/", "docker-compose", "Dockerfile", "install.sh"),
+        "Тести й безперервна інтеграція": ("tests/", ".github/"),
+        "Конфігурація та документація": ("config/", "characters/", "brands/", "prompts/", "README", "CHANGELOG", "TZ_", ".env.example"),
     }
     notes = []
     for title, prefixes in categories.items():
         count = sum(any(path.startswith(prefix) for prefix in prefixes) for _, path in files)
         if count:
-            notes.append(f"- {title}: {count} file(s) changed.")
+            notes.append(f"- {title}: змінено файлів — {count}.")
     if not notes:
-        notes.append(f"- Repository maintenance: {len(files)} file(s) changed.")
+        notes.append(f"- Обслуговування репозиторію: змінено файлів — {len(files)}.")
     release_commits = git(root, "log", "--format=%H%x09%s").splitlines()
     baseline = next((row.split("\t", 1)[0] for row in release_commits
                      if len(row.split("\t", 1)) == 2
@@ -96,7 +96,7 @@ def generated_notes(root: Path, files: list[tuple[str, str]]) -> list[str]:
     revision_range = f"{baseline}..HEAD" if baseline else "HEAD"
     subjects = [line for line in git(root, "log", "--format=%s", "--no-merges", revision_range).splitlines()
                 if line and not line.startswith("Release 0.0.0.") and not VERSION_RE.fullmatch(line)]
-    notes.extend(f"- Commit: {subject}" for subject in subjects[:20])
+    notes.extend(f"- Коміт: {subject}" for subject in subjects[:20])
     return notes
 
 
@@ -145,18 +145,18 @@ def prepare_release(root: Path, *, push: bool, skip_tests: bool) -> str:
     release_dir = root / "releases"
     release_dir.mkdir(exist_ok=True)
     release_path = release_dir / f"{version}.md"
-    release_path.write_text(f"# Vertep {version}\n\nReleased: {dt.date.today().isoformat()}\n\n## Changes\n\n"
-                            + "\n".join(notes) + "\n\n## Validation\n\n- Pending.\n", encoding="utf-8")
+    release_path.write_text(f"# Vertep {version}\n\nДата випуску: {dt.date.today().isoformat()}\n\n## Зміни\n\n"
+                            + "\n".join(notes) + "\n\n## Перевірка\n\n- Очікується.\n", encoding="utf-8")
     git(root, "add", "-A")
     scan_staged_secrets(root)
-    validation = "Skipped by explicit --skip-tests option."
+    validation = "Пропущено явним параметром --skip-tests."
     if not skip_tests:
         run(root, [sys.executable, "-m", "compileall", "-q", "core", "adapters", "worker", "scripts", "installer", "tests"], capture=False)
         result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=root, text=True,
                                 capture_output=True, check=True)
         print(result.stdout, end="")
         validation = next((line.strip() for line in reversed(result.stdout.splitlines()) if "passed" in line), "pytest passed")
-    release_text = release_path.read_text(encoding="utf-8").replace("- Pending.", f"- `{validation}`")
+    release_text = release_path.read_text(encoding="utf-8").replace("- Очікується.", f"- `{validation}`")
     release_path.write_text(release_text, encoding="utf-8")
     git(root, "add", "-A")
     scan_staged_secrets(root)

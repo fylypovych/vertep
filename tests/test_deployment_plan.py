@@ -39,3 +39,13 @@ def test_update_agent_has_no_docker_socket():
     proxy = Path("deploy/proxy.conf").read_text(encoding="utf-8")
     assert "ssl_crl /etc/vertep/revocation/node-ca.crl;" in proxy
     assert "nginx -s reload" in compose
+
+
+def test_appliance_images_can_be_pinned_by_signed_contract():
+    compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
+    for variable in ("VERTEP_PROXY_IMAGE", "VERTEP_CORE_IMAGE", "VERTEP_WORKER_IMAGE",
+                     "VERTEP_COMFYUI_IMAGE", "VERTEP_TTS_IMAGE", "VERTEP_PUBLISHER_WORKER_IMAGE",
+                     "VERTEP_BACKUP_SERVICE_IMAGE", "VERTEP_POSTGRES_IMAGE", "VERTEP_REDIS_IMAGE",
+                     "VERTEP_OLLAMA_IMAGE", "VERTEP_MONITORING_IMAGE", "VERTEP_GRAFANA_IMAGE",
+                     "VERTEP_UPDATE_AGENT_IMAGE"):
+        assert "${" + variable in compose

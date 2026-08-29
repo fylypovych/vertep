@@ -25,6 +25,8 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
         checks.append({"name": name, "passed": bool(passed), "detail": detail})
 
     required = ["bootstrap.sh", "deploy/docker-compose.yml", "config/node_roles.json",
+                "config/schemas/release-contract.schema.json", "scripts/runtime-contract.py",
+                "scripts/generate-sbom.py",
                 "scripts/update-agent.py", "scripts/release-layout.py", "installer/update-public.pem"]
     missing = [name for name in required if not (root / name).is_file()]
     record("required_release_files", not missing, ", ".join(missing))
@@ -37,6 +39,24 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
     except (OSError, ValueError, KeyError, TypeError) as error:
         record("role_catalog", False, str(error))
     compose = (root / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    try:
+        contract_schema = json.loads(
+            (root / "config/schemas/release-contract.schema.json").read_text(encoding="utf-8"))
+        record("release_contract_schema", contract_schema.get("properties", {}).get(
+            "schema", {}).get("const") == 2)
+    except (OSError, ValueError) as error:
+        record("release_contract_schema", False, str(error))
+    bootstrap = (root / "bootstrap.sh").read_text(encoding="utf-8")
+    record("signed_role_catalog_binding",
+           ".roles.catalog_sha256" in bootstrap and ".roles.profiles[$role].services" in bootstrap)
+    image_variables = {"VERTEP_PROXY_IMAGE", "VERTEP_CORE_IMAGE", "VERTEP_WORKER_IMAGE",
+                       "VERTEP_COMFYUI_IMAGE", "VERTEP_TTS_IMAGE", "VERTEP_PUBLISHER_WORKER_IMAGE",
+                       "VERTEP_BACKUP_SERVICE_IMAGE", "VERTEP_POSTGRES_IMAGE", "VERTEP_REDIS_IMAGE",
+                       "VERTEP_OLLAMA_IMAGE", "VERTEP_MONITORING_IMAGE", "VERTEP_GRAFANA_IMAGE",
+                       "VERTEP_UPDATE_AGENT_IMAGE"}
+    missing_image_variables = sorted(name for name in image_variables if f"${{{name}" not in compose)
+    record("compose_image_digest_overrides", not missing_image_variables,
+           ", ".join(missing_image_variables))
     record("no_docker_socket", "/var/run/docker.sock" not in compose)
     record("machine_mtls_proxy", "ssl_verify_client optional" in
            (root / "deploy/proxy.conf").read_text(encoding="utf-8"))

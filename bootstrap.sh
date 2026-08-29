@@ -81,6 +81,15 @@ open(signature, "wb").write(base64.b64decode(encoded, validate=True))
 PY
 openssl dgst -sha256 -verify "$public_key_tmp" -signature "$signature_tmp" "$canonical_tmp" >/dev/null \
   || fail "runtime manifest signature verification failed"
+jq -e --arg role "$NODE_ROLE" '
+  .schema == 2 and .product == "vertep" and
+  (.release_sequence | type == "number" and . >= 1) and
+  (.compatibility.core_api | type == "number" and . >= 1) and
+  (.compatibility.worker_api | type == "number" and . >= 1) and
+  (.compatibility.database_schema | type == "number" and . >= 1) and
+  (.roles.profiles[$role].services | type == "array" and length > 0) and
+  (.sbom.format == "CycloneDX-JSON")
+' "$manifest_tmp" >/dev/null || fail "runtime manifest contract is invalid or does not contain role: $NODE_ROLE"
 version=$(jq -er '.version' "$manifest_tmp")
 compose_sha=$(jq -er '.files["docker-compose.yml"].sha256' "$manifest_tmp")
 proxy_sha=$(jq -er '.files["proxy.conf"].sha256' "$manifest_tmp")
@@ -90,6 +99,9 @@ update_agent_sha=$(jq -er '.files["update-agent.py"].sha256' "$manifest_tmp")
 vertep_cli_sha=$(jq -er '.files["vertep"].sha256' "$manifest_tmp")
 safe_extract_sha=$(jq -er '.files["safe-extract.py"].sha256' "$manifest_tmp")
 release_layout_sha=$(jq -er '.files["release-layout.py"].sha256' "$manifest_tmp")
+sbom_file=$(jq -er '.sbom.file' "$manifest_tmp")
+sbom_sha=$(jq -er '.sbom.sha256' "$manifest_tmp")
+[[ $sbom_file != /* && $sbom_file != *..* ]] || fail "runtime manifest contains an unsafe SBOM path"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.yml" -o "$INSTALL_ROOT/docker-compose.yml"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/proxy.conf" -o "$INSTALL_ROOT/runtime/proxy.conf"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/node_roles.json" -o "$INSTALL_ROOT/config/node_roles.json"
@@ -98,6 +110,7 @@ curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/update-agent.py" -o "$INSTALL_RO
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/vertep" -o "$INSTALL_ROOT/scripts/vertep"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/safe-extract.py" -o "$INSTALL_ROOT/scripts/safe-extract.py"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/release-layout.py" -o "$INSTALL_ROOT/scripts/release-layout.py"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$sbom_file" -o "$INSTALL_ROOT/config/release-sbom.cdx.json"
 printf '%s  %s\n' "$compose_sha" "$INSTALL_ROOT/docker-compose.yml" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$proxy_sha" "$INSTALL_ROOT/runtime/proxy.conf" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$roles_sha" "$INSTALL_ROOT/config/node_roles.json" | sha256sum -c - >/dev/null
@@ -105,11 +118,21 @@ printf '%s  %s\n' "$update_agent_sha" "$INSTALL_ROOT/scripts/update-agent.py" | 
 printf '%s  %s\n' "$vertep_cli_sha" "$INSTALL_ROOT/scripts/vertep" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$safe_extract_sha" "$INSTALL_ROOT/scripts/safe-extract.py" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$release_layout_sha" "$INSTALL_ROOT/scripts/release-layout.py" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$sbom_sha" "$INSTALL_ROOT/config/release-sbom.cdx.json" | sha256sum -c - >/dev/null
 chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
 mapfile -t role_services < <(jq -er --arg role "$NODE_ROLE" '.[$role].services[]' "$INSTALL_ROOT/config/node_roles.json") \
   || fail "unsupported node role: $NODE_ROLE"
 [[ ${#role_services[@]} -gt 0 ]] || fail "node role has no services: $NODE_ROLE"
 node_capabilities=$(jq -er --arg role "$NODE_ROLE" '.[$role].capabilities | join(",")' "$INSTALL_ROOT/config/node_roles.json")
+jq -e --arg role "$NODE_ROLE" --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
+  . as $manifest |
+  $manifest.roles.catalog_sha256 == $manifest.files[$manifest.roles.catalog_file].sha256 and
+  $manifest.roles.profiles[$role].services == $catalog[0][$role].services and
+  $manifest.roles.profiles[$role].capabilities == $catalog[0][$role].capabilities and
+  $manifest.roles.profiles[$role].modules == $catalog[0][$role].modules and
+  all($manifest.roles.profiles[$role].services[]; . as $service |
+      ($manifest.images[$service].digest | test("^sha256:[0-9a-f]{64}$")))
+' "$manifest_tmp" >/dev/null || fail "role catalog is inconsistent with the signed runtime contract"
 if [[ $NODE_ROLE != core ]]; then
   [[ -n ${VERTEP_CORE_URL:-} && -n ${VERTEP_REGISTRATION_TOKEN:-} ]] \
     || fail "non-Core roles require VERTEP_CORE_URL and VERTEP_REGISTRATION_TOKEN"
@@ -125,9 +148,23 @@ secret_store_passphrase=$(secret 48)
 setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
 setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
 setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
+resolved_image(){ jq -er --arg service "$1" '.images[$service] | .reference + "@" + .digest' "$manifest_tmp"; }
 cat > "$INSTALL_ROOT/.env" <<EOF
 VERTEP_VERSION=$version
 VERTEP_IMAGE_REPOSITORY=${VERTEP_IMAGE_REPOSITORY:-registry.vertep.ai/vertep}
+VERTEP_PROXY_IMAGE=$(resolved_image proxy)
+VERTEP_CORE_IMAGE=$(resolved_image core)
+VERTEP_WORKER_IMAGE=$(resolved_image worker)
+VERTEP_COMFYUI_IMAGE=$(resolved_image comfyui)
+VERTEP_TTS_IMAGE=$(resolved_image tts)
+VERTEP_PUBLISHER_WORKER_IMAGE=$(resolved_image publisher-worker)
+VERTEP_BACKUP_SERVICE_IMAGE=$(resolved_image backup-service)
+VERTEP_POSTGRES_IMAGE=$(resolved_image postgres)
+VERTEP_REDIS_IMAGE=$(resolved_image redis)
+VERTEP_OLLAMA_IMAGE=$(resolved_image ollama)
+VERTEP_MONITORING_IMAGE=$(resolved_image monitoring)
+VERTEP_GRAFANA_IMAGE=$(resolved_image grafana)
+VERTEP_UPDATE_AGENT_IMAGE=$(resolved_image update-agent)
 POSTGRES_PASSWORD=$postgres_password
 REDIS_PASSWORD=$redis_password
 JWT_SECRET=$jwt_secret

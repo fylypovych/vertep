@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.vertep.ai/release-contract-v2.json",
+  "title": "Контракт runtime-релізу Vertep",
+  "type": "object",
+  "required": ["schema", "product", "version", "release_sequence", "channel", "issued_at", "expires_at", "compatibility", "files", "images", "roles", "sbom", "signature"],
+  "properties": {
+    "schema": {"const": 2},
+    "product": {"const": "vertep"},
+    "version": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+){2,3}$"},
+    "release_sequence": {"type": "integer", "minimum": 1},
+    "channel": {"type": "string", "pattern": "^[a-z0-9-]{1,32}$"},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "compatibility": {
+      "type": "object",
+      "required": ["core_api", "worker_api", "database_schema", "database_strategy", "rollback_safe", "minimum_version"],
+      "properties": {
+        "core_api": {"type": "integer", "minimum": 1},
+        "worker_api": {"type": "integer", "minimum": 1},
+        "database_schema": {"type": "integer", "minimum": 1},
+        "database_strategy": {"enum": ["none", "expand", "contract"]},
+        "rollback_safe": {"type": "boolean"},
+        "minimum_version": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "files": {"type": "object", "minProperties": 1},
+    "images": {"type": "object", "minProperties": 1},
+    "roles": {"type": "object"},
+    "sbom": {"type": "object"},
+    "signature": {"type": "string", "contentEncoding": "base64"}
+  },
+  "additionalProperties": false
+}

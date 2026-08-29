@@ -23,11 +23,13 @@ def test_role_isolation_failure_is_reported(tmp_path):
         '"services": ["worker", "comfyui", "update-agent"]',
         '"services": ["worker", "comfyui", "postgres", "update-agent"]')
     for name in ("bootstrap.sh", "deploy/docker-compose.yml", "deploy/proxy.conf",
+                 "config/schemas/release-contract.schema.json", "scripts/runtime-contract.py",
+                 "scripts/generate-sbom.py",
                  "scripts/update-agent.py", "scripts/release-layout.py", "installer/update-public.pem"):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((root / name).read_bytes())
-    (tmp_path / "config").mkdir()
+    (tmp_path / "config").mkdir(exist_ok=True)
     (tmp_path / "config/node_roles.json").write_text(catalog)
     report = module().qualify(tmp_path)
     assert not report["passed"]
