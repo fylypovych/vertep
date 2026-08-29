@@ -1230,7 +1230,8 @@ def system_status():
 async def registration_token(request: Request):
     payload = await request.json()
     try:
-        return create_registration_token(str(payload.get("role", "")), int(payload.get("ttl_seconds", 900)))
+        return create_registration_token(str(payload.get("role", "")), int(payload.get("ttl_seconds", 900)),
+                                         push_token=bool(payload.get("push_token", False)))
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 

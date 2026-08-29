@@ -63,7 +63,7 @@ def _token_hash(token: str) -> str:
     return hmac.new(key, token.encode(), hashlib.sha256).hexdigest()
 
 
-def create_registration_token(role: str, ttl_seconds: int = 900) -> dict:
+def create_registration_token(role: str, ttl_seconds: int = 900, push_token: bool = False) -> dict:
     if role not in node_roles() or role == "core":
         raise ValueError("Unsupported registration role")
     if not 60 <= ttl_seconds <= 3600:
@@ -73,15 +73,18 @@ def create_registration_token(role: str, ttl_seconds: int = 900) -> dict:
     if _postgres_enabled():
         with _connect() as connection:
             connection.execute("DELETE FROM node_registration_tokens WHERE expires_at <= now()")
-            connection.execute("""INSERT INTO node_registration_tokens(token_hash,role,expires_at)
-                                   VALUES(%s,%s,to_timestamp(%s))""", (_token_hash(raw), role, expires_at))
+            connection.execute("""INSERT INTO node_registration_tokens(token_hash,role,expires_at,push_token)
+                                   VALUES(%s,%s,to_timestamp(%s),%s)""",
+                               (_token_hash(raw), role, expires_at, push_token))
     else:
         with _lock:
             registry = _load()
             registry["tokens"][_token_hash(raw)] = {"role": role, "expires_at": expires_at,
-                                                      "created_at": datetime.now(timezone.utc).isoformat()}
+                                                      "created_at": datetime.now(timezone.utc).isoformat(),
+                                                      "push_token": push_token}
             _save(registry)
-    return {"token": raw, "role": role, "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat()}
+    return {"token": raw, "role": role, "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+            "push_token": push_token}
 
 
 def _b64(value: bytes) -> str:
