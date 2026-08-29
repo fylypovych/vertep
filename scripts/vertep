@@ -119,16 +119,22 @@ case "${1:-status}" in
       systemctl enable --now vertep-update.path
       systemctl enable --now vertep-update.timer
     fi
-    for attempt in {1..15}; do
-      if [[ "$role" == "worker" ]]; then
-        "${compose[@]}" ps --status running --services | grep -qx worker && exit 0
-      elif curl -fsS -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health"; then
-        exit 0
-      fi
-      sleep 2
-    done
-    echo "Update health check failed; the update agent will rollback automatically." >&2
+    # A running container is not a healthy release: the gate asserts every
+    # dependency, every Worker self-test and the queue state before the update
+    # is allowed to count as successful.
+    if VERTEP_CORE_URL="$core_url" python3 "$release_root/scripts/health-gate.py" \
+      --role "$role" --mode post-update --expected-version "$target_version" \
+      --report "$ROOT/backups/health-$stamp.json"; then
+      exit 0
+    fi
+    echo "Post-update health gate failed; the update agent will rollback automatically." >&2
     exit 1
+    ;;
+  health-gate)
+    version=${2:-$(tr -d '[:space:]' < "${ROOT}/current/VERSION" 2>/dev/null || tr -d '[:space:]' < "$ROOT/VERSION")}
+    gate="$ROOT/current/scripts/health-gate.py"
+    [[ -f "$gate" ]] || gate="$ROOT/scripts/health-gate.py"
+    exec python3 "$gate" --role "$role" --mode "${3:-final}" --expected-version "$version"
     ;;
   rollback)
     [[ -f "$ROOT/.vertep-last-good" ]] || { echo "No rollback revision recorded" >&2; exit 1; }
@@ -165,6 +171,12 @@ case "${1:-status}" in
       core-worker) "${compose[@]}" up -d ;;
       *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
     esac
+    # The restored release must satisfy the same gate; otherwise the node is
+    # broken in both directions and the agent escalates to EMERGENCY.
+    restored_version=$(tr -d '[:space:]' < "$release_root/VERSION")
+    VERTEP_CORE_URL="$core_url" python3 "$release_root/scripts/health-gate.py" \
+      --role "$role" --mode post-update --expected-version "$restored_version" \
+      --report "$ROOT/backups/health-rollback-$(date +%Y%m%d-%H%M%S).json"
     ;;
-  *) echo "Usage: vertep {status|update|rollback}"; exit 2 ;;
+  *) echo "Usage: vertep {status|update|apply-update|health-gate|rollback}"; exit 2 ;;
 esac

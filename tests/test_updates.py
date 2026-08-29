@@ -73,6 +73,63 @@ def test_update_agent_persists_signed_check_result_and_removes_request(monkeypat
     assert not request_path.exists()
 
 
+def install_update(monkeypatch, tmp_path, gate_report: dict | None):
+    """Drive a full install and return (status, executed commands); a missing report fails the gate."""
+    agent = load_update_agent()
+    import core.update_protocol as protocol
+    root, state = tmp_path / "repo", tmp_path / "state"
+    (root / "scripts").mkdir(parents=True)
+    requests = state / "requests"
+    requests.mkdir(parents=True)
+    request_path = requests / ("b" * 32 + ".json")
+    request_path.write_text(json.dumps({"request_id": "b" * 32, "action": "update"}), encoding="utf-8")
+    monkeypatch.setattr(protocol, "fetch_manifest", lambda channel: {
+        "version": "99.0.0", "required": False, "package": "packages/vertep.tar.gz",
+        "sha256": "1" * 64, "signature": "signed"})
+    monkeypatch.setattr(protocol, "validate_manifest", lambda manifest, public_key, **kwargs: manifest)
+    monkeypatch.setattr(protocol, "download_package", lambda manifest, destination: destination)
+    monkeypatch.setattr(agent, "wait_for_drain", lambda state_dir, status: None)
+    commands: list[list[str]] = []
+
+    def fake_run(command, cwd):
+        commands.append(command)
+        if command[1].endswith("health-gate.py"):
+            report = Path(command[command.index("--report") + 1])
+            if gate_report is None:
+                raise RuntimeError("gate failed")
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(json.dumps(gate_report), encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(agent, "run", fake_run)
+    agent.process_request(root, state, request_path)
+    return json.loads((state / "status.json").read_text(encoding="utf-8")), commands
+
+
+def test_successful_update_requires_the_final_health_gate(monkeypatch, tmp_path):
+    status, commands = install_update(monkeypatch, tmp_path, {"passed": True, "failed": [], "checks": []})
+    assert status["state"] == "SUCCEEDED"
+    assert status["health"]["passed"] is True
+    gate = next(command for command in commands if command[1].endswith("health-gate.py"))
+    assert gate[gate.index("--mode") + 1] == "final"
+    assert gate[gate.index("--expected-version") + 1] == "99.0.0"
+    assert not any(command[-1] == "rollback" for command in commands)
+
+
+def test_failed_final_health_gate_rolls_the_release_back(monkeypatch, tmp_path):
+    status, commands = install_update(monkeypatch, tmp_path,
+                                      {"passed": False, "failed": ["postgres"], "checks": []})
+    assert status["state"] == "ROLLED_BACK"
+    assert "postgres" in status["message"]
+    assert any(command[-1] == "rollback" for command in commands)
+
+
+def test_unreadable_health_report_rolls_the_release_back(monkeypatch, tmp_path):
+    status, commands = install_update(monkeypatch, tmp_path, None)
+    assert status["state"] == "ROLLED_BACK"
+    assert any(command[-1] == "rollback" for command in commands)
+
+
 def test_update_api_requires_admin_role(monkeypatch, tmp_path):
     password = "operator-password-long"
     monkeypatch.setenv("ADMIN_PASSWORD", "fallback-admin-password")

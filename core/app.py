@@ -30,7 +30,8 @@ from .models import (JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
                      WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
                      WorkerLogBatch, NodeAction, IntegrationSecretUpdate,
                      RollingUpdateRequest, utc_now)
-from .dispatcher import available_worker, can_retry
+from .dispatcher import available_worker, can_retry, current_tested_capabilities
+from .health_gate import gate_report, probe_ollama, probe_postgres, probe_redis
 from .pipeline import JobStore, prepare_job_safe, finalize_job_safe
 from .queue import TaskQueue
 from .orchestration import (all_scenes_ready, cancel_scene, fail_scene, finish_scene,
@@ -1271,6 +1272,42 @@ def update_readiness():
     return {"ready": not active and not busy and task_queue.inflight_depth() == 0,
             "active_jobs": active, "busy_workers": busy,
             "queue_paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth()}
+
+def health_snapshot() -> dict:
+    live = workers()
+    return {"postgres": probe_postgres(), "redis": probe_redis(), "ollama": probe_ollama(),
+            "api": {"status": "ok", "version": application_version()},
+            "web_ui": _web_ui_probe(),
+            "dispatcher": {"registered_workers": len(live), "eligible_workers": sum(
+                worker.get("status") == "READY"
+                and (not os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"
+                     or bool(current_tested_capabilities(worker)))
+                for worker in live)},
+            "nodes": registered_nodes(), "workers": live,
+            "system_state": get_system_state().get("state"),
+            "queue": {"paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth(),
+                      "depth": task_queue.depth(),
+                      "waiting_for_system": sum(job.status == JobStatus.WAITING_FOR_SYSTEM
+                                                for job in store.jobs.values())}}
+
+
+def _web_ui_probe() -> dict:
+    index = Path(os.getenv("WEB_ROOT", "web")) / "index.html"
+    try:
+        return {"status_code": 200 if index.stat().st_size else 500,
+                "error": "" if index.stat().st_size else f"{index} is empty"}
+    except OSError as error:
+        return {"status_code": None, "error": str(error)}
+
+
+@app.get("/api/system/health/full")
+def full_health_report(mode: str = "post-update"):
+    """Machine-readable definition of a successful update, shared by CLI, agent and Web UI."""
+    try:
+        return gate_report("core", health_snapshot(), application_version(), mode)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
 
 @app.post("/api/system/update/check")
 def web_update_check():

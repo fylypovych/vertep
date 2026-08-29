@@ -112,6 +112,30 @@ def wait_for_drain(state_dir: Path, state: dict) -> None:
     raise RuntimeError("Timed out waiting for jobs and workers to drain")
 
 
+def final_gate(root: Path, state_dir: Path, state: dict, version: str) -> None:
+    """Verify the whole appliance once dispatch resumed; a failure triggers rollback."""
+    role = os.getenv("ROLE", "core")
+    report_path = state_dir / "health" / f"{state.get('request_id', 'update')}-final.json"
+    try:
+        output = run([sys.executable, str(root / "scripts" / "health-gate.py"), "--role", role,
+                      "--mode", "final", "--expected-version", version,
+                      "--report", str(report_path)], root)
+    except RuntimeError as error:
+        state["log"].append(f"{now()} final health gate failed: {error}")
+        raise RuntimeError(f"Final health gate failed: {error}") from error
+    state["log"].extend(output.splitlines()[-100:])
+    try:
+        state["health"] = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"Final health gate produced no readable report: {error}") from error
+    if not state["health"].get("passed"):
+        raise RuntimeError(f"Final health gate failed: {state['health'].get('failed')}")
+    state["log"].append(f"{now()} Final health gate passed")
+    atomic_json(state_dir / "status.json", state)
+    append_audit(state_dir, {"operation_id": state.get("request_id"), "phase": "HEALTH_CHECK",
+                             "message": "Final health gate passed", "action": state.get("action")})
+
+
 def recover_if_interrupted(root: Path, state_dir: Path) -> None:
     """Rollback an apply interrupted by power loss; maintenance itself is safe to resume."""
     status_path = state_dir / "status.json"
@@ -212,6 +236,12 @@ def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
                 prune_output = run([sys.executable, str(root / "scripts" / "release-layout.py"),
                                     "prune", str(root), retention], root)
                 state["log"].append(f"Immutable release retention: {prune_output}")
+                # Resuming dispatch is part of the update: the final gate must
+                # observe a NORMAL system with a running queue, otherwise the
+                # release is rolled back exactly like a failed installation.
+                set_system_state(SystemState.NORMAL, "Update installed; verifying full health",
+                                 request_id, state_dir)
+                final_gate(root, state_dir, state, manifest["version"])
             state.update({"state": "SUCCEEDED", "phase": "NORMAL",
                           "message": "Update completed" if action == "update" else "Update check completed",
                           "updated_at": now()})
