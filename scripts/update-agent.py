@@ -96,7 +96,7 @@ def transition(state_dir: Path, state: dict, phase: str, message: str) -> None:
     append_audit(state_dir, {"operation_id": state.get("request_id"), "phase": phase,
                              "message": message, "action": state.get("action")})
     if phase in SystemState.__members__:
-        set_system_state(SystemState[phase], message, state.get("request_id"))
+        set_system_state(SystemState[phase], message, state.get("request_id"), state_dir)
 
 
 def wait_for_drain(state_dir: Path, state: dict) -> None:
@@ -128,7 +128,7 @@ def recover_if_interrupted(root: Path, state_dir: Path) -> None:
                   "updated_at": now()})
     atomic_json(status_path, state)
     from core.system_state import SystemState, set_system_state
-    set_system_state(SystemState.NORMAL, "Previous release restored", state.get("request_id"))
+    set_system_state(SystemState.NORMAL, "Previous release restored", state.get("request_id"), state_dir)
 
 
 def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
@@ -215,7 +215,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
             state.update({"state": "SUCCEEDED", "phase": "NORMAL",
                           "message": "Update completed" if action == "update" else "Update check completed",
                           "updated_at": now()})
-            set_system_state(SystemState.NORMAL, state["message"], request_id)
+            set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
         except Exception as error:
             state.setdefault("log", []).append(f"{now()} {error}")
             if state.get("phase") == "UPDATING":
@@ -225,14 +225,14 @@ def process_request(root: Path, state_dir: Path, request_path: Path) -> None:
                         ["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root
                     ).splitlines()[-100:])
                     state["state"] = "ROLLED_BACK"
-                    set_system_state(SystemState.NORMAL, "Automatic rollback completed", request_id)
+                    set_system_state(SystemState.NORMAL, "Automatic rollback completed", request_id, state_dir)
                 except Exception as rollback_error:
                     state.update({"state": "FAILED", "phase": "EMERGENCY"})
                     state["log"].append(f"{now()} rollback failed: {rollback_error}")
-                    set_system_state(SystemState.EMERGENCY, "Update and rollback failed", request_id)
+                    set_system_state(SystemState.EMERGENCY, "Update and rollback failed", request_id, state_dir)
             else:
                 state.update({"state": "FAILED", "phase": "NORMAL"})
-                set_system_state(SystemState.NORMAL, "Update stopped before installation", request_id)
+                set_system_state(SystemState.NORMAL, "Update stopped before installation", request_id, state_dir)
             state.update({"message": str(error), "updated_at": now()})
         finally:
             state["log"] = state.get("log", [])[-500:]

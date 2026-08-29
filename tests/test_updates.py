@@ -65,6 +65,7 @@ def test_update_agent_persists_signed_check_result_and_removes_request(monkeypat
         "sha256": "1" * 64, "signature": "signed"})
     monkeypatch.setattr(protocol, "validate_manifest", lambda manifest, public_key, **kwargs: manifest)
     agent.process_request(root, state, request_path)
+    assert (state / "system-state.json").is_file()
     result = json.loads((state / "status.json").read_text(encoding="utf-8"))
     assert result["state"] == "SUCCEEDED"
     assert result["update_available"] is True

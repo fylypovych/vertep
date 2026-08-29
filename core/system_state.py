@@ -20,8 +20,8 @@ class SystemState(str, Enum):
 _lock = threading.RLock()
 
 
-def _path() -> Path:
-    return Path(os.getenv("UPDATE_STATE_DIR", "/var/lib/vertep/update")) / "system-state.json"
+def _path(state_dir: Path | None = None) -> Path:
+    return (state_dir or Path(os.getenv("UPDATE_STATE_DIR", "/var/lib/vertep/update"))) / "system-state.json"
 
 
 def get_system_state() -> dict:
@@ -35,11 +35,12 @@ def get_system_state() -> dict:
                 "operation_id": None}
 
 
-def set_system_state(state: SystemState | str, reason: str, operation_id: str | None = None) -> dict:
+def set_system_state(state: SystemState | str, reason: str, operation_id: str | None = None,
+                     state_dir: Path | None = None) -> dict:
     state = SystemState(state)
     value = {"state": state.value, "updated_at": datetime.now(timezone.utc).isoformat(),
              "reason": reason, "operation_id": operation_id}
-    path = _path()
+    path = _path(state_dir)
     with _lock:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.tmp")
