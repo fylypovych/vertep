@@ -157,7 +157,7 @@ def test_installer_firewall_and_ssh_hardening_are_lockout_safe():
 def test_update_applies_migrations_before_core_rebuild():
     script = open("scripts/vertep", encoding="utf-8").read()
     migration = script.index('psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$migration"')
-    core_rebuild = script.index('up -d --build core redis postgres')
+    core_rebuild = script.index('up -d core redis postgres')
     assert script.index("pg_isready") < migration < core_rebuild
     assert "systemctl enable --now vertep-update.path" in script
 
@@ -178,7 +178,7 @@ def test_web_ui_has_remaining_job_and_registry_controls():
     assert 'data-panel="brands"' in html
     assert 'data-panel="workflows"' in html
     assert "mime_type?.startsWith('video/')" in html
-    assert "Оновлення з GitHub" in html
+    assert "Безпечне оновлення Vertep" in html
     assert "requestSystemUpdate" in html
 
 

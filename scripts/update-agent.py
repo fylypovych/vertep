@@ -26,11 +26,12 @@ def atomic_json(path: Path, value: dict) -> None:
         output.flush()
         os.fsync(output.fileno())
     temporary.replace(path)
-    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+    if hasattr(os, "O_DIRECTORY"):
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 def append_audit(state_dir: Path, event: dict) -> None:

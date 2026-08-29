@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 
 import pytest
@@ -6,6 +7,11 @@ import pytest
 from core.node_registry import (create_registration_token, enroll_node, registered_nodes,
                                 create_node_csr, renew_node, revoke_node,
                                 verify_node_certificate, verify_node_token)
+
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("openssl") is None, reason="node PKI integration tests require openssl"
+)
 
 
 def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch, tmp_path):

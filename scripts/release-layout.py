@@ -20,6 +20,8 @@ MUTABLE = (".env", "config", "logs", "storage", "backups", "models", "tls", "run
 
 
 def _fsync_dir(path: Path) -> None:
+    if not hasattr(os, "O_DIRECTORY"):
+        return
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)

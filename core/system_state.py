@@ -48,11 +48,15 @@ def set_system_state(state: SystemState | str, reason: str, operation_id: str | 
             output.flush()
             os.fsync(output.fileno())
         temporary.replace(path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        # Directory fsync makes the rename durable on Linux appliance hosts.
+        # Windows has neither O_DIRECTORY nor portable directory fsync
+        # semantics, so local development must stop after the atomic rename.
+        if hasattr(os, "O_DIRECTORY"):
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     return value
 
 

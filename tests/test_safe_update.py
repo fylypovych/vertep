@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import shutil
 import subprocess
 from datetime import datetime, timezone
 
@@ -9,6 +10,11 @@ from core.system_state import (SystemState, dispatch_allowed, get_system_state, 
                                new_job_status, operation_allowed, set_system_state)
 from core.update_protocol import (canonical_manifest, validate_manifest, validate_replay_state,
                                   version_tuple)
+
+
+requires_openssl = pytest.mark.skipif(
+    shutil.which("openssl") is None, reason="integration signature test requires openssl"
+)
 
 
 def test_global_state_is_durable_and_blocks_dispatch(monkeypatch, tmp_path):
@@ -48,6 +54,7 @@ def test_central_state_policy_blocks_mutation_during_update(monkeypatch, tmp_pat
     assert not jobs_may_be_created()
 
 
+@requires_openssl
 def test_signed_manifest_and_compatibility(tmp_path):
     private_key, public_key = tmp_path / "private.pem", tmp_path / "public.pem"
     subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048",
@@ -73,6 +80,7 @@ def test_versions_are_strictly_numeric():
         version_tuple("1.2.3-rc1")
 
 
+@requires_openssl
 def test_manifest_keyring_channel_and_validity(tmp_path):
     private_key, keyring = tmp_path / "private.pem", tmp_path / "keys"
     keyring.mkdir()
@@ -110,6 +118,7 @@ def test_release_sequence_rejects_replay_and_equivocation():
     assert validate_replay_state(newer, accepted) == newer
 
 
+@requires_openssl
 def test_rolling_compatibility_rejects_contract_migrations(monkeypatch, tmp_path):
     private_key, public_key = tmp_path / "private.pem", tmp_path / "public.pem"
     subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048",

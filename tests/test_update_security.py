@@ -2,6 +2,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,11 @@ import pytest
 from core.update_lease import UpdateLease
 from core.update_trust import (authorize_release_key, canonical_metadata,
                                validate_root_metadata)
+
+
+requires_openssl = pytest.mark.skipif(
+    shutil.which("openssl") is None, reason="integration signature test requires openssl"
+)
 
 
 def _keypair(private_key: Path, public_key: Path) -> None:
@@ -29,6 +35,7 @@ def _sign(document: dict, private_key: Path, output: Path) -> str:
     return base64.b64encode(output.read_bytes()).decode()
 
 
+@requires_openssl
 def test_root_metadata_threshold_rotation_and_release_authorization(tmp_path):
     roots, releases = tmp_path / "roots", tmp_path / "releases"
     roots.mkdir()

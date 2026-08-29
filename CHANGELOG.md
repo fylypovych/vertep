@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- Repaired malformed merge resolutions that duplicated security checks, updater logic, bootstrap steps, deployment configuration, Web UI sections, and tests; the repository compiles again and the hardened branch behavior is preserved.
-- Reconciled `VERSION`, changelog entries, and release notes with the published `0.0.0.3` and `0.0.0.5` commits.
-- Made release numbering discover untagged release metadata so the next release remains monotonic, and added a Windows-compatible local update lease for development and tests.
+- Виправлено пошкоджене злиття, яке дублювало перевірки безпеки, логіку оновлення, кроки bootstrap, конфігурацію розгортання, секції Web UI та тести; репозиторій знову компілюється, а посилений захист гілки збережено.
+- Узгоджено `VERSION`, записи журналу змін і примітки до релізів з опублікованими комітами `0.0.0.3` та `0.0.0.5`.
+- Нумерація релізів тепер враховує метадані релізів без тегів, тому наступний номер залишається монотонним; для локальної розробки й тестів додано сумісну з Windows оренду блокування оновлення.
+- Стабілізовано тестовий baseline: ізольовано стан API та черги між тестами, актуалізовано heartbeat-контракт Worker, виправлено фонову гонку й додано коректну поведінку Linux-only перевірок у Windows.
 
 ## 0.0.0.5 - 2026-08-28
 

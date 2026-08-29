@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -15,8 +16,9 @@ def test_first_run_creates_manifest_and_secret_store(monkeypatch, tmp_path):
     assert not is_configured()
     status = setup_status()
     assert status["configured"] is False
-    assert (tmp_path / "secrets.enc.json").stat().st_mode & 0o777 == 0o600
-    assert (tmp_path / "secret-store.key").stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert (tmp_path / "secrets.enc.json").stat().st_mode & 0o777 == 0o600
+        assert (tmp_path / "secret-store.key").stat().st_mode & 0o777 == 0o600
     result = complete_setup("Vertep Production", "operator", "very-secure-password",
                             "very-secure-password", "ollama")
     assert result["version"] == "1.2.3"

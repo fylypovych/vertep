@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 
+pytestmark = pytest.mark.skipif(
+    os.name == "nt", reason="immutable appliance activation requires POSIX symlinks"
+)
+
+
 def _module():
     path = Path(__file__).parents[1] / "scripts" / "release-layout.py"
     spec = importlib.util.spec_from_file_location("release_layout", path)

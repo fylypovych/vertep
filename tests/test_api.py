@@ -131,6 +131,10 @@ def test_dispatcher_respects_worker_workflow_capability():
 def test_distributed_worker_result(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     client = TestClient(app)
+    heartbeat = client.post("/api/workers/heartbeat", json={
+        "node_name": "gpu-real", "gpu_name": "GTX 1060", "vram_mb": 6144,
+    })
+    assert heartbeat.status_code == 200
     created = client.post("/api/jobs", json={"topic": "Distributed topic", "min_vram_mb": 128}).json()
     job_id = created["job_id"]
     task = None

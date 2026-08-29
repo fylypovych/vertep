@@ -19,6 +19,13 @@ def wait_for(client, job_id, statuses=("READY", "FAILED")):
     return job
 
 
+def heartbeat(client, node_name, **overrides):
+    payload = {"node_name": node_name, "vram_mb": 4096}
+    payload.update(overrides)
+    response = client.post("/api/workers/heartbeat", json=payload)
+    assert response.status_code == 200
+
+
 def test_multiscene_ffmpeg(tmp_path):
     images = []
     for index, color in enumerate(((255, 0, 0), (0, 255, 0))):
@@ -80,6 +87,7 @@ def test_job_rejects_workflow_outside_registry(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Workflow validation"}).json()["job_id"]
+    wait_for(client, job_id)
     response = client.patch(f"/api/jobs/{job_id}", json={"workflow": "../../secret.json"})
     assert response.status_code == 400
 
@@ -87,6 +95,7 @@ def test_job_rejects_workflow_outside_registry(monkeypatch):
 def test_duplicate_worker_result_is_idempotent(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     client = TestClient(app)
+    heartbeat(client, "idem-worker")
     job_id = client.post("/api/jobs", json={"topic": "Idempotency", "min_vram_mb": 1}).json()["job_id"]
     task = None
     for _ in range(100):
@@ -122,6 +131,7 @@ def test_multiscene_job_fans_out_to_distinct_tasks(monkeypatch):
 def test_worker_cannot_submit_another_workers_task(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     client = TestClient(app)
+    heartbeat(client, "owner")
     job_id = client.post("/api/jobs", json={"topic": "Lease owner"}).json()["job_id"]
     task = None
     for _ in range(100):
@@ -140,6 +150,7 @@ def test_worker_cannot_submit_another_workers_task(monkeypatch):
 def test_invalid_artifact_batch_is_not_partially_written(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     client = TestClient(app)
+    heartbeat(client, "atomic-worker")
     job_id = client.post("/api/jobs", json={"topic": "Atomic artifacts"}).json()["job_id"]
     task = None
     for _ in range(100):
@@ -164,6 +175,8 @@ def test_exhausted_scene_cancels_parallel_sibling(monkeypatch):
         "title": topic, "scenes": [{"prompt": "first", "duration": 1},
                                      {"prompt": "second", "duration": 1}]})
     client = TestClient(app)
+    heartbeat(client, "fatal-worker")
+    heartbeat(client, "sibling-worker")
     job_id = client.post("/api/jobs", json={"topic": "Sibling cancellation"}).json()["job_id"]
     claimed = []
     for worker in ("fatal-worker", "sibling-worker"):
@@ -189,6 +202,8 @@ def test_parallel_results_trigger_single_assembly(monkeypatch):
         "title": topic, "scenes": [{"prompt": "first", "duration": .2},
                                      {"prompt": "second", "duration": .2}]})
     client = TestClient(app)
+    heartbeat(client, "parallel-a")
+    heartbeat(client, "parallel-b")
     job_id = client.post("/api/jobs", json={"topic": "Parallel fan-in"}).json()["job_id"]
     claimed = []
     for worker in ("parallel-a", "parallel-b"):
@@ -217,6 +232,7 @@ def test_parallel_results_trigger_single_assembly(monkeypatch):
 def test_pause_requests_worker_cancellation(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     client = TestClient(app)
+    heartbeat(client, "cancel-worker")
     job_id = client.post("/api/jobs", json={"topic": "Cancel active", "min_vram_mb": 1}).json()["job_id"]
     task = None
     for _ in range(100):
@@ -251,6 +267,8 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
     image.write_bytes(b"P6\n4 4\n255\n" + bytes((20, 40, 80)) * 16)
     clip = FFmpegAdapter().assemble(tmp_path / "worker-clip.mp4", images=[image], durations=[0.25])
     client = TestClient(app)
+    heartbeat(client, "video-worker", capabilities=[], supported_tasks=["video"],
+              supported_workflows=["*"])
     response = client.post("/api/jobs", json={"topic": "Video worker contract", "task_type": "video",
                                                 "workflow": "workflows/video/demo.json"})
     assert response.status_code == 200
