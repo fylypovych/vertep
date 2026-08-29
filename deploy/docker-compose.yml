@@ -173,16 +173,67 @@ services:
     restart: unless-stopped
   monitoring:
     image: ${VERTEP_MONITORING_IMAGE:-prom/prometheus:v3.5.0}
-    volumes: ["monitoring-data:/prometheus"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus",
+              "--web.enable-lifecycle"]
+    volumes:
+      - monitoring-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
       interval: 30s
       timeout: 10s
       retries: 10
     restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  log-store:
+    image: ${VERTEP_LOG_STORE_IMAGE:-grafana/loki:3.5.2}
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - log-store-data:/loki
+      - ./monitoring/loki.yml:/etc/loki/config.yml:ro
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-verify-config=true", "-config.file=/etc/loki/config.yml"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  log-collector:
+    image: ${VERTEP_LOG_COLLECTOR_IMAGE:-grafana/promtail:3.5.2}
+    command: ["-config.file=/etc/promtail/config.yml", "-config.expand-env=true"]
+    volumes:
+      - ./logs:/var/log/vertep:ro
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - log-collector-data:/run/promtail
+    depends_on:
+      log-store: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/usr/bin/promtail", "-check-syntax", "-config.file=/etc/promtail/config.yml"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
   grafana:
     image: ${VERTEP_GRAFANA_IMAGE:-grafana/grafana:12.1.1}
-    volumes: ["grafana-data:/var/lib/grafana"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
       interval: 30s
@@ -211,6 +262,8 @@ volumes:
   models: {}
   monitoring-data: {}
   grafana-data: {}
+  log-store-data: {}
+  log-collector-data: {}
 secrets:
   secret_store_passphrase:
     file: ${SECRET_STORE_PASSPHRASE_FILE_HOST:-./config/secret-store.passphrase}

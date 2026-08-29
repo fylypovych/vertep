@@ -131,6 +131,7 @@ def test_bootstrap_installs_only_checksum_verified_host_update_executor():
     assert '.roles.catalog_sha256' in bootstrap
     assert 'release-sbom.cdx.json' in bootstrap
     assert 'resolved_image(){' in bootstrap
+    assert 'monitoring/grafana/dashboards/fleet.json' in bootstrap
 
 
 def test_bootstrap_preflight_and_text_model_provisioning_contract():

@@ -1,0 +1,25 @@
+{
+  "uid": "vertep-fleet",
+  "title": "Vertep — стан runtime",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Доступні monitoring targets",
+      "datasource": {"type": "prometheus", "uid": "vertep-prometheus"},
+      "targets": [{"expr": "sum(up)", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "Журнали Vertep",
+      "datasource": {"type": "loki", "uid": "vertep-loki"},
+      "targets": [{"expr": "{job=\"vertep\"}", "refId": "A"}],
+      "gridPos": {"h": 12, "w": 16, "x": 8, "y": 0}
+    }
+  ]
+}

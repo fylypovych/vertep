@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: Vertep Prometheus
+    uid: vertep-prometheus
+    type: prometheus
+    access: proxy
+    url: http://monitoring:9090
+    isDefault: true
+    editable: false
+  - name: Vertep Logs
+    uid: vertep-loki
+    type: loki
+    access: proxy
+    url: http://log-store:3100
+    editable: false

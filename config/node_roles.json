@@ -37,8 +37,8 @@
   },
   "monitoring": {
     "label": "Monitoring Node",
-    "services": ["worker", "monitoring", "grafana", "update-agent"],
+    "services": ["worker", "monitoring", "log-store", "log-collector", "grafana", "update-agent"],
     "capabilities": ["metrics", "logs", "alerting"],
-    "modules": ["grafana", "prometheus", "log_store", "update_agent"]
+    "modules": ["grafana", "prometheus", "log_store", "log_collector", "alert_rules", "update_agent"]
   }
 }

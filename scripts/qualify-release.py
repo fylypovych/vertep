@@ -29,6 +29,10 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
                 "scripts/generate-sbom.py",
                 "services/tts_service.py", "services/publisher_service.py", "services/backup_service.py",
                 "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
+                "monitoring/prometheus.yml", "monitoring/alerts.yml", "monitoring/loki.yml",
+                "monitoring/promtail.yml", "monitoring/grafana/provisioning/datasources/vertep.yml",
+                "monitoring/grafana/provisioning/dashboards/vertep.yml",
+                "monitoring/grafana/dashboards/fleet.json",
                 "scripts/update-agent.py", "scripts/release-layout.py", "installer/update-public.pem"]
     missing = [name for name in required if not (root / name).is_file()]
     record("required_release_files", not missing, ", ".join(missing))
@@ -55,6 +59,7 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
                        "VERTEP_COMFYUI_IMAGE", "VERTEP_TTS_IMAGE", "VERTEP_PUBLISHER_WORKER_IMAGE",
                        "VERTEP_BACKUP_SERVICE_IMAGE", "VERTEP_POSTGRES_IMAGE", "VERTEP_REDIS_IMAGE",
                        "VERTEP_OLLAMA_IMAGE", "VERTEP_MONITORING_IMAGE", "VERTEP_GRAFANA_IMAGE",
+                       "VERTEP_LOG_STORE_IMAGE", "VERTEP_LOG_COLLECTOR_IMAGE",
                        "VERTEP_UPDATE_AGENT_IMAGE"}
     missing_image_variables = sorted(name for name in image_variables if f"${{{name}" not in compose)
     record("compose_image_digest_overrides", not missing_image_variables,

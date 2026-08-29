@@ -24,6 +24,7 @@ jobs:
           cp .env.example .env
           printf '\nNODE_NAME=ci-worker\nCORE_ADDRESS=http://127.0.0.1:8080\nPOSTGRES_PASSWORD=ci-only\n' >> .env
           cp .env deploy/.env
+          cp -r monitoring deploy/monitoring
           printf 'ci-only-secret-store-passphrase' > config/secret-store.passphrase
       - name: Compile Python sources
         run: python -m compileall -q core adapters worker telegram publishers scripts tests
@@ -42,6 +43,17 @@ jobs:
           docker build -f docker/tts/Dockerfile -t vertep/tts:ci .
           docker build -f docker/publisher/Dockerfile -t vertep/publisher:ci .
           docker build -f docker/backup/Dockerfile -t vertep/backup:ci .
+      - name: Validate monitoring configuration
+        run: |
+          docker run --rm --entrypoint /bin/promtool \
+            -v "$PWD/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint /usr/bin/loki \
+            -v "$PWD/monitoring/loki.yml:/etc/loki/config.yml:ro" grafana/loki:3.5.2 \
+            -verify-config=true -config.file=/etc/loki/config.yml
+          docker run --rm --entrypoint /usr/bin/promtail \
+            -v "$PWD/monitoring/promtail.yml:/etc/promtail/config.yml:ro" grafana/promtail:3.5.2 \
+            -check-syntax -config.file=/etc/promtail/config.yml -config.expand-env=true
       - name: Run appliance release qualification gates
         run: python scripts/qualify-release.py --root . --docker --output qualification.json
       - name: Upload qualification evidence

@@ -120,6 +120,20 @@ printf '%s  %s\n' "$safe_extract_sha" "$INSTALL_ROOT/scripts/safe-extract.py" | 
 printf '%s  %s\n' "$release_layout_sha" "$INSTALL_ROOT/scripts/release-layout.py" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$sbom_sha" "$INSTALL_ROOT/config/release-sbom.cdx.json" | sha256sum -c - >/dev/null
 chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
+monitoring_files=(
+  monitoring/prometheus.yml monitoring/alerts.yml monitoring/loki.yml monitoring/promtail.yml
+  monitoring/grafana/provisioning/datasources/vertep.yml
+  monitoring/grafana/provisioning/dashboards/vertep.yml
+  monitoring/grafana/dashboards/fleet.json
+)
+for relative in "${monitoring_files[@]}"; do
+  artifact_sha=$(jq -er --arg name "$relative" '.files[$name].sha256' "$manifest_tmp")
+  destination="$INSTALL_ROOT/$relative"
+  install -d -m 0750 "$(dirname "$destination")"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$relative" -o "$destination"
+  printf '%s  %s\n' "$artifact_sha" "$destination" | sha256sum -c - >/dev/null
+  chmod 0640 "$destination"
+done
 mapfile -t role_services < <(jq -er --arg role "$NODE_ROLE" '.[$role].services[]' "$INSTALL_ROOT/config/node_roles.json") \
   || fail "unsupported node role: $NODE_ROLE"
 [[ ${#role_services[@]} -gt 0 ]] || fail "node role has no services: $NODE_ROLE"
@@ -144,7 +158,7 @@ fi
 secret(){ openssl rand -base64 "$1" | tr -d '\n'; }
 postgres_password=$(secret 36); redis_password=$(secret 36); jwt_secret=$(secret 48)
 worker_secret=$(secret 48); encryption_key=$(secret 32); internal_api_key=$(secret 48); session_secret=$(secret 48)
-secret_store_passphrase=$(secret 48)
+secret_store_passphrase=$(secret 48); grafana_password=$(secret 36)
 setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
 setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
 setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
@@ -164,9 +178,12 @@ VERTEP_REDIS_IMAGE=$(resolved_image redis)
 VERTEP_OLLAMA_IMAGE=$(resolved_image ollama)
 VERTEP_MONITORING_IMAGE=$(resolved_image monitoring)
 VERTEP_GRAFANA_IMAGE=$(resolved_image grafana)
+VERTEP_LOG_STORE_IMAGE=$(resolved_image log-store)
+VERTEP_LOG_COLLECTOR_IMAGE=$(resolved_image log-collector)
 VERTEP_UPDATE_AGENT_IMAGE=$(resolved_image update-agent)
 POSTGRES_PASSWORD=$postgres_password
 REDIS_PASSWORD=$redis_password
+GRAFANA_ADMIN_PASSWORD=$grafana_password
 JWT_SECRET=$jwt_secret
 WORKER_SECRET=$worker_secret
 ENCRYPTION_KEY=$encryption_key
@@ -200,7 +217,7 @@ python3 "$INSTALL_ROOT/runtime/deployment-plan.py" "$INSTALL_ROOT/config/node_ro
   "$version" "$INSTALL_ROOT/config/deployment-plan.json"
 chmod 0600 "$INSTALL_ROOT/config/deployment-plan.json"
 cat > "$INSTALL_ROOT/config/bootstrap-secrets.json" <<EOF
-{"postgres_password":"$postgres_password","redis_password":"$redis_password","jwt_secret":"$jwt_secret","worker_secret":"$worker_secret","encryption_key":"$encryption_key","internal_api_key":"$internal_api_key","session_secret":"$session_secret"}
+{"postgres_password":"$postgres_password","redis_password":"$redis_password","grafana_admin_password":"$grafana_password","jwt_secret":"$jwt_secret","worker_secret":"$worker_secret","encryption_key":"$encryption_key","internal_api_key":"$internal_api_key","session_secret":"$session_secret"}
 EOF
 chmod 0600 "$INSTALL_ROOT/config/bootstrap-secrets.json"
 cat > "$INSTALL_ROOT/config/hardware.json" <<EOF
