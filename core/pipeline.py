@@ -38,6 +38,9 @@ class JobStore:
         self._load()
         self.workers = {worker["node_name"]: worker for worker in self.repository.load_workers()}
 
+    def load_workers(self, role: str | None = None, status: str | None = None, capability: str | None = None) -> list[dict]:
+        return list(self.repository.load_workers(role=role, status=status, capability=capability))
+
     def _load(self) -> None:
         for loaded_job in self.repository.load_jobs():
             try:

@@ -24,7 +24,7 @@ class StateRepository(ABC):
     def save_worker(self, worker: dict) -> None: ...
 
     @abstractmethod
-    def load_workers(self) -> Iterable[dict]: ...
+    def load_workers(self, role: str | None = None, status: str | None = None, capability: str | None = None) -> Iterable[dict]: ...
 
     @abstractmethod
     def append_event(self, job_id: str, created_at: str, message: str) -> None: ...
@@ -76,11 +76,18 @@ class FileRepository(StateRepository):
         temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self.worker_file)
 
-    def load_workers(self) -> Iterable[dict]:
+    def load_workers(self, role: str | None = None, status: str | None = None, capability: str | None = None) -> Iterable[dict]:
         try:
-            return list(json.loads(self.worker_file.read_text(encoding="utf-8")).values())
+            workers = list(json.loads(self.worker_file.read_text(encoding="utf-8")).values())
         except (OSError, ValueError):
-            return []
+            workers = []
+        if role:
+            workers = [worker for worker in workers if worker.get("role") == role]
+        if status:
+            workers = [worker for worker in workers if worker.get("status") == status]
+        if capability:
+            workers = [worker for worker in workers if capability in (worker.get("capabilities") or [])]
+        return workers
 
     def append_event(self, job_id: str, created_at: str, message: str) -> None:
         path = self.root / job_id / "events.jsonl"
@@ -133,8 +140,15 @@ class MemoryRepository(StateRepository):
     def save_worker(self, worker: dict) -> None:
         self.workers[worker["node_name"]] = dict(worker)
 
-    def load_workers(self) -> Iterable[dict]:
-        return list(self.workers.values())
+    def load_workers(self, role: str | None = None, status: str | None = None, capability: str | None = None) -> Iterable[dict]:
+        workers = list(self.workers.values())
+        if role:
+            workers = [worker for worker in workers if worker.get("role") == role]
+        if status:
+            workers = [worker for worker in workers if worker.get("status") == status]
+        if capability:
+            workers = [worker for worker in workers if capability in (worker.get("capabilities") or [])]
+        return workers
 
     def append_event(self, job_id: str, created_at: str, message: str) -> None:
         self.events.append({"job_id": job_id, "created_at": created_at, "message": message})
@@ -211,10 +225,17 @@ class PostgresRepository(StateRepository):
                 capabilities=excluded.capabilities""", (worker["node_name"], worker["status"], worker["last_seen"],
                                                          json.dumps(worker)))
 
-    def load_workers(self) -> Iterable[dict]:
+    def load_workers(self, role: str | None = None, status: str | None = None, capability: str | None = None) -> Iterable[dict]:
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
             cursor.execute("SELECT capabilities FROM workers")
-            return [row[0] for row in cursor.fetchall()]
+            workers = [row[0] for row in cursor.fetchall()]
+            if role:
+                workers = [worker for worker in workers if worker.get("role") == role]
+            if status:
+                workers = [worker for worker in workers if worker.get("status") == status]
+            if capability:
+                workers = [worker for worker in workers if capability in (worker.get("capabilities") or [])]
+            return workers
 
     def append_event(self, job_id: str, created_at: str, message: str) -> None:
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:

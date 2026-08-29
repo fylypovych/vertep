@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# Text Worker role hook: configure Ollama and pull default model.
+# Text Processing Worker role hook: configure text processing directories.
 set -euo pipefail
 ROOT=$1
 ROLE=$2
 if [[ "$ROLE" != "text" ]]; then
   exit 0
 fi
-echo "Configuring Text Worker..."
-if command -v ollama >/dev/null 2>&1; then
-  MODEL=$(grep -E '^OLLAMA_MODEL=' "$ROOT/.env" 2>/dev/null | cut -d= -f2 || true)
-  MODEL=${MODEL:-llama3.2}
-  echo "Pulling Ollama model: $MODEL"
-  ollama pull "$MODEL" || echo "Ollama model pull failed; pull manually after installation."
-else
-  echo "Ollama not found; text worker will use external LLM API."
+echo "Configuring Text Processing Worker..."
+install -d -m 0750 "$ROOT/storage/text"
+install -d -m 0750 "$ROOT/storage/text/raw"
+install -d -m 0750 "$ROOT/storage/text/processed"
+if [[ -f "$ROOT/.env" ]]; then
+  python3 "$ROOT/scripts/set-env.py" "$ROOT/.env" TEXT_STORAGE "$ROOT/storage/text" || true
+  python3 "$ROOT/scripts/set-env.py" "$ROOT/.env" TEXT_PROCESSOR "default" || true
 fi

@@ -82,8 +82,10 @@ def node_capabilities() -> list[str]:
                 "publisher": "publishing", "backup": "backup,snapshot,archive",
                 "monitoring": "metrics,logs,alerting"}
     role = configured_role()
-    return sorted({item.strip() for item in os.getenv("NODE_CAPABILITIES", defaults.get(role, "")).split(",")
-                   if item.strip()})
+    raw = os.getenv("NODE_CAPABILITIES")
+    if not raw:
+        raw = defaults.get(role, "")
+    return sorted({item.strip() for item in raw.split(",") if item.strip()})
 
 def enroll(client: httpx.Client, core: str, node_name: str, metrics: dict,
            capabilities: list[str]) -> str:

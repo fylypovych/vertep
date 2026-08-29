@@ -955,17 +955,11 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
     now = datetime.now(timezone.utc)
     timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "45"))
     result = []
-    for worker in store.workers.values():
+    for worker in store.load_workers(role=role, status=status, capability=capability):
         last_seen = datetime.fromisoformat(worker["last_seen"])
         item = dict(worker)
         if (now - last_seen).total_seconds() > timeout:
             item["status"] = "OFFLINE"
-        if role and item.get("role") != role:
-            continue
-        if status and item.get("status") != status:
-            continue
-        if capability and capability not in (item.get("capabilities") or []):
-            continue
         result.append(item)
     return result
 
@@ -1220,11 +1214,50 @@ def system_status():
             "scheduler": {"pending": len(scheduled), "next_run": scheduled[0] if scheduled else None},
             "orchestration": {"active_jobs": sum(job.status not in {JobStatus.READY, JobStatus.PUBLISHED,
                                                                        JobStatus.FAILED, JobStatus.CANCELLED}
-                                                   for job in store.jobs.values()),
+                                                  for job in store.jobs.values()),
                               "active_scenes": sum(scene.status == StageStatus.RUNNING
                                                    for job in store.jobs.values() for scene in job.scenes)},
             "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
             "telegram": "CONFIGURED" if os.getenv("TELEGRAM_BOT_TOKEN") else "NOT CONFIGURED", "workers": workers()}
+
+@app.get("/status")
+def status_page():
+    return HTMLResponse("""<!DOCTYPE html>
+<html>
+<head>
+  <title>Vertep Status</title>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }
+    h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+    pre { background: #1e293b; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; }
+    .ok { color: #4ade80; } .off { color: #f87171; } .warn { color: #facc15; }
+  </style>
+</head>
+<body>
+  <h1>Vertep Status</h1>
+  <pre id="status">Loading...</pre>
+  <script>
+    async function load() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const el = document.getElementById('status');
+        let text = JSON.stringify(data, null, 2);
+        text = text.replace(/"OK"/g, '<span class="ok">"OK"</span>');
+        text = text.replace(/"OFFLINE"/g, '<span class="off">"OFFLINE"</span>');
+        text = text.replace(/"STUB"/g, '<span class="warn">"STUB"</span>');
+        text = text.replace(/"NOT CONFIGURED"/g, '<span class="off">"NOT CONFIGURED"</span>');
+        el.innerHTML = text;
+      } catch (e) {
+        document.getElementById('status').textContent = 'Failed to load status: ' + e;
+      }
+    }
+    load();
+    setInterval(load, 5000);
+  </script>
+</body>
+</html>""")
 
 @app.post("/api/nodes/registration-tokens")
 async def registration_token(request: Request):
