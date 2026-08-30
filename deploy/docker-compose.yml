@@ -37,7 +37,9 @@ services:
       WORKER_CLOCK_SKEW_SECONDS: "300"
       REQUIRE_SECRET_KEY_SEALING: "true"
       SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
-    secrets: [secret_store_passphrase]
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    secrets: [secret_store_passphrase, postgres_password, redis_password]
     volumes:
       - ./config:/data/config
       - ./logs:/data/logs
@@ -131,7 +133,8 @@ services:
     env_file: .env
     volumes: ["./config:/data/config:ro", "./storage:/data/storage:ro", "./backups:/data/backups"]
     environment:
-      BACKUP_ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
+    secrets: [backup_encryption_key]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8092/health"]
       interval: 30s
@@ -144,7 +147,8 @@ services:
     cap_drop: ["ALL"]
   postgres:
     image: ${VERTEP_POSTGRES_IMAGE:-postgres:16-alpine}
-    environment: {POSTGRES_DB: vertep, POSTGRES_USER: vertep, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"}
+    environment: {POSTGRES_DB: vertep, POSTGRES_USER: vertep, POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password}
+    secrets: [postgres_password]
     volumes: ["postgres-data:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vertep -d vertep"]
@@ -154,14 +158,14 @@ services:
     restart: unless-stopped
   redis:
     image: ${VERTEP_REDIS_IMAGE:-redis:7-alpine}
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass-file", "/run/secrets/redis_password"]
+    secrets: [redis_password]
     volumes: ["redis-data:/data"]
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      test: ["CMD-SHELL", "redis-cli -a $$(cat /run/secrets/redis_password) ping | grep PONG"]
       interval: 5s
       timeout: 3s
       retries: 40
-    environment: {REDIS_PASSWORD: "${REDIS_PASSWORD}"}
     restart: unless-stopped
   ollama:
     image: ${VERTEP_OLLAMA_IMAGE:-ollama/ollama:0.11.4}
@@ -268,3 +272,9 @@ volumes:
 secrets:
   secret_store_passphrase:
     file: ${SECRET_STORE_PASSPHRASE_FILE_HOST:-./config/secret-store.passphrase}
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_FILE_HOST:-./config/postgres.password}
+  redis_password:
+    file: ${REDIS_PASSWORD_FILE_HOST:-./config/redis.password}
+  backup_encryption_key:
+    file: ${BACKUP_ENCRYPTION_KEY_FILE_HOST:-./config/backup.key}

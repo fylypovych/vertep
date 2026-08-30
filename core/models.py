@@ -232,6 +232,7 @@ class RollingUpdateRequest(BaseModel):
     node_ids: list[str] = Field(min_length=1, max_length=1000)
     order: str = Field(default="workers-first", pattern=r"^(workers-first|core-first|custom)$")
     update_timeout_seconds: int = Field(default=600, ge=60, le=86400)
+    canary: bool = Field(default=False)
 
 class TaskRenew(BaseModel):
     node_name: str

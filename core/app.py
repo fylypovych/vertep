@@ -21,7 +21,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -52,7 +52,7 @@ from .node_registry import (create_node_csr, create_registration_token, enroll_n
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
 from .version import application_version
-from .rolling_update import reconcile_rollout, rollout_status, start_rollout
+from .rolling_update import cancel_rollout, reconcile_rollout, rollout_status, rollback_ready_nodes, start_rollout
 from adapters.telegram import TelegramAdapter
 from adapters.publisher import PUBLISHERS
 
@@ -1387,6 +1387,18 @@ def rolling_update_status():
     return rollout_status()
 
 
+@app.post("/api/system/update/rolling/cancel")
+def cancel_rolling_update():
+    return cancel_rollout()
+
+
+@app.post("/api/system/update/rolling/rollback")
+def rollback_canary():
+    result = rollback_ready_nodes(store.workers)
+    reconcile_rollout(store.workers)
+    return result
+
+
 @app.post("/api/system/update/rolling")
 def begin_rolling_update(payload: RollingUpdateRequest):
     registered = {node["node_id"] for node in registered_nodes() if not node.get("revoked_at")}
@@ -1395,7 +1407,7 @@ def begin_rolling_update(payload: RollingUpdateRequest):
         raise HTTPException(422, f"Unknown or revoked nodes: {', '.join(unknown)}")
     try:
         rollout = start_rollout(payload.target_version, payload.node_ids, payload.order,
-                                payload.update_timeout_seconds)
+                                payload.update_timeout_seconds, payload.canary)
         reconcile_rollout(store.workers)
         return rollout
     except RuntimeError as error:

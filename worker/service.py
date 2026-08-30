@@ -41,10 +41,23 @@ def role_self_test(role: str, metrics: dict, adapter: ComfyUIAdapter | None = No
             url = os.getenv("TTS_HEALTH_URL")
             if not url or httpx.get(url, timeout=15).status_code >= 400:
                 raise RuntimeError("TTS runtime health check failed")
+            synthesis_url = url.replace("/health", "/synthesize") if url.endswith("/health") else url.rstrip("/") + "/synthesize"
+            response = httpx.post(synthesis_url, json={"text": "OK", "voice": os.getenv("TTS_VOICE", "default")}, timeout=60)
+            response.raise_for_status()
+            if "audio" not in response.headers.get("content-type", "").lower() and "audio_base64" not in response.json().get("audio_base64", ""):
+                raise RuntimeError("TTS runtime did not return audio")
         elif role == "publisher":
             if not os.getenv("PUBLISHER_HEALTH_URL"):
                 raise RuntimeError("Publisher runtime is not configured")
             httpx.get(os.environ["PUBLISHER_HEALTH_URL"], timeout=15).raise_for_status()
+            publish_url = os.environ["PUBLISHER_HEALTH_URL"].replace("/health", "/publish") if os.environ["PUBLISHER_HEALTH_URL"].endswith("/health") else os.environ["PUBLISHER_HEALTH_URL"].rstrip("/") + "/publish"
+            response = httpx.post(publish_url, json={"job_id": "self-test", "payload": {"topic": "self-test"}}, timeout=30)
+            if response.status_code == 503:
+                raise RuntimeError("Publisher adapter not configured")
+            response.raise_for_status()
+            receipt = response.json()
+            if not receipt.get("publication_id"):
+                raise RuntimeError("Publisher returned no receipt")
         elif role == "monitoring":
             httpx.get(os.getenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy"), timeout=15).raise_for_status()
         elif role == "backup":

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import tarfile
 import tempfile
@@ -106,3 +107,61 @@ def snapshot(request: SnapshotRequest) -> dict:
                    "file": destination.name}
         receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     return receipt
+
+
+@app.get("/snapshots")
+def list_snapshots() -> dict:
+    root = _backup_root()
+    root.mkdir(parents=True, exist_ok=True)
+    snapshots = []
+    for path in sorted(root.glob("*.vtbackup")):
+        receipt_path = path.with_suffix(".json")
+        if receipt_path.exists():
+            try:
+                snapshots.append(json.loads(receipt_path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+    return {"snapshots": snapshots}
+
+
+@app.post("/snapshots/{snapshot_id}/restore")
+def restore_snapshot(snapshot_id: str) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(422, "Некоректний ідентифікатор snapshot")
+    key = _key()
+    root = _backup_root()
+    source = root / f"{snapshot_id}.vtbackup"
+    if not source.exists():
+        raise HTTPException(404, "Snapshot не знайдено")
+    restore_root = root / "restore"
+    restore_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=restore_root) as temporary:
+        encrypted = Path(temporary) / "snapshot.vtbackup"
+        archive = Path(temporary) / "snapshot.tar.gz"
+        decrypted = Path(temporary) / "snapshot.tar.gz"
+        encrypted.write_bytes(source.read_bytes())
+        digest = _decrypt(encrypted, decrypted, key)
+        with tarfile.open(decrypted, "r:gz") as tar:
+            tar.extractall(restore_root / snapshot_id)
+    return {"snapshot_id": snapshot_id, "restored_to": str(restore_root / snapshot_id), "sha256": digest}
+
+
+def _decrypt(source: Path, destination: Path, key: bytes) -> str:
+    with source.open("rb") as input_file:
+        magic = input_file.read(len(MAGIC))
+        if magic != MAGIC:
+            raise RuntimeError("Invalid backup magic")
+        nonce = input_file.read(12)
+        decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).decryptor()
+        digest = hashlib.sha256()
+        with destination.open("wb") as output:
+            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+                decrypted = decryptor.update(chunk)
+                output.write(decrypted)
+                digest.update(decrypted)
+            final = decryptor.finalize()
+            output.write(final)
+            digest.update(final)
+            output.flush()
+            os.fsync(output.fileno())
+    return digest.hexdigest()

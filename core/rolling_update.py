@@ -35,7 +35,7 @@ def rollout_status() -> dict:
 
 
 def start_rollout(target_version: str, node_ids: list[str], order: str = "workers-first",
-                  update_timeout_seconds: int = 600) -> dict:
+                  update_timeout_seconds: int = 600, canary: bool = False) -> dict:
     if not target_version or len(target_version) > 64:
         raise ValueError("Target version is invalid")
     if order not in {"workers-first", "core-first", "custom"}:
@@ -50,11 +50,40 @@ def start_rollout(target_version: str, node_ids: list[str], order: str = "worker
         if current.get("state") == "RUNNING":
             raise RuntimeError("A rolling update is already running")
         now = datetime.now(timezone.utc).isoformat()
+        nodes = [{"node_id": node, "phase": "PENDING", "canary": canary and index == 0}
+                 for index, node in enumerate(unique)]
         return _write({"operation_id": secrets.token_hex(16), "state": "RUNNING",
                        "target_version": target_version, "max_unavailable": 1,
                        "order": order, "update_timeout_seconds": update_timeout_seconds,
-                       "created_at": now, "updated_at": now,
-                       "nodes": [{"node_id": node, "phase": "PENDING"} for node in unique]})
+                       "canary": canary, "created_at": now, "updated_at": now,
+                       "nodes": nodes})
+
+
+def cancel_rollout() -> dict:
+    with _lock:
+        rollout = rollout_status()
+        if rollout.get("state") in {"RUNNING", "ROLLING_BACK"}:
+            for node in rollout.get("nodes", []):
+                if node.get("phase") not in {"READY", "FAILED"}:
+                    node["phase"] = "CANCELLED"
+            rollout["state"] = "CANCELLED"
+            return _write(rollout)
+        return rollout
+
+
+def rollback_ready_nodes(workers: dict[str, dict]) -> dict:
+    """Rollback all canary-ready nodes to previous version."""
+    with _lock:
+        rollout = rollout_status()
+        if rollout.get("state") != "ROLLING_BACK":
+            return rollout
+        nodes = rollout.get("nodes", [])
+        for node in nodes:
+            if node.get("phase") == "READY" and node.get("canary"):
+                worker = workers.get(node["node_id"])
+                if worker:
+                    worker.update({"desired_state": "ROLLBACK", "update_target_version": ""})
+        return _write(rollout)
 
 
 def reconcile_rollout(workers: dict[str, dict]) -> dict:
@@ -115,9 +144,23 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
             if test.get("status") == "FAILED":
                 active.update({"phase": "FAILED", "error": test.get("error", "Self-test failed")})
                 rollout["state"] = "FAILED"
+                if rollout.get("canary"):
+                    ready_nodes = [node for node in nodes if node["phase"] == "READY" and node.get("canary")]
+                    for node in ready_nodes:
+                        worker_data = workers.get(node["node_id"])
+                        if worker_data:
+                            worker_data.update({"desired_state": "ROLLBACK", "update_target_version": ""})
+                    rollout["state"] = "ROLLING_BACK"
             elif test.get("status") == "PASSED" and worker.get("version") == target:
                 active["phase"] = "READY"
                 worker.pop("desired_state", None)
                 worker.pop("update_target_version", None)
+        elif active["phase"] == "FAILED" and rollout.get("canary"):
+            ready_nodes = [node for node in nodes if node["phase"] == "READY" and node.get("canary")]
+            for node in ready_nodes:
+                worker_data = workers.get(node["node_id"])
+                if worker_data:
+                    worker_data.update({"desired_state": "ROLLBACK", "update_target_version": ""})
+            rollout["state"] = "ROLLING_BACK"
         rollout["updated_at"] = datetime.now(timezone.utc).isoformat()
         return _write(rollout)
