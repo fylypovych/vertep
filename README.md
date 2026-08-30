@@ -14,9 +14,9 @@ Open `http://localhost:8080` and sign in as `ADMIN_USER` (default `admin`). Demo
 
 For a local CORE-only developer run, set `LOCAL_WORKER_FALLBACK=true`. This fallback exists for development and is disabled in the supplied Compose environment.
 
-## Ubuntu installation
+## Legacy/source installation
 
-Run `sudo ./install.sh`, then choose `CORE`, `GPU WORKER`, or both. The installer:
+For development or advanced source deployments, run `sudo ./install.sh`, then choose `CORE`, `GPU WORKER`, or both. Production appliances should use the signed bootstrap flow described under [Appliance installation](#appliance-installation). The source installer:
 
 - validates Ubuntu 24.04;
 - installs Docker, Compose, Git, Python, FFmpeg and firewall rules;
@@ -56,19 +56,21 @@ vertep update
 vertep rollback
 ```
 
-The helpers are in `scripts/vertep`. `update` reads the installed node role and rebuilds only applicable services. Jobs and event histories are persisted under the Job volume; Redis and PostgreSQL have persistent volumes and restart policies.
+The helpers are in `scripts/vertep`. `update` reads the installed node role and starts only applicable services. Signed releases are prepared under an immutable release directory and activated atomically. Jobs and event histories are persisted under the Job volume; Redis and PostgreSQL have persistent volumes and restart policies.
 
-On CORE, update order is deliberately: backup, pull, start database services, wait for PostgreSQL, apply each unapplied migration, then rebuild CORE. If the database does not become ready or a migration fails, the new CORE is not started.
+On CORE, update order is deliberately: drain workloads, create and verify backups, validate the signed release, start database services, wait for PostgreSQL, apply each unapplied migration/backfill, then activate and health-check the new services. If the database does not become ready or a migration fails, the new CORE is not activated.
+
+Cluster updates use a PostgreSQL-backed rolling coordinator with global fencing. Nodes are drained in deterministic order, canary deployment requires explicit promotion, and a failed health check requests rollback to each node's recorded previous version. Resumable data backfills keep durable checkpoints and can continue after interruption.
 
 `vertep status` remains usable on a Worker while CORE is offline: local GPU information is still shown. When CORE is reachable, the Worker obtains the shared system status through its node-scoped token instead of requiring the administrator password.
 
-### Updating from GitHub in the Web UI
+### Signed updates in the Web UI
 
-On an installed CORE node, open **Система → Оновлення з GitHub**. First select **Перевірити оновлення**; the **Встановити оновлення** button is enabled only when the tracked upstream contains newer commits. Installation runs asynchronously, so the page may briefly lose its connection while CORE is rebuilt and restarted. The persistent status shows the current and remote revisions, ahead/behind counts, dirty-worktree state and the last update log.
+On an installed CORE node, open **Система → Безпечне оновлення Vertep**. First select **Перевірити оновлення**; the **Встановити оновлення** button is enabled only when the signed update service reports a newer compatible release. Installation runs asynchronously, so the page may briefly lose its connection while services are activated and restarted. The persistent status shows the current and available versions, update phase, system state and the last update log.
 
-The Web API never receives a command, repository URL or branch. It can enqueue only `check` or `update`. A root-owned systemd path unit processes the request on the host and invokes the existing role-aware `vertep update`, which creates backups, performs a fast-forward-only pull, applies migrations and runs health checks. The CORE container receives no Docker socket.
+The Web API never receives a command, repository URL or branch. It can enqueue only `check` or `update`. A root-owned systemd path unit processes the request on the host and invokes the role-aware update executor, which creates backups, verifies the signed package, applies migrations and resumable backfills, activates the immutable release and runs health checks. The CORE container receives no Docker socket.
 
-Web updates are enabled by the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. Releases are fetched only from `VERTEP_UPDATE_SERVER` (default `https://update.vertep.ai`) and their detached signature is verified with `UPDATE_PUBLIC_KEY` before a package is accepted. The updater enters maintenance mode, drains active work, creates application, job, configuration, migration, and PostgreSQL backups, then applies the package. Failed health checks trigger an automatic rollback; a durable update phase permits recovery after a power loss. The systemd timer checks for releases every six hours. GitHub credentials and repository access are never required on an installed node.
+Web updates are enabled by Bootstrap or the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. Releases are fetched only from `VERTEP_UPDATE_SERVER` (default `https://update.vertep.ai`) and their detached signature is verified with `UPDATE_PUBLIC_KEY` before a package is accepted. The updater enters maintenance mode, drains active work, creates application, job, configuration, migration, and PostgreSQL backups, then applies the package. Failed health checks trigger an automatic rollback; a durable update phase permits recovery after a power loss. The systemd timer checks for releases every six hours. GitHub credentials and repository access are never required on an installed node.
 
 After upgrading an older installation to a release that first contains the Web updater, run `sudo ./install.sh` once to install and enable `vertep-update.path`. If an update fails its health check, use `vertep rollback` from the server console; database backups and the last known Git revision are retained under the project directory.
 
@@ -85,6 +87,10 @@ After upgrading an older installation to a release that first contains the Web u
 - `POST /api/workers/heartbeat`, `GET /api/workers`
 - `POST /api/telegram/webhook`, `POST /api/telegram/setup`
 - `GET /api/system/update`, `POST /api/system/update/check|run` (administrator only for POST)
+- `GET|POST /api/system/backups`, `POST /api/system/backups/{snapshot_id}/restore`
+- `GET /api/system/models`, `POST /api/system/models/pull`, `DELETE /api/system/models/{name}`
+- `GET /api/system/certificates`, `POST /api/system/certificates/renew`
+- `GET /api/system/license`, `GET /api/system/installation-manifest`
 - `GET /api/status`, `GET /api/integrations`, `GET /api/health`
 
 Machine endpoints can be protected with `NODE_API_TOKEN`; the Web UI and administrative API use HTTP Basic authentication. Keep `.env` local—it is excluded from Git.
@@ -103,7 +109,7 @@ GitHub Actions runs the complete suite, Python compilation, shell syntax checks 
 
 ## Releases and version numbers
 
-Release versions are strictly sequential: `0.0.0.1`, `0.0.0.2`, `0.0.0.3`, and so on. Do not edit `VERSION` manually and do not use a normal `git push` for a release. Run:
+Release and commit names are strictly sequential. The fourth component runs from `0` through `99`: after `0.0.0.99` comes `0.0.1.0`; after `0.0.99.99` comes `0.1.0.0`. Do not edit `VERSION` manually and do not use a normal `git push` for a release. Run:
 
 ```bash
 python scripts/release.py
@@ -134,9 +140,11 @@ curl -fsSL https://download.vertep.ai/bootstrap.sh | sudo bash
 
 Bootstrap validates hardware and connectivity, installs the container runtime, downloads checksum-verified immutable runtime metadata from Vertep, generates all local credentials and TLS material, starts the complete stack, and waits for its health endpoint. Open the printed `https://SERVER-IP:8443` address to finish the seven-step First Run Wizard. After that, routine administration and signed updates are performed from the Web UI; bootstrap is not used again. The source-oriented `install.sh` remains available for development and advanced node deployments.
 
-The Deployment Wizard obtains its role list from `config/node_roles.json`; adding a role does not require changing token or enrollment logic. Core nodes can create 15-minute, one-use registration tokens from **Workers → Add Worker**. Non-Core nodes initiate the HTTPS enrollment request themselves and receive a node-bound JWT, per-node secret, certificate attestation, configuration, and capability set. Dispatch is capability-driven rather than role-driven, so installing a new engine only requires the node to advertise its new capability.
+For NVIDIA hosts Bootstrap installs the recommended driver and NVIDIA Container Toolkit, registers the Docker runtime and verifies `nvidia-smi`. For AMD hosts it installs ROCm/HIP, verifies `/dev/kfd`, `/dev/dri` and `rocminfo`, and applies the signed AMD Compose overlay. GPU-specific overlays remain active during updates, rollback, watchdog restarts and startup recovery.
 
-Production readiness and the traceability status of all three deployment/update specifications are tracked in [`docs/REQUIREMENTS_GAP_ANALYSIS_UK.md`](docs/REQUIREMENTS_GAP_ANALYSIS_UK.md). Items marked as partial or missing there must not be presented as completed appliance functionality.
+The production runtime has separate License Manager, Dispatcher, Scheduler and Certificate Manager services. Core waits for every selected service to become healthy. Proxy, Prometheus, Loki, Promtail and Grafana configuration is embedded into digest-pinned images rather than mounted from mutable runtime files.
+
+The Deployment Wizard obtains its role list from `config/node_roles.json`; adding a role does not require changing token or enrollment logic. Core nodes can create 15-minute, one-use registration tokens from **Workers → Add Worker**. Non-Core nodes initiate the HTTPS enrollment request themselves and receive a node-bound JWT, per-node secret, certificate attestation, configuration, and capability set. Dispatch is capability-driven rather than role-driven, so installing a new engine only requires the node to advertise its new capability.
 
 Release candidates must pass the reproducible appliance gates; CI uploads the resulting JSON evidence:
 
@@ -146,3 +154,7 @@ python scripts/qualify-release.py --root . --docker --output qualification.json
 
 Integration credentials are managed from **System → Protected integrations**. Values are write-only
 through the API and remain inside the authenticated encrypted secret envelope.
+
+During First Run the selected AI backend is contacted before setup completes: Vertep validates the endpoint, HTTPS policy, credentials and model inventory, and can pull a missing local Ollama model. The final Installation Manifest records the selected role and modules, actual Docker image digests, container state and module health.
+
+Routine appliance lifecycle is available under **System → Zero-Shell lifecycle**: administrators can create or restore encrypted backups, install or remove Ollama models, and inspect or renew the TLS certificate without using an SSH session. The authenticated `/api/system/installation-manifest` endpoint returns the current installation inventory.

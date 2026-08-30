@@ -11,9 +11,12 @@ def test_monitoring_role_has_metrics_logs_alerts_and_provisioning():
     assert {"monitoring", "log-store", "log-collector", "grafana"} <= set(monitoring["services"])
     assert {"metrics", "logs", "alerting"} <= set(monitoring["capabilities"])
     compose = (ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
-    assert "./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro" in compose
-    assert "./monitoring/promtail.yml:/etc/promtail/config.yml:ro" in compose
-    assert "./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro" in compose
+    assert "./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro" not in compose
+    assert "./monitoring/promtail.yml:/etc/promtail/config.yml:ro" not in compose
+    assert "./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro" not in compose
+    assert (ROOT / "docker/monitoring/Dockerfile").is_file()
+    assert (ROOT / "docker/log-collector/Dockerfile").is_file()
+    assert (ROOT / "docker/grafana/Dockerfile").is_file()
 
 
 def test_monitoring_configuration_has_no_default_anonymous_grafana():

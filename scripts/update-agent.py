@@ -147,7 +147,9 @@ def process_request(root: Path, state_dir: Path, request_path: Path, skip_drain:
              "request_id": request_id, "message": "Checking signed release manifest",
              "updated_at": now(), "log": []}
     atomic_json(state_dir / "status.json", state)
-    with UpdateLease(state_dir, request_id):
+    with UpdateLease(state_dir, request_id) as lease:
+        state["fence_epoch"] = lease.fence_epoch
+        atomic_json(state_dir / "status.json", state)
         try:
             manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
             requested_version = request.get("target_version")

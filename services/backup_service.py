@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import tarfile
 import tempfile
 import threading
@@ -38,8 +39,12 @@ def _sources() -> list[tuple[str, Path]]:
 
 def _key() -> bytes:
     try:
-        value = base64.b64decode(os.environ["BACKUP_ENCRYPTION_KEY"], validate=True)
-    except (KeyError, ValueError) as error:
+        encoded = os.getenv("BACKUP_ENCRYPTION_KEY", "")
+        key_file = os.getenv("BACKUP_ENCRYPTION_KEY_FILE", "")
+        if key_file:
+            encoded = Path(key_file).read_text(encoding="ascii").strip()
+        value = base64.b64decode(encoded, validate=True)
+    except (OSError, ValueError) as error:
         raise RuntimeError("BACKUP_ENCRYPTION_KEY відсутній або некоректний") from error
     if len(value) != 32:
         raise RuntimeError("BACKUP_ENCRYPTION_KEY має декодуватися у 32 байти")
@@ -133,35 +138,82 @@ def restore_snapshot(snapshot_id: str) -> dict:
     source = root / f"{snapshot_id}.vtbackup"
     if not source.exists():
         raise HTTPException(404, "Snapshot не знайдено")
+    receipt_path = source.with_suffix(".json")
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise HTTPException(409, "Receipt snapshot відсутній або пошкоджений") from error
+    encrypted_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    if not secrets.compare_digest(encrypted_digest, str(receipt.get("sha256", ""))):
+        raise HTTPException(409, "Checksum snapshot не збігається")
     restore_root = root / "restore"
     restore_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=restore_root) as temporary:
         encrypted = Path(temporary) / "snapshot.vtbackup"
-        archive = Path(temporary) / "snapshot.tar.gz"
         decrypted = Path(temporary) / "snapshot.tar.gz"
+        extracted = Path(temporary) / "extracted"
         encrypted.write_bytes(source.read_bytes())
-        digest = _decrypt(encrypted, decrypted, key)
+        _decrypt(encrypted, decrypted, key)
         with tarfile.open(decrypted, "r:gz") as tar:
-            tar.extractall(restore_root / snapshot_id)
-    return {"snapshot_id": snapshot_id, "restored_to": str(restore_root / snapshot_id), "sha256": digest}
+            _safe_extract(tar, extracted)
+        restored = []
+        destinations = dict(_sources())
+        for label, destination in destinations.items():
+            source_root = extracted / label
+            if not source_root.is_dir():
+                continue
+            destination.mkdir(parents=True, exist_ok=True)
+            for item in sorted(source_root.rglob("*")):
+                relative = item.relative_to(source_root)
+                target = destination / relative
+                if item.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                elif item.is_file() and not item.is_symlink():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    temporary_target = target.with_name(f".{target.name}.restore-{os.getpid()}")
+                    shutil.copy2(item, temporary_target)
+                    temporary_target.replace(target)
+                    restored.append(f"{label}/{relative.as_posix()}")
+    return {"snapshot_id": snapshot_id, "restored": restored, "sha256": encrypted_digest}
+
+
+def _safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    for member in archive.getmembers():
+        name = Path(member.name)
+        target = (destination / name).resolve()
+        if (name.is_absolute() or ".." in name.parts or target != root and root not in target.parents
+                or member.issym() or member.islnk() or member.isdev()):
+            raise RuntimeError(f"Unsafe backup member: {member.name}")
+    archive.extractall(destination)
 
 
 def _decrypt(source: Path, destination: Path, key: bytes) -> str:
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
     with source.open("rb") as input_file:
         magic = input_file.read(len(MAGIC))
         if magic != MAGIC:
             raise RuntimeError("Invalid backup magic")
         nonce = input_file.read(12)
-        decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).decryptor()
-        digest = hashlib.sha256()
+        ciphertext_size = source.stat().st_size - len(MAGIC) - len(nonce) - 16
+        if ciphertext_size < 0:
+            raise RuntimeError("Backup payload is truncated")
+        input_file.seek(-16, os.SEEK_END)
+        tag = input_file.read(16)
+        input_file.seek(len(MAGIC) + len(nonce))
+        decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
         with destination.open("wb") as output:
-            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+            remaining = ciphertext_size
+            while remaining:
+                chunk = input_file.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise RuntimeError("Backup ciphertext is truncated")
+                remaining -= len(chunk)
                 decrypted = decryptor.update(chunk)
                 output.write(decrypted)
-                digest.update(decrypted)
             final = decryptor.finalize()
             output.write(final)
-            digest.update(final)
             output.flush()
             os.fsync(output.fileno())
-    return digest.hexdigest()
+    return digest

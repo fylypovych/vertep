@@ -37,16 +37,22 @@ def recover_interrupted_update(root: Path, state_dir: Path) -> None:
         status = json.loads(status_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
-    if status.get("state") != "UPDATING":
+    phase = status.get("phase")
+    if status.get("state") != "RUNNING" or phase not in {"UPDATING", "RECOVERING"}:
         return
     print(f"{now()} STARTUP-RECOVERY: interrupted update detected, rolling back", file=sys.stderr)
-    rollback_dir = root / "runtime" / "updates"
-    rollback_script = root / "scripts" / "release-layout.py"
-    if rollback_script.is_file():
-        output = run([sys.executable, str(rollback_script), "--rollback", str(root), str(state_dir)])
-        print(f"{now()} STARTUP-RECOVERY: rollback result: {output}", file=sys.stderr)
-    status["state"] = "FAILED"
-    status["phase"] = "RECOVERED"
+    rollback_script = root / "scripts" / "vertep"
+    output = run(["/bin/bash", str(rollback_script), "rollback"], cwd=root)
+    print(f"{now()} STARTUP-RECOVERY: rollback result: {output}", file=sys.stderr)
+    if output.startswith("ERROR"):
+        status.update({"state": "FAILED", "phase": "EMERGENCY", "message": output})
+        (state_dir / "system-state.json").write_text(json.dumps({
+            "state": "EMERGENCY", "updated_at": now(),
+            "reason": "Startup rollback failed", "operation_id": status.get("request_id")
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        status.update({"state": "ROLLED_BACK", "phase": "NORMAL",
+                       "message": "Interrupted update rolled back"})
     status["updated_at"] = now()
     status_file.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -70,6 +76,14 @@ def restore_system_state(root: Path, state_dir: Path) -> None:
 
 def restart_containers(root: Path) -> str:
     compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml")]
+    try:
+        environment = (root / ".env").read_text(encoding="utf-8")
+    except OSError:
+        environment = ""
+    if "GPU_VENDOR=amd" in environment and (root / "docker-compose.amd.yml").is_file():
+        compose.extend(["-f", str(root / "docker-compose.amd.yml")])
+    if "GPU_VENDOR=nvidia" in environment and (root / "docker-compose.nvidia.yml").is_file():
+        compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
     try:
         subprocess.run([*compose, "up", "-d", "--remove-orphans"], check=True, capture_output=True, text=True, timeout=300)
         return "containers restarted"

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Додано PostgreSQL-backed координацію rolling update для всього кластера: глобальний fencing через advisory lock та epoch, детермінований порядок вузлів, явне просування canary, блокування dispatch під час update/rollback, автоматичний і ручний rollback до попередньої версії та відновлення після перерваного запуску.
+- Міграції підтримують resumable backfill-модулі з durable checkpoint; backup/restore тепер охоплює конфігурацію, storage, PostgreSQL і Redis, перевіряє SHA-256 та безпечно відновлює AES-256-GCM snapshot без path traversal.
+- Fleet readiness тепер формується з persisted Jobs і Workers та вимагає завершення drain усіма зареєстрованими вузлами; Worker обробляє окремі update і rollback requests та не приймає нові задачі під час зміни версії.
+- Production Bootstrap встановлює й перевіряє NVIDIA Container Toolkit або AMD ROCm, використовує окремі signed Compose overlays для NVIDIA/AMD та зберігає правильний GPU runtime під час deployment, update, rollback, watchdog і startup recovery.
+- License Manager, Dispatcher, Scheduler і Certificate Manager винесено в окремі health-checked runtime-сервіси; Core використовує окремі Dispatcher/Scheduler boundaries, а License Manager читає write-only license key із зашифрованого secret store.
+- First Run перевіряє AI endpoint, HTTPS-вимоги, credentials і наявність вибраної моделі; локальну Ollama-модель за потреби можна встановити автоматично без shell-доступу.
+- Installation Manifest доповнено фактичними Docker image ID/digest, станом контейнерів і health установлених модулів; deployment завершується лише після переходу всіх вибраних сервісів у healthy state.
+- У Web UI додано Zero-Shell lifecycle для створення та відновлення backup, встановлення й видалення Ollama models, перегляду та оновлення TLS certificate, а також API для отримання актуального Installation Manifest.
+- Runtime-конфігурацію Proxy, Prometheus, Loki, Promtail і Grafana вбудовано в незмінні образи; mutable bind-mounted configuration overlays вилучено з production Compose.
 - Виправлено пошкоджене злиття, яке дублювало перевірки безпеки, логіку оновлення, кроки bootstrap, конфігурацію розгортання, секції Web UI та тести; репозиторій знову компілюється, а посилений захист гілки збережено.
 - Узгоджено `VERSION`, записи журналу змін і примітки до релізів з опублікованими комітами `0.0.0.3` та `0.0.0.5`.
 - Нумерація релізів тепер враховує метадані релізів без тегів, тому наступний номер залишається монотонним; для локальної розробки й тестів додано сумісну з Windows оренду блокування оновлення.

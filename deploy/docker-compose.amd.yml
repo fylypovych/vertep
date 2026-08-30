@@ -1,0 +1,12 @@
+services:
+  worker:
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add: ["video", "render"]
+  comfyui:
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add: ["video", "render"]
+    security_opt: ["no-new-privileges:true"]

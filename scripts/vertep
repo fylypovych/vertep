@@ -49,13 +49,23 @@ case "${1:-status}" in
     done
     printf '%s\n' "$backup" > "$ROOT/.vertep-last-good"
     if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
-      docker compose -f "$ROOT/docker-compose.yml" exec -T core tar -czf - /data/jobs > "$backup/jobs.tar.gz"
-      docker compose -f "$ROOT/docker-compose.yml" exec -T postgres pg_dump -U vertep vertep > "$backup/postgres.sql"
-      docker compose -f "$ROOT/docker-compose.yml" exec -T postgres psql -U vertep -d vertep \
+      backup_compose=(docker compose --env-file "$ROOT/.env" -f "$ROOT/docker-compose.yml")
+      [[ "${GPU_VENDOR:-none}" == amd && -f "$ROOT/docker-compose.amd.yml" ]] \
+        && backup_compose+=(-f "$ROOT/docker-compose.amd.yml")
+      [[ "${GPU_VENDOR:-none}" == nvidia && -f "$ROOT/docker-compose.nvidia.yml" ]] \
+        && backup_compose+=(-f "$ROOT/docker-compose.nvidia.yml")
+      "${backup_compose[@]}" exec -T core tar -czf - /data/storage > "$backup/storage.tar.gz"
+      "${backup_compose[@]}" exec -T core tar -czf - /data/config > "$backup/core-config.tar.gz"
+      "${backup_compose[@]}" exec -T postgres pg_dump -U vertep vertep > "$backup/postgres.sql"
+      "${backup_compose[@]}" exec -T postgres psql -U vertep -d vertep \
         -Atc 'SELECT version, applied_at FROM schema_migrations ORDER BY applied_at' > "$backup/migrations.log" 2>/dev/null || true
+      "${backup_compose[@]}" exec -T redis redis-cli -a "${REDIS_PASSWORD:-}" SAVE >/dev/null
+      "${backup_compose[@]}" cp redis:/data/dump.rdb "$backup/redis.rdb"
+      printf '{"role":"%s","created_at":"%s","target_version":"%s"}\n' \
+        "$role" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$target_version" > "$backup/inventory.json"
       touch "$backup/database-restore-required"
     fi
-    (cd "$backup" && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+    (cd "$backup" && find . -type f ! -name SHA256SUMS -print0 \
       | sort -z | xargs -0 sha256sum > SHA256SUMS)
     staging=$(mktemp -d "$ROOT/.update-staging.XXXXXX")
     trap 'rm -rf "$staging"' EXIT
@@ -79,6 +89,10 @@ case "${1:-status}" in
     # Compose interpolation must use the persistent environment, while the
     # signed compose definition and application files come from the release.
     compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
+    [[ "${GPU_VENDOR:-none}" == amd && -f "$release_root/docker-compose.amd.yml" ]] \
+      && compose+=(-f "$release_root/docker-compose.amd.yml")
+    [[ "${GPU_VENDOR:-none}" == nvidia && -f "$release_root/docker-compose.nvidia.yml" ]] \
+      && compose+=(-f "$release_root/docker-compose.nvidia.yml")
     if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
       "${compose[@]}" up -d postgres redis
       database_ready=false
@@ -139,6 +153,10 @@ case "${1:-status}" in
     python3 "$ROOT/scripts/release-layout.py" rollback "$ROOT"
     release_root="$ROOT/current"
     compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
+    [[ "${GPU_VENDOR:-none}" == amd && -f "$release_root/docker-compose.amd.yml" ]] \
+      && compose+=(-f "$release_root/docker-compose.amd.yml")
+    [[ "${GPU_VENDOR:-none}" == nvidia && -f "$release_root/docker-compose.nvidia.yml" ]] \
+      && compose+=(-f "$release_root/docker-compose.nvidia.yml")
     if [[ ( "$role" == "core" || "$role" == "core-worker" ) \
           && -f "$backup/database-restore-required" && -s "$backup/postgres.sql" ]]; then
       "${compose[@]}" stop core || true
@@ -158,6 +176,19 @@ case "${1:-status}" in
         -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
       "${compose[@]}" exec -T postgres \
         psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$backup/postgres.sql"
+      if [[ -s "$backup/storage.tar.gz" ]]; then
+        "${compose[@]}" up -d core
+        "${compose[@]}" exec -T core tar -xzf - -C / < "$backup/storage.tar.gz"
+      fi
+      if [[ -s "$backup/core-config.tar.gz" ]]; then
+        "${compose[@]}" up -d core
+        "${compose[@]}" exec -T core tar -xzf - -C / < "$backup/core-config.tar.gz"
+      fi
+      if [[ -s "$backup/redis.rdb" ]]; then
+        "${compose[@]}" stop redis || true
+        "${compose[@]}" cp "$backup/redis.rdb" redis:/data/dump.rdb
+        "${compose[@]}" start redis
+      fi
     fi
     case "$role" in
       worker) "${compose[@]}" up -d worker ;;

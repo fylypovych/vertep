@@ -54,6 +54,32 @@ def test_central_state_policy_blocks_mutation_during_update(monkeypatch, tmp_pat
     assert not jobs_may_be_created()
 
 
+def test_fleet_readiness_requires_every_registered_worker_to_ack_drain(monkeypatch, tmp_path):
+    from core import app as core_app
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(core_app, "registered_nodes", lambda: [
+        {"node_id": "gpu-1", "revoked_at": None}, {"node_id": "gpu-2", "revoked_at": None}])
+    monkeypatch.setattr(core_app.store, "save_worker", lambda worker: None)
+    monkeypatch.setattr(core_app.store, "load_workers", lambda **kwargs: [])
+    monkeypatch.setattr(core_app.store.repository, "load_jobs", lambda: [])
+    monkeypatch.setattr(core_app.store, "jobs", {})
+    monkeypatch.setattr(core_app.store, "workers", {})
+    monkeypatch.setattr(core_app.task_queue, "inflight_depth", lambda: 0)
+    core_app.store.workers.update({
+        "gpu-1": {"node_name": "gpu-1", "status": "READY", "current_task": None},
+        "gpu-2": {"node_name": "gpu-2", "status": "BUSY", "current_task": "task-1"},
+    })
+    set_system_state(SystemState.MAINTENANCE, "fleet drain", "operation-1")
+    readiness = core_app.update_readiness()
+    assert not readiness["ready"]
+    assert readiness["unacknowledged_workers"] == ["gpu-1", "gpu-2"]
+    for worker in core_app.store.workers.values():
+        worker.update({"status": "DRAINING", "current_task": None})
+    readiness = core_app.update_readiness()
+    assert readiness["ready"]
+    assert readiness["acknowledged_workers"] == ["gpu-1", "gpu-2"]
+
+
 @requires_openssl
 def test_signed_manifest_and_compatibility(tmp_path):
     private_key, public_key = tmp_path / "private.pem", tmp_path / "public.pem"

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 FORBIDDEN_BY_ROLE = {
-    "core": {"worker", "comfyui", "tts", "backup-service", "publisher-worker", "grafana"},
+    "core": {"worker", "comfyui", "tts", "publisher-worker", "grafana"},
     "gpu": {"core", "migrate", "postgres", "redis", "ollama", "tts"},
     "text": {"core", "migrate", "postgres", "redis", "comfyui", "tts"},
     "voice": {"core", "migrate", "postgres", "redis", "comfyui", "ollama"},
@@ -24,13 +24,19 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
     def record(name: str, passed: bool, detail: str = "") -> None:
         checks.append({"name": name, "passed": bool(passed), "detail": detail})
 
-    required = ["bootstrap.sh", "deploy/docker-compose.yml", "config/node_roles.json",
+    required = ["bootstrap.sh", "deploy/docker-compose.yml", "deploy/docker-compose.amd.yml",
+                "deploy/docker-compose.nvidia.yml", "config/node_roles.json",
                 "config/schemas/release-contract.schema.json", "scripts/runtime-contract.py",
                 "scripts/generate-sbom.py",
                 "scripts/apply-deployment.py", "installer/vertep-deployment.service",
                 "installer/vertep-deployment.path",
                 "services/tts_service.py", "services/publisher_service.py", "services/backup_service.py",
+                "services/license_service.py", "services/dispatcher_service.py",
+                "services/scheduler_service.py", "services/certificate_service.py",
                 "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
+                "docker/proxy/Dockerfile", "docker/monitoring/Dockerfile",
+                "docker/log-store/Dockerfile", "docker/log-collector/Dockerfile",
+                "docker/grafana/Dockerfile",
                 "monitoring/prometheus.yml", "monitoring/alerts.yml", "monitoring/loki.yml",
                 "monitoring/promtail.yml", "monitoring/grafana/provisioning/datasources/vertep.yml",
                 "monitoring/grafana/provisioning/dashboards/vertep.yml",
@@ -62,11 +68,18 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
                        "VERTEP_BACKUP_SERVICE_IMAGE", "VERTEP_POSTGRES_IMAGE", "VERTEP_REDIS_IMAGE",
                        "VERTEP_OLLAMA_IMAGE", "VERTEP_MONITORING_IMAGE", "VERTEP_GRAFANA_IMAGE",
                        "VERTEP_LOG_STORE_IMAGE", "VERTEP_LOG_COLLECTOR_IMAGE",
-                       "VERTEP_UPDATE_AGENT_IMAGE"}
+                       "VERTEP_UPDATE_AGENT_IMAGE", "VERTEP_LICENSE_MANAGER_IMAGE",
+                       "VERTEP_DISPATCHER_IMAGE", "VERTEP_SCHEDULER_IMAGE",
+                       "VERTEP_CERTIFICATE_MANAGER_IMAGE"}
     missing_image_variables = sorted(name for name in image_variables if f"${{{name}" not in compose)
     record("compose_image_digest_overrides", not missing_image_variables,
            ", ".join(missing_image_variables))
     record("no_docker_socket", "/var/run/docker.sock" not in compose)
+    mutable_runtime_mounts = ["./runtime/proxy.conf", "./monitoring/prometheus.yml",
+                              "./monitoring/loki.yml", "./monitoring/promtail.yml",
+                              "./monitoring/grafana/provisioning"]
+    record("immutable_runtime_configuration",
+           not any(item in compose for item in mutable_runtime_mounts))
     record("machine_mtls_proxy", "ssl_verify_client optional" in
            (root / "deploy/proxy.conf").read_text(encoding="utf-8"))
     if run_compose:

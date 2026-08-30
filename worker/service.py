@@ -44,8 +44,10 @@ def role_self_test(role: str, metrics: dict, adapter: ComfyUIAdapter | None = No
             synthesis_url = url.replace("/health", "/synthesize") if url.endswith("/health") else url.rstrip("/") + "/synthesize"
             response = httpx.post(synthesis_url, json={"text": "OK", "voice": os.getenv("TTS_VOICE", "default")}, timeout=60)
             response.raise_for_status()
-            if "audio" not in response.headers.get("content-type", "").lower() and "audio_base64" not in response.json().get("audio_base64", ""):
-                raise RuntimeError("TTS runtime did not return audio")
+            if "audio" not in response.headers.get("content-type", "").lower():
+                encoded = response.json().get("audio_base64")
+                if not isinstance(encoded, str) or not encoded:
+                    raise RuntimeError("TTS runtime did not return audio")
         elif role == "publisher":
             if not os.getenv("PUBLISHER_HEALTH_URL"):
                 raise RuntimeError("Publisher runtime is not configured")
@@ -228,22 +230,23 @@ def host_metrics() -> dict:
             "cpu_load": cpu_load, "runtime_version": platform.python_version()}
 
 
-def request_local_update(target_version: str) -> None:
+def request_local_update(target_version: str, action: str = "update") -> None:
     request_root = os.getenv("UPDATE_REQUEST_DIR", "")
     if not request_root:
         raise RuntimeError("UPDATE_REQUEST_DIR is required for coordinated rolling updates")
     root = Path(request_root)
     root.mkdir(parents=True, exist_ok=True)
     marker = root.parent / "worker-update-target"
-    if marker.exists() and marker.read_text(encoding="utf-8").strip() == target_version:
+    marker_value = target_version if action == "update" else f"{action}:{target_version}"
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == marker_value:
         return
     request_id = secrets.token_hex(16)
     temporary = root / f".{request_id}.tmp"
-    temporary.write_text(json.dumps({"request_id": request_id, "action": "update",
+    temporary.write_text(json.dumps({"request_id": request_id, "action": action,
                                      "target_version": target_version}), encoding="utf-8")
     os.chmod(temporary, 0o600)
     temporary.replace(root / f"{request_id}.json")
-    marker.write_text(target_version, encoding="utf-8")
+    marker.write_text(marker_value, encoding="utf-8")
 
 def worker_status(metrics: dict, require_gpu: bool, busy: bool = False) -> str:
     if require_gpu and not metrics.get("gpu_available", False):
@@ -347,7 +350,7 @@ def main() -> None:
                     payload["current_task"] = None
                     future = None
                     active_task = None
-                if future is None and desired_state not in {"DRAINING", "QUARANTINED"}:
+                if future is None and desired_state not in {"DRAINING", "QUARANTINED", "UPDATING", "ROLLBACK"}:
                     task = client.post(f"{core}/api/tasks/claim", json={"node_name": payload["node_name"],
                                                                          "gpu_name": payload["gpu_name"],
                                                                          "vram_mb": payload["vram_mb"],
@@ -371,6 +374,10 @@ def main() -> None:
                 control = heartbeat_response.json()
                 desired_state = control.get("desired_state")
                 update_target = control.get("update_target_version")
+                rollback_target = control.get("rollback_target_version")
+                if desired_state == "ROLLBACK" and future is None:
+                    request_local_update(rollback_target or "previous", action="rollback")
+                    payload["status"] = "UPDATING"
                 if update_target and future is None:
                     request_local_update(update_target)
                     desired_state = "UPDATING"

@@ -8,7 +8,7 @@ INSTALL_ROOT=${VERTEP_INSTALL_ROOT:-/opt/vertep}
 NODE_ROLE=${VERTEP_ROLE:-unassigned}
 CORE_URL=${VERTEP_CORE_URL:-}
 REGISTRATION_TOKEN=${VERTEP_NODE_TOKEN:-}
-BOOTSTRAP_SERVICES=(proxy core migrate postgres redis update-agent)
+BOOTSTRAP_SERVICES=(proxy core license-manager dispatcher scheduler certificate-manager migrate postgres redis update-agent)
 MIN_RAM_MB=${VERTEP_MIN_RAM_MB:-4096}
 MIN_DISK_MB=${VERTEP_MIN_DISK_MB:-20480}
 
@@ -48,11 +48,43 @@ elif grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/de
 progress "Installing container runtime"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl openssl jq pciutils docker.io docker-compose-v2
+apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils docker.io docker-compose-v2
 systemctl enable --now docker
 if [[ $gpu_vendor == nvidia && $driver == unavailable ]]; then
   apt-get install -y -qq ubuntu-drivers-common
-  ubuntu-drivers install || true
+  ubuntu-drivers install || fail "NVIDIA driver installation failed"
+fi
+if [[ $gpu_vendor == nvidia ]]; then
+  progress "Installing NVIDIA Container Toolkit"
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
+    > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  apt-get update -qq
+  apt-get install -y -qq nvidia-container-toolkit
+  nvidia-ctk runtime configure --runtime=docker
+  systemctl restart docker
+  docker info --format '{{json .Runtimes}}' | grep -q nvidia \
+    || fail "NVIDIA container runtime was not registered with Docker"
+  nvidia-smi >/dev/null 2>&1 \
+    || fail "NVIDIA driver was installed but is not active; reboot the host and rerun bootstrap"
+  IFS=, read -r gpu_name gpu_vram_mb driver < <(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits | head -1)
+  cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: \([^ ]*\).*/\1/p' | head -1); cuda=${cuda:-unavailable}
+elif [[ $gpu_vendor == amd ]]; then
+  [[ $arch == amd64 ]] || fail "AMD ROCm runtime currently requires amd64"
+  progress "Installing AMD ROCm container runtime"
+  rocm_version=${VERTEP_ROCM_VERSION:-6.4.1}
+  curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key \
+    | gpg --dearmor -o /usr/share/keyrings/rocm.gpg
+  printf 'deb [arch=amd64 signed-by=/usr/share/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/%s noble main\n' "$rocm_version" \
+    > /etc/apt/sources.list.d/rocm.list
+  apt-get update -qq
+  apt-get install -y -qq rocm-hip-runtime rocminfo
+  [[ -c /dev/kfd && -d /dev/dri ]] || fail "AMD GPU devices /dev/kfd and /dev/dri are unavailable"
+  rocminfo >/dev/null || fail "ROCm runtime cannot access the AMD GPU"
+  driver=$(cat /sys/module/amdgpu/version 2>/dev/null || echo kernel)
+  cuda="rocm-$rocm_version"
 fi
 
 progress "Preparing immutable Vertep runtime"
@@ -95,6 +127,8 @@ jq -e '
 ' "$manifest_tmp" >/dev/null || fail "runtime manifest contract is invalid"
 version=$(jq -er '.version' "$manifest_tmp")
 compose_sha=$(jq -er '.files["docker-compose.yml"].sha256' "$manifest_tmp")
+compose_amd_sha=$(jq -er '.files["docker-compose.amd.yml"].sha256' "$manifest_tmp")
+compose_nvidia_sha=$(jq -er '.files["docker-compose.nvidia.yml"].sha256' "$manifest_tmp")
 proxy_sha=$(jq -er '.files["proxy.conf"].sha256' "$manifest_tmp")
 roles_sha=$(jq -er '.files["node_roles.json"].sha256' "$manifest_tmp")
 planner_sha=$(jq -er '.files["deployment-plan.py"].sha256' "$manifest_tmp")
@@ -107,6 +141,8 @@ sbom_file=$(jq -er '.sbom.file' "$manifest_tmp")
 sbom_sha=$(jq -er '.sbom.sha256' "$manifest_tmp")
 [[ $sbom_file != /* && $sbom_file != *..* ]] || fail "runtime manifest contains an unsafe SBOM path"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.yml" -o "$INSTALL_ROOT/docker-compose.yml"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.amd.yml" -o "$INSTALL_ROOT/docker-compose.amd.yml"
+curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.nvidia.yml" -o "$INSTALL_ROOT/docker-compose.nvidia.yml"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/proxy.conf" -o "$INSTALL_ROOT/runtime/proxy.conf"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/node_roles.json" -o "$INSTALL_ROOT/config/node_roles.json"
 install -d -m 0750 "$INSTALL_ROOT/scripts"
@@ -117,6 +153,8 @@ curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/release-layout.py" -o "$INSTALL_
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/apply-deployment.py" -o "$INSTALL_ROOT/scripts/apply-deployment.py"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$sbom_file" -o "$INSTALL_ROOT/config/release-sbom.cdx.json"
 printf '%s  %s\n' "$compose_sha" "$INSTALL_ROOT/docker-compose.yml" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$compose_amd_sha" "$INSTALL_ROOT/docker-compose.amd.yml" | sha256sum -c - >/dev/null
+printf '%s  %s\n' "$compose_nvidia_sha" "$INSTALL_ROOT/docker-compose.nvidia.yml" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$proxy_sha" "$INSTALL_ROOT/runtime/proxy.conf" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$roles_sha" "$INSTALL_ROOT/config/node_roles.json" | sha256sum -c - >/dev/null
 printf '%s  %s\n' "$update_agent_sha" "$INSTALL_ROOT/scripts/update-agent.py" | sha256sum -c - >/dev/null
@@ -168,6 +206,7 @@ if [[ "$NODE_ROLE" != "unassigned" ]]; then
   role_services=( $(jq -r --arg role "$NODE_ROLE" '.roles.profiles[$role].services[]' "$INSTALL_ROOT/config/node_roles.json") )
 fi
 role_services=("${BOOTSTRAP_SERVICES[@]}" "${role_services[@]}")
+mapfile -t role_services < <(printf '%s\n' "${role_services[@]}" | awk '!seen[$0]++')
 node_capabilities=$(jq -r --arg role "$NODE_ROLE" '.roles.profiles[$role].capabilities[]' "$INSTALL_ROOT/config/node_roles.json" 2>/dev/null | paste -sd, - || true)
 jq -e --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
   . as $manifest |
@@ -188,12 +227,17 @@ secret_store_passphrase=$(secret 48); grafana_password=$(secret 36)
 setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
 setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
 setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
+WEB_DOMAIN=${VERTEP_WEB_DOMAIN:-$(hostname -f 2>/dev/null || hostname)}
 resolved_image(){ jq -er --arg service "$1" '.images[$service] | .reference + "@" + .digest' "$manifest_tmp"; }
 cat > "$INSTALL_ROOT/.env" <<EOF
 VERTEP_VERSION=$version
 VERTEP_IMAGE_REPOSITORY=${VERTEP_IMAGE_REPOSITORY:-registry.vertep.ai/vertep}
 VERTEP_PROXY_IMAGE=$(resolved_image proxy)
 VERTEP_CORE_IMAGE=$(resolved_image core)
+VERTEP_LICENSE_MANAGER_IMAGE=$(resolved_image license-manager)
+VERTEP_DISPATCHER_IMAGE=$(resolved_image dispatcher)
+VERTEP_SCHEDULER_IMAGE=$(resolved_image scheduler)
+VERTEP_CERTIFICATE_MANAGER_IMAGE=$(resolved_image certificate-manager)
 VERTEP_WORKER_IMAGE=$(resolved_image worker)
 VERTEP_COMFYUI_IMAGE=$(resolved_image comfyui)
 VERTEP_TTS_IMAGE=$(resolved_image tts)
@@ -208,6 +252,8 @@ VERTEP_LOG_STORE_IMAGE=$(resolved_image log-store)
 VERTEP_LOG_COLLECTOR_IMAGE=$(resolved_image log-collector)
 VERTEP_UPDATE_AGENT_IMAGE=$(resolved_image update-agent)
 POSTGRES_PASSWORD=$postgres_password
+UPDATE_DATABASE_URL=postgresql://vertep:$postgres_password@127.0.0.1:5432/vertep
+SYSTEM_STATE_BACKEND=postgres
 REDIS_PASSWORD=$redis_password
 GRAFANA_ADMIN_PASSWORD=$grafana_password
 JWT_SECRET=$jwt_secret
@@ -228,16 +274,28 @@ SETUP_TOKEN_HASH=$setup_token_hash
 SETUP_TOKEN_EXPIRES_AT=$setup_token_expires_at
 COOKIE_SECURE=true
 CONFIG_ROOT=/data/config
-WEB_DOMAIN=${VERTEP_WEB_DOMAIN:-$(hostname -f 2>/dev/null || hostname)}
+WEB_DOMAIN=$WEB_DOMAIN
 WEB_UPDATE_ENABLED=true
 VERTEP_UPDATE_SERVER=https://update.vertep.ai
 REQUIRE_ROLLING_COMPATIBILITY=true
+UPDATE_REQUIRE_DISTRIBUTED_FENCE=true
 UPDATE_RELEASE_RETENTION=3
-GPU_ENABLED=$([[ $gpu_vendor == nvidia ]] && echo true || echo false)
+GPU_ENABLED=$([[ $gpu_vendor == nvidia || $gpu_vendor == amd ]] && echo true || echo false)
+GPU_VENDOR=$gpu_vendor
+LICENSE_MANAGER_URL=http://license-manager:8093
+DISPATCHER_URL=http://dispatcher:8094
+SCHEDULER_URL=http://scheduler:8095
+CERTIFICATE_MANAGER_URL=http://certificate-manager:8096
+BACKUP_URL=http://backup-service:8092
+OLLAMA_URL=http://ollama:11434
 EOF
 chmod 0600 "$INSTALL_ROOT/.env"
 printf '%s' "$secret_store_passphrase" > "$INSTALL_ROOT/config/secret-store.passphrase"
-chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase"
+printf '%s' "$postgres_password" > "$INSTALL_ROOT/config/postgres.password"
+printf '%s' "$redis_password" > "$INSTALL_ROOT/config/redis.password"
+printf '%s' "$encryption_key" > "$INSTALL_ROOT/config/backup.key"
+chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase" "$INSTALL_ROOT/config/postgres.password" \
+  "$INSTALL_ROOT/config/redis.password" "$INSTALL_ROOT/config/backup.key"
 curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
 printf '%s  %s\n' "$planner_sha" "$INSTALL_ROOT/runtime/deployment-plan.py" | sha256sum -c - >/dev/null
 python3 - "$version" "$INSTALL_ROOT/config/deployment-plan.json" "${BOOTSTRAP_SERVICES[@]}" <<'PY'
@@ -280,20 +338,36 @@ systemctl daemon-reload
 systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer vertep-startup-recovery.service
 
 progress "Starting Vertep $version"
-docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" pull "${role_services[@]}"
-docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" up -d --remove-orphans "${role_services[@]}"
-docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" wait migrate
-migrate_id=$(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" ps -aq migrate)
+compose=(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml")
+[[ $gpu_vendor == amd ]] && compose+=(-f "$INSTALL_ROOT/docker-compose.amd.yml")
+[[ $gpu_vendor == nvidia ]] && compose+=(-f "$INSTALL_ROOT/docker-compose.nvidia.yml")
+"${compose[@]}" pull "${role_services[@]}"
+"${compose[@]}" up -d --remove-orphans "${role_services[@]}"
+"${compose[@]}" wait migrate
+migrate_id=$("${compose[@]}" ps -aq migrate)
 [[ -n $migrate_id && $(docker inspect -f '{{.State.ExitCode}}' "$migrate_id") -eq 0 ]] \
   || fail "database migration did not complete successfully"
 deadline=$((SECONDS+600))
 service_count=$((${#role_services[@]}-1))
-until [[ $(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" ps --services --filter status=running | wc -l) -eq $service_count ]] \
-  && ! docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml" ps | grep -Eq '\(unhealthy\)|\(health: starting\)' \
+until [[ $("${compose[@]}" ps --services --filter status=running | wc -l) -eq $service_count ]] \
+  && ! "${compose[@]}" ps | grep -Eq '\(unhealthy\)|\(health: starting\)' \
   && curl -kfsS https://127.0.0.1:8443/api/health >/dev/null; do
-  (( SECONDS < deadline )) || { docker compose -f "$INSTALL_ROOT/docker-compose.yml" ps; fail "runtime health check timed out"; }
+  (( SECONDS < deadline )) || { "${compose[@]}" ps; fail "runtime health check timed out"; }
   sleep 5
 done
+inventory_rows=$(mktemp)
+for service in "${role_services[@]}"; do
+  container_id=$("${compose[@]}" ps -q "$service")
+  [[ -n $container_id ]] || continue
+  docker inspect "$container_id" | jq --arg service "$service" '.[0] | {
+    service:$service,image:.Config.Image,image_digest:.Image,
+    state:.State.Status,health:(.State.Health.Status // "")}' >> "$inventory_rows"
+done
+jq -s --arg version "$version" --arg role "$NODE_ROLE" --argjson services "$(printf '%s\n' "${role_services[@]}" | jq -R . | jq -s .)" \
+  '{schema:1,version:$version,role:$role,generated_at:(now|todate),services:$services,containers:.}' \
+  "$inventory_rows" > "$INSTALL_ROOT/config/runtime-inventory.json"
+rm -f "$inventory_rows"
+chmod 0600 "$INSTALL_ROOT/config/runtime-inventory.json"
 server_ip=$(hostname -I | awk '{print $1}')
 setup_url="https://$server_ip:8443/setup?token=$setup_token"
 printf '\nVertep Setup is ready.\n'

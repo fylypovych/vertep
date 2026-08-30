@@ -2,10 +2,9 @@ name: vertep
 services:
   proxy:
     image: ${VERTEP_PROXY_IMAGE:-nginx:1.27-alpine}
-    entrypoint: ["/bin/sh", "-c", "envsubst '$$WEB_DOMAIN' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec /bin/sh -c 'last=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); (while sleep 5; do current=$$(sha256sum /etc/vertep/revocation/node-ca.crl | cut -d' ' -f1); if [ \"$$current\" != \"$$last\" ]; then nginx -s reload; last=$$current; fi; done) & exec nginx -g 'daemon off;' '"]
+    entrypoint: ["/bin/sh", "-c", "envsubst '$$WEB_DOMAIN' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec /bin/sh -c 'last=$$(sha256sum /etc/vertep/revocation/node-ca.crl /etc/vertep/tls/vertep.crt | sha256sum | cut -d' ' -f1); (while sleep 5; do current=$$(sha256sum /etc/vertep/revocation/node-ca.crl /etc/vertep/tls/vertep.crt | sha256sum | cut -d' ' -f1); if [ \"$$current\" != \"$$last\" ]; then nginx -s reload; last=$$current; fi; done) & exec nginx -g 'daemon off;' '"]
     ports: ["8443:8443"]
     volumes:
-      - ./runtime/proxy.conf.template:/etc/nginx/conf.d/default.conf.template:ro
       - ./tls:/etc/vertep/tls:ro
       - ./config:/etc/vertep/revocation:ro
     depends_on:
@@ -16,6 +15,50 @@ services:
       timeout: 5s
       retries: 30
     restart: unless-stopped
+  license-manager:
+    image: ${VERTEP_LICENSE_MANAGER_IMAGE:-${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}}
+    command: ["uvicorn", "services.license_service:app", "--host", "0.0.0.0", "--port", "8093"]
+    env_file: .env
+    environment:
+      CONFIG_ROOT: /data/config
+      SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
+      REQUIRE_SECRET_KEY_SEALING: "true"
+    secrets: [secret_store_passphrase]
+    volumes: ["./config:/data/config:ro"]
+    healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8093/health"], interval: 15s, timeout: 5s, retries: 20}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  dispatcher:
+    image: ${VERTEP_DISPATCHER_IMAGE:-${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}}
+    command: ["uvicorn", "services.dispatcher_service:app", "--host", "0.0.0.0", "--port", "8094"]
+    healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8094/health"], interval: 15s, timeout: 5s, retries: 20}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  scheduler:
+    image: ${VERTEP_SCHEDULER_IMAGE:-${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}}
+    command: ["uvicorn", "services.scheduler_service:app", "--host", "0.0.0.0", "--port", "8095"]
+    healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8095/health"], interval: 15s, timeout: 5s, retries: 20}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  certificate-manager:
+    image: ${VERTEP_CERTIFICATE_MANAGER_IMAGE:-${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}}
+    command: ["uvicorn", "services.certificate_service:app", "--host", "0.0.0.0", "--port", "8096"]
+    env_file: .env
+    environment: {TLS_ROOT: /data/tls}
+    volumes: ["./tls:/data/tls"]
+    healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8096/health"], interval: 15s, timeout: 5s, retries: 20}
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
   core:
     image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
     env_file: .env
@@ -49,6 +92,9 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
+      license-manager: {condition: service_healthy}
+      dispatcher: {condition: service_healthy}
+      scheduler: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
       interval: 10s
@@ -91,10 +137,6 @@ services:
   comfyui:
     image: ${VERTEP_COMFYUI_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/comfyui:${VERTEP_VERSION}}
     volumes: ["./models:/data/models", "./storage:/data/output"]
-    deploy:
-      resources:
-        reservations:
-          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8188/system_stats"]
       interval: 20s
@@ -131,7 +173,7 @@ services:
   backup-service:
     image: ${VERTEP_BACKUP_SERVICE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/backup:${VERTEP_VERSION}}
     env_file: .env
-    volumes: ["./config:/data/config:ro", "./storage:/data/storage:ro", "./backups:/data/backups"]
+    volumes: ["./config:/data/config", "./storage:/data/storage", "./backups:/data/backups"]
     environment:
       BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
     secrets: [backup_encryption_key]
@@ -149,6 +191,7 @@ services:
     image: ${VERTEP_POSTGRES_IMAGE:-postgres:16-alpine}
     environment: {POSTGRES_DB: vertep, POSTGRES_USER: vertep, POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password}
     secrets: [postgres_password]
+    ports: ["127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"]
     volumes: ["postgres-data:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vertep -d vertep"]
@@ -158,8 +201,9 @@ services:
     restart: unless-stopped
   redis:
     image: ${VERTEP_REDIS_IMAGE:-redis:7-alpine}
-    command: ["redis-server", "--appendonly", "yes", "--requirepass-file", "/run/secrets/redis_password"]
+    command: ["/bin/sh", "-c", "printf 'appendonly yes\\nrequirepass %s\\n' \"$$(cat /run/secrets/redis_password)\" > /tmp/redis.conf && exec redis-server /tmp/redis.conf"]
     secrets: [redis_password]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=1m"]
     volumes: ["redis-data:/data"]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a $$(cat /run/secrets/redis_password) ping | grep PONG"]
@@ -182,8 +226,6 @@ services:
               "--web.enable-lifecycle"]
     volumes:
       - monitoring-data:/prometheus
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
       interval: 30s
@@ -199,7 +241,6 @@ services:
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - log-store-data:/loki
-      - ./monitoring/loki.yml:/etc/loki/config.yml:ro
     healthcheck:
       test: ["CMD", "/usr/bin/loki", "-verify-config=true", "-config.file=/etc/loki/config.yml"]
       interval: 30s
@@ -215,7 +256,6 @@ services:
     command: ["-config.file=/etc/promtail/config.yml", "-config.expand-env=true"]
     volumes:
       - ./logs:/var/log/vertep:ro
-      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
       - log-collector-data:/run/promtail
     depends_on:
       log-store: {condition: service_healthy}
@@ -237,8 +277,6 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
       interval: 30s

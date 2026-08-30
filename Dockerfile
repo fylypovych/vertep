@@ -6,6 +6,7 @@ COPY VERSION .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY core core
 COPY worker worker
+COPY services services
 COPY adapters adapters
 COPY web web
 COPY workflows workflows

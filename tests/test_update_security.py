@@ -4,6 +4,8 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -88,6 +90,35 @@ def test_update_lease_fences_a_second_agent(tmp_path):
                 pass
     with UpdateLease(tmp_path, "third"):
         assert True
+
+
+def test_update_lease_uses_postgres_epoch_fence(monkeypatch, tmp_path):
+    calls = []
+
+    class Cursor:
+        def __init__(self, row=None):
+            self.row = row
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def execute(self, query, params=()):
+            calls.append((" ".join(query.split()), params))
+            if "pg_try_advisory_lock" in query:
+                return Cursor((True,))
+            if "RETURNING epoch" in query:
+                return Cursor((7,))
+            return Cursor()
+        def close(self):
+            calls.append(("close", ()))
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(
+        connect=lambda *args, **kwargs: Connection()))
+    with UpdateLease(tmp_path, "distributed") as lease:
+        assert lease.fence_epoch == 7
+        assert json.loads((tmp_path / "update.lock").read_text())["fence_epoch"] == 7
+    assert any("pg_advisory_unlock" in query for query, _ in calls)
 
 
 def test_audit_log_is_hash_chained(tmp_path):

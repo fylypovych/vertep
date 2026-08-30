@@ -20,11 +20,37 @@ class SystemState(str, Enum):
 _lock = threading.RLock()
 
 
+def _database_url() -> str | None:
+    if os.getenv("SYSTEM_STATE_BACKEND", "file").lower() != "postgres":
+        return None
+    return os.getenv("DATABASE_URL") or os.getenv("UPDATE_DATABASE_URL")
+
+
+def _database_state() -> dict | None:
+    if os.getenv("SYSTEM_STATE_BACKEND", "file").lower() != "postgres":
+        return None
+    dsn = _database_url()
+    if not dsn:
+        raise RuntimeError("PostgreSQL system state requires a database URL")
+    import psycopg
+    with psycopg.connect(dsn) as connection:
+        row = connection.execute("""SELECT state,updated_at,reason,operation_id
+            FROM system_operating_state WHERE singleton=TRUE""").fetchone()
+    if not row:
+        return None
+    return {"state": SystemState(row[0]).value,
+            "updated_at": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1]),
+            "reason": row[2], "operation_id": row[3]}
+
+
 def _path(state_dir: Path | None = None) -> Path:
     return (state_dir or Path(os.getenv("UPDATE_STATE_DIR", "/var/lib/vertep/update"))) / "system-state.json"
 
 
 def get_system_state() -> dict:
+    database = _database_state()
+    if database is not None:
+        return database
     path = _path()
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -40,6 +66,14 @@ def set_system_state(state: SystemState | str, reason: str, operation_id: str | 
     state = SystemState(state)
     value = {"state": state.value, "updated_at": datetime.now(timezone.utc).isoformat(),
              "reason": reason, "operation_id": operation_id}
+    dsn = _database_url()
+    if dsn:
+        import psycopg
+        with psycopg.connect(dsn) as connection:
+            connection.execute("""INSERT INTO system_operating_state(singleton,state,reason,operation_id,updated_at)
+                VALUES(TRUE,%s,%s,%s,now()) ON CONFLICT(singleton) DO UPDATE SET
+                state=excluded.state,reason=excluded.reason,operation_id=excluded.operation_id,
+                updated_at=excluded.updated_at""", (state.value, reason, operation_id))
     path = _path(state_dir)
     with _lock:
         path.parent.mkdir(parents=True, exist_ok=True)

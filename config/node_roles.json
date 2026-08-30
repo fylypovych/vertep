@@ -1,9 +1,9 @@
 {
   "core": {
     "label": "Core Node",
-    "services": ["proxy", "core", "migrate", "postgres", "redis", "ollama", "monitoring", "update-agent"],
+    "services": ["proxy", "core", "license-manager", "dispatcher", "scheduler", "certificate-manager", "backup-service", "migrate", "postgres", "redis", "ollama", "monitoring", "update-agent"],
     "capabilities": ["orchestration", "scheduling", "publishing", "license_management"],
-    "modules": ["core", "api", "dispatcher", "scheduler", "publisher", "redis", "postgresql", "web_ui", "license_manager", "update_agent", "monitoring"]
+    "modules": ["core", "api", "dispatcher", "scheduler", "publisher", "redis", "postgresql", "web_ui", "license_manager", "certificate_manager", "backup_service", "update_agent", "monitoring"]
   },
   "gpu": {
     "label": "GPU Node",

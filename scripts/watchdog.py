@@ -31,6 +31,14 @@ def check_role() -> str:
 def check_containers(role: str) -> dict:
     root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
     compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml")]
+    try:
+        environment = (root / ".env").read_text(encoding="utf-8")
+    except OSError:
+        environment = ""
+    if "GPU_VENDOR=amd" in environment and (root / "docker-compose.amd.yml").is_file():
+        compose.extend(["-f", str(root / "docker-compose.amd.yml")])
+    if "GPU_VENDOR=nvidia" in environment and (root / "docker-compose.nvidia.yml").is_file():
+        compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
     required = {"core": ["core", "postgres", "redis"],
                 "gpu": ["worker"],
                 "text": ["worker", "ollama"],
@@ -43,7 +51,9 @@ def check_containers(role: str) -> dict:
 
 
 def check_gpu() -> dict:
-    return {"nvidia_smi": run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]).startswith("ERROR") is False}
+    if os.getenv("GPU_VENDOR") == "amd":
+        return {"rocminfo": not run(["rocminfo"]).startswith("ERROR")}
+    return {"nvidia_smi": not run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]).startswith("ERROR")}
 
 
 def check_core_api(core_url: str) -> dict:
@@ -67,6 +77,14 @@ def check_update_agent() -> dict:
 def restart_containers(role: str) -> str:
     root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
     compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml")]
+    try:
+        environment = (root / ".env").read_text(encoding="utf-8")
+    except OSError:
+        environment = ""
+    if "GPU_VENDOR=amd" in environment and (root / "docker-compose.amd.yml").is_file():
+        compose.extend(["-f", str(root / "docker-compose.amd.yml")])
+    if "GPU_VENDOR=nvidia" in environment and (root / "docker-compose.nvidia.yml").is_file():
+        compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
     services = {"core": ["core", "postgres", "redis"],
                 "gpu": ["worker"],
                 "text": ["worker", "ollama"],

@@ -49,5 +49,7 @@ def test_appliance_images_can_be_pinned_by_signed_contract():
                      "VERTEP_BACKUP_SERVICE_IMAGE", "VERTEP_POSTGRES_IMAGE", "VERTEP_REDIS_IMAGE",
                      "VERTEP_OLLAMA_IMAGE", "VERTEP_MONITORING_IMAGE", "VERTEP_GRAFANA_IMAGE",
                      "VERTEP_LOG_STORE_IMAGE", "VERTEP_LOG_COLLECTOR_IMAGE",
-                     "VERTEP_UPDATE_AGENT_IMAGE"):
+                     "VERTEP_UPDATE_AGENT_IMAGE", "VERTEP_LICENSE_MANAGER_IMAGE",
+                     "VERTEP_DISPATCHER_IMAGE", "VERTEP_SCHEDULER_IMAGE",
+                     "VERTEP_CERTIFICATE_MANAGER_IMAGE"):
         assert "${" + variable in compose

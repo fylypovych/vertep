@@ -3,7 +3,8 @@ import json
 
 from fastapi.testclient import TestClient
 
-from services import backup_service, publisher_service, tts_service
+from services import (backup_service, certificate_service, dispatcher_service,
+                      license_service, publisher_service, scheduler_service, tts_service)
 
 
 def test_tts_service_returns_valid_wav(monkeypatch):
@@ -51,3 +52,37 @@ def test_backup_service_creates_encrypted_snapshot_and_receipt(monkeypatch, tmp_
     assert encrypted.read_bytes().startswith(backup_service.MAGIC)
     assert b"content that must not remain plaintext" not in encrypted.read_bytes()
     assert json.loads((backups / f"{receipt['snapshot_id']}.json").read_text())["sha256"] == receipt["sha256"]
+    (config / "installation.json").write_text('{"id":"changed"}', encoding="utf-8")
+    (storage / "artifact.bin").write_bytes(b"changed")
+    restored = client.post(f"/snapshots/{receipt['snapshot_id']}/restore")
+    assert restored.status_code == 200
+    assert (config / "installation.json").read_text(encoding="utf-8") == '{"id":"installation"}'
+    assert (storage / "artifact.bin").read_bytes() == b"content that must not remain plaintext"
+
+
+def test_isolated_runtime_services_are_healthy(monkeypatch, tmp_path):
+    assert TestClient(dispatcher_service.app).get("/health").json()["service"] == "dispatcher"
+    assert TestClient(scheduler_service.app).get("/health").json()["service"] == "scheduler"
+    monkeypatch.delenv("VERTEP_LICENSE_KEY", raising=False)
+    monkeypatch.delenv("VERTEP_LICENSE_KEY_FILE", raising=False)
+    license_status = TestClient(license_service.app).get("/status").json()
+    assert license_status == {"status": "HEALTHY", "state": "COMMUNITY", "fingerprint": ""}
+
+
+def test_certificate_manager_renews_atomically(monkeypatch, tmp_path):
+    monkeypatch.setenv("TLS_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEB_DOMAIN", "vertep.example")
+    client = TestClient(certificate_service.app)
+    renewed = client.post("/certificate/renew")
+    assert renewed.status_code == 200
+    assert renewed.json()["status"] == "HEALTHY"
+    assert (tmp_path / "vertep.crt").read_text().startswith("-----BEGIN CERTIFICATE-----")
+    assert (tmp_path / "vertep.key").read_text().startswith("-----BEGIN PRIVATE KEY-----")
+
+
+def test_scheduler_filters_future_jobs():
+    response = TestClient(scheduler_service.app).post("/due", json={"jobs": [
+        {"job_id": "future", "scheduled_for": "2999-01-01T00:00:00Z", "priority": 99},
+        {"job_id": "ready", "scheduled_for": None, "priority": 1},
+    ], "limit": 10})
+    assert [item["job_id"] for item in response.json()["jobs"]] == ["ready"]

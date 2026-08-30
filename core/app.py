@@ -47,12 +47,13 @@ from .system_state import dispatch_allowed, get_system_state, jobs_may_be_create
 from .health_checks import run_checks as _run_health_checks, health_status as _health_status
 from .first_run import (complete_setup, configured_user, is_configured, session_secret,
                         setup_status, config_root, integration_secret_status,
-                        set_integration_secret)
+                        set_integration_secret, installation)
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
 from .version import application_version
-from .rolling_update import cancel_rollout, reconcile_rollout, rollout_status, rollback_ready_nodes, start_rollout
+from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
+                             rollout_status, rollback_ready_nodes, start_rollout)
 from adapters.telegram import TelegramAdapter
 from adapters.publisher import PUBLISHERS
 
@@ -89,6 +90,15 @@ def _serialize_job_result(function):
     return locked
 
 def _job_is_due(job) -> bool:
+    scheduler_url = os.getenv("SCHEDULER_URL", "").rstrip("/")
+    if scheduler_url:
+        try:
+            response = httpx.post(f"{scheduler_url}/due",
+                                  json={"jobs": [job.model_dump(mode="json")], "limit": 1}, timeout=3)
+            response.raise_for_status()
+            return bool(response.json().get("jobs"))
+        except (httpx.HTTPError, ValueError):
+            return False
     if not job.scheduled_for:
         return True
     try:
@@ -348,11 +358,18 @@ async def first_run_complete(request: Request):
             if response.status_code != 200:
                 raise ValueError(f"Core registration failed: {response.text[:300]}")
             credentials = response.json()
+        backend = str(payload.get("ai_backend", "skip"))
+        backend_url = str(payload.get("backend_url") or "").rstrip("/") or None
+        backend_model = str(payload.get("backend_model") or "").strip() or None
+        backend_key = str(payload.get("backend_api_key") or "")
+        await _validate_ai_backend(backend, backend_url, backend_model, backend_key)
         completed = complete_setup(str(payload.get("installation_name", "")), str(payload.get("username", "")),
                                    str(payload.get("password", "")), str(payload.get("password_confirmation", "")),
-                                   str(payload.get("ai_backend", "skip")), payload.get("backend_url"),
+                                   backend, backend_url,
                                    role, core_url or None, credentials,
-                                   str(payload.get("web_domain") or "").strip() or None)
+                                   str(payload.get("web_domain") or "").strip() or None, backend_model)
+        if backend_key:
+            set_integration_secret("external_ai_api_key", backend_key)
         if role == "core":
             completed["core_url"] = os.getenv("PUBLIC_URL") or os.getenv("WEB_DOMAIN") or str(request.base_url).rstrip("/")
             completed["core_certificate"] = (Path(os.getenv("CORE_CERTIFICATE_PATH", "/data/config/pki/ca.crt"))
@@ -368,9 +385,62 @@ async def first_run_complete(request: Request):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
+
+async def _validate_ai_backend(backend: str, url: str | None, model: str | None,
+                               api_key: str) -> None:
+    if backend == "skip":
+        return
+    if backend not in {"ollama", "openai", "external"}:
+        raise ValueError("Unsupported AI backend")
+    if not model:
+        raise ValueError("AI model is required")
+    base_url = url or (os.getenv("OLLAMA_URL", "http://ollama:11434") if backend == "ollama"
+                       else "https://api.openai.com/v1")
+    if backend != "ollama" and not api_key:
+        raise ValueError("AI backend API key is required")
+    if backend != "ollama" and not base_url.startswith("https://"):
+        raise ValueError("External AI backend must use HTTPS")
+    endpoint = f"{base_url}/api/tags" if backend == "ollama" else f"{base_url}/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(endpoint, headers=headers)
+            response.raise_for_status()
+            body = response.json()
+    except (httpx.HTTPError, ValueError) as error:
+        raise ValueError(f"AI backend validation failed: {error}") from error
+    rows = body.get("models", body.get("data", [])) if isinstance(body, dict) else []
+    names = {str(item.get("name") or item.get("model") or item.get("id")) for item in rows
+             if isinstance(item, dict)}
+    available = model in names or any(name.split(":", 1)[0] == model for name in names)
+    if not available and backend == "ollama":
+        try:
+            async with httpx.AsyncClient(timeout=3600) as client:
+                response = await client.post(f"{base_url}/api/pull",
+                                             json={"name": model, "stream": False})
+                response.raise_for_status()
+            return
+        except httpx.HTTPError as error:
+            raise ValueError(f"AI model '{model}' could not be installed: {error}") from error
+    if not available:
+        raise ValueError(f"AI model '{model}' is not available from the selected backend")
+
 def _scene_for_task(job, task_id: str):
     scene_id = job.active_task_ids.get(task_id)
     return next((scene for scene in job.scenes if scene.scene_id == scene_id), None)
+
+
+def _select_worker(workers: list[dict], job):
+    dispatcher_url = os.getenv("DISPATCHER_URL", "").rstrip("/")
+    if not dispatcher_url:
+        return available_worker(workers, job)
+    try:
+        response = httpx.post(f"{dispatcher_url}/select",
+                              json={"workers": workers, "job": job.model_dump(mode="json")}, timeout=3)
+        response.raise_for_status()
+        return response.json().get("worker")
+    except (httpx.HTTPError, ValueError):
+        return None
 
 def _task_for(job, scene=None) -> dict:
     workflow = job.workflow or "workflows/image/demo.json"
@@ -921,13 +991,21 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     if (os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"
             and data["status"] == "READY" and not data["tested_capabilities"]):
         data["status"] = "ERROR"
-    previous = store.workers.get(payload.node_name)
+    previous = next((worker for worker in store.load_workers()
+                     if worker.get("node_name") == payload.node_name), None)
+    if previous is None:
+        previous = store.workers.get(payload.node_name)
     desired = (previous or {}).get("desired_state")
+    drain_operation_id = (previous or {}).get("drain_operation_id")
+    if desired == "DRAINING" and drain_operation_id and get_system_state()["state"] == "NORMAL":
+        desired = None
+        drain_operation_id = None
     if desired == "QUARANTINED":
         data["status"] = "QUARANTINED"
         data["desired_state"] = desired
     elif desired == "DRAINING":
         data["desired_state"] = desired
+        data["drain_operation_id"] = drain_operation_id
         if data["status"] != "BUSY" and not data.get("current_task"):
             data["status"] = "DRAINING"
     if previous and previous.get("self_test_requested_at"):
@@ -947,7 +1025,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     return {"accepted": True, "workers": len(store.workers),
             "desired_state": data.get("desired_state"),
             "self_test_requested_at": data.get("self_test_requested_at"),
-            "update_target_version": data.get("update_target_version")}
+            "update_target_version": data.get("update_target_version"),
+            "rollback_target_version": data.get("rollback_target_version")}
 
 @app.get("/api/workers")
 def workers(role: str | None = None, status: str | None = None, capability: str | None = None):
@@ -956,9 +1035,12 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
     timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "45"))
     result = []
     for worker in store.load_workers(role=role, status=status, capability=capability):
-        last_seen = datetime.fromisoformat(worker["last_seen"])
         item = dict(worker)
-        if (now - last_seen).total_seconds() > timeout:
+        try:
+            last_seen = datetime.fromisoformat(str(worker["last_seen"]))
+        except (KeyError, TypeError, ValueError):
+            last_seen = None
+        if last_seen is None or (now - last_seen).total_seconds() > timeout:
             item["status"] = "OFFLINE"
         result.append(item)
     return result
@@ -1354,14 +1436,43 @@ def web_update_status():
 
 @app.get("/api/system/update/readiness")
 def update_readiness():
-    active = [job.job_id for job in store.jobs.values() if job.status not in {
+    persisted_jobs_by_id = {job.job_id: job for job in store.repository.load_jobs()}
+    persisted_jobs_by_id.update(store.jobs)
+    persisted_jobs = list(persisted_jobs_by_id.values())
+    active = [job.job_id for job in persisted_jobs if job.status not in {
         JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM, JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED,
         JobStatus.PAUSED, JobStatus.CANCELLED}]
-    busy = [worker.get("node_name") for worker in store.workers.values()
-            if worker.get("status") == "BUSY" or worker.get("current_task")]
-    return {"ready": not active and not busy and task_queue.inflight_depth() == 0,
+    persisted_workers_by_name = {worker["node_name"]: worker for worker in store.load_workers()}
+    persisted_workers_by_name.update(store.workers)
+    persisted_workers = list(persisted_workers_by_name.values())
+    system = get_system_state()
+    operation_id = system.get("operation_id")
+    acknowledged = []
+    unacknowledged = []
+    known = {worker.get("node_id") or worker.get("node_name"): worker
+             for worker in persisted_workers}
+    registered = [node for node in registered_nodes() if not node.get("revoked_at")]
+    required_nodes = {node.get("node_id") for node in registered if node.get("node_id")}
+    if not required_nodes:
+        required_nodes.update(known)
+    busy = [node_id for node_id in sorted(required_nodes) if known.get(node_id)
+            and (known[node_id].get("status") == "BUSY" or known[node_id].get("current_task"))]
+    for node_id in sorted(required_nodes):
+        worker = known.get(node_id)
+        if worker is None:
+            unacknowledged.append(node_id)
+            continue
+        worker.update({"desired_state": "DRAINING", "drain_operation_id": operation_id})
+        store.save_worker(worker)
+        drained = (worker.get("status") == "DRAINING" and not worker.get("current_task"))
+        (acknowledged if drained else unacknowledged).append(node_id)
+    ready = (not active and not busy and task_queue.inflight_depth() == 0
+             and not unacknowledged and not dispatch_allowed())
+    return {"ready": ready,
             "active_jobs": active, "busy_workers": busy,
-            "queue_paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth()}
+            "queue_paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth(),
+            "drain_operation_id": operation_id, "acknowledged_workers": acknowledged,
+            "unacknowledged_workers": unacknowledged}
 
 @app.post("/api/system/update/check")
 def web_update_check():
@@ -1397,6 +1508,14 @@ def rollback_canary():
     result = rollback_ready_nodes(store.workers)
     reconcile_rollout(store.workers)
     return result
+
+
+@app.post("/api/system/update/rolling/promote")
+def promote_canary():
+    try:
+        return promote_rollout()
+    except RuntimeError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 @app.post("/api/system/update/rolling")
@@ -1457,6 +1576,87 @@ def delete_secret_setting(name: str):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
+
+async def _internal_api(method: str, base_environment: str, path: str,
+                        payload: dict | None = None) -> dict:
+    base = os.getenv(base_environment, "").rstrip("/")
+    if not base:
+        raise HTTPException(503, f"{base_environment} is not configured")
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.request(method, f"{base}{path}", json=payload)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(502, error.response.text[:500]) from error
+    except (httpx.HTTPError, ValueError) as error:
+        raise HTTPException(503, f"Internal service is unavailable: {error}") from error
+
+
+@app.get("/api/system/backups")
+async def system_backups():
+    return await _internal_api("GET", "BACKUP_URL", "/snapshots")
+
+
+@app.get("/api/system/license")
+async def system_license():
+    return await _internal_api("GET", "LICENSE_MANAGER_URL", "/status")
+
+
+@app.get("/api/system/installation-manifest")
+def installation_manifest():
+    manifest_path = config_root() / "installation-manifest.json"
+    if manifest_path.is_file():
+        try:
+            return json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise HTTPException(503, "Installation manifest is unreadable") from error
+    return {key: item for key, item in installation().items() if key != "administrator"}
+
+
+@app.post("/api/system/backups")
+async def create_system_backup():
+    return await _internal_api("POST", "BACKUP_URL", "/snapshots", {
+        "job_id": "system-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"), "request": {}})
+
+
+@app.post("/api/system/backups/{snapshot_id}/restore")
+async def restore_system_backup(snapshot_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(422, "Invalid snapshot identifier")
+    return await _internal_api("POST", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore")
+
+
+@app.get("/api/system/models")
+async def system_models():
+    return await _internal_api("GET", "OLLAMA_URL", "/api/tags")
+
+
+@app.post("/api/system/models/pull")
+async def pull_system_model(request: Request):
+    payload = await request.json()
+    name = str(payload.get("name", ""))
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", name):
+        raise HTTPException(422, "Invalid model name")
+    return await _internal_api("POST", "OLLAMA_URL", "/api/pull", {"name": name, "stream": False})
+
+
+@app.delete("/api/system/models/{name:path}")
+async def delete_system_model(name: str):
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", name):
+        raise HTTPException(422, "Invalid model name")
+    return await _internal_api("DELETE", "OLLAMA_URL", "/api/delete", {"name": name})
+
+
+@app.get("/api/system/certificates")
+async def system_certificates():
+    return await _internal_api("GET", "CERTIFICATE_MANAGER_URL", "/certificate")
+
+
+@app.post("/api/system/certificates/renew")
+async def renew_system_certificate():
+    return await _internal_api("POST", "CERTIFICATE_MANAGER_URL", "/certificate/renew")
+
 @app.post("/api/tasks/claim")
 def claim_task(payload: TaskClaim, request: Request):
     if not _valid_worker_request(payload.node_name, request):
@@ -1476,7 +1676,7 @@ def claim_task(payload: TaskClaim, request: Request):
         if not task:
             break
         job = store.jobs.get(task["job_id"])
-        worker = available_worker([worker_data], job) if job else None
+        worker = _select_worker([worker_data], job) if job else None
         if job and worker:
             for held_task_id in held_tasks:
                 task_queue.release(held_task_id)

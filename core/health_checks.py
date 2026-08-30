@@ -70,6 +70,11 @@ def check_core_api(core_url: str) -> tuple[bool, str]:
 
 def check_gpu() -> tuple[bool, str]:
     try:
+        if os.getenv("GPU_VENDOR") == "amd":
+            output = subprocess.run(["rocminfo"], check=True, capture_output=True,
+                                    text=True, timeout=20).stdout
+            return True, next((line.strip() for line in output.splitlines()
+                               if "Name:" in line), "AMD GPU")
         output = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                                 check=True, capture_output=True, text=True, timeout=10).stdout.strip()
         return True, output.splitlines()[0] if output else "no gpu"
@@ -79,6 +84,10 @@ def check_gpu() -> tuple[bool, str]:
 
 def check_cuda() -> tuple[bool, str]:
     try:
+        if os.getenv("GPU_VENDOR") == "amd":
+            output = subprocess.run(["rocminfo", "--version"], capture_output=True,
+                                    text=True, timeout=10).stdout.strip()
+            return True, output or os.getenv("ROCM_VERSION", "ROCm")
         output = subprocess.run(["nvcc", "--version"], capture_output=True, text=True, timeout=10).stdout
         if "release" in output:
             return True, output.splitlines()[0]

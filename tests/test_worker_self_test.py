@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 from adapters.comfyui import ComfyUIAdapter
@@ -69,3 +70,13 @@ def test_coordinated_update_request_is_idempotent(monkeypatch, tmp_path):
     request_local_update("1.2.3")
     assert len(list(request_root.glob("*.json"))) == 1
     assert (request_root.parent / "worker-update-target").read_text() == "1.2.3"
+
+
+def test_rollback_request_is_idempotent(monkeypatch, tmp_path):
+    request_root = tmp_path / "update" / "requests"
+    monkeypatch.setenv("UPDATE_REQUEST_DIR", str(request_root))
+    request_local_update("1.1.0", action="rollback")
+    request_local_update("1.1.0", action="rollback")
+    request = json.loads(next(request_root.glob("*.json")).read_text())
+    assert request["action"] == "rollback"
+    assert len(list(request_root.glob("*.json"))) == 1

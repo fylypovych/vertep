@@ -39,8 +39,21 @@ def get_root() -> Path:
 
 def process_worker_update(root: Path, state_dir: Path, request_path: Path) -> None:
     request = json.loads(request_path.read_text(encoding="utf-8"))
-    if request.get("action") != "update":
+    action = request.get("action")
+    if action == "rollback":
+        status = {"state": "UPDATING", "phase": "ROLLING_BACK", "action": action,
+                  "request_id": request.get("request_id"), "updated_at": now(),
+                  "log": [f"{now()} Worker rollback started"]}
+        atomic_json(state_dir / "status.json", status)
+        output = run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], timeout=600)
+        if output.startswith("ERROR"):
+            raise RuntimeError(f"Rollback failed: {output}")
+        status.update({"state": "NORMAL", "phase": "ROLLED_BACK", "updated_at": now()})
+        status["log"].append(f"{now()} Worker rollback completed")
+        atomic_json(state_dir / "status.json", status)
         return
+    if action != "update":
+        raise ValueError("Unsupported worker update action")
     target_version = request.get("target_version")
     if not target_version:
         raise ValueError("Missing target_version in update request")

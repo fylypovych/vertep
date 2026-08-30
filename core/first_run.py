@@ -221,8 +221,16 @@ def _runtime_inventory() -> dict:
         except OSError:
             fingerprints[name] = None
     hardware = runtime_hardware()
+    live = _read("runtime-inventory.json")
+    containers = live.get("containers", []) if isinstance(live.get("containers"), list) else []
     return {"deployment_plan_sha256": plan.get("sha256"),
             "services": plan.get("services", []), "capabilities": plan.get("capabilities", []),
+            "installed_services": live.get("services", []),
+            "containers": containers,
+            "image_digests": {item.get("service"): item.get("image_digest") for item in containers
+                              if item.get("service") and item.get("image_digest")},
+            "module_health": live.get("modules", {item.get("service"): item.get("health") or item.get("state")
+                                                   for item in containers if item.get("service")}),
             "docker_version": hardware.get("docker_version"),
             "certificate_fingerprints": fingerprints,
             "storage_root": str(Path(os.getenv("STORAGE_ROOT", "/data/storage"))),
@@ -243,7 +251,7 @@ def setup_status() -> dict:
 def complete_setup(name: str, username: str, password: str, confirmation: str,
                    backend: str, backend_url: str | None = None, node_role: str = "core",
                    core_url: str | None = None, node_credentials: dict | None = None,
-                   web_domain: str | None = None) -> dict:
+                   web_domain: str | None = None, backend_model: str | None = None) -> dict:
     if is_configured():
         raise FileExistsError("First-run setup has already been completed")
     if not name.strip() or len(name.strip()) > 120:
@@ -277,7 +285,7 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
              "core_url": core_url if node_role != "core" else None,
              "web_domain": web_domain.strip() if web_domain else None,
              "worker_count": int(os.getenv("BOOTSTRAP_WORKER_COUNT", "0")),
-             "ai_backend": {"type": backend, "url": backend_url},
+             "ai_backend": {"type": backend, "url": backend_url, "model": backend_model},
              "administrator": {"username": username, "password_hash": password_hash(password), "role": "admin"}}
     _write("installation.json", value)
     if web_domain and web_domain.strip():
@@ -297,7 +305,7 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
         _write("node-credentials.json", node_credentials)
     _write("deployment-request.json", {"schema": 1, "role": node_role, "version": version,
                                         "core_url": core_url if node_role != "core" else None,
-                                        "ollama_model": os.getenv("OLLAMA_MODEL", "llama3.2"),
+                                        "ollama_model": backend_model or os.getenv("OLLAMA_MODEL", "llama3.2"),
                                         "plan_sha256": plan["sha256"],
                                         "requested_at": datetime.now(timezone.utc).isoformat()})
     manifest = {key: item for key, item in value.items() if key != "administrator"} | {
