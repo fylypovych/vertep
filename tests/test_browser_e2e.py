@@ -6,8 +6,8 @@ import sys
 try:
     from playwright.sync_api import sync_playwright, expect
 except ImportError:
-    print("Playwright is not installed. Run: pip install playwright")
-    sys.exit(2)
+    from unittest import SkipTest
+    raise SkipTest("Playwright is not installed. Install with: pip install playwright")
 
 
 BASE_URL = os.getenv("VERTEP_URL", "http://127.0.0.1:8080")
