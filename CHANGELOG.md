@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.39 - 2026-08-31
+
 - `/setup` now redirects to the actual First Run Wizard at `/setup.html` while preserving the one-time token query parameter, instead of returning the unconfigured-runtime placeholder.
 
 ## 0.0.0.37 - 2026-08-31
