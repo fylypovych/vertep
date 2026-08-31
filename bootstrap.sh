@@ -427,7 +427,10 @@ for unit in vertep-update.service vertep-update.path vertep-update-check.service
   rm -f "/tmp/$unit"
 done
 systemctl daemon-reload
-systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer vertep-startup-recovery.service
+systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
+# Startup recovery is a boot-time guard. Running it here would race the initial
+# Compose deployment that bootstrap performs immediately below.
+systemctl enable vertep-startup-recovery.service
 
 progress "Starting Vertep $version"
 compose=(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml")

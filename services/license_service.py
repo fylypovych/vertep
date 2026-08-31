@@ -18,7 +18,9 @@ def _license() -> tuple[str, str]:
             value = Path(key_file).read_text(encoding="utf-8").strip()
         except OSError as error:
             raise HTTPException(503, "License key file is unavailable") from error
-    if not value and os.getenv("CONFIG_ROOT"):
+    config_root = os.getenv("CONFIG_ROOT", "")
+    encrypted_store = Path(config_root) / "secrets.enc.json" if config_root else None
+    if not value and encrypted_store and encrypted_store.is_file():
         try:
             from core.first_run import ensure_secret_store
             value = str(ensure_secret_store().get("license_key") or "").strip()

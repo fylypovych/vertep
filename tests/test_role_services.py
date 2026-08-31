@@ -69,6 +69,21 @@ def test_isolated_runtime_services_are_healthy(monkeypatch, tmp_path):
     assert license_status == {"status": "HEALTHY", "state": "COMMUNITY", "fingerprint": ""}
 
 
+def test_license_health_does_not_initialize_an_empty_read_only_store(monkeypatch, tmp_path):
+    monkeypatch.delenv("VERTEP_LICENSE_KEY", raising=False)
+    monkeypatch.delenv("VERTEP_LICENSE_KEY_FILE", raising=False)
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "core.first_run.ensure_secret_store",
+        lambda: (_ for _ in ()).throw(AssertionError("healthcheck must not initialize storage")),
+    )
+
+    response = TestClient(license_service.app).get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "HEALTHY", "state": "COMMUNITY", "fingerprint": ""}
+
+
 def test_certificate_manager_renews_atomically(monkeypatch, tmp_path):
     monkeypatch.setenv("TLS_ROOT", str(tmp_path))
     monkeypatch.setenv("WEB_DOMAIN", "vertep.example")

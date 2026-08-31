@@ -157,6 +157,8 @@ def test_bootstrap_installs_only_checksum_verified_host_update_executor():
         assert f'.files["{artifact}"].sha256' in bootstrap or 'unit_sha=$(jq' in bootstrap
     assert 'sha256sum -c -' in bootstrap
     assert 'systemctl enable --now vertep-update.path vertep-update.timer' in bootstrap
+    assert 'systemctl enable vertep-startup-recovery.service' in bootstrap
+    assert 'vertep-watchdog.timer vertep-startup-recovery.service' not in bootstrap
     assert "SETUP_TOKEN_EXPIRES_AT=" in bootstrap
     assert '.schema == 2 and .product == "vertep"' in bootstrap
     assert '.roles.catalog_sha256' in bootstrap
