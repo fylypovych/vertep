@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.33 - 2026-08-31
+
 - Proxy startup logic moved from a quote-sensitive inline Compose command to a standalone image entrypoint; fresh and resumed installations no longer enter a restart loop with `unexpected end of file`.
 - The proxy image now renders the configured `WEB_DOMAIN` from its template before starting nginx and continues to reload nginx when the TLS certificate or node CRL changes.
 
