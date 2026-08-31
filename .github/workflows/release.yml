@@ -116,14 +116,6 @@ jobs:
           pattern: image-*
           path: ${{ runner.temp }}/image-metadata
           merge-multiple: true
-      - name: Make GHCR packages publicly pullable
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          for package in core tts publisher-worker backup-service proxy postgres redis ollama monitoring log-store log-collector grafana comfyui; do
-            gh api --method PATCH "/user/packages/container/vertep-$package" -f visibility=public >/dev/null
-          done
       - name: Create signed runtime release
         shell: bash
         env:
