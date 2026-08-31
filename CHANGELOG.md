@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bootstrap більше не викликає `docker compose wait` для вже завершеного one-shot контейнера `migrate`; код завершення міграції перевіряється безпосередньо через Docker inspect, тому успішний resume доходить до healthcheck і показу Setup URL.
+- Startup Recovery unit отримав коректну секцію `[Install]`, тож `systemctl enable` більше не виводить попередження про static unit.
+
 ## 0.0.0.29 - 2026-08-31
 
 - Bootstrap став resumable та idempotent: повторний запуск зберігає паролі PostgreSQL/Redis, ключі, TLS/Node CA, роль, домен, довільні локальні параметри й Docker volumes, оновлюючи лише підписаний runtime та керовані release-параметри.

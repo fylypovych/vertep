@@ -537,7 +537,6 @@ compose=(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker
 [[ $gpu_vendor == nvidia ]] && compose+=(-f "$INSTALL_ROOT/docker-compose.nvidia.yml")
 "${compose[@]}" pull "${role_services[@]}"
 "${compose[@]}" up -d --remove-orphans "${role_services[@]}"
-"${compose[@]}" wait migrate
 migrate_id=$("${compose[@]}" ps -aq migrate)
 [[ -n $migrate_id && $(docker inspect -f '{{.State.ExitCode}}' "$migrate_id") -eq 0 ]] \
   || fail "database migration did not complete successfully"

@@ -25,3 +25,6 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 ReadWritePaths=@VERTEP_ROOT@
+
+[Install]
+WantedBy=multi-user.target
