@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Публічне розгортання об’єднано в одному репозиторії `fylypovych/vertep`: Bootstrap отримує підписаний runtime із GitHub Releases, а digest-pinned образи — з GHCR; додано автоматичне підписування, публікацію та перевірку bundle.
+- Правило послідовних назв комітів і релізів підтримує перенесення за основою 100: після `0.0.0.99` — `0.0.1.0`, після `0.0.99.99` — `0.1.0.0`.
 - Додано PostgreSQL-backed координацію rolling update для всього кластера: глобальний fencing через advisory lock та epoch, детермінований порядок вузлів, явне просування canary, блокування dispatch під час update/rollback, автоматичний і ручний rollback до попередньої версії та відновлення після перерваного запуску.
 - Міграції підтримують resumable backfill-модулі з durable checkpoint; backup/restore тепер охоплює конфігурацію, storage, PostgreSQL і Redis, перевіряє SHA-256 та безпечно відновлює AES-256-GCM snapshot без path traversal.
 - Fleet readiness тепер формується з persisted Jobs і Workers та вимагає завершення drain усіма зареєстрованими вузлами; Worker обробляє окремі update і rollback requests та не приймає нові задачі під час зміни версії.

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-VERSION_RE = re.compile(r"^v?0\.0\.0\.(\d+)$")
+VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)\.(\d+)$")
 SECRET_PATTERNS = [
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
@@ -30,8 +30,22 @@ def git(root: Path, *args: str) -> str:
 
 
 def next_version(tags: list[str]) -> str:
-    numbers = [int(match.group(1)) for tag in tags if (match := VERSION_RE.fullmatch(tag.strip()))]
-    return f"0.0.0.{max(numbers, default=0) + 1}"
+    versions = []
+    for tag in tags:
+        match = VERSION_RE.fullmatch(tag.strip())
+        if not match:
+            continue
+        parts = tuple(int(value) for value in match.groups())
+        if any(value > 99 for value in parts[1:]):
+            continue
+        versions.append(parts)
+    parts = list(max(versions, default=(0, 0, 0, 0)))
+    parts[3] += 1
+    for index in (3, 2, 1):
+        if parts[index] == 100:
+            parts[index] = 0
+            parts[index - 1] += 1
+    return ".".join(str(value) for value in parts)
 
 
 def known_versions(root: Path) -> list[str]:
@@ -41,18 +55,20 @@ def known_versions(root: Path) -> list[str]:
     source for the next sequence number.
     """
     versions = git(root, "tag", "--list").splitlines()
+    versions.extend(subject for subject in git(root, "log", "--format=%s").splitlines()
+                    if VERSION_RE.fullmatch(subject.strip()))
     version_path = root / "VERSION"
     if version_path.exists():
         versions.append(version_path.read_text(encoding="utf-8").strip())
     changelog_path = root / "CHANGELOG.md"
     if changelog_path.exists():
         versions.extend(re.findall(
-            r"(?m)^## (0\.0\.0\.\d+)(?:\s+-|$)",
+            r"(?m)^## (\d+\.\d+\.\d+\.\d+)(?:\s+-|$)",
             changelog_path.read_text(encoding="utf-8"),
         ))
     release_dir = root / "releases"
     if release_dir.exists():
-        versions.extend(path.stem for path in release_dir.glob("0.0.0.*.md"))
+        versions.extend(path.stem for path in release_dir.glob("*.md"))
     return versions
 
 
@@ -92,10 +108,11 @@ def generated_notes(root: Path, files: list[tuple[str, str]]) -> list[str]:
     baseline = next((row.split("\t", 1)[0] for row in release_commits
                      if len(row.split("\t", 1)) == 2
                      and (VERSION_RE.fullmatch(row.split("\t", 1)[1])
-                          or row.split("\t", 1)[1].startswith("Release 0.0.0."))), "")
+                          or re.fullmatch(r"Release \d+\.\d+\.\d+\.\d+", row.split("\t", 1)[1]))), "")
     revision_range = f"{baseline}..HEAD" if baseline else "HEAD"
     subjects = [line for line in git(root, "log", "--format=%s", "--no-merges", revision_range).splitlines()
-                if line and not line.startswith("Release 0.0.0.") and not VERSION_RE.fullmatch(line)]
+                if line and not re.fullmatch(r"Release \d+\.\d+\.\d+\.\d+", line)
+                and not VERSION_RE.fullmatch(line)]
     notes.extend(f"- Коміт: {subject}" for subject in subjects[:20])
     return notes
 
@@ -160,8 +177,8 @@ def prepare_release(root: Path, *, push: bool, skip_tests: bool) -> str:
     release_path.write_text(release_text, encoding="utf-8")
     git(root, "add", "-A")
     scan_staged_secrets(root)
-    git(root, "commit", "-m", f"Release {version}")
-    tag = f"v{version}"
+    git(root, "commit", "-m", version)
+    tag = version
     git(root, "tag", "-a", tag, "-m", f"Vertep {version}\n\n" + "\n".join(notes))
     if push:
         branch = git(root, "branch", "--show-current")

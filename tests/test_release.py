@@ -18,6 +18,8 @@ def test_release_version_is_strictly_sequential():
     assert release.next_version([]) == "0.0.0.1"
     assert release.next_version(["v0.0.0.1"]) == "0.0.0.2"
     assert release.next_version(["v0.0.0.1", "0.0.0.3", "unrelated"]) == "0.0.0.4"
+    assert release.next_version(["0.0.0.99"]) == "0.0.1.0"
+    assert release.next_version(["0.0.99.99"]) == "0.1.0.0"
 
 
 def test_known_versions_include_untagged_release_metadata(tmp_path, monkeypatch):
@@ -29,11 +31,13 @@ def test_known_versions_include_untagged_release_metadata(tmp_path, monkeypatch)
     release_dir = tmp_path / "releases"
     release_dir.mkdir()
     (release_dir / "0.0.0.4.md").write_text("release", encoding="utf-8")
-    monkeypatch.setattr(release, "git", lambda *_args: "v0.0.0.1")
+    monkeypatch.setattr(release, "git", lambda _root, *args: (
+        "v0.0.0.1" if args[:2] == ("tag", "--list") else "0.0.0.2"
+    ))
 
     versions = release.known_versions(tmp_path)
 
-    assert set(versions) == {"v0.0.0.1", "0.0.0.3", "0.0.0.4", "0.0.0.5"}
+    assert set(versions) == {"v0.0.0.1", "0.0.0.2", "0.0.0.3", "0.0.0.4", "0.0.0.5"}
     assert release.next_version(versions) == "0.0.0.6"
 
 

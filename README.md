@@ -10,7 +10,7 @@ On a clean Ubuntu Server 24.04 host, run:
 curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash
 ```
 
-Bootstrap validates the host, installs Docker and the detected NVIDIA/AMD runtime, downloads and verifies the immutable Vertep runtime, generates credentials and TLS material, starts the selected services, and waits until they are healthy.
+The command uses this same public `fylypovych/vertep` repository from start to finish. Bootstrap validates the host, installs Docker and the detected NVIDIA/AMD runtime, downloads the latest signed GitHub Release from this repository, verifies every runtime file, pulls digest-pinned images from this repository's public GHCR packages, generates credentials and TLS material, starts the selected services, and waits until they are healthy. No second repository or external release server is required.
 
 When installation finishes, open the printed `https://SERVER-IP:8443` address and complete the First Run Wizard. Further setup, backups, models, certificates, node enrollment and signed updates are managed through the Web UI without rerunning Bootstrap. Development and advanced source installations are documented under [Legacy/source installation](#legacysource-installation).
 
@@ -82,7 +82,7 @@ On an installed CORE node, open **Система → Безпечне оновл
 
 The Web API never receives a command, repository URL or branch. It can enqueue only `check` or `update`. A root-owned systemd path unit processes the request on the host and invokes the role-aware update executor, which creates backups, verifies the signed package, applies migrations and resumable backfills, activates the immutable release and runs health checks. The CORE container receives no Docker socket.
 
-Web updates are enabled by Bootstrap or the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. Releases are fetched only from `VERTEP_UPDATE_SERVER` (default `https://update.vertep.ai`) and their detached signature is verified with `UPDATE_PUBLIC_KEY` before a package is accepted. The updater enters maintenance mode, drains active work, creates application, job, configuration, migration, and PostgreSQL backups, then applies the package. Failed health checks trigger an automatic rollback; a durable update phase permits recovery after a power loss. The systemd timer checks for releases every six hours. GitHub credentials and repository access are never required on an installed node.
+Web updates are enabled by Bootstrap or the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. Releases are fetched from the public GitHub Releases feed of `fylypovych/vertep`; their embedded RSA signature and file digests are verified before a package is accepted. The updater enters maintenance mode, drains active work, creates application, job, configuration, migration, and PostgreSQL backups, then applies the package. Failed health checks trigger an automatic rollback; a durable update phase permits recovery after a power loss. The systemd timer checks for releases every six hours. Installed nodes need no GitHub credentials.
 
 After upgrading an older installation to a release that first contains the Web updater, run `sudo ./install.sh` once to install and enable `vertep-update.path`. If an update fails its health check, use `vertep rollback` from the server console; database backups and the last known Git revision are retained under the project directory.
 
@@ -129,7 +129,7 @@ python scripts/release.py
 
 The command fetches tags, selects one greater than the highest release number recorded in tags, `VERSION`, `CHANGELOG.md`, or `releases/`, stages the repository, scans staged files for common secrets, moves notes from `CHANGELOG.md` → `Unreleased` into the new version section, generates `releases/<version>.md`, runs compilation and all tests, creates a release commit and annotated tag, and atomically pushes both to `origin`.
 
-If `Unreleased` is empty, the description is generated automatically from commit subjects and changed project areas. Use `python scripts/release.py --show-next` to inspect the next number or `--no-push` to create the commit and tag locally. GitHub also provides **Actions → Create sequential release → Run workflow**, which executes the same process with serialized concurrency.
+If `Unreleased` is empty, the description is generated automatically from commit subjects and changed project areas. Use `python scripts/release.py --show-next` to inspect the next number or `--no-push` to create the commit and tag locally. GitHub also provides **Actions → Vertep Release → Run workflow**, which builds and publishes the signed runtime and its container images from this repository.
 
 ## Orchestration and artifacts
 

@@ -12,9 +12,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  prepare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,65 +26,151 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - name: Configure release identity
+      - name: Validate and determine release number
+        id: version
+        shell: bash
+        run: |
+          python -m compileall -q core adapters worker scripts installer tests
+          python -m pytest -q
+          version="$(python scripts/release.py --show-next)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-images:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - {name: core, file: Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: tts, file: docker/tts/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: publisher-worker, file: docker/publisher/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: backup-service, file: docker/backup/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: proxy, file: docker/proxy/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: postgres, file: docker/postgres/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: redis, file: docker/redis/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: ollama, file: docker/ollama/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: monitoring, file: docker/monitoring/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: log-store, file: docker/log-store/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: log-collector, file: docker/log-collector/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: grafana, file: docker/grafana/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: comfyui, file: docker/comfyui-nvidia/Dockerfile, platforms: "linux/amd64"}
+          - {name: comfyui-amd, file: docker/comfyui-amd/Dockerfile, platforms: "linux/amd64"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish ${{ matrix.name }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          build-args: VERTEP_VERSION=${{ needs.prepare.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:${{ needs.prepare.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:latest
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: Save immutable image metadata
+        shell: bash
+        run: |
+          mkdir image-metadata
+          jq -n \
+            --arg name '${{ matrix.name }}' \
+            --arg reference 'ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:${{ needs.prepare.outputs.version }}' \
+            --arg digest '${{ steps.build.outputs.digest }}' \
+            --arg platforms '${{ matrix.platforms }}' \
+            '{name:$name,reference:$reference,digest:$digest,platforms:($platforms|split(","))}' \
+            > "image-metadata/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.name }}
+          path: image-metadata/*.json
+          retention-days: 1
+
+  publish-release:
+    needs: [prepare, build-images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: ${{ runner.temp }}/image-metadata
+          merge-multiple: true
+      - name: Make GHCR packages publicly pullable
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for package in core tts publisher-worker backup-service proxy postgres redis ollama monitoring log-store log-collector grafana comfyui comfyui-amd; do
+            gh api --method PATCH "/user/packages/container/vertep-$package" -f visibility=public >/dev/null
+          done
+      - name: Create signed runtime release
+        shell: bash
+        env:
+          RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.RUNTIME_SIGNING_PRIVATE_KEY }}
+          EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           git config user.name "vertep-release[bot]"
           git config user.email "vertep-release[bot]@users.noreply.github.com"
-      - name: Determine version
-        id: version
+          python scripts/release.py --no-push --skip-tests
+          version="$(tr -d '\r\n' < VERSION)"
+          test "$version" = "$EXPECTED_VERSION"
+          python scripts/assemble-image-lock.py "${{ runner.temp }}/image-metadata" "${{ runner.temp }}/images.json"
+          printf '%s' "$RUNTIME_SIGNING_PRIVATE_KEY" > "${{ runner.temp }}/runtime-signing.pem"
+          chmod 600 "${{ runner.temp }}/runtime-signing.pem"
+          sequence="$(python -c 'p=list(map(int,open("VERSION").read().strip().split("."))); print(((p[0]*100+p[1])*100+p[2])*100+p[3])')"
+          python scripts/build-runtime-bundle.py \
+            --root . \
+            --output "${{ runner.temp }}/runtime" \
+            --version "$version" \
+            --sequence "$sequence" \
+            --image-lock "${{ runner.temp }}/images.json" \
+            --private-key "${{ runner.temp }}/runtime-signing.pem"
+          python scripts/runtime-contract.py validate \
+            "${{ runner.temp }}/runtime/manifest.json" \
+            --artifact-root "${{ runner.temp }}/runtime" \
+            --public-key installer/update-public.pem
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
+            -C "${{ runner.temp }}/runtime" .
+          cp "${{ runner.temp }}/runtime/manifest.json" "${{ runner.temp }}/manifest-$version.json"
+          cd "${{ runner.temp }}"
+          sha256sum "vertep-runtime-$version.tar.gz" "manifest-$version.json" > "SHA256SUMS-$version"
+      - name: Push numbered commit and tag
+        shell: bash
         run: |
-          python scripts/release.py --show-next > version.txt
-          echo "version=$(cat version.txt)" >> $GITHUB_OUTPUT
-      - name: Create release commit and tag
-        run: |
-          python scripts/release.py --no-push
-          git push origin HEAD:main
-          tag="v${{ steps.version.outputs.version }}"
-          git push origin "$tag"
-      - name: Build runtime bundle
-        run: python scripts/release-bundle.py --version ${{ steps.version.outputs.version }}
-      - name: Build container images
-        run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep:${{ steps.version.outputs.version }} -t ghcr.io/${{ github.repository_owner }}/vertep:latest .
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-ollama:${{ steps.version.outputs.version }} ./docker/ollama
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-redis:${{ steps.version.outputs.version }} ./docker/redis
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-postgres:${{ steps.version.outputs.version }} ./docker/postgres
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-comfyui-nvidia:${{ steps.version.outputs.version }} ./docker/comfyui-nvidia
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-comfyui-amd:${{ steps.version.outputs.version }} ./docker/comfyui-amd
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-tts:${{ steps.version.outputs.version }} ./docker/tts
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-publisher:${{ steps.version.outputs.version }} ./docker/publisher
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-backup:${{ steps.version.outputs.version }} ./docker/backup
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-grafana:${{ steps.version.outputs.version }} ./docker/grafana
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-monitoring:${{ steps.version.outputs.version }} ./docker/monitoring
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-log-store:${{ steps.version.outputs.version }} ./docker/log-store
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-log-collector:${{ steps.version.outputs.version }} ./docker/log-collector
-          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-proxy:${{ steps.version.outputs.version }} ./docker/proxy
-      - name: Push container images
-        if: secrets.GHCR_PAT != ''
-        run: |
-          echo ${{ secrets.GHCR_PAT }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
-          docker push ghcr.io/${{ github.repository_owner }}/vertep:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep:latest
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-ollama:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-redis:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-postgres:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-comfyui-nvidia:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-comfyui-amd:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-tts:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-publisher:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-backup:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-grafana:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-monitoring:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-log-store:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-log-collector:${{ steps.version.outputs.version }}
-          docker push ghcr.io/${{ github.repository_owner }}/vertep-proxy:${{ steps.version.outputs.version }}
-      - name: Create GitHub Release
-        run: |
-          tag="v${{ steps.version.outputs.version }}"
-          gh release create "$tag" \
-            --title "Vertep ${{ steps.version.outputs.version }}" \
-            --notes-file "releases/${{ steps.version.outputs.version }}.md" \
-            releases/manifest-${{ steps.version.outputs.version }}.json \
-            releases/vertep-runtime-${{ steps.version.outputs.version }}.tar.gz
+          version="$(tr -d '\r\n' < VERSION)"
+          git push --atomic origin HEAD:main "$version"
+      - name: Publish GitHub Release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          gh release create "$version" \
+            --title "Vertep $version" \
+            --notes-file "releases/$version.md" \
+            "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
+            "${{ runner.temp }}/manifest-$version.json" \
+            "${{ runner.temp }}/SHA256SUMS-$version"

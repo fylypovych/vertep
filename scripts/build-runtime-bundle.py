@@ -2,6 +2,7 @@
 """Build the signed, deterministic appliance payload consumed by bootstrap.sh."""
 
 import argparse
+import importlib.util
 import json
 import shutil
 import sys
@@ -11,8 +12,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.release_contract import sign_release_contract
-from scripts.generate_sbom import generate
-from scripts.runtime_contract import build_contract
+
+
+def _load_script(name: str):
+    path = Path(__file__).with_name(name)
+    spec = importlib.util.spec_from_file_location(name.removesuffix(".py").replace("-", "_"), path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load release helper: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+generate = _load_script("generate-sbom.py").generate
+build_contract = _load_script("runtime-contract.py").build_contract
 
 
 FILES = {

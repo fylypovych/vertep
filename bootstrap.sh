@@ -121,13 +121,15 @@ PY
   public_key_tmp=$(mktemp); canonical_tmp=$(mktemp); signature_tmp=$(mktemp)
   cat > "$public_key_tmp" <<'BOOTSTRAP_PUBLIC_KEY'
 -----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu6Tn67753+ax6mx8/cXP
-TfS/BZr/PFNlfSF7EIJpShfgsm9mad+9glwYxN9AHjW1UfTM8lqUfugdItP8zCze
-1ltAfQT0hAmkKInX4ONesvEKlfoW0Zu0tye9KXCvPIFVR7osiaysPQcon7KStZI4
-Kfhe37wOl88yfPFWIhC41DnF6tgGm+q32OPr15fHX4jQaC95OKz/cZW+e/XC5Vlz
-s7F/qWL7k2+07UG+dTjLK++ckSCzo1J+/18QZ6fyDgn7eu0DV8IAclufa/y72M9B
-vpvdIWixnMowK4GLvzGsmez9Zyt1ocCCjji7hsBbwwTPeZcf8evuk2uUgsZG8MYX
-ZwIDAQAB
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAuCVLrHiR6yVAY+tTf1oK
+ggwyZO5kuH7HMUxElIPdLlfuLkj5Q9WA1CdyjZLvIvKVxUMIPxYu7om7fnmRk+LF
+o7h926Wq00rSri0elYSqoZ7i8bXYrD7/fH9/TDRVQVKa8qJ7yDI7bYeg7MZGd1Bn
+U0u2/bUT16qaPOSwaCYgthFyMDMUPMLokxypuk0cvhr6g0LLXD2TUGALA1D/btu5
+TozgX3rjAw9Tan990XefC1LT3krScRBG7GMv4ALfq2N1AQbbyfnjkQf5a6TsF61E
+4nMjZmO0RcNky8n/tG7KqmWz+w2WpwHlriuTJPJxEU4unZb1pSmFQB8VGEaxACRe
+AKd7AJOENZ4XbwIjme/zfRhHAvVrxGBHp681he1kwO60+vHu3zIm2GCVvDI/JP7F
+jKMVLW+e77/nGMhEXv6K5X8S8eK8JO1m02oT7GlpH13IMLbsPZbcqPpJKNM68XmQ
+yuC2ZNHe3ikH7JOa+xbEBQe/Q3e0o1fxSBdI8JwnFL7BAgMBAAE=
 -----END PUBLIC KEY-----
 BOOTSTRAP_PUBLIC_KEY
   python3 - "$manifest_tmp" "$canonical_tmp" "$signature_tmp" "$bundle_root" <<'PY'
@@ -137,8 +139,7 @@ root = pathlib.Path(bundle).resolve()
 manifest = json.load(open(source, encoding="utf-8"))
 encoded = manifest.pop("signature", None)
 if not isinstance(encoded, str):
-    print("WARNING: runtime manifest has no signature; skipping signature verification")
-    sys.exit(0)
+    raise SystemExit("runtime manifest has no signature")
 open(canonical, "wb").write(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode())
 open(signature, "wb").write(base64.b64decode(encoded, validate=True))
 for name, metadata in manifest.get("files", {}).items():
@@ -164,13 +165,15 @@ else
   trap 'rm -f "$manifest_tmp" "$public_key_tmp" "$canonical_tmp" "$signature_tmp"' EXIT
   cat > "$public_key_tmp" <<'BOOTSTRAP_PUBLIC_KEY'
 -----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu6Tn67753+ax6mx8/cXP
-TfS/BZr/PFNlfSF7EIJpShfgsm9mad+9glwYxN9AHjW1UfTM8lqUfugdItP8zCze
-1ltAfQT0hAmkKInX4ONesvEKlfoW0Zu0tye9KXCvPIFVR7osiaysPQcon7KStZI4
-Kfhe37wOl88yfPFWIhC41DnF6tgGm+q32OPr15fHX4jQaC95OKz/cZW+e/XC5Vlz
-s7F/qWL7k2+07UG+dTjLK++ckSCzo1J+/18QZ6fyDgn7eu0DV8IAclufa/y72M9B
-vpvdIWixnMowK4GLvzGsmez9Zyt1ocCCjji7hsBbwwTPeZcf8evuk2uUgsZG8MYX
-ZwIDAQAB
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAuCVLrHiR6yVAY+tTf1oK
+ggwyZO5kuH7HMUxElIPdLlfuLkj5Q9WA1CdyjZLvIvKVxUMIPxYu7om7fnmRk+LF
+o7h926Wq00rSri0elYSqoZ7i8bXYrD7/fH9/TDRVQVKa8qJ7yDI7bYeg7MZGd1Bn
+U0u2/bUT16qaPOSwaCYgthFyMDMUPMLokxypuk0cvhr6g0LLXD2TUGALA1D/btu5
+TozgX3rjAw9Tan990XefC1LT3krScRBG7GMv4ALfq2N1AQbbyfnjkQf5a6TsF61E
+4nMjZmO0RcNky8n/tG7KqmWz+w2WpwHlriuTJPJxEU4unZb1pSmFQB8VGEaxACRe
+AKd7AJOENZ4XbwIjme/zfRhHAvVrxGBHp681he1kwO60+vHu3zIm2GCVvDI/JP7F
+jKMVLW+e77/nGMhEXv6K5X8S8eK8JO1m02oT7GlpH13IMLbsPZbcqPpJKNM68XmQ
+yuC2ZNHe3ikH7JOa+xbEBQe/Q3e0o1fxSBdI8JwnFL7BAgMBAAE=
 -----END PUBLIC KEY-----
 BOOTSTRAP_PUBLIC_KEY
   python3 - "$manifest_tmp" "$canonical_tmp" "$signature_tmp" <<'PY'
