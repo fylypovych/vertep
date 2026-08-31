@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- First Run Wizard no longer crashes after a successful setup API response: the missing Core connection controls are present, role rendering tolerates absent optional markup, and manual setup-code entry updates the URL instead of reloading the stale token forever.
+
 ## 0.0.0.39 - 2026-08-31
 
 - `/setup` now redirects to the actual First Run Wizard at `/setup.html` while preserving the one-time token query parameter, instead of returning the unconfigured-runtime placeholder.

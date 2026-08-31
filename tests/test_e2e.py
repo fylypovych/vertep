@@ -73,6 +73,10 @@ def test_setup_wizard_has_manifest_step():
     assert "Installation Manifest" in html
     assert "downloadManifest" in html
     assert "manifest.json" in html
+    for element_id in ("coreConnection", "coreUrl", "coreCertificate", "registrationToken"):
+        assert f'id="{element_id}"' in html
+    assert "location.replace(target)" in html
+    assert "if(setupCode){alert" in html
 
 
 def test_bootstrap_redirects_to_setup():
