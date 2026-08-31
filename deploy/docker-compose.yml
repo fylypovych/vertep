@@ -111,6 +111,7 @@ services:
     restart: "no"
   worker:
     image: ${VERTEP_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/worker:${VERTEP_VERSION}}
+    command: ["python", "-m", "worker.service"]
     env_file: .env
     environment:
       CORE_ADDRESS: "${CORE_URL:-http://core:8080}"
@@ -285,6 +286,7 @@ services:
     restart: unless-stopped
   update-agent:
     image: ${VERTEP_UPDATE_AGENT_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/update-agent:${VERTEP_VERSION}}
+    command: ["uvicorn", "services.update_agent_service:app", "--host", "0.0.0.0", "--port", "8097"]
     env_file: .env
     volumes:
       - ./config:/data/config
@@ -294,7 +296,7 @@ services:
     cap_drop: ["ALL"]
     tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
     healthcheck:
-      test: ["CMD-SHELL", "test -d /data/config"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8097/health"]
       interval: 30s
       timeout: 5s
       retries: 10
