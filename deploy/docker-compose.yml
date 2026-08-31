@@ -2,7 +2,7 @@ name: vertep
 services:
   proxy:
     image: ${VERTEP_PROXY_IMAGE:-nginx:1.27-alpine}
-    entrypoint: ["/bin/sh", "-c", "envsubst '$$WEB_DOMAIN' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && exec /bin/sh -c 'last=$$(sha256sum /etc/vertep/revocation/node-ca.crl /etc/vertep/tls/vertep.crt | sha256sum | cut -d' ' -f1); (while sleep 5; do current=$$(sha256sum /etc/vertep/revocation/node-ca.crl /etc/vertep/tls/vertep.crt | sha256sum | cut -d' ' -f1); if [ \"$$current\" != \"$$last\" ]; then nginx -s reload; last=$$current; fi; done) & exec nginx -g 'daemon off;' '"]
+    entrypoint: ["/usr/local/bin/vertep-proxy-entrypoint"]
     ports: ["8443:8443"]
     volumes:
       - ./tls:/etc/vertep/tls:ro

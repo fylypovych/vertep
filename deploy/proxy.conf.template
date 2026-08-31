@@ -1,6 +1,6 @@
 server {
   listen 8443 ssl;
-  server_name ${WEB_DOMAIN:-_};
+  server_name ${WEB_DOMAIN};
   ssl_certificate /etc/vertep/tls/vertep.crt;
   ssl_certificate_key /etc/vertep/tls/vertep.key;
   ssl_client_certificate /etc/vertep/tls/node-ca.crt;

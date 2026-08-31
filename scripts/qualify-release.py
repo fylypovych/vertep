@@ -34,7 +34,7 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
                 "services/license_service.py", "services/dispatcher_service.py",
                 "services/scheduler_service.py", "services/certificate_service.py",
                 "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
-                "docker/proxy/Dockerfile", "docker/monitoring/Dockerfile",
+                "docker/proxy/Dockerfile", "docker/proxy/entrypoint.sh", "docker/monitoring/Dockerfile",
                 "docker/log-store/Dockerfile", "docker/log-collector/Dockerfile",
                 "docker/grafana/Dockerfile",
                 "monitoring/prometheus.yml", "monitoring/alerts.yml", "monitoring/loki.yml",

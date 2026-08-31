@@ -29,6 +29,7 @@ def test_role_isolation_failure_is_reported(tmp_path):
                  "installer/vertep-deployment.path",
                  "services/tts_service.py", "services/publisher_service.py", "services/backup_service.py",
                  "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
+                 "docker/proxy/entrypoint.sh",
                  "monitoring/prometheus.yml", "monitoring/alerts.yml", "monitoring/loki.yml",
                  "monitoring/promtail.yml", "monitoring/grafana/provisioning/datasources/vertep.yml",
                  "monitoring/grafana/provisioning/dashboards/vertep.yml",

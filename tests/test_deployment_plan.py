@@ -39,7 +39,16 @@ def test_update_agent_has_no_docker_socket():
     assert "no-new-privileges:true" in compose
     proxy = Path("deploy/proxy.conf").read_text(encoding="utf-8")
     assert "ssl_crl /etc/vertep/revocation/node-ca.crl;" in proxy
-    assert "nginx -s reload" in compose
+
+
+def test_proxy_uses_a_standalone_entrypoint():
+    compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
+    entrypoint = Path("docker/proxy/entrypoint.sh").read_text(encoding="utf-8")
+    dockerfile = Path("docker/proxy/Dockerfile").read_text(encoding="utf-8")
+    assert 'entrypoint: ["/usr/local/bin/vertep-proxy-entrypoint"]' in compose
+    assert "unexpected end of file" not in entrypoint
+    assert "COPY docker/proxy/entrypoint.sh /usr/local/bin/vertep-proxy-entrypoint" in dockerfile
+    assert "nginx -s reload" in entrypoint
 
 
 def test_appliance_images_can_be_pinned_by_signed_contract():
