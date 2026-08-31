@@ -135,10 +135,10 @@ Use `sudo ./install.sh --dry-run` for a read-only preflight, `python scripts/gen
 On a clean Ubuntu Server 24.04 host, the supported production installation is a single bootstrap command:
 
 ```bash
-curl -fsSL https://download.vertep.ai/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash
 ```
 
-Bootstrap validates hardware and connectivity, installs the container runtime, downloads checksum-verified immutable runtime metadata from Vertep, generates all local credentials and TLS material, starts the complete stack, and waits for its health endpoint. Open the printed `https://SERVER-IP:8443` address to finish the seven-step First Run Wizard. After that, routine administration and signed updates are performed from the Web UI; bootstrap is not used again. The source-oriented `install.sh` remains available for development and advanced node deployments.
+Bootstrap validates hardware and connectivity, installs the container runtime, downloads the immutable runtime from GitHub Releases, generates all local credentials and TLS material, starts the complete stack, and waits for its health endpoint. Open the printed `https://SERVER-IP:8443` address to finish the seven-step First Run Wizard. After that, routine administration and signed updates are performed from the Web UI; bootstrap is not used again. The source-oriented `install.sh` remains available for development and advanced node deployments.
 
 For NVIDIA hosts Bootstrap installs the recommended driver and NVIDIA Container Toolkit, registers the Docker runtime and verifies `nvidia-smi`. For AMD hosts it installs ROCm/HIP, verifies `/dev/kfd`, `/dev/dri` and `rocminfo`, and applies the signed AMD Compose overlay. GPU-specific overlays remain active during updates, rollback, watchdog restarts and startup recovery.
 
