@@ -2,6 +2,18 @@
 
 Vertep is a modular content-factory orchestrator for Ubuntu Server 24.04. CORE owns jobs and dispatches GPU work; WORKER runs replaceable ComfyUI workflows and returns artifacts; CORE assembles a valid MP4 with FFmpeg.
 
+## Production installation
+
+On a clean Ubuntu Server 24.04 host, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash
+```
+
+Bootstrap validates the host, installs Docker and the detected NVIDIA/AMD runtime, downloads and verifies the immutable Vertep runtime, generates credentials and TLS material, starts the selected services, and waits until they are healthy.
+
+When installation finishes, open the printed `https://SERVER-IP:8443` address and complete the First Run Wizard. Further setup, backups, models, certificates, node enrollment and signed updates are managed through the Web UI without rerunning Bootstrap. Development and advanced source installations are documented under [Legacy/source installation](#legacysource-installation).
+
 ## Demo
 
 ```bash
@@ -16,7 +28,7 @@ For a local CORE-only developer run, set `LOCAL_WORKER_FALLBACK=true`. This fall
 
 ## Legacy/source installation
 
-For development or advanced source deployments, run `sudo ./install.sh`, then choose `CORE`, `GPU WORKER`, or both. Production appliances should use the signed bootstrap flow described under [Appliance installation](#appliance-installation). The source installer:
+For development or advanced source deployments, run `sudo ./install.sh`, then choose `CORE`, `GPU WORKER`, or both. Production appliances should use the signed [Production installation](#production-installation) flow. The source installer:
 
 - validates Ubuntu 24.04;
 - installs Docker, Compose, Git, Python, FFmpeg and firewall rules;
@@ -130,15 +142,7 @@ Set `scheduled_for` to an ISO-8601 timestamp in `POST /api/jobs` to defer proces
 The CORE also provides priority/leased tasks with watchdog recovery, structured rotating logs, Character and Brand APIs, multi-scene FFmpeg assembly, Telegram commands, per-worker tokens, administrative sessions and mock-safe publisher contracts. Live social-network upload methods still require platform-specific API credentials and implementations.
 
 Use `sudo ./install.sh --dry-run` for a read-only preflight, `python scripts/generate-env.py` to create unique local secrets, and `python scripts/upgrade-config.py` after upgrades to add new configuration keys without overwriting existing values. Current release metadata is stored in `VERSION` and `CHANGELOG.md`.
-## Appliance installation
-
-On a clean Ubuntu Server 24.04 host, the supported production installation is a single bootstrap command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash
-```
-
-Bootstrap validates hardware and connectivity, installs the container runtime, downloads the immutable runtime from GitHub Releases, generates all local credentials and TLS material, starts the complete stack, and waits for its health endpoint. Open the printed `https://SERVER-IP:8443` address to finish the seven-step First Run Wizard. After that, routine administration and signed updates are performed from the Web UI; bootstrap is not used again. The source-oriented `install.sh` remains available for development and advanced node deployments.
+## Appliance runtime details
 
 For NVIDIA hosts Bootstrap installs the recommended driver and NVIDIA Container Toolkit, registers the Docker runtime and verifies `nvidia-smi`. For AMD hosts it installs ROCm/HIP, verifies `/dev/kfd`, `/dev/dri` and `rocminfo`, and applies the signed AMD Compose overlay. GPU-specific overlays remain active during updates, rollback, watchdog restarts and startup recovery.
 
