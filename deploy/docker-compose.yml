@@ -3,6 +3,7 @@ services:
   proxy:
     image: ${VERTEP_PROXY_IMAGE:-nginx:1.27-alpine}
     entrypoint: ["/usr/local/bin/vertep-proxy-entrypoint"]
+    environment: {WEB_DOMAIN: "${WEB_DOMAIN}"}
     ports: ["8443:8443"]
     volumes:
       - ./tls:/etc/vertep/tls:ro

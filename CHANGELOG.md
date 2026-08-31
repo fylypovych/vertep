@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Compose now passes the configured `WEB_DOMAIN` into the proxy container, allowing the standalone entrypoint to render a valid nginx `server_name`.
+- Bootstrap reports container state every 30 seconds while waiting for runtime health instead of appearing idle until the timeout.
+
 ## 0.0.0.33 - 2026-08-31
 
 - Proxy startup logic moved from a quote-sensitive inline Compose command to a standalone image entrypoint; fresh and resumed installations no longer enter a restart loop with `unexpected end of file`.

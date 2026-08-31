@@ -542,10 +542,16 @@ migrate_id=$("${compose[@]}" ps -aq migrate)
   || fail "database migration did not complete successfully"
 deadline=$((SECONDS+600))
 service_count=$((${#role_services[@]}-1))
+next_health_report=$((SECONDS+30))
+progress "Waiting for runtime health checks"
 until [[ $("${compose[@]}" ps --services --filter status=running | wc -l) -eq $service_count ]] \
   && ! "${compose[@]}" ps | grep -Eq '\(unhealthy\)|\(health: starting\)' \
   && curl -kfsS https://127.0.0.1:8443/api/health >/dev/null; do
   (( SECONDS < deadline )) || { "${compose[@]}" ps; fail "runtime health check timed out"; }
+  if (( SECONDS >= next_health_report )); then
+    "${compose[@]}" ps
+    next_health_report=$((SECONDS+30))
+  fi
   sleep 5
 done
 inventory_rows=$(mktemp)
