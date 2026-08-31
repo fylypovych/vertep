@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.37 - 2026-08-31
+
 - Proxy healthcheck now targets IPv4 loopback explicitly, avoiding Alpine resolving `localhost` to an unbound IPv6 address and reporting a healthy nginx process as `unhealthy`.
 
 ## 0.0.0.35 - 2026-08-31
