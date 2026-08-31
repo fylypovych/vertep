@@ -63,7 +63,7 @@ services:
     image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
+      DATABASE_URL: "host=postgres port=5432 dbname=vertep user=vertep password=${POSTGRES_PASSWORD}"
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       JOB_ROOT: /data/storage/jobs
       LOG_ROOT: /data/logs
@@ -105,7 +105,7 @@ services:
     image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
     command: ["python", "/app/scripts/migrate.py"]
     environment:
-      DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
+      DATABASE_URL: "host=postgres port=5432 dbname=vertep user=vertep password=${POSTGRES_PASSWORD}"
     depends_on:
       postgres: {condition: service_healthy}
     restart: "no"

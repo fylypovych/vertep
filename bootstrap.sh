@@ -307,7 +307,7 @@ if printf '%s\n' "${role_services[@]}" | grep -qx comfyui; then
     || fail "ComfyUI image $comfyui_image_service has no signed image for $platform"
 fi
 
-secret(){ openssl rand -base64 "$1" | tr -d '\n'; }
+secret(){ openssl rand -hex "$1"; }
 postgres_password=$(secret 36); redis_password=$(secret 36); jwt_secret=$(secret 48)
 worker_secret=$(secret 48); encryption_key=$(secret 32); internal_api_key=$(secret 48); session_secret=$(secret 48)
 secret_store_passphrase=$(secret 48); grafana_password=$(secret 36)

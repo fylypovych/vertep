@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Виправлено перший запуск PostgreSQL: випадкові паролі тепер URL-безпечні, а Core і `migrate` використовують libpq DSN, тому символи Base64 більше не пошкоджують hostname або порт у `DATABASE_URL`.
 ## 0.0.0.23 - 2026-08-31
 
 - Публічне розгортання об’єднано в одному репозиторії `fylypovych/vertep`: Bootstrap отримує підписаний runtime із GitHub Releases, а digest-pinned образи — з GHCR; додано автоматичне підписування, публікацію та перевірку bundle.
