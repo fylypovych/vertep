@@ -15,14 +15,77 @@ def _artifact(filename: str, kind: str, data: bytes) -> dict:
 
 
 def execute_text(task: dict) -> list[dict]:
-    response = httpx.post(f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/generate",
-                          json={"model": os.getenv("OLLAMA_MODEL", "llama3.2"),
-                                "prompt": task["topic"], "stream": False}, timeout=120)
-    response.raise_for_status()
-    text = response.json().get("response")
+    endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/generate"
+    model = os.getenv("OLLAMA_MODEL", "llama3.2")
+    requested_model = task.get("model") or model
+    payload = {"model": requested_model, "prompt": task["topic"], "stream": False}
+    stream = task.get("stream", False)
+    if stream:
+        payload["stream"] = True
+    timeout = task.get("timeout", 120)
+    if stream:
+        with httpx.stream("POST", endpoint, json=payload, timeout=timeout) as response:
+            response.raise_for_status()
+            text_parts = []
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                if "response" in data:
+                    text_parts.append(data["response"])
+                if data.get("done"):
+                    break
+            text = "".join(text_parts)
+    else:
+        response = httpx.post(endpoint, json=payload, timeout=timeout)
+        response.raise_for_status()
+        text = response.json().get("response", "")
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("Ollama returned no generated text")
     return [_artifact("response.txt", "text", text.encode("utf-8"))]
+
+
+def list_text_models() -> list[dict]:
+    endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/tags"
+    response = httpx.get(endpoint, timeout=30)
+    response.raise_for_status()
+    return response.json().get("models", [])
+
+
+def pull_text_model(model: str) -> dict:
+    endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/pull"
+    response = httpx.post(endpoint, json={"name": model, "stream": False}, timeout=600)
+    response.raise_for_status()
+    return response.json()
+
+
+def delete_text_model(model: str) -> None:
+    endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/delete"
+    response = httpx.delete(endpoint, json={"name": model}, timeout=30)
+    response.raise_for_status()
+
+
+def list_voices() -> list[dict]:
+    endpoint = os.getenv("TTS_URL", "http://tts:8090").rstrip("/") + "/voices"
+    response = httpx.get(endpoint, timeout=30)
+    response.raise_for_status()
+    return response.json().get("voices", [])
+
+
+def synthesize_voice(text: str, voice: str = "default", speed: int = 150) -> bytes:
+    endpoint = os.getenv("TTS_URL", "http://tts:8090").rstrip("/") + "/synthesize"
+    response = httpx.post(endpoint, json={"text": text, "voice": voice, "speed": speed}, timeout=180)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "")
+    if "json" in content_type:
+        encoded = response.json().get("audio_base64")
+        if not encoded:
+            raise RuntimeError("TTS runtime returned no audio")
+        return base64.b64decode(encoded, validate=True)
+    return response.content
 
 
 def execute_voice(task: dict) -> list[dict]:

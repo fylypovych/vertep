@@ -54,6 +54,7 @@ from .node_registry import (create_node_csr, create_registration_token, enroll_n
 from .version import application_version
 from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
                              rollout_status, rollback_ready_nodes, start_rollout)
+from worker.role_executor import delete_text_model, list_text_models, list_voices, pull_text_model, synthesize_voice
 from adapters.telegram import TelegramAdapter
 from adapters.publisher import PUBLISHERS
 
@@ -1033,6 +1034,7 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
     _recover_stale_workers()
     now = datetime.now(timezone.utc)
     timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "45"))
+    registry = {node["node_id"]: node for node in registered_nodes()}
     result = []
     for worker in store.load_workers(role=role, status=status, capability=capability):
         item = dict(worker)
@@ -1042,6 +1044,19 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
             last_seen = None
         if last_seen is None or (now - last_seen).total_seconds() > timeout:
             item["status"] = "OFFLINE"
+        node_id = item.get("node_id") or item.get("node_name")
+        record = registry.get(node_id, {})
+        item["certificate_serial"] = record.get("certificate_serial")
+        item["certificate_expires_at"] = record.get("certificate_expires_at")
+        item["credential_generation"] = record.get("credential_generation")
+        item["registered_at"] = record.get("registered_at")
+        item["revoked_at"] = record.get("revoked_at")
+        item["update_state"] = {
+            "desired_state": item.pop("desired_state", None),
+            "update_target_version": item.pop("update_target_version", None),
+            "rollback_target_version": item.pop("rollback_target_version", None),
+            "self_test_requested_at": item.pop("self_test_requested_at", None),
+        }
         result.append(item)
     return result
 
@@ -1406,6 +1421,14 @@ def control_node(node_id: str, command: NodeAction):
             raise HTTPException(409, "Busy worker cannot start a self-test")
         worker["self_test_requested_at"] = timestamp
         worker["status"] = "SELF_TESTING"
+    elif command.action == "rotate":
+        from .node_registry import renew_node
+        try:
+            renew_node(node_id, "")
+        except KeyError as error:
+            raise HTTPException(404, "Node is missing or revoked") from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
     worker["state_reason"] = command.reason
     worker["state_changed_at"] = timestamp
     store.save_worker(worker)
@@ -1429,6 +1452,56 @@ async def renew_node_credentials(node_id: str, request: Request):
         raise HTTPException(404, "Node is missing or revoked") from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@app.get("/api/models/text")
+def list_text_models_endpoint():
+    try:
+        return {"models": list_text_models()}
+    except httpx.HTTPError as error:
+        raise HTTPException(502, f"Ollama is unreachable: {error}") from error
+
+
+@app.post("/api/models/text/pull")
+def pull_text_model_endpoint(payload: dict):
+    model = payload.get("model")
+    if not model or not isinstance(model, str):
+        raise HTTPException(422, "model is required")
+    try:
+        return pull_text_model(model)
+    except httpx.HTTPError as error:
+        raise HTTPException(502, f"Ollama pull failed: {error}") from error
+
+
+@app.delete("/api/models/text/{model:path}")
+def delete_text_model_endpoint(model: str):
+    try:
+        delete_text_model(model)
+        return {"deleted": model}
+    except httpx.HTTPError as error:
+        raise HTTPException(502, f"Ollama delete failed: {error}") from error
+
+
+@app.get("/api/models/voices")
+def list_voices_endpoint():
+    try:
+        return {"voices": list_voices()}
+    except httpx.HTTPError as error:
+        raise HTTPException(502, f"TTS runtime is unreachable: {error}") from error
+
+
+@app.post("/api/models/voices/synthesize")
+def synthesize_voice_endpoint(payload: dict):
+    text = payload.get("text")
+    if not text or not isinstance(text, str):
+        raise HTTPException(422, "text is required")
+    voice = payload.get("voice", "default")
+    speed = int(payload.get("speed", 150))
+    try:
+        audio = synthesize_voice(text, voice, speed)
+        return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
+    except httpx.HTTPError as error:
+        raise HTTPException(502, f"TTS synthesis failed: {error}") from error
 
 @app.get("/api/system/update")
 def web_update_status():
