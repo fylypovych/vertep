@@ -371,20 +371,21 @@ async def first_run_complete(request: Request):
         backend_model = str(payload.get("backend_model") or "").strip() or None
         backend_key = str(payload.get("backend_api_key") or "")
         await _validate_ai_backend(backend, backend_url, backend_model, backend_key)
+        registration_token = create_registration_token("gpu", 900) if role == "core" else None
+        if backend_key:
+            set_integration_secret("external_ai_api_key", backend_key)
         completed = complete_setup(str(payload.get("installation_name", "")), str(payload.get("username", "")),
                                    str(payload.get("password", "")), str(payload.get("password_confirmation", "")),
                                    backend, backend_url,
                                    role, core_url or None, credentials,
                                    str(payload.get("web_domain") or "").strip() or None, backend_model)
-        if backend_key:
-            set_integration_secret("external_ai_api_key", backend_key)
         if role == "core":
             completed["core_url"] = os.getenv("PUBLIC_URL") or os.getenv("WEB_DOMAIN") or str(request.base_url).rstrip("/")
             completed["core_certificate"] = (Path(os.getenv("CORE_CERTIFICATE_PATH", "/data/config/pki/ca.crt"))
                                                .read_text(encoding="utf-8")
                                                if Path(os.getenv("CORE_CERTIFICATE_PATH", "/data/config/pki/ca.crt")).is_file()
                                                else None)
-            completed["registration_token"] = create_registration_token("gpu", 900)
+            completed["registration_token"] = registration_token
         return completed
     except FileExistsError as error:
         raise HTTPException(409, str(error)) from error

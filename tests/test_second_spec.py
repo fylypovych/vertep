@@ -81,6 +81,38 @@ def test_managed_ollama_validation_is_deferred_until_deployment(monkeypatch):
     asyncio.run(core_app._validate_ai_backend("ollama", None, "llama3.2", ""))
 
 
+def test_first_run_creates_registration_token_before_committing_setup(monkeypatch):
+    events = []
+
+    class Request:
+        base_url = "https://vertep.example/"
+
+        async def json(self):
+            return {"node_role": "core", "installation_name": "Production", "username": "admin",
+                    "password": "a-secure-password", "password_confirmation": "a-secure-password",
+                    "ai_backend": "skip"}
+
+    async def validate(*_args):
+        events.append("validate")
+
+    def create_token(*_args):
+        events.append("token")
+        return {"token": "one-time"}
+
+    def complete(*_args):
+        events.append("complete")
+        return {"configured": True}
+
+    monkeypatch.setattr(core_app, "_validate_ai_backend", validate)
+    monkeypatch.setattr(core_app, "create_registration_token", create_token)
+    monkeypatch.setattr(core_app, "complete_setup", complete)
+
+    result = asyncio.run(core_app.first_run_complete(Request()))
+
+    assert events == ["validate", "token", "complete"]
+    assert result["registration_token"] == {"token": "one-time"}
+
+
 def test_zero_shell_routes_and_ui_are_present():
     paths = {route.path for route in core_app.app.routes}
     assert {"/api/system/backups", "/api/system/backups/{snapshot_id}/restore",

@@ -1,0 +1,2 @@
+ALTER TABLE node_registration_tokens
+    ADD COLUMN IF NOT EXISTS push_token BOOLEAN NOT NULL DEFAULT FALSE;

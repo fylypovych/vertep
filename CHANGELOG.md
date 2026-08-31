@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a forward-only database migration for the node registration token `push_token` flag, fixing the First Run completion error on both existing and fresh installations.
+- Core registration tokens and integration secrets are now prepared before First Run is irreversibly marked complete, preventing a post-commit failure from stranding the wizard in a partially completed state.
+
 ## 0.0.0.43 - 2026-08-31
 
 - First Run now defers validation and model installation for the appliance-managed Ollama backend until role deployment has started Ollama; Core and Text roles wait for the service and then pull the selected model.

@@ -4,6 +4,8 @@ import sys
 import os
 import stat
 import time
+from pathlib import Path
+
 import httpx
 
 from fastapi.testclient import TestClient
@@ -160,6 +162,13 @@ def test_update_applies_migrations_before_core_rebuild():
     core_rebuild = script.index('up -d core redis postgres')
     assert script.index("pg_isready") < migration < core_rebuild
     assert "systemctl enable --now vertep-update.path" in script
+
+
+def test_node_registration_push_token_has_forward_migration():
+    root = Path(__file__).parents[1]
+    migration = (root / "db" / "009_node_registration_push_token.sql").read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS push_token" in migration
+    assert "BOOLEAN NOT NULL DEFAULT FALSE" in migration
 
 
 def test_web_ui_is_utf8_and_has_orchestration_sections():
