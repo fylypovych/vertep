@@ -47,6 +47,8 @@ def test_proxy_uses_a_standalone_entrypoint():
     dockerfile = Path("docker/proxy/Dockerfile").read_text(encoding="utf-8")
     assert 'entrypoint: ["/usr/local/bin/vertep-proxy-entrypoint"]' in compose
     assert 'environment: {WEB_DOMAIN: "${WEB_DOMAIN}"}' in compose
+    assert "https://127.0.0.1:8443/api/health" in compose
+    assert "https://localhost:8443/api/health" not in compose
     assert "unexpected end of file" not in entrypoint
     assert "COPY docker/proxy/entrypoint.sh /usr/local/bin/vertep-proxy-entrypoint" in dockerfile
     assert "nginx -s reload" in entrypoint

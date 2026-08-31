@@ -11,7 +11,7 @@ services:
     depends_on:
       core: {condition: service_healthy}
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://localhost:8443/api/health >/dev/null"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8443/api/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 30
