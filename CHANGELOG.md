@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.41 - 2026-08-31
+
 - First Run Wizard no longer crashes after a successful setup API response: the missing Core connection controls are present, role rendering tolerates absent optional markup, and manual setup-code entry updates the URL instead of reloading the stale token forever.
 
 ## 0.0.0.39 - 2026-08-31
