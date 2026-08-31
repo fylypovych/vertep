@@ -189,7 +189,8 @@ def _authenticate_user(user: str, password: str) -> str | None:
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        setup_route = request.url.path.startswith(("/api/setup", "/setup.html", "/api/health"))
+        setup_route = (request.url.path == "/setup" or
+                       request.url.path.startswith(("/api/setup", "/setup.html", "/api/health")))
         if not is_configured() and not setup_route:
             if request.url.path == "/":
                 return Response(status_code=307, headers={"Location": "/setup.html"})
@@ -302,6 +303,12 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(AdminAuthMiddleware)
+
+@app.get("/setup", include_in_schema=False)
+def setup_page(request: Request):
+    query = f"?{request.url.query}" if request.url.query else ""
+    return Response(status_code=307, headers={"Location": f"/setup.html{query}"})
+
 
 @app.get("/api/setup")
 def first_run_status():

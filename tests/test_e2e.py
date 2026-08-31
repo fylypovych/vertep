@@ -81,6 +81,20 @@ def test_bootstrap_redirects_to_setup():
     assert "xdg-open" in script or "open" in script
 
 
+def test_setup_alias_preserves_token(monkeypatch):
+    from core import app as core_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(core_app, "is_configured", lambda: False)
+    client = TestClient(core_app.app)
+    response = client.get("/setup?token=one-time-code", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/setup.html?token=one-time-code"
+    page = client.get(response.headers["location"])
+    assert page.status_code == 200
+    assert '<div class="brand">VERTEP</div>' in page.text
+
+
 def test_worker_update_processor_exists():
     assert Path("scripts/worker_update.py").is_file()
     content = Path("scripts/worker_update.py").read_text(encoding="utf-8")

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/setup` now redirects to the actual First Run Wizard at `/setup.html` while preserving the one-time token query parameter, instead of returning the unconfigured-runtime placeholder.
+
 ## 0.0.0.37 - 2026-08-31
 
 - Proxy healthcheck now targets IPv4 loopback explicitly, avoiding Alpine resolving `localhost` to an unbound IPv6 address and reporting a healthy nginx process as `unhealthy`.
