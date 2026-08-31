@@ -14,22 +14,37 @@ if [[ -f /etc/vertep/node.conf ]]; then
   source /etc/vertep/node.conf
   set +a
 fi
-role=${ROLE:-unknown}
-core_url=${VERTEP_CORE_URL:-${CORE_ADDRESS:-http://localhost:8080}}
+role=${ROLE:-${NODE_ROLE:-unknown}}
+core_url=${VERTEP_CORE_URL:-${CORE_ADDRESS:-https://127.0.0.1:8443}}
 [[ "$core_url" == http://* || "$core_url" == https://* ]] || core_url="http://$core_url"
+core_tls=()
+[[ "$core_url" == "https://127.0.0.1:8443" || "$core_url" == "https://localhost:8443" ]] \
+  && core_tls=(--insecure)
+sync_host_runtime(){
+  local release_root=$1
+  install -d -m 0750 "$ROOT/scripts" "$ROOT/core"
+  for executor in update-agent.py update-runtime-env.py vertep safe-extract.py \
+                  release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py; do
+    [[ -f "$release_root/scripts/$executor" ]] || continue
+    install -m 0750 "$release_root/scripts/$executor" "$ROOT/scripts/$executor"
+  done
+  cp -a "$release_root/core"/. "$ROOT/core"/
+  install -m 0640 "$release_root/VERSION" "$ROOT/VERSION"
+  ln -sfn "$ROOT/scripts/vertep" /usr/local/bin/vertep
+}
 case "${1:-status}" in
   status)
     if [[ "$role" == "worker" ]]; then
-      payload=$(curl -fsS --connect-timeout 3 -H "X-Vertep-Token: ${NODE_API_TOKEN:-}" "$core_url/api/node/status/${NODE_NAME:-unknown}" 2>/dev/null || printf '{}')
+      payload=$(curl -fsS "${core_tls[@]}" --connect-timeout 3 -H "X-Vertep-Token: ${NODE_API_TOKEN:-}" "$core_url/api/node/status/${NODE_NAME:-unknown}" 2>/dev/null || printf '{}')
     else
-      payload=$(curl -fsS --connect-timeout 3 -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/status" 2>/dev/null || printf '{}')
+      payload=$(curl -fsS "${core_tls[@]}" --connect-timeout 3 -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/status" 2>/dev/null || printf '{}')
     fi
     printf '%s' "$payload" | python3 "$ROOT/scripts/status.py"
     ;;
   update)
     auth=()
     [[ -n "${ADMIN_PASSWORD:-}" ]] && auth=(-u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD}")
-    curl -fsS "${auth[@]}" -X POST "$core_url/api/system/update/run"
+    curl -fsS "${core_tls[@]}" "${auth[@]}" -X POST "$core_url/api/system/update/run"
     printf '\nUpdate request accepted; follow progress with vertep status.\n'
     ;;
   apply-update)
@@ -41,7 +56,8 @@ case "${1:-status}" in
     backup="$ROOT/backups/update-$stamp"
     mkdir -p "$backup"
     printf '%s\n' "$target_version" > "$backup/target-version"
-    tar --exclude=.git --exclude=backups --exclude=runtime --exclude='*.pyc' \
+    tar --exclude=.git --exclude=backups --exclude=runtime --exclude=releases \
+      --exclude=current --exclude='*.pyc' \
       -czf "$backup/application.tar.gz" -C "$ROOT" .
     for item in .env config /etc/vertep/node.conf; do
       [[ -e "$ROOT/$item" ]] && cp -a "$ROOT/$item" "$backup/" || true
@@ -86,6 +102,12 @@ case "${1:-status}" in
     python3 "$ROOT/scripts/release-layout.py" prepare "$ROOT" "$payload::$target_version" >/dev/null
     python3 "$ROOT/scripts/release-layout.py" activate "$ROOT" "$target_version"
     release_root="$ROOT/current"
+    python3 "$release_root/scripts/update-runtime-env.py" \
+      "$ROOT/.env" "$release_root/manifest.json" "$target_version"
+    set -a
+    # shellcheck disable=SC1091
+    source "$ROOT/.env"
+    set +a
     # Compose interpolation must use the persistent environment, while the
     # signed compose definition and application files come from the release.
     compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
@@ -124,22 +146,27 @@ case "${1:-status}" in
       core-worker) "${compose[@]}" up -d ;;
       *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
     esac
+    sync_host_runtime "$release_root"
     if [[ "$role" == "core" || "$role" == "core-worker" ]] && command -v systemctl >/dev/null 2>&1; then
-      sed "s|@VERTEP_ROOT@|$ROOT|g" "$ROOT/installer/vertep-update.service" > /etc/systemd/system/vertep-update.service
-      sed "s|@VERTEP_ROOT@|$ROOT|g" "$ROOT/installer/vertep-update.path" > /etc/systemd/system/vertep-update.path
-      sed "s|@VERTEP_ROOT@|$ROOT|g" "$ROOT/installer/vertep-update-check.service" > /etc/systemd/system/vertep-update-check.service
-      cp "$ROOT/installer/vertep-update.timer" /etc/systemd/system/vertep-update.timer
+      for unit in vertep-update.service vertep-update.path vertep-update-check.service \
+                  vertep-deployment.service vertep-deployment.path \
+                  vertep-watchdog.service vertep-startup-recovery.service; do
+        sed "s|@VERTEP_ROOT@|$ROOT|g" "$release_root/$unit" > "/etc/systemd/system/$unit"
+      done
+      for unit in vertep-update.timer vertep-watchdog.timer; do
+        cp "$release_root/$unit" "/etc/systemd/system/$unit"
+      done
       systemctl daemon-reload
-      systemctl enable --now vertep-update.path
-      systemctl enable --now vertep-update.timer
+      systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
+      systemctl enable vertep-startup-recovery.service
     fi
-    for attempt in {1..15}; do
+    for attempt in {1..120}; do
       if [[ "$role" == "worker" ]]; then
         "${compose[@]}" ps --status running --services | grep -qx worker && exit 0
-      elif curl -fsS -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health"; then
+      elif curl -fsS "${core_tls[@]}" -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health"; then
         exit 0
       fi
-      sleep 2
+      sleep 5
     done
     echo "Update health check failed; the update agent will rollback automatically." >&2
     exit 1
@@ -152,6 +179,12 @@ case "${1:-status}" in
     (cd "$backup" && sha256sum -c SHA256SUMS)
     python3 "$ROOT/scripts/release-layout.py" rollback "$ROOT"
     release_root="$ROOT/current"
+    [[ ! -f "$backup/.env" ]] || cp -a "$backup/.env" "$ROOT/.env"
+    set -a
+    # shellcheck disable=SC1091
+    source "$ROOT/.env"
+    set +a
+    sync_host_runtime "$release_root"
     compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
     [[ "${GPU_VENDOR:-none}" == amd && -f "$release_root/docker-compose.amd.yml" ]] \
       && compose+=(-f "$release_root/docker-compose.amd.yml")

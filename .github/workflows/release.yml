@@ -146,8 +146,23 @@ jobs:
             -czf "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
             -C "${{ runner.temp }}/runtime" .
           cp "${{ runner.temp }}/runtime/manifest.json" "${{ runner.temp }}/manifest-$version.json"
+          python scripts/build-update-manifest.py \
+            --package "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
+            --version "$version" \
+            --repository "${{ github.repository }}" \
+            --private-key "${{ runner.temp }}/runtime-signing.pem" \
+            --output "${{ runner.temp }}/update-manifest-$version.json"
+          python - "${{ runner.temp }}/update-manifest-$version.json" "$version" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from core.update_protocol import validate_manifest
+          validate_manifest(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")),
+                            Path("installer/update-public.pem"), current=sys.argv[2],
+                            expected_channel="stable")
+          PY
           cd "${{ runner.temp }}"
-          sha256sum "vertep-runtime-$version.tar.gz" "manifest-$version.json" > "SHA256SUMS-$version"
+          sha256sum "vertep-runtime-$version.tar.gz" "manifest-$version.json" \
+            "update-manifest-$version.json" > "SHA256SUMS-$version"
       - name: Push numbered commit and tag
         shell: bash
         run: |
@@ -164,4 +179,5 @@ jobs:
             --notes-file "releases/$version.md" \
             "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
             "${{ runner.temp }}/manifest-$version.json" \
+            "${{ runner.temp }}/update-manifest-$version.json" \
             "${{ runner.temp }}/SHA256SUMS-$version"

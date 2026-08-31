@@ -1,5 +1,7 @@
 import importlib.util
+import io
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,22 @@ from core.update_manager import request_update, update_status
 def load_update_agent():
     path = Path("scripts/update-agent.py").resolve()
     spec = importlib.util.spec_from_file_location("vertep_update_agent", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_update_manifest_builder():
+    path = Path("scripts/build-update-manifest.py").resolve()
+    spec = importlib.util.spec_from_file_location("build_update_manifest", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_runtime_env_updater():
+    path = Path("scripts/update-runtime-env.py").resolve()
+    spec = importlib.util.spec_from_file_location("update_runtime_env", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -48,6 +66,114 @@ def test_update_server_must_be_a_credential_free_https_origin(monkeypatch):
     monkeypatch.setenv("VERTEP_UPDATE_SERVER", "http://update.vertep.ai")
     with pytest.raises(RuntimeError, match="HTTPS"):
         update_server_url()
+
+
+def test_github_release_provider_resolves_signed_update_manifest(monkeypatch):
+    import core.update_protocol as protocol
+
+    release = {"tag_name": "0.0.0.29", "assets": [{
+        "name": "update-manifest-0.0.0.29.json",
+        "url": "https://api.github.com/repos/fylypovych/vertep/releases/assets/42",
+    }]}
+    manifest = {"version": "0.0.0.29", "channel": "stable"}
+    responses = [json.dumps(release).encode(), json.dumps(manifest).encode()]
+    requests = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self, _):
+            return self.body
+
+    def urlopen(request, **_):
+        requests.append(request)
+        return Response(responses.pop(0))
+
+    monkeypatch.setenv(
+        "VERTEP_UPDATE_SERVER", "https://api.github.com/repos/fylypovych/vertep/releases")
+    monkeypatch.setattr(protocol.urllib.request, "urlopen", urlopen)
+
+    assert protocol.fetch_manifest() == manifest
+    assert requests[0].full_url.endswith("/releases/latest")
+    assert requests[1].headers["Accept"] == "application/octet-stream"
+
+
+def test_update_package_github_allowlist_is_repository_scoped(monkeypatch, tmp_path):
+    import core.update_protocol as protocol
+
+    monkeypatch.setenv(
+        "VERTEP_UPDATE_SERVER", "https://api.github.com/repos/fylypovych/vertep/releases")
+    manifest = {
+        "package": "https://github.com/attacker/vertep/releases/download/1.0.0/payload.tar.gz",
+        "sha256": "0" * 64,
+    }
+    with pytest.raises(RuntimeError, match="outside"):
+        protocol.download_package(manifest, tmp_path / "payload.tar.gz")
+
+
+def test_update_descriptor_is_derived_from_signed_runtime_contract(tmp_path):
+    builder = load_update_manifest_builder()
+    package = tmp_path / "vertep-runtime-0.0.0.29.tar.gz"
+    contract = {
+        "version": "0.0.0.29", "channel": "stable", "release_sequence": 29,
+        "issued_at": "2026-08-31T00:00:00Z", "expires_at": "2027-08-31T00:00:00Z",
+        "compatibility": {"minimum_version": "0.0.0.1", "database_schema": 8,
+                          "database_strategy": "expand", "rollback_safe": True},
+    }
+    encoded = json.dumps(contract).encode()
+    with tarfile.open(package, "w:gz") as archive:
+        info = tarfile.TarInfo("./manifest.json")
+        info.size = len(encoded)
+        archive.addfile(info, io.BytesIO(encoded))
+
+    result = builder.descriptor(package, "0.0.0.29", "fylypovych/vertep")
+
+    assert result["release_sequence"] == 29
+    assert result["database"] == {"schema": 8, "strategy": "expand", "rollback_safe": True}
+    assert result["package"].endswith(
+        "/fylypovych/vertep/releases/download/0.0.0.29/vertep-runtime-0.0.0.29.tar.gz")
+    assert len(result["sha256"]) == 64
+
+
+def test_runtime_update_switches_signed_images_without_rotating_secrets(tmp_path):
+    updater = load_runtime_env_updater()
+    env = tmp_path / ".env"
+    env.write_text(
+        "VERTEP_VERSION=0.0.0.27\n"
+        "VERTEP_CORE_IMAGE=ghcr.io/fylypovych/vertep-core@sha256:" + "1" * 64 + "\n"
+        "POSTGRES_PASSWORD=stable-database-secret\n"
+        "LOCAL_OPERATOR_SETTING=preserved\n"
+        "GPU_VENDOR=none\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "version": "0.0.0.29",
+        "images": {
+            "core": {"reference": "ghcr.io/fylypovych/vertep-core:0.0.0.29",
+                     "digest": "sha256:" + "2" * 64},
+            "comfyui": {"reference": "ghcr.io/fylypovych/vertep-comfyui:0.0.0.29",
+                        "digest": "sha256:" + "3" * 64},
+        },
+    }), encoding="utf-8")
+
+    updater.update(env, manifest, "0.0.0.29")
+    result = env.read_text(encoding="utf-8")
+
+    assert "VERTEP_VERSION=0.0.0.29" in result
+    assert "VERTEP_CORE_IMAGE=ghcr.io/fylypovych/vertep-core:0.0.0.29@sha256:" + "2" * 64 in result
+    assert "POSTGRES_PASSWORD=stable-database-secret" in result
+    assert "LOCAL_OPERATOR_SETTING=preserved" in result
+    assert "VERTEP_UPDATE_SERVER=https://api.github.com/repos/fylypovych/vertep/releases" in result
 
 
 def test_update_agent_persists_signed_check_result_and_removes_request(monkeypatch, tmp_path):

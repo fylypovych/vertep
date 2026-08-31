@@ -147,15 +147,40 @@ def update_server_url() -> str:
 def fetch_manifest(channel: str = "stable") -> dict:
     if not re.fullmatch(r"[a-z0-9-]{1,32}", channel):
         raise ValueError("Invalid update channel")
-    request = urllib.request.Request(urljoin(update_server_url(), f"v1/releases/{channel}/latest.json"),
-                                     headers={"Accept": "application/json", "User-Agent": "Vertep-Updater/1"})
+    base = update_server_url()
+    parsed = urlsplit(base)
+    github_repository = re.fullmatch(r"/repos/([^/]+)/([^/]+)/releases/", parsed.path)
+    url = (urljoin(base, "latest") if parsed.hostname == "api.github.com" and github_repository
+           else urljoin(base, f"v1/releases/{channel}/latest.json"))
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Vertep-Updater/1"})
     with urllib.request.urlopen(request, timeout=15, context=ssl.create_default_context()) as response:
         if response.status != 200:
             raise RuntimeError(f"Update server returned HTTP {response.status}")
         payload = response.read(1024 * 1024 + 1)
     if len(payload) > 1024 * 1024:
         raise RuntimeError("Update manifest is too large")
-    manifest = json.loads(payload)
+    document = json.loads(payload)
+    if parsed.hostname == "api.github.com" and github_repository:
+        if not isinstance(document, dict):
+            raise ValueError("GitHub release metadata must be an object")
+        version = str(document.get("tag_name", "")).removeprefix("v")
+        expected_name = f"update-manifest-{version}.json"
+        asset = next((item for item in document.get("assets", [])
+                      if isinstance(item, dict) and item.get("name") == expected_name), None)
+        if asset is None or not isinstance(asset.get("url"), str):
+            raise RuntimeError(f"GitHub release has no {expected_name}")
+        asset_request = urllib.request.Request(
+            asset["url"], headers={"Accept": "application/octet-stream",
+                                    "User-Agent": "Vertep-Updater/1"})
+        with urllib.request.urlopen(asset_request, timeout=15,
+                                    context=ssl.create_default_context()) as response:
+            payload = response.read(1024 * 1024 + 1)
+        if len(payload) > 1024 * 1024:
+            raise RuntimeError("Update manifest is too large")
+        manifest = json.loads(payload)
+    else:
+        manifest = document
     if not isinstance(manifest, dict):
         raise ValueError("Update manifest must be an object")
     return manifest
@@ -164,7 +189,15 @@ def fetch_manifest(channel: str = "stable") -> dict:
 def download_package(manifest: dict, destination: Path) -> Path:
     base = update_server_url()
     url = urljoin(base, manifest["package"])
-    if urlsplit(url).hostname != urlsplit(base).hostname or urlsplit(url).scheme != "https":
+    parsed_base, parsed_url = urlsplit(base), urlsplit(url)
+    github_repository = re.fullmatch(r"/repos/([^/]+)/([^/]+)/releases/", parsed_base.path)
+    github_download = bool(
+        parsed_base.hostname == "api.github.com" and github_repository
+        and parsed_url.hostname == "github.com" and parsed_url.scheme == "https"
+        and parsed_url.path.startswith(
+            f"/{github_repository.group(1)}/{github_repository.group(2)}/releases/download/"))
+    same_origin = parsed_url.hostname == parsed_base.hostname and parsed_url.scheme == "https"
+    if parsed_url.username or parsed_url.password or not (same_origin or github_download):
         raise RuntimeError("Package URL is outside the configured update server")
     digest = hashlib.sha256()
     maximum = int(os.getenv("UPDATE_MAX_PACKAGE_BYTES", str(4 * 1024**3)))

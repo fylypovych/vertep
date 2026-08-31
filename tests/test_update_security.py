@@ -178,3 +178,47 @@ def test_bootstrap_preflight_and_text_model_provisioning_contract():
     assert "VERTEP_ROLE" in bootstrap
     assert "vertep-deployment.path" in bootstrap
     assert "database migration did not complete successfully" in bootstrap
+
+
+def test_bootstrap_resume_preserves_installation_identity_and_mutable_state():
+    bootstrap = (Path(__file__).parents[1] / "bootstrap.sh").read_text()
+    assert 'existing_secret "$INSTALL_ROOT/config/postgres.password" POSTGRES_PASSWORD' in bootstrap
+    assert 'existing_secret "$INSTALL_ROOT/config/redis.password" REDIS_PASSWORD' in bootstrap
+    assert 'existing_secret "$INSTALL_ROOT/config/secret-store.passphrase"' in bootstrap
+    assert '[[ -s "$INSTALL_ROOT/config/postgres.password" ]]' in bootstrap
+    assert '[[ ! -f "$INSTALL_ROOT/config/secrets.enc.json"' in bootstrap
+    assert '[[ ! -f "$INSTALL_ROOT/config/deployment-plan.json" ]]' in bootstrap
+    assert 'existing TLS certificate/key pair is incomplete' in bootstrap
+    assert 'existing node CA certificate/key pair is incomplete' in bootstrap
+    assert 'chmod -R u+rX,g+rX,o-rwx "$bundle_root"' in bootstrap
+    assert 'chmod -R u+rX,g+rX,o-rwx "$INSTALL_ROOT"' not in bootstrap
+    assert 'docker volume inspect vertep_postgres-data' in bootstrap
+    assert 'existing PostgreSQL data volume found but its password is unavailable' in bootstrap
+
+
+def test_bootstrap_resume_updates_managed_env_and_preserves_unknown_settings():
+    bootstrap = (Path(__file__).parents[1] / "bootstrap.sh").read_text()
+    assert 'existing_env_tmp=$(mktemp)' in bootstrap
+    assert 'managed_keys = {line.split("=", 1)[0]' in bootstrap
+    assert 'line.split("=", 1)[0] in managed_keys' in bootstrap
+    assert 'mv -f "$env_tmp" "$INSTALL_ROOT/.env"' in bootstrap
+    assert 'existing_node_role=$(env_value NODE_ROLE)' in bootstrap
+    assert 'existing_web_domain=$(env_value WEB_DOMAIN)' in bootstrap
+    assert 'installation_complete=true' in bootstrap
+    assert 'ln -sfn "$INSTALL_ROOT/scripts/vertep" /usr/local/bin/vertep' in bootstrap
+    assert "'.version = $version | .runtime = $runtime[0]'" in bootstrap
+
+
+def test_signed_update_switches_runtime_images_and_host_executors():
+    command = (Path(__file__).parents[1] / "scripts/vertep").read_text()
+    runtime = (Path(__file__).parents[1] / "scripts/build-runtime-bundle.py").read_text()
+    workflow = (Path(__file__).parents[1] / ".github/workflows/release.yml").read_text()
+    assert 'python3 "$release_root/scripts/update-runtime-env.py"' in command
+    assert '"$ROOT/.env" "$release_root/manifest.json" "$target_version"' in command
+    assert '[[ ! -f "$backup/.env" ]] || cp -a "$backup/.env" "$ROOT/.env"' in command
+    assert 'sync_host_runtime "$release_root"' in command
+    assert command.count('source "$ROOT/.env"') >= 3
+    assert '--exclude=releases' in command and '--exclude=current' in command
+    assert '"worker_update.py", "update-runtime-env.py"' in runtime
+    assert "scripts/build-update-manifest.py" in workflow
+    assert '"update-manifest-$version.json"' in workflow

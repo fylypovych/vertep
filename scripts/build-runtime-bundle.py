@@ -41,7 +41,7 @@ FILES = {
 SCRIPTS = (
     "apply-deployment.py", "migrate.py", "release-layout.py", "safe-extract.py",
     "startup-recovery.py", "status.py", "update-agent.py", "vertep", "watchdog.py",
-    "worker_update.py",
+    "worker_update.py", "update-runtime-env.py",
 )
 
 UNITS = (

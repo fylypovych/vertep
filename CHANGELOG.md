@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Bootstrap став resumable та idempotent: повторний запуск зберігає паролі PostgreSQL/Redis, ключі, TLS/Node CA, роль, домен, довільні локальні параметри й Docker volumes, оновлюючи лише підписаний runtime та керовані release-параметри.
+- Resume відмовляється генерувати нові credentials поверх наявних Docker volumes або encrypted secret store, якщо відповідний ключ втрачено, замість створення несумісного частково працездатного стану.
+- Self-update підключено безпосередньо до GitHub Releases: release workflow публікує окремий підписаний update manifest, updater перевіряє підпис і SHA-256 пакета, а download allowlist обмежено репозиторієм `fylypovych/vertep`.
+- Після успішного оновлення host-side executors і systemd units синхронізуються з активним підписаним release; CLI коректно визначає роль із `NODE_ROLE` і працює через локальний HTTPS proxy.
+
 ## 0.0.0.27 - 2026-08-31
 
 - License Manager healthcheck більше не намагається ініціалізувати зашифроване сховище у read-only каталозі під час чистої інсталяції.

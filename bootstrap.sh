@@ -31,7 +31,14 @@ if command -v timedatectl >/dev/null && [[ $(timedatectl show -p NTPSynchronized
   fail "system clock is not synchronized; configure NTP before installing signed releases"
 fi
 if command -v ss >/dev/null && ss -H -ltn 'sport = :8443' | grep -q .; then
-  fail "TCP port 8443 is already in use"
+  vertep_proxy_running=false
+  if command -v docker >/dev/null 2>&1 \
+      && docker ps --filter label=com.docker.compose.project=vertep \
+           --filter label=com.docker.compose.service=proxy --format '{{.ID}}' | grep -q .; then
+    vertep_proxy_running=true
+  fi
+  [[ -f "$INSTALL_ROOT/.env" && $vertep_proxy_running == true ]] \
+    || fail "TCP port 8443 is already in use"
 fi
 filesystem=$(findmnt -n -o FSTYPE /opt 2>/dev/null || findmnt -n -o FSTYPE /)
 [[ $filesystem =~ ^(ext4|xfs|btrfs|zfs)$ ]] || fail "unsupported /opt filesystem: $filesystem"
@@ -156,8 +163,8 @@ PY
     || fail "runtime manifest signature verification failed"
   [[ $(jq -er '.version' "$manifest_tmp") == "$version" ]] \
     || fail "GitHub release tag and runtime manifest version differ"
+  chmod -R u+rX,g+rX,o-rwx "$bundle_root"
   cp -a "$bundle_root"/. "$INSTALL_ROOT/"
-  chmod -R u+rX,g+rX,o-rwx "$INSTALL_ROOT"
 else
   manifest_tmp=$(mktemp); trap 'rm -f "$manifest_tmp"' EXIT
   curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/stable/manifest.json" -o "$manifest_tmp"
@@ -235,8 +242,9 @@ PY
   printf '%s  %s\n' "$release_layout_sha" "$INSTALL_ROOT/scripts/release-layout.py" | sha256sum -c - >/dev/null
   printf '%s  %s\n' "$deployment_apply_sha" "$INSTALL_ROOT/scripts/apply-deployment.py" | sha256sum -c - >/dev/null
   printf '%s  %s\n' "$sbom_sha" "$INSTALL_ROOT/config/release-sbom.cdx.json" | sha256sum -c - >/dev/null
-  chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
 fi
+chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
+ln -sfn "$INSTALL_ROOT/scripts/vertep" /usr/local/bin/vertep
 planner_sha=$(jq -er '.files["runtime/deployment-plan.py"].sha256 // .files["deployment-plan.py"].sha256' "$manifest_tmp")
 monitoring_files=(
   monitoring/prometheus.yml monitoring/alerts.yml monitoring/loki.yml monitoring/promtail.yml
@@ -252,7 +260,14 @@ for relative in "${monitoring_files[@]}"; do
   printf '%s  %s\n' "$artifact_sha" "$destination" | sha256sum -c - >/dev/null
   chmod 0640 "$destination"
 done
-NODE_ROLE=${VERTEP_ROLE:-unassigned}
+env_value(){
+  local key=$1
+  [[ -f "$INSTALL_ROOT/.env" ]] || return 0
+  awk -v key="$key" 'index($0, key "=") == 1 {value=substr($0, length(key)+2)} END {print value}' \
+    "$INSTALL_ROOT/.env"
+}
+existing_node_role=$(env_value NODE_ROLE)
+NODE_ROLE=${VERTEP_ROLE:-${existing_node_role:-unassigned}}
 if [[ "$NODE_ROLE" == "unassigned" ]] && [[ -t 0 ]]; then
   echo "Select node role:"
   echo "1) core"
@@ -308,15 +323,66 @@ if printf '%s\n' "${role_services[@]}" | grep -qx comfyui; then
 fi
 
 secret(){ openssl rand -hex "$1"; }
-postgres_password=$(secret 36); redis_password=$(secret 36); jwt_secret=$(secret 48)
-worker_secret=$(secret 48); encryption_key=$(secret 32); internal_api_key=$(secret 48); session_secret=$(secret 48)
-secret_store_passphrase=$(secret 48); grafana_password=$(secret 36)
-setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
-setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
-setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
-WEB_DOMAIN=${VERTEP_WEB_DOMAIN:-$(hostname -f 2>/dev/null || hostname)}
+existing_secret(){
+  local file=$1 key=$2
+  if [[ -s $file ]]; then
+    tr -d '\r\n' < "$file"
+  else
+    env_value "$key"
+  fi
+}
+postgres_password=$(existing_secret "$INSTALL_ROOT/config/postgres.password" POSTGRES_PASSWORD)
+redis_password=$(existing_secret "$INSTALL_ROOT/config/redis.password" REDIS_PASSWORD)
+encryption_key=$(existing_secret "$INSTALL_ROOT/config/backup.key" ENCRYPTION_KEY)
+secret_store_passphrase=$(existing_secret "$INSTALL_ROOT/config/secret-store.passphrase" SECRET_STORE_PASSPHRASE)
+jwt_secret=$(env_value JWT_SECRET); worker_secret=$(env_value WORKER_SECRET)
+internal_api_key=$(env_value INTERNAL_API_KEY); session_secret=$(env_value SESSION_SECRET)
+grafana_password=$(env_value GRAFANA_ADMIN_PASSWORD); node_api_token=$(env_value NODE_API_TOKEN)
+if [[ -f "$INSTALL_ROOT/config/secrets.enc.json" && -z $secret_store_passphrase ]]; then
+  fail "encrypted secret store exists but its passphrase file is missing"
+fi
+if command -v docker >/dev/null 2>&1 \
+    && docker volume inspect vertep_postgres-data >/dev/null 2>&1 \
+    && [[ -z $postgres_password ]]; then
+  fail "existing PostgreSQL data volume found but its password is unavailable"
+fi
+if command -v docker >/dev/null 2>&1 \
+    && docker volume inspect vertep_redis-data >/dev/null 2>&1 \
+    && [[ -z $redis_password ]]; then
+  fail "existing Redis data volume found but its password is unavailable"
+fi
+[[ -n $postgres_password ]] || postgres_password=$(secret 36)
+[[ -n $redis_password ]] || redis_password=$(secret 36)
+[[ -n $encryption_key ]] || encryption_key=$(secret 32)
+[[ -n $secret_store_passphrase ]] || secret_store_passphrase=$(secret 48)
+[[ -n $jwt_secret ]] || jwt_secret=$(secret 48)
+[[ -n $worker_secret ]] || worker_secret=$(secret 48)
+[[ -n $internal_api_key ]] || internal_api_key=$(secret 48)
+[[ -n $session_secret ]] || session_secret=$(secret 48)
+[[ -n $grafana_password ]] || grafana_password=$(secret 36)
+[[ -n $node_api_token ]] || node_api_token=$(secret 48)
+existing_web_domain=$(env_value WEB_DOMAIN)
+WEB_DOMAIN=${VERTEP_WEB_DOMAIN:-${existing_web_domain:-$(hostname -f 2>/dev/null || hostname)}}
+installation_complete=false
+if [[ -f "$INSTALL_ROOT/config/installation.json" ]] \
+    && jq -e '.completed_at | type == "string" and length > 0' \
+         "$INSTALL_ROOT/config/installation.json" >/dev/null 2>&1; then
+  installation_complete=true
+fi
+if [[ $installation_complete == true ]]; then
+  setup_token=""
+  setup_token_hash=$(env_value SETUP_TOKEN_HASH)
+  setup_token_expires_at=$(env_value SETUP_TOKEN_EXPIRES_AT)
+else
+  setup_token=$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')
+  setup_token_hash=$(printf '%s' "$setup_token" | sha256sum | awk '{print $1}')
+  setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
+fi
 resolved_image(){ jq -er --arg service "$1" '.images[$service] | .reference + "@" + .digest' "$manifest_tmp"; }
-cat > "$INSTALL_ROOT/.env" <<EOF
+existing_env_tmp=$(mktemp)
+[[ -f "$INSTALL_ROOT/.env" ]] && cp "$INSTALL_ROOT/.env" "$existing_env_tmp"
+env_tmp=$(mktemp "$INSTALL_ROOT/.env.XXXXXX")
+cat > "$env_tmp" <<EOF
 VERTEP_VERSION=$version
 VERTEP_IMAGE_REPOSITORY=${VERTEP_IMAGE_REPOSITORY:-registry.vertep.ai/vertep}
 VERTEP_PROXY_IMAGE=$(resolved_image proxy)
@@ -350,7 +416,7 @@ INTERNAL_API_KEY=$internal_api_key
 SESSION_SECRET=$session_secret
 SECRET_STORE_PASSPHRASE_FILE=/run/secrets/secret_store_passphrase
 REQUIRE_SECRET_KEY_SEALING=true
-NODE_API_TOKEN=$(secret 48)
+NODE_API_TOKEN=$node_api_token
 NODE_ROLE=$NODE_ROLE
 NODE_CAPABILITIES=$node_capabilities
 NODE_NAME=$(hostname -s | tr '[:upper:]_' '[:lower:]-')
@@ -363,7 +429,7 @@ COOKIE_SECURE=true
 CONFIG_ROOT=/data/config
 WEB_DOMAIN=$WEB_DOMAIN
 WEB_UPDATE_ENABLED=true
-VERTEP_UPDATE_SERVER=https://update.vertep.ai
+VERTEP_UPDATE_SERVER=https://api.github.com/repos/fylypovych/vertep/releases
 REQUIRE_ROLLING_COMPATIBILITY=true
 UPDATE_REQUIRE_DISTRIBUTED_FENCE=true
 UPDATE_RELEASE_RETENTION=3
@@ -376,16 +442,35 @@ CERTIFICATE_MANAGER_URL=http://certificate-manager:8096
 BACKUP_URL=http://backup-service:8092
 OLLAMA_URL=http://ollama:11434
 EOF
-chmod 0600 "$INSTALL_ROOT/.env"
-printf '%s' "$secret_store_passphrase" > "$INSTALL_ROOT/config/secret-store.passphrase"
-printf '%s' "$postgres_password" > "$INSTALL_ROOT/config/postgres.password"
-printf '%s' "$redis_password" > "$INSTALL_ROOT/config/redis.password"
-printf '%s' "$encryption_key" > "$INSTALL_ROOT/config/backup.key"
+python3 - "$existing_env_tmp" "$env_tmp" <<'PY'
+import sys
+from pathlib import Path
+
+existing_path, managed_path = map(Path, sys.argv[1:])
+managed = managed_path.read_text(encoding="utf-8").splitlines()
+managed_keys = {line.split("=", 1)[0] for line in managed if "=" in line}
+existing = existing_path.read_text(encoding="utf-8").splitlines() if existing_path.exists() else []
+preserved = [line for line in existing
+             if not ("=" in line and line.split("=", 1)[0] in managed_keys)]
+managed_path.write_text("\n".join(managed + preserved) + "\n", encoding="utf-8")
+PY
+chmod 0600 "$env_tmp"
+mv -f "$env_tmp" "$INSTALL_ROOT/.env"
+rm -f "$existing_env_tmp"
+[[ -s "$INSTALL_ROOT/config/secret-store.passphrase" ]] \
+  || printf '%s' "$secret_store_passphrase" > "$INSTALL_ROOT/config/secret-store.passphrase"
+[[ -s "$INSTALL_ROOT/config/postgres.password" ]] \
+  || printf '%s' "$postgres_password" > "$INSTALL_ROOT/config/postgres.password"
+[[ -s "$INSTALL_ROOT/config/redis.password" ]] \
+  || printf '%s' "$redis_password" > "$INSTALL_ROOT/config/redis.password"
+[[ -s "$INSTALL_ROOT/config/backup.key" ]] \
+  || printf '%s' "$encryption_key" > "$INSTALL_ROOT/config/backup.key"
 chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase" "$INSTALL_ROOT/config/postgres.password" \
   "$INSTALL_ROOT/config/redis.password" "$INSTALL_ROOT/config/backup.key"
 [[ -f "$INSTALL_ROOT/runtime/deployment-plan.py" ]] \
   || curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
 printf '%s  %s\n' "$planner_sha" "$INSTALL_ROOT/runtime/deployment-plan.py" | sha256sum -c - >/dev/null
+if [[ ! -f "$INSTALL_ROOT/config/deployment-plan.json" ]]; then
 python3 - "$version" "$INSTALL_ROOT/config/deployment-plan.json" "${BOOTSTRAP_SERVICES[@]}" <<'PY'
 import hashlib, json, sys
 version, output, *services = sys.argv[1:]
@@ -394,21 +479,35 @@ plan = {"schema": 1, "role": "unassigned", "version": version, "services": servi
 plan["sha256"] = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 open(output, "w", encoding="utf-8").write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
 PY
+fi
 chmod 0600 "$INSTALL_ROOT/config/deployment-plan.json"
+if [[ ! -f "$INSTALL_ROOT/config/secrets.enc.json" \
+      && ! -f "$INSTALL_ROOT/config/bootstrap-secrets.json" ]]; then
 cat > "$INSTALL_ROOT/config/bootstrap-secrets.json" <<EOF
 {"postgres_password":"$postgres_password","redis_password":"$redis_password","grafana_admin_password":"$grafana_password","jwt_secret":"$jwt_secret","worker_secret":"$worker_secret","encryption_key":"$encryption_key","internal_api_key":"$internal_api_key","session_secret":"$session_secret"}
 EOF
 chmod 0600 "$INSTALL_ROOT/config/bootstrap-secrets.json"
+fi
 cat > "$INSTALL_ROOT/config/hardware.json" <<EOF
 {"architecture":"$arch","ram_mb":$ram_mb,"gpu":{"vendor":"$gpu_vendor","name":"${gpu_name//\"/}","vram_mb":${gpu_vram_mb// /},"driver":"$driver","cuda":"$cuda"},"docker_version":"$(docker --version | sed 's/"//g')"}
 EOF
-openssl req -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=${WEB_DOMAIN}" \
-  -addext "subjectAltName=DNS:${WEB_DOMAIN}" \
-  -keyout "$INSTALL_ROOT/tls/vertep.key" -out "$INSTALL_ROOT/tls/vertep.crt" >/dev/null 2>&1
+if [[ -f "$INSTALL_ROOT/tls/vertep.key" || -f "$INSTALL_ROOT/tls/vertep.crt" ]]; then
+  [[ -f "$INSTALL_ROOT/tls/vertep.key" && -f "$INSTALL_ROOT/tls/vertep.crt" ]] \
+    || fail "existing TLS certificate/key pair is incomplete"
+else
+  openssl req -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=${WEB_DOMAIN}" \
+    -addext "subjectAltName=DNS:${WEB_DOMAIN}" \
+    -keyout "$INSTALL_ROOT/tls/vertep.key" -out "$INSTALL_ROOT/tls/vertep.crt" >/dev/null 2>&1
+fi
 chmod 0600 "$INSTALL_ROOT/tls/vertep.key"
-openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=Vertep Installation Node CA" \
-  -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
-  -keyout "$INSTALL_ROOT/tls/node-ca.key" -out "$INSTALL_ROOT/tls/node-ca.crt" >/dev/null 2>&1
+if [[ -f "$INSTALL_ROOT/tls/node-ca.key" || -f "$INSTALL_ROOT/tls/node-ca.crt" ]]; then
+  [[ -f "$INSTALL_ROOT/tls/node-ca.key" && -f "$INSTALL_ROOT/tls/node-ca.crt" ]] \
+    || fail "existing node CA certificate/key pair is incomplete"
+else
+  openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=Vertep Installation Node CA" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "$INSTALL_ROOT/tls/node-ca.key" -out "$INSTALL_ROOT/tls/node-ca.crt" >/dev/null 2>&1
+fi
 chmod 0600 "$INSTALL_ROOT/tls/node-ca.key"
 
 progress "Installing privileged update executor"
@@ -463,13 +562,27 @@ jq -s --arg version "$version" --arg role "$NODE_ROLE" --argjson services "$(pri
   "$inventory_rows" > "$INSTALL_ROOT/config/runtime-inventory.json"
 rm -f "$inventory_rows"
 chmod 0600 "$INSTALL_ROOT/config/runtime-inventory.json"
+if [[ $installation_complete == true ]]; then
+  installation_tmp=$(mktemp "$INSTALL_ROOT/config/.installation.XXXXXX")
+  jq --arg version "$version" --slurpfile runtime "$INSTALL_ROOT/config/runtime-inventory.json" \
+    '.version = $version | .runtime = $runtime[0]' \
+    "$INSTALL_ROOT/config/installation.json" > "$installation_tmp"
+  chmod 0600 "$installation_tmp"
+  mv -f "$installation_tmp" "$INSTALL_ROOT/config/installation.json"
+fi
 server_ip=$(hostname -I | awk '{print $1}')
-setup_url="https://$server_ip:8443/setup?token=$setup_token"
-printf '\nVertep Setup is ready.\n'
-printf 'Open %s in your browser to complete the First Run Wizard.\n' "$setup_url"
+if [[ $installation_complete == true ]]; then
+  setup_url="https://$server_ip:8443/"
+  printf '\nVertep is healthy and up to date.\n'
+  printf 'Open %s in your browser.\n' "$setup_url"
+else
+  setup_url="https://$server_ip:8443/setup?token=$setup_token"
+  printf '\nVertep Setup is ready.\n'
+  printf 'Open %s in your browser to complete the First Run Wizard.\n' "$setup_url"
+fi
 if command -v xdg-open >/dev/null 2>&1; then
   xdg-open "$setup_url" >/dev/null 2>&1 || true
 elif command -v open >/dev/null 2>&1; then
   open "$setup_url" >/dev/null 2>&1 || true
 fi
-printf 'Setup code (if needed): %s\n' "$setup_token"
+[[ -z $setup_token ]] || printf 'Setup code (if needed): %s\n' "$setup_token"
