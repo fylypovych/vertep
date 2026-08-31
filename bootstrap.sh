@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-DOWNLOAD_ORIGIN=${VERTEP_DOWNLOAD_ORIGIN:-https://download.vertep.ai}
+DOWNLOAD_ORIGIN=${VERTEP_DOWNLOAD_ORIGIN:-https://github.com/fylypovych/vertep}
 INSTALL_ROOT=${VERTEP_INSTALL_ROOT:-/opt/vertep}
 NODE_ROLE=${VERTEP_ROLE:-unassigned}
 CORE_URL=${VERTEP_CORE_URL:-}
@@ -23,9 +23,9 @@ ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 disk_mb=$(df -Pm /opt 2>/dev/null | awk 'NR==2{print $4}' || df -Pm / | awk 'NR==2{print $4}')
 (( ram_mb >= MIN_RAM_MB )) || fail "at least ${MIN_RAM_MB} MB RAM is required (found ${ram_mb})"
 (( disk_mb >= MIN_DISK_MB )) || fail "at least ${MIN_DISK_MB} MB free disk is required (found ${disk_mb})"
-curl -fsS --connect-timeout 10 "$DOWNLOAD_ORIGIN/health" >/dev/null || fail "Vertep download service is unreachable"
+curl -fsS --connect-timeout 10 "$DOWNLOAD_ORIGIN" >/dev/null || fail "Vertep repository is unreachable"
 getent ahosts "${DOWNLOAD_ORIGIN#*://}" | head -1 >/dev/null 2>&1 \
-  || fail "DNS cannot resolve the Vertep download service"
+  || fail "DNS cannot resolve the Vertep repository"
 if command -v timedatectl >/dev/null && [[ $(timedatectl show -p NTPSynchronized --value 2>/dev/null) != yes ]]; then
   fail "system clock is not synchronized; configure NTP before installing signed releases"
 fi
@@ -89,11 +89,29 @@ fi
 
 progress "Preparing immutable Vertep runtime"
 install -d -m 0750 "$INSTALL_ROOT"/{data,config,logs,backups,storage,models,runtime,tls}
-manifest_tmp=$(mktemp); trap 'rm -f "$manifest_tmp"' EXIT
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/stable/manifest.json" -o "$manifest_tmp"
-public_key_tmp=$(mktemp); canonical_tmp=$(mktemp); signature_tmp=$(mktemp)
-trap 'rm -f "$manifest_tmp" "$public_key_tmp" "$canonical_tmp" "$signature_tmp"' EXIT
-cat > "$public_key_tmp" <<'BOOTSTRAP_PUBLIC_KEY'
+
+github_origin="https://github.com/fylypovych/vertep"
+if [[ "$DOWNLOAD_ORIGIN" == *"github.com"* ]]; then
+  progress "Resolving latest GitHub release"
+  release_json=$(curl -fsS "$github_origin/releases/latest" || fail "GitHub releases are unreachable")
+  tag=$(printf '%s' "$release_json" | grep -o 'tag/[^"<> ]*' | head -1 | cut -d/ -f2)
+  [[ -n "$tag" ]] || fail "Could not determine latest release tag"
+  version=${tag#v}
+  tarball_url="$github_origin/archive/refs/tags/$tag.tar.gz"
+  progress "Downloading Vertep $version from GitHub"
+  curl -fsSL "$tarball_url" -o /tmp/vertep-release.tar.gz || fail "Failed to download release tarball"
+  tar -xzf /tmp/vertep-release.tar.gz -C /tmp
+  extracted_dir=$(find /tmp -maxdepth 1 -type d -name "vertep-*" | head -1)
+  [[ -n "$extracted_dir" ]] || fail "Release tarball did not contain expected directory"
+  cp -a "$extracted_dir"/. "$INSTALL_ROOT/"
+  rm -rf /tmp/vertep-release.tar.gz "$extracted_dir"
+  chmod -R u+rX,g+rX,o-rwx "$INSTALL_ROOT"
+else
+  manifest_tmp=$(mktemp); trap 'rm -f "$manifest_tmp"' EXIT
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/stable/manifest.json" -o "$manifest_tmp"
+  public_key_tmp=$(mktemp); canonical_tmp=$(mktemp); signature_tmp=$(mktemp)
+  trap 'rm -f "$manifest_tmp" "$public_key_tmp" "$canonical_tmp" "$signature_tmp"' EXIT
+  cat > "$public_key_tmp" <<'BOOTSTRAP_PUBLIC_KEY'
 -----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu6Tn67753+ax6mx8/cXP
 TfS/BZr/PFNlfSF7EIJpShfgsm9mad+9glwYxN9AHjW1UfTM8lqUfugdItP8zCze
@@ -104,7 +122,7 @@ vpvdIWixnMowK4GLvzGsmez9Zyt1ocCCjji7hsBbwwTPeZcf8evuk2uUgsZG8MYX
 ZwIDAQAB
 -----END PUBLIC KEY-----
 BOOTSTRAP_PUBLIC_KEY
-python3 - "$manifest_tmp" "$canonical_tmp" "$signature_tmp" <<'PY'
+  python3 - "$manifest_tmp" "$canonical_tmp" "$signature_tmp" <<'PY'
 import base64, json, sys
 source, canonical, signature = sys.argv[1:]
 manifest = json.load(open(source, encoding="utf-8"))
@@ -114,56 +132,57 @@ if not isinstance(encoded, str):
 open(canonical, "wb").write(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode())
 open(signature, "wb").write(base64.b64decode(encoded, validate=True))
 PY
-openssl dgst -sha256 -verify "$public_key_tmp" -signature "$signature_tmp" "$canonical_tmp" >/dev/null \
-  || fail "runtime manifest signature verification failed"
-jq -e '
-  .schema == 2 and .product == "vertep" and
-  (.release_sequence | type == "number" and . >= 1) and
-  (.compatibility.core_api | type == "number" and . >= 1) and
-  (.compatibility.worker_api | type == "number" and . >= 1) and
-  (.compatibility.database_schema | type == "number" and . >= 1) and
-  (.roles.profiles | type == "object" and length > 0) and
-  (.sbom.format == "CycloneDX-JSON")
-' "$manifest_tmp" >/dev/null || fail "runtime manifest contract is invalid"
-version=$(jq -er '.version' "$manifest_tmp")
-compose_sha=$(jq -er '.files["docker-compose.yml"].sha256' "$manifest_tmp")
-compose_amd_sha=$(jq -er '.files["docker-compose.amd.yml"].sha256' "$manifest_tmp")
-compose_nvidia_sha=$(jq -er '.files["docker-compose.nvidia.yml"].sha256' "$manifest_tmp")
-proxy_sha=$(jq -er '.files["proxy.conf"].sha256' "$manifest_tmp")
-roles_sha=$(jq -er '.files["node_roles.json"].sha256' "$manifest_tmp")
-planner_sha=$(jq -er '.files["deployment-plan.py"].sha256' "$manifest_tmp")
-update_agent_sha=$(jq -er '.files["update-agent.py"].sha256' "$manifest_tmp")
-vertep_cli_sha=$(jq -er '.files["vertep"].sha256' "$manifest_tmp")
-safe_extract_sha=$(jq -er '.files["safe-extract.py"].sha256' "$manifest_tmp")
-release_layout_sha=$(jq -er '.files["release-layout.py"].sha256' "$manifest_tmp")
-deployment_apply_sha=$(jq -er '.files["apply-deployment.py"].sha256' "$manifest_tmp")
-sbom_file=$(jq -er '.sbom.file' "$manifest_tmp")
-sbom_sha=$(jq -er '.sbom.sha256' "$manifest_tmp")
-[[ $sbom_file != /* && $sbom_file != *..* ]] || fail "runtime manifest contains an unsafe SBOM path"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.yml" -o "$INSTALL_ROOT/docker-compose.yml"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.amd.yml" -o "$INSTALL_ROOT/docker-compose.amd.yml"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.nvidia.yml" -o "$INSTALL_ROOT/docker-compose.nvidia.yml"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/proxy.conf" -o "$INSTALL_ROOT/runtime/proxy.conf"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/node_roles.json" -o "$INSTALL_ROOT/config/node_roles.json"
-install -d -m 0750 "$INSTALL_ROOT/scripts"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/update-agent.py" -o "$INSTALL_ROOT/scripts/update-agent.py"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/vertep" -o "$INSTALL_ROOT/scripts/vertep"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/safe-extract.py" -o "$INSTALL_ROOT/scripts/safe-extract.py"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/release-layout.py" -o "$INSTALL_ROOT/scripts/release-layout.py"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/apply-deployment.py" -o "$INSTALL_ROOT/scripts/apply-deployment.py"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$sbom_file" -o "$INSTALL_ROOT/config/release-sbom.cdx.json"
-printf '%s  %s\n' "$compose_sha" "$INSTALL_ROOT/docker-compose.yml" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$compose_amd_sha" "$INSTALL_ROOT/docker-compose.amd.yml" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$compose_nvidia_sha" "$INSTALL_ROOT/docker-compose.nvidia.yml" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$proxy_sha" "$INSTALL_ROOT/runtime/proxy.conf" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$roles_sha" "$INSTALL_ROOT/config/node_roles.json" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$update_agent_sha" "$INSTALL_ROOT/scripts/update-agent.py" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$vertep_cli_sha" "$INSTALL_ROOT/scripts/vertep" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$safe_extract_sha" "$INSTALL_ROOT/scripts/safe-extract.py" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$release_layout_sha" "$INSTALL_ROOT/scripts/release-layout.py" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$deployment_apply_sha" "$INSTALL_ROOT/scripts/apply-deployment.py" | sha256sum -c - >/dev/null
-printf '%s  %s\n' "$sbom_sha" "$INSTALL_ROOT/config/release-sbom.cdx.json" | sha256sum -c - >/dev/null
-chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
+  openssl dgst -sha256 -verify "$public_key_tmp" -signature "$signature_tmp" "$canonical_tmp" >/dev/null \
+    || fail "runtime manifest signature verification failed"
+  jq -e '
+    .schema == 2 and .product == "vertep" and
+    (.release_sequence | type == "number" and . >= 1) and
+    (.compatibility.core_api | type == "number" and . >= 1) and
+    (.compatibility.worker_api | type == "number" and . >= 1) and
+    (.compatibility.database_schema | type == "number" and . >= 1) and
+    (.roles.profiles | type == "object" and length > 0) and
+    (.sbom.format == "CycloneDX-JSON")
+  ' "$manifest_tmp" >/dev/null || fail "runtime manifest contract is invalid"
+  version=$(jq -er '.version' "$manifest_tmp")
+  compose_sha=$(jq -er '.files["docker-compose.yml"].sha256' "$manifest_tmp")
+  compose_amd_sha=$(jq -er '.files["docker-compose.amd.yml"].sha256' "$manifest_tmp")
+  compose_nvidia_sha=$(jq -er '.files["docker-compose.nvidia.yml"].sha256' "$manifest_tmp")
+  proxy_sha=$(jq -er '.files["proxy.conf"].sha256' "$manifest_tmp")
+  roles_sha=$(jq -er '.files["node_roles.json"].sha256' "$manifest_tmp")
+  planner_sha=$(jq -er '.files["deployment-plan.py"].sha256' "$manifest_tmp")
+  update_agent_sha=$(jq -er '.files["update-agent.py"].sha256' "$manifest_tmp")
+  vertep_cli_sha=$(jq -er '.files["vertep"].sha256' "$manifest_tmp")
+  safe_extract_sha=$(jq -er '.files["safe-extract.py"].sha256' "$manifest_tmp")
+  release_layout_sha=$(jq -er '.files["release-layout.py"].sha256' "$manifest_tmp")
+  deployment_apply_sha=$(jq -er '.files["apply-deployment.py"].sha256' "$manifest_tmp")
+  sbom_file=$(jq -er '.sbom.file' "$manifest_tmp")
+  sbom_sha=$(jq -er '.sbom.sha256' "$manifest_tmp")
+  [[ $sbom_file != /* && $sbom_file != *..* ]] || fail "runtime manifest contains an unsafe SBOM path"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.yml" -o "$INSTALL_ROOT/docker-compose.yml"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.amd.yml" -o "$INSTALL_ROOT/docker-compose.amd.yml"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/docker-compose.nvidia.yml" -o "$INSTALL_ROOT/docker-compose.nvidia.yml"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/proxy.conf" -o "$INSTALL_ROOT/runtime/proxy.conf"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/node_roles.json" -o "$INSTALL_ROOT/config/node_roles.json"
+  install -d -m 0750 "$INSTALL_ROOT/scripts"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/update-agent.py" -o "$INSTALL_ROOT/scripts/update-agent.py"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/vertep" -o "$INSTALL_ROOT/scripts/vertep"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/safe-extract.py" -o "$INSTALL_ROOT/scripts/safe-extract.py"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/release-layout.py" -o "$INSTALL_ROOT/scripts/release-layout.py"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/apply-deployment.py" -o "$INSTALL_ROOT/scripts/apply-deployment.py"
+  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$sbom_file" -o "$INSTALL_ROOT/config/release-sbom.cdx.json"
+  printf '%s  %s\n' "$compose_sha" "$INSTALL_ROOT/docker-compose.yml" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$compose_amd_sha" "$INSTALL_ROOT/docker-compose.amd.yml" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$compose_nvidia_sha" "$INSTALL_ROOT/docker-compose.nvidia.yml" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$proxy_sha" "$INSTALL_ROOT/runtime/proxy.conf" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$roles_sha" "$INSTALL_ROOT/config/node_roles.json" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$update_agent_sha" "$INSTALL_ROOT/scripts/update-agent.py" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$vertep_cli_sha" "$INSTALL_ROOT/scripts/vertep" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$safe_extract_sha" "$INSTALL_ROOT/scripts/safe-extract.py" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$release_layout_sha" "$INSTALL_ROOT/scripts/release-layout.py" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$deployment_apply_sha" "$INSTALL_ROOT/scripts/apply-deployment.py" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$sbom_sha" "$INSTALL_ROOT/config/release-sbom.cdx.json" | sha256sum -c - >/dev/null
+  chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
+fi
 monitoring_files=(
   monitoring/prometheus.yml monitoring/alerts.yml monitoring/loki.yml monitoring/promtail.yml
   monitoring/grafana/provisioning/datasources/vertep.yml
