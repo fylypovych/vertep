@@ -57,7 +57,6 @@ jobs:
           - {name: log-collector, file: docker/log-collector/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: grafana, file: docker/grafana/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: comfyui, file: docker/comfyui-nvidia/Dockerfile, platforms: "linux/amd64"}
-          - {name: comfyui-amd, file: docker/comfyui-amd/Dockerfile, platforms: "linux/amd64"}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -122,7 +121,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for package in core tts publisher-worker backup-service proxy postgres redis ollama monitoring log-store log-collector grafana comfyui comfyui-amd; do
+          for package in core tts publisher-worker backup-service proxy postgres redis ollama monitoring log-store log-collector grafana comfyui; do
             gh api --method PATCH "/user/packages/container/vertep-$package" -f visibility=public >/dev/null
           done
       - name: Create signed runtime release
