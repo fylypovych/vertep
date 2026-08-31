@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.43 - 2026-08-31
+
 - First Run now defers validation and model installation for the appliance-managed Ollama backend until role deployment has started Ollama; Core and Text roles wait for the service and then pull the selected model.
 - The wizard completes setup before opening the Installation Manifest step, fills the manifest before enabling its download button, and no longer claims an unfinished manifest is already available.
 
