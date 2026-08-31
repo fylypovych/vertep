@@ -154,7 +154,8 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("Non-Core роль потребує коректний HTTPS Core URL")
     model = request.get("ollama_model", "llama3.2")
-    if role == "text" and (not isinstance(model, str) or not SAFE_MODEL.fullmatch(model)):
+    managed_ollama = request.get("ai_backend") == "ollama" and "ollama" in plan["services"]
+    if managed_ollama and (not isinstance(model, str) or not SAFE_MODEL.fullmatch(model)):
         raise ValueError("Некоректна назва Ollama model")
     update_env(root / ".env", {
         "NODE_ROLE": role,
@@ -181,7 +182,8 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         runner([*compose, "pull", *sorted(selected)], check=True, timeout=3600)
         runner([*compose, "up", "-d", "--remove-orphans", *sorted(selected)],
                check=True, timeout=1800)
-        if role == "text":
+        if managed_ollama:
+            wait_for_healthy(compose, {"ollama"}, runner)
             runner([*compose, "exec", "-T", "ollama", "ollama", "pull", model],
                    check=True, timeout=3600)
         wait_for_healthy(compose, selected, runner)

@@ -77,6 +77,9 @@ def test_setup_wizard_has_manifest_step():
         assert f'id="{element_id}"' in html
     assert "location.replace(target)" in html
     assert "if(setupCode){alert" in html
+    assert "step===sections.length-3" in html
+    assert "downloadBtn.disabled=false" in html
+    assert "Маніфест буде створено після перевірки налаштувань" in html
 
 
 def test_bootstrap_redirects_to_setup():

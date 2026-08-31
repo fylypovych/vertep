@@ -304,6 +304,7 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
     if node_credentials:
         _write("node-credentials.json", node_credentials)
     _write("deployment-request.json", {"schema": 1, "role": node_role, "version": version,
+                                        "ai_backend": backend,
                                         "core_url": core_url if node_role != "core" else None,
                                         "ollama_model": backend_model or os.getenv("OLLAMA_MODEL", "llama3.2"),
                                         "plan_sha256": plan["sha256"],

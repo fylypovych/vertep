@@ -402,6 +402,13 @@ async def _validate_ai_backend(backend: str, url: str | None, model: str | None,
         raise ValueError("Unsupported AI backend")
     if not model:
         raise ValueError("AI model is required")
+    if backend == "ollama" and url is None:
+        if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", model):
+            raise ValueError("Invalid Ollama model name")
+        # The appliance-managed Ollama container is started only after the
+        # wizard has committed the selected node role. Deployment validates
+        # the container and pulls the model once that service is available.
+        return
     base_url = url or (os.getenv("OLLAMA_URL", "http://ollama:11434") if backend == "ollama"
                        else "https://api.openai.com/v1")
     if backend != "ollama" and not api_key:

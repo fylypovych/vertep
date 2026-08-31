@@ -18,7 +18,7 @@ def fixture(tmp_path, role="gpu"):
     root = tmp_path / "vertep"
     (root / "config").mkdir(parents=True)
     roles = {
-        "core": {"services": ["proxy", "core", "postgres"],
+        "core": {"services": ["proxy", "core", "postgres", "ollama"],
                  "capabilities": ["scheduling"], "modules": ["core"]},
         "gpu": {"services": ["worker", "comfyui", "update-agent"],
                 "capabilities": ["image_generation"], "modules": ["worker", "comfyui"]},
@@ -31,7 +31,7 @@ def fixture(tmp_path, role="gpu"):
         encoding="utf-8")
     plan = module().create_plan(roles, role, "0.0.0.20")
     (root / "config/deployment-request.json").write_text(json.dumps({
-        "schema": 1, "role": role, "version": "0.0.0.20",
+        "schema": 1, "role": role, "version": "0.0.0.20", "ai_backend": "ollama",
         "core_url": None if role == "core" else "https://core.example",
         "plan_sha256": plan["sha256"], "ollama_model": "llama3.2",
     }), encoding="utf-8")
@@ -68,6 +68,14 @@ def test_apply_deployment_rejects_tampered_plan(tmp_path):
 
 def test_text_deployment_provisions_selected_model(tmp_path):
     root = fixture(tmp_path, "text")
+    commands = []
+    module().apply(root, runner=lambda command, **kwargs: commands.append(command))
+    assert any(command[-6:] == ["exec", "-T", "ollama", "ollama", "pull", "llama3.2"]
+               for command in commands)
+
+
+def test_core_deployment_provisions_managed_ollama_model(tmp_path):
+    root = fixture(tmp_path, "core")
     commands = []
     module().apply(root, runner=lambda command, **kwargs: commands.append(command))
     assert any(command[-6:] == ["exec", "-T", "ollama", "ollama", "pull", "llama3.2"]

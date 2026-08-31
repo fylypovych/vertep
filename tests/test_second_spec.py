@@ -72,6 +72,15 @@ def test_ollama_validation_can_install_selected_model(monkeypatch):
     assert calls == [("http://ollama:11434/api/pull", {"name": "llama3.2", "stream": False})]
 
 
+def test_managed_ollama_validation_is_deferred_until_deployment(monkeypatch):
+    class Client:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("managed Ollama must not be contacted before its container is deployed")
+
+    monkeypatch.setattr(core_app.httpx, "AsyncClient", Client)
+    asyncio.run(core_app._validate_ai_backend("ollama", None, "llama3.2", ""))
+
+
 def test_zero_shell_routes_and_ui_are_present():
     paths = {route.path for route in core_app.app.routes}
     assert {"/api/system/backups", "/api/system/backups/{snapshot_id}/restore",
