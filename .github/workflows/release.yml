@@ -1,10 +1,11 @@
-name: Create sequential release
+name: Vertep Release
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: vertep-release
@@ -13,7 +14,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,5 +28,61 @@ jobs:
         run: |
           git config user.name "vertep-release[bot]"
           git config user.email "vertep-release[bot]@users.noreply.github.com"
-      - name: Generate, validate and push next release
-        run: python scripts/release.py
+      - name: Determine version
+        id: version
+        run: |
+          python scripts/release.py --show-next > version.txt
+          echo "version=$(cat version.txt)" >> $GITHUB_OUTPUT
+      - name: Build runtime bundle
+        run: python scripts/release-bundle.py --version ${{ steps.version.outputs.version }}
+      - name: Rename bundle for bootstrap
+        run: |
+          cp releases/vertep-${{ steps.version.outputs.version }}.tar.gz releases/vertep-runtime-${{ steps.version.outputs.version }}.tar.gz
+      - name: Build container images
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep:${{ steps.version.outputs.version }} -t ghcr.io/${{ github.repository_owner }}/vertep:latest .
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-ollama:${{ steps.version.outputs.version }} ./docker/ollama
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-redis:${{ steps.version.outputs.version }} ./docker/redis
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-postgres:${{ steps.version.outputs.version }} ./docker/postgres
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-comfyui-nvidia:${{ steps.version.outputs.version }} ./docker/comfyui-nvidia
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-comfyui-amd:${{ steps.version.outputs.version }} ./docker/comfyui-amd
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-tts:${{ steps.version.outputs.version }} ./docker/tts
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-publisher:${{ steps.version.outputs.version }} ./docker/publisher
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-backup:${{ steps.version.outputs.version }} ./docker/backup
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-grafana:${{ steps.version.outputs.version }} ./docker/grafana
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-monitoring:${{ steps.version.outputs.version }} ./docker/monitoring
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-log-store:${{ steps.version.outputs.version }} ./docker/log-store
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-log-collector:${{ steps.version.outputs.version }} ./docker/log-collector
+          docker build -t ghcr.io/${{ github.repository_owner }}/vertep-proxy:${{ steps.version.outputs.version }} ./docker/proxy
+      - name: Push container images
+        if: secrets.GHCR_PAT != ''
+        run: |
+          echo ${{ secrets.GHCR_PAT }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+          docker push ghcr.io/${{ github.repository_owner }}/vertep:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep:latest
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-ollama:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-redis:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-postgres:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-comfyui-nvidia:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-comfyui-amd:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-tts:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-publisher:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-backup:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-grafana:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-monitoring:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-log-store:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-log-collector:${{ steps.version.outputs.version }}
+          docker push ghcr.io/${{ github.repository_owner }}/vertep-proxy:${{ steps.version.outputs.version }}
+      - name: Create GitHub Release
+        run: |
+          python scripts/release.py --no-push
+          git push origin HEAD:main
+          tag="v${{ steps.version.outputs.version }}"
+          git push origin "$tag"
+          gh release create "$tag" \
+            --title "Vertep ${{ steps.version.outputs.version }}" \
+            --notes-file "releases/${{ steps.version.outputs.version }}.md" \
+            releases/manifest-${{ steps.version.outputs.version }}.json \
+            releases/vertep-runtime-${{ steps.version.outputs.version }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

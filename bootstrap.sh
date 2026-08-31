@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-DOWNLOAD_ORIGIN=${VERTEP_DOWNLOAD_ORIGIN:-https://github.com/fylypovych/vertep}
+DOWNLOAD_ORIGIN=${VERTEP_DOWNLOAD_ORIGIN:-https://api.github.com/repos/fylypovych/vertep/releases/latest}
 INSTALL_ROOT=${VERTEP_INSTALL_ROOT:-/opt/vertep}
 NODE_ROLE=${VERTEP_ROLE:-unassigned}
 CORE_URL=${VERTEP_CORE_URL:-}
@@ -23,8 +23,9 @@ ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 disk_mb=$(df -Pm /opt 2>/dev/null | awk 'NR==2{print $4}' || df -Pm / | awk 'NR==2{print $4}')
 (( ram_mb >= MIN_RAM_MB )) || fail "at least ${MIN_RAM_MB} MB RAM is required (found ${ram_mb})"
 (( disk_mb >= MIN_DISK_MB )) || fail "at least ${MIN_DISK_MB} MB free disk is required (found ${disk_mb})"
-curl -fsS --connect-timeout 10 "$DOWNLOAD_ORIGIN" >/dev/null || fail "Vertep repository is unreachable"
-getent ahosts "${DOWNLOAD_ORIGIN#*://}" | head -1 >/dev/null 2>&1 \
+curl -fsS --connect-timeout 10 "$DOWNLOAD_ORIGIN" >/dev/null || fail "Vertep release service is unreachable or no release is published"
+download_host=${DOWNLOAD_ORIGIN#*://}; download_host=${download_host%%/*}
+getent ahosts "$download_host" | head -1 >/dev/null 2>&1 \
   || fail "DNS cannot resolve the Vertep repository"
 if command -v timedatectl >/dev/null && [[ $(timedatectl show -p NTPSynchronized --value 2>/dev/null) != yes ]]; then
   fail "system clock is not synchronized; configure NTP before installing signed releases"
@@ -90,21 +91,71 @@ fi
 progress "Preparing immutable Vertep runtime"
 install -d -m 0750 "$INSTALL_ROOT"/{data,config,logs,backups,storage,models,runtime,tls}
 
-github_origin="https://github.com/fylypovych/vertep"
-if [[ "$DOWNLOAD_ORIGIN" == *"github.com"* ]]; then
-  progress "Resolving latest GitHub release"
-  release_json=$(curl -fsS "$github_origin/releases/latest" || fail "GitHub releases are unreachable")
-  tag=$(printf '%s' "$release_json" | grep -o 'tag/[^"<> ]*' | head -1 | cut -d/ -f2)
-  [[ -n "$tag" ]] || fail "Could not determine latest release tag"
+if [[ "$DOWNLOAD_ORIGIN" == *"api.github.com"* ]]; then
+  progress "Resolving signed GitHub runtime release"
+  release_json=$(curl -fsS "$DOWNLOAD_ORIGIN")
+  tag=$(printf '%s' "$release_json" | jq -er '.tag_name')
   version=${tag#v}
-  tarball_url="$github_origin/archive/refs/tags/$tag.tar.gz"
-  progress "Downloading Vertep $version from GitHub"
-  curl -fsSL "$tarball_url" -o /tmp/vertep-release.tar.gz || fail "Failed to download release tarball"
-  tar -xzf /tmp/vertep-release.tar.gz -C /tmp
-  extracted_dir=$(find /tmp -maxdepth 1 -type d -name "vertep-*" | head -1)
-  [[ -n "$extracted_dir" ]] || fail "Release tarball did not contain expected directory"
-  cp -a "$extracted_dir"/. "$INSTALL_ROOT/"
-  rm -rf /tmp/vertep-release.tar.gz "$extracted_dir"
+  asset_name="vertep-runtime-${version}.tar.gz"
+  bundle_url=$(printf '%s' "$release_json" | jq -er --arg name "$asset_name" \
+    '.assets[] | select(.name == $name) | .browser_download_url') \
+    || fail "GitHub release $tag has no $asset_name asset"
+  bundle_tmp=$(mktemp); bundle_root=$(mktemp -d)
+  trap 'rm -f "$bundle_tmp"; rm -rf "$bundle_root"' EXIT
+  curl -fsSL "$bundle_url" -o "$bundle_tmp" || fail "Failed to download $asset_name"
+  python3 - "$bundle_tmp" "$bundle_root" <<'PY'
+import pathlib, sys, tarfile
+archive, destination = sys.argv[1:]
+root = pathlib.Path(destination).resolve()
+with tarfile.open(archive, "r:gz") as source:
+    for member in source.getmembers():
+        name = pathlib.PurePosixPath(member.name)
+        target = (root / pathlib.Path(*name.parts)).resolve()
+        if (name.is_absolute() or ".." in name.parts or member.issym() or member.islnk()
+                or member.isdev() or (target != root and root not in target.parents)):
+            raise SystemExit(f"unsafe runtime bundle member: {member.name}")
+    source.extractall(root)
+PY
+  manifest_tmp="$bundle_root/manifest.json"
+  [[ -f $manifest_tmp ]] || fail "Runtime bundle has no manifest.json"
+  public_key_tmp=$(mktemp); canonical_tmp=$(mktemp); signature_tmp=$(mktemp)
+  cat > "$public_key_tmp" <<'BOOTSTRAP_PUBLIC_KEY'
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu6Tn67753+ax6mx8/cXP
+TfS/BZr/PFNlfSF7EIJpShfgsm9mad+9glwYxN9AHjW1UfTM8lqUfugdItP8zCze
+1ltAfQT0hAmkKInX4ONesvEKlfoW0Zu0tye9KXCvPIFVR7osiaysPQcon7KStZI4
+Kfhe37wOl88yfPFWIhC41DnF6tgGm+q32OPr15fHX4jQaC95OKz/cZW+e/XC5Vlz
+s7F/qWL7k2+07UG+dTjLK++ckSCzo1J+/18QZ6fyDgn7eu0DV8IAclufa/y72M9B
+vpvdIWixnMowK4GLvzGsmez9Zyt1ocCCjji7hsBbwwTPeZcf8evuk2uUgsZG8MYX
+ZwIDAQAB
+-----END PUBLIC KEY-----
+BOOTSTRAP_PUBLIC_KEY
+  python3 - "$manifest_tmp" "$canonical_tmp" "$signature_tmp" "$bundle_root" <<'PY'
+import base64, hashlib, json, pathlib, sys
+source, canonical, signature, bundle = sys.argv[1:]
+root = pathlib.Path(bundle).resolve()
+manifest = json.load(open(source, encoding="utf-8"))
+encoded = manifest.pop("signature", None)
+if not isinstance(encoded, str):
+    print("WARNING: runtime manifest has no signature; skipping signature verification")
+    sys.exit(0)
+open(canonical, "wb").write(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode())
+open(signature, "wb").write(base64.b64decode(encoded, validate=True))
+for name, metadata in manifest.get("files", {}).items():
+    relative = pathlib.PurePosixPath(name)
+    path = (root / pathlib.Path(*relative.parts)).resolve()
+    if relative.is_absolute() or ".." in relative.parts or root not in path.parents or not path.is_file():
+        raise SystemExit(f"unsafe or missing runtime artifact: {name}")
+    if path.stat().st_size != metadata.get("size"):
+        raise SystemExit(f"runtime artifact size mismatch: {name}")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != metadata.get("sha256"):
+        raise SystemExit(f"runtime artifact checksum mismatch: {name}")
+PY
+  openssl dgst -sha256 -verify "$public_key_tmp" -signature "$signature_tmp" "$canonical_tmp" >/dev/null \
+    || fail "runtime manifest signature verification failed"
+  [[ $(jq -er '.version' "$manifest_tmp") == "$version" ]] \
+    || fail "GitHub release tag and runtime manifest version differ"
+  cp -a "$bundle_root"/. "$INSTALL_ROOT/"
   chmod -R u+rX,g+rX,o-rwx "$INSTALL_ROOT"
 else
   manifest_tmp=$(mktemp); trap 'rm -f "$manifest_tmp"' EXIT
@@ -183,6 +234,7 @@ PY
   printf '%s  %s\n' "$sbom_sha" "$INSTALL_ROOT/config/release-sbom.cdx.json" | sha256sum -c - >/dev/null
   chmod 0750 "$INSTALL_ROOT/scripts/vertep" "$INSTALL_ROOT/scripts/"*.py
 fi
+planner_sha=$(jq -er '.files["runtime/deployment-plan.py"].sha256 // .files["deployment-plan.py"].sha256' "$manifest_tmp")
 monitoring_files=(
   monitoring/prometheus.yml monitoring/alerts.yml monitoring/loki.yml monitoring/promtail.yml
   monitoring/grafana/provisioning/datasources/vertep.yml
@@ -193,7 +245,7 @@ for relative in "${monitoring_files[@]}"; do
   artifact_sha=$(jq -er --arg name "$relative" '.files[$name].sha256' "$manifest_tmp")
   destination="$INSTALL_ROOT/$relative"
   install -d -m 0750 "$(dirname "$destination")"
-  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$relative" -o "$destination"
+  [[ -f $destination ]] || curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$relative" -o "$destination"
   printf '%s  %s\n' "$artifact_sha" "$destination" | sha256sum -c - >/dev/null
   chmod 0640 "$destination"
 done
@@ -227,6 +279,7 @@ fi
 role_services=("${BOOTSTRAP_SERVICES[@]}" "${role_services[@]}")
 mapfile -t role_services < <(printf '%s\n' "${role_services[@]}" | awk '!seen[$0]++')
 node_capabilities=$(jq -r --arg role "$NODE_ROLE" '.roles.profiles[$role].capabilities[]' "$INSTALL_ROOT/config/node_roles.json" 2>/dev/null | paste -sd, - || true)
+platform="linux/$arch"
 jq -e --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
   . as $manifest |
   $manifest.roles.catalog_sha256 == $manifest.files[$manifest.roles.catalog_file].sha256 and
@@ -238,6 +291,18 @@ jq -e --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
     all($manifest.roles.profiles[$role].services[]; . as $service |
         ($manifest.images[$service].digest | test("^sha256:[0-9a-f]{64}$"))))
 ' "$manifest_tmp" >/dev/null || fail "role catalog is inconsistent with the signed runtime contract"
+for service in "${role_services[@]}"; do
+  jq -e --arg service "$service" --arg platform "$platform" \
+    '.images[$service].platforms | index($platform) != null' "$manifest_tmp" >/dev/null \
+    || fail "service $service has no signed image for $platform"
+done
+comfyui_image_service=comfyui
+[[ $gpu_vendor == amd ]] && comfyui_image_service=comfyui-amd
+if printf '%s\n' "${role_services[@]}" | grep -qx comfyui; then
+  jq -e --arg service "$comfyui_image_service" --arg platform "$platform" \
+    '.images[$service].platforms | index($platform) != null' "$manifest_tmp" >/dev/null \
+    || fail "ComfyUI image $comfyui_image_service has no signed image for $platform"
+fi
 
 secret(){ openssl rand -base64 "$1" | tr -d '\n'; }
 postgres_password=$(secret 36); redis_password=$(secret 36); jwt_secret=$(secret 48)
@@ -258,7 +323,7 @@ VERTEP_DISPATCHER_IMAGE=$(resolved_image dispatcher)
 VERTEP_SCHEDULER_IMAGE=$(resolved_image scheduler)
 VERTEP_CERTIFICATE_MANAGER_IMAGE=$(resolved_image certificate-manager)
 VERTEP_WORKER_IMAGE=$(resolved_image worker)
-VERTEP_COMFYUI_IMAGE=$(resolved_image comfyui)
+VERTEP_COMFYUI_IMAGE=$(resolved_image "$comfyui_image_service")
 VERTEP_TTS_IMAGE=$(resolved_image tts)
 VERTEP_PUBLISHER_WORKER_IMAGE=$(resolved_image publisher-worker)
 VERTEP_BACKUP_SERVICE_IMAGE=$(resolved_image backup-service)
@@ -315,7 +380,8 @@ printf '%s' "$redis_password" > "$INSTALL_ROOT/config/redis.password"
 printf '%s' "$encryption_key" > "$INSTALL_ROOT/config/backup.key"
 chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase" "$INSTALL_ROOT/config/postgres.password" \
   "$INSTALL_ROOT/config/redis.password" "$INSTALL_ROOT/config/backup.key"
-curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
+[[ -f "$INSTALL_ROOT/runtime/deployment-plan.py" ]] \
+  || curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
 printf '%s  %s\n' "$planner_sha" "$INSTALL_ROOT/runtime/deployment-plan.py" | sha256sum -c - >/dev/null
 python3 - "$version" "$INSTALL_ROOT/config/deployment-plan.json" "${BOOTSTRAP_SERVICES[@]}" <<'PY'
 import hashlib, json, sys
@@ -348,7 +414,11 @@ for unit in vertep-update.service vertep-update.path vertep-update-check.service
              vertep-watchdog.service vertep-watchdog.timer \
              vertep-startup-recovery.service; do
   unit_sha=$(jq -er --arg name "$unit" '.files[$name].sha256' "$manifest_tmp")
-  curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$unit" -o "/tmp/$unit"
+  if [[ -f "$INSTALL_ROOT/$unit" ]]; then
+    cp "$INSTALL_ROOT/$unit" "/tmp/$unit"
+  else
+    curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$unit" -o "/tmp/$unit"
+  fi
   printf '%s  %s\n' "$unit_sha" "/tmp/$unit" | sha256sum -c - >/dev/null
   sed "s|@VERTEP_ROOT@|$INSTALL_ROOT|g" "/tmp/$unit" > "/etc/systemd/system/$unit"
   rm -f "/tmp/$unit"
