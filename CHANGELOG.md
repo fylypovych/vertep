@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.49 - 2026-09-01
+
 - `vertep update` and the periodic update checker now authenticate with the host-only internal key instead of obsolete bootstrap administrator credentials, so First Run account creation no longer causes HTTP 401 responses.
 - Bootstrap, update and rollback paths remove only Docker Compose's stale hash-prefixed replacement containers before recreation, allowing interrupted updates to resume without container-name conflicts while preserving volumes and configuration.
 - The privileged update agent uses the same internal key for drain-readiness checks during an update.
