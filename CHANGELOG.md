@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.54 - 2026-09-01
+
 - Replaced the raw character JSON editor with a responsive Ukrainian form for identity, language, behavior, appearance, voice, generation and publishing settings; editing now loads the current character and opens reliably.
 - Localized the dashboard navigation, actions, statuses and operator-facing lifecycle terminology in Ukrainian, while preserving technical identifiers where they are needed for configuration.
 - Added JavaScript contract coverage and browser tests for both creating and editing characters without console errors.
