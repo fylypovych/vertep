@@ -184,6 +184,8 @@ def test_bootstrap_preflight_and_text_model_provisioning_contract():
     assert "'.[$role].services[]'" in bootstrap
     assert "'.roles.profiles[$role].services[]'" not in bootstrap
     assert 'has($role)' in bootstrap
+    assert "^[0-9a-f]{12}_vertep-" in bootstrap
+    assert 'docker rm -f "$stale_id"' in bootstrap
     recovery_unit = (Path(__file__).parents[1] / "installer/vertep-startup-recovery.service").read_text()
     assert "[Install]" in recovery_unit
     assert "WantedBy=multi-user.target" in recovery_unit
@@ -226,6 +228,9 @@ def test_signed_update_switches_runtime_images_and_host_executors():
     assert '"$ROOT/.env" "$release_root/manifest.json" "$target_version"' in command
     assert '[[ ! -f "$backup/.env" ]] || cp -a "$backup/.env" "$ROOT/.env"' in command
     assert 'sync_host_runtime "$release_root"' in command
+    assert "X-Vertep-Internal-Key" in command
+    assert "cleanup_stale_compose_replacements" in command
+    assert command.index("cleanup_stale_compose_replacements", command.index("apply-update)")) < command.index('"${compose[@]}" up -d postgres redis')
     assert command.count('source "$ROOT/.env"') >= 3
     assert '--exclude=releases' in command and '--exclude=current' in command
     assert '"worker_update.py", "update-runtime-env.py"' in runtime

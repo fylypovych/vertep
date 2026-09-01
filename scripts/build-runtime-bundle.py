@@ -94,7 +94,7 @@ def build(root: Path, output: Path, version: str, sequence: int,
     contract = build_contract(
         output, version, sequence, "stable", "config/node_roles.json",
         output / "images.json", "sbom.cdx.json", datetime.now(timezone.utc), 365,
-        {"core_api": 1, "worker_api": 1, "database_schema": 8,
+        {"core_api": 1, "worker_api": 1, "database_schema": 9,
          "database_strategy": "expand", "rollback_safe": True,
          "minimum_version": "0.0.0.1"},
     )

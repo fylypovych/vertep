@@ -538,6 +538,11 @@ compose=(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker
 [[ $gpu_vendor == amd ]] && compose+=(-f "$INSTALL_ROOT/docker-compose.amd.yml")
 [[ $gpu_vendor == nvidia ]] && compose+=(-f "$INSTALL_ROOT/docker-compose.nvidia.yml")
 "${compose[@]}" pull "${role_services[@]}"
+while read -r stale_id stale_name; do
+  [[ "$stale_name" =~ ^[0-9a-f]{12}_vertep- ]] || continue
+  printf 'Removing stale Compose replacement container %s (%s)\n' "$stale_name" "$stale_id"
+  docker rm -f "$stale_id" >/dev/null
+done < <(docker ps -a --format '{{.ID}} {{.Names}}')
 "${compose[@]}" up -d --remove-orphans "${role_services[@]}"
 migrate_id=$("${compose[@]}" ps -aq migrate)
 [[ -n $migrate_id && $(docker inspect -f '{{.State.ExitCode}}' "$migrate_id") -eq 0 ]] \

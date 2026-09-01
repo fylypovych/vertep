@@ -212,3 +212,17 @@ def test_update_api_requires_admin_role(monkeypatch, tmp_path):
     queued = client.post("/api/system/update/check", auth=("admin", "fallback-admin-password"))
     assert queued.status_code == 200
     assert queued.json()["state"] == "PENDING"
+
+
+def test_update_api_accepts_only_valid_internal_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "fallback-admin-password")
+    monkeypatch.setenv("INTERNAL_API_KEY", "host-executor-secret")
+    monkeypatch.setenv("WEB_UPDATE_ENABLED", "true")
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    client = TestClient(app)
+    assert client.post("/api/system/update/check",
+                       headers={"X-Vertep-Internal-Key": "wrong"}).status_code == 401
+    queued = client.post("/api/system/update/check",
+                         headers={"X-Vertep-Internal-Key": "host-executor-secret"})
+    assert queued.status_code == 200
+    assert queued.json()["state"] == "PENDING"

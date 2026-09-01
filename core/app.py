@@ -256,6 +256,13 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             # Keeping that check in one place also supports hashed per-worker tokens.
             response = await call_next(request)
             return self._secure(response)
+        internal_key = os.getenv("INTERNAL_API_KEY", "")
+        internal_update_routes = {"/api/status", "/api/system/update/check", "/api/system/update/run",
+                                  "/api/system/update/readiness"}
+        if (request.url.path in internal_update_routes and internal_key
+                and secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), internal_key)):
+            response = await call_next(request)
+            return self._secure(response)
         public = ("/api/health", "/api/telegram/webhook")
         if ((not configured_user() and not password and not os.getenv("USERS_JSON", "").strip(" {}"))
                 or request.url.path.startswith(public) or request.url.path == "/api/nodes/register"):

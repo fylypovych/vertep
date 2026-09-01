@@ -81,8 +81,11 @@ def run(command: list[str], root: Path) -> str:
 def core_json(path: str) -> dict:
     url = os.getenv("VERTEP_CORE_URL", "http://127.0.0.1:8080").rstrip("/") + path
     request = Request(url)
+    internal_key = os.getenv("INTERNAL_API_KEY")
     password = os.getenv("ADMIN_PASSWORD")
-    if password:
+    if internal_key:
+        request.add_header("X-Vertep-Internal-Key", internal_key)
+    elif password:
         credentials = f"{os.getenv('ADMIN_USER', 'admin')}:{password}"
         request.add_header("Authorization", "Basic " + base64.b64encode(credentials.encode()).decode())
     with urlopen(request, timeout=10) as response:

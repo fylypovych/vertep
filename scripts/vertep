@@ -20,6 +20,14 @@ core_url=${VERTEP_CORE_URL:-${CORE_ADDRESS:-https://127.0.0.1:8443}}
 core_tls=()
 [[ "$core_url" == "https://127.0.0.1:8443" || "$core_url" == "https://localhost:8443" ]] \
   && core_tls=(--insecure)
+cleanup_stale_compose_replacements(){
+  local container_id container_name
+  while read -r container_id container_name; do
+    [[ "$container_name" =~ ^[0-9a-f]{12}_vertep- ]] || continue
+    printf 'Removing stale Compose replacement container %s (%s)\n' "$container_name" "$container_id"
+    docker rm -f "$container_id" >/dev/null
+  done < <(docker ps -a --format '{{.ID}} {{.Names}}')
+}
 sync_host_runtime(){
   local release_root=$1
   install -d -m 0750 "$ROOT/scripts" "$ROOT/core"
@@ -36,6 +44,8 @@ case "${1:-status}" in
   status)
     if [[ "$role" == "worker" ]]; then
       payload=$(curl -fsS "${core_tls[@]}" --connect-timeout 3 -H "X-Vertep-Token: ${NODE_API_TOKEN:-}" "$core_url/api/node/status/${NODE_NAME:-unknown}" 2>/dev/null || printf '{}')
+    elif [[ -n "${INTERNAL_API_KEY:-}" ]]; then
+      payload=$(curl -fsS "${core_tls[@]}" --connect-timeout 3 -H "X-Vertep-Internal-Key: ${INTERNAL_API_KEY}" "$core_url/api/status" 2>/dev/null || printf '{}')
     else
       payload=$(curl -fsS "${core_tls[@]}" --connect-timeout 3 -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/status" 2>/dev/null || printf '{}')
     fi
@@ -43,7 +53,11 @@ case "${1:-status}" in
     ;;
   update)
     auth=()
-    [[ -n "${ADMIN_PASSWORD:-}" ]] && auth=(-u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD}")
+    if [[ -n "${INTERNAL_API_KEY:-}" ]]; then
+      auth=(-H "X-Vertep-Internal-Key: ${INTERNAL_API_KEY}")
+    elif [[ -n "${ADMIN_PASSWORD:-}" ]]; then
+      auth=(-u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD}")
+    fi
     curl -fsS "${core_tls[@]}" "${auth[@]}" -X POST "$core_url/api/system/update/run"
     printf '\nUpdate request accepted; follow progress with vertep status.\n'
     ;;
@@ -115,6 +129,7 @@ case "${1:-status}" in
       && compose+=(-f "$release_root/docker-compose.amd.yml")
     [[ "${GPU_VENDOR:-none}" == nvidia && -f "$release_root/docker-compose.nvidia.yml" ]] \
       && compose+=(-f "$release_root/docker-compose.nvidia.yml")
+    cleanup_stale_compose_replacements
     if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
       "${compose[@]}" up -d postgres redis
       database_ready=false
@@ -190,6 +205,7 @@ case "${1:-status}" in
       && compose+=(-f "$release_root/docker-compose.amd.yml")
     [[ "${GPU_VENDOR:-none}" == nvidia && -f "$release_root/docker-compose.nvidia.yml" ]] \
       && compose+=(-f "$release_root/docker-compose.nvidia.yml")
+    cleanup_stale_compose_replacements
     if [[ ( "$role" == "core" || "$role" == "core-worker" ) \
           && -f "$backup/database-restore-required" && -s "$backup/postgres.sql" ]]; then
       "${compose[@]}" stop core || true

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `vertep update` and the periodic update checker now authenticate with the host-only internal key instead of obsolete bootstrap administrator credentials, so First Run account creation no longer causes HTTP 401 responses.
+- Bootstrap, update and rollback paths remove only Docker Compose's stale hash-prefixed replacement containers before recreation, allowing interrupted updates to resume without container-name conflicts while preserving volumes and configuration.
+- The privileged update agent uses the same internal key for drain-readiness checks during an update.
+- Host-side `vertep status` now uses internal authentication as well, and signed runtime contracts report database schema generation 9 after the node-token expansion migration.
+
 ## 0.0.0.47 - 2026-09-01
 
 - Resumed installations now resolve services and capabilities from the downloaded role catalog using its actual top-level schema; repeating bootstrap after First Run no longer fails with `Cannot iterate over null`.
