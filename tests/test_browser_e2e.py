@@ -17,6 +17,10 @@ def test_setup_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page.route("**/api/setup", lambda route: route.fulfill(json={
+            "configured": False, "selected_role": None, "hardware": {},
+            "roles": {"core": {"label": "Основний сервер", "modules": [], "capabilities": []}},
+        }))
         page.goto(f"{BASE_URL}/setup?token=ci")
         assert "Vertep" in page.title()
         expect(page.locator("body")).to_contain_text("Перший запуск")
@@ -118,6 +122,24 @@ def test_friendly_queue_workflow_and_core_role_controls():
         expect(page.locator("#systemstatus")).to_be_hidden()
         expect(page.locator("#core-role-options input[type=checkbox]")).to_have_count(6)
         assert errors == []
+        browser.close()
+
+
+def test_update_panel_has_progress_and_restart_control():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.route("**/api/system/update", lambda route: route.fulfill(json={
+            "state": "RUNNING", "phase": "RESTARTING", "action": "update",
+            "request_id": "test-update", "progress": 82, "current_version": "0.0.0.60",
+            "available_version": "0.0.0.62", "update_available": True,
+            "message": "Restarting active Vertep services", "log": [], "enabled": True,
+        }))
+        page.goto(BASE_URL)
+        page.locator('#nav button[data-panel="settings"]').click()
+        expect(page.locator('#update-friendly [role="progressbar"]')).to_have_attribute("aria-valuenow", "82")
+        expect(page.locator("#update-friendly")).to_contain_text("Перезапуск сервера")
+        expect(page.locator("#restartserver")).to_be_visible()
         browser.close()
 
 

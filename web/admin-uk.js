@@ -360,6 +360,7 @@
     OK: "Працює", HEALTHY: "Працює", NORMAL: "Нормальний", SUCCEEDED: "Завершено",
     FAILED: "Помилка", ERROR: "Помилка", OFFLINE: "Недоступний", UNHEALTHY: "Несправний",
     PENDING: "Очікує", RUNNING: "Виконується", APPLYING: "Застосовується", QUEUED: "У черзі",
+    ROLLED_BACK: "Відновлено попередню версію",
   })[String(value || "").toUpperCase()] || String(value || "—");
 
   const queueRaw = document.querySelector("#queuestatus");
@@ -376,6 +377,8 @@
   if (updateRaw) {
     updateRaw.hidden = true;
     updateRaw.insertAdjacentHTML("afterend", '<div id="update-friendly"></div>');
+    document.querySelector("#runupdate")?.insertAdjacentHTML(
+      "afterend", ' <button id="restartserver" type="button" class="secondary">Перезапустити сервер</button>');
   }
 
   const renderOperationalStatus = async () => {
@@ -453,20 +456,108 @@
     finally { button.disabled = false; }
   });
 
+  const phaseLabels = {
+    CHECKING: "Перевірка підпису", MAINTENANCE: "Завершення активних завдань",
+    DOWNLOADING: "Завантаження пакета", UPDATING: "Встановлення",
+    RESTARTING: "Перезапуск сервера", VERIFYING: "Перевірка працездатності",
+    RECOVERING: "Відновлення попередньої версії", NORMAL: "Готово",
+  };
+  const phaseFallbackProgress = {CHECKING: 10, MAINTENANCE: 25, DOWNLOADING: 40,
+    UPDATING: 55, RESTARTING: 80, VERIFYING: 92, RECOVERING: 75, NORMAL: 100};
+  const updateSteps = [
+    ["CHECKING", "Перевірка"], ["MAINTENANCE", "Підготовка"], ["DOWNLOADING", "Завантаження"],
+    ["UPDATING", "Встановлення"], ["RESTARTING", "Перезапуск"],
+  ];
+  const updateMessagesUk = {
+    "Checking signed release manifest": "Перевіряємо підписаний маніфест оновлення",
+    "Signed release manifest verified": "Підпис пакета оновлення перевірено",
+    "Maintenance mode; waiting for active jobs": "Очікуємо завершення активних завдань",
+    "Workers drained and queue paused": "Активні завдання завершено, чергу призупинено",
+    "Downloading and verifying update package": "Завантажуємо та перевіряємо пакет оновлення",
+    "Backup and package installation started": "Створюємо резервну копію та встановлюємо пакет",
+    "Backup completed": "Резервну копію створено",
+    "Signed release activated": "Нову версію активовано",
+    "Restarting Vertep services": "Готуємо перезапуск сервісів Vertep",
+    "Restarting active Vertep services": "Перезапускаємо активні сервіси Vertep",
+    "Server restarted; waiting for health checks": "Сервер перезапущено, перевіряємо працездатність",
+    "Update completed": "Оновлення успішно завершено",
+    "Update check completed": "Перевірку оновлень завершено",
+    "Server restart completed": "Перезапуск сервера завершено",
+  };
+  const updateMessage = (value) => updateMessagesUk[value] || value;
+  let lastUpdateSnapshot = null, updateSeenRunning = false, updateOfflineSince = 0, reloadScheduled = false;
+  const renderUpdateSnapshot = (value, disconnected = false) => {
+    const target = document.querySelector("#update-friendly"); if (!target) return;
+    let progress = Number.isFinite(Number(value.progress)) ? Number(value.progress) : (phaseFallbackProgress[value.phase] || 0);
+    if (disconnected) {
+      if (!updateOfflineSince) updateOfflineSince = Date.now();
+      progress = Math.min(94, Math.max(progress, progress + Math.floor((Date.now() - updateOfflineSince) / 3000)));
+    } else updateOfflineSince = 0;
+    progress = Math.max(0, Math.min(100, Math.round(progress)));
+    const failed = ["FAILED", "ROLLED_BACK"].includes(String(value.state || "").toUpperCase());
+    const thresholds = [15, 30, 45, 70, 80];
+    const stepMarkup = updateSteps.map(([phase, label], index) => {
+      const css = progress >= (thresholds[index + 1] || 100) ? "done"
+        : progress >= thresholds[index] ? "active" : "";
+      return `<span class="update-step ${css}">${label}</span>`;
+    }).join("");
+    target.innerHTML = `<div class="update-progress-wrap">
+        <div class="update-progress-head"><b>${esc(phaseLabels[value.phase] || ukState(value.state))}</b><strong>${progress}%</strong></div>
+        <div class="update-progress" role="progressbar" aria-label="Прогрес оновлення" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span class="${failed ? "failed" : ""}" style="width:${progress}%"></span></div>
+      </div><div class="update-steps">${stepMarkup}</div>
+      ${disconnected ? '<p class="update-offline">CORE тимчасово недоступний — сервер перезапускається. Сторінка продовжує очікувати автоматично.</p>' : ""}
+      <div class="status-list">
+        <div class="status-row"><span>Встановлена версія</span><b>${esc(value.current_version || "—")}</b></div>
+        <div class="status-row"><span>Доступна версія</span><b>${esc(value.available_version || (value.update_available ? "нова" : "оновлень немає"))}</b></div>
+        <div class="status-row"><span>Стан</span><b class="${stateClass(value.state)}">${esc(ukState(value.state))}</b></div>
+        ${value.message ? `<div class="status-row"><span>Зараз виконується</span><b>${esc(updateMessage(value.message))}</b></div>` : ""}
+      </div>${(value.log || []).length ? `<details><summary>Журнал оновлення</summary><ol class="event-log">${value.log.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : ""}`;
+  };
+  const scheduleUpdateReload = (value) => {
+    if (reloadScheduled || !updateSeenRunning || !["update", "restart"].includes(value.action)
+        || value.state !== "SUCCEEDED" || !value.request_id) return;
+    const key = `vertep-update-reloaded:${value.request_id}`;
+    if (sessionStorage.getItem(key)) return;
+    reloadScheduled = true;
+    sessionStorage.setItem(key, "1");
+    const target = document.querySelector("#update-friendly");
+    target?.insertAdjacentHTML("afterbegin", '<p class="state-ok"><b>Готово. Сторінка автоматично оновиться…</b></p>');
+    setTimeout(() => window.location.reload(), 1800);
+  };
   const renderUpdateFriendly = async () => {
     const target = document.querySelector("#update-friendly");
     if (!target) return;
     try {
       const value = await window.api("/api/system/update");
-      const available = value.update_available === true;
-      target.innerHTML = `<div class="status-list">
-        <div class="status-row"><span>Встановлена версія</span><b>${esc(value.current_version || "—")}</b></div>
-        <div class="status-row"><span>Доступна версія</span><b>${esc(value.available_version || (available ? "нова" : "оновлень немає"))}</b></div>
-        <div class="status-row"><span>Стан</span><b class="${stateClass(value.state)}">${esc(ukState(value.state))}</b></div>
-        ${value.message ? `<div class="status-row"><span>Повідомлення</span><b>${esc(value.message)}</b></div>` : ""}
-      </div>${(value.log || []).length ? `<details><summary>Журнал оновлення</summary><ol class="event-log">${value.log.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : ""}`;
-    } catch (error) { target.innerHTML = `<p class="form-error visible">Статус оновлення недоступний: ${esc(error.message)}</p>`; }
+      lastUpdateSnapshot = value;
+      if (["PENDING", "RUNNING"].includes(value.state) && ["update", "restart"].includes(value.action)) updateSeenRunning = true;
+      const busy = ["PENDING", "RUNNING"].includes(value.state);
+      const restartButton = document.querySelector("#restartserver");
+      if (restartButton) restartButton.disabled = busy || !value.enabled;
+      renderUpdateSnapshot(value);
+      scheduleUpdateReload(value);
+    } catch (error) {
+      if (lastUpdateSnapshot && updateSeenRunning) renderUpdateSnapshot(lastUpdateSnapshot, true);
+      else target.innerHTML = `<p class="form-error visible">Статус оновлення недоступний: ${esc(error.message)}</p>`;
+    }
   };
+
+  window.requestSystemUpdate = async (action) => {
+    const isUpdate = action === "run";
+    if (isUpdate && !confirm("Завершити активні завдання, створити резервну копію, встановити оновлення та перезапустити сервер?")) return;
+    try {
+      const value = await window.api(`/api/system/update/${isUpdate ? "run" : "check"}`, {method: "POST"});
+      if (isUpdate) updateSeenRunning = true;
+      lastUpdateSnapshot = value; renderUpdateSnapshot(value); renderUpdateFriendly();
+    } catch (error) { alert(error.message); renderUpdateFriendly(); }
+  };
+  document.querySelector("#restartserver")?.addEventListener("click", async () => {
+    if (!confirm("Перезапустити активні сервіси Vertep? Сторінка буде тимчасово недоступною.")) return;
+    try {
+      const value = await window.api("/api/system/update/restart", {method: "POST"});
+      updateSeenRunning = true; lastUpdateSnapshot = value; renderUpdateSnapshot(value); renderUpdateFriendly();
+    } catch (error) { alert(error.message); }
+  });
 
   const renderLifecycleFriendly = async () => {
     const target = document.querySelector("#friendly-lifecycle-content"); if (!target) return;

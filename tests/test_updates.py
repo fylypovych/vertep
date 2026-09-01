@@ -48,6 +48,36 @@ def test_update_request_is_atomic_and_single_flight(monkeypatch, tmp_path):
     assert not list(tmp_path.rglob("*.tmp"))
 
 
+def test_restart_request_has_explicit_progress(monkeypatch, tmp_path):
+    monkeypatch.setenv("WEB_UPDATE_ENABLED", "true")
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    queued = request_update("restart")
+    assert queued["action"] == "restart"
+    assert queued["phase"] == "RESTARTING"
+    assert queued["progress"] == 1
+
+
+def test_update_agent_restart_uses_privileged_runtime_command(monkeypatch, tmp_path):
+    agent = load_update_agent()
+    root, state = tmp_path / "repo", tmp_path / "state"
+    root.mkdir()
+    requests = state / "requests"
+    requests.mkdir(parents=True)
+    request_path = requests / ("b" * 32 + ".json")
+    request_path.write_text(json.dumps({"request_id": "b" * 32, "action": "restart"}),
+                            encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(agent, "run", lambda command, root, extra_env=None:
+                        calls.append((command, extra_env)) or "runtime healthy")
+    agent.process_request(root, state, request_path)
+    result = json.loads((state / "status.json").read_text(encoding="utf-8"))
+    assert calls[0][0][-1] == "restart-runtime"
+    assert calls[0][1]["VERTEP_UPDATE_STATUS_FILE"].endswith("status.json")
+    assert result["state"] == "SUCCEEDED"
+    assert result["progress"] == 100
+    assert not request_path.exists()
+
+
 def test_web_update_is_disabled_by_default(monkeypatch, tmp_path):
     monkeypatch.setenv("WEB_UPDATE_ENABLED", "false")
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))

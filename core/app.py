@@ -1662,6 +1662,16 @@ def web_update_run():
         raise HTTPException(503, f"Update agent state directory is unavailable: {error}") from error
 
 
+@app.post("/api/system/update/restart")
+def web_server_restart():
+    try:
+        return request_update("restart")
+    except (RuntimeError, FileExistsError) as error:
+        raise HTTPException(409, str(error)) from error
+    except OSError as error:
+        raise HTTPException(503, f"Update agent state directory is unavailable: {error}") from error
+
+
 @app.get("/api/system/update/rolling")
 def rolling_update_status():
     return rollout_status()

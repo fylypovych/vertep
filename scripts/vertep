@@ -40,6 +40,35 @@ sync_host_runtime(){
   install -m 0640 "$release_root/VERSION" "$ROOT/VERSION"
   ln -sfn "$ROOT/scripts/vertep" /usr/local/bin/vertep
 }
+update_progress(){
+  [[ -n "${VERTEP_UPDATE_STATUS_FILE:-}" && -f "${VERTEP_UPDATE_STATUS_FILE}" ]] || return 0
+  python3 - "$VERTEP_UPDATE_STATUS_FILE" "$1" "$2" "$3" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+path = Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+value.update({"progress": max(0, min(100, int(sys.argv[2]))), "phase": sys.argv[3],
+              "message": sys.argv[4], "updated_at": datetime.now(timezone.utc).isoformat()})
+value.setdefault("log", []).append(f"{value['updated_at']} {sys.argv[4]}")
+temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+temporary.replace(path)
+PY
+}
+selected_runtime_services(){
+  python3 - "$ROOT/config/deployment-plan.json" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    for service in value.get("services", []):
+        if service != "migrate":
+            print(service)
+except (OSError, ValueError):
+    pass
+PY
+}
 case "${1:-status}" in
   status)
     if [[ "$role" == "worker" ]]; then
@@ -97,6 +126,7 @@ case "${1:-status}" in
     fi
     (cd "$backup" && find . -type f ! -name SHA256SUMS -print0 \
       | sort -z | xargs -0 sha256sum > SHA256SUMS)
+    update_progress 58 UPDATING "Backup completed"
     staging=$(mktemp -d "$ROOT/.update-staging.XXXXXX")
     trap 'rm -rf "$staging"' EXIT
     python3 "$ROOT/scripts/safe-extract.py" "$package" "$staging"
@@ -122,6 +152,7 @@ case "${1:-status}" in
     # shellcheck disable=SC1091
     source "$ROOT/.env"
     set +a
+    update_progress 70 UPDATING "Signed release activated"
     # Compose interpolation must use the persistent environment, while the
     # signed compose definition and application files come from the release.
     compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
@@ -155,12 +186,16 @@ case "${1:-status}" in
           psql -v ON_ERROR_STOP=1 -U vertep -d vertep -c "INSERT INTO schema_migrations(version) VALUES('$version')"
       done
     fi
-    case "$role" in
-      worker) "${compose[@]}" up -d worker ;;
-      core) "${compose[@]}" up -d core redis postgres ;;
-      core-worker) "${compose[@]}" up -d ;;
-      *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
-    esac
+    mapfile -t selected_services < <(selected_runtime_services)
+    [[ ${#selected_services[@]} -gt 0 ]] || mapfile -t selected_services < <("${compose[@]}" ps --services --filter status=running)
+    if [[ "$role" == "worker" ]]; then selected_services=(worker); fi
+    [[ ${#selected_services[@]} -gt 0 ]] || { echo "No active Vertep services found" >&2; exit 1; }
+    restart_services=()
+    for service in "${selected_services[@]}"; do
+      [[ "$service" == postgres || "$service" == redis || "$service" == migrate ]] || restart_services+=("$service")
+    done
+    update_progress 80 RESTARTING "Restarting active Vertep services"
+    [[ ${#restart_services[@]} -eq 0 ]] || "${compose[@]}" up -d --force-recreate --remove-orphans "${restart_services[@]}"
     sync_host_runtime "$release_root"
     if [[ "$role" == "core" || "$role" == "core-worker" ]] && command -v systemctl >/dev/null 2>&1; then
       for unit in vertep-update.service vertep-update.path vertep-update-check.service \
@@ -175,6 +210,7 @@ case "${1:-status}" in
       systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
       systemctl enable vertep-startup-recovery.service
     fi
+    update_progress 90 VERIFYING "Server restarted; waiting for health checks"
     for attempt in {1..120}; do
       if [[ "$role" == "worker" ]]; then
         "${compose[@]}" ps --status running --services | grep -qx worker && exit 0
@@ -184,6 +220,34 @@ case "${1:-status}" in
       sleep 5
     done
     echo "Update health check failed; the update agent will rollback automatically." >&2
+    exit 1
+    ;;
+  restart-runtime)
+    release_root="$ROOT"
+    [[ -L "$ROOT/current" ]] && release_root="$ROOT/current"
+    compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
+    [[ "${GPU_VENDOR:-none}" == amd && -f "$release_root/docker-compose.amd.yml" ]] && compose+=(-f "$release_root/docker-compose.amd.yml")
+    [[ "${GPU_VENDOR:-none}" == nvidia && -f "$release_root/docker-compose.nvidia.yml" ]] && compose+=(-f "$release_root/docker-compose.nvidia.yml")
+    mapfile -t selected_services < <(selected_runtime_services)
+    [[ ${#selected_services[@]} -gt 0 ]] || mapfile -t selected_services < <("${compose[@]}" ps --services --filter status=running)
+    if [[ "$role" == worker ]]; then selected_services=(worker); fi
+    restart_services=()
+    for service in "${selected_services[@]}"; do
+      [[ "$service" == postgres || "$service" == redis || "$service" == migrate ]] || restart_services+=("$service")
+    done
+    [[ ${#restart_services[@]} -gt 0 ]] || { echo "No active Vertep services found" >&2; exit 1; }
+    update_progress 80 RESTARTING "Restarting active Vertep services"
+    "${compose[@]}" up -d --force-recreate --remove-orphans "${restart_services[@]}"
+    update_progress 90 VERIFYING "Server restarted; waiting for health checks"
+    for attempt in {1..120}; do
+      if [[ "$role" == worker ]]; then
+        "${compose[@]}" ps --status running --services | grep -qx worker && exit 0
+      elif curl -fsS "${core_tls[@]}" "$core_url/api/health" >/dev/null; then
+        exit 0
+      fi
+      sleep 5
+    done
+    echo "Server restart health check failed" >&2
     exit 1
     ;;
   rollback)

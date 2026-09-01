@@ -68,10 +68,11 @@ def append_audit(state_dir: Path, event: dict) -> None:
         os.fsync(output.fileno())
 
 
-def run(command: list[str], root: Path) -> str:
+def run(command: list[str], root: Path, extra_env: dict[str, str] | None = None) -> str:
     try:
         result = subprocess.run(command, cwd=root, check=True, capture_output=True, text=True,
-                                timeout=int(os.getenv("UPDATE_TIMEOUT_SECONDS", "3600")))
+                                timeout=int(os.getenv("UPDATE_TIMEOUT_SECONDS", "3600")),
+                                env={**os.environ, **(extra_env or {})})
     except subprocess.CalledProcessError as error:
         detail = ((error.stdout or "") + (error.stderr or "")).strip()[-4000:]
         raise RuntimeError(detail or f"Command failed with exit code {error.returncode}") from error
@@ -105,9 +106,12 @@ def core_json(path: str) -> dict:
         return json.load(response)
 
 
-def transition(state_dir: Path, state: dict, phase: str, message: str) -> None:
+def transition(state_dir: Path, state: dict, phase: str, message: str,
+               progress: int | None = None) -> None:
     from core.system_state import SystemState, set_system_state
     state.update({"phase": phase, "message": message, "updated_at": now()})
+    if progress is not None:
+        state["progress"] = max(0, min(100, int(progress)))
     state.setdefault("log", []).append(f"{now()} {message}")
     state["log"] = state["log"][-500:]
     atomic_json(state_dir / "status.json", state)
@@ -117,14 +121,24 @@ def transition(state_dir: Path, state: dict, phase: str, message: str) -> None:
         set_system_state(SystemState[phase], message, state.get("request_id"), state_dir)
 
 
+def merge_runtime_progress(state_dir: Path, state: dict) -> None:
+    """Keep progress and log entries written by the privileged shell workflow."""
+    try:
+        runtime_state = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if runtime_state.get("request_id") == state.get("request_id"):
+        state.update(runtime_state)
+
+
 def wait_for_drain(state_dir: Path, state: dict) -> None:
     deadline = time.monotonic() + int(os.getenv("UPDATE_DRAIN_TIMEOUT_SECONDS", "86400"))
-    transition(state_dir, state, "MAINTENANCE", "Maintenance mode; waiting for active jobs")
+    transition(state_dir, state, "MAINTENANCE", "Maintenance mode; waiting for active jobs", 22)
     while time.monotonic() < deadline:
         readiness = core_json("/api/system/update/readiness")
         if readiness.get("ready"):
             state["readiness"] = readiness
-            transition(state_dir, state, "MAINTENANCE", "Workers drained and queue paused")
+            transition(state_dir, state, "MAINTENANCE", "Workers drained and queue paused", 30)
             return
         time.sleep(float(os.getenv("UPDATE_DRAIN_POLL_SECONDS", "5")))
     raise RuntimeError("Timed out waiting for jobs and workers to drain")
@@ -137,7 +151,8 @@ def recover_if_interrupted(root: Path, state_dir: Path) -> None:
         state = json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
-    if state.get("state") != "RUNNING" or state.get("phase") not in {"UPDATING", "RECOVERING"}:
+    if (state.get("state") != "RUNNING"
+            or state.get("phase") not in {"UPDATING", "RESTARTING", "VERIFYING", "RECOVERING"}):
         return
     transition(state_dir, state, "RECOVERING", "Interrupted update detected; restoring last good release")
     output = run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root)
@@ -159,16 +174,28 @@ def process_request(root: Path, state_dir: Path, request_path: Path, skip_drain:
 
     request = json.loads(request_path.read_text(encoding="utf-8"))
     request_id, action = str(request.get("request_id", "")), request.get("action")
-    if not re.fullmatch(r"[0-9a-f]{32}", request_id) or action not in {"check", "update"}:
+    if not re.fullmatch(r"[0-9a-f]{32}", request_id) or action not in {"check", "update", "restart"}:
         raise RuntimeError("Invalid update request")
-    state = {"state": "RUNNING", "phase": "CHECKING", "action": action,
-             "request_id": request_id, "message": "Checking signed release manifest",
+    initial_phase = "RESTARTING" if action == "restart" else "CHECKING"
+    initial_message = "Restarting Vertep services" if action == "restart" else "Checking signed release manifest"
+    state = {"state": "RUNNING", "phase": initial_phase, "action": action,
+             "request_id": request_id, "message": initial_message, "progress": 5,
              "updated_at": now(), "log": []}
     atomic_json(state_dir / "status.json", state)
     with UpdateLease(state_dir, request_id) as lease:
         state["fence_epoch"] = lease.fence_epoch
         atomic_json(state_dir / "status.json", state)
         try:
+            if action == "restart":
+                transition(state_dir, state, "RESTARTING", "Restarting active Vertep services", 70)
+                output = run(["/bin/bash", str(root / "scripts" / "vertep"), "restart-runtime"],
+                             root, {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
+                merge_runtime_progress(state_dir, state)
+                state["log"].extend(output.splitlines()[-100:])
+                state.update({"state": "SUCCEEDED", "phase": "NORMAL", "progress": 100,
+                              "message": "Server restart completed", "updated_at": now()})
+                set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
+                return
             manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
             requested_version = request.get("target_version")
             if requested_version and manifest.get("version") != requested_version:
@@ -219,21 +246,24 @@ def process_request(root: Path, state_dir: Path, request_path: Path, skip_drain:
             state.update({"current_version": current, "available_version": manifest["version"],
                           "required": bool(manifest.get("required", False)),
                           "update_available": version_tuple(manifest["version"]) > version_tuple(current)})
-            transition(state_dir, state, "CHECKING", "Signed release manifest verified")
+            transition(state_dir, state, "CHECKING", "Signed release manifest verified", 15)
             if action == "update" and state["update_available"]:
                 if not skip_drain:
                     wait_for_drain(state_dir, state)
+                transition(state_dir, state, "DOWNLOADING", "Downloading and verifying update package", 38)
                 package = download_package(
                     manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
-                transition(state_dir, state, "UPDATING", "Backup and package installation started")
+                transition(state_dir, state, "UPDATING", "Backup and package installation started", 50)
                 output = run(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
-                              str(package), manifest["version"]], root)
+                              str(package), manifest["version"]], root,
+                             {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
+                merge_runtime_progress(state_dir, state)
                 state["log"].extend(output.splitlines()[-200:])
                 retention = os.getenv("UPDATE_RELEASE_RETENTION", "3")
                 prune_output = run([sys.executable, str(root / "scripts" / "release-layout.py"),
                                     "prune", str(root), retention], root)
                 state["log"].append(f"Immutable release retention: {prune_output}")
-            state.update({"state": "SUCCEEDED", "phase": "NORMAL",
+            state.update({"state": "SUCCEEDED", "phase": "NORMAL", "progress": 100,
                           "message": "Update completed" if action == "update" else "Update check completed",
                           "updated_at": now()})
             set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)

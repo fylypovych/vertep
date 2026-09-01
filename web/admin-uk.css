@@ -145,6 +145,32 @@ button:disabled {
 .status-row:last-child { border-bottom: 0; }
 .event-log { max-height: 180px; overflow: auto; padding-left: 20px; color: var(--muted); }
 
+.update-progress-wrap { margin: 18px 0; }
+.update-progress-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+.update-progress {
+  height: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #e4e1d8;
+}
+.update-progress > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: #2c8b62;
+  transition: width 0.6s ease;
+}
+.update-progress > span.failed { background: var(--bad); }
+.update-steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 12px 0 18px; }
+.update-step { padding-top: 7px; border-top: 4px solid #d8d5cc; color: var(--muted); font-size: 12px; }
+.update-step.done { border-color: #2c8b62; color: var(--ink); }
+.update-step.active { border-color: #d89b20; color: var(--ink); font-weight: 700; }
+.update-offline { padding: 10px 12px; background: #fff6dc; border-left: 4px solid #d89b20; }
+
 @media (max-width: 680px) {
   .workflow-meta, .workflow-node-head { grid-template-columns: 1fr; }
+  .update-steps { grid-template-columns: 1fr; }
+  .update-step { border-top: 0; border-left: 4px solid #d8d5cc; padding: 4px 0 4px 8px; }
 }

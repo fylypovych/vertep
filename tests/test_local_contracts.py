@@ -160,9 +160,11 @@ def test_installer_firewall_and_ssh_hardening_are_lockout_safe():
 def test_update_applies_migrations_before_core_rebuild():
     script = open("scripts/vertep", encoding="utf-8").read()
     migration = script.index('psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$migration"')
-    core_rebuild = script.index('up -d core redis postgres')
+    core_rebuild = script.index('up -d --force-recreate --remove-orphans')
     assert script.index("pg_isready") < migration < core_rebuild
     assert "systemctl enable --now vertep-update.path" in script
+    assert "restart-runtime)" in script
+    assert "VERTEP_UPDATE_STATUS_FILE" in script
 
 
 def test_node_registration_push_token_has_forward_migration():

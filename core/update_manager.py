@@ -30,7 +30,7 @@ def update_status() -> dict:
     status = _read_json(root / "status.json", {
         "state": "IDLE", "phase": "NORMAL", "action": None, "message": "No update operation has run",
         "updated_at": None, "current_version": None, "available_version": None,
-        "update_available": None, "request_id": None, "log": [],
+        "update_available": None, "request_id": None, "progress": 0, "log": [],
     })
     status["enabled"] = os.getenv("WEB_UPDATE_ENABLED", "false").lower() == "true"
     status["pending"] = len(list((root / "requests").glob("*.json"))) if (root / "requests").is_dir() else 0
@@ -40,7 +40,7 @@ def update_status() -> dict:
 def request_update(action: str) -> dict:
     if os.getenv("WEB_UPDATE_ENABLED", "false").lower() != "true":
         raise RuntimeError("Web updates are disabled on this node")
-    if action not in {"check", "update"}:
+    if action not in {"check", "update", "restart"}:
         raise ValueError("Unsupported update action")
     root = state_root()
     requests = root / "requests"
@@ -54,7 +54,9 @@ def request_update(action: str) -> dict:
         temporary = requests / f".{request_id}.tmp"
         destination = requests / f"{request_id}.json"
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        pending = {**status, "state": "PENDING", "phase": "CHECKING", "action": action, "request_id": request_id,
+        phase = "RESTARTING" if action == "restart" else "CHECKING"
+        pending = {**status, "state": "PENDING", "phase": phase, "action": action,
+                   "request_id": request_id, "progress": 1,
                    "message": f"{action.title()} request queued", "updated_at": utc_now(), "pending": 1}
         status_temporary = root / ".status.tmp"
         status_temporary.write_text(json.dumps(pending, indent=2), encoding="utf-8")
