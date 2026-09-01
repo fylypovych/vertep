@@ -23,12 +23,17 @@ def test_setup_page_loads():
         browser.close()
 
 
-def test_unconfigured_dashboard_redirects_to_setup():
+def test_dashboard_loads_and_navigation_works_without_javascript_errors():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(BASE_URL)
-        expect(page.locator("body")).to_contain_text("Перший запуск")
+        expect(page.locator("#health")).to_contain_text("CORE ONLINE")
+        page.locator('#nav button[data-panel="jobs"]').click()
+        expect(page.locator("#jobs")).to_be_visible()
+        assert errors == []
         browser.close()
 
 
