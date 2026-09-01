@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.64 - 2026-09-01
+
 - Made emergency mode actionable: the Errors tab now shows the durable system reason, failed update/deployment history and technical details, while administrators can return to normal mode only after CORE, PostgreSQL and Redis pass health checks.
 - Moved local Core-role activation into Nodes, separated optional services from the base Core plan, fixed backup-service access to protected appliance data, and made signed role-catalog updates reach existing installations.
 - Replaced workflow parameter JSON blocks with typed Ukrainian fields and added dependency-aware workflow deletion; replaced the brand JSON editor with a guided form and added brand deletion.
