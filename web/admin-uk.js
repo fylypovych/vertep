@@ -6,6 +6,14 @@
     ["Workers", "Вузли"],
     ["Workflows", "Сценарії обробки"],
     ["Add Worker", "Додати вузол"],
+    ["Додати Worker", "Додати вузол"],
+    ["Core Node", "Головний вузол"],
+    ["GPU Node", "GPU-вузол"],
+    ["Text Node", "Текстовий вузол"],
+    ["Voice Node", "Голосовий вузол"],
+    ["Publisher Node", "Вузол публікації"],
+    ["Backup Node", "Вузол резервного копіювання"],
+    ["Monitoring Node", "Вузол моніторингу"],
     ["Dead-letter queue", "Черга помилкових завдань"],
     ["Alerts", "Сповіщення"],
     ["CORE ONLINE", "Ядро працює"],
@@ -57,6 +65,10 @@
     ["Створити Job", "Створити завдання"],
     ["Видалити прострочені Jobs", "Видалити прострочені завдання"],
     ["Registration Token", "токен реєстрації"],
+    ["нового Worker", "нового вузла"],
+    ["до Core", "до головного вузла"],
+    ["на Core", "на головному вузлі"],
+    ["installer command", "команду встановлення"],
     ["First Run Wizard", "майстер першого запуску"],
     ["Web Wizard", "вебмайстер"],
     ["non-Core вузлів", "додаткових вузлів"],
@@ -101,6 +113,18 @@
   };
 
   document.title = "Vertep — панель керування";
+  const roleLabels = {
+    core: "Головний вузол",
+    gpu: "GPU-вузол",
+    text: "Текстовий вузол",
+    voice: "Голосовий вузол",
+    publisher: "Вузол публікації",
+    backup: "Вузол резервного копіювання",
+    monitoring: "Вузол моніторингу",
+  };
+  document.querySelectorAll("#workerrole option, #filterRole option").forEach((option) => {
+    if (roleLabels[option.value]) option.textContent = roleLabels[option.value];
+  });
   translateTree(document.body);
   new MutationObserver((records) => {
     for (const record of records) {

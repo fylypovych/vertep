@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Completed the Ukrainian localization of the node onboarding wizard, including its title, role names and explanatory terminology; browser coverage now protects every role label from English-language regressions.
+
 ## 0.0.0.54 - 2026-09-01
 
 - Replaced the raw character JSON editor with a responsive Ukrainian form for identity, language, behavior, appearance, voice, generation and publishing settings; editing now loads the current character and opens reliably.

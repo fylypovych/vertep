@@ -79,6 +79,22 @@ def test_character_create_and_edit_use_localized_form():
         browser.close()
 
 
+def test_worker_wizard_role_labels_are_ukrainian():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(BASE_URL)
+        page.locator('#nav button[data-panel="workers"]').click()
+        page.get_by_role("button", name="Додати вузол").click()
+        expect(page.locator("#addworkerdialog")).to_be_visible()
+        expect(page.locator("#addworkerdialog h2")).to_have_text("Додати вузол")
+        expect(page.locator("#workerrole option")).to_have_text([
+            "GPU-вузол", "Текстовий вузол", "Голосовий вузол", "Вузол публікації",
+            "Вузол резервного копіювання", "Вузол моніторингу",
+        ])
+        browser.close()
+
+
 def test_health_endpoint_reports_core():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
