@@ -277,8 +277,7 @@ if [[ "$NODE_ROLE" == "unassigned" ]] && [[ -t 0 ]]; then
   echo "5) publisher"
   echo "6) backup"
   echo "7) monitoring"
-  echo "8) core-worker"
-  read -r -p "Role [1-8]: " role_choice
+  read -r -p "Role [1-7]: " role_choice
   case "$role_choice" in
     1) NODE_ROLE=core ;;
     2) NODE_ROLE=gpu ;;
@@ -287,16 +286,19 @@ if [[ "$NODE_ROLE" == "unassigned" ]] && [[ -t 0 ]]; then
     5) NODE_ROLE=publisher ;;
     6) NODE_ROLE=backup ;;
     7) NODE_ROLE=monitoring ;;
-    8) NODE_ROLE=core-worker ;;
     *) fail "Invalid role choice" ;;
   esac
 fi
 if [[ "$NODE_ROLE" != "unassigned" ]]; then
-  role_services=( $(jq -r --arg role "$NODE_ROLE" '.roles.profiles[$role].services[]' "$INSTALL_ROOT/config/node_roles.json") )
+  jq -e --arg role "$NODE_ROLE" 'has($role)' "$INSTALL_ROOT/config/node_roles.json" >/dev/null \
+    || fail "node role $NODE_ROLE is absent from the signed role catalog"
+  mapfile -t role_services < <(jq -r --arg role "$NODE_ROLE" '.[$role].services[]' \
+    "$INSTALL_ROOT/config/node_roles.json")
 fi
 role_services=("${BOOTSTRAP_SERVICES[@]}" "${role_services[@]}")
 mapfile -t role_services < <(printf '%s\n' "${role_services[@]}" | awk '!seen[$0]++')
-node_capabilities=$(jq -r --arg role "$NODE_ROLE" '.roles.profiles[$role].capabilities[]' "$INSTALL_ROOT/config/node_roles.json" 2>/dev/null | paste -sd, - || true)
+node_capabilities=$(jq -r --arg role "$NODE_ROLE" '.[$role].capabilities[]?' \
+  "$INSTALL_ROOT/config/node_roles.json" 2>/dev/null | paste -sd, - || true)
 platform="linux/$arch"
 jq -e --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
   . as $manifest |

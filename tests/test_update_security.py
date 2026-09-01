@@ -181,6 +181,9 @@ def test_bootstrap_preflight_and_text_model_provisioning_contract():
     assert '"${compose[@]}" wait migrate' not in bootstrap
     assert 'progress "Waiting for runtime health checks"' in bootstrap
     assert 'next_health_report=$((SECONDS+30))' in bootstrap
+    assert "'.[$role].services[]'" in bootstrap
+    assert "'.roles.profiles[$role].services[]'" not in bootstrap
+    assert 'has($role)' in bootstrap
     recovery_unit = (Path(__file__).parents[1] / "installer/vertep-startup-recovery.service").read_text()
     assert "[Install]" in recovery_unit
     assert "WantedBy=multi-user.target" in recovery_unit
