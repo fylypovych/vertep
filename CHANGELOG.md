@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed admin-panel updates stopping before installation with `Connection refused`: the privileged host updater now drains through the appliance's exposed HTTPS proxy on port 8443 instead of the unexposed container-only Core port 8080, while remote Core URLs retain normal TLS verification.
+
 ## 0.0.0.56 - 2026-09-01
 
 - Completed the Ukrainian localization of the node onboarding wizard, including its title, role names and explanatory terminology; browser coverage now protects every role label from English-language regressions.

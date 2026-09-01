@@ -6,11 +6,13 @@ import base64
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -79,7 +81,9 @@ def run(command: list[str], root: Path) -> str:
 
 
 def core_json(path: str) -> dict:
-    url = os.getenv("VERTEP_CORE_URL", "http://127.0.0.1:8080").rstrip("/") + path
+    core_url = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL")
+                or "https://127.0.0.1:8443")
+    url = core_url.rstrip("/") + path
     request = Request(url)
     internal_key = os.getenv("INTERNAL_API_KEY")
     password = os.getenv("ADMIN_PASSWORD")
@@ -88,7 +92,16 @@ def core_json(path: str) -> dict:
     elif password:
         credentials = f"{os.getenv('ADMIN_USER', 'admin')}:{password}"
         request.add_header("Authorization", "Basic " + base64.b64encode(credentials.encode()).decode())
-    with urlopen(request, timeout=10) as response:
+    options = {"timeout": 10}
+    parsed = urlparse(url)
+    if parsed.scheme == "https" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+        # The appliance proxy intentionally uses its private self-signed certificate on
+        # loopback. This exception never applies to a remote CORE address.
+        local_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        local_context.check_hostname = False
+        local_context.verify_mode = ssl.CERT_NONE
+        options["context"] = local_context
+    with urlopen(request, **options) as response:
         return json.load(response)
 
 

@@ -199,6 +199,60 @@ def test_update_agent_persists_signed_check_result_and_removes_request(monkeypat
     assert not request_path.exists()
 
 
+def test_update_agent_uses_the_host_https_proxy_for_local_readiness(monkeypatch):
+    agent = load_update_agent()
+    observed = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self):
+            return b'{"ready":true}'
+
+    def fake_urlopen(request, **options):
+        observed.update({"url": request.full_url, **options})
+        return Response()
+
+    monkeypatch.delenv("VERTEP_CORE_URL", raising=False)
+    monkeypatch.delenv("CORE_URL", raising=False)
+    monkeypatch.setattr(agent, "urlopen", fake_urlopen)
+
+    assert agent.core_json("/api/system/update/readiness") == {"ready": True}
+    assert observed["url"] == "https://127.0.0.1:8443/api/system/update/readiness"
+    assert observed["timeout"] == 10
+    assert observed["context"].verify_mode == agent.ssl.CERT_NONE
+
+
+def test_update_agent_keeps_tls_verification_for_remote_core(monkeypatch):
+    agent = load_update_agent()
+    observed = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self):
+            return b'{"ready":true}'
+
+    def fake_urlopen(request, **options):
+        observed.update({"url": request.full_url, **options})
+        return Response()
+
+    monkeypatch.setenv("VERTEP_CORE_URL", "https://core.example.test")
+    monkeypatch.setattr(agent, "urlopen", fake_urlopen)
+
+    assert agent.core_json("/api/system/update/readiness") == {"ready": True}
+    assert observed["url"] == "https://core.example.test/api/system/update/readiness"
+    assert "context" not in observed
+
+
 def test_update_api_requires_admin_role(monkeypatch, tmp_path):
     password = "operator-password-long"
     monkeypatch.setenv("ADMIN_PASSWORD", "fallback-admin-password")
