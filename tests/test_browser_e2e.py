@@ -30,9 +30,51 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(BASE_URL)
-        expect(page.locator("#health")).to_contain_text("CORE ONLINE")
+        expect(page.locator("#health")).to_contain_text("Ядро працює")
         page.locator('#nav button[data-panel="jobs"]').click()
         expect(page.locator("#jobs")).to_be_visible()
+        assert errors == []
+        browser.close()
+
+
+def test_character_create_and_edit_use_localized_form():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        saved = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        character = {
+            "id": "did_samogon", "name": "Дід Самогонщик", "language": "uk",
+            "enabled": True, "system_prompt": "Говорить українською.",
+            "voice": {"provider": "none", "language": "uk", "voice": None},
+            "visual": {"style": "тепла ілюстрація", "aspect_ratio": "16:9"},
+            "generation": {"workflow": "workflows/image/demo.json", "min_vram_mb": 4096,
+                           "max_retries": 3},
+            "publishing": {"enabled": False, "channels": []},
+        }
+        def handle_character(route):
+            if route.request.method == "PUT":
+                saved.append(route.request.post_data_json)
+            route.fulfill(json=character)
+        page.route("**/api/characters/did_samogon", handle_character)
+        page.goto(BASE_URL)
+        page.locator('#nav button[data-panel="characters"]').click()
+        expect(page.locator("#characters")).to_be_visible()
+        page.get_by_role("button", name="Новий персонаж").click()
+        expect(page.locator("#chardialog")).to_be_visible()
+        expect(page.locator("#characterform")).to_be_visible()
+        expect(page.locator("#charjson")).to_be_hidden()
+        expect(page.get_by_label("Ім’я персонажа")).to_have_value("Новий персонаж")
+        page.get_by_role("button", name="Скасувати").click()
+        page.evaluate("editCharacter('did_samogon')")
+        expect(page.locator("#chardialog")).to_be_visible()
+        expect(page.get_by_label("Ім’я персонажа")).to_have_value("Дід Самогонщик")
+        expect(page.get_by_label("Системний ідентифікатор")).to_be_disabled()
+        page.get_by_label("Ім’я персонажа").fill("Дід Самогонщик оновлений")
+        page.get_by_role("button", name="Зберегти").click()
+        expect(page.locator("#chardialog")).to_be_hidden()
+        assert saved[0]["name"] == "Дід Самогонщик оновлений"
         assert errors == []
         browser.close()
 

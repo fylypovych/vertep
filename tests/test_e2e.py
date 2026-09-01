@@ -81,6 +81,21 @@ def test_dashboard_inline_javascript_is_valid():
                        capture_output=True, check=True)
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required for UI syntax validation")
+def test_dashboard_external_javascript_is_valid():
+    subprocess.run(["node", "--check", "web/admin-uk.js"], capture_output=True,
+                   text=True, encoding="utf-8", check=True)
+
+
+def test_character_editor_is_a_localized_form():
+    script = Path("web/admin-uk.js").read_text(encoding="utf-8")
+    assert 'id="characterform"' in script
+    assert "Опис характеру та поведінки" in script
+    assert "Візуальний стиль" in script
+    assert "window.editCharacter = async" in script
+    assert "dialog.showModal()" in script
+
+
 def test_setup_wizard_has_manifest_step():
     html = Path("web/setup.html").read_text(encoding="utf-8")
     assert "Installation Manifest" in html

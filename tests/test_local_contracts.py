@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import sys
 import os
@@ -186,7 +187,7 @@ def test_web_ui_has_remaining_job_and_registry_controls():
     assert "removeJob" in html
     assert 'data-panel="brands"' in html
     assert 'data-panel="workflows"' in html
-    assert "mime_type?.startsWith('video/')" in html
+    assert re.search(r"mime_type\?\.startsWith\(['\"]video/['\"]\)", html)
     assert "Безпечне оновлення Vertep" in html
     assert "requestSystemUpdate" in html
 

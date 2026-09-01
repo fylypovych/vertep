@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Replaced the raw character JSON editor with a responsive Ukrainian form for identity, language, behavior, appearance, voice, generation and publishing settings; editing now loads the current character and opens reliably.
+- Localized the dashboard navigation, actions, statuses and operator-facing lifecycle terminology in Ukrainian, while preserving technical identifiers where they are needed for configuration.
+- Added JavaScript contract coverage and browser tests for both creating and editing characters without console errors.
+
 ## 0.0.0.52 - 2026-09-01
 
 - Fixed the dashboard's fatal inline JavaScript syntax error, restoring navigation, health refresh and lifecycle controls; CI now parses every inline dashboard script with Node.js.
