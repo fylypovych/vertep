@@ -125,17 +125,19 @@ They also cover the video-worker artifact contract: CORE accepts validated scene
 
 GitHub Actions runs the complete suite, Python compilation, shell syntax checks and Compose configuration validation on every push and pull request.
 
-## Releases and version numbers
+## Релізи та номери версій
 
-Release and commit names are strictly sequential. The fourth component runs from `0` through `99`: after `0.0.0.99` comes `0.0.1.0`; after `0.0.99.99` comes `0.1.0.0`. Do not edit `VERSION` manually and do not use a normal `git push` for a release. Run:
+Кожен реліз оформлюється одним основним комітом. Його назва має формат `0.0.0.65 — Короткий опис українською`, а цей самий коміт уже містить код, оновлений `VERSION`, секцію в `CHANGELOG.md` та файл `releases/<version>.md`. Четверта складова номера змінюється від `0` до `99`: після `0.0.0.99` іде `0.0.1.0`.
+
+Спочатку додайте змістовні українські пункти до секції `Unreleased`, потім виконайте:
 
 ```bash
-python scripts/release.py
+python scripts/release.py --title "Короткий опис змін українською"
 ```
 
-The command fetches tags, selects one greater than the highest release number recorded in tags, `VERSION`, `CHANGELOG.md`, or `releases/`, stages the repository, scans staged files for common secrets, moves notes from `CHANGELOG.md` → `Unreleased` into the new version section, generates `releases/<version>.md`, runs compilation and all tests, creates a release commit and annotated tag, and atomically pushes both to `origin`.
+Скрипт визначає наступний номер, перевіряє український опис, переносить пункти `Unreleased` до нової версії, формує нотатки, запускає перевірки й створює один готовий коміт. Після перегляду надішліть цей коміт у `main` і запустіть **Actions → Vertep Release → Run workflow**.
 
-If `Unreleased` is empty, the description is generated automatically from commit subjects and changed project areas. Use `python scripts/release.py --show-next` to inspect the next number or `--no-push` to create the commit and tag locally. GitHub also provides **Actions → Vertep Release → Run workflow**, which builds and publishes the signed runtime and its container images from this repository.
+Workflow не змінює `main` і не створює другого коміту від бота. Він перевіряє готовий коміт, збирає образи й підписані артефакти, ставить тег саме на цей коміт та публікує GitHub Release. Наступний номер можна переглянути командою `python scripts/release.py --show-next`, а готовий коміт перевірити командою `python scripts/release.py --check`.
 
 ## Orchestration and artifacts
 

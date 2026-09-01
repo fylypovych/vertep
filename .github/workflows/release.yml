@@ -26,13 +26,13 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - name: Validate and determine release number
+      - name: Validate prepared release commit
         id: version
         shell: bash
         run: |
           python -m compileall -q core adapters worker scripts installer tests
           python -m pytest -q
-          version="$(python scripts/release.py --show-next)"
+          version="$(python scripts/release.py --check)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build-images:
@@ -122,9 +122,6 @@ jobs:
           RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.RUNTIME_SIGNING_PRIVATE_KEY }}
           EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          git config user.name "vertep-release[bot]"
-          git config user.email "vertep-release[bot]@users.noreply.github.com"
-          python scripts/release.py --no-push --skip-tests
           version="$(tr -d '\r\n' < VERSION)"
           test "$version" = "$EXPECTED_VERSION"
           python scripts/assemble-image-lock.py "${{ runner.temp }}/image-metadata" "${{ runner.temp }}/images.json"
@@ -163,11 +160,21 @@ jobs:
           cd "${{ runner.temp }}"
           sha256sum "vertep-runtime-$version.tar.gz" "manifest-$version.json" \
             "update-manifest-$version.json" > "SHA256SUMS-$version"
-      - name: Push numbered commit and tag
+      - name: Tag the prepared commit
         shell: bash
         run: |
           version="$(tr -d '\r\n' < VERSION)"
-          git push --atomic origin HEAD:main "$version"
+          remote_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$remote_main" = "$GITHUB_SHA"
+          tagged_commit="$(git ls-remote origin "refs/tags/$version^{}" | cut -f1)"
+          if [ -n "$tagged_commit" ]; then
+            test "$tagged_commit" = "$GITHUB_SHA"
+          else
+            git config user.name "vertep-release[bot]"
+            git config user.email "vertep-release[bot]@users.noreply.github.com"
+            git tag -a "$version" "$GITHUB_SHA" -m "Vertep $version"
+            git push origin "refs/tags/$version"
+          fi
       - name: Publish GitHub Release
         shell: bash
         env:

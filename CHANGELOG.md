@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.0.0.65 - 2026-09-01
+
+- Об’єднано код, номер версії та український опис змін в одному основному коміті; релізний workflow більше не створює окремий коміт від бота й лише ставить тег на перевірений коміт.
+- Додано обов’язкову перевірку української назви коміту, опису в `CHANGELOG.md` і нотаток релізу, а також виправлено пошкоджене кодування текстів генератора.
+
 ## 0.0.0.64 - 2026-09-01
 
 - Made emergency mode actionable: the Errors tab now shows the durable system reason, failed update/deployment history and technical details, while administrators can return to normal mode only after CORE, PostgreSQL and Redis pass health checks.

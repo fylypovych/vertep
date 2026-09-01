@@ -43,12 +43,23 @@ def test_known_versions_include_untagged_release_metadata(tmp_path, monkeypatch)
 
 def test_release_moves_unreleased_notes_to_version_section():
     release = load_release_module()
-    source = "# Changelog\n\n## Unreleased\n\n- Added feature.\n- Fixed bug.\n\n## Older\n\n- Old.\n"
+    source = "# Changelog\n\n## Unreleased\n\n- Додано функцію.\n- Виправлено помилку.\n\n## Older\n\n- Old.\n"
     notes = release.unreleased_notes(source)
     result = release.release_changelog(source, "0.0.0.2", notes)
-    assert notes == ["- Added feature.", "- Fixed bug."]
+    assert notes == ["- Додано функцію.", "- Виправлено помилку."]
     assert "## Unreleased\n\n## 0.0.0.2" in result
-    assert result.count("- Added feature.") == 1
+    assert result.count("- Додано функцію.") == 1
+
+
+def test_release_descriptions_must_be_ukrainian():
+    release = load_release_module()
+    release.require_ukrainian("Виправлено процес оновлення", "Опис")
+    try:
+        release.require_ukrainian("Fix release process", "Опис")
+    except RuntimeError as error:
+        assert "українською" in str(error)
+    else:
+        raise AssertionError("English-only release descriptions must be rejected")
 
 
 def test_runtime_version_comes_from_version_file():
@@ -56,12 +67,16 @@ def test_runtime_version_comes_from_version_file():
     assert application_version().startswith("0.0.0.")
 
 
-def test_release_push_is_atomic_and_generates_notes():
+def test_release_is_prepared_once_and_ci_never_commits_to_main():
     script = Path("scripts/release.py").read_text(encoding="utf-8")
-    assert '"push", "--atomic"' in script
+    assert 'git(root, "commit", "-m", f"{version} — {title}")' in script
     assert "release_path.write_text" in script
     assert "scan_staged_secrets" in script
+    assert 'git(root, "tag", "-a"' not in script
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch" in workflow
     assert "contents: write" in workflow
-    assert "python scripts/release.py" in workflow
+    assert "python scripts/release.py --check" in workflow
+    assert "git commit" not in workflow
+    assert "HEAD:main" not in workflow
+    assert 'git push origin "refs/tags/$version"' in workflow
