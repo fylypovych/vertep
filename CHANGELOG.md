@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.47 - 2026-09-01
+
 - Resumed installations now resolve services and capabilities from the downloaded role catalog using its actual top-level schema; repeating bootstrap after First Run no longer fails with `Cannot iterate over null`.
 - Bootstrap rejects a persisted role that is absent from the signed catalog with an explicit diagnostic and no longer offers the unsupported legacy `core-worker` role.
 
