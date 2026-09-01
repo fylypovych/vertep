@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,8 +15,11 @@ try:
     status = json.load(sys.stdin)
 except ValueError:
     status = {}
-role = config.get("ROLE", "unknown").upper()
-print(f"VERTEP {role}\nNode: {config.get('NODE_NAME', 'unknown')}")
+role = (config.get("ROLE") or os.getenv("NODE_ROLE") or "unknown").upper()
+node_name = config.get("NODE_NAME") or os.getenv("NODE_NAME") or "unknown"
+print(f"VERTEP {role}\nNode: {node_name}")
+if status.get("version"):
+    print(f"Version        {status['version']}")
 for name in ("core", "postgres", "redis", "ollama", "telegram"):
     if name in status:
         print(f"{name.title():14} {status[name]}")
@@ -28,6 +32,9 @@ if scheduler:
 orchestration = status.get("orchestration", {})
 if orchestration:
     print(f"Orchestration  jobs={orchestration.get('active_jobs', 0)} scenes={orchestration.get('active_scenes', 0)}")
+update = status.get("update", {})
+if update:
+    print(f"Update         {update.get('state', 'UNKNOWN')} {update.get('message', '')}".rstrip())
 for worker in status.get("workers", []):
     print(f"{worker.get('node_name','worker'):14} {worker.get('status')} {worker.get('gpu_name')} {worker.get('free_vram_mb', worker.get('vram_mb', 0))} MB")
 if "worker" in role.lower():

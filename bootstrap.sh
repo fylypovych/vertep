@@ -15,6 +15,10 @@ MIN_DISK_MB=${VERTEP_MIN_DISK_MB:-20480}
 fail(){ printf 'VERTEP: %s\n' "$*" >&2; exit 1; }
 progress(){ printf '\n==> %s\n' "$*"; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run bootstrap as root (curl … | sudo bash)"
+if command -v systemctl >/dev/null && systemctl is-active --quiet vertep-update.service; then
+  fail "a Vertep update is currently active; wait for it to finish before running bootstrap"
+fi
+systemctl stop vertep-update.path >/dev/null 2>&1 || true
 . /etc/os-release
 [[ ${ID:-} == ubuntu && ${VERSION_ID:-} == 24.04 ]] || fail "Ubuntu Server 24.04 LTS is required"
 arch=$(dpkg --print-architecture)
@@ -56,7 +60,7 @@ elif grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/de
 progress "Installing container runtime"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils docker.io docker-compose-v2
+apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils python3-psycopg docker.io docker-compose-v2
 systemctl enable --now docker
 if [[ $gpu_vendor == nvidia && $driver == unavailable ]]; then
   apt-get install -y -qq ubuntu-drivers-common
@@ -513,6 +517,20 @@ fi
 chmod 0600 "$INSTALL_ROOT/tls/node-ca.key"
 
 progress "Installing privileged update executor"
+pending_requests=("$INSTALL_ROOT"/config/update/requests/*.json)
+if [[ -e "${pending_requests[0]}" ]]; then
+  cancelled_dir="$INSTALL_ROOT/config/update/cancelled"
+  install -d -m 0700 "$cancelled_dir"
+  for request in "${pending_requests[@]}"; do
+    mv "$request" "$cancelled_dir/bootstrap-${version}-$(basename "$request")"
+  done
+  status_tmp=$(mktemp "$INSTALL_ROOT/config/update/.status.XXXXXX")
+  jq -n --arg version "$version" '{state:"SUPERSEDED",phase:"NORMAL",action:null,
+    request_id:null,message:("Pending update superseded by bootstrap " + $version),
+    updated_at:(now|todate),log:[],pending:0}' > "$status_tmp"
+  chmod 0600 "$status_tmp"
+  mv -f "$status_tmp" "$INSTALL_ROOT/config/update/status.json"
+fi
 for unit in vertep-update.service vertep-update.path vertep-update-check.service vertep-update.timer \
              vertep-deployment.service vertep-deployment.path \
              vertep-watchdog.service vertep-watchdog.timer \

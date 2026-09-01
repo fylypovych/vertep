@@ -2,6 +2,9 @@
 
 import importlib.util
 import json
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -66,6 +69,16 @@ def test_add_worker_wizard_html_exists():
     assert "wizard-step-1" in html
     assert "wizard-step-2" in html
     assert "wizard-step-3" in html
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required for inline UI syntax validation")
+def test_dashboard_inline_javascript_is_valid():
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
+    assert scripts
+    for script in scripts:
+        subprocess.run(["node", "--check", "-"], input=script, text=True, encoding="utf-8",
+                       capture_output=True, check=True)
 
 
 def test_setup_wizard_has_manifest_step():

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed the dashboard's fatal inline JavaScript syntax error, restoring navigation, health refresh and lifecycle controls; CI now parses every inline dashboard script with Node.js.
+- Bootstrap installs the host update executor's PostgreSQL driver and safely supersedes any queued request when an explicit bootstrap run takes over, preventing `No module named psycopg` and stale `PENDING` state.
+- `vertep status` now falls back to the managed environment for the node role/name, prints the installed version and exposes update progress instead of reporting `VERTEP UNKNOWN`.
+- Browser smoke tests now assert the actual unconfigured redirect and public health contract.
+
 ## 0.0.0.49 - 2026-09-01
 
 - `vertep update` and the periodic update checker now authenticate with the host-only internal key instead of obsolete bootstrap administrator credentials, so First Run account creation no longer causes HTTP 401 responses.

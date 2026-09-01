@@ -18,25 +18,27 @@ def test_setup_page_loads():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{BASE_URL}/setup?token=ci")
-        expect(page.locator("title")).to_contain_text("Vertep")
+        assert "Vertep" in page.title()
+        expect(page.locator("body")).to_contain_text("Перший запуск")
         browser.close()
 
 
-def test_dashboard_requires_auth():
+def test_unconfigured_dashboard_redirects_to_setup():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(BASE_URL)
-        expect(page.locator("body")).to_contain_text("Увійти")
+        expect(page.locator("body")).to_contain_text("Перший запуск")
         browser.close()
 
 
-def test_status_page_json():
+def test_health_endpoint_reports_core():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(f"{BASE_URL}/status")
-        expect(page.locator("pre")).to_contain_text("core")
+        response = page.request.get(f"{BASE_URL}/api/health")
+        assert response.ok
+        assert response.json()["service"] == "core"
         browser.close()
 
 

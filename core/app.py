@@ -1337,7 +1337,8 @@ def system_status():
                               "active_scenes": sum(scene.status == StageStatus.RUNNING
                                                    for job in store.jobs.values() for scene in job.scenes)},
             "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
-            "telegram": "CONFIGURED" if os.getenv("TELEGRAM_BOT_TOKEN") else "NOT CONFIGURED", "workers": workers()}
+            "telegram": "CONFIGURED" if os.getenv("TELEGRAM_BOT_TOKEN") else "NOT CONFIGURED",
+            "update": update_status(), "workers": workers()}
 
 @app.get("/status")
 def status_page():
