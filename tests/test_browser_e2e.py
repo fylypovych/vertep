@@ -95,6 +95,32 @@ def test_worker_wizard_role_labels_are_ukrainian():
         browser.close()
 
 
+def test_friendly_queue_workflow_and_core_role_controls():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(BASE_URL)
+
+        page.locator('#nav button[data-panel="queue"]').click()
+        expect(page.locator("#queuestatus")).to_be_hidden()
+        expect(page.locator("#queue-friendly .friendly-card")).to_have_count(5)
+
+        page.locator('#nav button[data-panel="workflows"]').click()
+        page.locator("#workflows > button").click()
+        expect(page.locator("#workflowdialog")).to_be_visible()
+        expect(page.locator("#workflow-nodes .workflow-node")).to_have_count(1)
+        expect(page.locator("#workflowjson")).to_have_count(0)
+        page.locator("#workflow-close-friendly").click()
+
+        page.locator('#nav button[data-panel="settings"]').click()
+        expect(page.locator("#systemstatus")).to_be_hidden()
+        expect(page.locator("#core-role-options input[type=checkbox]")).to_have_count(6)
+        assert errors == []
+        browser.close()
+
+
 def test_health_endpoint_reports_core():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

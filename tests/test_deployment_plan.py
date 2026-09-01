@@ -33,6 +33,18 @@ def test_plan_tampering_and_unknown_roles_fail():
         planner.create_plan(roles, "unknown", "1.2.3")
 
 
+def test_core_plan_can_combine_additional_roles_deterministically():
+    planner = module()
+    roles = json.loads(Path("config/node_roles.json").read_text())
+    plan = planner.create_plan(roles, "core", "1.2.3", ["text", "gpu", "text"])
+    assert plan["additional_roles"] == ["gpu", "text"]
+    assert {"core", "worker", "comfyui", "ollama"} <= set(plan["services"])
+    assert {"image_generation", "text_generation"} <= set(plan["capabilities"])
+    assert planner.verify_plan(plan)
+    with pytest.raises(ValueError, match="only be activated on Core"):
+        planner.create_plan(roles, "gpu", "1.2.3", ["text"])
+
+
 def test_update_agent_has_no_docker_socket():
     compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
     assert "/var/run/docker.sock" not in compose

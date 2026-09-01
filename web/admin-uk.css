@@ -95,3 +95,56 @@ button:disabled {
     grid-column: auto;
   }
 }
+
+.friendly-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+
+.friendly-card {
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fffdf8;
+}
+
+.friendly-card .metric {
+  display: block;
+  margin-top: 6px;
+  font: 700 28px/1.1 system-ui, sans-serif;
+}
+
+.friendly-card .state-ok { color: #18734a; }
+.friendly-card .state-warn { color: #9a5c00; }
+.friendly-card .state-bad { color: var(--bad); }
+
+.role-options { display: grid; gap: 8px; margin: 14px 0; }
+.role-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.role-option input { width: auto; margin: 3px 0 0; }
+.role-option small { grid-column: 2; color: var(--muted); }
+.role-note { padding: 10px 12px; background: #fff6dc; border-left: 4px solid #d89b20; }
+
+.workflow-dialog { width: min(900px, 96vw); max-height: 92vh; overflow: auto; }
+.workflow-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.workflow-node { margin: 12px 0; padding: 14px; border: 1px solid var(--line); background: #fffdf8; }
+.workflow-node-head { display: grid; grid-template-columns: 90px 1fr auto; gap: 10px; align-items: end; }
+.workflow-node textarea { min-height: 100px; font-family: ui-monospace, monospace; }
+.workflow-help { padding: 12px; background: #edf7f1; border-left: 4px solid #2c8b62; }
+
+.status-list { display: grid; gap: 8px; }
+.status-row { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.status-row:last-child { border-bottom: 0; }
+.event-log { max-height: 180px; overflow: auto; padding-left: 20px; color: var(--muted); }
+
+@media (max-width: 680px) {
+  .workflow-meta, .workflow-node-head { grid-template-columns: 1fr; }
+}

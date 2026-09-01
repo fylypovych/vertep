@@ -349,4 +349,192 @@
     event.preventDefault();
     window.saveCharacter();
   });
+
+  const stateClass = (value) => {
+    const normalized = String(value || "").toUpperCase();
+    if (["OK", "HEALTHY", "NORMAL", "SUCCEEDED", "IDLE"].includes(normalized)) return "state-ok";
+    if (["FAILED", "ERROR", "OFFLINE", "UNHEALTHY"].includes(normalized)) return "state-bad";
+    return "state-warn";
+  };
+  const ukState = (value) => ({
+    OK: "Працює", HEALTHY: "Працює", NORMAL: "Нормальний", SUCCEEDED: "Завершено",
+    FAILED: "Помилка", ERROR: "Помилка", OFFLINE: "Недоступний", UNHEALTHY: "Несправний",
+    PENDING: "Очікує", RUNNING: "Виконується", APPLYING: "Застосовується", QUEUED: "У черзі",
+  })[String(value || "").toUpperCase()] || String(value || "—");
+
+  const queueRaw = document.querySelector("#queuestatus");
+  if (queueRaw) {
+    queueRaw.hidden = true;
+    queueRaw.insertAdjacentHTML("afterend", '<div id="queue-friendly" class="friendly-grid"></div>');
+  }
+  const systemRaw = document.querySelector("#systemstatus");
+  if (systemRaw) {
+    systemRaw.hidden = true;
+    systemRaw.insertAdjacentHTML("afterend", '<div id="system-friendly" class="friendly-grid"></div>');
+  }
+  const updateRaw = document.querySelector("#updatestatus");
+  if (updateRaw) {
+    updateRaw.hidden = true;
+    updateRaw.insertAdjacentHTML("afterend", '<div id="update-friendly"></div>');
+  }
+
+  const renderOperationalStatus = async () => {
+    try {
+      const status = await window.api("/api/status");
+      const queue = status.queue || {}, scheduler = status.scheduler || {}, orchestration = status.orchestration || {};
+      const queueTarget = document.querySelector("#queue-friendly");
+      if (queueTarget) queueTarget.innerHTML = `
+        <div class="friendly-card"><span>Очікують виконання</span><strong class="metric">${Number(queue.depth || 0)}</strong><small>Завдання, які ще не взяв вузол</small></div>
+        <div class="friendly-card"><span>Виконуються зараз</span><strong class="metric">${Number(queue.inflight || 0)}</strong><small>Передані вузлам іще не завершені</small></div>
+        <div class="friendly-card"><span>Заплановані</span><strong class="metric">${Number(scheduler.pending || 0)}</strong><small>${scheduler.next_run ? `Найближчий запуск: ${esc(scheduler.next_run)}` : "Запланованих запусків немає"}</small></div>
+        <div class="friendly-card"><span>Потребують уваги</span><strong class="metric ${queue.dead_letter ? "state-bad" : "state-ok"}">${Number(queue.dead_letter || 0)}</strong><small>${queue.dead_letter ? "Нижче можна повторити невдалі завдання" : "Помилкових завдань немає"}</small></div>
+        <div class="friendly-card"><span>Активні процеси</span><strong class="metric">${Number(orchestration.active_jobs || 0)}</strong><small>Активних сцен: ${Number(orchestration.active_scenes || 0)}</small></div>`;
+      const systemTarget = document.querySelector("#system-friendly");
+      if (systemTarget) systemTarget.innerHTML = [
+        ["Ядро", status.core], ["База даних", status.postgres], ["Черга Redis", status.redis],
+        ["Сховище", status.storage], ["Режим системи", status.system?.state]
+      ].map(([label, value]) => `<div class="friendly-card"><span>${label}</span><strong class="metric ${stateClass(value)}">${esc(ukState(value))}</strong></div>`).join("");
+    } catch (error) {
+      const target = document.querySelector("#system-friendly");
+      if (target) target.innerHTML = `<p class="form-error visible">Не вдалося отримати стан системи: ${esc(error.message)}</p>`;
+    }
+  };
+
+  const roleLabelsUk = {
+    gpu: "Генерація зображень (GPU)", text: "Генерація тексту", voice: "Синтез мовлення",
+    publisher: "Публікація", backup: "Резервне копіювання", monitoring: "Моніторинг і журнали",
+  };
+  const settings = document.querySelector("#settings");
+  if (settings) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.id = "core-role-card";
+    card.innerHTML = `<h3>Додаткові ролі цього CORE</h3>
+      <p class="muted">Активуйте функції, які має виконувати цей сервер локально. Зміна запускає або зупиняє відповідні компоненти без видалення даних.</p>
+      <div id="core-role-options" class="role-options">Завантаження…</div>
+      <p class="role-note">GPU-роль потребує сумісної відеокарти й найбільше ресурсів. Моделі та образи можуть завантажуватися кілька хвилин.</p>
+      <button id="save-core-roles" type="button">Застосувати ролі</button> <span id="core-role-result" class="muted"></span>`;
+    settings.querySelector("#system-friendly")?.insertAdjacentElement("afterend", card);
+    const legacyLifecycle = document.querySelector("#lifecyclestatus")?.closest(".card");
+    if (legacyLifecycle) legacyLifecycle.hidden = true;
+    card.insertAdjacentHTML("afterend", `<div class="card" id="friendly-lifecycle"><h3>Обслуговування системи</h3>
+      <p class="muted">Резервні копії, моделі ШІ та TLS-сертифікат в одному місці.</p>
+      <button type="button" onclick="createBackup()">Створити резервну копію</button> <button type="button" onclick="pullModel()">Додати модель</button> <button type="button" onclick="renewCertificate()">Оновити сертифікат</button>
+      <div id="friendly-lifecycle-content">Завантаження…</div></div>`);
+  }
+
+  let knownRoleStatus = null;
+  const renderRoles = async (preserveSelection = false) => {
+    const options = document.querySelector("#core-role-options");
+    if (!options) return;
+    try {
+      const selectedBefore = preserveSelection ? [...options.querySelectorAll("input:checked")].map((x) => x.value) : null;
+      knownRoleStatus = await window.api("/api/system/roles");
+      const active = new Set(selectedBefore || knownRoleStatus.active_roles || []);
+      options.innerHTML = (knownRoleStatus.available_roles || []).map((role) => `
+        <label class="role-option"><input type="checkbox" value="${esc(role.id)}" ${active.has(role.id) ? "checked" : ""}>
+          <b>${esc(roleLabelsUk[role.id] || role.label || role.id)}</b>
+          <small>Компоненти: ${esc((role.services || []).join(", ") || "вбудовані")}.</small></label>`).join("");
+      const deployment = knownRoleStatus.deployment || {};
+      document.querySelector("#core-role-result").textContent = deployment.state === "APPLYING"
+        ? "Застосування змін…" : deployment.state === "FAILED" ? `Помилка: ${deployment.error || "невідома"}` : "";
+    } catch (error) { options.innerHTML = `<p class="form-error visible">${esc(error.message)}</p>`; }
+  };
+  document.querySelector("#save-core-roles")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const roles = [...document.querySelectorAll("#core-role-options input:checked")].map((item) => item.value);
+    button.disabled = true;
+    document.querySelector("#core-role-result").textContent = "Передавання змін…";
+    try {
+      const result = await window.api("/api/system/roles", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({roles})});
+      document.querySelector("#core-role-result").textContent = result.message || "Зміни прийнято";
+      setTimeout(() => renderRoles(false), 2500);
+    } catch (error) { document.querySelector("#core-role-result").textContent = `Помилка: ${error.message}`; }
+    finally { button.disabled = false; }
+  });
+
+  const renderUpdateFriendly = async () => {
+    const target = document.querySelector("#update-friendly");
+    if (!target) return;
+    try {
+      const value = await window.api("/api/system/update");
+      const available = value.update_available === true;
+      target.innerHTML = `<div class="status-list">
+        <div class="status-row"><span>Встановлена версія</span><b>${esc(value.current_version || "—")}</b></div>
+        <div class="status-row"><span>Доступна версія</span><b>${esc(value.available_version || (available ? "нова" : "оновлень немає"))}</b></div>
+        <div class="status-row"><span>Стан</span><b class="${stateClass(value.state)}">${esc(ukState(value.state))}</b></div>
+        ${value.message ? `<div class="status-row"><span>Повідомлення</span><b>${esc(value.message)}</b></div>` : ""}
+      </div>${(value.log || []).length ? `<details><summary>Журнал оновлення</summary><ol class="event-log">${value.log.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : ""}`;
+    } catch (error) { target.innerHTML = `<p class="form-error visible">Статус оновлення недоступний: ${esc(error.message)}</p>`; }
+  };
+
+  const renderLifecycleFriendly = async () => {
+    const target = document.querySelector("#friendly-lifecycle-content"); if (!target) return;
+    try {
+      const [backups, models, certificate] = await Promise.all(["/api/system/backups", "/api/system/models", "/api/system/certificates"].map(window.api));
+      const snapshots = (backups.snapshots || []).map((item) => `<div class="status-row"><span><b>${esc(item.snapshot_id)}</b><br><small>${esc(item.created_at || "")}</small></span><button type="button" onclick="restoreBackup('${esc(item.snapshot_id)}')">Відновити</button></div>`).join("") || '<p class="muted">Резервних копій ще немає.</p>';
+      const modelRows = (models.models || []).map((item) => { const name = item.name || item.model; return `<div class="status-row"><b>${esc(name)}</b><button type="button" class="danger" onclick="deleteModel('${esc(name)}')">Видалити</button></div>`; }).join("") || '<p class="muted">Локальних моделей ще немає.</p>';
+      target.innerHTML = `<h4>Резервні копії</h4><div class="status-list">${snapshots}</div><h4>Моделі ШІ</h4><div class="status-list">${modelRows}</div><h4>TLS-сертифікат</h4><div class="status-list">
+        <div class="status-row"><span>Стан</span><b class="${stateClass(certificate.status)}">${esc(ukState(certificate.status))}</b></div>
+        <div class="status-row"><span>Кому виданий</span><b>${esc(certificate.subject || "—")}</b></div>
+        <div class="status-row"><span>Дійсний до</span><b>${esc(certificate.not_after || "—")}</b></div></div>`;
+    } catch (error) { target.innerHTML = `<p class="form-error visible">Не вдалося завантажити дані обслуговування: ${esc(error.message)}</p>`; }
+  };
+
+  const workflowDialog = document.querySelector("#workflowdialog");
+  let friendlyWorkflow = {}, friendlyWorkflowIdentity = null;
+  if (workflowDialog) {
+    workflowDialog.classList.add("workflow-dialog");
+    workflowDialog.innerHTML = `<h2>Сценарій обробки</h2><p class="workflow-help">Сценарій складається з послідовних вузлів. Для звичайного редагування змініть тип вузла або його параметри; JSON усього сценарію вводити не потрібно.</p>
+      <div class="workflow-meta"><label>Тип сценарію<select id="workflow-kind"><option value="image">Зображення</option><option value="video">Відео</option><option value="character">Персонаж</option></select></label><label>Назва файла<input id="workflow-name" pattern="[A-Za-z0-9._-]+" required></label></div>
+      <div id="workflow-nodes"></div><button id="workflow-add-node" type="button" class="secondary">Додати вузол</button>
+      <p id="workflow-error" class="form-error"></p><div class="dialog-actions"><button id="workflow-save-friendly" type="button">Зберегти</button><button id="workflow-close-friendly" type="button" class="secondary">Закрити</button></div>`;
+  }
+  const renderWorkflowNodes = () => {
+    const target = document.querySelector("#workflow-nodes"); if (!target) return;
+    target.innerHTML = Object.entries(friendlyWorkflow).map(([id, node]) => `<div class="workflow-node" data-node="${esc(id)}">
+      <div class="workflow-node-head"><label>№ вузла<input class="node-id" value="${esc(id)}"></label><label>Дія<input class="node-class" value="${esc(node.class_type || "")}" placeholder="Наприклад, SaveImage"></label><button type="button" class="danger node-remove">Видалити</button></div>
+      <label>Параметри вузла<textarea class="node-inputs" spellcheck="false">${esc(JSON.stringify(node.inputs || {}, null, 2))}</textarea></label></div>`).join("") || '<p class="muted">Додайте перший вузол сценарію.</p>';
+    target.querySelectorAll(".node-remove").forEach((button) => button.addEventListener("click", () => { delete friendlyWorkflow[button.closest(".workflow-node").dataset.node]; renderWorkflowNodes(); }));
+  };
+  const collectWorkflow = () => {
+    const value = {};
+    document.querySelectorAll("#workflow-nodes .workflow-node").forEach((row) => {
+      const id = row.querySelector(".node-id").value.trim(), classType = row.querySelector(".node-class").value.trim();
+      if (!id || !classType || value[id]) throw new Error("Кожен вузол повинен мати унікальний номер і назву дії");
+      let inputs; try { inputs = JSON.parse(row.querySelector(".node-inputs").value || "{}"); } catch (_) { throw new Error(`Некоректні параметри у вузлі ${id}`); }
+      value[id] = {class_type: classType, inputs};
+    });
+    return value;
+  };
+  window.newWorkflow = () => {
+    friendlyWorkflowIdentity = null; friendlyWorkflow = {"1": {class_type: "SaveImage", inputs: {filename_prefix: "vertep"}}};
+    document.querySelector("#workflow-kind").value = "image"; document.querySelector("#workflow-kind").disabled = false;
+    document.querySelector("#workflow-name").value = "new-workflow.json"; document.querySelector("#workflow-name").disabled = false;
+    renderWorkflowNodes(); workflowDialog.showModal();
+  };
+  window.editWorkflow = async (kind, name) => {
+    friendlyWorkflowIdentity = {kind, name}; friendlyWorkflow = await window.api(`/api/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`);
+    document.querySelector("#workflow-kind").value = kind; document.querySelector("#workflow-kind").disabled = true;
+    document.querySelector("#workflow-name").value = name; document.querySelector("#workflow-name").disabled = true;
+    renderWorkflowNodes(); workflowDialog.showModal();
+  };
+  document.querySelector("#workflow-add-node")?.addEventListener("click", () => { let id = 1; while (friendlyWorkflow[String(id)]) id += 1; friendlyWorkflow[String(id)] = {class_type: "", inputs: {}}; renderWorkflowNodes(); });
+  document.querySelector("#workflow-close-friendly")?.addEventListener("click", () => workflowDialog.close());
+  document.querySelector("#workflow-save-friendly")?.addEventListener("click", async () => {
+    const error = document.querySelector("#workflow-error"); error.classList.remove("visible");
+    try {
+      const value = collectWorkflow(), kind = friendlyWorkflowIdentity?.kind || document.querySelector("#workflow-kind").value;
+      let name = friendlyWorkflowIdentity?.name || document.querySelector("#workflow-name").value.trim();
+      if (!name.endsWith(".json")) name += ".json";
+      await window.api(`/api/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(value)});
+      workflowDialog.close(); if (window.refreshConfigs) window.refreshConfigs();
+    } catch (exception) { error.textContent = exception.message; error.classList.add("visible"); }
+  });
+
+  renderOperationalStatus(); renderRoles(); renderUpdateFriendly(); renderLifecycleFriendly();
+  setInterval(renderOperationalStatus, 5000);
+  setInterval(renderUpdateFriendly, 5000);
+  setInterval(() => renderRoles(false), 10000);
+  setInterval(renderLifecycleFriendly, 30000);
 })();

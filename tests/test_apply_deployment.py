@@ -82,6 +82,25 @@ def test_core_deployment_provisions_managed_ollama_model(tmp_path):
                for command in commands)
 
 
+def test_core_deployment_activates_multiple_local_roles(tmp_path):
+    root = fixture(tmp_path, "core")
+    roles = json.loads((root / "config/node_roles.json").read_text())
+    plan = module().create_plan(roles, "core", "0.0.0.20", ["gpu", "text"])
+    request_path = root / "config/deployment-request.json"
+    request = json.loads(request_path.read_text())
+    request.update({"additional_roles": ["text", "gpu"], "plan_sha256": plan["sha256"]})
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    commands = []
+    result = module().apply(root, runner=lambda command, **kwargs: commands.append(command))
+    assert result["additional_roles"] == ["gpu", "text"]
+    assert {"core", "worker", "comfyui", "ollama"} <= set(result["services"])
+    environment = (root / ".env").read_text(encoding="utf-8")
+    assert "NODE_ROLE=core" in environment
+    assert "NODE_ADDITIONAL_ROLES=gpu,text" in environment
+    assert "NODE_CAPABILITIES=image_generation,text_generation" in environment
+    assert "SUPPORTED_TASKS=image,text,video" in environment
+
+
 def test_apply_deployment_rejects_environment_injection(tmp_path):
     root = fixture(tmp_path)
     request_path = root / "config/deployment-request.json"

@@ -52,6 +52,7 @@ from .node_registry import (create_node_csr, create_registration_token, enroll_n
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
 from .version import application_version
+from .deployment_plan import create_plan
 from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
                              rollout_status, rollback_ready_nodes, start_rollout)
 from worker.role_executor import delete_text_model, list_text_models, list_voices, pull_text_model, synthesize_voice
@@ -284,7 +285,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return Response("Insufficient role", 403)
         if request.method in {"PUT", "DELETE"} and request.url.path.startswith(("/api/characters", "/api/brands", "/api/workflows")) and role != "admin":
             return Response("Administrator role required", 403)
-        if request.method != "GET" and request.url.path.startswith("/api/system/update") and role != "admin":
+        if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles")) and role != "admin":
             return Response("Administrator role required", 403)
         if request.method != "GET" and request.url.path.startswith("/api/settings") and role != "admin":
             return Response("Administrator role required", 403)
@@ -508,7 +509,11 @@ def _recover_stale_workers() -> None:
     now = datetime.now(timezone.utc)
     timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "45"))
     for worker in store.workers.values():
-        last_seen = datetime.fromisoformat(worker["last_seen"])
+        try:
+            last_seen = datetime.fromisoformat(str(worker["last_seen"]))
+        except (KeyError, TypeError, ValueError):
+            worker["status"] = "OFFLINE"
+            continue
         if (now - last_seen).total_seconds() <= timeout or worker.get("status") == "OFFLINE":
             continue
         worker["status"] = "OFFLINE"
@@ -1006,6 +1011,13 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
         data["status"] = "READY"
     role = node_roles().get(data["role"], {})
     allowed = set(role.get("capabilities", []))
+    if data["role"] == "core":
+        try:
+            deployed = json.loads((config_root() / "deployment-plan.json").read_text(encoding="utf-8"))
+            for additional in deployed.get("additional_roles", []):
+                allowed.update(node_roles().get(additional, {}).get("capabilities", []))
+        except (OSError, ValueError):
+            pass
     declared = set(data.get("capabilities", [])) & allowed
     self_test = data.get("self_test") or {}
     data["capabilities"] = sorted(declared)
@@ -1529,6 +1541,67 @@ def synthesize_voice_endpoint(payload: dict):
 @app.get("/api/system/update")
 def web_update_status():
     return {**update_status(), "system": get_system_state()}
+
+
+def _read_optional_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+@app.get("/api/system/roles")
+def local_roles_status():
+    definitions = node_roles()
+    plan = _read_optional_json(config_root() / "deployment-plan.json")
+    deployment = _read_optional_json(config_root() / "deployment-status.json")
+    active = plan.get("additional_roles", []) if plan.get("role") == "core" else []
+    return {
+        "node_role": plan.get("role") or installation().get("node_role") or "core",
+        "active_roles": active,
+        "available_roles": [
+            {"id": role, "label": definition.get("label", role),
+             "services": [service for service in definition.get("services", [])
+                          if service not in {"worker", "update-agent"}],
+             "capabilities": definition.get("capabilities", [])}
+            for role, definition in definitions.items() if role != "core"
+        ],
+        "deployment": deployment,
+    }
+
+
+@app.post("/api/system/roles")
+def configure_local_roles(payload: dict):
+    requested = payload.get("roles")
+    if not isinstance(requested, list) or any(not isinstance(role, str) for role in requested):
+        raise HTTPException(422, "roles must be a list of role identifiers")
+    definitions = node_roles()
+    try:
+        plan = create_plan(definitions, "core", application_version(), requested)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    current = _read_optional_json(config_root() / "deployment-plan.json")
+    if current.get("sha256") == plan["sha256"]:
+        return {"state": "UNCHANGED", "active_roles": plan.get("additional_roles", []),
+                "message": "Вибрані ролі вже активні"}
+    setup = installation()
+    backend = setup.get("ai_backend", {})
+    request_value = {
+        "schema": 1, "role": "core", "additional_roles": plan.get("additional_roles", []),
+        "version": application_version(), "ai_backend": backend.get("type") or "ollama",
+        "core_url": None, "plan_sha256": plan["sha256"],
+        "ollama_model": backend.get("model") or os.getenv("OLLAMA_MODEL", "llama3.2"),
+    }
+    path = config_root() / "deployment-request.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(request_value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    return {"state": "QUEUED", "active_roles": current.get("additional_roles", []),
+            "requested_roles": plan.get("additional_roles", []),
+            "message": "Зміни передано системному виконавцю"}
 
 @app.get("/api/system/update/readiness")
 def update_readiness():

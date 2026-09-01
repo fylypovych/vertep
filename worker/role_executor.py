@@ -132,7 +132,11 @@ ROLE_TASKS = {"text": {"text"}, "voice": {"voice"}, "publisher": {"publish"},
 
 def execute_role_task(role: str, task: dict) -> list[dict]:
     task_type = task.get("task", role)
-    if task_type not in ROLE_TASKS.get(role, set()):
+    allowed = set(ROLE_TASKS.get(role, set()))
+    if role == "core":
+        local_roles = {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",")}
+        allowed = {task for local_role in local_roles for task in ROLE_TASKS.get(local_role, set())}
+    if task_type not in allowed:
         raise PermissionError(f"Role {role} is not authorized to execute {task_type}")
     executor = EXECUTORS.get(task_type)
     if not executor:

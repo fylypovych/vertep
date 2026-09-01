@@ -118,12 +118,17 @@ services:
       CORE_ADDRESS: "${CORE_URL:-http://core:8080}"
       NODE_NAME: "${NODE_NAME:-local-worker}"
       NODE_ROLE: "${NODE_ROLE:-gpu}"
+      NODE_ADDITIONAL_ROLES: "${NODE_ADDITIONAL_ROLES:-}"
       NODE_CAPABILITIES: "${NODE_CAPABILITIES:-image_generation,image_upscale,controlnet,inpainting}"
+      SUPPORTED_TASKS: "${SUPPORTED_TASKS:-image}"
+      WORKER_REQUIRE_GPU: "${WORKER_REQUIRE_GPU:-true}"
       REGISTRATION_TOKEN: "${REGISTRATION_TOKEN:-}"
       CORE_CA_PATH: "${CORE_CA_PATH:-}"
       NODE_CONFIG_PATH: /data/config/node-credentials.json
       COMFYUI_URL: http://comfyui:8188
+      COMFYUI_HEALTH_URL: http://comfyui:8188/system_stats
       OLLAMA_URL: http://ollama:11434
+      OLLAMA_HEALTH_URL: http://ollama:11434/api/tags
       TTS_HEALTH_URL: http://tts:8090/health
       PUBLISHER_HEALTH_URL: http://publisher-worker:8091/health
       PROMETHEUS_URL: http://monitoring:9090/-/healthy

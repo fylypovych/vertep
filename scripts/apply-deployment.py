@@ -21,6 +21,8 @@ BOOTSTRAP_SERVICES = {"proxy", "core", "license-manager", "dispatcher", "schedul
                       "certificate-manager", "migrate", "postgres", "redis", "update-agent"}
 SAFE_VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}")
 SAFE_MODEL = re.compile(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}")
+ROLE_TASKS = {"gpu": {"image", "video"}, "text": {"text"}, "voice": {"voice"},
+              "publisher": {"publish"}, "backup": {"backup"}}
 
 
 def env_value(value: object, name: str) -> str:
@@ -144,7 +146,10 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         raise ValueError("Deployment request містить некоректну версію")
     if version != current_version(root / ".env"):
         raise RuntimeError("Deployment request створено для іншої версії Vertep")
-    plan = create_plan(roles, role, version)
+    additional_roles = request.get("additional_roles", [])
+    if not isinstance(additional_roles, list) or any(not isinstance(item, str) for item in additional_roles):
+        raise ValueError("Некоректний список додаткових ролей")
+    plan = create_plan(roles, role, version, additional_roles)
     if request.get("plan_sha256") != plan["sha256"]:
         raise RuntimeError("Deployment request не відповідає підписаному каталогу ролей")
     core_url = request.get("core_url") or ""
@@ -159,7 +164,14 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         raise ValueError("Некоректна назва Ollama model")
     update_env(root / ".env", {
         "NODE_ROLE": role,
-        "NODE_CAPABILITIES": ",".join(plan["capabilities"]),
+        "NODE_ADDITIONAL_ROLES": ",".join(plan.get("additional_roles", [])),
+        "NODE_CAPABILITIES": ",".join(sorted({capability
+                                               for selected_role in ([role] if role != "core" else additional_roles)
+                                               for capability in roles[selected_role]["capabilities"]})),
+        "SUPPORTED_TASKS": ",".join(sorted({task for selected_role in ([role] if role != "core" else additional_roles)
+                                                   for task in ROLE_TASKS.get(selected_role, set())})),
+        "WORKER_REQUIRE_GPU": "false" if role == "core" else
+                              ("true" if role == "gpu" else "false"),
         "CORE_URL": core_url,
         "CORE_ADDRESS": core_url,
         "REGISTRATION_TOKEN": "",
@@ -175,7 +187,8 @@ def apply(root: Path, runner=subprocess.run) -> dict:
     all_services = BOOTSTRAP_SERVICES | {service for definition in roles.values()
                                         for service in definition["services"]}
     unwanted = sorted(all_services - selected)
-    status = {"state": "APPLYING", "role": role, "services": sorted(selected),
+    status = {"state": "APPLYING", "role": role,
+              "additional_roles": plan.get("additional_roles", []), "services": sorted(selected),
               "updated_at": datetime.now(timezone.utc).isoformat()}
     atomic_json(root / "config/deployment-status.json", status)
     try:

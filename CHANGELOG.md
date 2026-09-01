@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Replaced raw queue and system JSON with Ukrainian status cards, readable update history, and a consolidated maintenance view for backups, models, and TLS certificates.
+- Replaced the full-document workflow JSON editor with a guided Ukrainian node editor that validates node identifiers, action types, and per-node parameters.
+- Added administrator-controlled checkboxes for activating multiple local worker roles on a Core host; signed composite deployment plans add or remove only the required services while preserving data and limiting the local worker to selected capabilities.
+- Made status recovery tolerate legacy worker records without heartbeat timestamps instead of failing the entire dashboard.
+
 ## 0.0.0.58 - 2026-09-01
 
 - Fixed admin-panel updates stopping before installation with `Connection refused`: the privileged host updater now drains through the appliance's exposed HTTPS proxy on port 8443 instead of the unexposed container-only Core port 8080, while remote Core URLs retain normal TLS verification.

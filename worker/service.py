@@ -22,7 +22,22 @@ pending_logs: list[dict] = []
 def role_self_test(role: str, metrics: dict, adapter: ComfyUIAdapter | None = None) -> dict:
     started = time.monotonic()
     try:
-        if role == "gpu":
+        if role == "core":
+            additional = {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",") if item.strip()}
+            if not additional:
+                raise RuntimeError("Core has no local worker roles")
+            health_urls = {
+                "gpu": os.getenv("COMFYUI_HEALTH_URL", "http://comfyui:8188/system_stats"),
+                "text": os.getenv("OLLAMA_HEALTH_URL", "http://ollama:11434/api/tags"),
+                "voice": os.getenv("TTS_HEALTH_URL", "http://tts:8090/health"),
+                "publisher": os.getenv("PUBLISHER_HEALTH_URL", "http://publisher-worker:8091/health"),
+                "monitoring": os.getenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy"),
+            }
+            for selected in additional & health_urls.keys():
+                httpx.get(health_urls[selected], timeout=15).raise_for_status()
+            if "backup" in additional:
+                Path(os.getenv("BACKUP_ROOT", "/data/backups")).mkdir(parents=True, exist_ok=True)
+        elif role == "gpu":
             if os.getenv("DEMO_MODE", "true").lower() != "true" and not metrics.get("gpu_available"):
                 raise RuntimeError("NVIDIA GPU/driver is unavailable")
             adapter = adapter or ComfyUIAdapter()
