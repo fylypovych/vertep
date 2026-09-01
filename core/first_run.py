@@ -275,12 +275,13 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
         raise ValueError("A non-Core node must be registered with Core")
     secrets_store = ensure_secret_store()
     version = os.getenv("VERTEP_VERSION", "unknown")
-    plan = create_plan(roles, node_role, version)
+    additional_roles = ["text"] if node_role == "core" and backend == "ollama" else []
+    plan = create_plan(roles, node_role, version, additional_roles)
     _write("deployment-plan.json", plan)
     value = {"installation_id": secrets.token_hex(16), "installation_name": name.strip(),
              "version": version, "created_at": datetime.now(timezone.utc).isoformat(),
              "completed_at": datetime.now(timezone.utc).isoformat(), "hardware": runtime_hardware(),
-             "node_role": node_role, "modules": roles[node_role]["modules"],
+             "node_role": node_role, "modules": plan["modules"],
              "runtime": _runtime_inventory(),
              "core_url": core_url if node_role != "core" else None,
              "web_domain": web_domain.strip() if web_domain else None,
@@ -304,6 +305,7 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
     if node_credentials:
         _write("node-credentials.json", node_credentials)
     _write("deployment-request.json", {"schema": 1, "role": node_role, "version": version,
+                                        "additional_roles": plan.get("additional_roles", []),
                                         "ai_backend": backend,
                                         "core_url": core_url if node_role != "core" else None,
                                         "ollama_model": backend_model or os.getenv("OLLAMA_MODEL", "llama3.2"),

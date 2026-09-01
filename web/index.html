@@ -215,7 +215,7 @@
         <div id="stats" class="stats"></div>
         <div class="grid">
           <div class="card">
-            <h2>Нова задача</h2>
+            <h2>Нове завдання</h2>
             <textarea id="topic" placeholder="Тема ролика"></textarea
             ><label
               >Відкладений запуск (ISO-8601)<input
@@ -1013,14 +1013,14 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
             brands
               .map(
                 (b) =>
-                  `<div class="card"><b>${esc(b.name)}</b><p>${esc(b.id)}</p><button onclick="editBrand('${b.id}')">Редагувати</button></div>`,
+                  `<div class="card"><b>${esc(b.name)}</b><p>${esc(b.id)}</p><div class="actions"><button onclick="editBrand('${b.id}')">Редагувати</button><button class="danger" onclick="deleteBrand('${b.id}')">Видалити</button></div></div>`,
               )
               .join("") || '<p class="muted">Брендів нема</p>';
           $("#workflowlist").innerHTML =
             workflows
               .map(
                 (w) =>
-                  `<div class="card"><b>${esc(w.type + "/" + w.name)}</b> <span class="status">${w.valid ? "VALID" : "INVALID"}</span><p>${esc((w.errors || []).join("; "))}</p><button onclick="editWorkflow('${w.type}','${w.name}')">Редагувати</button></div>`,
+                  `<div class="card"><b>${esc(w.type + "/" + w.name)}</b> <span class="status">${w.valid ? "VALID" : "INVALID"}</span><p>${esc((w.errors || []).join("; "))}</p><div class="actions"><button onclick="editWorkflow('${w.type}','${w.name}')">Редагувати</button><button class="danger" onclick="deleteWorkflow('${w.type}','${w.name}')">Видалити</button></div></div>`,
               )
               .join("") || '<p class="muted">Workflows відсутні</p>';
         } catch (e) {
@@ -1047,6 +1047,7 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
           null,
           2,
         );
+        $("#branddialog").showModal();
       }
       async function saveBrand() {
         let b;

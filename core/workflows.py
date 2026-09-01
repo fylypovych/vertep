@@ -56,6 +56,12 @@ class WorkflowRegistry:
         (directory / name).write_text(json.dumps(workflow, ensure_ascii=False, indent=2), encoding="utf-8")
         return {"type": kind, "name": name, "valid": True}
 
+    def delete(self, kind: str, name: str) -> dict:
+        self._validate_path(kind, name)
+        path = self.root / kind / name
+        path.unlink()
+        return {"deleted": f"workflows/{kind}/{name}"}
+
     @staticmethod
     def _validate_path(kind: str, name: str) -> None:
         if kind not in WORKFLOW_TYPES or not SAFE_NAME.fullmatch(name):

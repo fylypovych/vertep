@@ -92,6 +92,8 @@ def test_workflow_registry_validation(tmp_path):
     registry.save("image", "test.json", workflow)
     assert registry.list()[0]["valid"] is True
     assert registry.load("image", "test.json") == workflow
+    assert registry.delete("image", "test.json") == {"deleted": "workflows/image/test.json"}
+    assert registry.list() == []
 
 
 def test_roles_metrics_and_worker_log_ingestion(monkeypatch):
@@ -160,11 +162,16 @@ def test_installer_firewall_and_ssh_hardening_are_lockout_safe():
 def test_update_applies_migrations_before_core_rebuild():
     script = open("scripts/vertep", encoding="utf-8").read()
     migration = script.index('psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$migration"')
-    core_rebuild = script.index('up -d --force-recreate --remove-orphans')
+    core_rebuild = script.index('up -d --force-recreate --no-deps --remove-orphans')
     assert script.index("pg_isready") < migration < core_rebuild
     assert "systemctl enable --now vertep-update.path" in script
     assert "restart-runtime)" in script
     assert "VERTEP_UPDATE_STATUS_FILE" in script
+    assert 'install -m 0640 "$release_root/config/node_roles.json"' in script
+    assert all(f"  {command})" in script for command in ("start", "stop", "restart", "recover"))
+    assert 'missing_infra+=("$service")' in script
+    assert 'up -d postgres redis' not in script
+    assert script.count('up -d --force-recreate --no-deps --remove-orphans') == 2
 
 
 def test_node_registration_push_token_has_forward_migration():
@@ -192,6 +199,17 @@ def test_web_ui_has_remaining_job_and_registry_controls():
     assert re.search(r"mime_type\?\.startsWith\(['\"]video/['\"]\)", html)
     assert "Безпечне оновлення Vertep" in html
     assert "requestSystemUpdate" in html
+    assert "deleteBrand" in html
+    assert "deleteWorkflow" in html
+
+
+def test_appliance_backup_service_can_read_protected_sources():
+    compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
+    start = compose.index("  backup-service:")
+    backup = compose[start:compose.index("  postgres:", start)]
+    assert 'user: "0:0"' in backup
+    assert 'cap_drop: ["ALL"]' in backup
+    assert 'no-new-privileges:true' in backup
 
 
 def test_worker_converts_rejected_artifact_to_failed_result():

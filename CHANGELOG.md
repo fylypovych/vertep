@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Made emergency mode actionable: the Errors tab now shows the durable system reason, failed update/deployment history and technical details, while administrators can return to normal mode only after CORE, PostgreSQL and Redis pass health checks.
+- Moved local Core-role activation into Nodes, separated optional services from the base Core plan, fixed backup-service access to protected appliance data, and made signed role-catalog updates reach existing installations.
+- Replaced workflow parameter JSON blocks with typed Ukrainian fields and added dependency-aware workflow deletion; replaced the brand JSON editor with a guided form and added brand deletion.
+- Moved new-job creation from Overview to Tasks and added `vertep start`, `vertep stop`, `vertep restart`, and `vertep recover` operations.
+- Prevented normal application updates and restarts from recreating PostgreSQL or Redis, avoiding false emergency transitions caused by terminated state-store connections.
+
 ## 0.0.0.62 - 2026-09-01
 
 - Added a privileged server-restart action to the administration panel and made updates automatically recreate every active Core-role service while leaving PostgreSQL and Redis running.

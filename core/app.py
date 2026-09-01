@@ -43,7 +43,8 @@ from .logging_config import configure_logging, read_logs
 from .workflows import WorkflowRegistry
 from .maintenance import cleanup_jobs, cleanup_temporary_files
 from .update_manager import request_update, update_status
-from .system_state import dispatch_allowed, get_system_state, jobs_may_be_created, operation_allowed
+from .system_state import (SystemState, dispatch_allowed, get_system_state,
+                           jobs_may_be_created, operation_allowed, set_system_state)
 from .health_checks import run_checks as _run_health_checks, health_status as _health_status
 from .first_run import (complete_setup, configured_user, is_configured, session_secret,
                         setup_status, config_root, integration_secret_status,
@@ -234,8 +235,12 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 operation = "node_control"
             elif path.startswith("/api/settings"):
                 operation = "configuration"
+            elif path.startswith("/api/system/roles"):
+                operation = "configuration"
             elif path.startswith("/api/system/update"):
                 operation = "update"
+            elif path.startswith("/api/system/recovery"):
+                operation = "recovery"
             if operation and not operation_allowed(operation):
                 return Response(f"Operation {operation} is blocked by system state", 423)
         client = request.client.host if request.client else "unknown"
@@ -259,7 +264,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return self._secure(response)
         internal_key = os.getenv("INTERNAL_API_KEY", "")
         internal_update_routes = {"/api/status", "/api/system/update/check", "/api/system/update/run",
-                                  "/api/system/update/readiness"}
+                                  "/api/system/update/readiness", "/api/system/recovery/normal"}
         if (request.url.path in internal_update_routes and internal_key
                 and secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), internal_key)):
             response = await call_next(request)
@@ -285,7 +290,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return Response("Insufficient role", 403)
         if request.method in {"PUT", "DELETE"} and request.url.path.startswith(("/api/characters", "/api/brands", "/api/workflows")) and role != "admin":
             return Response("Administrator role required", 403)
-        if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles")) and role != "admin":
+        if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles", "/api/system/recovery")) and role != "admin":
             return Response("Administrator role required", 403)
         if request.method != "GET" and request.url.path.startswith("/api/settings") and role != "admin":
             return Response("Administrator role required", 403)
@@ -764,6 +769,25 @@ def prometheus_metrics():
 @app.get("/api/alerts")
 def alerts():
     result = []
+    system = get_system_state()
+    if system.get("state") != "NORMAL":
+        result.append({"severity": "error" if system.get("state") == "EMERGENCY" else "warning",
+                       "type": "SYSTEM_STATE", "state": system.get("state"),
+                       "message": system.get("reason") or "System is not in normal mode",
+                       "operation_id": system.get("operation_id"),
+                       "updated_at": system.get("updated_at")})
+    update = update_status()
+    if update.get("state") in {"FAILED", "ROLLED_BACK"}:
+        result.append({"severity": "error", "type": "UPDATE_FAILED",
+                       "message": update.get("message") or "Update failed",
+                       "operation_id": update.get("request_id"),
+                       "updated_at": update.get("updated_at"),
+                       "details": (update.get("log") or [])[-20:]})
+    deployment = _read_optional_json(config_root() / "deployment-status.json")
+    if deployment.get("state") == "FAILED":
+        result.append({"severity": "error", "type": "ROLE_DEPLOYMENT_FAILED",
+                       "message": deployment.get("error") or "Role activation failed",
+                       "updated_at": deployment.get("updated_at")})
     for job in store.jobs.values():
         if job.status == JobStatus.FAILED:
             result.append({"severity": "error", "type": "JOB_FAILED", "job_id": job.job_id,
@@ -800,6 +824,24 @@ def put_workflow(kind: str, name: str, workflow: dict):
         return workflow_registry.save(kind, name, workflow)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+
+
+@app.delete("/api/workflows/{kind}/{name}")
+def delete_workflow(kind: str, name: str):
+    reference = f"workflows/{kind}/{name}"
+    if any(job.workflow == reference for job in store.jobs.values()):
+        raise HTTPException(409, "Сценарій використовується у завданнях")
+    character_root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
+    for directory in character_root.iterdir() if character_root.is_dir() else []:
+        if (read_json(directory / "character.json").get("workflow") == reference
+                or read_json(directory / "generation.json").get("workflow") == reference):
+            raise HTTPException(409, f"Сценарій використовує персонаж {directory.name}")
+    try:
+        return workflow_registry.delete(kind, name)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    except FileNotFoundError as error:
+        raise HTTPException(404, "Workflow not found") from error
 
 @app.post("/api/jobs")
 def create_job(request: JobCreate):
@@ -1171,6 +1213,19 @@ def put_brand(brand_id: str, config: BrandConfig):
     (directory / "brand.json").write_text(config.model_dump_json(indent=2), encoding="utf-8")
     return config
 
+
+@app.delete("/api/brands/{brand_id}")
+def delete_brand(brand_id: str):
+    if any(job.brand_id == brand_id for job in store.jobs.values()):
+        raise HTTPException(409, "Бренд використовується у завданнях")
+    if not SAFE_ID.fullmatch(brand_id):
+        raise HTTPException(400, "Invalid brand ID")
+    directory = Path(os.getenv("BRANDS_ROOT", "brands")) / brand_id
+    if not directory.is_dir():
+        raise HTTPException(404, "Brand not found")
+    shutil.rmtree(directory)
+    return {"deleted": brand_id}
+
 @app.post("/api/telegram/webhook")
 def telegram_webhook(update: dict, request: Request):
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
@@ -1541,6 +1596,15 @@ def synthesize_voice_endpoint(payload: dict):
 @app.get("/api/system/update")
 def web_update_status():
     return {**update_status(), "system": get_system_state()}
+
+
+@app.post("/api/system/recovery/normal")
+def recover_normal_operation():
+    status = system_status()
+    failed = [name for name in ("core", "postgres", "redis") if status.get(name) != "OK"]
+    if failed:
+        raise HTTPException(409, "Recovery health checks failed: " + ", ".join(failed))
+    return set_system_state(SystemState.NORMAL, "Administrator confirmed healthy runtime recovery")
 
 
 def _read_optional_json(path: Path) -> dict:

@@ -35,8 +35,10 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(BASE_URL)
         expect(page.locator("#health")).to_contain_text("Ядро працює")
+        expect(page.locator("#dashboard .task-composer")).to_have_count(0)
         page.locator('#nav button[data-panel="jobs"]').click()
         expect(page.locator("#jobs")).to_be_visible()
+        expect(page.locator("#jobs .task-composer")).to_contain_text("Нове завдання")
         assert errors == []
         browser.close()
 
@@ -115,13 +117,80 @@ def test_friendly_queue_workflow_and_core_role_controls():
         page.locator("#workflows > button").click()
         expect(page.locator("#workflowdialog")).to_be_visible()
         expect(page.locator("#workflow-nodes .workflow-node")).to_have_count(1)
+        expect(page.locator("#workflow-nodes .workflow-parameter")).to_have_count(1)
+        expect(page.locator("#workflow-nodes .parameter-type")).to_have_value("text")
+        expect(page.locator("#workflow-nodes .node-inputs")).to_have_count(0)
         expect(page.locator("#workflowjson")).to_have_count(0)
         page.locator("#workflow-close-friendly").click()
 
-        page.locator('#nav button[data-panel="settings"]').click()
+        page.locator('#nav button[data-panel="workers"]').click()
         expect(page.locator("#systemstatus")).to_be_hidden()
+        expect(page.locator("#core-role-card")).to_be_visible()
         expect(page.locator("#core-role-options input[type=checkbox]")).to_have_count(6)
         assert errors == []
+        browser.close()
+
+
+def test_brand_form_edits_and_deletes_without_json():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        saved, deleted = [], []
+        brand = {"id": "brand01", "name": "Тестовий бренд", "enabled": True,
+                 "metadata": {"language": "uk", "description": "Опис"},
+                 "publishing": {"enabled": False, "channels": []}}
+
+        def brands_handler(route):
+            if route.request.method == "PUT":
+                saved.append(route.request.post_data_json)
+                route.fulfill(json=route.request.post_data_json)
+            elif route.request.method == "DELETE":
+                deleted.append(route.request.url)
+                route.fulfill(json={"deleted": "brand01"})
+            else:
+                route.fulfill(json=[brand])
+
+        page.route("**/api/brands", brands_handler)
+        page.route("**/api/brands/brand01", brands_handler)
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(BASE_URL)
+        page.locator('#nav button[data-panel="brands"]').click()
+        page.get_by_role("button", name="Редагувати").click()
+        expect(page.locator("#branddialog")).to_be_visible()
+        expect(page.locator("#brandjson")).to_have_count(0)
+        page.get_by_label("Назва бренду").fill("Оновлений бренд")
+        page.locator("#brand-save-friendly").click()
+        expect(page.locator("#branddialog")).to_be_hidden()
+        assert saved[0]["name"] == "Оновлений бренд"
+        page.get_by_role("button", name="Видалити").click()
+        assert deleted
+        browser.close()
+
+
+def test_emergency_reason_is_visible_and_recovery_is_actionable():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        recoveries = []
+        status = {"core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
+                  "system": {"state": "EMERGENCY", "reason": "Update and rollback failed"},
+                  "queue": {}, "scheduler": {}, "orchestration": {}}
+        page.route("**/api/status", lambda route: route.fulfill(json=status))
+        page.route("**/api/alerts", lambda route: route.fulfill(json=[{
+            "severity": "error", "type": "SYSTEM_STATE",
+            "message": "Update and rollback failed", "details": ["rollback failed"],
+        }]))
+        page.route("**/api/system/recovery/normal", lambda route: (
+            recoveries.append(True), route.fulfill(json={"state": "NORMAL"})))
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(BASE_URL)
+        page.locator('#nav button[data-panel="settings"]').click()
+        expect(page.locator("#system-friendly")).to_contain_text("Update and rollback failed")
+        page.locator('#nav button[data-panel="errors"]').click()
+        expect(page.locator("#incident-friendly")).to_contain_text("Update and rollback failed")
+        page.locator('#nav button[data-panel="settings"]').click()
+        page.locator("#recover-normal").click()
+        assert recoveries
         browser.close()
 
 

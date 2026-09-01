@@ -179,6 +179,10 @@ services:
     cap_drop: ["ALL"]
   backup-service:
     image: ${VERTEP_BACKUP_SERVICE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/backup:${VERTEP_VERSION}}
+    # The backup service must read root-owned 0600 appliance configuration and
+    # write the host backup directory. It remains read-only, capability-free,
+    # non-privileged and constrained by no-new-privileges below.
+    user: "0:0"
     env_file: .env
     volumes: ["./config:/data/config", "./storage:/data/storage", "./backups:/data/backups"]
     environment:

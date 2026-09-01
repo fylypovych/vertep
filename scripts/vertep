@@ -37,6 +37,7 @@ sync_host_runtime(){
     install -m 0750 "$release_root/scripts/$executor" "$ROOT/scripts/$executor"
   done
   cp -a "$release_root/core"/. "$ROOT/core"/
+  install -m 0640 "$release_root/config/node_roles.json" "$ROOT/config/node_roles.json"
   install -m 0640 "$release_root/VERSION" "$ROOT/VERSION"
   ln -sfn "$ROOT/scripts/vertep" /usr/local/bin/vertep
 }
@@ -69,6 +70,13 @@ except (OSError, ValueError):
     pass
 PY
 }
+build_runtime_compose(){
+  release_root="$ROOT"
+  [[ -L "$ROOT/current" ]] && release_root="$ROOT/current"
+  compose=(docker compose --env-file "$ROOT/.env" -f "$release_root/docker-compose.yml")
+  [[ "${GPU_VENDOR:-none}" == amd && -f "$release_root/docker-compose.amd.yml" ]] && compose+=(-f "$release_root/docker-compose.amd.yml")
+  [[ "${GPU_VENDOR:-none}" == nvidia && -f "$release_root/docker-compose.nvidia.yml" ]] && compose+=(-f "$release_root/docker-compose.nvidia.yml")
+}
 case "${1:-status}" in
   status)
     if [[ "$role" == "worker" ]]; then
@@ -89,6 +97,31 @@ case "${1:-status}" in
     fi
     curl -fsS "${core_tls[@]}" "${auth[@]}" -X POST "$core_url/api/system/update/run"
     printf '\nUpdate request accepted; follow progress with vertep status.\n'
+    ;;
+  start)
+    build_runtime_compose
+    mapfile -t selected_services < <(selected_runtime_services)
+    [[ ${#selected_services[@]} -gt 0 ]] || { echo "Deployment plan is missing; run bootstrap to repair it" >&2; exit 1; }
+    cleanup_stale_compose_replacements
+    "${compose[@]}" up -d --remove-orphans "${selected_services[@]}"
+    "${compose[@]}" ps
+    ;;
+  stop)
+    build_runtime_compose
+    "${compose[@]}" stop
+    ;;
+  restart)
+    exec "$0" restart-runtime
+    ;;
+  recover)
+    auth=()
+    if [[ -n "${INTERNAL_API_KEY:-}" ]]; then
+      auth=(-H "X-Vertep-Internal-Key: ${INTERNAL_API_KEY}")
+    elif [[ -n "${ADMIN_PASSWORD:-}" ]]; then
+      auth=(-u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD}")
+    fi
+    curl -fsS "${core_tls[@]}" "${auth[@]}" -X POST "$core_url/api/system/recovery/normal"
+    printf '\nNormal operating mode restored after health checks.\n'
     ;;
   apply-update)
     package=${2:-}
@@ -162,7 +195,12 @@ case "${1:-status}" in
       && compose+=(-f "$release_root/docker-compose.nvidia.yml")
     cleanup_stale_compose_replacements
     if [[ "$role" == "core" || "$role" == "core-worker" ]]; then
-      "${compose[@]}" up -d postgres redis
+      mapfile -t running_services < <("${compose[@]}" ps --status running --services)
+      missing_infra=()
+      for service in postgres redis; do
+        printf '%s\n' "${running_services[@]}" | grep -qx "$service" || missing_infra+=("$service")
+      done
+      [[ ${#missing_infra[@]} -eq 0 ]] || "${compose[@]}" up -d "${missing_infra[@]}"
       database_ready=false
       for attempt in {1..30}; do
         if "${compose[@]}" exec -T postgres pg_isready -U vertep -d vertep >/dev/null 2>&1; then
@@ -195,7 +233,7 @@ case "${1:-status}" in
       [[ "$service" == postgres || "$service" == redis || "$service" == migrate ]] || restart_services+=("$service")
     done
     update_progress 80 RESTARTING "Restarting active Vertep services"
-    [[ ${#restart_services[@]} -eq 0 ]] || "${compose[@]}" up -d --force-recreate --remove-orphans "${restart_services[@]}"
+    [[ ${#restart_services[@]} -eq 0 ]] || "${compose[@]}" up -d --force-recreate --no-deps --remove-orphans "${restart_services[@]}"
     sync_host_runtime "$release_root"
     if [[ "$role" == "core" || "$role" == "core-worker" ]] && command -v systemctl >/dev/null 2>&1; then
       for unit in vertep-update.service vertep-update.path vertep-update-check.service \
@@ -237,7 +275,7 @@ case "${1:-status}" in
     done
     [[ ${#restart_services[@]} -gt 0 ]] || { echo "No active Vertep services found" >&2; exit 1; }
     update_progress 80 RESTARTING "Restarting active Vertep services"
-    "${compose[@]}" up -d --force-recreate --remove-orphans "${restart_services[@]}"
+    "${compose[@]}" up -d --force-recreate --no-deps --remove-orphans "${restart_services[@]}"
     update_progress 90 VERIFYING "Server restarted; waiting for health checks"
     for attempt in {1..120}; do
       if [[ "$role" == worker ]]; then
@@ -310,5 +348,5 @@ case "${1:-status}" in
       *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
     esac
     ;;
-  *) echo "Usage: vertep {status|update|rollback}"; exit 2 ;;
+  *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback}"; exit 2 ;;
 esac

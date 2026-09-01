@@ -21,6 +21,8 @@ def test_each_role_has_an_isolated_valid_plan():
         assert plan["services"] == definition["services"]
     assert "postgres" not in planner.create_plan(roles, "gpu", "1.2.3")["services"]
     assert "worker" not in planner.create_plan(roles, "core", "1.2.3")["services"]
+    assert {"ollama", "backup-service", "monitoring"}.isdisjoint(
+        planner.create_plan(roles, "core", "1.2.3")["services"])
 
 
 def test_plan_tampering_and_unknown_roles_fail():

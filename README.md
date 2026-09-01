@@ -66,13 +66,17 @@ Telegram updates are deduplicated by chat and message ID. A completed Telegram j
 
 ```bash
 vertep status
+vertep start
+vertep stop
+vertep restart
 vertep update
+vertep recover
 vertep rollback
 ```
 
 The helpers are in `scripts/vertep`. `update` reads the installed node role and starts only applicable services. Signed releases are prepared under an immutable release directory and activated atomically. Jobs and event histories are persisted under the Job volume; Redis and PostgreSQL have persistent volumes and restart policies.
 
-On CORE, update order is deliberately: drain workloads, create and verify backups, validate the signed release, start database services, wait for PostgreSQL, apply each unapplied migration/backfill, then activate and health-check the new services. If the database does not become ready or a migration fails, the new CORE is not activated.
+On CORE, update order is deliberately: drain workloads, create and verify backups, validate the signed release, verify the already-running database services, apply each unapplied migration/backfill, then activate and health-check the new application services. PostgreSQL and Redis are not recreated during a normal application update. If the database does not become ready or a migration fails, the new CORE is not activated.
 
 Cluster updates use a PostgreSQL-backed rolling coordinator with global fencing. Nodes are drained in deterministic order, canary deployment requires explicit promotion, and a failed health check requests rollback to each node's recorded previous version. Resumable data backfills keep durable checkpoints and can continue after interruption.
 
@@ -82,7 +86,7 @@ Cluster updates use a PostgreSQL-backed rolling coordinator with global fencing.
 
 On an installed CORE node, open **Система → Безпечне оновлення Vertep**. First select **Перевірити оновлення**; the **Встановити оновлення** button is enabled only when the signed update service reports a newer compatible release. Installation runs asynchronously, so the page may briefly lose its connection while services are activated and restarted. The persistent status shows the current and available versions, update phase, system state and the last update log.
 
-The Web API never receives a command, repository URL or branch. It can enqueue only `check` or `update`. A root-owned systemd path unit processes the request on the host and invokes the role-aware update executor, which creates backups, verifies the signed package, applies migrations and resumable backfills, activates the immutable release and runs health checks. The CORE container receives no Docker socket.
+The Web API never receives a command, repository URL or branch. It can enqueue only fixed maintenance actions such as `check`, `update`, and `restart`; emergency recovery returns the system to normal mode only after CORE, PostgreSQL, and Redis health checks pass. A root-owned systemd path unit processes privileged requests on the host. The CORE container receives no Docker socket.
 
 Web updates are enabled by Bootstrap or the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. Releases are fetched directly from the public GitHub Releases feed of `fylypovych/vertep`; each release includes a separately signed update manifest that binds its version, compatibility metadata and runtime-package SHA-256. The updater enters maintenance mode, drains active work, creates application, job, configuration, migration, and PostgreSQL backups, atomically switches the digest-pinned images, then applies the package. Failed health checks restore the previous release and environment; a durable update phase permits recovery after a power loss. The systemd timer checks for releases every six hours. Installed nodes need no GitHub credentials.
 

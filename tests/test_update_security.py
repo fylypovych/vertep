@@ -232,7 +232,8 @@ def test_signed_update_switches_runtime_images_and_host_executors():
     assert 'sync_host_runtime "$release_root"' in command
     assert "X-Vertep-Internal-Key" in command
     assert "cleanup_stale_compose_replacements" in command
-    assert command.index("cleanup_stale_compose_replacements", command.index("apply-update)")) < command.index('"${compose[@]}" up -d postgres redis')
+    assert command.index("cleanup_stale_compose_replacements", command.index("apply-update)")) < command.index('missing_infra=()')
+    assert 'up -d --force-recreate --no-deps --remove-orphans' in command
     assert command.count('source "$ROOT/.env"') >= 3
     assert '--exclude=releases' in command and '--exclude=current' in command
     assert '"worker_update.py", "update-runtime-env.py"' in runtime

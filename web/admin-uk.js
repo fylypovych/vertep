@@ -133,6 +133,13 @@
     }
   }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
+  const taskComposer = document.querySelector("#dashboard .grid > .card:first-child");
+  const jobsPanel = document.querySelector("#jobs");
+  if (taskComposer && jobsPanel) {
+    taskComposer.classList.add("task-composer");
+    jobsPanel.querySelector("h2")?.insertAdjacentElement("afterend", taskComposer);
+  }
+
   const dialog = document.querySelector("#chardialog");
   const rawEditor = document.querySelector("#charjson");
   if (!dialog || !rawEditor) return;
@@ -360,7 +367,8 @@
     OK: "Працює", HEALTHY: "Працює", NORMAL: "Нормальний", SUCCEEDED: "Завершено",
     FAILED: "Помилка", ERROR: "Помилка", OFFLINE: "Недоступний", UNHEALTHY: "Несправний",
     PENDING: "Очікує", RUNNING: "Виконується", APPLYING: "Застосовується", QUEUED: "У черзі",
-    ROLLED_BACK: "Відновлено попередню версію",
+    ROLLED_BACK: "Відновлено попередню версію", EMERGENCY: "Аварійний режим",
+    MAINTENANCE: "Обслуговування", RECOVERING: "Відновлення", READ_ONLY: "Лише читання",
   })[String(value || "").toUpperCase()] || String(value || "—");
 
   const queueRaw = document.querySelector("#queuestatus");
@@ -372,6 +380,11 @@
   if (systemRaw) {
     systemRaw.hidden = true;
     systemRaw.insertAdjacentHTML("afterend", '<div id="system-friendly" class="friendly-grid"></div>');
+  }
+  const alertsRaw = document.querySelector("#alerts");
+  if (alertsRaw) {
+    alertsRaw.hidden = true;
+    alertsRaw.insertAdjacentHTML("afterend", '<div id="incident-friendly" class="incident-list">Завантаження…</div>');
   }
   const updateRaw = document.querySelector("#updatestatus");
   if (updateRaw) {
@@ -396,37 +409,62 @@
       if (systemTarget) systemTarget.innerHTML = [
         ["Ядро", status.core], ["База даних", status.postgres], ["Черга Redis", status.redis],
         ["Сховище", status.storage], ["Режим системи", status.system?.state]
-      ].map(([label, value]) => `<div class="friendly-card"><span>${label}</span><strong class="metric ${stateClass(value)}">${esc(ukState(value))}</strong></div>`).join("");
+      ].map(([label, value]) => `<div class="friendly-card"><span>${label}</span><strong class="metric ${stateClass(value)}">${esc(ukState(value))}</strong></div>`).join("")
+        + (status.system?.state !== "NORMAL" ? `<div class="system-recovery"><b>Система потребує уваги</b><p>${esc(status.system?.reason || "Причину не записано")}</p>${status.system?.state === "EMERGENCY" ? '<button id="recover-normal" type="button">Перевірити й повернути нормальний режим</button>' : ""}</div>` : "");
+      document.querySelector("#recover-normal")?.addEventListener("click", recoverNormalMode);
     } catch (error) {
       const target = document.querySelector("#system-friendly");
       if (target) target.innerHTML = `<p class="form-error visible">Не вдалося отримати стан системи: ${esc(error.message)}</p>`;
     }
   };
 
+  const incidentLabels = {SYSTEM_STATE: "Режим системи", UPDATE_FAILED: "Оновлення", ROLE_DEPLOYMENT_FAILED: "Локальні ролі", JOB_FAILED: "Завдання", WORKER_OFFLINE: "Вузол", DEAD_LETTER_TASK: "Черга помилок"};
+  const renderIncidents = async () => {
+    const target = document.querySelector("#incident-friendly"); if (!target) return;
+    try {
+      const incidents = await window.api("/api/alerts");
+      target.innerHTML = incidents.length ? incidents.map((item) => `<article class="incident ${item.severity === "error" ? "incident-error" : "incident-warning"}"><div><b>${esc(incidentLabels[item.type] || item.type || "Подія")}</b><p>${esc(updateMessage(item.message || "Потрібна увага"))}</p>${item.updated_at ? `<small>${esc(item.updated_at)}</small>` : ""}</div>${(item.details || []).length ? `<details><summary>Технічні подробиці</summary><ol class="event-log">${item.details.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : ""}</article>`).join("") : '<p class="state-ok">Активних помилок і сповіщень немає.</p>';
+    } catch (error) { target.innerHTML = `<p class="form-error visible">Не вдалося завантажити журнал проблем: ${esc(error.message)}</p>`; }
+  };
+  async function recoverNormalMode() {
+    if (!confirm("Перевірити CORE, PostgreSQL і Redis та повернути систему в нормальний режим, якщо вони справні?")) return;
+    try { await window.api("/api/system/recovery/normal", {method: "POST"}); await Promise.all([renderOperationalStatus(), renderIncidents()]); }
+    catch (error) { alert(`Відновлення неможливе: ${error.message}`); }
+  }
+
   const roleLabelsUk = {
     gpu: "Генерація зображень (GPU)", text: "Генерація тексту", voice: "Синтез мовлення",
     publisher: "Публікація", backup: "Резервне копіювання", monitoring: "Моніторинг і журнали",
   };
   const settings = document.querySelector("#settings");
-  if (settings) {
+  const workersPanel = document.querySelector("#workers");
+  if (workersPanel) {
     const card = document.createElement("div");
     card.className = "card";
     card.id = "core-role-card";
-    card.innerHTML = `<h3>Додаткові ролі цього CORE</h3>
+    card.innerHTML = `<h3>Локальні ролі головного вузла</h3>
       <p class="muted">Активуйте функції, які має виконувати цей сервер локально. Зміна запускає або зупиняє відповідні компоненти без видалення даних.</p>
       <div id="core-role-options" class="role-options">Завантаження…</div>
       <p class="role-note">GPU-роль потребує сумісної відеокарти й найбільше ресурсів. Моделі та образи можуть завантажуватися кілька хвилин.</p>
       <button id="save-core-roles" type="button">Застосувати ролі</button> <span id="core-role-result" class="muted"></span>`;
-    settings.querySelector("#system-friendly")?.insertAdjacentElement("afterend", card);
+    workersPanel.querySelector("#registration")?.insertAdjacentElement("afterend", card);
+  }
+  if (settings) {
     const legacyLifecycle = document.querySelector("#lifecyclestatus")?.closest(".card");
     if (legacyLifecycle) legacyLifecycle.hidden = true;
-    card.insertAdjacentHTML("afterend", `<div class="card" id="friendly-lifecycle"><h3>Обслуговування системи</h3>
+    settings.querySelector("#system-friendly")?.insertAdjacentHTML("afterend", `<div class="card" id="friendly-lifecycle"><h3>Обслуговування системи</h3>
       <p class="muted">Резервні копії, моделі ШІ та TLS-сертифікат в одному місці.</p>
       <button type="button" onclick="createBackup()">Створити резервну копію</button> <button type="button" onclick="pullModel()">Додати модель</button> <button type="button" onclick="renewCertificate()">Оновити сертифікат</button>
       <div id="friendly-lifecycle-content">Завантаження…</div></div>`);
   }
 
   let knownRoleStatus = null;
+  const deploymentErrorUk = (message = "") => {
+    const service = message.split(":").slice(1).join(":").trim();
+    if (message.includes("Selected services failed health checks")) return `Не вдалося запустити компоненти: ${service}. Перегляньте проблему у вкладці «Помилки» або зніміть відповідну роль і повторіть.`;
+    if (message.includes("did not become healthy before timeout")) return "Компоненти не встигли запуститися. Перегляньте вкладку «Помилки» та повторіть застосування ролей.";
+    return message || "невідома помилка";
+  };
   const renderRoles = async (preserveSelection = false) => {
     const options = document.querySelector("#core-role-options");
     if (!options) return;
@@ -440,7 +478,7 @@
           <small>Компоненти: ${esc((role.services || []).join(", ") || "вбудовані")}.</small></label>`).join("");
       const deployment = knownRoleStatus.deployment || {};
       document.querySelector("#core-role-result").textContent = deployment.state === "APPLYING"
-        ? "Застосування змін…" : deployment.state === "FAILED" ? `Помилка: ${deployment.error || "невідома"}` : "";
+        ? "Застосування змін…" : deployment.state === "FAILED" ? `Помилка: ${deploymentErrorUk(deployment.error)}` : "";
     } catch (error) { options.innerHTML = `<p class="form-error visible">${esc(error.message)}</p>`; }
   };
   document.querySelector("#save-core-roles")?.addEventListener("click", async (event) => {
@@ -572,29 +610,131 @@
     } catch (error) { target.innerHTML = `<p class="form-error visible">Не вдалося завантажити дані обслуговування: ${esc(error.message)}</p>`; }
   };
 
+  const brandDialog = document.querySelector("#branddialog");
+  let currentBrand = null;
+  if (brandDialog) {
+    brandDialog.classList.add("brand-dialog");
+    brandDialog.innerHTML = `<h2>Бренд</h2><form id="brand-form" class="friendly-form">
+      <div class="field"><label for="brand-name">Назва бренду</label><input id="brand-name" maxlength="120" required placeholder="Наприклад, Vertep Studio"></div>
+      <div class="field"><label for="brand-id">Ідентифікатор бренду</label><input id="brand-id" pattern="[a-z0-9][a-z0-9_-]{1,63}" required placeholder="vertep_studio"><small class="hint">Малі латинські літери, цифри, дефіс або підкреслення.</small></div>
+      <label class="toggle"><input id="brand-enabled" type="checkbox"> Бренд активний</label>
+      <div class="field wide"><label for="brand-description">Опис і стиль комунікації</label><textarea id="brand-description" placeholder="Тон, аудиторія та ключові правила бренду"></textarea></div>
+      <div class="field"><label for="brand-watermark">Водяний знак</label><input id="brand-watermark" placeholder="Текст або шлях до зображення"></div>
+      <div class="field"><label for="brand-language">Основна мова</label><select id="brand-language"><option value="uk">Українська</option><option value="en">Англійська</option><option value="pl">Польська</option><option value="de">Німецька</option></select></div>
+      <fieldset class="wide"><legend>Публікація</legend><label class="toggle"><input id="brand-publishing-enabled" type="checkbox"> Дозволити публікацію</label><label for="brand-channels">Канали</label><input id="brand-channels" placeholder="youtube, telegram"><small class="hint">Назви каналів через кому.</small></fieldset>
+      <p id="brand-error" class="form-error wide" role="alert"></p></form>
+      <div class="dialog-actions"><button id="brand-save-friendly" type="button">Зберегти</button><button id="brand-close-friendly" type="button" class="secondary">Скасувати</button></div>`;
+  }
+  const populateBrand = (brand, isNew) => {
+    currentBrand = clone(brand);
+    field("brand-name").value = brand.name || "";
+    field("brand-id").value = brand.id || "";
+    field("brand-id").disabled = !isNew;
+    field("brand-enabled").checked = brand.enabled !== false;
+    field("brand-description").value = brand.metadata?.description || brand.metadata?.style_guide || "";
+    field("brand-watermark").value = brand.metadata?.watermark || "";
+    field("brand-language").value = brand.metadata?.language || "uk";
+    field("brand-publishing-enabled").checked = brand.publishing?.enabled === true;
+    field("brand-channels").value = (brand.publishing?.channels || []).join(", ");
+    field("brand-error").classList.remove("visible");
+    brandDialog.querySelector("h2").textContent = isNew ? "Новий бренд" : "Редагування бренду";
+    brandDialog.showModal(); field("brand-name").focus();
+  };
+  window.newBrand = () => populateBrand({id: "new_brand", name: "Новий бренд", enabled: true, metadata: {language: "uk"}, publishing: {enabled: false, channels: []}}, true);
+  window.editBrand = (id) => {
+    const brand = brands.find((item) => item.id === id);
+    if (!brand) return window.alert("Не вдалося знайти бренд");
+    populateBrand(brand, false);
+  };
+  document.querySelector("#brand-save-friendly")?.addEventListener("click", async () => {
+    const error = field("brand-error"), form = field("brand-form");
+    if (!form.reportValidity()) return;
+    const id = field("brand-id").value.trim();
+    const value = {...clone(currentBrand), id, name: field("brand-name").value.trim(), enabled: field("brand-enabled").checked,
+      metadata: {...clone(currentBrand?.metadata), description: field("brand-description").value.trim(), watermark: field("brand-watermark").value.trim(), language: field("brand-language").value},
+      publishing: {...clone(currentBrand?.publishing), enabled: field("brand-publishing-enabled").checked,
+        channels: field("brand-channels").value.split(",").map((item) => item.trim()).filter(Boolean)}};
+    try {
+      await window.api(`/api/brands/${encodeURIComponent(id)}`, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(value)});
+      brandDialog.close(); await window.refreshConfigs();
+    } catch (exception) { error.textContent = `Не вдалося зберегти бренд: ${exception.message}`; error.classList.add("visible"); }
+  });
+  document.querySelector("#brand-close-friendly")?.addEventListener("click", () => brandDialog.close());
+  window.deleteBrand = async (id) => {
+    if (!confirm(`Видалити бренд «${id}»? Цю дію неможливо скасувати.`)) return;
+    try { await window.api(`/api/brands/${encodeURIComponent(id)}`, {method: "DELETE"}); await window.refreshConfigs(); }
+    catch (error) { alert(`Не вдалося видалити бренд: ${error.message}`); }
+  };
+
   const workflowDialog = document.querySelector("#workflowdialog");
   let friendlyWorkflow = {}, friendlyWorkflowIdentity = null;
   if (workflowDialog) {
     workflowDialog.classList.add("workflow-dialog");
     workflowDialog.innerHTML = `<h2>Сценарій обробки</h2><p class="workflow-help">Сценарій складається з послідовних вузлів. Для звичайного редагування змініть тип вузла або його параметри; JSON усього сценарію вводити не потрібно.</p>
       <div class="workflow-meta"><label>Тип сценарію<select id="workflow-kind"><option value="image">Зображення</option><option value="video">Відео</option><option value="character">Персонаж</option></select></label><label>Назва файла<input id="workflow-name" pattern="[A-Za-z0-9._-]+" required></label></div>
+      <datalist id="workflow-actions"><option value="CheckpointLoaderSimple"><option value="CLIPTextEncode"><option value="EmptyLatentImage"><option value="KSampler"><option value="VAEDecode"><option value="SaveImage"></datalist>
       <div id="workflow-nodes"></div><button id="workflow-add-node" type="button" class="secondary">Додати вузол</button>
       <p id="workflow-error" class="form-error"></p><div class="dialog-actions"><button id="workflow-save-friendly" type="button">Зберегти</button><button id="workflow-close-friendly" type="button" class="secondary">Закрити</button></div>`;
   }
+  const workflowInputType = (value) => {
+    if (Array.isArray(value) && value.length === 2 && ["string", "number"].includes(typeof value[0]) && Number.isInteger(Number(value[1]))) return "connection";
+    if (typeof value === "number") return "number";
+    if (typeof value === "boolean") return "boolean";
+    if (value && typeof value === "object") return "json";
+    return "text";
+  };
+  const workflowParameter = (name, value, forcedType = null) => {
+    const type = forcedType || workflowInputType(value), selected = (candidate) => type === candidate ? "selected" : "";
+    let control = `<input class="parameter-value" value="${esc(value ?? "")}">`;
+    if (type === "number") control = `<input class="parameter-value" type="number" step="any" value="${esc(value)}">`;
+    if (type === "boolean") control = `<select class="parameter-value"><option value="true" ${value ? "selected" : ""}>Так</option><option value="false" ${!value ? "selected" : ""}>Ні</option></select>`;
+    if (type === "connection") control = `<span class="connection-fields"><input class="parameter-source" value="${esc(value[0])}" aria-label="Вузол-джерело"><input class="parameter-output" type="number" min="0" value="${esc(value[1])}" aria-label="Номер виходу"></span>`;
+    if (type === "json") control = `<textarea class="parameter-value" spellcheck="false">${esc(JSON.stringify(value, null, 2))}</textarea>`;
+    return `<div class="workflow-parameter"><input class="parameter-name" value="${esc(name)}" placeholder="Назва параметра" aria-label="Назва параметра"><select class="parameter-type" aria-label="Тип значення"><option value="text" ${selected("text")}>Текст</option><option value="number" ${selected("number")}>Число</option><option value="boolean" ${selected("boolean")}>Так / ні</option><option value="connection" ${selected("connection")}>Зв’язок із вузлом</option><option value="json" ${selected("json")}>Список або об’єкт</option></select>${control}<button type="button" class="danger parameter-remove" aria-label="Видалити параметр">×</button></div>`;
+  };
   const renderWorkflowNodes = () => {
     const target = document.querySelector("#workflow-nodes"); if (!target) return;
     target.innerHTML = Object.entries(friendlyWorkflow).map(([id, node]) => `<div class="workflow-node" data-node="${esc(id)}">
-      <div class="workflow-node-head"><label>№ вузла<input class="node-id" value="${esc(id)}"></label><label>Дія<input class="node-class" value="${esc(node.class_type || "")}" placeholder="Наприклад, SaveImage"></label><button type="button" class="danger node-remove">Видалити</button></div>
-      <label>Параметри вузла<textarea class="node-inputs" spellcheck="false">${esc(JSON.stringify(node.inputs || {}, null, 2))}</textarea></label></div>`).join("") || '<p class="muted">Додайте перший вузол сценарію.</p>';
-    target.querySelectorAll(".node-remove").forEach((button) => button.addEventListener("click", () => { delete friendlyWorkflow[button.closest(".workflow-node").dataset.node]; renderWorkflowNodes(); }));
+      <div class="workflow-node-head"><label>№ вузла<input class="node-id" value="${esc(id)}"></label><label>Дія<input class="node-class" list="workflow-actions" value="${esc(node.class_type || "")}" placeholder="Оберіть або введіть дію"></label><button type="button" class="danger node-remove">Видалити вузол</button></div>
+      <div class="workflow-parameters"><div class="workflow-parameter-title"><b>Параметри</b><small>Кожен параметр має назву, тип і значення.</small></div>${Object.entries(node.inputs || {}).map(([name, value]) => workflowParameter(name, value)).join("")}</div>
+      <button type="button" class="secondary parameter-add">Додати параметр</button></div>`).join("") || '<p class="muted">Додайте перший вузол сценарію.</p>';
+    target.querySelectorAll(".node-remove").forEach((button) => button.addEventListener("click", () => {
+      try { friendlyWorkflow = collectWorkflow(); } catch (_) { /* Removing a broken node is still allowed. */ }
+      delete friendlyWorkflow[button.closest(".workflow-node").dataset.node]; renderWorkflowNodes();
+    }));
+    target.querySelectorAll(".parameter-remove").forEach((button) => button.addEventListener("click", () => button.closest(".workflow-parameter").remove()));
+    target.querySelectorAll(".parameter-add").forEach((button) => button.addEventListener("click", () => {
+      button.previousElementSibling.insertAdjacentHTML("beforeend", workflowParameter("new_parameter", ""));
+      const row = button.previousElementSibling.lastElementChild;
+      row.querySelector(".parameter-remove").addEventListener("click", () => row.remove()); row.querySelector(".parameter-name").focus();
+    }));
+    target.onchange = (event) => {
+      const select = event.target.closest?.(".parameter-type"); if (!select) return;
+      const row = select.closest(".workflow-parameter"), name = row.querySelector(".parameter-name").value.trim();
+      const defaults = {text: "", number: 0, boolean: false, connection: ["", 0], json: {}};
+      row.insertAdjacentHTML("afterend", workflowParameter(name, defaults[select.value], select.value));
+      const replacement = row.nextElementSibling; row.remove();
+      replacement.querySelector(".parameter-remove").addEventListener("click", () => replacement.remove());
+      replacement.querySelector(".parameter-name").focus();
+    };
   };
   const collectWorkflow = () => {
     const value = {};
     document.querySelectorAll("#workflow-nodes .workflow-node").forEach((row) => {
       const id = row.querySelector(".node-id").value.trim(), classType = row.querySelector(".node-class").value.trim();
       if (!id || !classType || value[id]) throw new Error("Кожен вузол повинен мати унікальний номер і назву дії");
-      let inputs; try { inputs = JSON.parse(row.querySelector(".node-inputs").value || "{}"); } catch (_) { throw new Error(`Некоректні параметри у вузлі ${id}`); }
-      value[id] = {class_type: classType, inputs};
+      const inputs = {};
+      row.querySelectorAll(".workflow-parameter").forEach((parameter) => {
+        const name = parameter.querySelector(".parameter-name").value.trim(), type = parameter.querySelector(".parameter-type").value;
+        if (!name || Object.hasOwn(inputs, name)) throw new Error(`У вузлі ${id} параметри повинні мати унікальні назви`);
+        let parameterValue = parameter.querySelector(".parameter-value")?.value ?? "";
+        if (type === "number") { parameterValue = Number(parameterValue); if (!Number.isFinite(parameterValue)) throw new Error(`Параметр ${name} у вузлі ${id} має бути числом`); }
+        if (type === "boolean") parameterValue = parameterValue === "true";
+        if (type === "connection") parameterValue = [parameter.querySelector(".parameter-source").value.trim(), Number(parameter.querySelector(".parameter-output").value || 0)];
+        if (type === "json") { try { parameterValue = JSON.parse(parameterValue); } catch (_) { throw new Error(`Список або об’єкт «${name}» у вузлі ${id} заповнено некоректно`); } }
+        inputs[name] = parameterValue;
+      });
+      value[id] = {...clone(friendlyWorkflow[row.dataset.node]), class_type: classType, inputs};
     });
     return value;
   };
@@ -622,10 +762,16 @@
       workflowDialog.close(); if (window.refreshConfigs) window.refreshConfigs();
     } catch (exception) { error.textContent = exception.message; error.classList.add("visible"); }
   });
+  window.deleteWorkflow = async (kind, name) => {
+    if (!confirm(`Видалити сценарій «${kind}/${name}»? Цю дію неможливо скасувати.`)) return;
+    try { await window.api(`/api/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, {method: "DELETE"}); await window.refreshConfigs(); }
+    catch (error) { alert(`Не вдалося видалити сценарій: ${error.message}`); }
+  };
 
-  renderOperationalStatus(); renderRoles(); renderUpdateFriendly(); renderLifecycleFriendly();
+  renderOperationalStatus(); renderRoles(); renderUpdateFriendly(); renderLifecycleFriendly(); renderIncidents();
   setInterval(renderOperationalStatus, 5000);
   setInterval(renderUpdateFriendly, 5000);
+  setInterval(renderIncidents, 10000);
   setInterval(() => renderRoles(false), 10000);
   setInterval(renderLifecycleFriendly, 30000);
 })();

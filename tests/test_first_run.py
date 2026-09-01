@@ -28,6 +28,8 @@ def test_first_run_creates_manifest_and_secret_store(monkeypatch, tmp_path):
     deployment_request = json.loads((tmp_path / "deployment-request.json").read_text())
     assert deployment_request["role"] == "core"
     assert deployment_request["ai_backend"] == "ollama"
+    assert deployment_request["additional_roles"] == ["text"]
+    assert "ollama" in result["runtime"]["services"]
     assert deployment_request["plan_sha256"] == result["runtime"]["deployment_plan_sha256"]
     assert is_configured()
     username, record = configured_user()
