@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.0.62 - 2026-09-01
+
 - Added a privileged server-restart action to the administration panel and made updates automatically recreate every active Core-role service while leaving PostgreSQL and Redis running.
 - Added a Ukrainian five-stage update view with live percentage progress, readable current-step messages, temporary restart handling, and automatic page refresh after success.
 - Preserved detailed progress emitted by the host update workflow in the final update history and added API, executor, contract, and browser coverage for restart operations.
