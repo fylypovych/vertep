@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Виправлено publisher-worker: health-check тепер не падає з `PermissionError`, коли каталог storage недоступний для запису.
+- Додано long polling для Telegram: мігруємо з webhook на постійний опитування оновлень.
+
+## 0.0.0.78 - 2026-09-02
+
+- Виправлено publisher-worker: health-check тепер не падає з `PermissionError`, коли каталог storage недоступний для запису.
+- Додано long polling для Telegram: мігруємо з webhook на постійний опитування оновлень.
+
 ## 0.0.0.77 - 2026-09-02
 
 - Виправлено падіння publisher-worker: додано відсутню залежність `httpx` в імедж `docker/publisher`.
