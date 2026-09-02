@@ -1,6 +1,7 @@
 # Changelog
 
-## Unreleased
+## 0.0.0.84
+
 
 - Виправлено publisher-worker: health-check тепер не падає з `PermissionError`, коли каталог storage недоступний для запису.
 - Додано long polling для Telegram: мігруємо з webhook на постійний опитування оновлень.

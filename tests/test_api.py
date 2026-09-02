@@ -141,6 +141,10 @@ def test_telegram_setup_saves_chat_ids_without_public_url(monkeypatch, tmp_path)
     monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "")
     monkeypatch.delenv("PUBLIC_URL", raising=False)
+    config_root = tmp_path / "config"
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "installation.json").write_text(json.dumps({"completed_at": "2024-01-01T00:00:00Z"}), encoding="utf-8")
+    monkeypatch.setenv("CONFIG_ROOT", str(config_root))
     client = TestClient(app)
     response = client.post("/api/telegram/setup", json={
         "allowed_chat_ids": "111,222",
@@ -246,9 +250,13 @@ def test_distributed_worker_result(monkeypatch):
         time.sleep(0.025)
     assert job["status"] == "READY"
 
-def test_admin_and_node_auth(monkeypatch):
+def test_admin_and_node_auth(monkeypatch, tmp_path):
     monkeypatch.setenv("ADMIN_PASSWORD", "admin-secret")
     monkeypatch.setenv("NODE_API_TOKEN", "node-secret")
+    config_root = tmp_path / "config"
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "installation.json").write_text(json.dumps({"completed_at": "2024-01-01T00:00:00Z"}), encoding="utf-8")
+    monkeypatch.setenv("CONFIG_ROOT", str(config_root))
     client = TestClient(app)
     assert client.get("/api/jobs").status_code == 401
     assert client.get("/api/jobs", auth=("admin", "admin-secret")).status_code == 200
