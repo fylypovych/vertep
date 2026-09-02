@@ -43,7 +43,11 @@ def _key() -> bytes:
         key_file = os.getenv("BACKUP_ENCRYPTION_KEY_FILE", "")
         if key_file:
             encoded = Path(key_file).read_text(encoding="ascii").strip()
-        value = base64.b64decode(encoded, validate=True)
+        # Bootstrap has historically stored a 32-byte key as 64 hexadecimal
+        # characters. API deployments may provide the same key as base64.
+        # Accept both representations so existing backups remain readable.
+        value = (bytes.fromhex(encoded) if re.fullmatch(r"[0-9a-fA-F]{64}", encoded)
+                 else base64.b64decode(encoded, validate=True))
     except (OSError, ValueError) as error:
         raise RuntimeError("BACKUP_ENCRYPTION_KEY відсутній або некоректний") from error
     if len(value) != 32:

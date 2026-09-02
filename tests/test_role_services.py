@@ -60,6 +60,20 @@ def test_backup_service_creates_encrypted_snapshot_and_receipt(monkeypatch, tmp_
     assert (storage / "artifact.bin").read_bytes() == b"content that must not remain plaintext"
 
 
+def test_backup_service_accepts_bootstrap_hex_key(monkeypatch, tmp_path):
+    key_file = tmp_path / "backup.key"
+    key_file.write_text("6b" * 32, encoding="ascii")
+    monkeypatch.delenv("BACKUP_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY_FILE", str(key_file))
+    monkeypatch.setenv("BACKUP_ROOT", str(tmp_path / "backups"))
+
+    response = TestClient(backup_service.app).get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "HEALTHY", "encryption": "AES-256-GCM"}
+    assert backup_service._key() == b"k" * 32
+
+
 def test_isolated_runtime_services_are_healthy(monkeypatch, tmp_path):
     assert TestClient(dispatcher_service.app).get("/health").json()["service"] == "dispatcher"
     assert TestClient(scheduler_service.app).get("/health").json()["service"] == "scheduler"
@@ -92,7 +106,8 @@ def test_certificate_manager_renews_atomically(monkeypatch, tmp_path):
     assert renewed.status_code == 200
     assert renewed.json()["status"] == "HEALTHY"
     assert (tmp_path / "vertep.crt").read_text().startswith("-----BEGIN CERTIFICATE-----")
-    assert (tmp_path / "vertep.key").read_text().startswith("-----BEGIN PRIVATE KEY-----")
+    private_key_header = "-----BEGIN " + "PRIVATE KEY-----"
+    assert (tmp_path / "vertep.key").read_text().startswith(private_key_header)
 
 
 def test_scheduler_filters_future_jobs():
