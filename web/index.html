@@ -438,6 +438,38 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         </button>
       </div>
     </dialog>
+    <dialog id="role-wizard-dialog">
+      <h2>Налаштування ролей головного вузла</h2>
+      <div class="wizard-steps" id="role-wizard-steps">
+        <div class="wizard-step" data-step="1">1. Вибір ролей</div>
+        <div class="wizard-step" data-step="2">2. Підтвердження</div>
+        <div class="wizard-step" data-step="3">3. Застосування</div>
+      </div>
+      <section id="role-wizard-step-1">
+        <p class="muted">Оберіть додаткові ролі, які цей сервер виконуватиме локально. Базова роль CORE завжди активна.</p>
+        <div id="role-wizard-list" class="role-wizard-list">Завантаження…</div>
+      </section>
+      <section id="role-wizard-step-2" style="display: none">
+        <p class="muted">Перегляньте зміни перед застосуванням:</p>
+        <div id="role-wizard-review" class="role-wizard-review"></div>
+      </section>
+      <section id="role-wizard-step-3" style="display: none">
+        <p class="muted">Застосовую зміни. Це може зайняти кілька хвилин…</p>
+        <div id="role-wizard-result" class="role-wizard-result">Очікування…</div>
+      </section>
+      <div class="actions" style="margin-top: 20px">
+        <button id="role-wizard-back" class="secondary" style="display: none">Назад</button>
+        <button id="role-wizard-next">Далі</button>
+        <button id="role-wizard-close" class="secondary" style="display: none">Закрити</button>
+      </div>
+    </dialog>
+    <dialog id="node-settings-dialog">
+      <h2 id="node-settings-title">Налаштування вузла</h2>
+      <div id="node-settings-content">Завантаження…</div>
+      <div class="actions" style="margin-top: 20px">
+        <button id="node-settings-close" class="secondary">Закрити</button>
+      </div>
+    </dialog>
     <script>
       let jobs = [],
         characters = [],
@@ -532,7 +564,7 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
             ),
           );
         $("#workerlist").innerHTML = filtered.length
-          ? `<table><tr><th>Node</th><th>Роль</th><th>Статус</th><th>Обладнання</th><th>Capabilities</th><th>Task</th><th>Update State</th><th>Self-test</th><th>Certificate</th><th>Керування</th></tr>${filtered.map((w) => `<tr><td><b>${esc(w.node_name)}</b><br><small>${esc(w.node_id || "")}</small></td><td>${esc(w.role || "")}</td><td class="status">${esc(w.status)}</td><td>${esc(w.gpu_name || "N/A")} ${w.gpu_count ? `× ${w.gpu_count}` : ""}<br><small>${w.vram_mb ?? 0} MB VRAM · CUDA ${w.cuda_version || "-"}</small></td><td>${(w.capabilities || []).join(", ") || "-"}</td><td>${esc(w.current_task || "-")}</td><td>${esc(w.update_state?.desired_state || "-")}${w.update_state?.update_target_version ? ` → ${esc(w.update_state.update_target_version)}` : ""}</td><td>${esc((w.self_test || {}).status || "-")}${w.self_test?.duration_ms ? ` (${w.self_test.duration_ms}ms)` : ""}</td><td>${w.certificate_expires_at ? esc(w.certificate_expires_at) : "-"}</td><td><button onclick="nodeAction('${w.node_name}','drain')">Drain</button> <button onclick="nodeAction('${w.node_name}','resume')">Resume</button> <button onclick="nodeAction('${w.node_name}','self-test')">Self-test</button> <button onclick="nodeAction('${w.node_name}','rotate')">Rotate</button> <button class="danger" onclick="nodeAction('${w.node_name}','revoke')">Revoke</button> <button class="danger" onclick="nodeAction('${w.node_name}','quarantine')">Quarantine</button></td></tr>`).join("")}</table>`
+          ? `<table><tr><th>Node</th><th>Роль</th><th>Статус</th><th>Обладнання</th><th>Capabilities</th>        <th>Task</th><th>Update State</th><th>Self-test</th><th>Certificate</th><th>Керування</th></tr>${filtered.map((w) => `<tr><td><b>${esc(w.node_name)}</b><br><small>${esc(w.node_id || "")}</small></td><td>${esc(w.role || "")}</td><td class="status">${esc(w.status)}</td><td>${esc(w.gpu_name || "N/A")} ${w.gpu_count ? `× ${w.gpu_count}` : ""}<br><small>${w.vram_mb ?? 0} MB VRAM · CUDA ${w.cuda_version || "-"}</small></td><td>${(w.capabilities || []).join(", ") || "-"}</td><td>${esc(w.current_task || "-")}</td><td>${esc(w.update_state?.desired_state || "-")}${w.update_state?.update_target_version ? ` → ${esc(w.update_state.update_target_version)}` : ""}</td><td>${esc((w.self_test || {}).status || "-")}${w.self_test?.duration_ms ? ` (${w.self_test.duration_ms}ms)` : ""}</td><td>${w.certificate_expires_at ? esc(w.certificate_expires_at) : "-"}</td><td><button onclick="nodeAction('${w.node_name}','drain')">Drain</button> <button onclick="nodeAction('${w.node_name}','resume')">Resume</button> <button onclick="nodeAction('${w.node_name}','self-test')">Self-test</button> <button onclick="openNodeSettings('${esc(w.node_id || w.node_name)}','${esc(w.node_name)}')">Налаштування</button> <button onclick="nodeAction('${w.node_name}','rotate')">Rotate</button> <button class="danger" onclick="nodeAction('${w.node_name}','revoke')">Revoke</button> <button class="danger" onclick="nodeAction('${w.node_name}','quarantine')">Quarantine</button></td></tr>`).join("")}</table>`
           : "<p>Workers відсутні</p>";
       }
       async function refresh() {

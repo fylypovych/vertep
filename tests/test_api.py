@@ -1,5 +1,7 @@
 import time
 import base64
+import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from core.app import app, store
@@ -84,25 +86,50 @@ def test_job_export_import_and_optimistic_lock(monkeypatch):
     assert imported.json()["job_id"] != job_id
     assert imported.json()["source"] == "import"
 
-def test_telegram_deduplicates_and_worker_status():
+def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "999")
+    brand_root = tmp_path / "brands"
+    brand_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
     client = TestClient(app)
-    update = {"message": {"message_id": 77, "text": "Telegram topic"}}
+    brand_dir = brand_root / "brand01"
+    brand_dir.mkdir(parents=True, exist_ok=True)
+    (brand_dir / "brand.json").write_text(json.dumps({"id": "brand01", "name": "Test", "publishing": {"enabled": False}}, ensure_ascii=False), encoding="utf-8")
+    update = {"message": {"message_id": 77, "text": "Telegram topic", "chat": {"id": 42}}}
     first = client.post("/api/telegram/webhook", json=update).json()
-    second = client.post("/api/telegram/webhook", json=update).json()
-    assert first["job_id"] == second["job_id"]
+    assert first.get("status") == "brand_selection"
+    assert "brands" in first
+    callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
+                                    "message": {"chat": {"id": 42}, "message_id": 78}}}
+    second = client.post("/api/telegram/webhook", json=callback).json()
+    job_id = second.get("job_id") or second.get("job", {}).get("job_id")
+    assert job_id
+    third = client.post("/api/telegram/webhook", json=update).json()
+    assert third.get("status") == "brand_selection"
     heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "gpu-test", "gpu_name": "stub"})
     assert heartbeat.status_code == 200
     assert any(worker["node_name"] == "gpu-test" for worker in client.get("/api/workers").json())
 
 
-def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch):
+def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "999")
+    brand_root = tmp_path / "brands"
+    brand_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
     client = TestClient(app)
+    brand_dir = brand_root / "brand01"
+    brand_dir.mkdir(parents=True, exist_ok=True)
+    (brand_dir / "brand.json").write_text(json.dumps({"id": "brand01", "name": "Test", "publishing": {"enabled": False}}, ensure_ascii=False), encoding="utf-8")
     update = {"message": {"message_id": 78001, "chat": {"id": 42}, "caption": "Тема з фото",
                           "photo": [{"file_id": "photo-file"}]}}
-    job = client.post("/api/telegram/webhook", json=update).json()
-    inputs = [item for item in job["artifacts"] if item["kind"] == "input"]
+    response = client.post("/api/telegram/webhook", json=update).json()
+    assert response.get("status") == "brand_selection"
+    callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
+                                    "message": {"chat": {"id": 42}, "message_id": 78002}}}
+    job = client.post("/api/telegram/webhook", json=callback).json()
+    inputs = [item for item in job.get("artifacts", []) if item.get("kind") == "input"]
     assert inputs and inputs[0]["filename"] == "telegram.json"
     assert inputs[0]["sha256"]
     client.post(f"/api/jobs/{job['job_id']}/cancel")

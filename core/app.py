@@ -14,6 +14,7 @@ import io
 import zipfile
 import threading
 import re
+import uuid
 from functools import wraps
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -29,7 +30,7 @@ from starlette.responses import Response
 from .models import (JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
                      WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
                      WorkerLogBatch, NodeAction, IntegrationSecretUpdate,
-                     RollingUpdateRequest, utc_now)
+                     RollingUpdateRequest, utc_now, Channel, ChannelCreate, ChannelUpdate, CHANNEL_TYPES)
 from .dispatcher import available_worker, can_retry
 from .pipeline import JobStore, prepare_job_safe, finalize_job_safe
 from .queue import TaskQueue
@@ -47,8 +48,8 @@ from .system_state import (SystemState, dispatch_allowed, get_system_state,
                            jobs_may_be_created, operation_allowed, set_system_state)
 from .health_checks import run_checks as _run_health_checks, health_status as _health_status
 from .first_run import (complete_setup, configured_user, is_configured, session_secret,
-                        setup_status, config_root, integration_secret_status,
-                        set_integration_secret, installation)
+                       setup_status, config_root, integration_secret_status,
+                       set_integration_secret, installation)
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
@@ -84,6 +85,7 @@ request_windows: dict[str, deque[float]] = defaultdict(deque)
 setup_request_windows: dict[str, deque[float]] = defaultdict(deque)
 last_maintenance = 0.0
 result_locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
+_telegram_pending_brands: dict[str, dict] = {}
 
 def _serialize_job_result(function):
     @wraps(function)
@@ -1226,6 +1228,66 @@ def delete_brand(brand_id: str):
     shutil.rmtree(directory)
     return {"deleted": brand_id}
 
+
+@app.get("/api/channels/types")
+def channel_types():
+    return sorted(CHANNEL_TYPES)
+
+
+@app.get("/api/brands/{brand_id}/channels")
+def list_brand_channels(brand_id: str):
+    if not SAFE_ID.fullmatch(brand_id):
+        raise HTTPException(400, "Invalid brand ID")
+    return [ch.model_dump() for ch in store.repository.list_channels(brand_id)]
+
+
+@app.get("/api/channels/{channel_id}")
+def get_channel(channel_id: str):
+    channel = store.repository.get_channel(channel_id)
+    if not channel:
+        raise HTTPException(404, "Channel not found")
+    return channel.model_dump()
+
+
+@app.post("/api/brands/{brand_id}/channels")
+def create_channel(brand_id: str, config: ChannelCreate):
+    if not SAFE_ID.fullmatch(brand_id):
+        raise HTTPException(400, "Invalid brand ID")
+    if config.brand_id != brand_id:
+        raise HTTPException(400, "Brand ID mismatch")
+    if config.channel_type not in CHANNEL_TYPES:
+        raise HTTPException(400, f"Invalid channel type. Allowed: {', '.join(sorted(CHANNEL_TYPES))}")
+    import uuid
+    channel = Channel(channel_id=f"ch-{uuid.uuid4().hex[:12]}", brand_id=config.brand_id,
+                      channel_type=config.channel_type, target=config.target,
+                      enabled=config.enabled, metadata=config.metadata)
+    store.repository.save_channel(channel)
+    return channel.model_dump()
+
+
+@app.put("/api/channels/{channel_id}")
+def update_channel(channel_id: str, config: ChannelUpdate):
+    existing = store.repository.get_channel(channel_id)
+    if not existing:
+        raise HTTPException(404, "Channel not found")
+    if config.target is not None:
+        existing.target = config.target
+    if config.enabled is not None:
+        existing.enabled = config.enabled
+    if config.metadata is not None:
+        existing.metadata = config.metadata
+    store.repository.save_channel(existing)
+    return existing.model_dump()
+
+
+@app.delete("/api/channels/{channel_id}")
+def delete_channel(channel_id: str):
+    existing = store.repository.get_channel(channel_id)
+    if not existing:
+        raise HTTPException(404, "Channel not found")
+    store.repository.delete_channel(channel_id)
+    return {"deleted": channel_id}
+
 @app.post("/api/telegram/webhook")
 def telegram_webhook(update: dict, request: Request):
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
@@ -1233,13 +1295,7 @@ def telegram_webhook(update: dict, request: Request):
         raise HTTPException(401, "Invalid Telegram webhook secret")
     callback = update.get("callback_query")
     if callback:
-        data = str(callback.get("data", ""))
-        action, _, job_id = data.partition(":")
-        job = store.jobs.get(job_id)
-        if job and action == "cancel":
-            cancel_job(job_id)
-        text = f"{job_id}: {job.status.value}" if job else "Job not found"
-        return TelegramAdapter().answer_callback(str(callback.get("id", "")), text)
+        return _handle_telegram_callback(callback)
     message = update.get("message", {})
     text = str(message.get("text") or message.get("caption") or "").strip()
     if not text:
@@ -1249,6 +1305,161 @@ def telegram_webhook(update: dict, request: Request):
     if allowed and chat_id not in allowed:
         raise HTTPException(403, "Telegram chat is not allowed")
     source_id = str(message.get("message_id", ""))
+    return _handle_telegram_message(chat_id, source_id, text, message)
+
+
+def _admin_chat_ids() -> list[str]:
+    return [item.strip() for item in os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "").split(",") if item.strip()]
+
+
+def _is_admin_chat(chat_id: str) -> bool:
+    return chat_id in _admin_chat_ids()
+
+
+def _handle_telegram_callback(callback: dict) -> dict:
+    data = str(callback.get("data", ""))
+    action, _, payload = data.partition(":")
+    callback_id = str(callback.get("id", ""))
+    chat_id = str(callback.get("message", {}).get("chat", {}).get("id", "unknown"))
+
+    if action == "select_brand":
+        return _handle_brand_selection(callback, chat_id, payload)
+    elif action == "approve":
+        return _handle_approve_job(callback, chat_id, payload)
+    elif action == "reject":
+        return _handle_reject_job(callback, chat_id, payload)
+    elif action == "publish_channel":
+        return _handle_publish_channel(callback, chat_id, payload)
+    elif action == "publish_all":
+        return _handle_publish_all(callback, chat_id, payload)
+
+    job_id = payload
+    job = store.jobs.get(job_id)
+    if job and action == "cancel":
+        cancel_job(job_id)
+    text = f"{job_id}: {job.status.value}" if job else "Job not found"
+    return TelegramAdapter().answer_callback(callback_id, text)
+
+
+def _handle_brand_selection(callback: dict, chat_id: str, brand_id: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    pending = _telegram_pending_brands.get(chat_id)
+    if not pending:
+        return TelegramAdapter().answer_callback(callback_id, "Сесію закрито. Почніть спочатку.")
+    job = _create_job_from_telegram(pending, brand_id)
+    del _telegram_pending_brands[chat_id]
+    _send_approval_request(job)
+    TelegramAdapter().answer_callback(callback_id, f"Job {job.job_id} створено. Очікує затвердження.")
+    return job.model_dump(mode="json")
+
+
+def _handle_approve_job(callback: dict, chat_id: str, job_id: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    job = store.jobs.get(job_id)
+    if not job:
+        return TelegramAdapter().answer_callback(callback_id, "Job not found")
+    if job.approval_status == "approved":
+        return TelegramAdapter().answer_callback(callback_id, f"{job_id} вже схвалено.")
+    job.approval_status = "approved"
+    job.status = JobStatus.READY
+    store.update(job, JobStatus.READY, "APPROVED via Telegram")
+    channels = store.repository.list_channels(job.brand_id)
+    active_channels = [ch for ch in channels if ch.enabled]
+    if not active_channels:
+        TelegramAdapter().send_message(chat_id, f"⚠️ {job_id} схвалено, але для бренду {job.brand_id} немає активних каналів.")
+        return TelegramAdapter().answer_callback(callback_id, f"{job_id} схвалено (каналів немає)")
+    keyboard = [[{"text": f"📤 {ch.channel_type}: {ch.target}", "callback_data": f"publish_channel:{ch.channel_id}:{job_id}"}] for ch in active_channels]
+    keyboard.append([{"text": "📢 Опублікувати всюди", "callback_data": f"publish_all:{job_id}"}])
+    for admin_chat in _admin_chat_ids():
+        try:
+            TelegramAdapter().send_message(admin_chat, f"✅ {job_id} схвалено. Оберіть канали для публікації:",
+                                          {"inline_keyboard": keyboard})
+        except Exception:
+            pass
+    return TelegramAdapter().answer_callback(callback_id, f"{job_id} схвалено")
+
+
+def _handle_reject_job(callback: dict, chat_id: str, job_id: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    job = store.jobs.get(job_id)
+    if not job:
+        return TelegramAdapter().answer_callback(callback_id, "Job not found")
+    job.approval_status = "rejected"
+    store.update(job, JobStatus.CANCELLED, "REJECTED via Telegram")
+    return TelegramAdapter().answer_callback(callback_id, f"{job_id} відхилено")
+
+
+def _handle_publish_channel(callback: dict, chat_id: str, payload: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    channel_id, _, job_id = payload.partition(":")
+    job = store.jobs.get(job_id)
+    if not job:
+        return TelegramAdapter().answer_callback(callback_id, "Job not found")
+    channel = store.repository.get_channel(channel_id)
+    if not channel:
+        return TelegramAdapter().answer_callback(callback_id, "Канал не знайдено")
+    result = _publish_to_channel(job, channel)
+    status_text = "✅ Опубліковано" if result.get("status") == "PUBLISHED" else f"❌ Помилка: {result.get('error', 'невідомо')}"
+    return TelegramAdapter().answer_callback(callback_id, f"{channel.channel_type} ({channel.target}): {status_text}")
+
+
+def _handle_publish_all(callback: dict, chat_id: str, job_id: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    job = store.jobs.get(job_id)
+    if not job:
+        return TelegramAdapter().answer_callback(callback_id, "Job not found")
+    channels = [ch for ch in store.repository.list_channels(job.brand_id) if ch.enabled]
+    results = []
+    for channel in channels:
+        result = _publish_to_channel(job, channel)
+        status = "✅" if result.get("status") == "PUBLISHED" else "❌"
+        results.append(f"{status} {channel.channel_type}: {channel.target}")
+    summary = "\n".join(results) or "Немає активних каналів"
+    for admin_chat in _admin_chat_ids():
+        try:
+            TelegramAdapter().send_message(admin_chat, f"📊 Підсумок публікації {job_id}:\n{summary}")
+        except Exception:
+            pass
+    return TelegramAdapter().answer_callback(callback_id, "Публікацію завершено")
+
+
+def _publish_to_channel(job, channel) -> dict:
+    from adapters.publisher import PUBLISHERS
+    adapter = PUBLISHERS.get(channel.channel_type)
+    if not adapter or not adapter.configured():
+        return {"status": "NOT_CONFIGURED", "error": f"{channel.channel_type} не налаштовано"}
+    try:
+        result = adapter.publish(job.output_path or "", {"job_id": job.job_id, "topic": job.topic, "target": channel.target})
+        job.publication_results[channel.channel_id] = result
+        if result.get("status") == "PUBLISHED":
+            if channel.channel_id not in job.published_to:
+                job.published_to.append(channel.channel_id)
+        store.update(job, job.status, f"PUBLISHED to {channel.channel_type}:{channel.target}")
+        return result
+    except Exception as error:
+        return {"status": "FAILED", "error": str(error)}
+
+
+def _send_approval_request(job) -> None:
+    text = (
+        f"📋 Новий Job потребує затвердження\n"
+        f"ID: {job.job_id}\n"
+        f"Бренд: {job.brand_id}\n"
+        f"Тема: {job.topic[:200]}\n"
+        f"Джерело: {job.source}"
+    )
+    keyboard = {"inline_keyboard": [
+        [{"text": "✅ Схвалити", "callback_data": f"approve:{job.job_id}"},
+         {"text": "❌ Відхилити", "callback_data": f"reject:{job.job_id}"}]
+    ]}
+    for admin_chat in _admin_chat_ids():
+        try:
+            TelegramAdapter().send_message(admin_chat, text, keyboard)
+        except Exception as error:
+            logger.warning("Failed to send approval to %s: %s", admin_chat, error)
+
+
+def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: dict) -> dict:
     if text.startswith("/status"):
         active = sum(job.status not in {JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED, JobStatus.CANCELLED}
                      for job in store.jobs.values())
@@ -1282,14 +1493,87 @@ def telegram_webhook(update: dict, request: Request):
         else:
             publish_job(job.job_id)
         return TelegramAdapter().send_message(chat_id, f"{job.job_id}: {job.status.value}")
+    attachments = {key: message.get(key) for key in ("photo", "video", "document", "audio") if message.get(key)}
+    _telegram_pending_brands[chat_id] = {"text": text, "source_id": source_id, "message": message, "attachments": attachments}
+    brands_dir = Path(os.getenv("BRANDS_ROOT", "brands"))
+    brands = []
+    for path in brands_dir.glob("*/brand.json"):
+        try:
+            brands.append(BrandConfig.model_validate(read_json(path)))
+        except ValueError:
+            continue
+    if not brands:
+        character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
+        if text.startswith("/new "):
+            parts = text.split(maxsplit=2)
+            if len(parts) == 3:
+                character_id, text = parts[1], parts[2]
+        source = f"telegram:{chat_id}:{source_id or 'unknown'}"
+        if source_id and store.repository.has_telegram_update(chat_id, source_id):
+            return next((job for job in store.jobs.values() if job.source == source), {"duplicate": True})
+        for existing in store.jobs.values():
+            if existing.source == source:
+                return existing
+        try:
+            load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
+        except Exception as error:
+            raise HTTPException(400, f"Unknown character: {character_id}") from error
+        job = store.create(text, character_id, int(os.getenv("TELEGRAM_DEFAULT_PRIORITY", "5")), source)
+        if source_id:
+            store.repository.record_telegram_update(chat_id, source_id, message)
+        if attachments:
+            _save_telegram_attachments(job, message, store.root)
+        TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: NEW",
+                                       {"inline_keyboard": [[{"text": "Status", "callback_data": f"status:{job.job_id}"},
+                                                             {"text": "Cancel", "callback_data": f"cancel:{job.job_id}"}]]})
+        executor.submit(_prepare_and_dispatch, job)
+        return job
+    keyboard = {"inline_keyboard": [
+        [{"text": f"📁 {brand.name}", "callback_data": f"select_brand:{brand.id}"}] for brand in brands
+    ]}
+    TelegramAdapter().send_message(chat_id, "Оберіть бренд для цього завдання:", keyboard)
+    return {"status": "brand_selection", "brands": [b.id for b in brands]}
+
+
+def _save_telegram_attachments(job, message: dict, root: Path) -> None:
+    attachments = {key: message.get(key) for key in ("photo", "video", "document", "audio") if message.get(key)}
+    if attachments:
+        reference = root / job.job_id / "references" / "telegram.json"
+        reference.parent.mkdir(parents=True, exist_ok=True)
+        reference.write_text(json.dumps(attachments, ensure_ascii=False, indent=2), encoding="utf-8")
+        register_artifact(job, root, reference, "input", workflow="telegram:webhook")
+        store.event(job, "TELEGRAM REFERENCES RECORDED")
+    adapter = TelegramAdapter()
+    file_ids = []
+    if message.get("photo"):
+        file_ids.append(message["photo"][-1].get("file_id"))
+    for key in ("video", "document", "audio"):
+        if message.get(key):
+            file_ids.append(message[key].get("file_id"))
+    if adapter.configured():
+        for file_id in filter(None, file_ids):
+            try:
+                data, filename = adapter.download_file(file_id, int(os.getenv("TELEGRAM_MAX_FILE_BYTES", "26214400")))
+                downloaded = root / job.job_id / "references" / Path(filename).name
+                if downloaded.exists():
+                    downloaded = downloaded.with_name(f"{downloaded.stem}-{hashlib.sha256(data).hexdigest()[:8]}{downloaded.suffix}")
+                downloaded.write_bytes(data)
+                register_artifact(job, root, downloaded, "input", workflow="telegram:download")
+            except Exception as error:
+                store.event(job, f"TELEGRAM DOWNLOAD FAILED: {error}")
+
+
+def _create_job_from_telegram(pending: dict, brand_id: str):
+    text = pending["text"]
+    source_id = pending["source_id"]
+    message = pending["message"]
+    chat_id = message.get("chat", {}).get("id", "unknown")
     character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
-    if text.startswith("/new "):
-        parts = text.split(maxsplit=2)
-        if len(parts) == 3:
-            character_id, text = parts[1], parts[2]
     source = f"telegram:{chat_id}:{source_id or 'unknown'}"
     if source_id and store.repository.has_telegram_update(chat_id, source_id):
-        return next((job for job in store.jobs.values() if job.source == source), {"duplicate": True})
+        existing = next((job for job in store.jobs.values() if job.source == source), None)
+        if existing:
+            return existing
     for existing in store.jobs.values():
         if existing.source == source:
             return existing
@@ -1298,37 +1582,14 @@ def telegram_webhook(update: dict, request: Request):
     except Exception as error:
         raise HTTPException(400, f"Unknown character: {character_id}") from error
     job = store.create(text, character_id, int(os.getenv("TELEGRAM_DEFAULT_PRIORITY", "5")), source)
+    job.brand_id = brand_id
+    job.status = JobStatus.PENDING_APPROVAL
+    job.approval_status = "pending"
+    store.update(job, JobStatus.PENDING_APPROVAL, f"PENDING_APPROVAL for brand {brand_id}")
     if source_id:
-        store.repository.record_telegram_update(chat_id, source_id, update)
-    attachments = {key: message.get(key) for key in ("photo", "video", "document", "audio") if message.get(key)}
-    if attachments:
-        reference = store.root / job.job_id / "references" / "telegram.json"
-        reference.write_text(json.dumps(attachments, ensure_ascii=False, indent=2), encoding="utf-8")
-        register_artifact(job, store.root, reference, "input", workflow="telegram:webhook")
-        store.event(job, "TELEGRAM REFERENCES RECORDED")
-        adapter = TelegramAdapter()
-        file_ids = []
-        if message.get("photo"):
-            file_ids.append(message["photo"][-1].get("file_id"))
-        for key in ("video", "document", "audio"):
-            if message.get(key):
-                file_ids.append(message[key].get("file_id"))
-        if adapter.configured():
-            for file_id in filter(None, file_ids):
-                try:
-                    data, filename = adapter.download_file(file_id, int(os.getenv("TELEGRAM_MAX_FILE_BYTES", "26214400")))
-                    downloaded = store.root / job.job_id / "references" / Path(filename).name
-                    if downloaded.exists():
-                        downloaded = downloaded.with_name(
-                            f"{downloaded.stem}-{hashlib.sha256(data).hexdigest()[:8]}{downloaded.suffix}")
-                    downloaded.write_bytes(data)
-                    register_artifact(job, store.root, downloaded, "input", workflow="telegram:download")
-                except Exception as error:
-                    store.event(job, f"TELEGRAM DOWNLOAD FAILED: {error}")
-    TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: NEW",
-                                   {"inline_keyboard": [[{"text": "Status", "callback_data": f"status:{job.job_id}"},
-                                                         {"text": "Cancel", "callback_data": f"cancel:{job.job_id}"}]]})
-    executor.submit(_prepare_and_dispatch, job)
+        store.repository.record_telegram_update(chat_id, source_id, message)
+    if pending.get("attachments"):
+        _save_telegram_attachments(job, message, store.root)
     return job
 
 @app.post("/api/telegram/setup")

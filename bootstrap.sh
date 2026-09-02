@@ -271,7 +271,9 @@ env_value(){
     "$INSTALL_ROOT/.env"
 }
 existing_node_role=$(env_value NODE_ROLE)
+existing_additional_roles=$(env_value NODE_ADDITIONAL_ROLES)
 NODE_ROLE=${VERTEP_ROLE:-${existing_node_role:-unassigned}}
+ADDITIONAL_ROLES=${VERTEP_ADDITIONAL_ROLES:-${existing_additional_roles:-}}
 if [[ "$NODE_ROLE" == "unassigned" ]] && [[ -t 0 ]]; then
   echo "Select node role:"
   echo "1) core"
@@ -293,16 +295,73 @@ if [[ "$NODE_ROLE" == "unassigned" ]] && [[ -t 0 ]]; then
     *) fail "Invalid role choice" ;;
   esac
 fi
+if [[ "$NODE_ROLE" == "unassigned" ]]; then
+  ADDITIONAL_ROLES=""
+elif [[ "$NODE_ROLE" == "core" ]]; then
+  if [[ -z "$ADDITIONAL_ROLES" ]] && [[ -t 0 ]]; then
+    echo "Activate additional roles on this core node? (comma-separated numbers, or empty for none)"
+    echo "1) gpu         — генерація зображень"
+    echo "2) text        — генерація тексту"
+    echo "3) voice       — синтез мовлення"
+    echo "4) publisher   — публікація в соцмережах"
+    echo "5) backup      — резервне копіювання"
+    echo "6) monitoring  — моніторинг і журнали"
+    read -r -p "Additional roles: " additional_choice
+    additional_roles_parsed=()
+    if [[ -n "$additional_choice" ]]; then
+      IFS=', ' read -ra choices <<< "$additional_choice"
+      for choice in "${choices[@]}"; do
+        case "$choice" in
+          1) additional_roles_parsed+=("gpu") ;;
+          2) additional_roles_parsed+=("text") ;;
+          3) additional_roles_parsed+=("voice") ;;
+          4) additional_roles_parsed+=("publisher") ;;
+          5) additional_roles_parsed+=("backup") ;;
+          6) additional_roles_parsed+=("monitoring") ;;
+          *) echo "Skipping unknown choice: $choice" ;;
+        esac
+      done
+    fi
+    ADDITIONAL_ROLES=$(IFS=,; echo "${additional_roles_parsed[*]}")
+  fi
+else
+  ADDITIONAL_ROLES=""
+fi
 if [[ "$NODE_ROLE" != "unassigned" ]]; then
   jq -e --arg role "$NODE_ROLE" 'has($role)' "$INSTALL_ROOT/config/node_roles.json" >/dev/null \
     || fail "node role $NODE_ROLE is absent from the signed role catalog"
   mapfile -t role_services < <(jq -r --arg role "$NODE_ROLE" '.[$role].services[]' \
     "$INSTALL_ROOT/config/node_roles.json")
 fi
-role_services=("${BOOTSTRAP_SERVICES[@]}" "${role_services[@]}")
+additional_services=()
+if [[ -n "$ADDITIONAL_ROLES" ]]; then
+  IFS=',' read -ra extra_role_list <<< "$ADDITIONAL_ROLES"
+  for extra_role in "${extra_role_list[@]}"; do
+    extra_role=$(echo "$extra_role" | tr -d ' ')
+    [[ -z "$extra_role" ]] && continue
+    jq -e --arg role "$extra_role" 'has($role)' "$INSTALL_ROOT/config/node_roles.json" >/dev/null \
+      || fail "additional role $extra_role is absent from the signed role catalog"
+    while IFS= read -r svc; do
+      additional_services+=("$svc")
+    done < <(jq -r --arg role "$extra_role" '.[$role].services[]' "$INSTALL_ROOT/config/node_roles.json")
+  done
+fi
+role_services=("${BOOTSTRAP_SERVICES[@]}" "${role_services[@]}" "${additional_services[@]}")
 mapfile -t role_services < <(printf '%s\n' "${role_services[@]}" | awk '!seen[$0]++')
 node_capabilities=$(jq -r --arg role "$NODE_ROLE" '.[$role].capabilities[]?' \
   "$INSTALL_ROOT/config/node_roles.json" 2>/dev/null | paste -sd, - || true)
+if [[ -n "$ADDITIONAL_ROLES" ]]; then
+  IFS=',' read -ra extra_role_list <<< "$ADDITIONAL_ROLES"
+  for extra_role in "${extra_role_list[@]}"; do
+    extra_role=$(echo "$extra_role" | tr -d ' ')
+    [[ -z "$extra_role" ]] && continue
+    extra_caps=$(jq -r --arg role "$extra_role" '.[$role].capabilities[]?' \
+      "$INSTALL_ROOT/config/node_roles.json" 2>/dev/null | paste -sd, - || true)
+    if [[ -n "$extra_caps" ]]; then
+      node_capabilities="${node_capabilities:+$node_capabilities,}$extra_caps"
+    fi
+  done
+fi
 platform="linux/$arch"
 jq -e --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
   . as $manifest |
@@ -424,6 +483,7 @@ SECRET_STORE_PASSPHRASE_FILE=/run/secrets/secret_store_passphrase
 REQUIRE_SECRET_KEY_SEALING=true
 NODE_API_TOKEN=$node_api_token
 NODE_ROLE=$NODE_ROLE
+NODE_ADDITIONAL_ROLES=$ADDITIONAL_ROLES
 NODE_CAPABILITIES=$node_capabilities
 NODE_NAME=$(hostname -s | tr '[:upper:]_' '[:lower:]-')
 CORE_URL=${VERTEP_CORE_URL:-}
@@ -477,11 +537,13 @@ chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase" "$INSTALL_ROOT/config/
   || curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
 printf '%s  %s\n' "$planner_sha" "$INSTALL_ROOT/runtime/deployment-plan.py" | sha256sum -c - >/dev/null
 if [[ ! -f "$INSTALL_ROOT/config/deployment-plan.json" ]]; then
-python3 - "$version" "$INSTALL_ROOT/config/deployment-plan.json" "${BOOTSTRAP_SERVICES[@]}" <<'PY'
+python3 - "$version" "$INSTALL_ROOT/config/deployment-plan.json" "$NODE_ROLE" "$ADDITIONAL_ROLES" "${role_services[@]}" <<'PY'
 import hashlib, json, sys
-version, output, *services = sys.argv[1:]
-plan = {"schema": 1, "role": "unassigned", "version": version, "services": services,
+version, output, role, additional, *services = sys.argv[1:]
+plan = {"schema": 1, "role": role, "version": version, "services": services,
         "modules": ["setup_runtime"], "capabilities": []}
+if additional:
+    plan["additional_roles"] = [r for r in additional.split(",") if r]
 plan["sha256"] = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 open(output, "w", encoding="utf-8").write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
 PY

@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterable
 
-from .models import Job
+from .models import Job, Channel
 
 
 class StateRepository(ABC):
@@ -37,6 +37,18 @@ class StateRepository(ABC):
 
     @abstractmethod
     def record_telegram_update(self, chat_id: str, message_id: str, payload: dict) -> None: ...
+
+    def list_channels(self, brand_id: str | None = None) -> list[Channel]:
+        return []
+
+    def get_channel(self, channel_id: str) -> Channel | None:
+        return None
+
+    def save_channel(self, channel: Channel) -> None:
+        pass
+
+    def delete_channel(self, channel_id: str) -> None:
+        pass
 
 
 class FileRepository(StateRepository):
@@ -257,6 +269,55 @@ class PostgresRepository(StateRepository):
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
             cursor.execute("INSERT INTO telegram_updates(chat_id,message_id,payload) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING",
                            (chat_id, message_id, json.dumps(payload)))
+
+    def _ensure_channels_table(self) -> None:
+        with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
+            cursor.execute("""CREATE TABLE IF NOT EXISTS channels (
+                channel_id TEXT PRIMARY KEY,
+                brand_id TEXT NOT NULL,
+                channel_type TEXT NOT NULL,
+                target TEXT NOT NULL,
+                enabled BOOLEAN DEFAULT true,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                metadata JSONB DEFAULT '{}')""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_brand ON channels(brand_id)")
+
+    def list_channels(self, brand_id: str | None = None) -> list[Channel]:
+        self._ensure_channels_table()
+        with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
+            if brand_id:
+                cursor.execute("SELECT channel_id, brand_id, channel_type, target, enabled, created_at, metadata FROM channels WHERE brand_id=%s ORDER BY created_at", (brand_id,))
+            else:
+                cursor.execute("SELECT channel_id, brand_id, channel_type, target, enabled, created_at, metadata FROM channels ORDER BY created_at")
+            return [Channel(channel_id=row[0], brand_id=row[1], channel_type=row[2], target=row[3],
+                            enabled=row[4], created_at=row[5].isoformat() if hasattr(row[5], 'isoformat') else str(row[5]),
+                            metadata=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {})
+                    for row in cursor.fetchall()]
+
+    def get_channel(self, channel_id: str) -> Channel | None:
+        self._ensure_channels_table()
+        with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT channel_id, brand_id, channel_type, target, enabled, created_at, metadata FROM channels WHERE channel_id=%s", (channel_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return Channel(channel_id=row[0], brand_id=row[1], channel_type=row[2], target=row[3],
+                           enabled=row[4], created_at=row[5].isoformat() if hasattr(row[5], 'isoformat') else str(row[5]),
+                           metadata=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {})
+
+    def save_channel(self, channel: Channel) -> None:
+        self._ensure_channels_table()
+        with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
+            cursor.execute("""INSERT INTO channels(channel_id, brand_id, channel_type, target, enabled, created_at, metadata)
+                VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(channel_id) DO UPDATE SET
+                target=excluded.target, enabled=excluded.enabled, metadata=excluded.metadata""",
+                (channel.channel_id, channel.brand_id, channel.channel_type, channel.target,
+                 channel.enabled, channel.created_at, json.dumps(channel.metadata)))
+
+    def delete_channel(self, channel_id: str) -> None:
+        self._ensure_channels_table()
+        with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM channels WHERE channel_id=%s", (channel_id,))
 
 
 def build_repository(root: str | Path) -> StateRepository:

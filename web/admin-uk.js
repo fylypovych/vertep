@@ -443,10 +443,9 @@
     card.className = "card";
     card.id = "core-role-card";
     card.innerHTML = `<h3>Локальні ролі головного вузла</h3>
-      <p class="muted">Активуйте функції, які має виконувати цей сервер локально. Зміна запускає або зупиняє відповідні компоненти без видалення даних.</p>
-      <div id="core-role-options" class="role-options">Завантаження…</div>
-      <p class="role-note">GPU-роль потребує сумісної відеокарти й найбільше ресурсів. Моделі та образи можуть завантажуватися кілька хвилин.</p>
-      <button id="save-core-roles" type="button">Застосувати ролі</button> <span id="core-role-result" class="muted"></span>`;
+      <p class="muted">Керуйте функціями, які цей сервер виконує локально. Натисніть «Налаштувати ролі», щоб додати або вилучити ролі.</p>
+      <div id="core-role-summary" class="role-summary">Завантаження…</div>
+      <button id="open-role-wizard" type="button">Налаштувати ролі</button> <span id="core-role-result" class="muted"></span>`;
     workersPanel.querySelector("#registration")?.insertAdjacentElement("afterend", card);
   }
   if (settings) {
@@ -459,39 +458,159 @@
   }
 
   let knownRoleStatus = null;
+  let roleWizardStep = 0;
+  let roleWizardSelected = new Set();
   const deploymentErrorUk = (message = "") => {
     const service = message.split(":").slice(1).join(":").trim();
     if (message.includes("Selected services failed health checks")) return `Не вдалося запустити компоненти: ${service}. Перегляньте проблему у вкладці «Помилки» або зніміть відповідну роль і повторіть.`;
     if (message.includes("did not become healthy before timeout")) return "Компоненти не встигли запуститися. Перегляньте вкладку «Помилки» та повторіть застосування ролей.";
     return message || "невідома помилка";
   };
-  const renderRoles = async (preserveSelection = false) => {
-    const options = document.querySelector("#core-role-options");
-    if (!options) return;
+  const renderRoleSummary = async () => {
+    const summary = document.querySelector("#core-role-summary");
+    if (!summary) return;
     try {
-      const selectedBefore = preserveSelection ? [...options.querySelectorAll("input:checked")].map((x) => x.value) : null;
       knownRoleStatus = await window.api("/api/system/roles");
-      const active = new Set(selectedBefore || knownRoleStatus.active_roles || []);
-      options.innerHTML = (knownRoleStatus.available_roles || []).map((role) => `
-        <label class="role-option"><input type="checkbox" value="${esc(role.id)}" ${active.has(role.id) ? "checked" : ""}>
-          <b>${esc(roleLabelsUk[role.id] || role.label || role.id)}</b>
-          <small>Компоненти: ${esc((role.services || []).join(", ") || "вбудовані")}.</small></label>`).join("");
+      const active = knownRoleStatus.active_roles || [];
       const deployment = knownRoleStatus.deployment || {};
-      document.querySelector("#core-role-result").textContent = deployment.state === "APPLYING"
-        ? "Застосування змін…" : deployment.state === "FAILED" ? `Помилка: ${deploymentErrorUk(deployment.error)}` : "";
-    } catch (error) { options.innerHTML = `<p class="form-error visible">${esc(error.message)}</p>`; }
+      const statusText = deployment.state === "APPLYING" ? "Застосування змін…"
+        : deployment.state === "FAILED" ? `Помилка: ${deploymentErrorUk(deployment.error)}` : "";
+      document.querySelector("#core-role-result").textContent = statusText;
+      if (!active.length) {
+        summary.innerHTML = `<p class="muted">Базова роль <b>CORE</b> активна. Додаткові ролі не налаштовано.</p>`;
+        return;
+      }
+      summary.innerHTML = `<div class="role-summary-grid">${active.map((roleId) => {
+        const info = (knownRoleStatus.available_roles || []).find((r) => r.id === roleId);
+        const label = roleLabelsUk[roleId] || (info && info.label) || roleId;
+        const services = info && info.services ? info.services.join(", ") : "вбудовані";
+        return `<div class="role-summary-item"><b>${esc(label)}</b><small>Компоненти: ${esc(services)}</small></div>`;
+      }).join("")}</div>`;
+    } catch (error) { summary.innerHTML = `<p class="form-error visible">${esc(error.message)}</p>`; }
   };
-  document.querySelector("#save-core-roles")?.addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    const roles = [...document.querySelectorAll("#core-role-options input:checked")].map((item) => item.value);
-    button.disabled = true;
-    document.querySelector("#core-role-result").textContent = "Передавання змін…";
+  const openRoleWizard = async () => {
+    if (!knownRoleStatus) {
+      knownRoleStatus = await window.api("/api/system/roles");
+    }
+    roleWizardSelected = new Set(knownRoleStatus.active_roles || []);
+    roleWizardStep = 1;
+    renderRoleWizard();
+    document.querySelector("#role-wizard-dialog")?.showModal();
+  };
+  const renderRoleWizard = () => {
+    const dialog = document.querySelector("#role-wizard-dialog");
+    if (!dialog) return;
+    const step1 = dialog.querySelector("#role-wizard-step-1");
+    const step2 = dialog.querySelector("#role-wizard-step-2");
+    const step3 = dialog.querySelector("#role-wizard-step-3");
+    const nextBtn = dialog.querySelector("#role-wizard-next");
+    const backBtn = dialog.querySelector("#role-wizard-back");
+    [step1, step2, step3].forEach((s) => s && (s.style.display = "none"));
+    dialog.querySelectorAll(".wizard-step").forEach((el) => {
+      const stepNum = parseInt(el.dataset.step);
+      el.classList.remove("active", "done");
+      if (stepNum === roleWizardStep) el.classList.add("active");
+      else if (stepNum < roleWizardStep) el.classList.add("done");
+    });
+    if (roleWizardStep === 1) {
+      step1.style.display = "";
+      nextBtn.textContent = "Далі";
+      nextBtn.disabled = false;
+      backBtn.style.display = "none";
+      const list = dialog.querySelector("#role-wizard-list");
+      list.innerHTML = (knownRoleStatus.available_roles || []).map((role) => {
+        const label = roleLabelsUk[role.id] || role.label || role.id;
+        const services = (role.services || []).join(", ") || "вбудовані";
+        const checked = roleWizardSelected.has(role.id) ? "checked" : "";
+        return `<label class="role-wizard-option"><input type="checkbox" value="${esc(role.id)}" ${checked}>
+          <b>${esc(label)}</b><small>Компоненти: ${esc(services)}</small></label>`;
+      }).join("");
+      list.querySelectorAll("input").forEach((input) => {
+        input.onchange = () => {
+          if (input.checked) roleWizardSelected.add(input.value);
+          else roleWizardSelected.delete(input.value);
+        };
+      });
+    } else if (roleWizardStep === 2) {
+      step2.style.display = "";
+      nextBtn.textContent = "Застосувати";
+      nextBtn.disabled = false;
+      backBtn.style.display = "";
+      const current = knownRoleStatus.active_roles || [];
+      const toAdd = [...roleWizardSelected].filter((r) => !current.includes(r));
+      const toRemove = current.filter((r) => !roleWizardSelected.has(r));
+      const review = dialog.querySelector("#role-wizard-review");
+      let html = "";
+      if (toAdd.length) html += `<p><b>Додаються:</b> ${toAdd.map((r) => esc(roleLabelsUk[r] || r)).join(", ")}</p>`;
+      if (toRemove.length) html += `<p><b>Вилучаються:</b> ${toRemove.map((r) => esc(roleLabelsUk[r] || r)).join(", ")}</p>`;
+      if (!toAdd.length && !toRemove.length) html = "<p>Змін немає — поточні ролі залишаються без змін.</p>";
+      review.innerHTML = html;
+    } else if (roleWizardStep === 3) {
+      step3.style.display = "";
+      nextBtn.textContent = "Готово";
+      nextBtn.disabled = true;
+      backBtn.style.display = "none";
+      const result = dialog.querySelector("#role-wizard-result");
+      result.textContent = "Передавання змін…";
+      const roles = [...roleWizardSelected];
+      window.api("/api/system/roles", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({roles})})
+        .then((result) => {
+          result.textContent = result.message || "Зміни прийнято";
+          renderRoleSummary();
+          nextBtn.disabled = false;
+        })
+        .catch((error) => {
+          result.textContent = `Помилка: ${error.message}`;
+          nextBtn.disabled = false;
+        });
+    }
+  };
+  document.querySelector("#open-role-wizard")?.addEventListener("click", openRoleWizard);
+  document.querySelector("#role-wizard-next")?.addEventListener("click", () => {
+    if (roleWizardStep < 3) { roleWizardStep += 1; renderRoleWizard(); }
+    else { document.querySelector("#role-wizard-dialog")?.close(); renderRoleSummary(); }
+  });
+  document.querySelector("#role-wizard-back")?.addEventListener("click", () => {
+    if (roleWizardStep > 1) { roleWizardStep -= 1; renderRoleWizard(); }
+  });
+  document.querySelector("#role-wizard-close")?.addEventListener("click", () => {
+    document.querySelector("#role-wizard-dialog")?.close();
+  });
+
+  const openNodeSettings = async (nodeId, nodeName) => {
+    const dialog = document.querySelector("#node-settings-dialog");
+    const title = document.querySelector("#node-settings-title");
+    const content = document.querySelector("#node-settings-content");
+    if (!dialog) return;
+    title.textContent = `Налаштування вузла: ${nodeName}`;
+    content.innerHTML = "Завантаження…";
+    dialog.showModal();
     try {
-      const result = await window.api("/api/system/roles", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({roles})});
-      document.querySelector("#core-role-result").textContent = result.message || "Зміни прийнято";
-      setTimeout(() => renderRoles(false), 2500);
-    } catch (error) { document.querySelector("#core-role-result").textContent = `Помилка: ${error.message}`; }
-    finally { button.disabled = false; }
+      const nodes = await window.api("/api/nodes");
+      const node = nodes.find((n) => n.node_id === nodeId) || {};
+      const capabilities = (node.capabilities || []).join(", ") || "—";
+      const hardware = node.hardware || {};
+      content.innerHTML = `
+        <div class="node-settings-grid">
+          <div class="node-settings-row"><span>Ідентифікатор</span><b>${esc(node.node_id || nodeId)}</b></div>
+          <div class="node-settings-row"><span>Роль</span><b>${esc(roleLabels[node.role] || node.role || "—")}</b></div>
+          <div class="node-settings-row"><span>Статус</span><b>${esc(node.status || "—")}</b></div>
+          <div class="node-settings-row"><span>Можливості</span><b>${esc(capabilities)}</b></div>
+          <div class="node-settings-row"><span>Версія</span><b>${esc(node.version || "—")}</b></div>
+          <div class="node-settings-row"><span>Архітектура</span><b>${esc(hardware.architecture || "—")}</b></div>
+          <div class="node-settings-row"><span>Оперативна пам'ять</span><b>${hardware.ram_mb ? `${hardware.ram_mb} МБ` : "—"}</b></div>
+          <div class="node-settings-row"><span>Відеокарта</span><b>${esc(hardware.gpu?.name || "—")}</b></div>
+          <div class="node-settings-row"><span>VRAM</span><b>${hardware.gpu?.vram_mb ? `${hardware.gpu.vram_mb} МБ` : "—"}</b></div>
+          <div class="node-settings-row"><span>Драйвер</span><b>${esc(hardware.gpu?.driver || "—")}</b></div>
+          <div class="node-settings-row"><span>CUDA</span><b>${esc(hardware.gpu?.cuda || "—")}</b></div>
+        </div>`;
+    } catch (error) {
+      content.innerHTML = `<p class="form-error visible">Не вдалося завантажити дані вузла: ${esc(error.message)}</p>`;
+    }
+  };
+  window.openNodeSettings = openNodeSettings;
+  document.querySelector("#node-settings-close")?.addEventListener("click", () => {
+    document.querySelector("#node-settings-dialog")?.close();
   });
 
   const phaseLabels = {
@@ -621,10 +740,72 @@
       <div class="field wide"><label for="brand-description">Опис і стиль комунікації</label><textarea id="brand-description" placeholder="Тон, аудиторія та ключові правила бренду"></textarea></div>
       <div class="field"><label for="brand-watermark">Водяний знак</label><input id="brand-watermark" placeholder="Текст або шлях до зображення"></div>
       <div class="field"><label for="brand-language">Основна мова</label><select id="brand-language"><option value="uk">Українська</option><option value="en">Англійська</option><option value="pl">Польська</option><option value="de">Німецька</option></select></div>
-      <fieldset class="wide"><legend>Публікація</legend><label class="toggle"><input id="brand-publishing-enabled" type="checkbox"> Дозволити публікацію</label><label for="brand-channels">Канали</label><input id="brand-channels" placeholder="youtube, telegram"><small class="hint">Назви каналів через кому.</small></fieldset>
+      <fieldset class="wide"><legend>Публікація</legend><label class="toggle"><input id="brand-publishing-enabled" type="checkbox"> Дозволити публікацію</label></fieldset>
+      <fieldset class="wide"><legend>Канали публікації</legend>
+        <div id="brand-channel-list" class="channel-list">Завантаження…</div>
+        <div id="brand-channel-form" class="channel-form" style="display: none">
+          <div class="field"><label for="channel-type">Тип каналу</label><select id="channel-type"></select></div>
+          <div class="field"><label for="channel-target">Ідентифікатор каналу</label><input id="channel-target" placeholder="@channel_name або ID"><small class="hint">Для Telegram: @channel_name. Для YouTube: channel ID.</small></div>
+          <button id="channel-add-submit" type="button">Додати</button> <button id="channel-cancel" type="button" class="secondary">Скасувати</button>
+        </div>
+        <button id="channel-add-toggle" type="button" class="secondary">Додати канал</button>
+      </fieldset>
       <p id="brand-error" class="form-error wide" role="alert"></p></form>
       <div class="dialog-actions"><button id="brand-save-friendly" type="button">Зберегти</button><button id="brand-close-friendly" type="button" class="secondary">Скасувати</button></div>`;
   }
+  const channelTypeLabels = {telegram: "Telegram", youtube: "YouTube", facebook: "Facebook", tiktok: "TikTok", instagram: "Instagram", threads: "Threads"};
+  let availableChannelTypes = [];
+  const renderBrandChannels = async (brandId) => {
+    const list = document.querySelector("#brand-channel-list");
+    if (!list) return;
+    if (!brandId) { list.innerHTML = "<p class='muted'>Спочатку збережіть бренд.</p>"; return; }
+    try {
+      const channels = await window.api(`/api/brands/${encodeURIComponent(brandId)}/channels`);
+      if (!channels.length) { list.innerHTML = "<p class='muted'>Каналів ще додано.</p>"; return; }
+      list.innerHTML = `<table><tr><th>Тип</th><th>Ідентифікатор</th><th>Статус</th><th>Дії</th></tr>${channels.map((ch) => `<tr><td>${esc(channelTypeLabels[ch.channel_type] || ch.channel_type)}</td><td>${esc(ch.target)}</td><td>${ch.enabled ? "Активний" : "Вимкнено"}</td><td><button type="button" class="danger" onclick="deleteBrandChannel('${esc(brandId)}','${esc(ch.channel_id)}')">Видалити</button></td></tr>`).join("")}</table>`;
+    } catch (error) { list.innerHTML = `<p class="form-error visible">${esc(error.message)}</p>`; }
+  };
+  window.deleteBrandChannel = async (brandId, channelId) => {
+    if (!confirm("Видалити цей канал?")) return;
+    try {
+      await window.api(`/api/channels/${encodeURIComponent(channelId)}`, {method: "DELETE"});
+      renderBrandChannels(brandId);
+    } catch (error) { alert(error.message); }
+  };
+  document.querySelector("#channel-add-toggle")?.addEventListener("click", async () => {
+    const form = document.querySelector("#channel-channel-form");
+    const toggle = document.querySelector("#channel-add-toggle");
+    if (form.style.display === "none") {
+      if (!availableChannelTypes.length) {
+        availableChannelTypes = await window.api("/api/channels/types");
+      }
+      const select = document.querySelector("#channel-type");
+      select.innerHTML = availableChannelTypes.map((t) => `<option value="${t}">${esc(channelTypeLabels[t] || t)}</option>`).join("");
+      form.style.display = "";
+      toggle.style.display = "none";
+    }
+  });
+  document.querySelector("#channel-cancel")?.addEventListener("click", () => {
+    document.querySelector("#brand-channel-form").style.display = "none";
+    document.querySelector("#channel-add-toggle").style.display = "";
+  });
+  document.querySelector("#channel-add-submit")?.addEventListener("click", async () => {
+    const brandId = field("brand-id").value.trim();
+    const type = document.querySelector("#channel-type").value;
+    const target = document.querySelector("#channel-target").value.trim();
+    if (!brandId) { alert("Спочатку введіть ідентифікатор бренду"); return; }
+    if (!target) { alert("Введіть ідентифікатор каналу"); return; }
+    try {
+      await window.api(`/api/brands/${encodeURIComponent(brandId)}/channels`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({brand_id: brandId, channel_type: type, target})
+      });
+      document.querySelector("#channel-target").value = "";
+      document.querySelector("#brand-channel-form").style.display = "none";
+      document.querySelector("#channel-add-toggle").style.display = "";
+      renderBrandChannels(brandId);
+    } catch (error) { alert(error.message); }
+  });
   const populateBrand = (brand, isNew) => {
     currentBrand = clone(brand);
     field("brand-name").value = brand.name || "";
@@ -635,9 +816,11 @@
     field("brand-watermark").value = brand.metadata?.watermark || "";
     field("brand-language").value = brand.metadata?.language || "uk";
     field("brand-publishing-enabled").checked = brand.publishing?.enabled === true;
-    field("brand-channels").value = (brand.publishing?.channels || []).join(", ");
     field("brand-error").classList.remove("visible");
     brandDialog.querySelector("h2").textContent = isNew ? "Новий бренд" : "Редагування бренду";
+    document.querySelector("#brand-channel-form").style.display = "none";
+    document.querySelector("#channel-add-toggle").style.display = "";
+    renderBrandChannels(brand.id);
     brandDialog.showModal(); field("brand-name").focus();
   };
   window.newBrand = () => populateBrand({id: "new_brand", name: "Новий бренд", enabled: true, metadata: {language: "uk"}, publishing: {enabled: false, channels: []}}, true);
@@ -768,10 +951,10 @@
     catch (error) { alert(`Не вдалося видалити сценарій: ${error.message}`); }
   };
 
-  renderOperationalStatus(); renderRoles(); renderUpdateFriendly(); renderLifecycleFriendly(); renderIncidents();
+  renderOperationalStatus(); renderRoleSummary(); renderUpdateFriendly(); renderLifecycleFriendly(); renderIncidents();
   setInterval(renderOperationalStatus, 5000);
   setInterval(renderUpdateFriendly, 5000);
   setInterval(renderIncidents, 10000);
-  setInterval(() => renderRoles(false), 10000);
+  setInterval(() => renderRoleSummary(), 10000);
   setInterval(renderLifecycleFriendly, 30000);
 })();

@@ -3,6 +3,8 @@ from enum import Enum
 from typing import Any
 from pydantic import BaseModel, Field
 
+from .configuration import SAFE_ID
+
 class JobStatus(str, Enum):
     NEW = "NEW"
     WAITING_FOR_SYSTEM = "WAITING_FOR_SYSTEM"
@@ -13,12 +15,40 @@ class JobStatus(str, Enum):
     VIDEO_GENERATION = "VIDEO_GENERATION"
     VIDEO_READY = "VIDEO_READY"
     ASSEMBLY = "ASSEMBLY"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
     READY = "READY"
     PUBLISHING = "PUBLISHING"
     PUBLISHED = "PUBLISHED"
     FAILED = "FAILED"
     PAUSED = "PAUSED"
     CANCELLED = "CANCELLED"
+
+
+CHANNEL_TYPES = {"telegram", "youtube", "facebook", "tiktok", "instagram", "threads"}
+
+
+class Channel(BaseModel):
+    channel_id: str = Field(min_length=1, max_length=64)
+    brand_id: str = Field(pattern=SAFE_ID.pattern)
+    channel_type: str
+    target: str = Field(min_length=1, max_length=256)
+    enabled: bool = True
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    metadata: dict = Field(default_factory=dict)
+
+
+class ChannelCreate(BaseModel):
+    brand_id: str = Field(pattern=SAFE_ID.pattern)
+    channel_type: str
+    target: str = Field(min_length=1, max_length=256)
+    enabled: bool = True
+    metadata: dict = Field(default_factory=dict)
+
+
+class ChannelUpdate(BaseModel):
+    target: str | None = Field(default=None, min_length=1, max_length=256)
+    enabled: bool | None = None
+    metadata: dict | None = None
 
 
 class WorkerState(str, Enum):
@@ -161,6 +191,8 @@ class Job(BaseModel):
     source: str = "web"
     assigned_worker: str | None = None
     approved: bool = False
+    approved_channels: list[str] = Field(default_factory=list)
+    approval_status: str = "pending"
     published_to: list[str] = Field(default_factory=list)
     publication_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
     task_type: str = "image"

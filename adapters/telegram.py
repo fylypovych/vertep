@@ -58,3 +58,23 @@ class TelegramAdapter:
                               json={"callback_query_id": callback_query_id, "text": text}, timeout=20)
         response.raise_for_status()
         return response.json()
+
+    def send_video(self, chat_id: str, video_path: str, caption: str = "") -> dict:
+        if not self.configured():
+            return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+        with open(video_path, "rb") as video_file:
+            response = httpx.post(f"{self.base_url}/sendVideo",
+                                  data={"chat_id": chat_id, "caption": caption[:1024]},
+                                  files={"video": video_file}, timeout=120)
+        response.raise_for_status()
+        return response.json()
+
+    def send_photo(self, chat_id: str, photo_path: str, caption: str = "") -> dict:
+        if not self.configured():
+            return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+        with open(photo_path, "rb") as photo_file:
+            response = httpx.post(f"{self.base_url}/sendPhoto",
+                                  data={"chat_id": chat_id, "caption": caption[:1024]},
+                                  files={"photo": photo_file}, timeout=60)
+        response.raise_for_status()
+        return response.json()

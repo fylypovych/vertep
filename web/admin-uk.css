@@ -132,7 +132,60 @@ button:disabled {
 .role-option input { width: auto; margin: 3px 0 0; }
 .role-option small { grid-column: 2; color: var(--muted); }
 .role-note { padding: 10px 12px; background: #fff6dc; border-left: 4px solid #d89b20; }
+.role-summary { margin: 12px 0; }
+.role-summary-grid { display: grid; gap: 8px; }
+.role-summary-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: #f0f7f4;
+  border-left: 4px solid #2c8b62;
+}
+.role-summary-item small { color: var(--muted); }
 .task-composer { margin: 12px 0 22px; max-width: 760px; }
+.role-wizard-list { display: grid; gap: 8px; margin: 14px 0; }
+.role-wizard-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  cursor: pointer;
+}
+.role-wizard-option input { width: auto; margin: 3px 0 0; }
+.role-wizard-option small { grid-column: 2; color: var(--muted); }
+.role-wizard-option:hover { border-color: #2c8b62; background: #f0f7f4; }
+.role-wizard-review { padding: 12px; background: #f0f7f4; border-left: 4px solid #2c8b62; }
+.role-wizard-result { padding: 12px; background: #fff6dc; border-left: 4px solid #d89b20; }
+#role-wizard-steps { display: flex; gap: 12px; margin: 16px 0; }
+.wizard-step {
+  padding: 6px 12px;
+  border-bottom: 3px solid #d8d5cc;
+  color: var(--muted);
+  font-size: 13px;
+}
+.wizard-step.active { border-color: #2c8b62; color: var(--ink); font-weight: 600; }
+.wizard-step.done { border-color: #2c8b62; color: #2c8b62; }
+.node-settings-grid { display: grid; gap: 0; }
+.node-settings-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.node-settings-row:last-child { border-bottom: 0; }
+.node-settings-row span { color: var(--muted); }
+.channel-list { margin: 12px 0; }
+.channel-list table { width: 100%; border-collapse: collapse; }
+.channel-list th, .channel-list td { padding: 8px; text-align: left; border-bottom: 1px solid var(--line); }
+.channel-list th { font-weight: 600; color: var(--muted); font-size: 12px; }
+.channel-form { padding: 12px; background: #f8f8f8; border: 1px solid var(--line); margin: 12px 0; }
+.channel-form .field { margin-bottom: 8px; }
 .brand-dialog { width: min(760px, 96vw); max-height: 92vh; overflow: auto; }
 .friendly-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
 .friendly-form .wide { grid-column: 1 / -1; }
