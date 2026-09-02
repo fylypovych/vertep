@@ -1592,13 +1592,52 @@ def _create_job_from_telegram(pending: dict, brand_id: str):
         _save_telegram_attachments(job, message, store.root)
     return job
 
-@app.post("/api/telegram/setup")
-def telegram_setup():
+
+@app.get("/api/telegram/status")
+def telegram_status():
+    from core.first_run import ensure_secret_store
+    secrets = ensure_secret_store()
+    token_configured = bool(secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN"))
     public_url = os.getenv("PUBLIC_URL", "")
-    if not public_url:
-        raise HTTPException(400, "PUBLIC_URL is not configured")
+    webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    allowed_chat_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
+    admin_chat_ids = os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+    webhook_url = f"{public_url.rstrip('/')}/api/telegram/webhook" if public_url else ""
+    return {
+        "configured": token_configured,
+        "webhook_url": webhook_url,
+        "public_url": public_url,
+        "webhook_secret_configured": bool(webhook_secret),
+        "allowed_chat_ids": allowed_chat_ids,
+        "admin_chat_ids": admin_chat_ids,
+    }
+
+
+@app.post("/api/telegram/setup")
+def telegram_setup(request: Request):
+    from core.first_run import ensure_secret_store
+    secrets = ensure_secret_store()
+    token = secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        raise HTTPException(400, "TELEGRAM_BOT_TOKEN is not configured")
+    body = {}
     try:
-        return TelegramAdapter().set_webhook(public_url, os.getenv("TELEGRAM_WEBHOOK_SECRET", ""))
+        body = request.json()
+    except Exception:
+        pass
+    public_url = body.get("public_url") or os.getenv("PUBLIC_URL", "")
+    webhook_secret = body.get("webhook_secret") or os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    allowed_chat_ids = body.get("allowed_chat_ids")
+    admin_chat_ids = body.get("admin_chat_ids")
+    if allowed_chat_ids is not None:
+        os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = allowed_chat_ids
+    if admin_chat_ids is not None:
+        os.environ["TELEGRAM_ADMIN_CHAT_IDS"] = admin_chat_ids
+    if not public_url:
+        raise HTTPException(400, "PUBLIC_URL is required")
+    try:
+        adapter = TelegramAdapter()
+        return adapter.set_webhook(public_url, webhook_secret)
     except (RuntimeError, httpx.HTTPError) as error:
         raise HTTPException(502, str(error)) from error
 

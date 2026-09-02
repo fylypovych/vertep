@@ -319,10 +319,16 @@
           </p>
           <div id="secretsettings">Завантаження…</div>
         </div>
+        <div class="card">
+          <h3>Telegram</h3>
+          <p class="muted">Налаштуйте Telegram-бота для прийому завдань та затвердження.</p>
+          <div id="telegramsettings">Завантаження…</div>
+          <div id="telegramstatus" class="muted"></div>
+        </div>
         <button onclick="cleanup(true)">Cleanup dry-run</button
         ><button class="danger" onclick="cleanup(false)">
           Видалити прострочені Jobs</button
-        ><button class="secondary" onclick="logout()">Вийти</button>
+        ><button class="secondary" onclick="logout()">Вихід</button>
         <pre id="cleanupresult"></pre>
       </section>
     </main>
@@ -874,6 +880,44 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         });
         await refreshSecrets();
       }
+      async function refreshTelegramSettings() {
+        try {
+          const r = await api("/api/telegram/status");
+          const container = document.querySelector("#telegramsettings");
+          if (!container) return;
+          container.innerHTML = `
+            <p><b>Токен</b> <span class="status">${r.configured ? "CONFIGURED" : "NOT CONFIGURED"}</span></p>
+            <label>PUBLIC_URL<input id="telegram-public-url" value="${esc(r.public_url || "")}" placeholder="https://example.com:8443"></label>
+            <label>TELEGRAM_WEBHOOK_SECRET<input id="telegram-webhook-secret" value="${esc("")}" placeholder="секрет для вебхука"></label>
+            <label>TELEGRAM_ALLOWED_CHAT_IDS<input id="telegram-allowed-chats" value="${esc(r.allowed_chat_ids || "")}" placeholder="через кому"></label>
+            <label>TELEGRAM_ADMIN_CHAT_IDS<input id="telegram-admin-chats" value="${esc(r.admin_chat_ids || "")}" placeholder="через кому"></label>
+            <button onclick="setupTelegramWebhook()">Встановити webhook</button>
+          `;
+          const status = document.querySelector("#telegramstatus");
+          if (status) status.textContent = `Webhook URL: ${r.webhook_url || "—"}`;
+        } catch (e) {
+          const container = document.querySelector("#telegramsettings");
+          if (container) container.textContent = e.message;
+        }
+      }
+      async function setupTelegramWebhook() {
+        try {
+          const publicUrl = document.querySelector("#telegram-public-url")?.value?.trim() || "";
+          const webhookSecret = document.querySelector("#telegram-webhook-secret")?.value?.trim() || "";
+          const allowedChatIds = document.querySelector("#telegram-allowed-chats")?.value?.trim() || "";
+          const adminChatIds = document.querySelector("#telegram-admin-chats")?.value?.trim() || "";
+          if (!publicUrl) { alert("PUBLIC_URL обов'язковий"); return; }
+          const r = await api("/api/telegram/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ public_url: publicUrl, webhook_secret: webhookSecret, allowed_chat_ids: allowedChatIds, admin_chat_ids: adminChatIds }),
+          });
+          alert("Webhook встановлено: " + JSON.stringify(r));
+          refreshTelegramSettings();
+        } catch (e) {
+          alert(e.message);
+        }
+      }
       async function addWorker() {
         workerWizardStep = 0;
         workerWizardToken = null;
@@ -1193,8 +1237,10 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
       refreshConfigs();
       refreshUpdate();
       refreshSecrets();
+      refreshTelegramSettings();
       setInterval(refreshConfigs, 15000);
       setInterval(refreshUpdate, 5000);
+      setInterval(refreshTelegramSettings, 15000);
     </script>
     <script>
       document

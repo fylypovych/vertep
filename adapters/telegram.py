@@ -2,9 +2,18 @@ import os
 import httpx
 import time
 
+
+def _integration_secret(name: str) -> str | None:
+    try:
+        from core.first_run import ensure_secret_store
+        return ensure_secret_store().get(name)
+    except Exception:
+        return None
+
+
 class TelegramAdapter:
     def __init__(self) -> None:
-        self.token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.token = os.getenv("TELEGRAM_BOT_TOKEN") or _integration_secret("telegram_bot_token") or ""
         self.base_url = f"https://api.telegram.org/bot{self.token}"
 
     def configured(self) -> bool:

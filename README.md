@@ -54,11 +54,14 @@ A standalone GPU node uses `docker-compose.worker.yml`; this file contains only 
 
 ## Telegram
 
-Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and an HTTPS `PUBLIC_URL`, start CORE, then authenticate as the administrator and call:
-
-```bash
-curl -u admin -X POST http://localhost:8080/api/telegram/setup
-```
+1. Відкрити адмінку → **Система → Захищені інтеграції** → вставити токен бота в `telegram_bot_token`.
+2. Перейти до розділу **Telegram** і вказати:
+   - `PUBLIC_URL` — публічний HTTPS-адрес CORE, наприклад `https://example.com:8443`
+   - `TELEGRAM_WEBHOOK_SECRET` — довільний секрет для підпису вебхука
+   - `TELEGRAM_ALLOWED_CHAT_IDS` — дозволені Telegram `chat_id`, через кому
+   - `TELEGRAM_ADMIN_CHAT_IDS` — адмінські чати для затвердження, через кому
+3. Натиснути **Встановити webhook**.
+4. Перевірити в Telegram: написати боту повідомлення. Якщо бренди не налаштовано, створюється Job без затвердження; якщо налаштовано — бот просить вибрати бренд.
 
 Telegram updates are deduplicated by chat and message ID. A completed Telegram job sends `STATUS: READY` back to its source chat.
 
