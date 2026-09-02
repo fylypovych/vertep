@@ -183,6 +183,10 @@ def test_bootstrap_preflight_and_text_model_provisioning_contract():
     assert '"${compose[@]}" wait migrate' not in bootstrap
     assert 'progress "Waiting for runtime health checks"' in bootstrap
     assert 'next_health_report=$((SECONDS+30))' in bootstrap
+    assert 'required_services_healthy(){' in bootstrap
+    assert 'for service in "${role_services[@]}"' in bootstrap
+    assert '[[ $service == migrate ]] && continue' in bootstrap
+    assert 'ps --services --filter status=running | wc -l' not in bootstrap
     assert "'.[$role].services[]'" in bootstrap
     assert "'.roles.profiles[$role].services[]'" not in bootstrap
     assert 'has($role)' in bootstrap

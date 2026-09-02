@@ -566,11 +566,21 @@ migrate_id=$("${compose[@]}" ps -aq migrate)
 [[ -n $migrate_id && $(docker inspect -f '{{.State.ExitCode}}' "$migrate_id") -eq 0 ]] \
   || fail "database migration did not complete successfully"
 deadline=$((SECONDS+600))
-service_count=$((${#role_services[@]}-1))
 next_health_report=$((SECONDS+30))
 progress "Waiting for runtime health checks"
-until [[ $("${compose[@]}" ps --services --filter status=running | wc -l) -eq $service_count ]] \
-  && ! "${compose[@]}" ps | grep -Eq '\(unhealthy\)|\(health: starting\)' \
+required_services_healthy(){
+  local service container_id state health
+  for service in "${role_services[@]}"; do
+    [[ $service == migrate ]] && continue
+    container_id=$("${compose[@]}" ps -q "$service")
+    [[ -n $container_id ]] || return 1
+    read -r state health < <(docker inspect -f \
+      '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+      "$container_id")
+    [[ $state == running && ( $health == healthy || $health == none ) ]] || return 1
+  done
+}
+until required_services_healthy \
   && curl -kfsS https://127.0.0.1:8443/api/health >/dev/null; do
   (( SECONDS < deadline )) || { "${compose[@]}" ps; fail "runtime health check timed out"; }
   if (( SECONDS >= next_health_report )); then
