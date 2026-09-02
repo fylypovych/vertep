@@ -241,3 +241,10 @@ def test_signed_update_switches_runtime_images_and_host_executors():
     assert '"worker_update.py", "update-runtime-env.py"' in runtime
     assert "scripts/build-update-manifest.py" in workflow
     assert '"update-manifest-$version.json"' in workflow
+
+
+def test_update_service_can_replace_only_managed_unit_files():
+    unit = (Path(__file__).parents[1] / "installer" / "vertep-update.service").read_text()
+    assert "ProtectSystem=strict" in unit
+    assert "ReadWritePaths=@VERTEP_ROOT@ /etc/systemd/system" in unit
+    assert "/usr/local" not in unit

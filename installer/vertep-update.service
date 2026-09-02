@@ -23,4 +23,4 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths=@VERTEP_ROOT@
+ReadWritePaths=@VERTEP_ROOT@ /etc/systemd/system

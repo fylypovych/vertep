@@ -280,7 +280,8 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                     state["log"].extend(run(
                         ["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root
                     ).splitlines()[-100:])
-                    state["state"] = "ROLLED_BACK"
+                    state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
+                                  "message": "Попередню версію відновлено автоматично"})
                     set_system_state(SystemState.NORMAL, "Automatic rollback completed", request_id, state_dir)
                 except Exception as rollback_error:
                     state.update({"state": "FAILED", "phase": "EMERGENCY"})

@@ -107,6 +107,12 @@ def test_update_agent_reports_failed_operation_to_systemd(monkeypatch, tmp_path)
     assert status["message"] == "update server unavailable"
 
 
+def test_successful_rollback_returns_to_normal_phase():
+    source = Path("scripts/update-agent.py").read_text(encoding="utf-8")
+    assert '"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100' in source
+    assert "Попередню версію відновлено автоматично" in source
+
+
 def test_update_server_must_be_a_credential_free_https_origin(monkeypatch):
     from core.update_protocol import update_server_url
 
