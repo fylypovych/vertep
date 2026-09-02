@@ -5,9 +5,12 @@ import hashlib
 import json
 import os
 import re
+import socket
 import ssl
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +147,26 @@ def update_server_url() -> str:
     return url
 
 
+def _read_small_response(request: urllib.request.Request, *, timeout: int,
+                         maximum: int) -> bytes:
+    attempts = max(1, int(os.getenv("UPDATE_HTTP_RETRIES", "3")))
+    delay = max(0.0, float(os.getenv("UPDATE_HTTP_RETRY_DELAY_SECONDS", "2")))
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(
+                    request, timeout=timeout, context=ssl.create_default_context()) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"Update server returned HTTP {response.status}")
+                return response.read(maximum + 1)
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
+            if attempt == attempts:
+                raise RuntimeError(
+                    f"Не вдалося прочитати відповідь сервера оновлень після {attempts} спроб: {error}"
+                ) from error
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 def fetch_manifest(channel: str = "stable") -> dict:
     if not re.fullmatch(r"[a-z0-9-]{1,32}", channel):
         raise ValueError("Invalid update channel")
@@ -154,10 +177,7 @@ def fetch_manifest(channel: str = "stable") -> dict:
            else urljoin(base, f"v1/releases/{channel}/latest.json"))
     request = urllib.request.Request(
         url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Vertep-Updater/1"})
-    with urllib.request.urlopen(request, timeout=15, context=ssl.create_default_context()) as response:
-        if response.status != 200:
-            raise RuntimeError(f"Update server returned HTTP {response.status}")
-        payload = response.read(1024 * 1024 + 1)
+    payload = _read_small_response(request, timeout=30, maximum=1024 * 1024)
     if len(payload) > 1024 * 1024:
         raise RuntimeError("Update manifest is too large")
     document = json.loads(payload)
@@ -173,9 +193,7 @@ def fetch_manifest(channel: str = "stable") -> dict:
         asset_request = urllib.request.Request(
             asset["url"], headers={"Accept": "application/octet-stream",
                                     "User-Agent": "Vertep-Updater/1"})
-        with urllib.request.urlopen(asset_request, timeout=15,
-                                    context=ssl.create_default_context()) as response:
-            payload = response.read(1024 * 1024 + 1)
+        payload = _read_small_response(asset_request, timeout=30, maximum=1024 * 1024)
         if len(payload) > 1024 * 1024:
             raise RuntimeError("Update manifest is too large")
         manifest = json.loads(payload)

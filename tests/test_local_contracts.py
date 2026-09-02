@@ -169,6 +169,9 @@ def test_update_applies_migrations_before_core_rebuild():
     assert "VERTEP_UPDATE_STATUS_FILE" in script
     assert 'install -m 0640 "$release_root/config/node_roles.json"' in script
     assert all(f"  {command})" in script for command in ("start", "stop", "restart", "recover"))
+    assert "Сервіси Vertep запущено." in script
+    assert "Сервіси Vertep зупинено. Дані збережено." in script
+    assert "Оновлення заблоковано станом системи." in script
     assert 'missing_infra+=("$service")' in script
     assert 'up -d postgres redis' not in script
     assert script.count('up -d --force-recreate --no-deps --remove-orphans') == 2

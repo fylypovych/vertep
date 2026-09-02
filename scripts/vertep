@@ -95,23 +95,45 @@ case "${1:-status}" in
     elif [[ -n "${ADMIN_PASSWORD:-}" ]]; then
       auth=(-u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD}")
     fi
-    curl -fsS "${core_tls[@]}" "${auth[@]}" -X POST "$core_url/api/system/update/run"
-    printf '\nUpdate request accepted; follow progress with vertep status.\n'
+    response_file=$(mktemp)
+    http_code=$(curl -sS "${core_tls[@]}" "${auth[@]}" -o "$response_file" \
+      -w '%{http_code}' -X POST "$core_url/api/system/update/run") || {
+      cat "$response_file" >&2
+      rm -f "$response_file"
+      echo "Не вдалося зв’язатися з CORE для запуску оновлення." >&2
+      exit 1
+    }
+    cat "$response_file"
+    rm -f "$response_file"
+    if [[ "$http_code" == 423 ]]; then
+      printf '\nОновлення заблоковано станом системи. Виконайте: sudo vertep recover\n' >&2
+      exit 1
+    fi
+    [[ "$http_code" =~ ^2 ]] || {
+      printf '\nCORE відхилив оновлення (HTTP %s).\n' "$http_code" >&2
+      exit 1
+    }
+    printf '\nЗапит на оновлення прийнято. Стежте за станом командою: vertep status\n'
     ;;
   start)
+    printf 'Запускаємо сервіси Vertep...\n'
     build_runtime_compose
     mapfile -t selected_services < <(selected_runtime_services)
     [[ ${#selected_services[@]} -gt 0 ]] || { echo "Deployment plan is missing; run bootstrap to repair it" >&2; exit 1; }
     cleanup_stale_compose_replacements
     "${compose[@]}" up -d --remove-orphans "${selected_services[@]}"
+    printf 'Сервіси Vertep запущено.\n'
     "${compose[@]}" ps
     ;;
   stop)
+    printf 'Зупиняємо сервіси Vertep...\n'
     build_runtime_compose
     "${compose[@]}" stop
+    printf 'Сервіси Vertep зупинено. Дані збережено.\n'
     ;;
   restart)
-    exec "$0" restart-runtime
+    "$0" restart-runtime
+    printf 'Сервіси Vertep перезапущено.\n'
     ;;
   recover)
     auth=()
@@ -121,7 +143,7 @@ case "${1:-status}" in
       auth=(-u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD}")
     fi
     curl -fsS "${core_tls[@]}" "${auth[@]}" -X POST "$core_url/api/system/recovery/normal"
-    printf '\nNormal operating mode restored after health checks.\n'
+    printf '\nНормальний режим відновлено після перевірки основних сервісів.\n'
     ;;
   apply-update)
     package=${2:-}

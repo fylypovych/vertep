@@ -139,8 +139,8 @@ def check_release(root: Path) -> str:
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
     if not VERSION_RE.fullmatch(version):
         raise RuntimeError("Файл VERSION містить некоректний номер версії")
-    if git(root, "status", "--porcelain"):
-        raise RuntimeError("Для публікації релізу робоче дерево має бути чистим")
+    if git(root, "status", "--porcelain", "--untracked-files=no"):
+        raise RuntimeError("Для публікації релізу відстежувані файли мають бути закомічені")
     subject = git(root, "log", "-1", "--pretty=%s")
     prefix = f"{version} — "
     if not subject.startswith(prefix):
@@ -193,7 +193,10 @@ def prepare_release(root: Path, *, title: str, skip_tests: bool) -> str:
         + "\n\n## Перевірка\n\n" + f"- {validation}\n",
         encoding="utf-8",
     )
-    git(root, "add", "-A")
+    # Update tracked files and add only the generated release note. Unrelated
+    # untracked workspace files must never leak into a release commit.
+    git(root, "add", "-u")
+    git(root, "add", str(release_path.relative_to(root)))
     scan_staged_secrets(root)
     git(root, "commit", "-m", f"{version} — {title}")
     check_release(root)

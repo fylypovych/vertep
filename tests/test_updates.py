@@ -150,6 +150,37 @@ def test_update_package_github_allowlist_is_repository_scoped(monkeypatch, tmp_p
         protocol.download_package(manifest, tmp_path / "payload.tar.gz")
 
 
+def test_manifest_read_retries_after_timeout(monkeypatch):
+    import core.update_protocol as protocol
+
+    attempts = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self, _maximum):
+            return b'{"version":"0.0.0.67"}'
+
+    def urlopen(_request, **_options):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise TimeoutError("temporary timeout")
+        return Response()
+
+    monkeypatch.setenv("VERTEP_UPDATE_SERVER", "https://updates.example.test")
+    monkeypatch.setenv("UPDATE_HTTP_RETRY_DELAY_SECONDS", "0")
+    monkeypatch.setattr(protocol.urllib.request, "urlopen", urlopen)
+
+    assert protocol.fetch_manifest()["version"] == "0.0.0.67"
+    assert len(attempts) == 2
+
+
 def test_update_descriptor_is_derived_from_signed_runtime_contract(tmp_path):
     builder = load_update_manifest_builder()
     package = tmp_path / "vertep-runtime-0.0.0.29.tar.gz"

@@ -72,6 +72,9 @@ def test_release_is_prepared_once_and_ci_never_commits_to_main():
     assert 'git(root, "commit", "-m", f"{version} — {title}")' in script
     assert "release_path.write_text" in script
     assert "scan_staged_secrets" in script
+    assert 'git(root, "add", "-A")' not in script
+    assert 'git(root, "add", "-u")' in script
+    assert '"--untracked-files=no"' in script
     assert 'git(root, "tag", "-a"' not in script
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch" in workflow
