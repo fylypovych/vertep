@@ -887,6 +887,8 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
           if (!container) return;
           container.innerHTML = `
             <p><b>Токен</b> <span class="status">${r.configured ? "CONFIGURED" : "NOT CONFIGURED"}</span></p>
+            <label>TELEGRAM_BOT_TOKEN<input id="telegram-bot-token" type="password" value="" placeholder="8281141621:AAFtzEhnRPJD07YJbuyyQxBBP5GIleuP1d4"></label>
+            <button onclick="saveTelegramToken()">Зберегти токен</button>
             <label>PUBLIC_URL<input id="telegram-public-url" value="${esc(r.public_url || "")}" placeholder="https://example.com:8443"></label>
             <label>TELEGRAM_WEBHOOK_SECRET<input id="telegram-webhook-secret" value="${esc("")}" placeholder="секрет для вебхука"></label>
             <label>TELEGRAM_ALLOWED_CHAT_IDS<input id="telegram-allowed-chats" value="${esc(r.allowed_chat_ids || "")}" placeholder="через кому"></label>
@@ -898,6 +900,21 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         } catch (e) {
           const container = document.querySelector("#telegramsettings");
           if (container) container.textContent = e.message;
+        }
+      }
+      async function saveTelegramToken() {
+        try {
+          const value = document.querySelector("#telegram-bot-token")?.value?.trim() || "";
+          if (!value) { alert("Введіть токен"); return; }
+          await api("/api/settings/secrets/" + encodeURIComponent("telegram_bot_token"), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value }),
+          });
+          alert("Токен збережено");
+          refreshTelegramSettings();
+        } catch (e) {
+          alert(e.message);
         }
       }
       async function setupTelegramWebhook() {

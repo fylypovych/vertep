@@ -635,11 +635,21 @@ required_services_healthy(){
   for service in "${role_services[@]}"; do
     [[ $service == migrate ]] && continue
     container_id=$("${compose[@]}" ps -q "$service")
-    [[ -n $container_id ]] || return 1
+    if [[ -z $container_id ]]; then
+      echo "HEALTH CHECK: service $service is not running (no container)" >&2
+      return 1
+    fi
     read -r state health < <(docker inspect -f \
       '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
       "$container_id")
-    [[ $state == running && ( $health == healthy || $health == none ) ]] || return 1
+    if [[ $state != running || ( $health != healthy && $health != none ) ]]; then
+      echo "HEALTH CHECK: service $service state=$state health=$health" >&2
+      if [[ $state == "restarting" ]]; then
+        echo "HEALTH CHECK: service $service is restarting, last logs:" >&2
+        docker logs --tail 20 "$container_id" >&2 || true
+      fi
+      return 1
+    fi
   done
 }
 until required_services_healthy \
