@@ -69,7 +69,7 @@ def test_update_agent_restart_uses_privileged_runtime_command(monkeypatch, tmp_p
     calls = []
     monkeypatch.setattr(agent, "run", lambda command, root, extra_env=None:
                         calls.append((command, extra_env)) or "runtime healthy")
-    agent.process_request(root, state, request_path)
+    assert agent.process_request(root, state, request_path) is True
     result = json.loads((state / "status.json").read_text(encoding="utf-8"))
     assert calls[0][0][-1] == "restart-runtime"
     assert calls[0][1]["VERTEP_UPDATE_STATUS_FILE"].endswith("status.json")
@@ -83,6 +83,28 @@ def test_web_update_is_disabled_by_default(monkeypatch, tmp_path):
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
     with pytest.raises(RuntimeError, match="disabled"):
         request_update("check")
+
+
+def test_update_agent_reports_failed_operation_to_systemd(monkeypatch, tmp_path):
+    agent = load_update_agent()
+    import core.update_protocol as protocol
+    root, state = tmp_path / "repo", tmp_path / "state"
+    root.mkdir()
+    request_path = state / "requests" / ("c" * 32 + ".json")
+    request_path.parent.mkdir(parents=True)
+    request_path.write_text(
+        json.dumps({"request_id": "c" * 32, "action": "check"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        protocol, "fetch_manifest", lambda _channel: (_ for _ in ()).throw(
+            RuntimeError("update server unavailable")
+        )
+    )
+
+    assert agent.process_request(root, state, request_path) is False
+    status = json.loads((state / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED"
+    assert status["message"] == "update server unavailable"
 
 
 def test_update_server_must_be_a_credential_free_https_origin(monkeypatch):

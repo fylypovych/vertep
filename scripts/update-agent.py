@@ -164,7 +164,8 @@ def recover_if_interrupted(root: Path, state_dir: Path) -> None:
     set_system_state(SystemState.NORMAL, "Previous release restored", state.get("request_id"), state_dir)
 
 
-def process_request(root: Path, state_dir: Path, request_path: Path, skip_drain: bool = False) -> None:
+def process_request(root: Path, state_dir: Path, request_path: Path,
+                    skip_drain: bool = False) -> bool:
     from core.system_state import SystemState, set_system_state
     from core.update_protocol import (download_package, fetch_manifest, validate_manifest,
                                       validate_replay_state, version_tuple)
@@ -195,7 +196,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path, skip_drain:
                 state.update({"state": "SUCCEEDED", "phase": "NORMAL", "progress": 100,
                               "message": "Server restart completed", "updated_at": now()})
                 set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
-                return
+                return True
             manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
             requested_version = request.get("target_version")
             if requested_version and manifest.get("version") != requested_version:
@@ -267,6 +268,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path, skip_drain:
                           "message": "Update completed" if action == "update" else "Update check completed",
                           "updated_at": now()})
             set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
+            return True
         except Exception as error:
             state.setdefault("log", []).append(f"{now()} {error}")
             if state.get("phase") == "UPDATING":
@@ -285,6 +287,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path, skip_drain:
                 state.update({"state": "FAILED", "phase": "NORMAL"})
                 set_system_state(SystemState.NORMAL, "Update stopped before installation", request_id, state_dir)
             state.update({"message": str(error), "updated_at": now()})
+            return False
         finally:
             state["log"] = state.get("log", [])[-500:]
             atomic_json(state_dir / "status.json", state)
@@ -304,14 +307,19 @@ def main() -> None:
     recover_if_interrupted(root, state_dir)
     requests = state_dir / "requests"
     requests.mkdir(parents=True, exist_ok=True)
+    failed = False
     for request_path in sorted(requests.glob("*.json")):
         try:
-            process_request(root, state_dir, request_path, skip_drain=args.skip_drain)
+            if not process_request(root, state_dir, request_path, skip_drain=args.skip_drain):
+                failed = True
         except Exception as error:
+            failed = True
             atomic_json(state_dir / "status.json", {"state": "FAILED", "phase": "NORMAL",
                         "action": None, "request_id": None, "message": str(error),
                         "updated_at": now(), "log": [f"{now()} {error}"]})
             request_path.unlink(missing_ok=True)
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

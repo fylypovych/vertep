@@ -230,6 +230,7 @@ def test_signed_update_switches_runtime_images_and_host_executors():
     assert '"$ROOT/.env" "$release_root/manifest.json" "$target_version"' in command
     assert '[[ ! -f "$backup/.env" ]] || cp -a "$backup/.env" "$ROOT/.env"' in command
     assert 'sync_host_runtime "$release_root"' in command
+    assert '[[ ! "$release_root/config/node_roles.json" -ef "$ROOT/config/node_roles.json" ]]' in command
     assert "X-Vertep-Internal-Key" in command
     assert "cleanup_stale_compose_replacements" in command
     assert command.index("cleanup_stale_compose_replacements", command.index("apply-update)")) < command.index('missing_infra=()')
