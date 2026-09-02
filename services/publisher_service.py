@@ -68,8 +68,10 @@ def _canonical_id(request: PublishRequest) -> str:
 
 @app.get("/health")
 def health() -> dict:
-    root = _root()
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        _root().mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        pass
     adapters = []
     if os.getenv("PUBLISHER_YOUTUBE_ENABLED", "false").lower() == "true":
         adapters.append("youtube")
