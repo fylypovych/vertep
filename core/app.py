@@ -58,7 +58,7 @@ from .deployment_plan import create_plan
 from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
                              rollout_status, rollback_ready_nodes, start_rollout)
 from worker.role_executor import delete_text_model, list_text_models, list_voices, pull_text_model, synthesize_voice
-from adapters.telegram import TelegramAdapter, TelegramPollingService
+from adapters.telegram import TelegramAdapter, TelegramPollingService, _integration_secret
 from adapters.publisher import PUBLISHERS
 
 @asynccontextmanager

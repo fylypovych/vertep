@@ -668,6 +668,8 @@
         : progress >= thresholds[index] ? "active" : "";
       return `<span class="update-step ${css}">${label}</span>`;
     }).join("");
+    const existingDetails = target.querySelector("details");
+    const wasOpen = existingDetails && existingDetails.open;
     target.innerHTML = `<div class="update-progress-wrap">
         <div class="update-progress-head"><b>${esc(phaseLabels[value.phase] || ukState(value.state))}</b><strong>${progress}%</strong></div>
         <div class="update-progress" role="progressbar" aria-label="Прогрес оновлення" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span class="${failed ? "failed" : ""}" style="width:${progress}%"></span></div>
@@ -679,8 +681,6 @@
         <div class="status-row"><span>Стан</span><b class="${stateClass(value.state)}">${esc(ukState(value.state))}</b></div>
          ${value.message ? `<div class="status-row"><span>Зараз виконується</span><b>${esc(updateMessage(value.message))}</b></div>` : ""}
        </div>`;
-    const existingDetails = target.querySelector("details");
-    const wasOpen = existingDetails && existingDetails.open;
     target.innerHTML += (value.log || []).length ? `<details ${wasOpen ? "open" : ""}><summary>Журнал оновлення</summary><ol class="event-log">${value.log.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : "";
   };
   const scheduleUpdateReload = (value) => {
@@ -848,8 +848,7 @@
     const id = field("brand-id").value.trim();
     const value = {...clone(currentBrand), id, name: field("brand-name").value.trim(), enabled: field("brand-enabled").checked,
       metadata: {...clone(currentBrand?.metadata), description: field("brand-description").value.trim(), watermark: field("brand-watermark").value.trim(), language: field("brand-language").value},
-      publishing: {...clone(currentBrand?.publishing), enabled: field("brand-publishing-enabled").checked,
-        channels: field("brand-channels").value.split(",").map((item) => item.trim()).filter(Boolean)}};
+      publishing: {...clone(currentBrand?.publishing), enabled: field("brand-publishing-enabled").checked}};
     try {
       await window.api(`/api/brands/${encodeURIComponent(id)}`, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(value)});
       brandDialog.close(); await window.refreshConfigs();
