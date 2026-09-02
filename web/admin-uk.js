@@ -406,11 +406,18 @@
         <div class="friendly-card"><span>Потребують уваги</span><strong class="metric ${queue.dead_letter ? "state-bad" : "state-ok"}">${Number(queue.dead_letter || 0)}</strong><small>${queue.dead_letter ? "Нижче можна повторити невдалі завдання" : "Помилкових завдань немає"}</small></div>
         <div class="friendly-card"><span>Активні процеси</span><strong class="metric">${Number(orchestration.active_jobs || 0)}</strong><small>Активних сцен: ${Number(orchestration.active_scenes || 0)}</small></div>`;
       const systemTarget = document.querySelector("#system-friendly");
-      if (systemTarget) systemTarget.innerHTML = [
-        ["Ядро", status.core], ["База даних", status.postgres], ["Черга Redis", status.redis],
-        ["Сховище", status.storage], ["Режим системи", status.system?.state]
-      ].map(([label, value]) => `<div class="friendly-card"><span>${label}</span><strong class="metric ${stateClass(value)}">${esc(ukState(value))}</strong></div>`).join("")
-        + (status.system?.state !== "NORMAL" ? `<div class="system-recovery"><b>Система потребує уваги</b><p>${esc(status.system?.reason || "Причину не записано")}</p>${status.system?.state === "EMERGENCY" ? '<button id="recover-normal" type="button">Перевірити й повернути нормальний режим</button>' : ""}</div>` : "");
+      if (systemTarget) {
+        const telegram = status.telegram || {};
+        const telegramStatus = telegram.status === "running" ? "OK" : (telegram.status === "error" ? "ERROR" : (telegram.enabled ? "DISABLED" : "NOT_CONFIGURED"));
+        systemTarget.innerHTML = [
+          ["Ядро", status.core], ["База даних", status.postgres], ["Черга Redis", status.redis],
+          ["Сховище", status.storage], ["Режим системи", status.system?.state],
+          ["Telegram", telegramStatus]
+        ].map(([label, value]) => `<div class="friendly-card"><span>${label}</span><strong class="metric ${stateClass(value)}">${esc(ukState(value))}</strong></div>`).join("")
+          + (telegram.bot_username ? `<div class="friendly-card"><span>Bot</span><strong class="metric">@${esc(telegram.bot_username)}</strong></div>` : "")
+          + (telegram.last_message_at ? `<div class="friendly-card"><span>Останнє повідомлення</span><strong class="metric">${esc(telegram.last_message_at)}</strong></div>` : "")
+          + (status.system?.state !== "NORMAL" ? `<div class="system-recovery"><b>Система потребує уваги</b><p>${esc(status.system?.reason || "Причину не записано")}</p>${status.system?.state === "EMERGENCY" ? '<button id="recover-normal" type="button">Перевірити й повернути нормальний режим</button>' : ""}</div>` : "");
+      }
       document.querySelector("#recover-normal")?.addEventListener("click", recoverNormalMode);
     } catch (error) {
       const target = document.querySelector("#system-friendly");
@@ -423,7 +430,10 @@
     const target = document.querySelector("#incident-friendly"); if (!target) return;
     try {
       const incidents = await window.api("/api/alerts");
+      const openDetails = new Set();
+      target.querySelectorAll("details[open]").forEach((details, index) => openDetails.add(index));
       target.innerHTML = incidents.length ? incidents.map((item) => `<article class="incident ${item.severity === "error" ? "incident-error" : "incident-warning"}"><div><b>${esc(incidentLabels[item.type] || item.type || "Подія")}</b><p>${esc(updateMessage(item.message || "Потрібна увага"))}</p>${item.updated_at ? `<small>${esc(item.updated_at)}</small>` : ""}</div>${(item.details || []).length ? `<details><summary>Технічні подробиці</summary><ol class="event-log">${item.details.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : ""}</article>`).join("") : '<p class="state-ok">Активних помилок і сповіщень немає.</p>';
+      target.querySelectorAll("details").forEach((details, index) => { if (openDetails.has(index)) details.open = true; });
     } catch (error) { target.innerHTML = `<p class="form-error visible">Не вдалося завантажити журнал проблем: ${esc(error.message)}</p>`; }
   };
   async function recoverNormalMode() {
@@ -667,8 +677,11 @@
         <div class="status-row"><span>Встановлена версія</span><b>${esc(value.current_version || "—")}</b></div>
         <div class="status-row"><span>Доступна версія</span><b>${esc(value.available_version || (value.update_available ? "нова" : "оновлень немає"))}</b></div>
         <div class="status-row"><span>Стан</span><b class="${stateClass(value.state)}">${esc(ukState(value.state))}</b></div>
-        ${value.message ? `<div class="status-row"><span>Зараз виконується</span><b>${esc(updateMessage(value.message))}</b></div>` : ""}
-      </div>${(value.log || []).length ? `<details><summary>Журнал оновлення</summary><ol class="event-log">${value.log.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : ""}`;
+         ${value.message ? `<div class="status-row"><span>Зараз виконується</span><b>${esc(updateMessage(value.message))}</b></div>` : ""}
+       </div>`;
+    const existingDetails = target.querySelector("details");
+    const wasOpen = existingDetails && existingDetails.open;
+    target.innerHTML += (value.log || []).length ? `<details ${wasOpen ? "open" : ""}><summary>Журнал оновлення</summary><ol class="event-log">${value.log.map((row) => `<li>${esc(row)}</li>`).join("")}</ol></details>` : "";
   };
   const scheduleUpdateReload = (value) => {
     if (reloadScheduled || !updateSeenRunning || !["update", "restart"].includes(value.action)

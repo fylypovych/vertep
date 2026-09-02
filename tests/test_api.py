@@ -134,6 +134,66 @@ def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_pa
     assert inputs[0]["sha256"]
     client.post(f"/api/jobs/{job['job_id']}/cancel")
 
+
+def test_telegram_setup_saves_chat_ids_without_public_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "")
+    monkeypatch.delenv("PUBLIC_URL", raising=False)
+    client = TestClient(app)
+    response = client.post("/api/telegram/setup", json={
+        "allowed_chat_ids": "111,222",
+        "admin_chat_ids": "333",
+        "webhook_secret": "supersecret",
+    })
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "saved"
+    status = client.get("/api/telegram/status").json()
+    assert status["allowed_chat_ids"] == "111,222"
+    assert status["admin_chat_ids"] == "333"
+    assert status["webhook_secret_configured"] is True
+
+
+def test_telegram_start_command_does_not_create_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "42")
+    brand_root = tmp_path / "brands"
+    brand_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
+    client = TestClient(app)
+    brand_dir = brand_root / "brand01"
+    brand_dir.mkdir(parents=True, exist_ok=True)
+    (brand_dir / "brand.json").write_text(json.dumps({"id": "brand01", "name": "Test", "publishing": {"enabled": False}}, ensure_ascii=False), encoding="utf-8")
+    update = {"message": {"message_id": 1, "text": "/start", "chat": {"id": 42}}}
+    from unittest.mock import patch, MagicMock
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.return_value = {"ok": True}
+    with patch("adapters.telegram.httpx.post", return_value=mock_response) as mock_post:
+        response = client.post("/api/telegram/webhook", json=update).json()
+    assert response.get("ok") is True
+
+
+def test_telegram_polling_service_persists_offset(tmp_path, monkeypatch):
+    from adapters.telegram import TelegramPollingService
+    monkeypatch.setenv("TELEGRAM_POLLING_ENABLED", "true")
+    state_file = tmp_path / "telegram_polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda update: None, offset_file=state_file)
+    assert service.offset == 0
+    service.offset = 123
+    service.last_update_id = 123
+    service.last_message_at = "2026-09-02T16:21:00+03:00"
+    service._save_offset()
+    assert state_file.exists(), f"state file missing: {state_file}"
+    raw = state_file.read_text(encoding="utf-8")
+    assert '"last_update_id": 123' in raw, raw
+    loaded = TelegramPollingService(token="test-token", on_update=lambda update: None, offset_file=state_file)
+    assert loaded.offset == 123
+    assert loaded.last_update_id == 123
+    assert loaded.last_message_at == "2026-09-02T16:21:00+03:00"
+
 def test_dispatcher_respects_vram():
     job = Job(job_id="2026-999999", topic="image", character_id="did_samogon", priority=5,
               status=JobStatus.NEW, created_at="2026-01-01T00:00:00+00:00", min_vram_mb=6000)

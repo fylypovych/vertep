@@ -881,22 +881,30 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         await refreshSecrets();
       }
       async function refreshTelegramSettings() {
+        const container = document.querySelector("#telegramsettings");
+        if (!container) return;
+        if (container.querySelector("input:focus, textarea:focus, select:focus")) return;
         try {
           const r = await api("/api/telegram/status");
-          const container = document.querySelector("#telegramsettings");
-          if (!container) return;
+          if (container.querySelector("input:focus, textarea:focus, select:focus")) return;
+          const pollingLabel = r.polling_enabled ? (r.polling_status === "running" ? "RUNNING" : "STOPPED") : "DISABLED";
           container.innerHTML = `
             <p><b>Токен</b> <span class="status">${r.configured ? "CONFIGURED" : "NOT CONFIGURED"}</span></p>
             <label>TELEGRAM_BOT_TOKEN<input id="telegram-bot-token" type="password" value="" placeholder="8281141621:AAFtzEhnRPJD07YJbuyyQxBBP5GIleuP1d4"></label>
             <button onclick="saveTelegramToken()">Зберегти токен</button>
-            <label>PUBLIC_URL<input id="telegram-public-url" value="${esc(r.public_url || "")}" placeholder="https://example.com:8443"></label>
-            <label>TELEGRAM_WEBHOOK_SECRET<input id="telegram-webhook-secret" value="${esc("")}" placeholder="секрет для вебхука"></label>
             <label>TELEGRAM_ALLOWED_CHAT_IDS<input id="telegram-allowed-chats" value="${esc(r.allowed_chat_ids || "")}" placeholder="через кому"></label>
             <label>TELEGRAM_ADMIN_CHAT_IDS<input id="telegram-admin-chats" value="${esc(r.admin_chat_ids || "")}" placeholder="через кому"></label>
-            <button onclick="setupTelegramWebhook()">Встановити webhook</button>
+            <button onclick="saveTelegramChatIds()">Зберегти чат-ід</button>
+            <div class="telegram-status">
+              <p><b>Polling:</b> <span class="status">${esc(pollingLabel)}</span></p>
+              ${r.bot_username ? `<p><b>Bot:</b> @${esc(r.bot_username)}</p>` : ""}
+              ${r.last_update_id ? `<p><b>Останній update:</b> ${esc(String(r.last_update_id))}</p>` : ""}
+              ${r.last_message_at ? `<p><b>Останнє повідомлення:</b> ${esc(r.last_message_at)}</p>` : ""}
+              <button onclick="checkTelegramBot()">Перевірити бота</button>
+            </div>
           `;
           const status = document.querySelector("#telegramstatus");
-          if (status) status.textContent = `Webhook URL: ${r.webhook_url || "—"}`;
+          if (status) status.textContent = r.polling_enabled ? `Polling: ${esc(pollingLabel)}` : "Polling вимкнено";
         } catch (e) {
           const container = document.querySelector("#telegramsettings");
           if (container) container.textContent = e.message;
@@ -915,6 +923,33 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
           refreshTelegramSettings();
         } catch (e) {
           alert(e.message);
+        }
+      }
+      async function saveTelegramChatIds() {
+        try {
+          const allowedChatIds = document.querySelector("#telegram-allowed-chats")?.value?.trim() || "";
+          const adminChatIds = document.querySelector("#telegram-admin-chats")?.value?.trim() || "";
+          await api("/api/telegram/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ allowed_chat_ids: allowedChatIds, admin_chat_ids: adminChatIds }),
+          });
+          alert("Чат-ід збережено");
+          refreshTelegramSettings();
+        } catch (e) {
+          alert(e.message);
+        }
+      }
+      async function checkTelegramBot() {
+        try {
+          const r = await api("/api/telegram/bot-info");
+          if (r.ok && r.bot_username) {
+            alert(`Telegram: OK\nBot: @${r.bot_username}\nPolling: RUNNING`);
+          } else {
+            alert(`Telegram: ERROR\n${r.error || "Невідома помилка"}`);
+          }
+        } catch (e) {
+          alert(`Telegram: ERROR\n${e.message}`);
         }
       }
       async function setupTelegramWebhook() {

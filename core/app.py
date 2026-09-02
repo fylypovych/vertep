@@ -29,7 +29,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from .models import (JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
                      WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
-                     WorkerLogBatch, NodeAction, IntegrationSecretUpdate,
+                     WorkerLogBatch, NodeAction, IntegrationSecretUpdate, TelegramSetup,
                      RollingUpdateRequest, utc_now, Channel, ChannelCreate, ChannelUpdate, CHANNEL_TYPES)
 from .dispatcher import available_worker, can_retry
 from .pipeline import JobStore, prepare_job_safe, finalize_job_safe
@@ -58,11 +58,12 @@ from .deployment_plan import create_plan
 from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
                              rollout_status, rollback_ready_nodes, start_rollout)
 from worker.role_executor import delete_text_model, list_text_models, list_voices, pull_text_model, synthesize_voice
-from adapters.telegram import TelegramAdapter
+from adapters.telegram import TelegramAdapter, TelegramPollingService
 from adapters.publisher import PUBLISHERS
 
 @asynccontextmanager
 async def lifespan(_app):
+    global telegram_polling_service
     if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
         write_node_crl()
     for recovered_job in list(store.jobs.values()):
@@ -72,8 +73,10 @@ async def lifespan(_app):
                 store.update(recovered_job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
             executor.submit(_prepare_and_dispatch, recovered_job)
     watchdog_task = asyncio.create_task(_watchdog())
+    _start_telegram_polling()
     yield
     watchdog_task.cancel()
+    _stop_telegram_polling()
 
 app = FastAPI(title="Vertep CORE", version=application_version(), lifespan=lifespan)
 store = JobStore(os.getenv("JOB_ROOT", "jobs"))
@@ -86,6 +89,7 @@ setup_request_windows: dict[str, deque[float]] = defaultdict(deque)
 last_maintenance = 0.0
 result_locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
 _telegram_pending_brands: dict[str, dict] = {}
+telegram_polling_service: TelegramPollingService | None = None
 
 def _serialize_job_result(function):
     @wraps(function)
@@ -1302,7 +1306,8 @@ def telegram_webhook(update: dict, request: Request):
         raise HTTPException(400, "Telegram update has no text")
     chat_id = str(message.get("chat", {}).get("id", "unknown"))
     allowed = {item.strip() for item in os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").split(",") if item.strip()}
-    if allowed and chat_id not in allowed:
+    admin_ids = {item.strip() for item in os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "").split(",") if item.strip()}
+    if allowed and chat_id not in allowed and chat_id not in admin_ids:
         raise HTTPException(403, "Telegram chat is not allowed")
     source_id = str(message.get("message_id", ""))
     return _handle_telegram_message(chat_id, source_id, text, message)
@@ -1460,6 +1465,8 @@ def _send_approval_request(job) -> None:
 
 
 def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: dict) -> dict:
+    if text == "/start":
+        return TelegramAdapter().send_message(chat_id, "Vertep Bot підключений.\nНадішліть тему для створення контенту.")
     if text.startswith("/status"):
         active = sum(job.status not in {JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED, JobStatus.CANCELLED}
                      for job in store.jobs.values())
@@ -1614,32 +1621,171 @@ def telegram_status():
 
 
 @app.post("/api/telegram/setup")
-def telegram_setup(request: Request):
+def telegram_setup(body: TelegramSetup):
     from core.first_run import ensure_secret_store
     secrets = ensure_secret_store()
     token = secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise HTTPException(400, "TELEGRAM_BOT_TOKEN is not configured")
-    body = {}
-    try:
-        body = request.json()
-    except Exception:
-        pass
-    public_url = body.get("public_url") or os.getenv("PUBLIC_URL", "")
-    webhook_secret = body.get("webhook_secret") or os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    allowed_chat_ids = body.get("allowed_chat_ids")
-    admin_chat_ids = body.get("admin_chat_ids")
+    public_url = body.public_url or os.getenv("PUBLIC_URL", "")
+    webhook_secret = body.webhook_secret or os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    allowed_chat_ids = body.allowed_chat_ids
+    admin_chat_ids = body.admin_chat_ids
+    if webhook_secret:
+        os.environ["TELEGRAM_WEBHOOK_SECRET"] = webhook_secret
     if allowed_chat_ids is not None:
         os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = allowed_chat_ids
     if admin_chat_ids is not None:
         os.environ["TELEGRAM_ADMIN_CHAT_IDS"] = admin_chat_ids
     if not public_url:
-        raise HTTPException(400, "PUBLIC_URL is required")
+        return {"status": "saved", "message": "Settings saved; webhook not configured (PUBLIC_URL is not set)"}
     try:
         adapter = TelegramAdapter()
         return adapter.set_webhook(public_url, webhook_secret)
     except (RuntimeError, httpx.HTTPError) as error:
         raise HTTPException(502, str(error)) from error
+
+
+def _start_telegram_polling() -> None:
+    global telegram_polling_service
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or _integration_secret("telegram_bot_token") or ""
+    if not token:
+        return
+    if os.getenv("TELEGRAM_POLLING_ENABLED", "true").lower() != "true":
+        return
+    telegram_polling_service = TelegramPollingService(
+        token=token,
+        on_update=_process_telegram_update,
+    )
+    telegram_polling_service.start()
+    logger.info("Telegram polling started")
+
+
+def _stop_telegram_polling() -> None:
+    global telegram_polling_service
+    if telegram_polling_service is not None:
+        telegram_polling_service.stop()
+        telegram_polling_service = None
+        logger.info("Telegram polling stopped")
+
+
+def _process_telegram_update(update: dict) -> None:
+    callback = update.get("callback_query")
+    if callback:
+        _handle_telegram_callback(callback)
+        return
+    message = update.get("message") or {}
+    text = str(message.get("text") or message.get("caption") or "").strip()
+    if not text:
+        logger.debug("Telegram update skipped: no text")
+        return
+    chat_id = str(message.get("chat", {}).get("id", "unknown"))
+    allowed = {item.strip() for item in os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").split(",") if item.strip()}
+    admin_ids = {item.strip() for item in os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "").split(",") if item.strip()}
+    if allowed and chat_id not in allowed and chat_id not in admin_ids:
+        logger.warning("Telegram message rejected: chat_id not allowed", extra={"chat_id": chat_id})
+        try:
+            TelegramAdapter().send_message(chat_id, "Доступ заборонено.")
+        except Exception:
+            pass
+        return
+    source_id = str(message.get("message_id", ""))
+    if text == "/start":
+        try:
+            TelegramAdapter().send_message(chat_id, "Vertep Bot підключений.\nНадішліть тему для створення контенту.")
+        except Exception:
+            pass
+        return
+    _handle_telegram_message(chat_id, source_id, text, message)
+
+
+@app.get("/api/telegram/status")
+def telegram_status():
+    from core.first_run import ensure_secret_store
+    secrets = ensure_secret_store()
+    token_configured = bool(secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN"))
+    public_url = os.getenv("PUBLIC_URL", "")
+    webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    allowed_chat_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
+    admin_chat_ids = os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+    polling_enabled = os.getenv("TELEGRAM_POLLING_ENABLED", "true").lower() == "true"
+    polling_status = "stopped"
+    bot_username = None
+    last_update_id = None
+    last_message_at = None
+    if telegram_polling_service is not None:
+        polling_status = "running" if telegram_polling_service.running else "stopped"
+        bot_username = _get_bot_username()
+        last_update_id = telegram_polling_service.last_update_id
+        last_message_at = telegram_polling_service.last_message_at
+    return {
+        "configured": token_configured,
+        "webhook_url": f"{public_url.rstrip('/')}/api/telegram/webhook" if public_url else "",
+        "public_url": public_url,
+        "webhook_secret_configured": bool(webhook_secret),
+        "allowed_chat_ids": allowed_chat_ids,
+        "admin_chat_ids": admin_chat_ids,
+        "polling_enabled": polling_enabled,
+        "polling_status": polling_status,
+        "bot_username": bot_username,
+        "last_update_id": last_update_id,
+        "last_message_at": last_message_at,
+    }
+
+
+def _get_bot_username() -> str | None:
+    try:
+        adapter = TelegramAdapter()
+        if not adapter.configured():
+            return None
+        result = adapter.get_me()
+        if result.get("ok"):
+            return result.get("result", {}).get("username")
+    except Exception:
+        pass
+    return None
+
+
+def _build_telegram_status() -> dict:
+    from core.first_run import ensure_secret_store
+    secrets = ensure_secret_store()
+    token_configured = bool(secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN"))
+    if not token_configured:
+        return {"enabled": False, "mode": "polling", "status": "not_configured"}
+    polling_enabled = os.getenv("TELEGRAM_POLLING_ENABLED", "true").lower() == "true"
+    status = "running" if telegram_polling_service and telegram_polling_service.running else "stopped"
+    if telegram_polling_service and telegram_polling_service.last_error:
+        status = "error"
+    return {
+        "enabled": True,
+        "mode": "polling" if polling_enabled else "disabled",
+        "status": status,
+        "bot_username": _get_bot_username(),
+        "last_update_id": telegram_polling_service.last_update_id if telegram_polling_service else None,
+        "last_message_at": telegram_polling_service.last_message_at if telegram_polling_service else None,
+    }
+
+
+@app.get("/api/telegram/bot-info")
+def telegram_bot_info():
+    from core.first_run import ensure_secret_store
+    secrets = ensure_secret_store()
+    token_configured = bool(secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN"))
+    if not token_configured:
+        return {"configured": False}
+    adapter = TelegramAdapter()
+    try:
+        me = adapter.get_me()
+        if not me.get("ok"):
+            return {"configured": True, "ok": False, "error": me.get("description")}
+        return {
+            "configured": True,
+            "ok": True,
+            "bot_username": me.get("result", {}).get("username"),
+            "bot_id": me.get("result", {}).get("id"),
+        }
+    except (httpx.HTTPError, RuntimeError) as error:
+        return {"configured": True, "ok": False, "error": str(error)}
 
 @app.post("/api/jobs/{job_id}/publish")
 def publish_job(job_id: str, channels: list[str] | None = None):
@@ -1703,9 +1849,9 @@ def system_status():
                                                   for job in store.jobs.values()),
                               "active_scenes": sum(scene.status == StageStatus.RUNNING
                                                    for job in store.jobs.values() for scene in job.scenes)},
-            "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
-            "telegram": "CONFIGURED" if os.getenv("TELEGRAM_BOT_TOKEN") else "NOT CONFIGURED",
-            "update": update_status(), "workers": workers()}
+             "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
+             "telegram": _build_telegram_status(),
+             "update": update_status(), "workers": workers()}
 
 @app.get("/status")
 def status_page():
