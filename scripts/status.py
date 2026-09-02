@@ -1,4 +1,5 @@
 import json
+import html
 import os
 import subprocess
 import sys
@@ -34,7 +35,9 @@ if orchestration:
     print(f"Orchestration  jobs={orchestration.get('active_jobs', 0)} scenes={orchestration.get('active_scenes', 0)}")
 update = status.get("update", {})
 if update:
-    print(f"Update         {update.get('state', 'UNKNOWN')} {update.get('message', '')}".rstrip())
+    message = html.unescape(str(update.get("message", "")))
+    summary = next((line.strip() for line in reversed(message.splitlines()) if line.strip()), "")
+    print(f"Update         {update.get('state', 'UNKNOWN')} {summary}".rstrip())
 for worker in status.get("workers", []):
     print(f"{worker.get('node_name','worker'):14} {worker.get('status')} {worker.get('gpu_name')} {worker.get('free_vram_mb', worker.get('vram_mb', 0))} MB")
 if "worker" in role.lower():

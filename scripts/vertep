@@ -41,7 +41,6 @@ sync_host_runtime(){
     install -m 0640 "$release_root/config/node_roles.json" "$ROOT/config/node_roles.json"
   fi
   install -m 0640 "$release_root/VERSION" "$ROOT/VERSION"
-  ln -sfn "$ROOT/scripts/vertep" /usr/local/bin/vertep
 }
 update_progress(){
   [[ -n "${VERTEP_UPDATE_STATUS_FILE:-}" && -f "${VERTEP_UPDATE_STATUS_FILE}" ]] || return 0

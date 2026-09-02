@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import html
 import json
 import os
 import re
@@ -74,7 +75,9 @@ def run(command: list[str], root: Path, extra_env: dict[str, str] | None = None)
                                 timeout=int(os.getenv("UPDATE_TIMEOUT_SECONDS", "3600")),
                                 env={**os.environ, **(extra_env or {})})
     except subprocess.CalledProcessError as error:
-        detail = ((error.stdout or "") + (error.stderr or "")).strip()[-4000:]
+        detail = html.unescape(
+            ((error.stdout or "") + (error.stderr or "")).strip()[-4000:]
+        )
         raise RuntimeError(detail or f"Command failed with exit code {error.returncode}") from error
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"Command timed out after {error.timeout} seconds") from error

@@ -177,6 +177,12 @@ def test_update_applies_migrations_before_core_rebuild():
     assert script.count('up -d --force-recreate --no-deps --remove-orphans') == 2
 
 
+def test_status_shows_the_final_update_error_without_html_noise():
+    status_script = open("scripts/status.py", encoding="utf-8").read()
+    assert "html.unescape" in status_script
+    assert "reversed(message.splitlines())" in status_script
+
+
 def test_node_registration_push_token_has_forward_migration():
     root = Path(__file__).parents[1]
     migration = (root / "db" / "009_node_registration_push_token.sql").read_text(encoding="utf-8")
