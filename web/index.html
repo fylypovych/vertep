@@ -146,6 +146,35 @@
         border-left: 4px solid var(--line);
         background: #f7f4ec;
       }
+      #script-fields label, #script-fields fieldset {
+        display: block;
+        margin: 6px 0;
+      }
+      #script-fields input, #script-fields textarea {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .scene-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin: 6px 0;
+        padding: 8px;
+        border: 1px solid var(--line);
+        background: #fdfbf7;
+      }
+      .scene-row input, .scene-row textarea {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .scene-row button {
+        justify-self: start;
+      }
+      @media (max-width: 760px) {
+        .scene-row {
+          grid-template-columns: 1fr;
+        }
+      }
       dialog {
         width: min(780px, 94vw);
         border: 0;
@@ -342,12 +371,17 @@
           max="10" /></label
       ><label>Персонаж<input id="editcharacter" /></label
       ><label>Workflow<input id="editworkflow" /></label
-      ><label
-        >Сценарій JSON<textarea
-          id="editscript"
-          style="min-height: 190px; font-family: monospace"
-        ></textarea></label
-      ><button onclick="saveJob()">Зберегти</button
+      ><fieldset id="script-fields">
+        <legend>Сценарій</legend>
+        <label>Заголовок<input id="script-title" /></label>
+        <label>Опис<textarea id="script-description" rows="2"></textarea></label>
+        <label>Хештеги<input id="script-hashtags" placeholder="#tag1 #tag2" /></label>
+        <label>Загальне озвучення<textarea id="script-voiceover" rows="2"></textarea></label>
+        <h3>Сцени</h3>
+        <div id="scenes-list"></div>
+        <button type="button" id="add-scene" class="secondary">Додати сцену</button>
+      </fieldset>
+      <button onclick="saveJob()">Зберегти</button
       ><button class="secondary" onclick="jobdialog.close()">Закрити</button
       ><a id="exportlink"><button class="secondary">Експорт ZIP</button></a>
       <h3>Етапи та сцени</h3>
@@ -700,6 +734,36 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         });
         refresh();
       }
+      window._jobScenes = [];
+      function renderScenes() {
+        const list = $("#scenes-list");
+        if (!list) return;
+        list.innerHTML = window._jobScenes
+          .map(
+            (scene, index) =>
+              `<div class="scene-row" data-scene-index="${index}">
+                <div>
+                  <label>Промпт сцени<textarea rows="2" data-field="prompt">${esc(scene.prompt || "")}</textarea></label>
+                  <label>Відео промпт<textarea rows="2" data-field="video_prompt">${esc(scene.video_prompt || "")}</textarea></label>
+                </div>
+                <div>
+                  <label>Озвучення<textarea rows="2" data-field="voiceover">${esc(scene.voiceover || "")}</textarea></label>
+                  <label>Тривалість (с)<input type="number" min="1" max="600" data-field="duration" value="${Number(scene.duration) || 5}" /></label>
+                  <button type="button" class="danger" onclick="removeScene(${index})">Видалити сцену</button>
+                </div>
+              </div>`,
+          )
+          .join("");
+      }
+      window.addScene = function () {
+        window._jobScenes.push({ prompt: "", video_prompt: "", voiceover: "", duration: 5 });
+        renderScenes();
+      };
+      window.removeScene = function (index) {
+        window._jobScenes.splice(index, 1);
+        renderScenes();
+      };
+      document.querySelector("#add-scene")?.addEventListener("click", window.addScene);
       async function openJob(id) {
         editing = jobs.find((j) => j.job_id === id);
         const items = await api(`/api/jobs/${id}/assets`);
@@ -707,7 +771,19 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         $("#editpriority").value = editing.priority;
         $("#editcharacter").value = editing.character_id;
         $("#editworkflow").value = editing.workflow || "";
-        $("#editscript").value = JSON.stringify(editing.script || {}, null, 2);
+        const script = editing.script || {};
+        $("#script-title").value = script.title || "";
+        $("#script-description").value = script.description || "";
+        $("#script-hashtags").value = (script.hashtags || []).join(" ");
+        $("#script-voiceover").value = script.voiceover || "";
+        window._jobScenes = (script.scenes || []).map((scene) => ({
+          prompt: scene.prompt || "",
+          video_prompt: scene.video_prompt || "",
+          voiceover: scene.voiceover || "",
+          duration: scene.duration || 5,
+        }));
+        if (!window._jobScenes.length) window._jobScenes.push({ prompt: "", video_prompt: "", voiceover: "", duration: 5 });
+        renderScenes();
         $("#timeline").innerHTML =
           Object.values(editing.stages || {})
             .map(
@@ -736,13 +812,27 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         $("#jobdialog").showModal();
       }
       async function saveJob() {
-        let script;
-        try {
-          script = JSON.parse($("#editscript").value);
-        } catch (e) {
-          alert("Некоректний JSON");
-          return;
-        }
+        const hashtags = $("#script-hashtags").value
+          .split(/\s+/)
+          .map((value) => value.trim())
+          .filter(Boolean);
+        const scenes = [];
+        document.querySelectorAll("#scenes-list .scene-row").forEach((row) => {
+          const index = row.dataset.sceneIndex;
+          scenes.push({
+            prompt: row.querySelector('[data-field="prompt"]')?.value || "",
+            video_prompt: row.querySelector('[data-field="video_prompt"]')?.value || "",
+            voiceover: row.querySelector('[data-field="voiceover"]')?.value || "",
+            duration: parseFloat(row.querySelector('[data-field="duration"]')?.value || 5),
+          });
+        });
+        const script = {
+          title: $("#script-title").value.trim(),
+          description: $("#script-description").value.trim(),
+          hashtags,
+          voiceover: $("#script-voiceover").value.trim(),
+          scenes: scenes.length ? scenes : [{ prompt: $("#script-title").value.trim() || editing.topic || "Новий сценарій", video_prompt: "", voiceover: "", duration: 5 }],
+        };
         await api("/api/jobs/" + editing.job_id, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -942,11 +1032,13 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
       }
       async function checkTelegramBot() {
         try {
-          const r = await api("/api/telegram/bot-info");
-          if (r.ok && r.bot_username) {
-            alert(`Telegram: OK\nBot: @${r.bot_username}\nPolling: RUNNING`);
+          const [info, status] = await Promise.all([api("/api/telegram/bot-info"), api("/api/status")]);
+          const telegramStatus = status?.telegram?.status || "unknown";
+          if (info.ok && info.bot_username) {
+            const label = telegramStatus === "running" ? "OK" : "ПОМИЛКА";
+            alert(`Telegram: ${label}\nBot: @${info.bot_username}\nPolling: ${telegramStatus.toUpperCase()}`);
           } else {
-            alert(`Telegram: ERROR\n${r.error || "Невідома помилка"}`);
+            alert(`Telegram: ERROR\n${info.error || "Невідома помилка"}`);
           }
         } catch (e) {
           alert(`Telegram: ERROR\n${e.message}`);
