@@ -165,7 +165,8 @@ jobs:
         run: |
           version="$(tr -d '\r\n' < VERSION)"
           remote_main="$(git ls-remote origin refs/heads/main | cut -f1)"
-          test "$remote_main" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" "$remote_main"
           tagged_commit="$(git ls-remote origin "refs/tags/$version^{}" | cut -f1)"
           if [ -n "$tagged_commit" ]; then
             test "$tagged_commit" = "$GITHUB_SHA"

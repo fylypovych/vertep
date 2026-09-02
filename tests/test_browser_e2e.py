@@ -33,6 +33,13 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        page.route("**/api/status", lambda route: route.fulfill(json={
+            "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
+            "system": {"state": "NORMAL"},
+            "queue": {"depth": 0, "inflight": 0, "dead_letter": 0},
+            "scheduler": {"pending": 0, "next_run": None},
+            "orchestration": {"active_jobs": 0, "active_scenes": 0},
+        }))
         page.goto(BASE_URL)
         expect(page.locator("#health")).to_contain_text("Ядро працює")
         expect(page.locator("#dashboard .task-composer")).to_have_count(0)
@@ -107,6 +114,13 @@ def test_friendly_queue_workflow_and_core_role_controls():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        page.route("**/api/status", lambda route: route.fulfill(json={
+            "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
+            "system": {"state": "NORMAL"},
+            "queue": {"depth": 0, "inflight": 0, "dead_letter": 0},
+            "scheduler": {"pending": 0, "next_run": None},
+            "orchestration": {"active_jobs": 0, "active_scenes": 0},
+        }))
         page.goto(BASE_URL)
 
         page.locator('#nav button[data-panel="queue"]').click()

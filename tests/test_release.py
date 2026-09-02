@@ -83,3 +83,4 @@ def test_release_is_prepared_once_and_ci_never_commits_to_main():
     assert "git commit" not in workflow
     assert "HEAD:main" not in workflow
     assert 'git push origin "refs/tags/$version"' in workflow
+    assert 'git merge-base --is-ancestor "$GITHUB_SHA" "$remote_main"' in workflow
