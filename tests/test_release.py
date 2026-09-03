@@ -22,23 +22,26 @@ def test_release_version_is_strictly_sequential():
     assert release.next_version(["0.0.99.99"]) == "0.1.0.0"
 
 
-def test_known_versions_include_untagged_release_metadata(tmp_path, monkeypatch):
+def test_known_versions_with_both_formats(tmp_path, monkeypatch):
     release = load_release_module()
     (tmp_path / "VERSION").write_text("0.0.0.5\n", encoding="utf-8")
     (tmp_path / "CHANGELOG.md").write_text(
-        "# Changelog\n\n## 0.0.0.3 - 2026-08-25\n", encoding="utf-8"
+        "# Changelog\n\n## 0.0.0.3 - 2026-08-25\n"
+        "## ПРАВИЛЬНА НАЗВА: 0.0.0.4\n\n- Виправлено помилку.\n\n"
+        "## ПРАВИЛЬНА НАЗВА: 0.0.0.6\n\n- Додано функцію.\n",
+        encoding="utf-8"
     )
     release_dir = tmp_path / "releases"
-    release_dir.mkdir()
-    (release_dir / "0.0.0.4.md").write_text("release", encoding="utf-8")
+    release_dir.mkdir(exist_ok=True)
+    (release_dir / "0.0.0.2.md").write_text("release", encoding="utf-8")
     monkeypatch.setattr(release, "git", lambda _root, *args: (
-        "v0.0.0.1" if args[:2] == ("tag", "--list") else "0.0.0.2"
+        "v0.0.0.1" if args[:2] == ("tag", "--list") else "0.0.0.7"
     ))
 
     versions = release.known_versions(tmp_path)
 
-    assert set(versions) == {"v0.0.0.1", "0.0.0.2", "0.0.0.3", "0.0.0.4", "0.0.0.5"}
-    assert release.next_version(versions) == "0.0.0.6"
+    assert set(versions) == {"v0.0.0.1", "0.0.0.2", "0.0.0.3", "0.0.0.4", "0.0.0.5", "0.0.0.6", "0.0.0.7"}
+    assert release.next_version(versions) == "0.0.0.8"
 
 
 def test_release_moves_unreleased_notes_to_version_section():

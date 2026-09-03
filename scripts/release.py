@@ -65,7 +65,7 @@ def known_versions(root: Path) -> list[str]:
     if changelog_path.exists():
         versions.extend(
             re.findall(
-                r"(?m)^## (\d+\.\d+\.\d+\.\d+)(?:\s+-|$)",
+                r"(?m)^## (?:ПРАВИЛЬНА НАЗВА: )?(\d+\.\d+\.\d+\.\d+)(?:\s+-|$)",
                 changelog_path.read_text(encoding="utf-8"),
             )
         )
@@ -84,10 +84,8 @@ def unreleased_notes(changelog: str) -> list[str]:
 
 
 def version_notes(changelog: str, version: str) -> list[str]:
-    match = re.search(
-        rf"(?ms)^## {re.escape(version)}(?:\s+-[^\n]*)?\s*\n(.*?)(?=^## |\Z)",
-        changelog,
-    )
+    pattern = rf"(?ms)^## (?:ПРАВИЛЬНА НАЗВА: )?{re.escape(version)}(?:\s+-)?\s*\n(.*?)(?=^## |\Z)"
+    match = re.search(pattern, changelog)
     if not match:
         return []
     return [line.strip() for line in match.group(1).splitlines()
