@@ -48,8 +48,10 @@ from .system_state import (SystemState, dispatch_allowed, get_system_state,
                            jobs_may_be_created, operation_allowed, set_system_state)
 from .health_checks import run_checks as _run_health_checks, health_status as _health_status
 from .first_run import (complete_setup, configured_user, is_configured, session_secret,
-                       setup_status, config_root, integration_secret_status,
-                       set_integration_secret, installation)
+                        setup_status, config_root, integration_secret_status,
+                        set_integration_secret, installation)
+from .telegram_store import (get_admin_chat_ids, get_allowed_chat_ids, is_allowed_chat,
+                             is_admin_chat, load_telegram_settings, save_telegram_settings)
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
@@ -89,6 +91,7 @@ setup_request_windows: dict[str, deque[float]] = defaultdict(deque)
 last_maintenance = 0.0
 result_locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
 _telegram_pending_brands: dict[str, dict] = {}
+_telegram_pending_character: dict[str, dict] = {}
 telegram_polling_service: TelegramPollingService | None = None
 
 def _serialize_job_result(function):
@@ -1305,8 +1308,8 @@ def telegram_webhook(update: dict, request: Request):
     if not text:
         raise HTTPException(400, "Telegram update has no text")
     chat_id = str(message.get("chat", {}).get("id", "unknown"))
-    allowed = {item.strip() for item in os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").split(",") if item.strip()}
-    admin_ids = {item.strip() for item in os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "").split(",") if item.strip()}
+    allowed = get_allowed_chat_ids()
+    admin_ids = set(get_admin_chat_ids())
     if allowed and chat_id not in allowed and chat_id not in admin_ids:
         raise HTTPException(403, "Telegram chat is not allowed")
     source_id = str(message.get("message_id", ""))
@@ -1314,11 +1317,11 @@ def telegram_webhook(update: dict, request: Request):
 
 
 def _admin_chat_ids() -> list[str]:
-    return [item.strip() for item in os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "").split(",") if item.strip()]
+    return get_admin_chat_ids()
 
 
 def _is_admin_chat(chat_id: str) -> bool:
-    return chat_id in _admin_chat_ids()
+    return is_admin_chat(chat_id)
 
 
 def _handle_telegram_callback(callback: dict) -> dict:
@@ -1329,6 +1332,8 @@ def _handle_telegram_callback(callback: dict) -> dict:
 
     if action == "select_brand":
         return _handle_brand_selection(callback, chat_id, payload)
+    elif action == "select_character":
+        return _handle_character_selection(callback, chat_id, payload)
     elif action == "approve":
         return _handle_approve_job(callback, chat_id, payload)
     elif action == "reject":
@@ -1351,9 +1356,56 @@ def _handle_brand_selection(callback: dict, chat_id: str, brand_id: str) -> dict
     pending = _telegram_pending_brands.get(chat_id)
     if not pending:
         return TelegramAdapter().answer_callback(callback_id, "Сесію закрито. Почніть спочатку.")
-    job = _create_job_from_telegram(pending, brand_id)
-    del _telegram_pending_brands[chat_id]
+    TelegramAdapter().answer_callback(callback_id, f"Бренд обрано. Тепер оберіть персонажа.")
+    _telegram_pending_brands.pop(chat_id, None)
+    _telegram_pending_character[chat_id] = {"pending": pending, "brand_id": brand_id}
+    return _send_character_selection(chat_id, brand_id)
+
+
+def _send_character_selection(chat_id: str, brand_id: str) -> dict:
+    characters_root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
+    character_dirs = sorted(characters_root.glob("*"), key=lambda p: p.name)
+    characters = []
+    for char_dir in character_dirs:
+        char_config_path = char_dir / "character.json"
+        if char_config_path.exists():
+            try:
+                config = read_json(char_config_path)
+                characters.append({"id": char_dir.name, "name": config.get("name", char_dir.name)})
+            except (ValueError, OSError):
+                continue
+    if not characters:
+        character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
+        pending = _telegram_pending_character.get(chat_id, {}).get("pending", {})
+        job = _create_job_from_telegram(pending, brand_id, character_id)
+        _telegram_pending_character.pop(chat_id, None)
+        _send_approval_request(job)
+        TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: NEW\nПерсонажів не знайдено, використовується {character_id}.")
+        return job.model_dump(mode="json")
+    keyboard = {"inline_keyboard": [
+        [{"text": f"👤 {char['name']}", "callback_data": f"select_character:{char['id']}"}] for char in characters
+    ]}
+    TelegramAdapter().send_message(chat_id, "Оберіть персонажа для цього завдання:", keyboard)
+    return {"status": "character_selection", "brand_id": brand_id, "characters": [c["id"] for c in characters]}
+
+
+def _handle_character_selection(callback: dict, chat_id: str, character_id: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    pending_data = _telegram_pending_character.get(chat_id)
+    if not pending_data:
+        return TelegramAdapter().answer_callback(callback_id, "Сесію закрито. Почніть спочатку.")
+    pending = pending_data["pending"]
+    brand_id = pending_data["brand_id"]
+    _telegram_pending_character.pop(chat_id, None)
+    TelegramAdapter().answer_callback(callback_id, f"Персонаж {character_id} обрано. Створюю завдання…")
+    try:
+        load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
+    except Exception as error:
+        TelegramAdapter().answer_callback(callback_id, f"Помилка: невідомий персонаж {character_id}")
+        raise HTTPException(400, f"Unknown character: {character_id}") from error
+    job = _create_job_from_telegram(pending, brand_id, character_id)
     _send_approval_request(job)
+    TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: {job.status.value}\nОчікує затвердження.")
     TelegramAdapter().answer_callback(callback_id, f"Job {job.job_id} створено. Очікує затвердження.")
     return job.model_dump(mode="json")
 
@@ -1510,31 +1562,7 @@ def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: d
         except ValueError:
             continue
     if not brands:
-        character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
-        if text.startswith("/new "):
-            parts = text.split(maxsplit=2)
-            if len(parts) == 3:
-                character_id, text = parts[1], parts[2]
-        source = f"telegram:{chat_id}:{source_id or 'unknown'}"
-        if source_id and store.repository.has_telegram_update(chat_id, source_id):
-            return next((job for job in store.jobs.values() if job.source == source), {"duplicate": True})
-        for existing in store.jobs.values():
-            if existing.source == source:
-                return existing
-        try:
-            load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
-        except Exception as error:
-            raise HTTPException(400, f"Unknown character: {character_id}") from error
-        job = store.create(text, character_id, int(os.getenv("TELEGRAM_DEFAULT_PRIORITY", "5")), source)
-        if source_id:
-            store.repository.record_telegram_update(chat_id, source_id, message)
-        if attachments:
-            _save_telegram_attachments(job, message, store.root)
-        TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: NEW",
-                                       {"inline_keyboard": [[{"text": "Status", "callback_data": f"status:{job.job_id}"},
-                                                             {"text": "Cancel", "callback_data": f"cancel:{job.job_id}"}]]})
-        executor.submit(_prepare_and_dispatch, job)
-        return job
+        return _send_character_selection(chat_id, None)
     keyboard = {"inline_keyboard": [
         [{"text": f"📁 {brand.name}", "callback_data": f"select_brand:{brand.id}"}] for brand in brands
     ]}
@@ -1570,12 +1598,13 @@ def _save_telegram_attachments(job, message: dict, root: Path) -> None:
                 store.event(job, f"TELEGRAM DOWNLOAD FAILED: {error}")
 
 
-def _create_job_from_telegram(pending: dict, brand_id: str):
+def _create_job_from_telegram(pending: dict, brand_id: str, character_id: str | None = None):
     text = pending["text"]
     source_id = pending["source_id"]
     message = pending["message"]
     chat_id = message.get("chat", {}).get("id", "unknown")
-    character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
+    if character_id is None:
+        character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
     source = f"telegram:{chat_id}:{source_id or 'unknown'}"
     if source_id and store.repository.has_telegram_update(chat_id, source_id):
         existing = next((job for job in store.jobs.values() if job.source == source), None)
@@ -1592,7 +1621,7 @@ def _create_job_from_telegram(pending: dict, brand_id: str):
     job.brand_id = brand_id
     job.status = JobStatus.PENDING_APPROVAL
     job.approval_status = "pending"
-    store.update(job, JobStatus.PENDING_APPROVAL, f"PENDING_APPROVAL for brand {brand_id}")
+    store.update(job, JobStatus.PENDING_APPROVAL, f"PENDING_APPROVAL for brand {brand_id or 'default'}")
     if source_id:
         store.repository.record_telegram_update(chat_id, source_id, message)
     if pending.get("attachments"):
@@ -1607,16 +1636,13 @@ def telegram_status():
     token_configured = bool(secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN"))
     public_url = os.getenv("PUBLIC_URL", "")
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    allowed_chat_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
-    admin_chat_ids = os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "")
-    webhook_url = f"{public_url.rstrip('/')}/api/telegram/webhook" if public_url else ""
     return {
         "configured": token_configured,
-        "webhook_url": webhook_url,
+        "webhook_url": f"{public_url.rstrip('/')}/api/telegram/webhook" if public_url else "",
         "public_url": public_url,
         "webhook_secret_configured": bool(webhook_secret),
-        "allowed_chat_ids": allowed_chat_ids,
-        "admin_chat_ids": admin_chat_ids,
+        "allowed_chat_ids": load_telegram_settings().get("allowed_chat_ids", ""),
+        "admin_chat_ids": load_telegram_settings().get("admin_chat_ids", ""),
     }
 
 
@@ -1633,10 +1659,7 @@ def telegram_setup(body: TelegramSetup):
     admin_chat_ids = body.admin_chat_ids
     if webhook_secret:
         os.environ["TELEGRAM_WEBHOOK_SECRET"] = webhook_secret
-    if allowed_chat_ids is not None:
-        os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = allowed_chat_ids
-    if admin_chat_ids is not None:
-        os.environ["TELEGRAM_ADMIN_CHAT_IDS"] = admin_chat_ids
+    save_telegram_settings(allowed_chat_ids=allowed_chat_ids, admin_chat_ids=admin_chat_ids)
     if not public_url:
         return {"status": "saved", "message": "Settings saved; webhook not configured (PUBLIC_URL is not set)"}
     try:
@@ -1680,8 +1703,8 @@ def _process_telegram_update(update: dict) -> None:
         logger.debug("Telegram update skipped: no text")
         return
     chat_id = str(message.get("chat", {}).get("id", "unknown"))
-    allowed = {item.strip() for item in os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").split(",") if item.strip()}
-    admin_ids = {item.strip() for item in os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "").split(",") if item.strip()}
+    allowed = get_allowed_chat_ids()
+    admin_ids = set(get_admin_chat_ids())
     if allowed and chat_id not in allowed and chat_id not in admin_ids:
         logger.warning("Telegram message rejected: chat_id not allowed", extra={"chat_id": chat_id})
         try:
@@ -1706,8 +1729,9 @@ def telegram_status():
     token_configured = bool(secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN"))
     public_url = os.getenv("PUBLIC_URL", "")
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    allowed_chat_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "")
-    admin_chat_ids = os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+    settings = load_telegram_settings()
+    allowed_chat_ids = settings.get("allowed_chat_ids", "")
+    admin_chat_ids = settings.get("admin_chat_ids", "")
     polling_enabled = os.getenv("TELEGRAM_POLLING_ENABLED", "true").lower() == "true"
     polling_status = "stopped"
     bot_username = None
@@ -2066,7 +2090,9 @@ def local_roles_status():
     definitions = node_roles()
     plan = _read_optional_json(config_root() / "deployment-plan.json")
     deployment = _read_optional_json(config_root() / "deployment-status.json")
+    request = _read_optional_json(config_root() / "deployment-request.json")
     active = plan.get("additional_roles", []) if plan.get("role") == "core" else []
+    queued = bool(request)
     return {
         "node_role": plan.get("role") or installation().get("node_role") or "core",
         "active_roles": active,
@@ -2078,6 +2104,7 @@ def local_roles_status():
             for role, definition in definitions.items() if role != "core"
         ],
         "deployment": deployment,
+        "queued": queued,
     }
 
 

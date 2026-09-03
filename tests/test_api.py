@@ -1,3 +1,5 @@
+from unittest.mock import patch, MagicMock
+
 import time
 import base64
 import json
@@ -91,21 +93,43 @@ def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
     brand_root = tmp_path / "brands"
     brand_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
+    character_root = tmp_path / "characters"
+    character_root.mkdir(parents=True, exist_ok=True)
+    char_dir = character_root / "did_samogon"
+    char_dir_for_config = char_dir
+    char_dir_for_characterize = char_dir
+    char_dir_for_characterize.mkdir(parents=True, exist_ok=True)
+    (char_dir_for_characterize / "character.json").write_text(json.dumps({
+        "id": "did_samogon", "name": "Дід Самогонщик", "language": "uk", "enabled": True,
+        "system_prompt": "Ти дід самогонщик.", "voice": {"provider": "none"},
+        "visual": {"style": "documentary"}, "generation": {"workflow": "workflows/image/demo.json"},
+        "publishing": {"enabled": False, "channels": []},
+    }), encoding="utf-8")
+    monkeypatch.setenv("CHARACTERS_ROOT", str(character_root))
     client = TestClient(app)
     brand_dir = brand_root / "brand01"
     brand_dir.mkdir(parents=True, exist_ok=True)
     (brand_dir / "brand.json").write_text(json.dumps({"id": "brand01", "name": "Test", "publishing": {"enabled": False}}, ensure_ascii=False), encoding="utf-8")
-    update = {"message": {"message_id": 77, "text": "Telegram topic", "chat": {"id": 42}}}
-    first = client.post("/api/telegram/webhook", json=update).json()
-    assert first.get("status") == "brand_selection"
-    assert "brands" in first
-    callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
-                                    "message": {"chat": {"id": 42}, "message_id": 78}}}
-    second = client.post("/api/telegram/webhook", json=callback).json()
-    job_id = second.get("job_id") or second.get("job", {}).get("job_id")
-    assert job_id
-    third = client.post("/api/telegram/webhook", json=update).json()
-    assert third.get("status") == "brand_selection"
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.return_value = {"ok": True}
+    with patch("adapters.telegram.httpx.post", return_value=mock_response):
+        update = {"message": {"message_id": 77, "text": "Telegram topic", "chat": {"id": 42}}}
+        first = client.post("/api/telegram/webhook", json=update).json()
+        assert first.get("status") == "brand_selection"
+        assert "brands" in first
+        callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
+                                        "message": {"chat": {"id": 42}, "message_id": 78}}}
+        second = client.post("/api/telegram/webhook", json=callback).json()
+        assert second.get("status") == "character_selection"
+        assert second.get("brand_id") == "brand01"
+        character_callback = {"callback_query": {"id": "cb-2", "data": "select_character:did_samogon",
+                                                  "message": {"chat": {"id": 42}, "message_id": 79}}}
+        third = client.post("/api/telegram/webhook", json=character_callback).json()
+        job_id = third.get("job_id") or third.get("job", {}).get("job_id")
+        assert job_id
+        fourth = client.post("/api/telegram/webhook", json=update).json()
+        assert fourth.get("status") == "brand_selection"
     heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "gpu-test", "gpu_name": "stub"})
     assert heartbeat.status_code == 200
     assert any(worker["node_name"] == "gpu-test" for worker in client.get("/api/workers").json())
@@ -118,21 +142,41 @@ def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_pa
     brand_root = tmp_path / "brands"
     brand_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
+    character_root = tmp_path / "characters"
+    character_root.mkdir(parents=True, exist_ok=True)
+    char_dir = character_root / "did_samogon"
+    char_dir.mkdir(parents=True, exist_ok=True)
+    (char_dir / "character.json").write_text(json.dumps({
+        "id": "did_samogon", "name": "Дід Самогонщик", "language": "uk", "enabled": True,
+        "system_prompt": "Ти дід самогонщик.", "voice": {"provider": "none"},
+        "visual": {"style": "documentary"}, "generation": {"workflow": "workflows/image/demo.json"},
+        "publishing": {"enabled": False, "channels": []},
+    }), encoding="utf-8")
+    monkeypatch.setenv("CHARACTERS_ROOT", str(character_root))
     client = TestClient(app)
     brand_dir = brand_root / "brand01"
     brand_dir.mkdir(parents=True, exist_ok=True)
     (brand_dir / "brand.json").write_text(json.dumps({"id": "brand01", "name": "Test", "publishing": {"enabled": False}}, ensure_ascii=False), encoding="utf-8")
     update = {"message": {"message_id": 78001, "chat": {"id": 42}, "caption": "Тема з фото",
                           "photo": [{"file_id": "photo-file"}]}}
-    response = client.post("/api/telegram/webhook", json=update).json()
-    assert response.get("status") == "brand_selection"
-    callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
-                                    "message": {"chat": {"id": 42}, "message_id": 78002}}}
-    job = client.post("/api/telegram/webhook", json=callback).json()
-    inputs = [item for item in job.get("artifacts", []) if item.get("kind") == "input"]
-    assert inputs and inputs[0]["filename"] == "telegram.json"
-    assert inputs[0]["sha256"]
-    client.post(f"/api/jobs/{job['job_id']}/cancel")
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.return_value = {"ok": True}
+    with patch("adapters.telegram.httpx.post", return_value=mock_response):
+        response = client.post("/api/telegram/webhook", json=update).json()
+        assert response.get("status") == "brand_selection"
+        callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
+                                        "message": {"chat": {"id": 42}, "message_id": 78002}}}
+        brand_response = client.post("/api/telegram/webhook", json=callback).json()
+        assert brand_response.get("status") == "character_selection"
+        assert brand_response.get("brand_id") == "brand01"
+        character_callback = {"callback_query": {"id": "cb-2", "data": "select_character:did_samogon",
+                                                  "message": {"chat": {"id": 42}, "message_id": 78003}}}
+        job = client.post("/api/telegram/webhook", json=character_callback).json()
+        inputs = [item for item in job.get("artifacts", []) if item.get("kind") == "input"]
+        assert inputs and inputs[0]["filename"] == "telegram.json"
+        assert inputs[0]["sha256"]
+        client.post(f"/api/jobs/{job['job_id']}/cancel")
 
 
 def test_telegram_setup_saves_chat_ids_without_public_url(monkeypatch, tmp_path):

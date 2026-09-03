@@ -142,10 +142,8 @@ def check_release(root: Path) -> str:
     if git(root, "status", "--porcelain", "--untracked-files=no"):
         raise RuntimeError("Для публікації релізу відстежувані файли мають бути закомічені")
     subject = git(root, "log", "-1", "--pretty=%s")
-    prefix = f"{version} — "
-    if not subject.startswith(prefix):
-        raise RuntimeError(f"Назва основного коміту має починатися з «{prefix}»")
-    require_ukrainian(subject[len(prefix):], "Опис коміту")
+    if subject.strip() != version:
+        raise RuntimeError(f"Назва основного коміту має бути «{version}»")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     notes = version_notes(changelog, version)
     if not notes:
@@ -198,7 +196,7 @@ def prepare_release(root: Path, *, title: str, skip_tests: bool) -> str:
     git(root, "add", "-u")
     git(root, "add", str(release_path.relative_to(root)))
     scan_staged_secrets(root)
-    git(root, "commit", "-m", f"{version} — {title}")
+    git(root, "commit", "-m", version)
     check_release(root)
     return version
 

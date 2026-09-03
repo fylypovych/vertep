@@ -980,7 +980,7 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
           const pollingLabel = r.polling_enabled ? (r.polling_status === "running" ? "RUNNING" : "STOPPED") : "DISABLED";
           container.innerHTML = `
             <p><b>Токен</b> <span class="status">${r.configured ? "CONFIGURED" : "NOT CONFIGURED"}</span></p>
-            <label>TELEGRAM_BOT_TOKEN<input id="telegram-bot-token" type="password" value="" placeholder="8281141621:AAFtzEhnRPJD07YJbuyyQxBBP5GIleuP1d4"></label>
+            <label>TELEGRAM_BOT_TOKEN<input id="telegram-bot-token" type="password" value="${r.configured ? "•".repeat(8) : ""}" placeholder="8281141621:AAFtzEhnRPJD07YJbuyyQxBBP5GIleuP1d4"></label>
             <button onclick="saveTelegramToken()">Зберегти токен</button>
             <label>TELEGRAM_ALLOWED_CHAT_IDS<input id="telegram-allowed-chats" value="${esc(r.allowed_chat_ids || "")}" placeholder="через кому"></label>
             <label>TELEGRAM_ADMIN_CHAT_IDS<input id="telegram-admin-chats" value="${esc(r.admin_chat_ids || "")}" placeholder="через кому"></label>

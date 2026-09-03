@@ -48,6 +48,10 @@ def reset_in_process_api_state():
                 task_queue._cancellations.clear()
                 task_queue._dead_letters.clear()
                 task_queue._sequence = 0
+        # Очищення стану Telegram
+        from core.app import _telegram_pending_brands, _telegram_pending_character
+        _telegram_pending_brands.clear()
+        _telegram_pending_character.clear()
 
     reset()
     yield

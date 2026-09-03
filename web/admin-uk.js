@@ -478,16 +478,19 @@
   };
   const renderRoleSummary = async () => {
     const summary = document.querySelector("#core-role-summary");
+    const resultSpan = document.querySelector("#core-role-result");
     if (!summary) return;
     try {
       knownRoleStatus = await window.api("/api/system/roles");
       const active = knownRoleStatus.active_roles || [];
       const deployment = knownRoleStatus.deployment || {};
-      const statusText = deployment.state === "APPLYING" ? "Застосування змін…"
-        : deployment.state === "FAILED" ? `Помилка: ${deploymentErrorUk(deployment.error)}` : "";
-      document.querySelector("#core-role-result").textContent = statusText;
+      let statusText = "";
+      if (deployment.state === "APPLYING") statusText = "Застосування змін…";
+      else if (deployment.state === "FAILED") statusText = `Помилка: ${deploymentErrorUk(deployment.error)}`;
+      else if (knownRoleStatus.queued) statusText = "Заявка в черзі на застосування ролей...";
+      resultSpan.textContent = statusText;
       if (!active.length) {
-        summary.innerHTML = `<p class="muted">Базова роль <b>CORE</b> активна. Додаткові ролі не налаштовано.</p>`;
+        summary.innerHTML = `<p class="muted">Базова роль <b>CORE</b> активна. Додаткові ролі не налаштовто.</p>`;
         return;
       }
       summary.innerHTML = `<div class="role-summary-grid">${active.map((roleId) => {
