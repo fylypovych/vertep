@@ -10,3 +10,4 @@ runtime/
 .vertep-last-good
 *.pyc
 /.kilo
+/.vscode
