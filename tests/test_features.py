@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from adapters.ffmpeg import FFmpegAdapter
 from core.app import app, store
-from adapters.llm import LLMAdapter
+from core.script_agent import ScriptAgent
 
 
 def wait_for(client, job_id, statuses=("READY", "FAILED")):
@@ -112,7 +112,7 @@ def test_duplicate_worker_result_is_idempotent(monkeypatch):
 
 def test_multiscene_job_fans_out_to_distinct_tasks(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
-    monkeypatch.setattr(LLMAdapter, "generate_script", lambda self, topic, system_prompt="": {
+    monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
         "title": topic, "scenes": [
             {"prompt": "first", "voiceover": "one", "duration": 1},
             {"prompt": "second", "voiceover": "two", "duration": 1},
@@ -171,7 +171,7 @@ def test_invalid_artifact_batch_is_not_partially_written(monkeypatch):
 def test_exhausted_scene_cancels_parallel_sibling(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("MAX_RETRIES", "1")
-    monkeypatch.setattr(LLMAdapter, "generate_script", lambda self, topic, system_prompt="": {
+    monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
         "title": topic, "scenes": [{"prompt": "first", "duration": 1},
                                      {"prompt": "second", "duration": 1}]})
     client = TestClient(app)
@@ -198,7 +198,7 @@ def test_exhausted_scene_cancels_parallel_sibling(monkeypatch):
 
 def test_parallel_results_trigger_single_assembly(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
-    monkeypatch.setattr(LLMAdapter, "generate_script", lambda self, topic, system_prompt="": {
+    monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
         "title": topic, "scenes": [{"prompt": "first", "duration": .2},
                                      {"prompt": "second", "duration": .2}]})
     client = TestClient(app)

@@ -270,25 +270,7 @@ def worker_status(metrics: dict, require_gpu: bool, busy: bool = False) -> str:
 
 def execute_task(adapter: ComfyUIAdapter, task: dict, node_name: str) -> dict:
     try:
-        if task.get("task", "image") in {"text", "voice", "publish", "backup"}:
-            artifacts = execute_role_task(configured_role(), task)
-            return {"job_id": task["job_id"], "task_id": task["task_id"],
-                    "node_name": node_name, "success": True,
-                    "filename": artifacts[0]["filename"], "artifacts": artifacts}
-        scenes = (task.get("script") or {}).get("scenes") or [{"prompt": task["topic"]}]
-        artifacts = []
-        for index, scene in enumerate(scenes, 1):
-            task_type = task.get("task", "image")
-            if hasattr(adapter, "generate_output"):
-                data, filename, kind = adapter.generate_output(task["workflow"],
-                                                               scene.get("prompt") or task["topic"], task_type)
-            else:
-                data, filename = adapter.generate(task["workflow"], scene.get("prompt") or task["topic"])
-                kind = "image"
-            suffix = os.path.splitext(filename)[1] or ".png"
-            scene_name = task.get("scene_id") if len(scenes) == 1 and task.get("scene_id") else f"scene-{index:03d}"
-            artifacts.append({"filename": f"{scene_name}{suffix}", "kind": kind,
-                              "data_base64": base64.b64encode(data).decode("ascii")})
+        artifacts = execute_role_task(configured_role(), task)
         images = [{"filename": item["filename"], "image_base64": item["data_base64"]}
                   for item in artifacts if item["kind"] == "image"]
         return {"job_id": task["job_id"], "task_id": task["task_id"], "node_name": node_name, "success": True,

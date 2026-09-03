@@ -5,6 +5,7 @@ import json
 import os
 
 import httpx
+from adapters.comfyui import ComfyUIAdapter
 
 
 def _artifact(filename: str, kind: str, data: bytes) -> dict:
@@ -124,10 +125,55 @@ def execute_backup(task: dict) -> list[dict]:
                       json.dumps(receipt, sort_keys=True).encode("utf-8"))]
 
 
+def execute_image(task: dict) -> list[dict]:
+    adapter = ComfyUIAdapter()
+    workflow = task.get("workflow") or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json")
+    topic = task.get("topic") or task.get("prompt") or ""
+    scenes = (task.get("script") or {}).get("scenes")
+    if scenes:
+        artifacts = []
+        for index, scene in enumerate(scenes, 1):
+            data, filename, kind = adapter.generate_output(workflow, scene.get("prompt") or topic, "image")
+            if kind != "image":
+                raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
+            artifacts.append(_artifact(f"scene-{index:03d}{Path(filename).suffix or '.png'}", "image", data))
+        return artifacts
+    data, filename, kind = adapter.generate_output(workflow, topic, "image")
+    if kind != "image":
+        raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
+    return [_artifact(filename, "image", data)]
+
+
+def execute_video(task: dict) -> list[dict]:
+    adapter = ComfyUIAdapter()
+    workflow = task.get("workflow") or os.getenv("COMFYUI_DEFAULT_VIDEO_WORKFLOW", "")
+    topic = task.get("topic") or task.get("prompt") or ""
+    if workflow:
+        try:
+            data, filename, kind = adapter.generate_output(workflow, topic, "video")
+            if kind != "video":
+                raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
+            return [_artifact(filename, "video", data)]
+        except RuntimeError as error:
+            if "no synthetic video workflow" not in str(error):
+                raise
+    scenes = (task.get("script") or {}).get("scenes") or [{"prompt": topic}]
+    artifacts = []
+    for index, scene in enumerate(scenes, 1):
+        scene_data, scene_filename, kind = adapter.generate_output(
+            task.get("workflow") or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json"),
+            scene.get("prompt") or topic, "image")
+        if kind != "image":
+            raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
+        artifacts.append(_artifact(f"scene-{index:03d}{Path(scene_filename).suffix or '.png'}", "image", scene_data))
+    return artifacts
+
+
 EXECUTORS = {"text": execute_text, "voice": execute_voice,
-             "publish": execute_publisher, "backup": execute_backup}
+             "publish": execute_publisher, "backup": execute_backup,
+             "image": execute_image, "video": execute_video}
 ROLE_TASKS = {"text": {"text"}, "voice": {"voice"}, "publisher": {"publish"},
-              "backup": {"backup"}}
+              "backup": {"backup"}, "gpu": {"image", "video"}}
 
 
 def execute_role_task(role: str, task: dict) -> list[dict]:
