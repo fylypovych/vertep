@@ -69,7 +69,7 @@ def test_runtime_version_comes_from_version_file():
 
 def test_release_is_prepared_once_and_ci_never_commits_to_main():
     script = Path("scripts/release.py").read_text(encoding="utf-8")
-    assert 'git(root, "commit", "-m", f"{version} — {title}")' in script
+    assert 'git(root, "commit", "-m", version)' in script
     assert "release_path.write_text" in script
     assert "scan_staged_secrets" in script
     assert 'git(root, "add", "-A")' not in script
