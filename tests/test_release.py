@@ -50,7 +50,7 @@ def test_release_moves_unreleased_notes_to_version_section():
     notes = release.unreleased_notes(source)
     result = release.release_changelog(source, "0.0.0.2", notes)
     assert notes == ["- Додано функцію.", "- Виправлено помилку."]
-    assert "## Unreleased\n\n## 0.0.0.2" in result
+    assert "## Unreleased\n\n## ПРАВИЛЬНА НАЗВА: 0.0.0.2" in result
     assert result.count("- Додано функцію.") == 1
 
 
@@ -79,6 +79,9 @@ def test_release_is_prepared_once_and_ci_never_commits_to_main():
     assert 'git(root, "add", "-u")' in script
     assert '"--untracked-files=no"' in script
     assert 'git(root, "tag", "-a"' not in script
+    assert "--title" not in script
+    assert 'git(root, "push", "origin", "main")' in script
+    assert "--ignore=tests/test_browser_e2e.py" in script
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch" in workflow
     assert "contents: write" in workflow
@@ -87,3 +90,85 @@ def test_release_is_prepared_once_and_ci_never_commits_to_main():
     assert "HEAD:main" not in workflow
     assert 'git push origin "refs/tags/$version"' in workflow
     assert 'git merge-base --is-ancestor "$GITHUB_SHA" "$remote_main"' in workflow
+
+
+def test_release_changelog_uses_correct_format():
+    release = load_release_module()
+    changelog = "# Changelog\n\n## Unreleased\n\n- Додано функцію.\n- Виправлено помилку.\n"
+    notes = ["- Додано функцію.", "- Виправлено помилку."]
+    result = release.release_changelog(changelog, "0.0.0.96", notes)
+    assert "## ПРАВИЛЬНА НАЗВА: 0.0.0.96" in result
+    assert "- Додано функцію." in result
+    assert "- Виправлено помилку." in result
+    assert "## 0.0.0.96 -" not in result
+
+
+def test_check_release_validates_first_line_of_release_notes(tmp_path, monkeypatch):
+    release = load_release_module()
+    version = "0.0.0.99"
+    (tmp_path / "VERSION").write_text(version + "\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## ПРАВИЛЬНА НАЗВА: {version}\n- Тестова зміна.\n",
+        encoding="utf-8",
+    )
+    release_dir = tmp_path / "releases"
+    release_dir.mkdir(exist_ok=True)
+    (release_dir / f"{version}.md").write_text(
+        f"# Vertep {version}\n\n- Тестова зміна.\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(release, "git", lambda _root, *args: (
+        "0.0.0.99" if args == ("log", "-1", "--pretty=%s") else
+        "" if args[:2] == ("status", "--porcelain") else
+        ""
+    ))
+    assert release.check_release(tmp_path) == version
+
+
+def test_check_release_rejects_wrong_first_line_in_release_notes(tmp_path, monkeypatch):
+    release = load_release_module()
+    version = "0.0.0.99"
+    (tmp_path / "VERSION").write_text(version + "\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## ПРАВИЛЬНА НАЗВА: {version}\n- Тестова зміна.\n",
+        encoding="utf-8",
+    )
+    release_dir = tmp_path / "releases"
+    release_dir.mkdir(exist_ok=True)
+    (release_dir / f"{version}.md").write_text(
+        f"# Release {version}\n\n- Тестова зміна.\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(release, "git", lambda _root, *args: (
+        version if args == ("log", "-1", "--pretty=%s") else
+        "" if args[:2] == ("status", "--porcelain") else
+        ""
+    ))
+    try:
+        release.check_release(tmp_path)
+        raise AssertionError("Версія в реліз-нотах має перевірятися строго")
+    except RuntimeError as error:
+        assert "неправильну версію" in str(error)
+
+
+def test_check_release_does_not_modify_repository(tmp_path, monkeypatch):
+    release = load_release_module()
+    version = "0.0.0.99"
+    (tmp_path / "VERSION").write_text(version + "\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## ПРАВИЛЬНА НАЗВА: {version}\n- Тестова зміна.\n",
+        encoding="utf-8",
+    )
+    release_dir = tmp_path / "releases"
+    release_dir.mkdir(exist_ok=True)
+    (release_dir / f"{version}.md").write_text(
+        f"# Vertep {version}\n\n- Тестова зміна.\n", encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(release, "git", lambda _root, *args: calls.append(args) or (
+        version if args == ("log", "-1", "--pretty=%s") else ""
+    ))
+    release.check_release(tmp_path)
+    for call in calls:
+        assert call[0] != "commit"
+        assert call[0] != "add"
+        assert call[0] != "push"
+        assert call[0] != "tag"

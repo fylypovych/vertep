@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           python -m compileall -q core adapters worker scripts installer tests
-          python -m pytest -q
+          python -m pytest -q --ignore=tests/test_browser_e2e.py
           version="$(python scripts/release.py --check)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 

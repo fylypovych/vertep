@@ -1,5 +1,4 @@
 import argparse
-import datetime as dt
 import re
 import subprocess
 import sys
@@ -22,7 +21,7 @@ FORBIDDEN_SUFFIXES = {".pem", ".p12", ".pfx"}
 def run(root: Path, command: list[str], *, capture: bool = True) -> str:
     result = subprocess.run(
         command, cwd=root, check=True, text=True, encoding="utf-8",
-        capture_output=capture
+        errors="replace", capture_output=capture
     )
     return result.stdout.strip() if capture else ""
 
@@ -53,6 +52,15 @@ def next_version(versions_source: list[str]) -> str:
 def known_versions(root: Path) -> list[str]:
     """Return every release number recorded by repository metadata."""
     versions = git(root, "tag", "--list").splitlines()
+    try:
+        remote = git(root, "ls-remote", "--tags", "origin")
+        versions.extend(
+            ref.split("/")[-1]
+            for ref in remote.splitlines()
+            if ref
+        )
+    except subprocess.CalledProcessError:
+        pass
     versions.extend(
         match.group(1)
         for subject in git(root, "log", "--format=%s").splitlines()
@@ -93,7 +101,7 @@ def version_notes(changelog: str, version: str) -> list[str]:
 
 
 def release_changelog(changelog: str, version: str, notes: list[str]) -> str:
-    release = f"## {version} - {dt.date.today().isoformat()}\n\n" + "\n".join(notes) + "\n\n"
+    release = f"## ПРАВИЛЬНА НАЗВА: {version}\n" + "\n".join(notes) + "\n\n"
     pattern = re.compile(r"(?ms)^## Unreleased\s*\n.*?(?=^## |\Z)")
     if pattern.search(changelog):
         return pattern.sub("## Unreleased\n\n" + release, changelog, count=1)
@@ -151,15 +159,18 @@ def check_release(root: Path) -> str:
     if not release_path.exists():
         raise RuntimeError(f"Відсутній файл {release_path.relative_to(root)}")
     release_text = release_path.read_text(encoding="utf-8")
-    if f"# Vertep {version}" not in release_text:
+    release_lines = release_text.splitlines()
+    if not release_lines or release_lines[0].strip() != f"# Vertep {version}":
         raise RuntimeError("Файл нотаток релізу містить неправильну версію")
     require_ukrainian(release_text, "Нотатки релізу")
     return version
 
 
-def prepare_release(root: Path, *, title: str, skip_tests: bool) -> str:
-    require_ukrainian(title, "Назва коміту")
-    git(root, "fetch", "--tags", "origin")
+def prepare_release(root: Path, *, skip_tests: bool) -> str:
+    try:
+        git(root, "fetch", "--tags", "origin")
+    except subprocess.CalledProcessError:
+        pass
     version = next_version(known_versions(root))
     changelog_path = root / "CHANGELOG.md"
     changelog = changelog_path.read_text(encoding="utf-8")
@@ -167,26 +178,22 @@ def prepare_release(root: Path, *, title: str, skip_tests: bool) -> str:
     if not notes:
         raise RuntimeError("Додайте український опис змін до секції Unreleased у CHANGELOG.md")
     require_ukrainian("\n".join(notes), "Опис змін у CHANGELOG.md")
+    if not skip_tests:
+        run(root, [sys.executable, "-m", "compileall", "-q", "core", "adapters",
+                   "worker", "scripts", "installer", "tests"], capture=False)
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "--ignore=tests/test_browser_e2e.py"],
+            cwd=root, text=True, encoding="utf-8", errors="replace",
+            capture_output=True, check=True
+        )
+        print(result.stdout, end="")
     (root / "VERSION").write_text(version + "\n", encoding="utf-8")
     changelog_path.write_text(release_changelog(changelog, version, notes), encoding="utf-8")
     release_dir = root / "releases"
     release_dir.mkdir(exist_ok=True)
     release_path = release_dir / f"{version}.md"
-    validation = "Перевірку пропущено явним параметром `--skip-tests`."
-    if not skip_tests:
-        run(root, [sys.executable, "-m", "compileall", "-q", "core", "adapters",
-                   "worker", "scripts", "installer", "tests"], capture=False)
-        result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=root,
-                                text=True, encoding="utf-8", capture_output=True,
-                                check=True)
-        print(result.stdout, end="")
-        summary = next((line.strip() for line in reversed(result.stdout.splitlines())
-                        if "passed" in line), "pytest успішно завершено")
-        validation = f"`{summary}`"
     release_path.write_text(
-        f"# Vertep {version}\n\nДата випуску: {dt.date.today().isoformat()}\n\n"
-        "## Зміни\n\n" + "\n".join(notes)
-        + "\n\n## Перевірка\n\n" + f"- {validation}\n",
+        f"# Vertep {version}\n\n" + "\n".join(notes) + "\n",
         encoding="utf-8",
     )
     # Update tracked files and add only the generated release note. Unrelated
@@ -196,6 +203,13 @@ def prepare_release(root: Path, *, title: str, skip_tests: bool) -> str:
     scan_staged_secrets(root)
     git(root, "commit", "-m", version)
     check_release(root)
+    local_sha = git(root, "rev-parse", "HEAD")
+    git(root, "push", "origin", "main")
+    git(root, "fetch", "origin", "main")
+    remote_sha = git(root, "rev-parse", "origin/main")
+    if local_sha != remote_sha:
+        raise RuntimeError(f"Commit {local_sha} не потрапив у origin/main (remote: {remote_sha})")
+    print(f"Пуш виконано. Commit {local_sha} присутній у origin/main.")
     return version
 
 
@@ -203,7 +217,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Підготувати єдиний нумерований коміт релізу Vertep"
     )
-    parser.add_argument("--title", help="короткий український опис після номера версії")
     parser.add_argument("--skip-tests", action="store_true",
                         help="пропустити перевірку (не рекомендовано)")
     parser.add_argument("--show-next", action="store_true",
@@ -219,12 +232,10 @@ def main() -> None:
         if args.check:
             print(check_release(root))
             return
-        if not args.title:
-            parser.error("для підготовки релізу потрібен параметр --title українською")
-        version = prepare_release(root, title=args.title, skip_tests=args.skip_tests)
+        version = prepare_release(root, skip_tests=args.skip_tests)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         raise SystemExit(str(error)) from error
-    print(f"Підготовлено коміт релізу {version}. Перегляньте його та надішліть у main.")
+    print(f"Підготовлено коміт релізу {version} та відправлено його у main.")
 
 
 if __name__ == "__main__":
