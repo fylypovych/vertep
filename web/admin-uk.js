@@ -135,9 +135,19 @@
 
   const taskComposer = document.querySelector("#dashboard .grid > .card:first-child");
   const jobsPanel = document.querySelector("#jobs");
-  if (taskComposer && jobsPanel) {
-    taskComposer.classList.add("task-composer");
-    jobsPanel.querySelector("h2")?.insertAdjacentElement("afterend", taskComposer);
+  if (jobsPanel && !jobsPanel.querySelector(".task-composer")) {
+    const composer = document.createElement("div");
+    composer.className = "card task-composer";
+    composer.innerHTML = `<h3>Нове завдання</h3>
+      <div class="field"><label>Тема<input id="topic" placeholder="Наприклад, Історія про діда Самогонщика"></label></div>
+      <label class="toggle"><input id="scheduled-toggle" type="checkbox"> Запланувати</label>
+      <input id="scheduled" type="datetime-local" style="margin-top:8px;display:none">
+      <div style="margin-top:10px"><button onclick="createJob()">Створити</button></div>`;
+    jobsPanel.querySelector("h2")?.insertAdjacentElement("afterend", composer);
+    composer.querySelector("#scheduled-toggle")?.addEventListener("change", (e) => {
+      const dt = composer.querySelector("#scheduled");
+      if (dt) dt.style.display = e.target.checked ? "" : "none";
+    });
   }
 
   const dialog = document.querySelector("#chardialog");
@@ -453,7 +463,15 @@
     card.className = "card";
     card.id = "core-role-card";
     card.innerHTML = `<h3>Локальні ролі головного вузла</h3>
-      <p class="muted">Керуйте функціями, які цей сервер виконує локально. Натисніть «Налаштувати ролі», щоб додати або вилучити ролі.</p>
+      <p class="muted">Керуйте функціями, які цей сервер виконує локально.</p>
+      <div id="core-role-options" class="role-options">
+        <label class="role-option"><input type="checkbox" value="gpu"><b>Генерація зображень (GPU)</b></label>
+        <label class="role-option"><input type="checkbox" value="text"><b>Генерація тексту</b></label>
+        <label class="role-option"><input type="checkbox" value="voice"><b>Синтез мовлення</b></label>
+        <label class="role-option"><input type="checkbox" value="publisher"><b>Публікація</b></label>
+        <label class="role-option"><input type="checkbox" value="backup"><b>Резервне копіювання</b></label>
+        <label class="role-option"><input type="checkbox" value="monitoring"><b>Моніторинг і журнали</b></label>
+      </div>
       <div id="core-role-summary" class="role-summary">Завантаження…</div>
       <button id="open-role-wizard" type="button">Налаштувати ролі</button> <span id="core-role-result" class="muted"></span>`;
     workersPanel.querySelector("#registration")?.insertAdjacentElement("afterend", card);
@@ -998,7 +1016,7 @@
       skeleton.classList.add("hidden");
       content.classList.remove("hidden");
     }
-    const count = (s) => jobs.filter((j) => j.status === s).length;
+    const count = (s) => (jobs || []).filter((j) => j.status === s).length;
     const onlineWorkers = (workers || []).filter((w) => w.status !== "OFFLINE").length;
     const offlineWorkers = (workers || []).filter((w) => w.status === "OFFLINE").length;
     $("#kpi-workers").textContent = (workers || []).length || "—";
@@ -1025,7 +1043,7 @@
     const unread = (alertRows || []).filter((x) => x.severity === "error").length;
     const badge = $("#notif-badge");
     if (badge) { badge.textContent = unread; badge.classList.toggle("hidden", unread === 0); }
-    document.querySelector("#version-label").textContent = `v${status?.version || "1.3.0"}`;
+    document.querySelector("#version-label").textContent = status?.version ? `v${status.version}` : "—";
   };
 
   const renderSystemStateCard = (status) => {
@@ -1214,7 +1232,7 @@
       modal.innerHTML = `<h2>Core Node Details</h2>
         <div class="node-details-grid">
           <div class="state-row"><span>Статус</span><b class="state-ok">Онлайн</b></div>
-          <div class="state-row"><span>Версія</span><b>${esc(status?.version || "1.3.0")}</b></div>
+          <div class="state-row"><span>Версія</span><b>${esc(status?.version || "—")}</b></div>
           <div class="state-row"><span>Режим</span><b>${esc(ukState(status?.system?.state || "NORMAL"))}</b></div>
           <div class="state-row"><span>База даних</span><b>${esc(status?.postgres || "—")}</b></div>
           <div class="state-row"><span>Черга</span><b>${esc(status?.redis || "—")}</b></div>
@@ -1249,63 +1267,6 @@
       alert("Перевірку запущено. Результати з'являться в журналі.");
     } catch (e) { alert(e.message); }
   };
-
-  const loadLogo = async () => {
-    const img = document.querySelector("#brand-logo");
-    const preview = document.querySelector("#settings-logo-preview");
-    const removeBtn = document.querySelector("#remove-logo-btn");
-    try {
-      const data = await api("/api/settings/logo");
-      if (data && data.saved) {
-        const blob = new Blob([""], { type: "image/png" });
-        const objectUrl = URL.createObjectURL(blob);
-        if (img) { img.src = "/api/settings/logo?" + new Date().getTime(); img.classList.remove("hidden"); }
-        if (preview) { preview.src = "/api/settings/logo?" + new Date().getTime(); preview.style.display = ""; }
-        if (removeBtn) removeBtn.style.display = "";
-        return;
-      }
-    } catch (e) {
-      // logo not found or error
-    }
-    if (img) { img.src = ""; img.classList.add("hidden"); }
-    if (preview) { preview.src = ""; preview.style.display = "none"; }
-    if (removeBtn) removeBtn.style.display = "none";
-  };
-  window.uploadLogo = async () => {
-    const input = document.querySelector("#logo-file");
-    const file = input?.files?.[0];
-    if (!file) { alert("Оберіть зображення"); return; }
-    try {
-      await api("/api/settings/logo", {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "image/png" },
-        body: file,
-      });
-      loadLogo();
-      const status = document.querySelector("#logo-status");
-      if (status) status.textContent = "Логотип збережено на сервері.";
-    } catch (e) {
-      alert("Не вдалося зберегти логотип: " + e.message);
-    }
-  };
-  window.removeLogo = async () => {
-    try {
-      await api("/api/settings/logo", { method: "DELETE" });
-      loadLogo();
-      const status = document.querySelector("#logo-status");
-      if (status) status.textContent = "Логотип видалено.";
-    } catch (e) {
-      alert("Не вдалося видалити логотип: " + e.message);
-    }
-  };
-  document.querySelector("#logo-file")?.addEventListener("change", () => {
-    const preview = document.querySelector("#settings-logo-preview");
-    const file = document.querySelector("#logo-file")?.files?.[0];
-    if (!file || !preview) return;
-    const reader = new FileReader();
-    reader.onload = () => { preview.src = reader.result; preview.style.display = ""; };
-    reader.readAsDataURL(file);
-  });
 
   const renderLicense = async () => {
     const target = document.querySelector("#license-card");
@@ -1453,7 +1414,6 @@
     await originalRenderDashboard(workers, status, jobs, dead, alertRows);
   };
 
-  loadLogo();
   renderLicense();
   setInterval(renderLicense, 30000);
 

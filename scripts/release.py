@@ -1,7 +1,9 @@
 import argparse
+import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -210,6 +212,87 @@ def prepare_release(root: Path, *, skip_tests: bool) -> str:
     if local_sha != remote_sha:
         raise RuntimeError(f"Commit {local_sha} не потрапив у origin/main (remote: {remote_sha})")
     print(f"Пуш виконано. Commit {local_sha} присутній у origin/main.")
+    return version
+
+
+def gh_run(root: Path, args: list[str]) -> str:
+    result = subprocess.run(
+        ["gh", *args],
+        cwd=root,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def gh_run_json(root: Path, args: list[str]) -> dict:
+    raw = gh_run(root, args)
+    if not raw:
+        return {}
+    return json.loads(raw)
+
+
+def verify_release(root: Path, version: str, expected_sha: str) -> None:
+    repo = gh_run(root, ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"])
+    tag_ref = f"repos/{repo}/git/ref/tags/{version}"
+    tag_data = gh_run_json(root, ["api", tag_ref])
+    tag_sha = tag_data.get("object", {}).get("sha")
+    tag_type = tag_data.get("object", {}).get("type")
+    if not tag_sha:
+        raise RuntimeError(f"Тег {version} не знайдено")
+    resolved_sha = tag_sha
+    if tag_type == "tag":
+        tag_object = gh_run_json(root, ["api", f"repos/{repo}/git/tags/{tag_sha}"])
+        resolved_sha = tag_object.get("object", {}).get("sha")
+        if not resolved_sha:
+            raise RuntimeError(f"Не вдалося розібрати annotated tag {version}")
+    if resolved_sha != expected_sha:
+        raise RuntimeError(
+            f"Тег {version} вказує на {resolved_sha}, очікувалось {expected_sha}"
+        )
+    release_data = gh_run_json(root, ["release", "view", version, "--json", "tagName,targetCommitish,assets"])
+    assets = [item.get("name", "") for item in release_data.get("assets", [])]
+    required = [
+        f"vertep-runtime-{version}.tar.gz",
+        f"manifest-{version}.json",
+        f"update-manifest-{version}.json",
+        f"SHA256SUMS-{version}",
+    ]
+    missing = [name for name in required if name not in assets]
+    if missing:
+        raise RuntimeError("Release не містить обов'язкових артефактів: " + ", ".join(missing))
+
+
+def orchestrate_release(
+    root: Path,
+    *,
+    skip_tests: bool,
+    timeout: int,
+    trigger,
+) -> str:
+    status = git(root, "status", "--porcelain", "--untracked-files=no")
+    if status:
+        version = prepare_release(root, skip_tests=skip_tests)
+    else:
+        version = check_release(root)
+    local_sha = git(root, "rev-parse", "HEAD")
+    run_id = trigger.run(root, workflow="Vertep Release", sha=local_sha)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = trigger.wait(root, run_id=run_id, timeout=min(30, max(1, deadline - time.time())))
+        if result.get("conclusion") in {"success", "failure", "cancelled"}:
+            break
+        time.sleep(5)
+    conclusion = result.get("conclusion", "timeout")
+    if conclusion == "failure":
+        failed = trigger.failed_jobs(root, run_id=run_id)
+        raise RuntimeError(f"Release workflow завершився з помилкою: {failed or conclusion}")
+    if conclusion == "cancelled":
+        raise RuntimeError("Release workflow було скасовано")
+    trigger.verify(root, version=version, expected_sha=local_sha)
     return version
 
 

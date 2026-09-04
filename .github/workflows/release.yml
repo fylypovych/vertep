@@ -160,6 +160,15 @@ jobs:
           cd "${{ runner.temp }}"
           sha256sum "vertep-runtime-$version.tar.gz" "manifest-$version.json" \
             "update-manifest-$version.json" > "SHA256SUMS-$version"
+      - name: Appliance release qualification
+        shell: bash
+        run: python scripts/qualify-release.py --root . --docker --output qualification.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appliance-qualification
+          path: qualification.json
+          if-no-files-found: error
       - name: Tag the prepared commit
         shell: bash
         run: |
