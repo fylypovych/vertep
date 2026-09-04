@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.0.97
+- Виправлено Web UI Dashboard відповідно до затвердженого референсу:
+- Виправлено критичну JS-помилку `Cannot set properties of null (setting 'onclick')` — замінено `$("#nav").onclick` на event delegation.
+- Виправлено `Assignment to constant variable` — `const renderDashboard` → `let`.
+- Вилучено 48 дублікатів `id` у HTML (видалено 5 дубльованих діалогів).
+- Sidebar: одна вертикальна колонка, фіксована ширина, вертикальний скрол, без горизонтального overflow.
+- Палітра: видалено бежево-кремову, додано холодний нейтральний світлий фон (#F8FAFC), білі картки, зелений primary (#10B981).
+- Додано CSS design tokens (--bg-page, --bg-surface, --primary, --success, --info, --warning, --danger, --purple тощо).
+- Header: Dashboard/Огляд ліворуч, статус/нотифікації/допомога/профіль праворуч.
+- KPI: 6 карток (Воркери, Активні завдання, Завдань у черзі, Навантаження, GPU, Стан).
+- Architecture: CORE + 6 груп вузлів з онлайн-лічильниками.
+- Job Status: donut chart + легенда.
+- Resources: CPU/RAM/Диск progress bars без бежевих відтінків.
+- Workers table: 8 колонок, pill-статуси, контекстне меню.
+- Right Sidebar: System State, Recent Activity, Quick Actions, License.
+- Responsive: брейкпойнти 1320/1100/760px.
+- Виправлено `scripts/release.py`: додано повну оркестрацію `реліз` (`--release`): пуш при брудному дереві, `gh workflow run`, polling очікування, верифікація tag/release/артефактів.
+- Додано тести для `реліз`: пуш→workflow, чисте дерево, failed workflow, verify_release з dereferencing annotated tag.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.0.96
 - Виправлено `scripts/release.py`: `release_changelog()` тепер створює блоки у форматі `## ПРАВИЛЬНА НАЗВА: <версія>` замість `## <версія> — <дата>`.
 - Додано remote tag discovery через `git ls-remote --tags origin` у `known_versions()`.

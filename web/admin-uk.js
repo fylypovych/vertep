@@ -989,7 +989,7 @@
     else el.classList.add("bad");
   };
 
-  const renderDashboard = async (workers, status, jobs, dead, alertRows) => {
+  let renderDashboard = async (workers, status, jobs, dead, alertRows) => {
     const dashboardPanel = document.querySelector("#dashboard");
     const skeleton = document.querySelector("#dashboard-skeleton");
     const content = document.querySelector("#dashboard-content");
@@ -1090,7 +1090,7 @@
     const setRes = (id, value, barId, metaId) => {
       const el = document.querySelector(id); if (!el) return;
       el.textContent = typeof value === "number" ? `${value}%` : value;
-      const bar = document.querySelector(barId); if (bar) { bar.style.width = `${Math.max(0, Math.min(100, Number(value) || 0))}%`; bar.className = "progress-fill" + (Number(value) > 85 ? " bad" : Number(value) > 60 ? " busy" : ""); }
+      const bar = document.querySelector(barId); if (bar) { bar.style.width = `${Math.max(0, Math.min(100, Number(value) || 0))}%`; bar.className = "progress-fill" + (Number(value) > 85 ? " danger" : Number(value) > 60 ? " warning" : ""); }
     };
     setRes("#res-cpu", status?.resources?.cpu_percent ?? status?.cpu_percent ?? "—", "#res-cpu-bar", "#res-cpu-meta");
     const ramVal = status?.resources?.ram_percent ?? status?.ram_percent ?? "—";
@@ -1346,8 +1346,8 @@
     if (error) error.classList.add("hidden");
     tbody.innerHTML = workers.map((w) => {
       const load = typeof w.load === "number" ? w.load : (typeof w.gpu_util === "number" ? w.gpu_util : 0);
-      const loadClass = load > 85 ? "bad" : load > 60 ? "busy" : "";
-      const statusClass = w.status === "ERROR" || w.status === "OFFLINE" ? "bad" : w.status === "BUSY" ? "busy" : w.status === "UPDATING" || w.status === "RECOVERING" ? "warn" : "";
+      const loadClass = load > 85 ? "danger" : load > 60 ? "warning" : "";
+      const statusClass = w.status === "ERROR" || w.status === "OFFLINE" ? "danger" : w.status === "BUSY" ? "warning" : w.status === "UPDATING" || w.status === "RECOVERING" ? "warn" : "";
       return `<tr>
         <td><b>${esc(w.node_name)}</b><br><small>${esc(w.node_id || "")}</small></td>
         <td>${esc(roleLabels[w.role] || w.role || "—")}</td>

@@ -7,14 +7,14 @@
     <title>Vertep — панель керування</title>
     <style>
       :root {
-        --ink: #17231f;
-        --muted: #66736e;
-        --paper: #f1eee5;
-        --card: #fffdf8;
-        --line: #d2cec2;
-        --accent: #d74f34;
-        --ok: #27745b;
-        --bad: #a52d27;
+        --ink: var(--text-primary);
+        --muted: var(--text-muted);
+        --paper: var(--bg-page);
+        --card: var(--bg-surface);
+        --line: var(--border-default);
+        --accent: var(--primary);
+        --ok: var(--success);
+        --bad: var(--danger);
       }
       * {
         box-sizing: border-box;
@@ -23,64 +23,10 @@
         margin: 0;
         background: var(--paper);
         color: var(--ink);
-        font:
-          15px system-ui,
-          sans-serif;
+        font: 15px system-ui, sans-serif;
       }
-      header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 20px 4vw;
-        border-bottom: 1px solid var(--line);
-      }
-      h1 {
-        margin: 0;
-        font:
-          700 32px Georgia,
-          serif;
-      }
-      .eyebrow,
-      .status {
-        font: 700 12px monospace;
-        letter-spacing: 0.07em;
-      }
-      .eyebrow {
-        color: var(--accent);
-      }
-      nav {
-        display: flex;
-        gap: 5px;
-        flex-wrap: wrap;
-        padding: 10px 4vw;
-        background: #e6e2d7;
-      }
-      button {
-        border: 0;
-        background: var(--accent);
-        color: white;
-        padding: 9px 13px;
-        cursor: pointer;
-      }
-      nav button {
-        background: transparent;
-        color: var(--ink);
-        border-bottom: 2px solid transparent;
-      }
-      nav button.active {
-        border-color: var(--accent);
-      }
-      button.secondary {
-        background: var(--ink);
-      }
-      button.danger {
-        background: var(--bad);
-      }
-      main {
-        max-width: 1280px;
-        margin: auto;
-        padding: 25px 4vw;
-      }
+      /* Old header styles removed - using new .topbar */
+      /* Old nav styles removed - using new .sidebar-nav */
       .panel {
         display: none;
       }
@@ -144,7 +90,7 @@
         margin: 5px 0;
         padding: 8px;
         border-left: 4px solid var(--line);
-        background: #f7f4ec;
+        background: var(--bg-page);
       }
       #script-fields label, #script-fields fieldset {
         display: block;
@@ -161,7 +107,7 @@
         margin: 6px 0;
         padding: 8px;
         border: 1px solid var(--line);
-        background: #fdfbf7;
+        background: var(--bg-surface);
       }
       .scene-row input, .scene-row textarea {
         width: 100%;
@@ -186,7 +132,7 @@
       pre {
         max-height: 260px;
         overflow: auto;
-        background: #ece9df;
+        background: var(--bg-page);
         padding: 10px;
         white-space: pre-wrap;
       }
@@ -219,6 +165,8 @@
           font-size: 12px;
         }
       }
+      /* Override for inline styles using var(--line) in dialogs etc. */
+      #settings-logo-preview { border-color: var(--border-default) !important; }
     </style>
   </head>
   <body>
@@ -335,7 +283,7 @@
               <div class="kpi-card">
                 <div class="kpi-header">
                   <div class="kpi-title">Воркери</div>
-                  <div class="kpi-icon gpu-icon">
+                  <div class="kpi-icon primary">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="18" r="1" fill="currentColor"/></svg>
                   </div>
                 </div>
@@ -345,7 +293,7 @@
               <div class="kpi-card">
                 <div class="kpi-header">
                   <div class="kpi-title">Активні завдання</div>
-                  <div class="kpi-icon blue-icon">
+                  <div class="kpi-icon info">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                   </div>
                 </div>
@@ -355,7 +303,7 @@
               <div class="kpi-card">
                 <div class="kpi-header">
                   <div class="kpi-title">Завдань у черзі</div>
-                  <div class="kpi-icon yellow-icon">
+                  <div class="kpi-icon warning">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                   </div>
                 </div>
@@ -365,7 +313,7 @@
               <div class="kpi-card">
                 <div class="kpi-header">
                   <div class="kpi-title">Навантаження системи</div>
-                  <div class="kpi-icon purple-icon">
+                  <div class="kpi-icon purple">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h10"/><path d="M9 7v10"/><path d="M14 9l3-3 3 3"/><path d="M17 13l3 4 3-4"/></svg>
                   </div>
                 </div>
@@ -375,7 +323,7 @@
               <div class="kpi-card">
                 <div class="kpi-header">
                   <div class="kpi-title">Використання GPU</div>
-                  <div class="kpi-icon purple-icon">
+                  <div class="kpi-icon purple">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/><path d="M12 12h.01"/></svg>
                   </div>
                 </div>
@@ -424,10 +372,10 @@
                       </div>
                     </div>
                     <div class="job-legend">
-                      <div class="legend-item"><span class="legend-dot blue"></span><span id="legend-progress" class="legend-value">—</span><span class="legend-label">В процесі</span></div>
-                      <div class="legend-item"><span class="legend-dot yellow"></span><span id="legend-queued" class="legend-value">—</span><span class="legend-label">Очікують</span></div>
-                      <div class="legend-item"><span class="legend-dot green"></span><span id="legend-done" class="legend-value">—</span><span class="legend-label">Завершено</span></div>
-                      <div class="legend-item"><span class="legend-dot red"></span><span id="legend-failed" class="legend-value">—</span><span class="legend-label">Помилки</span></div>
+                      <div class="legend-item"><span class="legend-dot info"></span><span id="legend-progress" class="legend-value">—</span><span class="legend-label">В процесі</span></div>
+                      <div class="legend-item"><span class="legend-dot warning"></span><span id="legend-queued" class="legend-value">—</span><span class="legend-label">Очікують</span></div>
+                      <div class="legend-item"><span class="legend-dot success"></span><span id="legend-done" class="legend-value">—</span><span class="legend-label">Завершено</span></div>
+                      <div class="legend-item"><span class="legend-dot danger"></span><span id="legend-failed" class="legend-value">—</span><span class="legend-label">Помилки</span></div>
                     </div>
                   </div>
                 </div>
@@ -615,113 +563,6 @@
     </div>
     <dialog id="jobdialog">
       <h2 id="jobtitle"></h2>
-      <label>Пріоритет<input id="editpriority" type="number" min="1" max="10" /></label>
-      <label>Персонаж<input id="editcharacter" /></label>
-      <label>Workflow<input id="editworkflow" /></label>
-      <fieldset id="script-fields">
-        <legend>Сценарій</legend>
-        <label>Заголовок<input id="script-title" /></label>
-        <label>Опис<textarea id="script-description" rows="2"></textarea></label>
-        <label>Хештеги<input id="script-hashtags" placeholder="#tag1 #tag2" /></label>
-        <label>Загальне озвучення<textarea id="script-voiceover" rows="2"></textarea></label>
-        <h3>Сцени</h3>
-        <div id="scenes-list"></div>
-        <button type="button" id="add-scene" class="secondary">Додати сцену</button>
-      </fieldset>
-      <button onclick="saveJob()">Зберегти</button>
-      <button class="secondary" onclick="jobdialog.close()">Закрити</button>
-      <a id="exportlink"><button class="secondary">Експорт ZIP</button></a>
-      <h3>Етапи та сцени</h3>
-      <div id="timeline"></div>
-      <h3>Завантажити reference</h3>
-      <input id="reference" type="file" />
-      <button onclick="uploadReference()">Завантажити</button>
-      <h3>Артефакти</h3>
-      <div id="assets"></div>
-      <h3>Історія</h3>
-      <pre id="events"></pre>
-    </dialog>
-    <dialog id="chardialog">
-      <h2>Конфігурація персонажа</h2>
-      <textarea id="charjson" style="min-height: 390px; font-family: monospace"></textarea>
-      <button onclick="saveCharacter()">Зберегти</button>
-      <button class="secondary" onclick="chardialog.close()">Закрити</button>
-    </dialog>
-    <dialog id="addworkerdialog">
-      <h2>Додати Worker</h2>
-      <div class="wizard-steps" id="wizardsteps">
-        <div></div>
-        <div></div>
-        <div></div>
-      </div>
-      <section id="wizard-step-1">
-        <p>Оберіть роль для нового вузла. Роль визначає, які компоненти будуть встановлені.</p>
-        <label>Роль вузла<select id="workerrole">
-          <option value="gpu">GPU Node</option>
-          <option value="text">Text Node</option>
-          <option value="voice">Voice Node</option>
-          <option value="publisher">Publisher Node</option>
-          <option value="backup">Backup Node</option>
-          <option value="monitoring">Monitoring Node</option>
-        </select></label>
-        <p class="muted">Після підключення вузол автоматично отримає можливості (capabilities) залежно від його обладнання.</p>
-      </section>
-      <section id="wizard-step-2" style="display: none">
-        <p>Одноразовий токен діє 15 хвилин. Скопіюйте його та введіть на новому вузлі під час First Run Wizard, або використовуйте installer command нижче.</p>
-        <pre id="workertoken" class="muted">Генерація токена…</pre>
-        <button class="secondary" onclick="copyWorkerToken()">Копіювати токен</button>
-        <h3>Installer Command</h3>
-        <pre class="muted" id="installerCommand">curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash</pre>
-        <p class="muted">Після запуску bootstrap виберіть відповідну роль у Web Wizard. Для non-Core вузлів вкажіть Core URL та Registration Token.</p>
-        <h3>Push-based (автоматичне підключення)</h3>
-        <pre class="muted">VERTEP_ROLE=<span id="installerRole">gpu</span> curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash</pre>
-        <p class="muted">При push-based сценарії вузол автоматично підключиться до Core після встановлення. Переконайтеся, що на Core згенеровано відповідний Registration Token.</p>
-      </section>
-      <section id="wizard-step-3" style="display: none">
-        <p>Очікуємо підключення нового Worker…</p>
-        <div id="newworkerstatus" class="status">Очікування…</div>
-        <pre id="newworkerinfo"></pre>
-      </section>
-      <div class="actions" style="margin-top: 20px">
-        <button id="wizardback" class="secondary" onclick="wizardBack()">Назад</button>
-        <button id="wizardnext" onclick="wizardNext()">Далі</button>
-        <button id="wizardclose" class="secondary" onclick="addWorkerDialog.close()" style="display: none">Закрити</button>
-      </div>
-    </dialog>
-    <dialog id="role-wizard-dialog">
-      <h2>Налаштування ролей головного вузла</h2>
-      <div class="wizard-steps" id="role-wizard-steps">
-        <div class="wizard-step" data-step="1">1. Вибір ролей</div>
-        <div class="wizard-step" data-step="2">2. Підтвердження</div>
-        <div class="wizard-step" data-step="3">3. Застосування</div>
-      </div>
-      <section id="role-wizard-step-1">
-        <p class="muted">Оберіть додаткові ролі, які цей сервер виконуватиме локально. Базова роль CORE завжди активна.</p>
-        <div id="role-wizard-list" class="role-wizard-list">Завантаження…</div>
-      </section>
-      <section id="role-wizard-step-2" style="display: none">
-        <p class="muted">Перегляньте зміни перед застосуванням:</p>
-        <div id="role-wizard-review" class="role-wizard-review"></div>
-      </section>
-      <section id="role-wizard-step-3" style="display: none">
-        <p class="muted">Застосовую зміни. Це може зайняти кілька хвилин…</p>
-        <div id="role-wizard-result" class="role-wizard-result">Очікування…</div>
-      </section>
-      <div class="actions" style="margin-top: 20px">
-        <button id="role-wizard-back" class="secondary" style="display: none">Назад</button>
-        <button id="role-wizard-next">Далі</button>
-        <button id="role-wizard-close" class="secondary" style="display: none">Закрити</button>
-      </div>
-    </dialog>
-    <dialog id="node-settings-dialog">
-      <h2 id="node-settings-title">Налаштування вузла</h2>
-      <div id="node-settings-content">Завантаження…</div>
-      <div class="actions" style="margin-top: 20px">
-        <button id="node-settings-close" class="secondary">Закрити</button>
-      </div>
-    </dialog>
-    <dialog id="jobdialog">
-      <h2 id="jobtitle"></h2>
       <label
         >Пріоритет<input
           id="editpriority"
@@ -907,15 +748,16 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
           );
         return r.json();
       }
-      $("#nav").onclick = (e) => {
-        const b = e.target.closest("button");
-        if (!b) return;
+      document.querySelector(".sidebar-nav")?.addEventListener("click", (e) => {
+        const a = e.target.closest("a[data-panel]");
+        if (!a) return;
+        e.preventDefault();
         document
-          .querySelectorAll(".panel,#nav button")
+          .querySelectorAll(".panel,.sidebar-nav .nav-item")
           .forEach((x) => x.classList.remove("active"));
-        $("#" + b.dataset.panel).classList.add("active");
-        b.classList.add("active");
-      };
+        $("#" + a.dataset.panel).classList.add("active");
+        a.classList.add("active");
+      });
       function actionButtons(j) {
         return `<div class="actions"><button onclick="openJob('${j.job_id}')">Деталі</button>${j.status === "READY" ? `<a href="/jobs/${j.job_id}/final/video.mp4"><button>Відео</button></a><button onclick="act('${j.job_id}','approve')">Approve</button><button onclick="act('${j.job_id}','publish')">Publish</button>` : ""}<button class="secondary" onclick="act('${j.job_id}','${j.status === "PAUSED" ? "resume" : "pause"}')">${j.status === "PAUSED" ? "Resume" : "Pause"}</button>${j.status === "FAILED" ? `<button onclick="act('${j.job_id}','retry')">Retry</button>` : ""}<button class="secondary" onclick="act('${j.job_id}','regenerate')">Regenerate</button><button class="danger" onclick="act('${j.job_id}','cancel')">Cancel</button></div>`;
       }
