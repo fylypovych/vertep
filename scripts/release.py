@@ -1,7 +1,9 @@
 import argparse
+import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -17,6 +19,15 @@ SECRET_PATTERNS = [
 FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519"}
 FORBIDDEN_SUFFIXES = {".pem", ".p12", ".pfx"}
 
+RELEASE_WORKFLOW = "Vertep Release"
+REQUIRED_ARTIFACT_NAMES = (
+    "vertep-runtime-{version}.tar.gz",
+    "manifest-{version}.json",
+    "update-manifest-{version}.json",
+    "SHA256SUMS-{version}",
+)
+TERMINAL_RUN_STATUSES = {"completed"}
+
 
 def run(root: Path, command: list[str], *, capture: bool = True) -> str:
     result = subprocess.run(
@@ -24,6 +35,13 @@ def run(root: Path, command: list[str], *, capture: bool = True) -> str:
         errors="replace", capture_output=capture
     )
     return result.stdout.strip() if capture else ""
+
+
+def run_allow_failure(root: Path, command: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        command, cwd=root, text=True, encoding="utf-8",
+        errors="replace", capture_output=True
+    )
 
 
 def git(root: Path, *args: str) -> str:
@@ -141,6 +159,22 @@ def require_ukrainian(value: str, label: str) -> None:
         raise RuntimeError(f"{label} має бути українською мовою")
 
 
+def has_uncommitted_changes(root: Path) -> bool:
+    try:
+        return bool(git(root, "status", "--porcelain", "--untracked-files=no"))
+    except subprocess.CalledProcessError:
+        return False
+
+
+def current_release_commit(root: Path) -> tuple[str, str]:
+    """Return (version, SHA) of the latest release-shaped commit on HEAD."""
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    if not VERSION_RE.fullmatch(version):
+        raise RuntimeError("Файл VERSION містить некоректний номер версії")
+    sha = git(root, "rev-parse", "HEAD")
+    return version, sha
+
+
 def check_release(root: Path) -> str:
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
     if not VERSION_RE.fullmatch(version):
@@ -213,6 +247,208 @@ def prepare_release(root: Path, *, skip_tests: bool) -> str:
     return version
 
 
+def gh_run(root: Path, args: list[str]) -> str:
+    return run(root, ["gh", *args])
+
+
+def gh_run_json(root: Path, args: list[str]) -> object:
+    result = run_allow_failure(root, ["gh", *args])
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"Команда gh {' '.join(args)} завершилась з помилкою: {stderr}")
+    return json.loads(result.stdout) if result.stdout.strip() else {}
+
+
+def trigger_release_workflow(root: Path, sha: str) -> int:
+    """Trigger Vertep Release for the given commit. Returns the run id."""
+    try:
+        subprocess.run(
+            ["gh", "--version"], cwd=root, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", check=True
+        )
+    except FileNotFoundError:
+        raise RuntimeError("Клієнт gh не знайдено. Встановіть GitHub CLI.") from None
+    result = subprocess.run(
+        ["gh", "workflow", "run", RELEASE_WORKFLOW + ".yml", "--ref", sha],
+        cwd=root, text=True, encoding="utf-8", errors="replace",
+        capture_output=True
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout).strip()
+        raise RuntimeError(
+            "Не вдалося запустити GitHub Actions workflow "
+            f"«{RELEASE_WORKFLOW}»: {stderr}"
+        )
+    # Discover the new run id (poll briefly because `gh workflow run` does not
+    # return the id directly).
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        runs = gh_run_json(root, [
+            "run", "list", "--workflow", RELEASE_WORKFLOW + ".yml",
+            "--commit", sha, "--json", "databaseId,status,conclusion,headSha",
+            "--limit", "5"
+        ])
+        if isinstance(runs, list) and runs:
+            for entry in runs:
+                if entry.get("headSha", "").lower() == sha.lower():
+                    return int(entry["databaseId"])
+        time.sleep(2)
+    raise RuntimeError(
+        "GitHub Actions workflow запущено, але run id не вдалося визначити"
+    )
+
+
+def wait_for_workflow(root: Path, run_id: int, *, timeout: int) -> dict:
+    """Wait until the workflow reaches a terminal status. Returns the run object."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = gh_run_json(root, [
+            "run", "view", str(run_id),
+            "--json", "databaseId,status,conclusion,name,headSha,url,displayTitle"
+        ])
+        status = run.get("status")
+        if status in TERMINAL_RUN_STATUSES or run.get("conclusion"):
+            return run
+        time.sleep(10)
+    raise RuntimeError(
+        f"Очікування GitHub Actions workflow перевищило {timeout} секунд "
+        f"(run id {run_id})."
+    )
+
+
+def _format_failed_jobs(root: Path, run_id: int) -> str:
+    jobs = gh_run_json(root, ["api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs",
+                              "--jq", ".jobs[] | {name, conclusion, steps: [.steps[] | select(.conclusion==\"failure\") | {name, conclusion}]}"])
+    if not isinstance(jobs, list) or not jobs:
+        return "Деталі jobів недоступні."
+    lines = []
+    for job in jobs:
+        name = job.get("name", "?")
+        conclusion = job.get("conclusion") or "?"
+        if conclusion != "failure":
+            continue
+        lines.append(f"  • job «{name}» — {conclusion}")
+        for step in job.get("steps", []):
+            lines.append(
+                f"      - step «{step.get('name', '?')}»: {step.get('conclusion', '?')}"
+            )
+    return "\n".join(lines) if lines else "Без деталей jobів."
+
+
+def _resolve_tag_commit_sha(root: Path, repo: str, version: str) -> str:
+    """Return the commit SHA the given tag points to (dereferencing annotated tags)."""
+    try:
+        ref_payload = gh_run_json(root, ["api", f"repos/{repo}/git/ref/tags/{version}"])
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"Git tag «{version}» не створено. Перевірте лог Vertep Release."
+        ) from error
+    object_meta = ref_payload.get("object", {})
+    object_type = object_meta.get("type", "commit")
+    object_sha = (object_meta.get("sha") or "").lower()
+    if not object_sha:
+        raise RuntimeError(f"Git tag «{version}» не вказує на SHA.")
+    if object_type == "tag":
+        try:
+            tag_payload = gh_run_json(root, [
+                "api", f"repos/{repo}/git/tags/{object_sha}"
+            ])
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"Annotated tag «{version}» пошкоджено: {error}"
+            ) from error
+        object_sha = (tag_payload.get("object", {}).get("sha") or "").lower()
+        if not object_sha:
+            raise RuntimeError(f"Annotated tag «{version}» не вказує на коміт.")
+    return object_sha
+
+
+def verify_release(root: Path, version: str, expected_sha: str) -> None:
+    """Verify that tag, GitHub Release and required artifacts exist for `version`."""
+    repo = gh_run(root, ["repo", "view", "--json", "nameWithOwner"])
+    tag_commit_sha = _resolve_tag_commit_sha(root, repo, version)
+    if tag_commit_sha != expected_sha.lower():
+        raise RuntimeError(
+            f"Git tag «{version}» вказує на {tag_commit_sha}, але очікувався {expected_sha}."
+        )
+    try:
+        release_json = gh_run_json(root, [
+            "release", "view", version,
+            "--json", "tagName,name,targetCommitish,isDraft,isPrerelease,assets"
+        ])
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"GitHub Release «{version}» не знайдено: {error}"
+        ) from error
+    asset_names = {asset.get("name") for asset in release_json.get("assets", [])}
+    missing = [
+        template.format(version=version)
+        for template in REQUIRED_ARTIFACT_NAMES
+        if template.format(version=version) not in asset_names
+    ]
+    if missing:
+        raise RuntimeError(
+            "GitHub Release «{v}» не містить обов'язкових артефактів: {missing}".format(
+                v=version, missing=", ".join(missing)
+            )
+        )
+
+
+def orchestrate_release(
+    root: Path,
+    *,
+    skip_tests: bool,
+    timeout: int,
+    trigger: "_ProductionTrigger | None" = None,
+) -> str:
+    """End-to-end `реліз`: optional push, trigger workflow, wait, verify."""
+    if trigger is None:
+        trigger = _ProductionTrigger()
+    if has_uncommitted_changes(root):
+        version = prepare_release(root, skip_tests=skip_tests)
+    else:
+        version, _sha = current_release_commit(root)
+        check_release(root)
+    git(root, "fetch", "origin", "main")
+    remote_sha = git(root, "rev-parse", "origin/main")
+    local_sha = git(root, "rev-parse", "HEAD")
+    if local_sha != remote_sha:
+        raise RuntimeError(
+            f"Локальний HEAD ({local_sha}) відрізняється від origin/main ({remote_sha})."
+        )
+    run_id = trigger.run(root, workflow=RELEASE_WORKFLOW, sha=local_sha)
+    run = trigger.wait(root, run_id=run_id, timeout=timeout)
+    conclusion = run.get("conclusion")
+    if conclusion != "success":
+        failed_jobs = trigger.failed_jobs(root, run_id=run_id)
+        raise RuntimeError(
+            f"GitHub Actions workflow «{RELEASE_WORKFLOW}» завершився зі статусом "
+            f"«{conclusion}».\n{failed_jobs}"
+        )
+    trigger.verify(root, version=version, expected_sha=local_sha)
+    print(
+        f"Release {version} створено успішно (workflow run {run_id}). "
+        f"Commit {local_sha} присутній у origin/main."
+    )
+    return version
+
+
+class _ProductionTrigger:
+    """Default implementation that shells out to the GitHub CLI."""
+
+    def run(self, root: Path, *, workflow: str, sha: str) -> int:
+        return trigger_release_workflow(root, sha)
+
+    def wait(self, root: Path, *, run_id: int, timeout: int) -> dict:
+        return wait_for_workflow(root, run_id, timeout=timeout)
+
+    def failed_jobs(self, root: Path, *, run_id: int) -> str:
+        return _format_failed_jobs(root, run_id)
+
+    def verify(self, root: Path, *, version: str, expected_sha: str) -> None:
+        verify_release(root, version, expected_sha)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Підготувати єдиний нумерований коміт релізу Vertep"
@@ -223,6 +459,10 @@ def main() -> None:
                         help="показати наступний номер без змін")
     parser.add_argument("--check", action="store_true",
                         help="перевірити готовий релізний коміт")
+    parser.add_argument("--release", action="store_true",
+                        help="запустити повну команду «реліз»: пуш + Vertep Release + перевірка")
+    parser.add_argument("--release-timeout", type=int, default=3600,
+                        help="максимальний час очікування GitHub Actions (секунди)")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     try:
@@ -231,6 +471,13 @@ def main() -> None:
             return
         if args.check:
             print(check_release(root))
+            return
+        if args.release:
+            orchestrate_release(
+                root,
+                skip_tests=args.skip_tests,
+                timeout=args.release_timeout,
+            )
             return
         version = prepare_release(root, skip_tests=args.skip_tests)
     except (RuntimeError, subprocess.CalledProcessError) as error:
