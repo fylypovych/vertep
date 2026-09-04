@@ -222,145 +222,504 @@
     </style>
   </head>
   <body>
-    <header>
+    <header class="topbar">
       <div>
         <div class="eyebrow">VERTEP / CORE</div>
-        <h1>Панель керування</h1>
+        <h1>Dashboard</h1>
+        <p class="subtitle">Огляд вашої системи Vertep</p>
       </div>
-      <div id="health">Завантаження…</div>
-    </header>
-    <nav id="nav">
-      <button data-panel="dashboard" class="active">Огляд</button
-      ><button data-panel="jobs">Jobs</button
-      ><button data-panel="queue">Черга</button
-      ><button data-panel="characters">Персонажі</button
-      ><button data-panel="workers">Workers</button
-      ><button data-panel="published">Опубліковані</button
-      ><button data-panel="errors">Помилки</button
-      ><button data-panel="settings">Система</button>
-    </nav>
-    <main>
-      <section id="dashboard" class="panel active">
-        <div id="stats" class="stats"></div>
-        <div class="grid">
-          <div class="card">
-            <h2>Нове завдання</h2>
-            <textarea id="topic" placeholder="Тема ролика"></textarea
-            ><label
-              >Відкладений запуск (ISO-8601)<input
-                id="scheduled"
-                placeholder="2026-12-24T18:00:00+02:00" /></label
-            ><button onclick="createJob()">Створити Job</button>
-          </div>
-          <div class="card">
-            <h2>Останні події</h2>
-            <div id="recent"></div>
-          </div>
-        </div>
-      </section>
-      <section id="jobs" class="panel">
-        <h2>Jobs</h2>
-        <input id="jobfilter" placeholder="Пошук" oninput="renderJobs()" />
-        <div id="jobtable"></div>
-      </section>
-      <section id="queue" class="panel">
-        <h2>Черга</h2>
-        <pre id="queuestatus"></pre>
-        <h3>Dead-letter queue</h3>
-        <div id="deadletters"></div>
-      </section>
-      <section id="characters" class="panel">
-        <h2>Персонажі</h2>
-        <button onclick="newCharacter()">Новий персонаж</button>
-        <div id="characterlist" class="stats"></div>
-      </section>
-      <section id="workers" class="panel">
-        <h2>Workers</h2>
-        <button onclick="addWorker()">Add Worker</button>
-        <p class="muted">
-          Одноразовий Registration Token діє 15 хвилин. Вузол сам ініціює
-          захищене підключення до Core.
-        </p>
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0">
-          <select id="filterRole" onchange="renderWorkers()">
-            <option value="">Всі ролі</option>
-            <option value="core">Core</option>
-            <option value="gpu">GPU</option>
-            <option value="text">Text</option>
-            <option value="voice">Voice</option>
-            <option value="publisher">Publisher</option>
-            <option value="backup">Backup</option>
-            <option value="monitoring">Monitoring</option></select
-          ><select id="filterStatus" onchange="renderWorkers()">
-            <option value="">Всі статуси</option>
-            <option value="ONLINE">ONLINE</option>
-            <option value="BUSY">BUSY</option>
-            <option value="FREE">FREE</option>
-            <option value="UPDATING">UPDATING</option>
-            <option value="OFFLINE">OFFLINE</option>
-            <option value="ERROR">ERROR</option>
-            <option value="QUARANTINED">QUARANTINED</option>
-            <option value="DRAINING">DRAINING</option></select
-          ><input
-            id="filterCapability"
-            placeholder="Capability (наприклад, image_generation)"
-            oninput="renderWorkers()"
-          />
-        </div>
-        <pre id="registration"></pre>
-        <div id="workerlist"></div>
-      </section>
-      <section id="published" class="panel">
-        <h2>Опубліковані</h2>
-        <div id="publishedlist"></div>
-      </section>
-      <section id="errors" class="panel">
-        <h2>Помилки</h2>
-        <div id="errorlist"></div>
-        <h3>Alerts</h3>
-        <pre id="alerts"></pre>
-      </section>
-      <section id="settings" class="panel">
-        <h2>Стан системи</h2>
-        <pre id="systemstatus"></pre>
-        <div class="card">
-          <h3>Безпечне оновлення Vertep</h3>
-          <p class="muted">
-            Підписані пакети надходять лише з налаштованого сервера оновлень
-            Vertep. Активні задачі буде завершено перед встановленням.
-          </p>
-          <button id="checkupdate" onclick="requestSystemUpdate('check')">
-            Перевірити оновлення</button
-          ><button
-            id="runupdate"
-            class="danger"
-            onclick="requestSystemUpdate('run')"
-            disabled
-          >
-            Встановити оновлення
+      <div class="topbar-right">
+        <div id="system-state-badge" class="state-badge">Завантаження…</div>
+        <div style="position:relative">
+          <button class="icon-btn" title="Сповіщення" id="notif-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a1.94 1.94 0 0 1-3.46 0"/></svg>
+            <span id="notif-badge" class="badge hidden">0</span>
           </button>
-          <pre id="updatestatus">Завантаження статусу…</pre>
+          <div class="notif-menu" id="notif-menu">
+            <div class="notif-header">Сповіщення</div>
+            <div id="notif-list">Завантаження…</div>
+          </div>
         </div>
-        <div class="card">
-          <h3>Захищені інтеграції</h3>
-          <p class="muted">
-            Значення шифруються і ніколи не повертаються через API.
-          </p>
-          <div id="secretsettings">Завантаження…</div>
+        <button class="icon-btn" title="Довідка" onclick="alert('Vertep панель керування. Зверніться до документації або адміністратора системи.')">?</button>
+        <div class="profile">
+          <button class="profile-btn" id="profile-btn" title="Профіль">
+            <div class="avatar">A</div>
+            <div>
+              <div class="profile-name">Admin</div>
+              <div class="profile-role muted">Супер адміністратор</div>
+            </div>
+          </button>
+          <div class="profile-menu" id="profile-menu">
+            <button onclick="switchPanel('settings')">Профіль</button>
+            <button onclick="switchPanel('settings')">Налаштування</button>
+            <button class="danger" onclick="logout()">Вихід</button>
+          </div>
         </div>
-        <div class="card">
-          <h3>Telegram</h3>
-          <p class="muted">Налаштуйте Telegram-бота для прийому завдань та затвердження.</p>
-          <div id="telegramsettings">Завантаження…</div>
-          <div id="telegramstatus" class="muted"></div>
+      </div>
+    </header>
+    <div class="layout">
+      <aside class="left-sidebar">
+        <div class="brand">
+          <img id="brand-logo" src="" alt="Vertep" class="brand-logo hidden" />
+          <div class="brand-mark">VERTEP</div>
+          <div class="brand-dot"></div>
         </div>
-        <button onclick="cleanup(true)">Cleanup dry-run</button
-        ><button class="danger" onclick="cleanup(false)">
-          Видалити прострочені Jobs</button
-        ><button class="secondary" onclick="logout()">Вихід</button>
-        <pre id="cleanupresult"></pre>
+        <nav class="sidebar-nav">
+          <a href="#" class="nav-item active" data-panel="dashboard">
+            <span class="nav-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+            </span>
+            <span>Дашборд</span>
+          </a>
+          <div class="nav-group">
+            <div class="nav-group-title">СИСТЕМА</div>
+            <a href="#" class="nav-item" data-panel="jobs">Завдання</a>
+            <a href="#" class="nav-item" data-panel="queue">Диспетчер</a>
+            <a href="#" class="nav-item" data-panel="workers">Воркери</a>
+            <a href="#" class="nav-item" data-panel="settings">Планувальник</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">AI ТА МОДЕЛІ</div>
+            <a href="#" class="nav-item" data-panel="settings">AI Моделі</a>
+            <a href="#" class="nav-item" data-panel="settings">LLM</a>
+            <a href="#" class="nav-item" data-panel="settings">ComfyUI Workflows</a>
+            <a href="#" class="nav-item" data-panel="settings">Можливості</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">ПУБЛІКАЦІЯ</div>
+            <a href="#" class="nav-item" data-panel="settings">Паблішери</a>
+            <a href="#" class="nav-item" data-panel="settings">Канали</a>
+            <a href="#" class="nav-item" data-panel="settings">Бібліотека контенту</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">КЕРУВАННЯ</div>
+            <a href="#" class="nav-item" data-panel="settings">Користувачі</a>
+            <a href="#" class="nav-item" data-panel="settings">Ліцензії</a>
+            <a href="#" class="nav-item" data-panel="settings">Секрети</a>
+            <a href="#" class="nav-item" data-panel="settings">Налаштування</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">МОНІТОРИНГ</div>
+            <a href="#" class="nav-item" data-panel="errors">Моніторинг</a>
+            <a href="#" class="nav-item" data-panel="errors">Журнали</a>
+            <a href="#" class="nav-item" data-panel="errors">Сповіщення</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">СИСТЕМА</div>
+            <a href="#" class="nav-item" data-panel="settings">Оновлення</a>
+            <a href="#" class="nav-item" data-panel="settings">Резервні копії</a>
+            <a href="#" class="nav-item" data-panel="settings">Перевірка здоров'я</a>
+          </div>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="version-line">Vertep <span id="version-label">v1.3.0</span> <span class="brand-dot"></span></div>
+        </div>
+      </aside>
+      <main class="main-area">
+        <div id="warning-banner" class="warning-banner hidden"></div>
+        <section id="dashboard" class="panel active">
+          <div id="dashboard-skeleton" class="skeleton-wrap">
+            <div class="skeleton-kpi">
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+            </div>
+            <div class="skeleton-large"></div>
+            <div class="skeleton-large"></div>
+            <div class="skeleton-table"></div>
+          </div>
+          <div id="dashboard-content" class="dashboard-content hidden">
+            <div class="kpi-row">
+              <div class="kpi-card">
+                <div class="kpi-header">
+                  <div class="kpi-title">Воркери</div>
+                  <div class="kpi-icon gpu-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="18" r="1" fill="currentColor"/></svg>
+                  </div>
+                </div>
+                <div class="kpi-value" id="kpi-workers">—</div>
+                <div class="kpi-footer"><span id="kpi-workers-online" class="muted">Онлайн —</span><span id="kpi-workers-offline" class="muted">Офлайн —</span></div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-header">
+                  <div class="kpi-title">Активні завдання</div>
+                  <div class="kpi-icon blue-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  </div>
+                </div>
+                <div class="kpi-value" id="kpi-active-jobs">—</div>
+                <div class="kpi-footer"><span class="muted">В процесі</span></div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-header">
+                  <div class="kpi-title">Завдань у черзі</div>
+                  <div class="kpi-icon yellow-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  </div>
+                </div>
+                <div class="kpi-value" id="kpi-queued-jobs">—</div>
+                <div class="kpi-footer"><span class="muted">Очікують</span></div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-header">
+                  <div class="kpi-title">Навантаження системи</div>
+                  <div class="kpi-icon purple-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h10"/><path d="M9 7v10"/><path d="M14 9l3-3 3 3"/><path d="M17 13l3 4 3-4"/></svg>
+                  </div>
+                </div>
+                <div class="kpi-value" id="kpi-cpu">—</div>
+                <div class="kpi-footer"><span id="kpi-cpu-label" class="muted">Середнє</span></div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-header">
+                  <div class="kpi-title">Використання GPU</div>
+                  <div class="kpi-icon purple-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/><path d="M12 12h.01"/></svg>
+                  </div>
+                </div>
+                <div class="kpi-value" id="kpi-gpu">—</div>
+                <div class="kpi-footer"><span id="kpi-gpu-label" class="muted">Середнє</span></div>
+              </div>
+            </div>
+            <div id="dashboard-state-widgets" class="dashboard-state-widgets hidden"></div>
+            <div class="dashboard-row">
+              <div class="dashboard-main">
+                <div class="card">
+                  <div class="card-header">
+                    <h2 class="card-title">Архітектура системи</h2>
+                    <div class="card-actions">
+                      <select id="node-filter" class="select-sm">
+                        <option value="all">Всі вузли</option>
+                        <option value="gpu">GPU</option>
+                        <option value="text">Text</option>
+                        <option value="voice">Voice</option>
+                        <option value="publisher">Publisher</option>
+                        <option value="backup">Backup</option>
+                        <option value="monitoring">Monitoring</option>
+                        <option value="offline">Offline</option>
+                        <option value="error">Error</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="architecture">
+                    <button class="arch-node core-node" onclick="openNodeDetails('core')">
+                      <div class="arch-node-title">CORE</div>
+                      <div class="arch-node-status" id="core-status">Онлайн</div>
+                    </button>
+                    <div class="arch-groups" id="arch-groups"></div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-header">
+                    <h2 class="card-title">Статуси завдань</h2>
+                  </div>
+                  <div class="job-status-row">
+                    <div class="donut-wrap">
+                      <canvas id="job-donut" width="180" height="180"></canvas>
+                      <div class="donut-center">
+                        <div id="donut-total" class="donut-total">—</div>
+                        <div class="donut-label">Всього</div>
+                      </div>
+                    </div>
+                    <div class="job-legend">
+                      <div class="legend-item"><span class="legend-dot blue"></span><span id="legend-progress" class="legend-value">—</span><span class="legend-label">В процесі</span></div>
+                      <div class="legend-item"><span class="legend-dot yellow"></span><span id="legend-queued" class="legend-value">—</span><span class="legend-label">Очікують</span></div>
+                      <div class="legend-item"><span class="legend-dot green"></span><span id="legend-done" class="legend-value">—</span><span class="legend-label">Завершено</span></div>
+                      <div class="legend-item"><span class="legend-dot red"></span><span id="legend-failed" class="legend-value">—</span><span class="legend-label">Помилки</span></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-header">
+                    <h2 class="card-title">Ресурси системи</h2>
+                  </div>
+                  <div class="resources">
+                    <div class="resource">
+                      <div class="resource-head"><span>CPU</span><span id="res-cpu">—</span></div>
+                      <div class="progress"><div id="res-cpu-bar" class="progress-fill" style="width:0"></div></div>
+                      <div class="resource-meta muted" id="res-cpu-meta">—</div>
+                    </div>
+                    <div class="resource">
+                      <div class="resource-head"><span>RAM</span><span id="res-ram">—</span></div>
+                      <div class="progress"><div id="res-ram-bar" class="progress-fill" style="width:0"></div></div>
+                      <div class="resource-meta muted" id="res-ram-meta">—</div>
+                    </div>
+                    <div class="resource">
+                      <div class="resource-head"><span>Диск</span><span id="res-disk">—</span></div>
+                      <div class="progress"><div id="res-disk-bar" class="progress-fill" style="width:0"></div></div>
+                      <div class="resource-meta muted" id="res-disk-meta">—</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-header">
+                    <h2 class="card-title">Воркери</h2>
+                  </div>
+                  <div id="dashboard-worker-empty" class="empty-state hidden">
+                    <p>Воркери ще не підключені</p>
+                    <p class="muted">Додайте перший вузол до Vertep.</p>
+                    <button onclick="addWorker()">Додати воркер</button>
+                  </div>
+                  <div id="dashboard-worker-error" class="error-state hidden">
+                    <p>Не вдалося отримати інформацію про Worker.</p>
+                    <button onclick="refresh()">Повторити</button>
+                  </div>
+                  <div class="table-wrap" id="dashboard-worker-table-wrap">
+                    <table class="data-table">
+                      <thead>
+                        <tr>
+                          <th>Назва</th>
+                          <th>Роль</th>
+                          <th>Можливості</th>
+                          <th>Статус</th>
+                          <th>Навантаження</th>
+                          <th>VRAM / RAM</th>
+                          <th>Аптайм</th>
+                          <th>Дії</th>
+                        </tr>
+                      </thead>
+                      <tbody id="dashboard-worker-body"></tbody>
+                    </table>
+                    <div id="worker-menu-anchor" class="worker-menu-anchor"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="dashboard-right">
+                <div class="card">
+                  <h2 class="card-title">Стан системи</h2>
+                  <div id="system-state-card" class="system-state-card">Завантаження…</div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Нещодавня активність</h2>
+                  <div id="recent-activity" class="activity-list">Завантаження…</div>
+                  <button class="link-btn" onclick="switchPanel('jobs')">Переглянути всю активність</button>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Швидкі дії</h2>
+                  <div class="quick-actions">
+                    <button onclick="switchPanel('jobs')">+ Створити нове завдання</button>
+                    <button onclick="addWorker()">Додати воркер</button>
+                    <button onclick="runHealthCheck()">Перевірка системи</button>
+                    <button onclick="switchPanel('errors')">Переглянути журнали</button>
+                    <button onclick="createBackup()">Створити резервну копію</button>
+                    <button onclick="requestSystemUpdate('check')">Оновити систему</button>
+                  </div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Ліцензія</h2>
+                  <div id="license-card" class="license-card">Завантаження…</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section id="jobs" class="panel">
+          <h2>Завдання</h2>
+          <input id="jobfilter" placeholder="Пошук" oninput="renderJobs()" />
+          <div id="jobtable"></div>
+        </section>
+        <section id="queue" class="panel">
+          <h2>Диспетчер</h2>
+          <pre id="queuestatus"></pre>
+          <h3>Черга помилкових завдань</h3>
+          <div id="deadletters"></div>
+        </section>
+        <section id="characters" class="panel">
+          <h2>Персонажі</h2>
+          <button onclick="newCharacter()">Новий персонаж</button>
+          <div id="characterlist" class="stats"></div>
+        </section>
+        <section id="workers" class="panel">
+          <h2>Воркери</h2>
+          <button onclick="addWorker()">Додати воркер</button>
+          <p class="muted">Одноразовий Registration Token діє 15 хвилин. Вузол сам ініціює захищене підключення до Core.</p>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0">
+            <select id="filterRole" onchange="renderWorkers()">
+              <option value="">Всі ролі</option>
+              <option value="core">Core</option>
+              <option value="gpu">GPU</option>
+              <option value="text">Text</option>
+              <option value="voice">Voice</option>
+              <option value="publisher">Publisher</option>
+              <option value="backup">Backup</option>
+              <option value="monitoring">Monitoring</option>
+            </select>
+            <select id="filterStatus" onchange="renderWorkers()">
+              <option value="">Всі статуси</option>
+              <option value="ONLINE">ONLINE</option>
+              <option value="BUSY">BUSY</option>
+              <option value="FREE">FREE</option>
+              <option value="UPDATING">UPDATING</option>
+              <option value="OFFLINE">OFFLINE</option>
+              <option value="ERROR">ERROR</option>
+              <option value="QUARANTINED">QUARANTINED</option>
+              <option value="DRAINING">DRAINING</option>
+            </select>
+            <input id="filterCapability" placeholder="Capability (наприклад, image_generation)" oninput="renderWorkers()" />
+          </div>
+          <pre id="registration"></pre>
+          <div id="workerlist"></div>
+        </section>
+        <section id="published" class="panel">
+          <h2>Опубліковані</h2>
+          <div id="publishedlist"></div>
+        </section>
+        <section id="errors" class="panel">
+          <h2>Помилки</h2>
+          <div id="errorlist"></div>
+          <h3>Сповіщення</h3>
+          <pre id="alerts"></pre>
+        </section>
+        <section id="settings" class="panel">
+          <h2>Система</h2>
+          <pre id="systemstatus"></pre>
+          <div class="card">
+            <h3>Логотип Vertep</h3>
+            <p class="muted">Завантажте зображення для відображення в лівому меню. Рекомендований розмір: 64×64 px.</p>
+            <div style="display:flex;align-items:center;gap:12px;margin:10px 0">
+              <img id="settings-logo-preview" src="" alt="logo" style="height:48px;width:48px;object-fit:contain;border-radius:8px;border:1px solid var(--line);display:none" />
+              <div>
+                <input id="logo-file" type="file" accept="image/*" />
+                <button onclick="uploadLogo()">Зберегти логотип</button>
+                <button class="danger" onclick="removeLogo()" style="display:none" id="remove-logo-btn">Видалити</button>
+              </div>
+            </div>
+            <pre id="logo-status" class="muted"></pre>
+          </div>
+          <div class="card">
+            <h3>Безпечне оновлення Vertep</h3>
+            <p class="muted">Підписані пакети надходять лише з налаштованого сервера оновлень Vertep. Активні задачі буде завершено перед встановленням.</p>
+            <button id="checkupdate" onclick="requestSystemUpdate('check')">Перевірити оновлення</button>
+            <button id="runupdate" class="danger" onclick="requestSystemUpdate('run')" disabled>Встановити оновлення</button>
+            <pre id="updatestatus">Завантаження статусу…</pre>
+          </div>
+          <div class="card">
+            <h3>Захищені інтеграції</h3>
+            <p class="muted">Значення шифруються і ніколи не повертаються через API.</p>
+            <div id="secretsettings">Завантаження…</div>
+          </div>
+          <div class="card">
+            <h3>Telegram</h3>
+            <p class="muted">Налаштуйте Telegram-бота для прийому завдань та затвердження.</p>
+            <div id="telegramsettings">Завантаження…</div>
+            <div id="telegramstatus" class="muted"></div>
+          </div>
+          <button onclick="cleanup(true)">Перевірити очищення</button>
+          <button class="danger" onclick="cleanup(false)">Видалити прострочені Jobs</button>
+          <button class="secondary" onclick="logout()">Вихід</button>
+          <pre id="cleanupresult"></pre>
+        </section>
+      </main>
+    </div>
+    <dialog id="jobdialog">
+      <h2 id="jobtitle"></h2>
+      <label>Пріоритет<input id="editpriority" type="number" min="1" max="10" /></label>
+      <label>Персонаж<input id="editcharacter" /></label>
+      <label>Workflow<input id="editworkflow" /></label>
+      <fieldset id="script-fields">
+        <legend>Сценарій</legend>
+        <label>Заголовок<input id="script-title" /></label>
+        <label>Опис<textarea id="script-description" rows="2"></textarea></label>
+        <label>Хештеги<input id="script-hashtags" placeholder="#tag1 #tag2" /></label>
+        <label>Загальне озвучення<textarea id="script-voiceover" rows="2"></textarea></label>
+        <h3>Сцени</h3>
+        <div id="scenes-list"></div>
+        <button type="button" id="add-scene" class="secondary">Додати сцену</button>
+      </fieldset>
+      <button onclick="saveJob()">Зберегти</button>
+      <button class="secondary" onclick="jobdialog.close()">Закрити</button>
+      <a id="exportlink"><button class="secondary">Експорт ZIP</button></a>
+      <h3>Етапи та сцени</h3>
+      <div id="timeline"></div>
+      <h3>Завантажити reference</h3>
+      <input id="reference" type="file" />
+      <button onclick="uploadReference()">Завантажити</button>
+      <h3>Артефакти</h3>
+      <div id="assets"></div>
+      <h3>Історія</h3>
+      <pre id="events"></pre>
+    </dialog>
+    <dialog id="chardialog">
+      <h2>Конфігурація персонажа</h2>
+      <textarea id="charjson" style="min-height: 390px; font-family: monospace"></textarea>
+      <button onclick="saveCharacter()">Зберегти</button>
+      <button class="secondary" onclick="chardialog.close()">Закрити</button>
+    </dialog>
+    <dialog id="addworkerdialog">
+      <h2>Додати Worker</h2>
+      <div class="wizard-steps" id="wizardsteps">
+        <div></div>
+        <div></div>
+        <div></div>
+      </div>
+      <section id="wizard-step-1">
+        <p>Оберіть роль для нового вузла. Роль визначає, які компоненти будуть встановлені.</p>
+        <label>Роль вузла<select id="workerrole">
+          <option value="gpu">GPU Node</option>
+          <option value="text">Text Node</option>
+          <option value="voice">Voice Node</option>
+          <option value="publisher">Publisher Node</option>
+          <option value="backup">Backup Node</option>
+          <option value="monitoring">Monitoring Node</option>
+        </select></label>
+        <p class="muted">Після підключення вузол автоматично отримає можливості (capabilities) залежно від його обладнання.</p>
       </section>
-    </main>
+      <section id="wizard-step-2" style="display: none">
+        <p>Одноразовий токен діє 15 хвилин. Скопіюйте його та введіть на новому вузлі під час First Run Wizard, або використовуйте installer command нижче.</p>
+        <pre id="workertoken" class="muted">Генерація токена…</pre>
+        <button class="secondary" onclick="copyWorkerToken()">Копіювати токен</button>
+        <h3>Installer Command</h3>
+        <pre class="muted" id="installerCommand">curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash</pre>
+        <p class="muted">Після запуску bootstrap виберіть відповідну роль у Web Wizard. Для non-Core вузлів вкажіть Core URL та Registration Token.</p>
+        <h3>Push-based (автоматичне підключення)</h3>
+        <pre class="muted">VERTEP_ROLE=<span id="installerRole">gpu</span> curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash</pre>
+        <p class="muted">При push-based сценарії вузол автоматично підключиться до Core після встановлення. Переконайтеся, що на Core згенеровано відповідний Registration Token.</p>
+      </section>
+      <section id="wizard-step-3" style="display: none">
+        <p>Очікуємо підключення нового Worker…</p>
+        <div id="newworkerstatus" class="status">Очікування…</div>
+        <pre id="newworkerinfo"></pre>
+      </section>
+      <div class="actions" style="margin-top: 20px">
+        <button id="wizardback" class="secondary" onclick="wizardBack()">Назад</button>
+        <button id="wizardnext" onclick="wizardNext()">Далі</button>
+        <button id="wizardclose" class="secondary" onclick="addWorkerDialog.close()" style="display: none">Закрити</button>
+      </div>
+    </dialog>
+    <dialog id="role-wizard-dialog">
+      <h2>Налаштування ролей головного вузла</h2>
+      <div class="wizard-steps" id="role-wizard-steps">
+        <div class="wizard-step" data-step="1">1. Вибір ролей</div>
+        <div class="wizard-step" data-step="2">2. Підтвердження</div>
+        <div class="wizard-step" data-step="3">3. Застосування</div>
+      </div>
+      <section id="role-wizard-step-1">
+        <p class="muted">Оберіть додаткові ролі, які цей сервер виконуватиме локально. Базова роль CORE завжди активна.</p>
+        <div id="role-wizard-list" class="role-wizard-list">Завантаження…</div>
+      </section>
+      <section id="role-wizard-step-2" style="display: none">
+        <p class="muted">Перегляньте зміни перед застосуванням:</p>
+        <div id="role-wizard-review" class="role-wizard-review"></div>
+      </section>
+      <section id="role-wizard-step-3" style="display: none">
+        <p class="muted">Застосовую зміни. Це може зайняти кілька хвилин…</p>
+        <div id="role-wizard-result" class="role-wizard-result">Очікування…</div>
+      </section>
+      <div class="actions" style="margin-top: 20px">
+        <button id="role-wizard-back" class="secondary" style="display: none">Назад</button>
+        <button id="role-wizard-next">Далі</button>
+        <button id="role-wizard-close" class="secondary" style="display: none">Закрити</button>
+      </div>
+    </dialog>
+    <dialog id="node-settings-dialog">
+      <h2 id="node-settings-title">Налаштування вузла</h2>
+      <div id="node-settings-content">Завантаження…</div>
+      <div class="actions" style="margin-top: 20px">
+        <button id="node-settings-close" class="secondary">Закрити</button>
+      </div>
+    </dialog>
     <dialog id="jobdialog">
       <h2 id="jobtitle"></h2>
       <label
@@ -624,41 +983,8 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
           characters = chars;
           $("#health").textContent = "CORE ONLINE";
           const count = (s) => jobs.filter((j) => j.status === s).length;
-          $("#stats").innerHTML = [
-            ["Усього Jobs", jobs.length],
-            ["У черзі", count("NEW")],
-            ["Генерація", count("ASSET_GENERATION")],
-            ["Готові", count("READY")],
-            ["Опубліковані", count("PUBLISHED")],
-            ["Помилки", count("FAILED")],
-            [
-              "Workers online",
-              workers.filter((w) => w.status !== "OFFLINE").length,
-            ],
-          ]
-            .map(
-              (x) =>
-                `<div class="stat"><strong>${x[1]}</strong><small>${x[0]}</small></div>`,
-            )
-            .join("");
+          renderDashboard(workers, status, jobs, dead, alertRows);
           renderJobs();
-          $("#recent").innerHTML = jobs
-            .slice(-6)
-            .reverse()
-            .map(
-              (j) =>
-                `<p><b>${esc(j.job_id)}</b> ${esc(j.events.at(-1) || "")}</p>`,
-            )
-            .join("");
-          $("#publishedlist").innerHTML = table(
-            jobs.filter((j) => j.status === "PUBLISHED"),
-          );
-          $("#errorlist").innerHTML = table(
-            jobs.filter((j) => j.status === "FAILED"),
-          );
-          $("#workerlist").innerHTML = workers.length
-            ? `<table><tr><th>Node</th><th>Роль</th><th>Статус</th><th>Обладнання</th><th>Capabilities</th><th>Task</th><th>Керування</th></tr>${workers.map((w) => `<tr><td><b>${esc(w.node_name)}</b><br><small>${esc(w.node_id || "")}</small></td><td>${esc(w.role || "")}</td><td class="status">${esc(w.status)}</td><td>${esc(w.gpu_name || "N/A")} ${w.gpu_count ? `× ${w.gpu_count}` : ""}<br><small>${w.vram_mb ?? 0} MB VRAM · CUDA ${w.cuda_version || "-"}</small></td><td>${(w.capabilities || []).join(", ") || "-"}</td><td>${esc(w.current_task || "-")}</td><td><button onclick="nodeAction('${w.node_name}','drain')">Drain</button> <button onclick="nodeAction('${w.node_name}','resume')">Resume</button> <button onclick="nodeAction('${w.node_name}','self-test')">Self-test</button> <button class="danger" onclick="nodeAction('${w.node_name}','quarantine')">Quarantine</button></td></tr>`).join("")}</table>`
-            : "<p>Workers відсутні</p>";
           renderWorkers();
           if (workerWizardInterval && workerWizardStep === 2) {
             const newWorker = workers.find(

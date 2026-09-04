@@ -31,7 +31,7 @@ def configure_logging(service: str) -> logging.Logger:
     return logger
 
 
-def read_logs(limit: int = 200, level: str | None = None, job_id: str | None = None) -> list[dict]:
+def read_logs(limit: int = 200, level: str | None = None, job_id: str | None = None, node_name: str | None = None) -> list[dict]:
     result = []
     for path in Path(os.getenv("LOG_ROOT", "logs")).glob("*.jsonl"):
         try:
@@ -46,6 +46,8 @@ def read_logs(limit: int = 200, level: str | None = None, job_id: str | None = N
             if level and item.get("level") != level.upper():
                 continue
             if job_id and item.get("job_id") != job_id:
+                continue
+            if node_name and item.get("node_name") != node_name:
                 continue
             result.append(item)
     return sorted(result, key=lambda item: item.get("timestamp", ""), reverse=True)[:limit]

@@ -192,8 +192,8 @@ def test_node_registration_push_token_has_forward_migration():
 
 def test_web_ui_is_utf8_and_has_orchestration_sections():
     html = open("web/index.html", encoding="utf-8").read()
-    assert "Панель керування" in html
-    assert "Dead-letter queue" in html
+    assert "Dashboard" in html
+    assert "Черга помилкових завдань" in html
     assert "Етапи та сцени" in html
     assert "РќР" not in html
     assert "вЂ" not in html

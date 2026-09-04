@@ -1,5 +1,21 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.0.95
+- Додано новий Dashboard за технічним завданням: 3-колоночна структура, світла мінімалістична тема, лівий sidebar з навігацією, центральна область з KPI/архітектурою/ресурсами/таблицею воркерів, правий sidebar з активністю/швидкими діями/ліцензією.
+- Додано KPI-картки: Воркери, Активні завдання, Завдань у черзі, Навантаження системи, Використання GPU.
+- Додано блок Архітектура системи з CORE + групами вузлів (GPU/Text/Voice/Publisher/Backup/Monitoring) та фільтрацією.
+- Додано donut chart статусів завдань, прогрес-бари ресурсів (CPU/RAM/Диск), таблицю Worker з контекстним меню `⋮`.
+- Додано детальні widgets для режимів Maintenance/Update на Dashboard.
+- Додано profile dropdown, notification dropdown, help button.
+- Додано підтримку логотипу: завантаження через Settings, серверне збереження через `/api/settings/logo`.
+- Додано повне контекстне меню Worker: Відкрити, Drain, Disable, Restart Service, Update, Health Check, View Logs, Remove.
+- Додано фільтрацію архітектури за роллю та статусом (Offline/Error) з автопереходом на Workers.
+- Розширено `/api/nodes/{node_id}/actions`: додано дії `disable`, `enable`, `restart`, `update`, `logs`.
+- Розширено `/api/logs` фільтром `node_name`.
+- Додано `/api/settings/logo` GET/PUT/DELETE для збереження логотипу dashboard.
+- Оновлено `/api/system/license` проксіювання.
+- Оновлено UI логіку: real-time оновлення, skeleton loading, empty/error states, адаптивність.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.0.94
 - Виправлено логіку створення релізу
 

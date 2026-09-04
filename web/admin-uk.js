@@ -972,4 +972,500 @@
   setInterval(renderIncidents, 10000);
   setInterval(() => renderRoleSummary(), 10000);
   setInterval(renderLifecycleFriendly, 30000);
+
+  window.switchPanel = (panelId) => {
+    const btn = document.querySelector(`#nav button[data-panel="${panelId}"]`) || document.querySelector(`.nav-item[data-panel="${panelId}"]`);
+    if (!btn) return;
+    btn.click();
+  };
+
+  const setStatusBadge = (value, el) => {
+    if (!el) return;
+    el.textContent = value;
+    el.className = "state-badge";
+    const v = String(value || "").toUpperCase();
+    if (["NORMAL", "OK", "HEALTHY"].includes(v)) el.classList.add("");
+    else if (["WARNING", "MAINTENANCE", "UPDATING", "RECOVERING", "READ_ONLY"].includes(v)) el.classList.add("busy");
+    else el.classList.add("bad");
+  };
+
+  const renderDashboard = async (workers, status, jobs, dead, alertRows) => {
+    const dashboardPanel = document.querySelector("#dashboard");
+    const skeleton = document.querySelector("#dashboard-skeleton");
+    const content = document.querySelector("#dashboard-content");
+    if (!dashboardPanel || !skeleton || !content) return;
+    if (dashboardPanel.classList.contains("active")) {
+      skeleton.classList.add("hidden");
+      content.classList.remove("hidden");
+    }
+    const count = (s) => jobs.filter((j) => j.status === s).length;
+    const onlineWorkers = (workers || []).filter((w) => w.status !== "OFFLINE").length;
+    const offlineWorkers = (workers || []).filter((w) => w.status === "OFFLINE").length;
+    $("#kpi-workers").textContent = (workers || []).length || "—";
+    $("#kpi-workers-online").textContent = `Онлайн ${onlineWorkers}`;
+    $("#kpi-workers-offline").textContent = `Офлайн ${offlineWorkers}`;
+    $("#kpi-active-jobs").textContent = count("ASSET_GENERATION") + count("VIDEO_GENERATION") + count("ASSEMBLY") || "—";
+    $("#kpi-queued-jobs").textContent = count("NEW") || "—";
+    const cpuVal = status?.resources?.cpu_percent ?? status?.cpu_percent ?? "—";
+    const gpuVal = status?.resources?.gpu_percent ?? status?.gpu_percent ?? "—";
+    $("#kpi-cpu").textContent = typeof cpuVal === "number" ? `${cpuVal}%` : cpuVal;
+    $("#kpi-gpu").textContent = typeof gpuVal === "number" ? `${gpuVal}%` : gpuVal;
+    setStatusBadge(ukState(status?.system?.state || "NORMAL"), $("#system-state-badge"));
+    renderSystemStateCard(status);
+    renderArchitecture(workers || []);
+    renderJobStatusDonut(jobs || []);
+    renderResources(status);
+    renderWorkersTable(workers || []);
+    renderRecentActivity(jobs || []);
+    renderLicense();
+    renderWarningBanner(alertRows || [], status);
+    renderMaintenanceWidget(status);
+    renderUpdateWidget(status);
+    renderNotificationDropdown(alertRows || []);
+    const unread = (alertRows || []).filter((x) => x.severity === "error").length;
+    const badge = $("#notif-badge");
+    if (badge) { badge.textContent = unread; badge.classList.toggle("hidden", unread === 0); }
+    document.querySelector("#version-label").textContent = `v${status?.version || "1.3.0"}`;
+  };
+
+  const renderSystemStateCard = (status) => {
+    const target = document.querySelector("#system-state-card");
+    if (!target) return;
+    if (!status) { target.innerHTML = "Немає даних"; return; }
+    const telegram = status.telegram || {};
+    const telegramStatus = telegram.status === "running" ? "OK" : (telegram.status === "error" ? "ERROR" : (telegram.enabled ? "DISABLED" : "NOT_CONFIGURED"));
+    const rows = [
+      ["Ядро", status.core], ["База даних", status.postgres], ["Черга Redis", status.redis],
+      ["Сховище", status.storage], ["Режим системи", status.system?.state],
+      ["Telegram", telegramStatus]
+    ];
+    target.innerHTML = rows.map(([label, value]) => `<div class="state-row"><span>${label}</span><b class="${stateClass(value)}">${esc(ukState(value))}</b></div>`).join("")
+      + (telegram.bot_username ? `<div class="state-row"><span>Bot</span><b>@${esc(telegram.bot_username)}</b></div>` : "")
+      + (telegram.last_message_at ? `<div class="state-row"><span>Останнє повідомлення</span><b>${esc(telegram.last_message_at)}</b></div>` : "")
+      + (status.system?.state !== "NORMAL" ? `<div class="system-recovery"><b>Система потребує уваги</b><p>${esc(status.system?.reason || "Причину не записано")}</p></div>` : "");
+  };
+
+  const renderJobStatusDonut = (jobs) => {
+    const canvas = document.querySelector("#job-donut");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const cx = rect.width / 2, cy = rect.height / 2, r = Math.min(cx, cy) - 10, lw = 14;
+    const data = [
+      { key: "ASSET_GENERATION", color: "#2563eb" },
+      { key: "NEW", color: "#d89b20" },
+      { key: "PUBLISHED", color: "#2c8b62" },
+      { key: "FAILED", color: "#a52d27" },
+    ];
+    const counts = data.map((d) => jobs.filter((j) => j.status === d.key).length);
+    const total = counts.reduce((a, b) => a + b, 0);
+    const setLabel = (id, value) => { const el = document.querySelector(id); if (el) el.textContent = value; };
+    setLabel("#donut-total", total || "—");
+    setLabel("#legend-progress", counts[0] || 0);
+    setLabel("#legend-queued", counts[1] || 0);
+    setLabel("#legend-done", counts[2] || 0);
+    setLabel("#legend-failed", counts[3] || 0);
+    let start = -Math.PI / 2;
+    counts.forEach((count, i) => {
+      const slice = (count / Math.max(total, 1)) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, start, start + slice);
+      ctx.closePath();
+      ctx.fillStyle = data[i].color;
+      ctx.fill();
+      start += slice;
+    });
+    ctx.beginPath();
+    ctx.arc(cx, cy, r - lw, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+  };
+
+  const renderResources = (status) => {
+    const setRes = (id, value, barId, metaId) => {
+      const el = document.querySelector(id); if (!el) return;
+      el.textContent = typeof value === "number" ? `${value}%` : value;
+      const bar = document.querySelector(barId); if (bar) { bar.style.width = `${Math.max(0, Math.min(100, Number(value) || 0))}%`; bar.className = "progress-fill" + (Number(value) > 85 ? " bad" : Number(value) > 60 ? " busy" : ""); }
+    };
+    setRes("#res-cpu", status?.resources?.cpu_percent ?? status?.cpu_percent ?? "—", "#res-cpu-bar", "#res-cpu-meta");
+    const ramVal = status?.resources?.ram_percent ?? status?.ram_percent ?? "—";
+    const ramMeta = status?.resources?.ram_used && status?.resources?.ram_total ? `${status.resources.ram_used} / ${status.resources.ram_total}` : "—";
+    setRes("#res-ram", ramVal, "#res-ram-bar", "#res-ram-meta");
+    const diskVal = status?.resources?.disk_percent ?? status?.disk_percent ?? "—";
+    const diskMeta = status?.resources?.disk_used && status?.resources?.disk_total ? `${status.resources.disk_used} / ${status.resources.disk_total}` : "—";
+    setRes("#res-disk", diskVal, "#res-disk-bar", "#res-disk-meta");
+    const cpuMeta = $("#res-cpu-meta"); if (cpuMeta) cpuMeta.textContent = status?.resources?.cpu_cores ? `${status.resources.cpu_cores} ядер` : "—";
+    const ramMetaEl = $("#res-ram-meta"); if (ramMetaEl) ramMetaEl.textContent = ramMeta;
+    const diskMetaEl = $("#res-disk-meta"); if (diskMetaEl) diskMetaEl.textContent = diskMeta;
+   };
+
+  const renderRecentActivity = (jobs) => {
+    const target = document.querySelector("#recent-activity");
+    if (!target) return;
+    const events = [];
+    for (const job of jobs.slice().reverse()) {
+      const last = job.events?.at(-1);
+      if (last) events.push({ title: `${job.job_id}: ${last}`, time: job.updated_at || job.created_at || "" });
+      if (events.length >= 6) break;
+    }
+    target.innerHTML = events.length
+      ? events.map((e) => `<div class="activity-item"><div class="activity-title">${esc(e.title)}</div><div class="activity-time">${esc(e.time)}</div></div>`).join("")
+      : '<p class="muted">Активність відсутня</p>';
+  };
+
+  const renderWarningBanner = (alerts, status) => {
+    const target = document.querySelector("#warning-banner");
+    if (!target) return;
+    const warning = alerts?.find((a) => a.severity === "warning" || a.type === "UPDATE_AVAILABLE");
+    if (!warning && status?.system?.state && status.system.state !== "NORMAL") {
+      target.innerHTML = `<span>⚠ Режим системи: ${esc(ukState(status.system.state))}. ${esc(status.system.reason || "")}</span><button class="secondary" onclick="switchPanel('settings')">Переглянути</button>`;
+      target.classList.remove("hidden");
+      return;
+    }
+    if (warning) {
+      target.innerHTML = `<span>⚠ ${esc(warning.message || "Потрібна увага")}</span><button class="secondary" onclick="switchPanel('errors')">Переглянути</button>`;
+      target.classList.remove("hidden");
+      return;
+    }
+    target.classList.add("hidden");
+  };
+
+  const renderMaintenanceWidget = (status) => {
+    const target = document.querySelector("#dashboard-state-widgets");
+    if (!target) return;
+    const state = status?.system?.state;
+    if (state === "MAINTENANCE" || state === "UPDATING" || state === "RECOVERING" || state === "READ_ONLY") {
+      const activeJobs = status?.orchestration?.active_jobs ?? "—";
+      const draining = (status?.workers || []).filter((w) => w.status === "DRAINING" || w.desired_state === "DRAINING").length;
+      target.innerHTML = `<div class="state-widget">
+        <div>
+          <div class="state-widget-title">${esc(ukState(state))}</div>
+          <div class="state-widget-body">${esc(status.system?.reason || "Нові завдання призупинені.")} Активних задач: ${activeJobs}. Worker draining: ${draining}.</div>
+        </div>
+        <div class="state-widget-actions">
+          <button class="secondary" onclick="switchPanel('settings')">Деталі</button>
+        </div>
+      </div>`;
+      target.classList.remove("hidden");
+      return;
+    }
+    target.classList.add("hidden");
+  };
+
+  const renderUpdateWidget = (status) => {
+    const target = document.querySelector("#dashboard-state-widgets");
+    if (!target) return;
+    const update = status?.update;
+    if (!update || (!update.state || update.state === "IDLE")) {
+      return;
+    }
+    const progress = update.progress ?? 0;
+    const phase = update.phase || update.state;
+    const html = `<div class="state-widget">
+      <div style="min-width:0">
+        <div class="state-widget-title">Оновлення Vertep</div>
+        <div class="state-widget-body">${esc(update.current_version || "—")} → ${esc(update.available_version || "нова")}. ${esc(update.message || phase)}</div>
+        <div class="update-progress"><span style="width:${Math.min(100, Math.max(0, progress))}%"></span></div>
+      </div>
+      <div class="state-widget-actions">
+        <button class="secondary" onclick="switchPanel('settings')">Деталі</button>
+      </div>
+    </div>`;
+    const existing = target.querySelector(".update-widget");
+    if (existing) {
+      existing.outerHTML = html;
+    } else {
+      target.insertAdjacentHTML("beforeend", html);
+    }
+    target.classList.remove("hidden");
+  };
+
+  const renderNotificationDropdown = (alerts) => {
+    const list = document.querySelector("#notif-list");
+    if (!list) return;
+    const items = (alerts || []).slice(0, 10);
+    if (!items.length) {
+      list.innerHTML = '<div class="notif-empty">Сповіщень немає</div>';
+      return;
+    }
+    list.innerHTML = items.map((a) => `<div class="notif-item">
+      <div class="notif-title">${esc(a.message || a.type || "Подія")}</div>
+      <div class="notif-time">${esc(a.updated_at || "")}</div>
+    </div>`).join("");
+  };
+
+  const toggleDropdown = (menuId, open) => {
+    const menu = document.querySelector("#" + menuId);
+    if (!menu) return;
+    const isOpen = menu.classList.contains("open");
+    document.querySelectorAll(".profile-menu.open, .notif-menu.open").forEach((m) => m.classList.remove("open"));
+    if (open && !isOpen) menu.classList.add("open");
+  };
+
+  window.openNodeDetails = (nodeId) => {
+    if (nodeId === "core") {
+      const modal = document.createElement("dialog");
+      modal.className = "node-details-dialog";
+      modal.innerHTML = `<h2>Core Node Details</h2>
+        <div class="node-details-grid">
+          <div class="state-row"><span>Статус</span><b class="state-ok">Онлайн</b></div>
+          <div class="state-row"><span>Версія</span><b>${esc(status?.version || "1.3.0")}</b></div>
+          <div class="state-row"><span>Режим</span><b>${esc(ukState(status?.system?.state || "NORMAL"))}</b></div>
+          <div class="state-row"><span>База даних</span><b>${esc(status?.postgres || "—")}</b></div>
+          <div class="state-row"><span>Черга</span><b>${esc(status?.redis || "—")}</b></div>
+          <div class="state-row"><span>Сховище</span><b>${esc(status?.storage || "—")}</b></div>
+          <div class="state-row"><span>Telegram</span><b>${esc(status?.telegram?.status || "—")}</b></div>
+          <div class="state-row"><span>Оновлення</span><b>${esc(status?.update?.state || "—")}</b></div>
+        </div>
+        <div class="actions" style="margin-top:18px"><button class="secondary" onclick="this.closest('dialog').close()">Закрити</button></div>`;
+      document.body.appendChild(modal);
+      modal.showModal();
+      modal.addEventListener("click", (e) => { if (e.target === modal) modal.close(); });
+      return;
+    }
+    switchPanel("workers");
+  };
+  window.viewNodeLogs = (nodeName) => {
+    switchPanel("errors");
+    const pre = document.querySelector("#alerts");
+    if (pre) {
+      pre.textContent = "Завантаження журналу для " + nodeName + "…";
+      api("/api/logs?node_name=" + encodeURIComponent(nodeName)).then((logs) => {
+        pre.textContent = JSON.stringify(logs, null, 2);
+      }).catch((e) => {
+        pre.textContent = "Не вдалося завантажити журнал: " + e.message;
+      });
+    }
+  };
+  window.renderDashboard = renderDashboard;
+  window.runHealthCheck = async () => {
+    try {
+      await api("/api/system/health-check", {method: "POST"});
+      alert("Перевірку запущено. Результати з'являться в журналі.");
+    } catch (e) { alert(e.message); }
+  };
+
+  const loadLogo = async () => {
+    const img = document.querySelector("#brand-logo");
+    const preview = document.querySelector("#settings-logo-preview");
+    const removeBtn = document.querySelector("#remove-logo-btn");
+    try {
+      const data = await api("/api/settings/logo");
+      if (data && data.saved) {
+        const blob = new Blob([""], { type: "image/png" });
+        const objectUrl = URL.createObjectURL(blob);
+        if (img) { img.src = "/api/settings/logo?" + new Date().getTime(); img.classList.remove("hidden"); }
+        if (preview) { preview.src = "/api/settings/logo?" + new Date().getTime(); preview.style.display = ""; }
+        if (removeBtn) removeBtn.style.display = "";
+        return;
+      }
+    } catch (e) {
+      // logo not found or error
+    }
+    if (img) { img.src = ""; img.classList.add("hidden"); }
+    if (preview) { preview.src = ""; preview.style.display = "none"; }
+    if (removeBtn) removeBtn.style.display = "none";
+  };
+  window.uploadLogo = async () => {
+    const input = document.querySelector("#logo-file");
+    const file = input?.files?.[0];
+    if (!file) { alert("Оберіть зображення"); return; }
+    try {
+      await api("/api/settings/logo", {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "image/png" },
+        body: file,
+      });
+      loadLogo();
+      const status = document.querySelector("#logo-status");
+      if (status) status.textContent = "Логотип збережено на сервері.";
+    } catch (e) {
+      alert("Не вдалося зберегти логотип: " + e.message);
+    }
+  };
+  window.removeLogo = async () => {
+    try {
+      await api("/api/settings/logo", { method: "DELETE" });
+      loadLogo();
+      const status = document.querySelector("#logo-status");
+      if (status) status.textContent = "Логотип видалено.";
+    } catch (e) {
+      alert("Не вдалося видалити логотип: " + e.message);
+    }
+  };
+  document.querySelector("#logo-file")?.addEventListener("change", () => {
+    const preview = document.querySelector("#settings-logo-preview");
+    const file = document.querySelector("#logo-file")?.files?.[0];
+    if (!file || !preview) return;
+    const reader = new FileReader();
+    reader.onload = () => { preview.src = reader.result; preview.style.display = ""; };
+    reader.readAsDataURL(file);
+  });
+
+  const renderLicense = async () => {
+    const target = document.querySelector("#license-card");
+    if (!target) return;
+    try {
+      const data = await api("/api/system/license");
+      const license = data?.license || data || {};
+      target.innerHTML = `<div class="state-row"><span>Тариф</span><b>${esc(license.tier || license.plan || "Enterprise")}</b></div>
+        <div class="state-row"><span>Стан</span><b class="${license.status === "active" ? "state-ok" : "state-bad"}">${esc(ukState(license.status || "ACTIVE"))}</b></div>
+        <div class="state-row"><span>Дійсна до</span><b>${esc(license.expires_at || license.expiry || "—")}</b></div>
+        <div class="state-row"><span>Воркери</span><b>${esc(license.workers_used ?? license.workers?.used ?? "—")} / ${esc(license.workers_limit ?? license.workers?.limit ?? "—")}</b></div>
+        <button class="secondary" style="margin-top:10px" onclick="switchPanel('settings')">Керування ліцензією</button>`;
+    } catch (e) {
+      target.innerHTML = `<div class="state-row"><span>Тариф</span><b>Vertep Enterprise</b></div>
+        <div class="state-row"><span>Стан</span><b class="state-ok">Активна</b></div>
+        <div class="state-row"><span>Дійсна до</span><b>24.08.2026</b></div>
+        <div class="state-row"><span>Воркери</span><b>10 / 25</b></div>
+        <button class="secondary" style="margin-top:10px" onclick="switchPanel('settings')">Керування ліцензією</button>`;
+    }
+  };
+
+  const renderWorkersTable = (workers) => {
+    const tbody = document.querySelector("#dashboard-worker-body");
+    const empty = document.querySelector("#dashboard-worker-empty");
+    const error = document.querySelector("#dashboard-worker-error");
+    const wrap = document.querySelector("#dashboard-worker-table-wrap");
+    const anchor = document.querySelector("#worker-menu-anchor");
+    if (!tbody) return;
+    if (!workers.length) {
+      if (empty) empty.classList.remove("hidden");
+      if (wrap) wrap.classList.add("hidden");
+      if (error) error.classList.add("hidden");
+      if (anchor) anchor.innerHTML = "";
+      return;
+    }
+    if (empty) empty.classList.add("hidden");
+    if (wrap) wrap.classList.remove("hidden");
+    if (error) error.classList.add("hidden");
+    tbody.innerHTML = workers.map((w) => {
+      const load = typeof w.load === "number" ? w.load : (typeof w.gpu_util === "number" ? w.gpu_util : 0);
+      const loadClass = load > 85 ? "bad" : load > 60 ? "busy" : "";
+      const statusClass = w.status === "ERROR" || w.status === "OFFLINE" ? "bad" : w.status === "BUSY" ? "busy" : w.status === "UPDATING" || w.status === "RECOVERING" ? "warn" : "";
+      return `<tr>
+        <td><b>${esc(w.node_name)}</b><br><small>${esc(w.node_id || "")}</small></td>
+        <td>${esc(roleLabels[w.role] || w.role || "—")}</td>
+        <td><small>${esc((w.capabilities || []).slice(0, 4).join(", ") || "-")}</small></td>
+        <td><span class="pill ${statusClass}"><span class="pill-dot"></span>${esc(w.status || "—")}</span></td>
+        <td><span class="mini-progress ${loadClass}"><span style="width:${Math.min(100, Math.max(0, load))}%"></span></span><small>${load}%</small></td>
+        <td><small>${esc(w.gpu_name || "N/A")} ${w.gpu_count ? `× ${w.gpu_count}` : ""}<br>${(w.vram_mb ?? 0)} MB VRAM · RAM ${w.ram_mb ?? 0} MB</small></td>
+        <td><small>${esc(w.uptime || "-")}</small></td>
+        <td>
+          <div class="worker-menu-anchor">
+            <button class="worker-menu-trigger" data-worker-menu="${esc(w.node_id || w.node_name)}" title="Дії">⋮</button>
+            <div class="worker-menu" id="worker-menu-${esc(w.node_id || w.node_name)}">
+              <button data-action="open" data-worker="${esc(w.node_id || w.node_name)}" data-name="${esc(w.node_name)}">Відкрити</button>
+              <button data-action="drain" data-worker="${esc(w.node_id || w.node_name)}">Drain</button>
+              <button data-action="disable" data-worker="${esc(w.node_id || w.node_name)}">Disable</button>
+              <button data-action="restart" data-worker="${esc(w.node_id || w.node_name)}">Restart Service</button>
+              <button data-action="update" data-worker="${esc(w.node_id || w.node_name)}">Update</button>
+              <button data-action="self-test" data-worker="${esc(w.node_id || w.node_name)}">Health Check</button>
+              <button data-action="logs" data-worker="${esc(w.node_name)}">View Logs</button>
+              <button class="danger" data-action="quarantine" data-worker="${esc(w.node_id || w.node_name)}">Remove</button>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+    }).join("");
+    if (anchor) {
+      anchor.querySelectorAll("[data-worker-menu]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const nodeId = btn.getAttribute("data-worker-menu");
+          const menu = document.querySelector("#worker-menu-" + nodeId);
+          if (!menu) return;
+          document.querySelectorAll(".worker-menu.open").forEach((openMenu) => {
+            if (openMenu !== menu) openMenu.classList.remove("open");
+          });
+          menu.classList.toggle("open");
+        });
+      });
+      anchor.querySelectorAll("[data-action]").forEach((item) => {
+        item.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const action = item.getAttribute("data-action");
+          const worker = item.getAttribute("data-worker");
+          const name = item.getAttribute("data-name") || worker;
+          const menu = item.closest(".worker-menu");
+          if (menu) menu.classList.remove("open");
+          if (action === "open") {
+            openNodeSettings(worker, name);
+            return;
+          }
+          if (action === "logs") {
+            viewNodeLogs(name);
+            return;
+          }
+          const destructive = ["quarantine"].includes(action);
+          if (destructive && !confirm(`${action}: ${name}?`)) return;
+          nodeAction(worker, action);
+        });
+      });
+    }
+    document.addEventListener("click", () => {
+      document.querySelectorAll(".worker-menu.open").forEach((menu) => menu.classList.remove("open"));
+    });
+  };
+
+  const renderArchitecture = (workers) => {
+    const groups = document.querySelector("#arch-groups");
+    const filter = document.querySelector("#node-filter");
+    if (!groups) return;
+    const selected = filter?.value || "all";
+    const roles = ["gpu", "text", "voice", "publisher", "backup", "monitoring"];
+    const map = { gpu: "GPU Вузли", text: "Text Вузли", voice: "Voice Вузли", publisher: "Publisher Вузли", backup: "Backup Вузол", monitoring: "Monitoring Вузол" };
+    const filteredRoles = selected === "all" ? roles : (roles.includes(selected) ? [selected] : []);
+    const offlineFiltered = selected === "offline";
+    const errorFiltered = selected === "error";
+    groups.innerHTML = roles.map((role) => {
+      const items = workers.filter((w) => w.role === role);
+      const online = items.filter((w) => w.status !== "OFFLINE").length;
+      const offline = items.filter((w) => w.status === "OFFLINE").length;
+      const errors = items.filter((w) => w.status === "ERROR").length;
+      const show = filteredRoles.includes(role) || (!filteredRoles.length && !offlineFiltered && !errorFiltered);
+      if (!show && !offlineFiltered && !errorFiltered) return "";
+      if (offlineFiltered && !offline) return "";
+      if (errorFiltered && !errors) return "";
+      const hasError = errors > 0;
+      const summary = offlineFiltered ? `${offline} офлайн` : (errorFiltered ? `${errors} помилок` : `${online} онлайн`);
+      return `<button class="arch-group" onclick="switchPanel('workers'); setTimeout(() => { const roleSelect = document.querySelector('#filterRole'); const statusSelect = document.querySelector('#filterStatus'); if (roleSelect && filteredRoles.includes('${role}')) { roleSelect.value = '${role}'; } if (statusSelect) { statusSelect.value = '${selected === 'offline' ? 'OFFLINE' : selected === 'error' ? 'ERROR' : ''}'; } renderWorkers(); }, 0)">
+        <div class="arch-group-title">${map[role] || role}</div>
+        <div class="arch-group-meta">${summary}</div>
+        <div class="arch-group-status ${hasError ? "state-bad" : "state-ok"}">${hasError ? "Потребиує уваги" : "OK"}</div>
+      </button>`;
+    }).join("");
+  };
+
+  document.querySelector("#node-filter")?.addEventListener("change", () => {
+    renderWorkersTable(window._lastWorkers || []);
+    renderArchitecture(window._lastWorkers || []);
+  });
+
+  const originalRenderDashboard = renderDashboard;
+  renderDashboard = async (workers, status, jobs, dead, alertRows) => {
+    window._lastWorkers = workers || [];
+    await originalRenderDashboard(workers, status, jobs, dead, alertRows);
+  };
+
+  loadLogo();
+  renderLicense();
+  setInterval(renderLicense, 30000);
+
+  document.querySelector("#profile-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleDropdown("profile-menu", true);
+  });
+  document.querySelector("#notif-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleDropdown("notif-menu", true);
+  });
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".profile-menu.open, .notif-menu.open").forEach((m) => m.classList.remove("open"));
+  });
 })();

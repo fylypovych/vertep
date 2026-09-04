@@ -738,8 +738,8 @@ def security_check():
     return {"ok": not weak, "weak_or_missing": weak, "recommendation": "Use random values of at least 32 characters"}
 
 @app.get("/api/logs")
-def logs(limit: int = 200, level: str | None = None, job_id: str | None = None):
-    return read_logs(min(max(limit, 1), 1000), level, job_id)
+def logs(limit: int = 200, level: str | None = None, job_id: str | None = None, node_name: str | None = None):
+    return read_logs(min(max(limit, 1), 1000), level, job_id, node_name)
 
 @app.post("/api/logs/ingest")
 def ingest_logs(batch: WorkerLogBatch, request: Request):
@@ -1989,6 +1989,21 @@ def control_node(node_id: str, command: NodeAction):
             raise HTTPException(404, "Node is missing or revoked") from error
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
+    elif command.action == "disable":
+        worker.update({"desired_state": "DISABLED", "status": "OFFLINE"})
+    elif command.action == "enable":
+        worker.pop("desired_state", None)
+        worker["status"] = "READY" if (worker.get("self_test") or {}).get("status") == "PASSED" else "ERROR"
+    elif command.action == "restart":
+        worker["desired_state"] = "RESTARTING"
+        worker["status"] = "UPDATING"
+    elif command.action == "logs":
+        pass
+    elif command.action == "update":
+        worker["desired_state"] = "UPDATING"
+        worker["status"] = "UPDATING"
+    else:
+        raise HTTPException(400, f"Unsupported action: {command.action}")
     worker["state_reason"] = command.reason
     worker["state_changed_at"] = timestamp
     store.save_worker(worker)
@@ -2291,6 +2306,35 @@ def delete_secret_setting(name: str):
         return {"secrets": set_integration_secret(name, None), "values_exposed": False}
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@app.get("/api/settings/logo")
+def get_logo():
+    logo_path = config_root() / "dashboard-logo.png"
+    if not logo_path.is_file():
+        raise HTTPException(404, "Logo not found")
+    return FileResponse(logo_path, media_type="image/png")
+
+
+@app.put("/api/settings/logo")
+async def put_logo(request: Request):
+    content_type = request.headers.get("content-type", "")
+    if "image/png" not in content_type and "image/" not in content_type:
+        raise HTTPException(422, "Expected image upload")
+    body = await request.body()
+    if len(body) > 2 * 1024 * 1024:
+        raise HTTPException(413, "Logo too large")
+    logo_path = config_root() / "dashboard-logo.png"
+    logo_path.write_bytes(body)
+    return {"saved": True}
+
+
+@app.delete("/api/settings/logo")
+def delete_logo():
+    logo_path = config_root() / "dashboard-logo.png"
+    if logo_path.is_file():
+        logo_path.unlink()
+    return {"deleted": True}
 
 
 async def _internal_api(method: str, base_environment: str, path: str,
