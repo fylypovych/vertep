@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.2
+- Додано `.dockerignore` з виключенням `**/node_modules`: раніше крок `COPY web-v2/ .` перезаписував свіжі node_modules від `npm ci` на закомічені з Windows, через що `ng` втрачав exec-біт і збірка образу `core` падала з `Permission denied` (код 127).
+- Додано `node_modules/` та `web-v2/node_modules/` до `.gitignore`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.1
 - Виправлено тест `tests/test_release.py::test_runtime_version_comes_from_version_file`, який жорстко очікував префікс версії `0.0.0.` і блокував release workflow після переходу на нову послідовність версій `0.0.1.x`.
 

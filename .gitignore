@@ -11,3 +11,5 @@ runtime/
 *.pyc
 /.kilo
 /.vscode
+node_modules/
+web-v2/node_modules/
