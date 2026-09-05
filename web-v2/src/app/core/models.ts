@@ -27,7 +27,7 @@ export interface Character {
   system_prompt?: string;
   voice?: { provider: string; voice: string };
   visual?: { style: string; aspect_ratio: string };
-  generation?: { workflow: string; min_vram_mb: number };
+  generation?: { workflow: string; min_vram_mb: number; max_retries: number };
   publishing?: { enabled: boolean };
 }
 

@@ -1,10 +1,9 @@
 import { Component } from '@angular/core';
-import { RouterModule } from '@angular/router';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-header',
   standalone: true,
-  imports: [RouterModule],
   template: `
     <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6">
       <div>
@@ -30,4 +29,21 @@ import { RouterModule } from '@angular/router';
 export class HeaderComponent {
   title = 'Дашборд';
   subtitle = 'Огляд вашої системи Vertep';
+
+  constructor(private router: Router) {
+    this.router.events.subscribe(() => {
+      const route = this.router.routerState.root.firstChild;
+      if (route?.snapshot.data?.['title']) {
+        this.title = route.snapshot.data['title'];
+      }
+      const subtitles: Record<string, string> = {
+        '': 'Огляд вашої системи Vertep',
+        'jobs': 'Управління завданнями',
+        'workers': 'Вузли та їх стан',
+        'characters': 'Персонажі контенту',
+        'settings': 'Системні налаштування',
+      };
+      this.subtitle = subtitles[route?.snapshot.routeConfig?.path || ''] || '';
+    });
+  }
 }

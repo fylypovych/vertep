@@ -2781,3 +2781,4 @@ def job_file(job_id: str, folder: str, filename: str):
     return download_artifact(job_id, artifact.artifact_id)
 
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
+app.mount("/admin", StaticFiles(directory="web-v2/dist/vertep-admin-v2", html=True), name="web-v2")

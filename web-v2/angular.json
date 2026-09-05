@@ -21,6 +21,12 @@
             "styles": ["src/styles.css"],
             "scripts": []
           }
+        },
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "options": {
+            "buildTarget": "vertep-admin-v2:build"
+          }
         }
       }
     }

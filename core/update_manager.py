@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .atomic_write import atomic_write_json
 
 _lock = threading.Lock()
 
@@ -58,9 +59,7 @@ def request_update(action: str) -> dict:
         pending = {**status, "state": "PENDING", "phase": phase, "action": action,
                    "request_id": request_id, "progress": 1,
                    "message": f"{action.title()} request queued", "updated_at": utc_now(), "pending": 1}
-        status_temporary = root / ".status.tmp"
-        status_temporary.write_text(json.dumps(pending, indent=2), encoding="utf-8")
-        status_temporary.replace(root / "status.json")
+        atomic_write_json(root / "status.json", pending)
         # Publish the request only after PENDING is durable; the systemd path unit may react immediately.
         temporary.replace(destination)
         return pending

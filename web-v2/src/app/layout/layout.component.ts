@@ -2,11 +2,12 @@ import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { SidebarComponent } from './sidebar.component';
 import { HeaderComponent } from './header.component';
+import { ToastContainerComponent } from '../shared/toast-container.component';
 
 @Component({
   selector: 'app-layout',
   standalone: true,
-  imports: [RouterOutlet, SidebarComponent, HeaderComponent],
+  imports: [RouterOutlet, SidebarComponent, HeaderComponent, ToastContainerComponent],
   template: `
     <div class="flex h-screen bg-slate-50">
       <app-sidebar />
@@ -16,6 +17,7 @@ import { HeaderComponent } from './header.component';
           <router-outlet></router-outlet>
         </main>
       </div>
+      <app-toast-container />
     </div>
   `,
 })

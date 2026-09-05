@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.0
+- Переведено збірку образу на багатоетапний `Dockerfile`: додано окремий `web-v2` Node-етап з `npm ci` та `npm run build`.
+- Змонтовано статичний Web UI v2 (Angular) за шляхом `/admin` у `core/app.py`.
+- Додано спільний модуль атомарного запису файлів `core/atomic_write.py` та переведено `core/update_manager.py` на `atomic_write_json`.
+- Додано автентифікацію Web UI: `AuthGuard`, сторінку входу `login`, класовий `AuthInterceptor` з редиректом на `/login` за відповіді 401, новий `api.service` замість `vertep-api.service`.
+- Додано сервіси `toast` і `confirm`, i18n-пайп `uk`, компоненти `confirm-dialog` та `toast-container`.
+- Оновлено маршрутизацію (`canActivate`, title сторінок) та провайдерів у `app.config.ts`.
+- Реалізовано CRUD персонажів: створення, оновлення та видалення.
+- Оновлено `web-v2/package.json` (додано `@playwright/test`, скрипти `build`/`start`/`test:e2e`), `web-v2/angular.json` (serve) та `web-v2/postcss.config.js` (`@tailwindcss/postcss`).
+- Додано Playwright e2e тести для Web UI.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.0.99
+- Додано Web UI v2 на Angular: каркас застосунку, роутинг, layout зі sidebar/header, сторінки Dashboard, Jobs, Workers, Characters, Settings.
+- Додано API-сервіс, auth interceptor та моделі даних (Character, Worker тощо).
+- Оновлено release workflow.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.0.98
 - Виправлено Web UI Dashboard: додано favicon, прибрано залежність від `/api/settings/logo` (404), версія тепер завантажується з `/api/status` замість хардкоду `v1.3.0`.
 - Виправлено навігацію Sidebar: усі пункти мають унікальний `data-panel`, додано відсутні панелі (`characters`, `brands`, `workflows`, `queue`, `errors`), замінено `<a>` на `<button>`.
