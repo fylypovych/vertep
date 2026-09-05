@@ -1,0 +1,16 @@
+/* Dialogs */
+.node-details-dialog {
+  width: min(520px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  padding: 18px;
+}
+.node-details-dialog::backdrop { background: #00000080; }
+.node-details-grid { display: grid; gap: 0; }
+.node-details-grid .state-row { border-bottom: 1px solid var(--border-muted); }
+
+/* Responsive */
+@media (max-width: 1320px) {

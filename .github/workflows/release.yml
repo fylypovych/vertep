@@ -162,7 +162,7 @@ jobs:
             "update-manifest-$version.json" > "SHA256SUMS-$version"
       - name: Appliance release qualification
         shell: bash
-        run: python scripts/qualify-release.py --root . --docker --output qualification.json
+        run: python scripts/qualify-release.py --root . --output qualification.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

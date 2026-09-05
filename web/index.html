@@ -726,6 +726,8 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         <button id="node-settings-close" class="secondary">Закрити</button>
       </div>
     </dialog>
+    <script src="/js/utils.js"></script>
+    <script src="/js/api.js"></script>
     <script>
       let jobs = [],
         characters = [],
@@ -734,36 +736,6 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         workerWizardToken = null,
         workerWizardRole = null,
         workerWizardInterval = null;
-      const $ = (s) => document.querySelector(s),
-        esc = (s) =>
-          String(s ?? "").replace(
-            /[&<>"']/g,
-            (c) =>
-              ({
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                '"': "&quot;",
-                "'": "&#39;",
-              })[c],
-          );
-      async function api(url, opt = {}) {
-        if (!opt || typeof opt !== "object" || Array.isArray(opt)) opt = {};
-        const csrf = document.cookie
-          .split("; ")
-          .find((x) => x.startsWith("vertep_csrf="))
-          ?.split("=")[1];
-        opt.headers = {
-          ...(opt.headers || {}),
-          ...(csrf ? { "X-CSRF-Token": csrf } : {}),
-        };
-        const r = await fetch(url, opt);
-        if (!r.ok)
-          throw new Error(
-            (await r.json().catch(() => ({}))).detail || r.statusText,
-          );
-        return r.json();
-      }
       document.querySelector(".sidebar-nav")?.addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-panel]");
         if (!btn) return;

@@ -1,0 +1,22 @@
+/* Vertep Admin UI - Modular Styles */
+
+/* Tokens & Reset */
+@import url("tokens.css");
+
+/* Layout */
+@import url("layout.css");
+
+/* Components */
+@import url("components.css");
+
+/* Dashboard */
+@import url("dashboard.css");
+
+/* Panels */
+@import url("panels.css");
+
+/* Dialogs */
+@import url("dialogs.css");
+
+/* Setup */
+@import url("setup.css");
