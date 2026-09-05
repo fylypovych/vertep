@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.3
+- Оновлено Node-образ у `web-v2` етапі `Dockerfile` з `node:20-slim` на `node:24-slim`: Angular CLI v22 вимагає Node.js ≥ v22.22.3 / v24.15.0, через що `ng build` завершувався з кодом 3 і збірка образу `core` падала.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.2
 - Додано `.dockerignore` з виключенням `**/node_modules`: раніше крок `COPY web-v2/ .` перезаписував свіжі node_modules від `npm ci` на закомічені з Windows, через що `ng` втрачав exec-біт і збірка образу `core` падала з `Permission denied` (код 127).
 - Додано `node_modules/` та `web-v2/node_modules/` до `.gitignore`.

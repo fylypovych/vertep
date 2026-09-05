@@ -6,7 +6,7 @@ ARG VERTEP_VERSION=dev
 RUN printf '%s\n' "$VERTEP_VERSION" > VERSION
 RUN pip install --no-cache-dir -r requirements.txt
 
-FROM node:20-slim AS web-v2
+FROM node:24-slim AS web-v2
 WORKDIR /app/web-v2
 COPY web-v2/package.json web-v2/package-lock.json ./
 RUN npm ci --silent
