@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.1
+- Виправлено тест `tests/test_release.py::test_runtime_version_comes_from_version_file`, який жорстко очікував префікс версії `0.0.0.` і блокував release workflow після переходу на нову послідовність версій `0.0.1.x`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.0
 - Переведено збірку образу на багатоетапний `Dockerfile`: додано окремий `web-v2` Node-етап з `npm ci` та `npm run build`.
 - Змонтовано статичний Web UI v2 (Angular) за шляхом `/admin` у `core/app.py`.

@@ -68,7 +68,8 @@ def test_release_descriptions_must_be_ukrainian():
 
 def test_runtime_version_comes_from_version_file():
     assert app.version == application_version()
-    assert application_version().startswith("0.0.0.")
+    parts = application_version().split(".")
+    assert len(parts) == 4 and all(part.isdigit() for part in parts)
 
 
 def test_release_is_prepared_once_and_ci_never_commits_to_main():
