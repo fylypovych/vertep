@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.4
+- Виправлено кореневий `.gitignore`: шаблон `jobs/` був змінений на `/jobs/`, бо він необґрунтовано ігнорував `web-v2/src/app/jobs/` на будь-якій глибині, через що `jobs.component.ts` не потрапляв у git і `ng build` падав з `TS2307: Cannot find module './jobs/jobs.component'` (код 1).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.3
 - Оновлено Node-образ у `web-v2` етапі `Dockerfile` з `node:20-slim` на `node:24-slim`: Angular CLI v22 вимагає Node.js ≥ v22.22.3 / v24.15.0, через що `ng build` завершувався з кодом 3 і збірка образу `core` падала.
 

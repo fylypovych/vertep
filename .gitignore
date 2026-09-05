@@ -3,7 +3,7 @@ config/secret-store.passphrase
 .venv/
 __pycache__/
 .pytest_cache/
-jobs/
+/jobs/
 logs/
 backups/
 runtime/
