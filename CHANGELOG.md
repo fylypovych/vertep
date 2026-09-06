@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.6
+- Виправлено монтування Web UI v2 у `core/app.py`: v2-маунт тепер виконується лише за наявності скомпільованої збірки Angular (`web-v2/dist`); інакше з кореня сервується класична v1. Раніше `web-v2/dist/` було закомічено в git, що маскувало жорстку залежність імпорту `core.app` від статичних файлів. Після виключення build-артефактів з трекінгу імпорт падав у CI з `RuntimeError: Directory 'web-v2/dist/vertep-admin-v2' does not exist`, що блокувало збирання тестів (`pytest`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.5
 - Впроваджено Provider / Adapter Layer (фази 1–6 open-source аудиту): формалізовані інтерфейси та лазливий registry `providers` у `adapters/providers/`.
 - Переведено `core/pipeline.py`, `core/script_agent.py`, `worker/service.py`, `worker/role_executor.py` на `providers.*` та абстрактні інтерфейси; ffmpeg-збірку через `engine.render()` у `finalize_job`.

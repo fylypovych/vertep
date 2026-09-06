@@ -2787,11 +2787,6 @@ def job_file(job_id: str, folder: str, filename: str):
     return download_artifact(job_id, artifact.artifact_id)
 
 # --- Web UI mounts (design switching: v2 default at "/", v1 classic at "/v1") ---
-_V2_STATIC_DIR = "web-v2/dist/vertep-admin-v2/browser"
-if not os.path.isdir(_V2_STATIC_DIR):
-    _V2_STATIC_DIR = "web-v2/dist/vertep-admin-v2"
-
-
 class SPAStaticFiles(StaticFiles):
     """StaticFiles with SPA fallback for client-side routing (Angular v2)."""
 
@@ -2812,5 +2807,14 @@ def admin_alias():
     return Response(status_code=307, headers={"Location": "/"})
 
 
+# Mount v2 only when the Angular build output is present. The Docker image build
+# always emits dist (web-v2 Node stage), but a fresh checkout or CI test
+# collection has no compiled frontend, so importing core.app must not require it.
+_V2_STATIC_DIR = "web-v2/dist/vertep-admin-v2/browser"
+if not os.path.isdir(_V2_STATIC_DIR):
+    _V2_STATIC_DIR = "web-v2/dist/vertep-admin-v2"
 app.mount("/v1", StaticFiles(directory="web", html=True), name="web-v1")
-app.mount("/", SPAStaticFiles(directory=_V2_STATIC_DIR, html=True), name="web-v2")
+if os.path.isdir(_V2_STATIC_DIR):
+    app.mount("/", SPAStaticFiles(directory=_V2_STATIC_DIR, html=True), name="web-v2")
+else:
+    app.mount("/", StaticFiles(directory="web", html=True), name="web-v2")
