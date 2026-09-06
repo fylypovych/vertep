@@ -11,6 +11,7 @@ except ImportError:
 
 
 BASE_URL = os.getenv("VERTEP_URL", "http://127.0.0.1:8080")
+V1_URL = BASE_URL.rstrip("/") + "/v1"
 
 
 def test_setup_page_loads():
@@ -40,7 +41,7 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
             "scheduler": {"pending": 0, "next_run": None},
             "orchestration": {"active_jobs": 0, "active_scenes": 0},
         }))
-        page.goto(BASE_URL)
+        page.goto(V1_URL)
         expect(page.locator("#health")).to_contain_text("Ядро працює")
         expect(page.locator("#dashboard .task-composer")).to_have_count(0)
         page.locator('#nav button[data-panel="jobs"]').click()
@@ -71,7 +72,7 @@ def test_character_create_and_edit_use_localized_form():
                 saved.append(route.request.post_data_json)
             route.fulfill(json=character)
         page.route("**/api/characters/did_samogon", handle_character)
-        page.goto(BASE_URL)
+        page.goto(V1_URL)
         page.locator('#nav button[data-panel="characters"]').click()
         expect(page.locator("#characters")).to_be_visible()
         page.get_by_role("button", name="Новий персонаж").click()
@@ -96,7 +97,7 @@ def test_worker_wizard_role_labels_are_ukrainian():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(BASE_URL)
+        page.goto(V1_URL)
         page.locator('#nav button[data-panel="workers"]').click()
         page.get_by_role("button", name="Додати вузол").click()
         expect(page.locator("#addworkerdialog")).to_be_visible()
@@ -121,7 +122,7 @@ def test_friendly_queue_workflow_and_core_role_controls():
             "scheduler": {"pending": 0, "next_run": None},
             "orchestration": {"active_jobs": 0, "active_scenes": 0},
         }))
-        page.goto(BASE_URL)
+        page.goto(V1_URL)
 
         page.locator('#nav button[data-panel="queue"]').click()
         expect(page.locator("#queuestatus")).to_be_hidden()
@@ -167,7 +168,7 @@ def test_brand_form_edits_and_deletes_without_json():
         page.route("**/api/brands", brands_handler)
         page.route("**/api/brands/brand01", brands_handler)
         page.on("dialog", lambda dialog: dialog.accept())
-        page.goto(BASE_URL)
+        page.goto(V1_URL)
         page.locator('#nav button[data-panel="brands"]').click()
         page.get_by_role("button", name="Редагувати").click()
         expect(page.locator("#branddialog")).to_be_visible()
@@ -197,7 +198,7 @@ def test_emergency_reason_is_visible_and_recovery_is_actionable():
         page.route("**/api/system/recovery/normal", lambda route: (
             recoveries.append(True), route.fulfill(json={"state": "NORMAL"})))
         page.on("dialog", lambda dialog: dialog.accept())
-        page.goto(BASE_URL)
+        page.goto(V1_URL)
         page.locator('#nav button[data-panel="settings"]').click()
         expect(page.locator("#system-friendly")).to_contain_text("Update and rollback failed")
         page.locator('#nav button[data-panel="errors"]').click()
@@ -218,7 +219,7 @@ def test_update_panel_has_progress_and_restart_control():
             "available_version": "0.0.0.62", "update_available": True,
             "message": "Restarting active Vertep services", "log": [], "enabled": True,
         }))
-        page.goto(BASE_URL)
+        page.goto(V1_URL)
         page.locator('#nav button[data-panel="settings"]').click()
         expect(page.locator('#update-friendly [role="progressbar"]')).to_have_attribute("aria-valuenow", "82")
         expect(page.locator("#update-friendly")).to_contain_text("Перезапуск сервера")

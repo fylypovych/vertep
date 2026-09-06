@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.8
+- Виправлено URL у browser-e2e тестах: додано `V1_URL` з суфіксом `/v1` для всіх переходів `page.goto()`, оскільки Web UI v2 тепер за замовчуванням на `/`, а класичний v1 — на `/v1`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.7
 - Виправлено падіння `core` при старті в Docker: у `Dockerfile` додано `COPY publishers publishers`. Раніше пакет `publishers` не потрапляв в образ, але `core/app.py` → `core/pipeline.py` → `adapters/providers/__init__.py` → `compute_backends.py`/`video_engines.py` мають безумовний імпорт `from publishers.transport import HttpTransport`, що викликало `ModuleNotFoundError: No module named 'publishers'` і аварійний вихід контейнера `vertep-core-1`.
 - Оновлено версії GitHub Actions у всіх workflows: `actions/checkout` → v7, `actions/setup-python` → v7, `actions/upload-artifact` → v7, `actions/download-artifact` → v8.
