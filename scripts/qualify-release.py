@@ -52,7 +52,11 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
             record(f"role_isolation:{role}", not unexpected, ", ".join(unexpected))
     except (OSError, ValueError, KeyError, TypeError) as error:
         record("role_catalog", False, str(error))
-    compose = (root / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    try:
+        compose = (root / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    except OSError as error:
+        record("compose_load", False, str(error))
+        compose = ""
     try:
         contract_schema = json.loads(
             (root / "config/schemas/release-contract.schema.json").read_text(encoding="utf-8"))
@@ -60,7 +64,11 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
             "schema", {}).get("const") == 2)
     except (OSError, ValueError) as error:
         record("release_contract_schema", False, str(error))
-    bootstrap = (root / "bootstrap.sh").read_text(encoding="utf-8")
+    try:
+        bootstrap = (root / "bootstrap.sh").read_text(encoding="utf-8")
+    except OSError as error:
+        record("signed_role_catalog_binding", False, str(error))
+        bootstrap = ""
     record("signed_role_catalog_binding",
            ".roles.catalog_sha256" in bootstrap and ".roles.profiles[$role].services" in bootstrap)
     image_variables = {"VERTEP_PROXY_IMAGE", "VERTEP_CORE_IMAGE", "VERTEP_WORKER_IMAGE",
@@ -80,8 +88,11 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
                               "./monitoring/grafana/provisioning"]
     record("immutable_runtime_configuration",
            not any(item in compose for item in mutable_runtime_mounts))
-    record("machine_mtls_proxy", "ssl_verify_client optional" in
-           (root / "deploy/proxy.conf").read_text(encoding="utf-8"))
+    try:
+        proxy_conf = (root / "deploy/proxy.conf").read_text(encoding="utf-8")
+        record("machine_mtls_proxy", "ssl_verify_client optional" in proxy_conf)
+    except OSError as error:
+        record("machine_mtls_proxy", False, str(error))
     if run_compose:
         result = subprocess.run(["docker", "compose", "-f", str(root / "deploy/docker-compose.yml"),
                                  "config", "--quiet"], capture_output=True, text=True, check=False)

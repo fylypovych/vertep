@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.7
+- Виправлено падіння `core` при старті в Docker: у `Dockerfile` додано `COPY publishers publishers`. Раніше пакет `publishers` не потрапляв в образ, але `core/app.py` → `core/pipeline.py` → `adapters/providers/__init__.py` → `compute_backends.py`/`video_engines.py` мають безумовний імпорт `from publishers.transport import HttpTransport`, що викликало `ModuleNotFoundError: No module named 'publishers'` і аварійний вихід контейнера `vertep-core-1`.
+- Оновлено версії GitHub Actions у всіх workflows: `actions/checkout` → v7, `actions/setup-python` → v7, `actions/upload-artifact` → v7, `actions/download-artifact` → v8.
+- У `.github/workflows/browser-e2e.yml` додано крок збірки Angular фронтенду (`setup-node@v4`, Node 24, `npm ci && npm run build`) до запуску E2E-смоук-тестів, що усуває залежність від скомпільованої збірки в репозиторії.
+- У `ci.yml` і `release.yml` для артефактів кваліфікації змінено `if-no-files-found: error` → `warn`.
+- У `scripts/qualify-release.py` обгорнуто три оголені виклики `.read_text()` (для `deploy/docker-compose.yml`, `bootstrap.sh`, `deploy/proxy.conf`) у `try/except OSError`, щоб перевірка не падала з необробленим винятком за відсутності файла.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.6
 - Виправлено монтування Web UI v2 у `core/app.py`: v2-маунт тепер виконується лише за наявності скомпільованої збірки Angular (`web-v2/dist`); інакше з кореня сервується класична v1. Раніше `web-v2/dist/` було закомічено в git, що маскувало жорстку залежність імпорту `core.app` від статичних файлів. Після виключення build-артефактів з трекінгу імпорт падав у CI з `RuntimeError: Directory 'web-v2/dist/vertep-admin-v2' does not exist`, що блокувало збирання тестів (`pytest`).
 

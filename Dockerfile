@@ -23,6 +23,7 @@ COPY adapters adapters
 COPY web web
 COPY workflows workflows
 COPY characters characters
+COPY publishers publishers
 COPY brands brands
 COPY config config
 COPY db db
