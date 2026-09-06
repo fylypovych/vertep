@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from .models import (JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
                      WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
                      WorkerLogBatch, NodeAction, IntegrationSecretUpdate, TelegramSetup,
@@ -61,7 +62,7 @@ from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
                              rollout_status, rollback_ready_nodes, start_rollout)
 from worker.role_executor import delete_text_model, list_text_models, list_voices, pull_text_model, synthesize_voice
 from adapters.telegram import TelegramAdapter, TelegramPollingService, _integration_secret
-from adapters.publisher import PUBLISHERS
+from adapters.providers import providers, provider_matrix
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -201,12 +202,16 @@ def _authenticate_user(user: str, password: str) -> str | None:
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         setup_route = (request.url.path == "/setup" or
-                       request.url.path.startswith(("/api/setup", "/setup.html", "/api/health")))
+                       request.url.path.startswith(("/api/setup", "/setup.html", "/v1/setup.html", "/api/health")))
         if not is_configured() and not setup_route:
             if request.url.path == "/":
-                return Response(status_code=307, headers={"Location": "/setup.html"})
+                return Response(status_code=307, headers={"Location": "/v1/setup.html"})
             return Response("Complete the First Run Wizard", 503,
                             {"Retry-After": "30", "X-Vertep-Setup": "required"})
+        if request.method == "GET" and is_configured() and request.url.path in ("/", "/index.html"):
+            # Design choice: v2 (default) vs v1 (classic). Choice is persisted in the cookie.
+            if request.cookies.get("vertep_ui") == "v1":
+                return Response(status_code=307, headers={"Location": "/v1/"})
         if not is_configured() and setup_route:
             expected_setup = os.getenv("SETUP_TOKEN_HASH", "")
             if expected_setup and request.url.path.startswith("/api/setup"):
@@ -329,7 +334,7 @@ app.add_middleware(AdminAuthMiddleware)
 @app.get("/setup", include_in_schema=False)
 def setup_page(request: Request):
     query = f"?{request.url.query}" if request.url.query else ""
-    return Response(status_code=307, headers={"Location": f"/setup.html{query}"})
+    return Response(status_code=307, headers={"Location": f"/v1/setup.html{query}"})
 
 
 @app.get("/api/setup")
@@ -1481,12 +1486,11 @@ def _handle_publish_all(callback: dict, chat_id: str, job_id: str) -> dict:
 
 
 def _publish_to_channel(job, channel) -> dict:
-    from adapters.publisher import PUBLISHERS
-    adapter = PUBLISHERS.get(channel.channel_type)
-    if not adapter or not adapter.configured():
+    publisher = providers.publisher()
+    if not publisher.configured(channel.channel_type):
         return {"status": "NOT_CONFIGURED", "error": f"{channel.channel_type} не налаштовано"}
     try:
-        result = adapter.publish(job.output_path or "", {"job_id": job.job_id, "topic": job.topic, "target": channel.target})
+        result = publisher.publish(channel.channel_type, job.output_path or "", {"job_id": job.job_id, "topic": job.topic, "target": channel.target})
         job.publication_results[channel.channel_id] = result
         if result.get("status") == "PUBLISHED":
             if channel.channel_id not in job.published_to:
@@ -1821,7 +1825,8 @@ def publish_job(job_id: str, channels: list[str] | None = None):
     if job.status != JobStatus.READY and not retryable_publish_failure:
         raise HTTPException(409, "Job is not ready")
     targets = channels or ["youtube"]
-    unknown = [channel for channel in targets if channel not in PUBLISHERS]
+    publisher = providers.publisher()
+    unknown = [channel for channel in targets if channel not in publisher.available_channels()]
     if unknown:
         raise HTTPException(400, f"Unknown publishers: {', '.join(unknown)}")
     metadata = (job.script or {}) | {"job_id": job.job_id, "character_id": job.character_id,
@@ -1834,7 +1839,7 @@ def publish_job(job_id: str, channels: list[str] | None = None):
         results = {}
         for channel in targets:
             try:
-                results[channel] = PUBLISHERS[channel].publish(job.output_path or "", metadata)
+                results[channel] = publisher.publish(channel, job.output_path or "", metadata)
             except Exception as error:
                 logger.exception("Publisher failed", extra={"job_id": job.job_id, "action": channel})
                 results[channel] = {"channel": channel, "status": "FAILED", "error": str(error)}
@@ -1875,6 +1880,7 @@ def system_status():
                                                    for job in store.jobs.values() for scene in job.scenes)},
              "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
              "telegram": _build_telegram_status(),
+             "providers": provider_matrix(),
              "update": update_status(), "workers": workers()}
 
 @app.get("/status")
@@ -2780,5 +2786,31 @@ def job_file(job_id: str, folder: str, filename: str):
         raise HTTPException(404, "Asset not found")
     return download_artifact(job_id, artifact.artifact_id)
 
-app.mount("/", StaticFiles(directory="web", html=True), name="web")
-app.mount("/admin", StaticFiles(directory="web-v2/dist/vertep-admin-v2", html=True), name="web-v2")
+# --- Web UI mounts (design switching: v2 default at "/", v1 classic at "/v1") ---
+_V2_STATIC_DIR = "web-v2/dist/vertep-admin-v2/browser"
+if not os.path.isdir(_V2_STATIC_DIR):
+    _V2_STATIC_DIR = "web-v2/dist/vertep-admin-v2"
+
+
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles with SPA fallback for client-side routing (Angular v2)."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and scope.get("method") in ("GET", "HEAD") \
+                    and not path.startswith("api/"):
+                # Let the Angular router handle client-side routes (e.g. /login, /jobs).
+                return await super().get_response("index.html", scope)
+            raise
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_alias():
+    # v2 is now the default at root; keep /admin as a redirect alias.
+    return Response(status_code=307, headers={"Location": "/"})
+
+
+app.mount("/v1", StaticFiles(directory="web", html=True), name="web-v1")
+app.mount("/", SPAStaticFiles(directory=_V2_STATIC_DIR, html=True), name="web-v2")

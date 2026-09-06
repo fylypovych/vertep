@@ -31,6 +31,14 @@ export interface Character {
   publishing?: { enabled: boolean };
 }
 
+export interface ProviderSlot {
+  backend: string;
+  options?: string[];
+  env?: string;
+  configured?: boolean;
+  platforms?: Record<string, { configured: boolean }>;
+}
+
 export interface SystemStatus {
   core: string;
   postgres: string;
@@ -42,4 +50,5 @@ export interface SystemStatus {
   scheduler?: { pending: number; next_run?: string };
   orchestration?: { active_jobs: number; active_scenes: number };
   resources?: { cpu: number; ram: number; disk: number };
+  providers?: Record<string, ProviderSlot>;
 }

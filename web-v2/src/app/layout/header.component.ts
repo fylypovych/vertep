@@ -11,6 +11,11 @@ import { Router } from '@angular/router';
         <p class="text-sm text-slate-500">{{ subtitle }}</p>
       </div>
       <div class="flex items-center gap-4">
+        <button (click)="switchToV1()" title="Класичний дизайн v1"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-400 text-emerald-700 bg-emerald-50 text-sm font-medium hover:bg-emerald-100 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3l1.9 5.8H20l-5 3.6 1.9 5.8-4.9-3.6-4.9 3.6L9 12.4l-5-3.6h6.1z"/></svg>
+          Класичний v1
+        </button>
         <div class="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-full text-sm font-medium">
           <span class="w-2 h-2 bg-emerald-500 rounded-full"></span>
           Нормальний
@@ -45,5 +50,11 @@ export class HeaderComponent {
       };
       this.subtitle = subtitles[route?.snapshot.routeConfig?.path || ''] || '';
     });
+  }
+
+  // Switch to the classic v1 design. Persist choice in a cookie.
+  switchToV1() {
+    document.cookie = 'vertep_ui=v1; path=/; max-age=31536000; SameSite=Lax';
+    window.location.href = '/v1/';
   }
 }

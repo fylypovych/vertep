@@ -4,8 +4,7 @@ import shutil
 import threading
 from pathlib import Path
 from .models import Job, JobStatus, utc_now
-from adapters.ffmpeg import FFmpegAdapter
-from adapters.tts import TTSAdapter
+from adapters.providers import providers
 from adapters.telegram import TelegramAdapter
 from .logging_config import configure_logging
 from .repository import StateRepository, build_repository
@@ -13,7 +12,6 @@ from .orchestration import initialize_plan, recover_after_restart, transition_st
 from .models import StageName, StageStatus
 from .artifacts import register_artifact
 from .script_schema import normalize_script
-from .script_agent import ScriptAgent
 
 logger = configure_logging("core")
 
@@ -146,7 +144,7 @@ def prepare_job(store: JobStore, job: Job) -> Job:
         transition_stage(job, StageName.SCRIPT, StageStatus.RUNNING)
         store.update(job, JobStatus.SCRIPTING, f"SCRIPT STARTED {script_attempt}/{job.max_retries}")
         try:
-            job.script = normalize_script(ScriptAgent().generate_script(job.topic, system_prompt, character), job.topic)
+            job.script = normalize_script(providers.llm().generate_script(job.topic, system_prompt, character), job.topic)
             break
         except (ValueError, TypeError) as error:
             script_error = error
@@ -165,7 +163,7 @@ def prepare_job(store: JobStore, job: Job) -> Job:
         voice_config = json.loads(voice_path.read_text(encoding="utf-8")) if voice_path.exists() else {}
     except ValueError:
         voice_config = {}
-    tts = TTSAdapter(voice_config.get("provider"))
+    tts = providers.tts(voice_config.get("provider"))
     scene_audio = []
     for tts_attempt in range(1, max(1, job.max_retries) + 1):
         transition_stage(job, StageName.TTS, StageStatus.RUNNING)
@@ -195,7 +193,7 @@ def prepare_job(store: JobStore, job: Job) -> Job:
             scene.artifact_ids.append(artifact.artifact_id)
     if scene_audio:
         combined_audio = store.root / job.job_id / "audio" / "voice.wav"
-        FFmpegAdapter().concat_audio(scene_audio, combined_audio)
+        providers.assembly().concat_audio(scene_audio, combined_audio)
         register_artifact(job, store.root, combined_audio, "audio", workflow="ffmpeg:concat")
     store.event(job, "TTS READY" if scene_audio else "TTS SKIPPED")
     store.update(job, JobStatus.SCRIPT_READY, "SCRIPT READY")
@@ -251,13 +249,20 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
         brand = {}
     watermark_value = brand.get("metadata", {}).get("watermark")
     watermark = Path(watermark_value) if watermark_value else None
-    if job.task_type == "video":
-        FFmpegAdapter().assemble_clips(output, clips=image_list, audio=voice, subtitles=subtitles,
-                                       aspect_ratio=job.aspect_ratio, preset=job.output_preset)
-    else:
-        FFmpegAdapter().assemble(output, images=image_list, durations=durations,
-                                 audio=voice, music=music, subtitles=subtitles, aspect_ratio=job.aspect_ratio,
-                                 preset=job.output_preset, watermark=watermark)
+    engine = providers.video_engine()
+    engine.render(
+        output,
+        images=image_list if job.task_type != "video" else None,
+        clips=image_list if job.task_type == "video" else None,
+        durations=durations,
+        audio=voice,
+        music=music,
+        subtitles=subtitles,
+        aspect_ratio=job.aspect_ratio,
+        preset=job.output_preset,
+        watermark=watermark,
+        task_type=job.task_type,
+    )
     if subtitles:
         register_artifact(job, store.root, subtitles, "subtitles", workflow="srt")
     register_artifact(job, store.root, output, "video", workflow="ffmpeg")

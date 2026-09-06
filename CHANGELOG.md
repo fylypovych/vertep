@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.5
+- Впроваджено Provider / Adapter Layer (фази 1–6 open-source аудиту): формалізовані інтерфейси та лазливий registry `providers` у `adapters/providers/`.
+- Переведено `core/pipeline.py`, `core/script_agent.py`, `worker/service.py`, `worker/role_executor.py` на `providers.*` та абстрактні інтерфейси; ffmpeg-збірку через `engine.render()` у `finalize_job`.
+- Додано LLM-клієнти Ollama та OpenAI-сумісний (`adapters/llm_clients.py`, `VERTEP_LLM_PROVIDER`).
+- Додано open-source TTS-движки Piper та Kokoro (`adapters/providers/tts_backends.py`, `TTS_PROVIDER`).
+- Створено live Publisher-адаптери YouTube/TikTok/Facebook/Instagram/Threads на транспортному шарі (`publishers/base.py`, `publishers/transport.py`, `LIVE_PUBLISHERS`), інтегровано через `providers.publisher()`.
+- Додано опційний ComfyUI-Distributed compute (`ComfyUIDistributedProvider`) з fallback на `vertep-worker`.
+- Додано VideoEngine: `native` (FFmpeg) за замовчуванням, опційні `money-printer` / `shortgpt` (`VERTEP_VIDEO_ENGINE`).
+- Додано `provider_matrix()` та інтегровано в `/api/status` (поле `providers`).
+- Web UI v2 тепер за замовчуванням на `/`, класичний v1 на `/v1` (SPA-fallback та перемикач у header).
+- У Налаштуваннях додано панель «Движки обробки (backends)».
+- Оновлено `AGENTS.md` (розділ 28), `README.md`, `.env.example`; додано `docs/architecture/open-source-audit.md`.
+- Додано `web-v2/dist/` та `web-v2/.angular/` до `.gitignore` і прибрано build-артефакти з git-трекінгу.
+- Додано тести: `test_providers.py`, `test_llm_tts_providers.py`, `test_publisher_live_adapters.py`, `test_compute_distributed.py`, `test_video_engines.py`, `test_provider_matrix.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.4
 - Виправлено кореневий `.gitignore`: шаблон `jobs/` був змінений на `/jobs/`, бо він необґрунтовано ігнорував `web-v2/src/app/jobs/` на будь-якій глибині, через що `jobs.component.ts` не потрапляв у git і `ng build` падав з `TS2307: Cannot find module './jobs/jobs.component'` (код 1).
 

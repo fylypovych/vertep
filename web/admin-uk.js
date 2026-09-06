@@ -1,6 +1,12 @@
 (() => {
   "use strict";
 
+  // Switch to the new v2 design (default). Persist choice in a cookie.
+  function switchDesignV2() {
+    document.cookie = "vertep_ui=v2; path=/; max-age=31536000; SameSite=Lax";
+    window.location.href = "/";
+  }
+
   const textReplacements = new Map([
     ["Jobs", "Завдання"],
     ["Workers", "Вузли"],

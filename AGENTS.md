@@ -1220,3 +1220,58 @@ sudo bash bootstrap.sh
 - існує ризик втрати даних;
 - дія може змінити Git-історію;
 - потрібне рішення або підтвердження користувача.
+
+## 28. Provider / Adapter Layer
+
+### 28.1 Принцип
+
+Усі зовнішні движки (LLM, TTS, GPU/ComfyUI, FFmpeg-assembly, VideoEngine,
+Publisher) викликаються виключно через формалізовані інтерфейси в
+`adapters/providers/base.py`. Це робить задні технології взаємозамінними без
+зміни Job Orchestrator, Dispatcher, Node Registry чи Web UI.
+
+Інтерфейси (ABC):
+- `LLMProvider` — генерація сценарію (`generate_script`).
+- `ImageProvider` / `VideoProvider` — AI-генерація зображень/відео.
+- `TTSProvider` — синтез мовлення (`synthesize`), `provider`, `configured`.
+- `AssemblyProvider` — FFmpeg-монтаж (`assemble`, `assemble_clips`,
+  `concat_audio`, `probe`).
+- `ComputeProvider` — GPU-обчислення (`generate_output`, `cancel`).
+- `PublisherProvider` — публікація (`publish`, `configured`,
+  `available_channels`).
+- `VideoEngine` — високорівневий драйвер фінальної збірки (`render`),
+  відмінний від `VideoProvider`; Vertep завжди володіє Job-циклом.
+
+### 28.2 Фабрики та registry
+
+`adapters/providers/__init__.py` містить:
+- `providers` — глобальний лазливий registry (доступ через `providers.llm()`,
+  `providers.tts(name)`, `providers.assembly()`, `providers.compute()`,
+  `providers.publisher()`, `providers.video_engine()`).
+- `get_providers()` — створення registry.
+- `provider_matrix()` — опис активних backend для Web UI та `/api/status`
+  (без мережевих викликів).
+- `replace(name, provider)` — підміна провайдера (тести/рицимові swap).
+
+### 28.3 Доступні задні движки та env
+
+| Слот | Дефолт | Альтернативи | Змінна |
+|---|---|---|---|
+| LLM | `ollama` | `openai` (OpenAI-сумісний) | `VERTEP_LLM_PROVIDER`, `OPENAI_API_KEY` |
+| TTS | `none` | `mock`, `piper` (MIT), `kokoro` (Apache-2.0) | `TTS_PROVIDER` |
+| Compute (GPU) | `vertep-worker` | `comfyui-distributed` | `VERTEP_COMPUTE_PROVIDER`, `COMFYUI_DISTRIBUTED_URL`, `COMFYUI_DISTRIBUTED_TOKEN` |
+| Image / Video | `vertep-worker` | спільний з Compute | `VERTEP_COMPUTE_PROVIDER` |
+| Assembly | `ffmpeg` | `ffmpeg` | — |
+| VideoEngine | `native` | `money-printer`, `shortgpt` | `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`, `MONEY_PRINTER_TOKEN`, `SHORTGPT_URL`, `SHORTGPT_TOKEN` |
+| Publisher | `vertep-official` | Telegram + офіційні API YouTube/TikTok/FB/IG/Threads | `PUBLISHER_MOCK` / платформові credentials |
+
+### 28.4 Правила
+
+- **Не** викликати `ComfyUIAdapter`, `TTSAdapter` чи інші адаптери напряму в
+  `worker/service.py` — використовувати `providers.*` та `execute_role_task()`.
+- Зовнішні движки (MoneyPrinter/ShortGPT/ComfyUI-Distributed) — **опційні**,
+  лише за явного включення через `.env`; інакше фабрики повертають дефолт.
+- `VideoEngine` лише рендерить фінальне відео; Job-цикл, персонаж і metadata
+  залишаються виключно в Vertep.
+- Актуальну матрицю активних backend видно в Web UI: **Налаштування → Движки
+  обробки (backends)**.

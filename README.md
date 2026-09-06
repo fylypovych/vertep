@@ -153,6 +153,19 @@ Set `scheduled_for` to an ISO-8601 timestamp in `POST /api/jobs` to defer proces
 The CORE also provides priority/leased tasks with watchdog recovery, structured rotating logs, Character and Brand APIs, multi-scene FFmpeg assembly, Telegram commands, per-worker tokens, administrative sessions and mock-safe publisher contracts. Live social-network upload methods still require platform-specific API credentials and implementations.
 
 Use `sudo ./install.sh --dry-run` for a read-only preflight, `python scripts/generate-env.py` to create unique local secrets, and `python scripts/upgrade-config.py` after upgrades to add new configuration keys without overwriting existing values. Current release metadata is stored in `VERSION` and `CHANGELOG.md`.
+
+## Provider layer (replaceable engines)
+
+Vertep calls every external engine through formal interfaces in `adapters/providers/base.py` (`LLMProvider`, `ImageProvider`, `VideoProvider`, `TTSProvider`, `AssemblyProvider`, `ComputeProvider`, `PublisherProvider`, `VideoEngine`). Wrappers in `adapters/providers/__init__.py` expose a registry (`providers.*`) and keep defaults interchangeable without touching the Job Orchestrator. Optional engines are engaged only on explicit opt-in via `.env`, otherwise factories fall back to the native backend:
+
+- **LLM**: `ollama` (default) or OpenAI-compatible `openai` — `VERTEP_LLM_PROVIDER`.
+- **TTS**: `none`/`mock` (default), `piper` (MIT), `kokoro` (Apache-2.0) — `TTS_PROVIDER`.
+- **Compute / GPU image-video**: `vertep-worker` (default, attached ComfyUI) or `comfyui-distributed` — `VERTEP_COMPUTE_PROVIDER`, `COMFYUI_DISTRIBUTED_URL`/`_TOKEN`.
+- **Assembly**: native FFmpeg.
+- **VideoEngine** (final render): `native` (default), `money-printer`, `shortgpt` — `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`/`_TOKEN`, `SHORTGPT_URL`/`_TOKEN`.
+- **Publisher**: official adapters for Telegram and YouTube/TikTok/Facebook/Instagram/Threads.
+
+The active backend matrix is exposed by `provider_matrix()` in `/api/status` and shown in the Web UI under **Settings → Engines (backends)**. Vertep keeps ownership of the Job lifecycle; external engines only render or publish.
 ## Appliance runtime details
 
 For NVIDIA hosts Bootstrap installs the recommended driver and NVIDIA Container Toolkit, registers the Docker runtime and verifies `nvidia-smi`. For AMD hosts it installs ROCm/HIP, verifies `/dev/kfd`, `/dev/dri` and `rocminfo`, and applies the signed AMD Compose overlay. GPU-specific overlays remain active during updates, rollback, watchdog restarts and startup recovery.

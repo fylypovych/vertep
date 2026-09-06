@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <link rel="stylesheet" href="/admin-uk.css" />
+    <link rel="stylesheet" href="admin-uk.css" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' font-family='system-ui'>V</text></svg>" />
     <title>Vertep — панель керування</title>
     <style>
@@ -178,6 +178,9 @@
         <p class="subtitle">Огляд вашої системи Vertep</p>
       </div>
       <div class="topbar-right">
+        <button class="icon-btn design-switch" title="Новий дизайн v2" id="design-switch-v2" onclick="switchDesignV2()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.8H20l-5 3.6 1.9 5.8-4.9-3.6-4.9 3.6L9 12.4l-5-3.6h6.1z"/></svg>
+        </button>
         <div id="system-state-badge" class="state-badge">Завантаження…</div>
         <div id="health" class="state-badge">Завантаження…</div>
         <div style="position:relative">
@@ -726,8 +729,8 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
         <button id="node-settings-close" class="secondary">Закрити</button>
       </div>
     </dialog>
-    <script src="/js/utils.js"></script>
-    <script src="/js/api.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/api.js"></script>
     <script>
       let jobs = [],
         characters = [],
@@ -1634,6 +1637,6 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
     </script>
     <dialog id="branddialog"><h2>Бренд</h2><textarea id="brandjson" style="min-height:320px;font-family:monospace"></textarea><button onclick="saveBrand()">Зберегти</button><button class="secondary" onclick="branddialog.close()">Закрити</button></dialog>
     <dialog id="workflowdialog"><h2 id="workflowtitle">Workflow</h2><textarea id="workflowjson" style="min-height:390px;font-family:monospace"></textarea><button onclick="saveWorkflow()">Зберегти</button><button class="secondary" onclick="workflowdialog.close()">Закрити</button></dialog>
-    <script src="/admin-uk.js"></script>
+    <script src="admin-uk.js"></script>
   </body>
 </html>

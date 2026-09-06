@@ -2,7 +2,7 @@ import os
 import json
 from typing import Any
 
-import httpx
+from adapters.llm_clients import get_llm_client
 
 from .script_schema import normalize_script, ScriptDocument
 
@@ -17,6 +17,9 @@ class ScriptAgent:
         payload = {**metadata, "scenes": scenes}
         return normalize_script(payload, topic)
 
+    def _complete(self, prompt: str) -> str:
+        return get_llm_client().complete(prompt, format_json=True)
+
     def _generate_metadata(self, topic: str, system_prompt: str, character: dict | None) -> dict:
         prompt = self._build_prompt(system_prompt, character, f"""
 Згенеруй структуру сценарію для короткого відео на тему: {topic}
@@ -27,11 +30,7 @@ class ScriptAgent:
 - voiceover: загальний текст озвучки (якщо є)
 - scenes_plan: масив з 3-5 планів сцен, кожен з полями: index, summary, estimated_duration
 """)
-        response = httpx.post(f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/api/generate",
-                              json={"model": os.getenv("OLLAMA_MODEL", "llama3.2"), "prompt": prompt,
-                                    "format": "json", "stream": False}, timeout=300)
-        response.raise_for_status()
-        raw = response.json().get("response", "")
+        raw = self._complete(prompt)
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
@@ -68,11 +67,7 @@ class ScriptAgent:
 - voiceover: текст озвучки для цієї сцени
 - duration: тривалість в секундах (макс 600)
 """)
-        response = httpx.post(f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/api/generate",
-                              json={"model": os.getenv("OLLAMA_MODEL", "llama3.2"), "prompt": prompt,
-                                    "format": "json", "stream": False}, timeout=300)
-        response.raise_for_status()
-        raw = response.json().get("response", "")
+        raw = self._complete(prompt)
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:

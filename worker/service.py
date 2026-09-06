@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import httpx
-from adapters.comfyui import ComfyUIAdapter
+from adapters.providers import providers
+from adapters.providers.base import ComputeProvider
 from core.gpu_profiles import gpu_profile
 from core.logging_config import configure_logging
 from worker.role_executor import execute_role_task
@@ -19,7 +20,7 @@ from worker.role_executor import execute_role_task
 logger = configure_logging("worker")
 pending_logs: list[dict] = []
 
-def role_self_test(role: str, metrics: dict, adapter: ComfyUIAdapter | None = None) -> dict:
+def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = None) -> dict:
     started = time.monotonic()
     try:
         if role == "core":
@@ -40,7 +41,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComfyUIAdapter | None = No
         elif role == "gpu":
             if os.getenv("DEMO_MODE", "true").lower() != "true" and not metrics.get("gpu_available"):
                 raise RuntimeError("NVIDIA GPU/driver is unavailable")
-            adapter = adapter or ComfyUIAdapter()
+            adapter = adapter or providers.compute()
             data, _, kind = adapter.generate_output(os.getenv("SELF_TEST_WORKFLOW", "workflows/image/demo.json"),
                                                      "Vertep worker self-test", "image")
             if kind != "image" or len(data) < 16:
@@ -268,7 +269,7 @@ def worker_status(metrics: dict, require_gpu: bool, busy: bool = False) -> str:
         return "ERROR"
     return "BUSY" if busy else "READY"
 
-def execute_task(adapter: ComfyUIAdapter, task: dict, node_name: str) -> dict:
+def execute_task(adapter: ComputeProvider, task: dict, node_name: str) -> dict:
     try:
         artifacts = execute_role_task(configured_role(), task)
         images = [{"filename": item["filename"], "image_base64": item["data_base64"]}
@@ -294,7 +295,7 @@ def main() -> None:
                "supported_tasks": supported_tasks, "supported_workflows": supported_workflows,
                "role": configured_role(), "capabilities": capabilities,
                "version": os.getenv("VERTEP_VERSION")}
-    adapter = ComfyUIAdapter()
+    adapter = providers.compute()
     self_test = role_self_test(configured_role(), metrics, adapter)
     payload["self_test"] = self_test
     if self_test["status"] != "PASSED":

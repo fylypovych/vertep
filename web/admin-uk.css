@@ -136,6 +136,28 @@
   background: var(--bg-hover);
   border-color: var(--text-muted);
 }
+.design-switch {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.design-switch:hover {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  border-color: var(--primary);
+}
+.design-switch:after {
+  content: "v2";
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--bg-surface);
+}
 .badge {
   position: absolute;
   top: -6px;

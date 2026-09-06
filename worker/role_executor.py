@@ -5,7 +5,7 @@ import json
 import os
 
 import httpx
-from adapters.comfyui import ComfyUIAdapter
+from adapters.providers import providers
 
 
 def _artifact(filename: str, kind: str, data: bytes) -> dict:
@@ -126,7 +126,7 @@ def execute_backup(task: dict) -> list[dict]:
 
 
 def execute_image(task: dict) -> list[dict]:
-    adapter = ComfyUIAdapter()
+    adapter = providers.compute()
     workflow = task.get("workflow") or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json")
     topic = task.get("topic") or task.get("prompt") or ""
     scenes = (task.get("script") or {}).get("scenes")
@@ -145,7 +145,7 @@ def execute_image(task: dict) -> list[dict]:
 
 
 def execute_video(task: dict) -> list[dict]:
-    adapter = ComfyUIAdapter()
+    adapter = providers.compute()
     workflow = task.get("workflow") or os.getenv("COMFYUI_DEFAULT_VIDEO_WORKFLOW", "")
     topic = task.get("topic") or task.get("prompt") or ""
     if workflow:

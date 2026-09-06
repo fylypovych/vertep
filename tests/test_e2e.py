@@ -124,7 +124,7 @@ def test_setup_alias_preserves_token(monkeypatch):
     client = TestClient(core_app.app)
     response = client.get("/setup?token=one-time-code", follow_redirects=False)
     assert response.status_code == 307
-    assert response.headers["location"] == "/setup.html?token=one-time-code"
+    assert response.headers["location"] == "/v1/setup.html?token=one-time-code"
     page = client.get(response.headers["location"])
     assert page.status_code == 200
     assert '<div class="brand">VERTEP</div>' in page.text
