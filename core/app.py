@@ -63,6 +63,13 @@ from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
 from worker.role_executor import delete_text_model, list_text_models, list_voices, pull_text_model, synthesize_voice
 from adapters.telegram import TelegramAdapter, TelegramPollingService, _integration_secret
 from adapters.providers import providers, provider_matrix
+from .api.workflows import router as workflows_router
+from .api.resources import router as resources_router
+from .api.settings import router as settings_router
+
+from .security import (_authenticate_user, _hash_secret, _session_token, _valid_session,
+                       _valid_worker_request, _valid_worker_token, _verify_hash, _worker_tokens)
+
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -82,17 +89,10 @@ async def lifespan(_app):
     _stop_telegram_polling()
 
 app = FastAPI(title="Vertep CORE", version=application_version(), lifespan=lifespan)
-store = JobStore(os.getenv("JOB_ROOT", "jobs"))
-executor = ThreadPoolExecutor(max_workers=2)
-task_queue = TaskQueue()
-logger = configure_logging("core")
-workflow_registry = WorkflowRegistry(os.getenv("WORKFLOWS_ROOT", "workflows"))
-request_windows: dict[str, deque[float]] = defaultdict(deque)
-setup_request_windows: dict[str, deque[float]] = defaultdict(deque)
+from .state import (store, executor, task_queue, logger, workflow_registry,
+                    request_windows, setup_request_windows, result_locks,
+                    _telegram_pending_brands, _telegram_pending_character)
 last_maintenance = 0.0
-result_locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
-_telegram_pending_brands: dict[str, dict] = {}
-_telegram_pending_character: dict[str, dict] = {}
 telegram_polling_service: TelegramPollingService | None = None
 
 def _serialize_job_result(function):
@@ -122,82 +122,7 @@ def _job_is_due(job) -> bool:
     except ValueError:
         return False
 
-def _worker_tokens() -> dict[str, str]:
-    result = {}
-    for item in os.getenv("WORKER_TOKENS", "").split(","):
-        if ":" in item:
-            node, token = item.split(":", 1)
-            result[node.strip()] = token.strip()
-    return result
-
-def _hash_secret(value: str, salt: str = "vertep", iterations: int = 200_000) -> str:
-    digest = hashlib.pbkdf2_hmac("sha256", value.encode(), salt.encode(), iterations).hex()
-    return f"pbkdf2_sha256${iterations}${salt}${digest}"
-
-def _verify_hash(value: str, encoded: str) -> bool:
-    try:
-        algorithm, iterations, salt, expected = encoded.split("$", 3)
-        if algorithm != "pbkdf2_sha256":
-            return False
-        actual = _hash_secret(value, salt, int(iterations)).rsplit("$", 1)[1]
-        return secrets.compare_digest(actual, expected)
-    except ValueError:
-        return False
-
-def _valid_worker_token(node_name: str, supplied: str, client_dn: str = "",
-                        client_serial: str = "") -> bool:
-    if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
-        common_names = re.findall(r"(?:^|[,/])\s*CN=([^,/]+)", client_dn)
-        if (not common_names or not secrets.compare_digest(common_names[-1], node_name)
-                or not verify_node_certificate(node_name, client_serial)):
-            return False
-    if supplied and verify_node_token(supplied, node_name):
-        return True
-    if _hash_secret(supplied) in {item.strip() for item in os.getenv("REVOKED_TOKEN_HASHES", "").split(",") if item.strip()}:
-        return False
-    for item in os.getenv("WORKER_TOKEN_HASHES", "").split(","):
-        if ":" in item:
-            node, encoded = item.split(":", 1)
-            if node.strip() == node_name:
-                return _verify_hash(supplied, encoded.strip())
-    expected = _worker_tokens().get(node_name) or os.getenv("NODE_API_TOKEN", "")
-    return not expected or secrets.compare_digest(supplied, expected)
-
-
-def _valid_worker_request(node_name: str, request: Request) -> bool:
-    return _valid_worker_token(node_name, request.headers.get("x-vertep-token", ""),
-                               request.headers.get("x-vertep-client-dn", ""),
-                               request.headers.get("x-vertep-client-serial", ""))
-
-def _session_token(user: str = "admin", role: str = "admin") -> str:
-    expiry = str(int(time.time()) + int(os.getenv("SESSION_TTL", "28800")))
-    payload = f"{expiry}:{user}:{role}"
-    signature = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}.{signature}"
-
-def _valid_session(token: str) -> tuple[str, str] | None:
-    try:
-        payload, signature = token.rsplit(".", 1)
-        expiry, user, role = payload.split(":", 2)
-        expected = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
-        return (user, role) if int(expiry) > time.time() and secrets.compare_digest(signature, expected) else None
-    except (ValueError, TypeError):
-        return None
-
-def _authenticate_user(user: str, password: str) -> str | None:
-    configured = configured_user()
-    if configured and secrets.compare_digest(user, configured[0]) and _verify_hash(password, configured[1]["password_hash"]):
-        return str(configured[1].get("role", "admin"))
-    try:
-        users = json.loads(os.getenv("USERS_JSON", "{}"))
-    except ValueError:
-        users = {}
-    record = users.get(user)
-    if isinstance(record, dict) and _verify_hash(password, str(record.get("password_hash", ""))):
-        return str(record.get("role", "viewer"))
-    if secrets.compare_digest(user, os.getenv("ADMIN_USER", "admin")) and secrets.compare_digest(password, os.getenv("ADMIN_PASSWORD", "")):
-        return "admin"
-    return None
+# Authentication and credential helpers were extracted to core/security.py.
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -330,6 +255,9 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(AdminAuthMiddleware)
+app.include_router(workflows_router)
+app.include_router(resources_router)
+app.include_router(settings_router)
 
 @app.get("/setup", include_in_schema=False)
 def setup_page(request: Request):
@@ -821,41 +749,7 @@ def maintenance_cleanup(dry_run: bool = True, retention_days: int | None = None)
     logger.info("Maintenance cleanup", extra={"action": "dry-run" if dry_run else "delete"})
     return result
 
-@app.get("/api/workflows")
-def workflows():
-    return workflow_registry.list()
-
-@app.get("/api/workflows/{kind}/{name}")
-def get_workflow(kind: str, name: str):
-    try:
-        return workflow_registry.load(kind, name)
-    except (ValueError, OSError) as error:
-        raise HTTPException(404, str(error)) from error
-
-@app.put("/api/workflows/{kind}/{name}")
-def put_workflow(kind: str, name: str, workflow: dict):
-    try:
-        return workflow_registry.save(kind, name, workflow)
-    except ValueError as error:
-        raise HTTPException(400, str(error)) from error
-
-
-@app.delete("/api/workflows/{kind}/{name}")
-def delete_workflow(kind: str, name: str):
-    reference = f"workflows/{kind}/{name}"
-    if any(job.workflow == reference for job in store.jobs.values()):
-        raise HTTPException(409, "Сценарій використовується у завданнях")
-    character_root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
-    for directory in character_root.iterdir() if character_root.is_dir() else []:
-        if (read_json(directory / "character.json").get("workflow") == reference
-                or read_json(directory / "generation.json").get("workflow") == reference):
-            raise HTTPException(409, f"Сценарій використовує персонаж {directory.name}")
-    try:
-        return workflow_registry.delete(kind, name)
-    except ValueError as error:
-        raise HTTPException(400, str(error)) from error
-    except FileNotFoundError as error:
-        raise HTTPException(404, "Workflow not found") from error
+# Workflow CRUD routes are defined in core/api/workflows.py
 
 @app.post("/api/jobs")
 def create_job(request: JobCreate):
@@ -1170,135 +1064,7 @@ def workers_health():
         result.append({"node_id": worker.get("node_id"), "node_name": worker.get("node_name"), "checks": checks})
     return {"status": _health_status({item["node_name"]: tuple(item["checks"].values())[0] for item in result}), "workers": result}
 
-@app.get("/api/characters")
-def characters():
-    root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
-    result = []
-    for path in root.glob("*/character.json"):
-        try:
-            result.append(load_character(root, path.parent.name).model_dump())
-        except (OSError, ValueError):
-            continue
-    return result
-
-@app.get("/api/characters/{character_id}")
-def get_character(character_id: str):
-    if not SAFE_ID.fullmatch(character_id):
-        raise HTTPException(400, "Invalid character ID")
-    try:
-        return load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
-    except Exception as error:
-        raise HTTPException(404, f"Character not found or invalid: {error}") from error
-
-@app.put("/api/characters/{character_id}")
-def put_character(character_id: str, config: CharacterConfig):
-    if character_id != config.id:
-        raise HTTPException(400, "Character ID cannot be changed")
-    save_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), config)
-    return config
-
-@app.delete("/api/characters/{character_id}")
-def delete_character(character_id: str):
-    if any(job.character_id == character_id for job in store.jobs.values()):
-        raise HTTPException(409, "Character is referenced by jobs")
-    directory = Path(os.getenv("CHARACTERS_ROOT", "characters")) / character_id
-    if not directory.is_dir():
-        raise HTTPException(404, "Character not found")
-    shutil.rmtree(directory)
-    return {"deleted": character_id}
-
-@app.get("/api/brands")
-def brands():
-    root = Path(os.getenv("BRANDS_ROOT", "brands"))
-    result = []
-    for path in root.glob("*/brand.json"):
-        try:
-            result.append(BrandConfig.model_validate(read_json(path)).model_dump())
-        except ValueError:
-            continue
-    return result
-
-@app.put("/api/brands/{brand_id}")
-def put_brand(brand_id: str, config: BrandConfig):
-    if brand_id != config.id:
-        raise HTTPException(400, "Brand ID cannot be changed")
-    directory = Path(os.getenv("BRANDS_ROOT", "brands")) / brand_id
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "brand.json").write_text(config.model_dump_json(indent=2), encoding="utf-8")
-    return config
-
-
-@app.delete("/api/brands/{brand_id}")
-def delete_brand(brand_id: str):
-    if any(job.brand_id == brand_id for job in store.jobs.values()):
-        raise HTTPException(409, "Бренд використовується у завданнях")
-    if not SAFE_ID.fullmatch(brand_id):
-        raise HTTPException(400, "Invalid brand ID")
-    directory = Path(os.getenv("BRANDS_ROOT", "brands")) / brand_id
-    if not directory.is_dir():
-        raise HTTPException(404, "Brand not found")
-    shutil.rmtree(directory)
-    return {"deleted": brand_id}
-
-
-@app.get("/api/channels/types")
-def channel_types():
-    return sorted(CHANNEL_TYPES)
-
-
-@app.get("/api/brands/{brand_id}/channels")
-def list_brand_channels(brand_id: str):
-    if not SAFE_ID.fullmatch(brand_id):
-        raise HTTPException(400, "Invalid brand ID")
-    return [ch.model_dump() for ch in store.repository.list_channels(brand_id)]
-
-
-@app.get("/api/channels/{channel_id}")
-def get_channel(channel_id: str):
-    channel = store.repository.get_channel(channel_id)
-    if not channel:
-        raise HTTPException(404, "Channel not found")
-    return channel.model_dump()
-
-
-@app.post("/api/brands/{brand_id}/channels")
-def create_channel(brand_id: str, config: ChannelCreate):
-    if not SAFE_ID.fullmatch(brand_id):
-        raise HTTPException(400, "Invalid brand ID")
-    if config.brand_id != brand_id:
-        raise HTTPException(400, "Brand ID mismatch")
-    if config.channel_type not in CHANNEL_TYPES:
-        raise HTTPException(400, f"Invalid channel type. Allowed: {', '.join(sorted(CHANNEL_TYPES))}")
-    import uuid
-    channel = Channel(channel_id=f"ch-{uuid.uuid4().hex[:12]}", brand_id=config.brand_id,
-                      channel_type=config.channel_type, target=config.target,
-                      enabled=config.enabled, metadata=config.metadata)
-    store.repository.save_channel(channel)
-    return channel.model_dump()
-
-
-@app.put("/api/channels/{channel_id}")
-def update_channel(channel_id: str, config: ChannelUpdate):
-    existing = store.repository.get_channel(channel_id)
-    if not existing:
-        raise HTTPException(404, "Channel not found")
-    if config.target is not None:
-        existing.target = config.target
-    if config.enabled is not None:
-        existing.enabled = config.enabled
-    if config.metadata is not None:
-        existing.metadata = config.metadata
-    store.repository.save_channel(existing)
-    return existing.model_dump()
-
-
-@app.delete("/api/channels/{channel_id}")
-def delete_channel(channel_id: str):
-    existing = store.repository.get_channel(channel_id)
-    if not existing:
-        raise HTTPException(404, "Channel not found")
-    store.repository.delete_channel(channel_id)
-    return {"deleted": channel_id}
+# Characters, Brands and Channels routes are defined in core/api/resources.py
 
 @app.post("/api/telegram/webhook")
 def telegram_webhook(update: dict, request: Request):
@@ -2277,70 +2043,7 @@ def node_system_status(node_name: str, request: Request):
         raise HTTPException(401, "Token is not valid for this worker")
     return system_status()
 
-@app.get("/api/integrations")
-def integrations():
-    endpoints = {
-        "ollama": os.getenv("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/tags",
-        "comfyui": os.getenv("COMFYUI_URL", "http://127.0.0.1:8188") + "/system_stats",
-    }
-    result = {}
-    for name, endpoint in endpoints.items():
-        try:
-            response = httpx.get(endpoint, timeout=3)
-            result[name] = {"status": "ONLINE", "http_status": response.status_code}
-        except httpx.HTTPError as error:
-            result[name] = {"status": "OFFLINE", "error": str(error)}
-    return result
-
-
-@app.get("/api/settings/secrets")
-def secret_settings():
-    return {"secrets": integration_secret_status(), "values_exposed": False}
-
-
-@app.put("/api/settings/secrets/{name}")
-def update_secret_setting(name: str, payload: IntegrationSecretUpdate):
-    try:
-        return {"secrets": set_integration_secret(name, payload.value), "values_exposed": False}
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
-
-
-@app.delete("/api/settings/secrets/{name}")
-def delete_secret_setting(name: str):
-    try:
-        return {"secrets": set_integration_secret(name, None), "values_exposed": False}
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
-
-
-@app.get("/api/settings/logo")
-def get_logo():
-    logo_path = config_root() / "dashboard-logo.png"
-    if not logo_path.is_file():
-        raise HTTPException(404, "Logo not found")
-    return FileResponse(logo_path, media_type="image/png")
-
-
-@app.put("/api/settings/logo")
-async def put_logo(request: Request):
-    content_type = request.headers.get("content-type", "")
-    if "image/png" not in content_type and "image/" not in content_type:
-        raise HTTPException(422, "Expected image upload")
-    body = await request.body()
-    if len(body) > 2 * 1024 * 1024:
-        raise HTTPException(413, "Logo too large")
-    logo_path = config_root() / "dashboard-logo.png"
-    logo_path.write_bytes(body)
-    return {"saved": True}
-
-
-@app.delete("/api/settings/logo")
-def delete_logo():
-    logo_path = config_root() / "dashboard-logo.png"
-    if logo_path.is_file():
-        logo_path.unlink()
-    return {"deleted": True}
+# Settings, integrations and logo routes are defined in core/api/settings.py
 
 
 async def _internal_api(method: str, base_environment: str, path: str,

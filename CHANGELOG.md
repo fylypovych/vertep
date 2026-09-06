@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.9
+- Розпочато системний рефакторинг великих файлів. `core/app.py` зменшено з 2576 до ~2320 рядків шляхом винесення доменів у окремі модулі без зміни API-контракту та публічних імпортів:
+  - `core/security.py` — шар автентифікації/авторизації (хелпери `_hash_secret`, авторизації Web UI); пере-експортований у `app.py`.
+  - `core/state.py` — спільний mutable-стан (`store`, `executor`, `task_queue`, `workflow_registry`, `request_windows`, `result_locks`, telegram pending dicts); пере-експортований у `app.py`.
+  - `core/api/workflows.py` — роутер CRUD `/api/workflows` (4 endpointe).
+  - `core/api/resources.py` — роутер characters/brands/channels (13 endpointe).
+  - `core/api/settings.py` — роутер settings/integrations/logo (7 endpointe).
+- Поведінка та URL незмінні (перевірено: 101 маршрут, жодного відсутнього). Циклічних імпортів немає. Тести: 256 passed, 9 skipped.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.8
 - Виправлено URL у browser-e2e тестах: додано `V1_URL` з суфіксом `/v1` для всіх переходів `page.goto()`, оскільки Web UI v2 тепер за замовчуванням на `/`, а класичний v1 — на `/v1`.
 
