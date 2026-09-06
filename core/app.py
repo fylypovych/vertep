@@ -66,6 +66,7 @@ from adapters.providers import providers, provider_matrix
 from .api.workflows import router as workflows_router
 from .api.resources import router as resources_router
 from .api.settings import router as settings_router
+from .api.models import router as models_router
 
 from .security import (_authenticate_user, _hash_secret, _session_token, _valid_session,
                        _valid_worker_request, _valid_worker_token, _verify_hash, _worker_tokens)
@@ -258,6 +259,7 @@ app.add_middleware(AdminAuthMiddleware)
 app.include_router(workflows_router)
 app.include_router(resources_router)
 app.include_router(settings_router)
+app.include_router(models_router)
 
 @app.get("/setup", include_in_schema=False)
 def setup_page(request: Request):
@@ -1801,54 +1803,7 @@ async def renew_node_credentials(node_id: str, request: Request):
         raise HTTPException(422, str(error)) from error
 
 
-@app.get("/api/models/text")
-def list_text_models_endpoint():
-    try:
-        return {"models": list_text_models()}
-    except httpx.HTTPError as error:
-        raise HTTPException(502, f"Ollama is unreachable: {error}") from error
-
-
-@app.post("/api/models/text/pull")
-def pull_text_model_endpoint(payload: dict):
-    model = payload.get("model")
-    if not model or not isinstance(model, str):
-        raise HTTPException(422, "model is required")
-    try:
-        return pull_text_model(model)
-    except httpx.HTTPError as error:
-        raise HTTPException(502, f"Ollama pull failed: {error}") from error
-
-
-@app.delete("/api/models/text/{model:path}")
-def delete_text_model_endpoint(model: str):
-    try:
-        delete_text_model(model)
-        return {"deleted": model}
-    except httpx.HTTPError as error:
-        raise HTTPException(502, f"Ollama delete failed: {error}") from error
-
-
-@app.get("/api/models/voices")
-def list_voices_endpoint():
-    try:
-        return {"voices": list_voices()}
-    except httpx.HTTPError as error:
-        raise HTTPException(502, f"TTS runtime is unreachable: {error}") from error
-
-
-@app.post("/api/models/voices/synthesize")
-def synthesize_voice_endpoint(payload: dict):
-    text = payload.get("text")
-    if not text or not isinstance(text, str):
-        raise HTTPException(422, "text is required")
-    voice = payload.get("voice", "default")
-    speed = int(payload.get("speed", 150))
-    try:
-        audio = synthesize_voice(text, voice, speed)
-        return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
-    except httpx.HTTPError as error:
-        raise HTTPException(502, f"TTS synthesis failed: {error}") from error
+# Text model and voice model routes are defined in core/api/models.py
 
 @app.get("/api/system/update")
 def web_update_status():

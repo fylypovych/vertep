@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.10
+- Продовжено рефакторинг `core/app.py`: винесено домен керування моделями у `core/api/models.py` (5 endpointe: `/api/models/text`, `/api/models/text/pull`, `/api/models/text/{model}`, `/api/models/voices`, `/api/models/voices/synthesize`). `app.py` зменшено до ~2283 рядків. API-контракт та тести незмінні: 256 passed, 9 skipped.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.9
 - Розпочато системний рефакторинг великих файлів. `core/app.py` зменшено з 2576 до ~2320 рядків шляхом винесення доменів у окремі модулі без зміни API-контракту та публічних імпортів:
   - `core/security.py` — шар автентифікації/авторизації (хелпери `_hash_secret`, авторизації Web UI); пере-експортований у `app.py`.
