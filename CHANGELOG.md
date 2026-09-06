@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.11
+- Продовжено рефакторинг `core/app.py`: винесено first-run/setup домен у `core/api/setup.py` (3 endpointe: `/api/setup`, `/api/setup/health`, `/api/setup/complete`) разом із хелпером `_validate_ai_backend`. Додано re-export `first_run_complete`/`_validate_ai_backend` у `core.app` для збереження публічного контракту. `app.py` зменшено до ~2159 рядків. API-контракт та тести незмінні: 256 passed, 9 skipped.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.10
 - Продовжено рефакторинг `core/app.py`: винесено домен керування моделями у `core/api/models.py` (5 endpointe: `/api/models/text`, `/api/models/text/pull`, `/api/models/text/{model}`, `/api/models/voices`, `/api/models/voices/synthesize`). `app.py` зменшено до ~2283 рядків. API-контракт та тести незмінні: 256 passed, 9 skipped.
 

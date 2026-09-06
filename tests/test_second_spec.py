@@ -6,6 +6,7 @@ import pytest
 
 
 core_app = importlib.import_module("core.app")
+setup_mod = importlib.import_module("core.api.setup")
 
 
 class Response:
@@ -103,9 +104,9 @@ def test_first_run_creates_registration_token_before_committing_setup(monkeypatc
         events.append("complete")
         return {"configured": True}
 
-    monkeypatch.setattr(core_app, "_validate_ai_backend", validate)
-    monkeypatch.setattr(core_app, "create_registration_token", create_token)
-    monkeypatch.setattr(core_app, "complete_setup", complete)
+    monkeypatch.setattr(setup_mod, "_validate_ai_backend", validate)
+    monkeypatch.setattr(setup_mod, "create_registration_token", create_token)
+    monkeypatch.setattr(setup_mod, "complete_setup", complete)
 
     result = asyncio.run(core_app.first_run_complete(Request()))
 
