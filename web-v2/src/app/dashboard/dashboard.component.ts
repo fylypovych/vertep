@@ -8,7 +8,7 @@ import { Worker } from '../core/models';
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="space-y-6">
+    <div class="space-y-6" data-testid="dashboard">
       @if (loading) {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           @for (_ of [1,2,3,4]; track $index) {
@@ -27,7 +27,7 @@ import { Worker } from '../core/models';
         </div>
       } @else {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div class="bg-white rounded-xl border border-slate-200 p-5">
+          <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-workers">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Воркери</p>
@@ -39,7 +39,7 @@ import { Worker } from '../core/models';
               </div>
             </div>
           </div>
-          <div class="bg-white rounded-xl border border-slate-200 p-5">
+          <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-active-jobs">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Активні завдання</p>
@@ -51,7 +51,7 @@ import { Worker } from '../core/models';
               </div>
             </div>
           </div>
-          <div class="bg-white rounded-xl border border-slate-200 p-5">
+          <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-queued-jobs">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Завдань у черзі</p>
@@ -63,7 +63,7 @@ import { Worker } from '../core/models';
               </div>
             </div>
           </div>
-          <div class="bg-white rounded-xl border border-slate-200 p-5">
+          <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-system-state">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Стан системи</p>
@@ -80,7 +80,7 @@ import { Worker } from '../core/models';
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div class="bg-white rounded-xl border border-slate-200 p-5">
             <h3 class="text-lg font-semibold text-slate-900 mb-4">Архітектура системи</h3>
-            <div class="flex flex-col items-center gap-3">
+            <div class="flex flex-col items-center gap-3" data-testid="architecture">
               <div class="px-4 py-2 bg-slate-900 text-white rounded-lg font-semibold">CORE</div>
               <div class="grid grid-cols-3 gap-3 w-full max-w-md">
                 <div *ngFor="let item of architectureItems" class="border border-slate-200 rounded-lg p-3 text-center">
@@ -92,7 +92,7 @@ import { Worker } from '../core/models';
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
             <h3 class="text-lg font-semibold text-slate-900 mb-4">Статуси завдань</h3>
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-2 gap-4" data-testid="job-statuses">
               <div class="text-center">
                 <div class="text-3xl font-bold text-blue-600">{{ statusCounts.inProgress }}</div>
                 <div class="text-sm text-slate-500">В процесі</div>
@@ -127,7 +127,7 @@ import { Worker } from '../core/models';
           </div>
         </div>
 
-        <div class="bg-white rounded-xl border border-slate-200 p-5">
+        <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="resources">
           <h3 class="text-lg font-semibold text-slate-900 mb-4">Ресурси системи</h3>
           @if (resources.length) {
             <div class="space-y-4">
@@ -146,7 +146,7 @@ import { Worker } from '../core/models';
           }
         </div>
 
-        <div class="bg-white rounded-xl border border-slate-200 p-5">
+        <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-table-section">
           <h3 class="text-lg font-semibold text-slate-900 mb-4">Workers</h3>
           <div class="overflow-x-auto">
             <table class="w-full text-sm text-left">
@@ -217,11 +217,13 @@ export class DashboardComponent implements OnInit {
   }
 
   loadData(): void {
+    console.log('[DIAG][Dashboard] loadData() start');
     this.loading = true;
     this.error = null;
 
     this.api.getStatus().subscribe({
       next: (status) => {
+        console.log('[DIAG][Dashboard] getStatus next', status);
         this.systemState = status.system?.state || 'NORMAL';
         this.systemReason = status.system?.reason || 'Штатний режим';
         this.statusCounts = {
@@ -240,14 +242,24 @@ export class DashboardComponent implements OnInit {
               { label: 'Диск', value: status.resources.disk || 0, color: 'bg-amber-500' },
             ]
           : [];
+        console.log('[DIAG][Dashboard] getStatus state assigned', {
+          systemState: this.systemState,
+          resources: this.resources,
+          statusCounts: this.statusCounts,
+        });
       },
       error: (err) => {
+        console.error('[DIAG][Dashboard] getStatus error', err);
         this.error = err.message || 'Не вдалося завантажити дані системи';
+      },
+      complete: () => {
+        console.log('[DIAG][Dashboard] getStatus complete');
       },
     });
 
     this.api.getWorkers().subscribe({
       next: (workers) => {
+        console.log('[DIAG][Dashboard] getWorkers next', workers);
         this.workers = workers;
         this.onlineWorkers = workers.filter(w => w.status === 'ONLINE').length;
         const groups: Record<string, number> = {};
@@ -260,15 +272,25 @@ export class DashboardComponent implements OnInit {
           count,
         }));
         this.loading = false;
+        console.log('[DIAG][Dashboard] getWorkers state assigned', {
+          onlineWorkers: this.onlineWorkers,
+          architectureItems: this.architectureItems,
+          loading: this.loading,
+        });
       },
       error: (err) => {
+        console.error('[DIAG][Dashboard] getWorkers error', err);
         this.error = err.message || 'Не вдалося завантажити воркери';
         this.loading = false;
+      },
+      complete: () => {
+        console.log('[DIAG][Dashboard] getWorkers complete');
       },
     });
 
     this.api.getJobs().subscribe({
       next: (jobs) => {
+        console.log('[DIAG][Dashboard] getJobs next', jobs);
         this.activeJobs = jobs.filter(j => ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY'].includes(j.status)).length;
         this.queuedJobs = jobs.filter(j => ['NEW', 'QUEUED', 'PENDING'].includes(j.status)).length;
         this.statusCounts = {
@@ -277,9 +299,17 @@ export class DashboardComponent implements OnInit {
           cancelled: jobs.filter(j => j.status === 'CANCELLED').length,
           waiting: jobs.filter(j => j.status === 'WAITING_FOR_SYSTEM').length,
         };
+        console.log('[DIAG][Dashboard] getJobs state assigned', {
+          activeJobs: this.activeJobs,
+          queuedJobs: this.queuedJobs,
+          statusCounts: this.statusCounts,
+        });
       },
       error: () => {
-        // Jobs are secondary, don't block dashboard
+        console.error('[DIAG][Dashboard] getJobs error');
+      },
+      complete: () => {
+        console.log('[DIAG][Dashboard] getJobs complete');
       },
     });
   }

@@ -11,16 +11,16 @@ import { Character } from '../core/models';
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-    <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="characters-page">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">Персонажі</h3>
-        <button (click)="openCreateModal()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+        <button (click)="openCreateModal()" data-testid="create-character-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
           Новий персонаж
         </button>
       </div>
 
       <div class="mb-4">
-        <input [(ngModel)]="search" placeholder="Пошук за ім'ям або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <input [(ngModel)]="search" data-testid="characters-search" placeholder="Пошук за ім'ям або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
       @if (loading) {
@@ -49,7 +49,7 @@ import { Character } from '../core/models';
               </div>
             </div>
           } @empty {
-            <div class="col-span-full text-center text-slate-500 py-6">Персонажів не знайдено</div>
+            <div class="col-span-full text-center text-slate-500 py-6" data-testid="characters-empty">Персонажів не знайдено</div>
           }
         </div>
         @if (pages > 1) {
@@ -63,17 +63,17 @@ import { Character } from '../core/models';
     </div>
 
     <!-- Character Form Modal -->
-    <div *ngIf="showModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div *ngIf="showModal" data-testid="character-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ editingCharacter ? 'Редагувати персонажа' : 'Новий персонаж' }}</h3>
         <div class="space-y-4">
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Ім'я персонажа</label>
-            <input [(ngModel)]="form.name" placeholder="Наприклад, Дід Самогонщик" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <input [(ngModel)]="form.name" data-testid="character-name-input" placeholder="Наприклад, Дід Самогонщик" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
           </div>
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Системний ідентифікатор</label>
-            <input [(ngModel)]="form.id" placeholder="did_samogon" [disabled]="editingCharacter !== null" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100">
+            <input [(ngModel)]="form.id" data-testid="character-id-input" placeholder="did_samogon" [disabled]="editingCharacter !== null" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100">
           </div>
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>

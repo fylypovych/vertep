@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.18
+- Додано діагностичні `console.log` у `ApiService`, `Dashboard` і `main.ts` для трасування даних між HTTP request і component state.
+- Оновлено `tests/test_browser_e2e.py` під фактичний Web UI V2: тести використовують Angular routes `/`, `/jobs`, `/workers`, `/characters`, `/settings` та `data-testid` селектори; видалено залежність від застарілих V1 елементів `#nav button[data-panel=...]`, `#health`, `#jobs`, `#characters` тощо.
+- Додано `data-testid` у V2 компоненти (`dashboard`, `jobs`, `workers`, `characters`, `settings`) для стабільних E2E селекторів.
+- Видалено/адаптовано тестовий сценарії, що перевіряли відсутні у V2 сторінки Queue/Brands/Updates; збережено перевірки empty state, forms, navigation та settings backends.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.17
 - Виправлено API contract V2: `api.service.ts` тепер нормалізує відповіді backend під фактичні поля — `job_id` → `id` для jobs, `workers` завжди масив, `load: 0` як fallback.
 - Оновлено `SystemStatus` у V2: додано поля `version`, `ollama`, `update`, `workers` щоб відповідали чинному `/api/status`.

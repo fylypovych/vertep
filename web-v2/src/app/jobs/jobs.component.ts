@@ -11,16 +11,16 @@ import { Job } from '../core/models';
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-    <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="jobs-page">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">Завдання</h3>
-        <button (click)="openCreateModal()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+        <button (click)="openCreateModal()" data-testid="create-job-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
           Нове завдання
         </button>
       </div>
 
       <div class="mb-4">
-        <input [(ngModel)]="search" placeholder="Пошук за ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <input [(ngModel)]="search" data-testid="jobs-search" placeholder="Пошук за ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
       @if (loading) {
@@ -36,7 +36,7 @@ import { Job } from '../core/models';
         </div>
       } @else {
         <div class="overflow-x-auto">
-          <table class="w-full text-sm text-left">
+          <table class="w-full text-sm text-left" data-testid="jobs-table">
             <thead class="text-xs text-slate-500 uppercase bg-slate-50">
               <tr>
                 <th class="px-4 py-3">ID</th>
@@ -65,7 +65,7 @@ import { Job } from '../core/models';
                   </td>
                 </tr>
               } @empty {
-                <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">Завдань не знайдено</td></tr>
+                <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500" data-testid="jobs-empty">Завдань не знайдено</td></tr>
               }
             </tbody>
           </table>
@@ -81,13 +81,13 @@ import { Job } from '../core/models';
     </div>
 
     <!-- Create Job Modal -->
-    <div *ngIf="showCreateModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div *ngIf="showCreateModal" data-testid="create-job-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Нове завдання</h3>
         <div class="space-y-4">
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Тема</label>
-            <input [(ngModel)]="newJobTopic" placeholder="Наприклад, Історія про діда Самогонщика" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <input [(ngModel)]="newJobTopic" data-testid="job-topic-input" placeholder="Наприклад, Історія про діда Самогонщика" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
           </div>
           <div class="flex items-center gap-2">
             <input type="checkbox" [(ngModel)]="newJobScheduled" id="scheduled">

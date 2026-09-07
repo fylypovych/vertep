@@ -11,16 +11,16 @@ import { Worker } from '../core/models';
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-    <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-page">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">Воркери</h3>
-        <button (click)="openWizard()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+        <button (click)="openWizard()" data-testid="create-worker-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
           Додати вузол
         </button>
       </div>
 
       <div class="mb-4">
-        <input [(ngModel)]="search" placeholder="Пошук за назвою або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <input [(ngModel)]="search" data-testid="workers-search" placeholder="Пошук за назвою або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
       @if (loading) {
@@ -36,7 +36,7 @@ import { Worker } from '../core/models';
         </div>
       } @else {
         <div class="overflow-x-auto">
-          <table class="w-full text-sm text-left">
+          <table class="w-full text-sm text-left" data-testid="workers-table">
             <thead class="text-xs text-slate-500 uppercase bg-slate-50">
               <tr>
                 <th class="px-4 py-3">Назва</th>
@@ -75,7 +75,7 @@ import { Worker } from '../core/models';
                   </td>
                 </tr>
               } @empty {
-                <tr><td colspan="6" class="px-4 py-6 text-center text-slate-500">Воркерів не знайдено</td></tr>
+                <tr><td colspan="6" class="px-4 py-6 text-center text-slate-500" data-testid="workers-empty">Воркерів не знайдено</td></tr>
               }
             </tbody>
           </table>
@@ -91,7 +91,7 @@ import { Worker } from '../core/models';
     </div>
 
     <!-- Worker Wizard Modal -->
-    <div *ngIf="showWizard" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div *ngIf="showWizard" data-testid="worker-wizard-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Додати вузол</h3>
         <div class="space-y-4">
@@ -101,7 +101,7 @@ import { Worker } from '../core/models';
           </div>
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Роль</label>
-            <select [(ngModel)]="wizard.role" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <select [(ngModel)]="wizard.role" data-testid="worker-role-select" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
               <option value="gpu">GPU-вузол</option>
               <option value="text">Текстовий вузол</option>
               <option value="voice">Голосовий вузол</option>

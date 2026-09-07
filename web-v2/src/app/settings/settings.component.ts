@@ -9,7 +9,7 @@ import { SystemStatus } from '../core/models';
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="space-y-6">
+    <div class="space-y-6" data-testid="settings-page">
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Система</h3>
         @if (loading) {
@@ -26,10 +26,10 @@ import { SystemStatus } from '../core/models';
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Движки обробки (backends)</h3>
         @if (!systemStatus || !systemStatus.providers) {
-          <p class="text-sm text-slate-500">Інформація про движки недоступна.</p>
+          <p class="text-sm text-slate-500" data-testid="backends-unavailable">Інформація про движки недоступна.</p>
         } @else {
           <div class="overflow-x-auto">
-            <table class="min-w-full text-sm">
+            <table class="min-w-full text-sm" data-testid="backends-table">
               <thead>
                 <tr class="text-left text-slate-500 border-b border-slate-200">
                   <th class="py-2 pr-4 font-medium">Роль</th>
@@ -72,7 +72,7 @@ import { SystemStatus } from '../core/models';
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Оновлення</h3>
         @if (!systemStatus || !systemStatus.update) {
-          <p class="text-sm text-slate-500">Інформація про оновлення недоступна.</p>
+          <p class="text-sm text-slate-500" data-testid="update-unavailable">Інформація про оновлення недоступна.</p>
         } @else {
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
