@@ -1,4 +1,4 @@
-import { Routes } from '@angular/router';
+﻿import { Routes } from '@angular/router';
 import { LayoutComponent } from './layout/layout.component';
 import { DashboardComponent } from './dashboard/dashboard.component';
 import { JobsComponent } from './jobs/jobs.component';
@@ -15,11 +15,12 @@ export const routes: Routes = [
     component: LayoutComponent,
     canActivate: [AuthGuard],
     children: [
-      { path: '', component: DashboardComponent, title: 'Дашборд' },
-      { path: 'jobs', component: JobsComponent, title: 'Завдання' },
-      { path: 'workers', component: WorkersComponent, title: 'Воркери' },
-      { path: 'characters', component: CharactersComponent, title: 'Персонажі' },
-      { path: 'settings', component: SettingsComponent, title: 'Налаштування' },
+      { path: '',           component: DashboardComponent,  title: 'Дашборд' },
+      { path: 'jobs',       component: JobsComponent,        title: 'Завдання' },
+      { path: 'workers',    component: WorkersComponent,     title: 'Воркери' },
+      { path: 'characters', component: CharactersComponent,  title: 'Персонажі' },
+      { path: 'settings',   component: SettingsComponent,    title: 'Налаштування' },
     ],
   },
+  { path: '**', redirectTo: '' },
 ];

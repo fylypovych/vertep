@@ -1,4 +1,4 @@
-import { Component, Inject } from '@angular/core';
+﻿import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ConfirmService, ConfirmOptions } from '../core/services/confirm.service';
 
@@ -7,44 +7,46 @@ import { ConfirmService, ConfirmOptions } from '../core/services/confirm.service
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" *ngIf="visible">
-      <div class="bg-white rounded-xl border border-slate-200 p-6 max-w-sm w-full mx-4">
-        <h3 class="text-lg font-semibold text-slate-900 mb-2">{{ options.title }}</h3>
-        <p class="text-sm text-slate-600 mb-6">{{ options.message }}</p>
-        <div class="flex gap-3 justify-end">
-          <button (click)="cancel()" class="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg">Скасувати</button>
-          <button (click)="confirm()" class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg">Підтвердити</button>
+    @if (visible) {
+      <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 max-w-sm w-full mx-4 shadow-xl">
+          <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">{{ options.title }}</h3>
+          <p class="text-sm text-slate-600 dark:text-slate-400 mb-6">{{ options.message }}</p>
+          <div class="flex gap-3 justify-end">
+            <button (click)="onCancel()"
+                    class="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+              {{ options.cancelText || 'Скасувати' }}
+            </button>
+            <button (click)="onConfirm()"
+                    class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors">
+              {{ options.confirmText || 'Підтвердити' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    }
   `,
 })
-export class ConfirmDialogComponent {
+export class ConfirmDialogComponent implements OnInit {
   visible = false;
   options: ConfirmOptions = { title: '', message: '' };
-  private resolve?: (value: boolean) => void;
 
-  constructor(private confirmService: ConfirmService) {
-    this.confirmService['subject'].subscribe({
-      next: () => {},
+  constructor(private confirmService: ConfirmService) {}
+
+  ngOnInit(): void {
+    this.confirmService.open$.subscribe((opts) => {
+      this.options = opts;
+      this.visible = true;
     });
   }
 
-  async open(options: ConfirmOptions): Promise<boolean> {
-    this.options = options;
-    this.visible = true;
-    return new Promise((resolve) => {
-      this.resolve = resolve;
-    });
+  onConfirm(): void {
+    this.visible = false;
+    this.confirmService.resolve(true);
   }
 
-  confirm(): void {
+  onCancel(): void {
     this.visible = false;
-    this.resolve?.(true);
-  }
-
-  cancel(): void {
-    this.visible = false;
-    this.resolve?.(false);
+    this.confirmService.resolve(false);
   }
 }

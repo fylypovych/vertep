@@ -1,6 +1,5 @@
-import { Injectable } from '@angular/core';
+﻿import { Injectable } from '@angular/core';
 import { Observable, Subject } from 'rxjs';
-import { ConfirmDialogComponent } from '../../shared/confirm-dialog.component';
 
 export interface ConfirmOptions {
   title: string;
@@ -11,14 +10,26 @@ export interface ConfirmOptions {
 
 @Injectable({ providedIn: 'root' })
 export class ConfirmService {
-  private subject = new Subject<boolean>();
+  private pending: { resolve: (value: boolean) => void } | null = null;
+  private openSubject = new Subject<ConfirmOptions>();
+  open$ = this.openSubject.asObservable();
 
   confirm(options: ConfirmOptions): Observable<boolean> {
-    const result = confirm(`${options.title}\n\n${options.message}`);
-    const confirmed = result === true;
-    this.subject.next(confirmed);
-    this.subject.complete();
-    this.subject = new Subject<boolean>();
-    return this.subject.asObservable();
+    return new Observable<boolean>((subscriber) => {
+      this.pending = {
+        resolve: (value: boolean) => {
+          subscriber.next(value);
+          subscriber.complete();
+        },
+      };
+      this.openSubject.next(options);
+    });
+  }
+
+  resolve(value: boolean): void {
+    if (this.pending) {
+      this.pending.resolve(value);
+      this.pending = null;
+    }
   }
 }

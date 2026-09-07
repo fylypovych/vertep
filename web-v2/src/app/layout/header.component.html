@@ -1,0 +1,62 @@
+<header class="h-16 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between px-4 lg:px-6 flex-shrink-0">
+  <!-- Left: toggle + title -->
+  <div class="flex items-center gap-3">
+    <button (click)="toggleSidebar()"
+            class="p-2 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            aria-label="Перемикач меню">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+      </svg>
+    </button>
+    <div class="hidden sm:block">
+      <h1 class="text-base font-semibold text-slate-800 dark:text-slate-100 leading-tight">{{ title }}</h1>
+      <p class="text-xs text-slate-500 dark:text-slate-400 leading-tight">{{ subtitle }}</p>
+    </div>
+  </div>
+
+  <!-- Right: actions -->
+  <div class="flex items-center gap-1.5">
+    <!-- System state badge -->
+    <div class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+         [class.bg-emerald-50]="systemOk"
+         [class.text-emerald-700]="systemOk"
+         [class.bg-amber-50]="!systemOk"
+         [class.text-amber-700]="!systemOk">
+      <span class="w-1.5 h-1.5 rounded-full"
+            [class.bg-emerald-500]="systemOk"
+            [class.bg-amber-500]="!systemOk"></span>
+      {{ systemState }}
+    </div>
+
+    <!-- Dark mode toggle -->
+    <button (click)="toggleTheme()"
+            class="p-2 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            [title]="isDark ? 'Світла тема' : 'Темна тема'">
+      @if (isDark) {
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M17.657 17.657l-.707-.707M6.343 6.343l-.707-.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+        </svg>
+      } @else {
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+        </svg>
+      }
+    </button>
+
+    <!-- Switch to v1 -->
+    <button (click)="switchToV1()"
+            class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            title="Класичний дизайн v1">
+      v1
+    </button>
+
+    <!-- User / logout -->
+    <button (click)="logout()"
+            class="flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            title="Вийти">
+      <div class="w-8 h-8 bg-emerald-100 dark:bg-emerald-900 rounded-full flex items-center justify-center text-emerald-700 dark:text-emerald-400 font-semibold text-sm select-none">A</div>
+    </button>
+  </div>
+</header>

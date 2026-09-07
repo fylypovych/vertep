@@ -1,60 +1,91 @@
-import { Component } from '@angular/core';
-import { Router } from '@angular/router';
+﻿import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Router, NavigationEnd, RouterModule } from '@angular/router';
+import { CommonModule } from '@angular/common';
+import { filter, Subscription } from 'rxjs';
+import { SidebarService } from '../core/services/sidebar.service';
+import { ThemeService } from '../core/services/theme.service';
+import { VertepApiService } from '../core/api.service';
+
+const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
+  '':           { title: 'Дашборд',      subtitle: 'Огляд системи Vertep' },
+  'jobs':       { title: 'Завдання',      subtitle: 'Управління завданнями' },
+  'workers':    { title: 'Воркери',       subtitle: 'Вузли та їх стан' },
+  'characters': { title: 'Персонажі',     subtitle: 'Персонажі контенту' },
+  'settings':   { title: 'Налаштування',  subtitle: 'Системні налаштування' },
+};
 
 @Component({
   selector: 'app-header',
   standalone: true,
-  template: `
-    <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6">
-      <div>
-        <h1 class="text-xl font-semibold text-slate-800">{{ title }}</h1>
-        <p class="text-sm text-slate-500">{{ subtitle }}</p>
-      </div>
-      <div class="flex items-center gap-4">
-        <button (click)="switchToV1()" title="Класичний дизайн v1"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-400 text-emerald-700 bg-emerald-50 text-sm font-medium hover:bg-emerald-100 transition-colors">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3l1.9 5.8H20l-5 3.6 1.9 5.8-4.9-3.6-4.9 3.6L9 12.4l-5-3.6h6.1z"/></svg>
-          Класичний v1
-        </button>
-        <div class="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-full text-sm font-medium">
-          <span class="w-2 h-2 bg-emerald-500 rounded-full"></span>
-          Нормальний
-        </div>
-        <button class="p-2 text-slate-400 hover:text-slate-600">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-        </button>
-        <div class="flex items-center gap-2">
-          <div class="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-700 font-semibold text-sm">A</div>
-          <span class="text-sm font-medium text-slate-700">Admin</span>
-        </div>
-      </div>
-    </header>
-  `,
+  imports: [CommonModule, RouterModule],
+  templateUrl: './header.component.html',
 })
-export class HeaderComponent {
+export class HeaderComponent implements OnInit, OnDestroy {
   title = 'Дашборд';
-  subtitle = 'Огляд вашої системи Vertep';
+  subtitle = 'Огляд системи Vertep';
+  systemState = 'Нормальний';
+  systemOk = true;
+  isDark = false;
 
-  constructor(private router: Router) {
-    this.router.events.subscribe(() => {
-      const route = this.router.routerState.root.firstChild;
-      if (route?.snapshot.data?.['title']) {
-        this.title = route.snapshot.data['title'];
-      }
-      const subtitles: Record<string, string> = {
-        '': 'Огляд вашої системи Vertep',
-        'jobs': 'Управління завданнями',
-        'workers': 'Вузли та їх стан',
-        'characters': 'Персонажі контенту',
-        'settings': 'Системні налаштування',
-      };
-      this.subtitle = subtitles[route?.snapshot.routeConfig?.path || ''] || '';
+  private subs = new Subscription();
+
+  constructor(
+    private router: Router,
+    private sidebarService: SidebarService,
+    private themeService: ThemeService,
+    private api: VertepApiService,
+  ) {}
+
+  ngOnInit(): void {
+    this.isDark = this.themeService.isDark;
+    this.subs.add(this.themeService.dark$.subscribe(d => { this.isDark = d; }));
+    this.updateTitle(this.router.url);
+    this.subs.add(
+      this.router.events.pipe(filter(e => e instanceof NavigationEnd))
+        .subscribe(e => this.updateTitle((e as NavigationEnd).urlAfterRedirects))
+    );
+    this.loadSystemState();
+    const id = setInterval(() => this.loadSystemState(), 30_000);
+    this.subs.add(new Subscription(() => clearInterval(id)));
+  }
+
+  ngOnDestroy(): void { this.subs.unsubscribe(); }
+
+  toggleSidebar(): void { this.sidebarService.toggle(); }
+  toggleTheme(): void   { this.themeService.toggle(); }
+
+  switchToV1(): void {
+    document.cookie = 'vertep_ui=v1; path=/; max-age=31536000; SameSite=Lax';
+    window.location.href = '/v1/';
+  }
+
+  logout(): void {
+    this.api.deleteSession().subscribe({
+      next:  () => this.router.navigate(['/login']),
+      error: () => this.router.navigate(['/login']),
     });
   }
 
-  // Switch to the classic v1 design. Persist choice in a cookie.
-  switchToV1() {
-    document.cookie = 'vertep_ui=v1; path=/; max-age=31536000; SameSite=Lax';
-    window.location.href = '/v1/';
+  private updateTitle(url: string): void {
+    const segment = url.replace(/^\//, '').split('?')[0].split('#')[0];
+    const info = PAGE_TITLES[segment] ?? PAGE_TITLES[''];
+    this.title    = info.title;
+    this.subtitle = info.subtitle;
+  }
+
+  private loadSystemState(): void {
+    this.api.getStatus().subscribe({
+      next: (s) => {
+        const state = s.system?.state?.toUpperCase() ?? 'NORMAL';
+        const labels: Record<string, string> = {
+          NORMAL: 'Нормальний', OK: 'Працює', HEALTHY: 'Працює',
+          MAINTENANCE: 'Обслуговування', UPDATING: 'Оновлення',
+          EMERGENCY: 'Аварія', FAILED: 'Помилка', ERROR: 'Помилка',
+        };
+        this.systemState = labels[state] ?? state;
+        this.systemOk = ['NORMAL', 'OK', 'HEALTHY'].includes(state);
+      },
+      error: () => { this.systemState = 'Недоступний'; this.systemOk = false; },
+    });
   }
 }
