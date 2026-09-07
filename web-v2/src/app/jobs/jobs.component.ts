@@ -127,7 +127,8 @@ export class JobsComponent implements OnInit {
 
   get filteredJobs(): Job[] {
     if (!this.search.trim()) return this.jobs;
-    return this.jobs.filter(j => j.id.toLowerCase().includes(this.search.toLowerCase()));
+    const term = this.search.toLowerCase();
+    return this.jobs.filter(j => (j.id || '').toLowerCase().includes(term));
   }
 
   get pagedJobs(): Job[] {

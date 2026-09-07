@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .atomic_write import atomic_write_json
+from .version import application_version
 
 _lock = threading.Lock()
 
@@ -35,6 +36,8 @@ def update_status() -> dict:
     })
     status["enabled"] = os.getenv("WEB_UPDATE_ENABLED", "false").lower() == "true"
     status["pending"] = len(list((root / "requests").glob("*.json"))) if (root / "requests").is_dir() else 0
+    if not status.get("current_version"):
+        status["current_version"] = application_version()
     return status
 
 

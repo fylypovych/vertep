@@ -1,7 +1,8 @@
-﻿import { Component } from '@angular/core';
+﻿import { Component, OnInit } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { SidebarService } from '../core/services/sidebar.service';
+import { VertepApiService } from '../core/api.service';
 
 interface NavItem {
   path: string;
@@ -61,13 +62,13 @@ interface NavItem {
         <div class="text-xs text-slate-500 whitespace-nowrap transition-opacity duration-200"
              [class.opacity-0]="collapsed"
              [class.hidden]="collapsed">
-          Vertep Admin v2
+          Vertep v{{ runtimeVersion || '...' }}
         </div>
       </div>
     </aside>
   `,
 })
-export class SidebarComponent {
+export class SidebarComponent implements OnInit {
   navItems: NavItem[] = [
     {
       path: '/',
@@ -105,5 +106,14 @@ export class SidebarComponent {
     return window.innerWidth < 1024;
   }
 
-  constructor(private sidebarService: SidebarService) {}
+  runtimeVersion: string | null = null;
+
+  constructor(private sidebarService: SidebarService, private api: VertepApiService) {}
+
+  ngOnInit(): void {
+    this.api.getStatus().subscribe({
+      next: (s) => { this.runtimeVersion = s.version || null; },
+      error: () => { this.runtimeVersion = null; },
+    });
+  }
 }

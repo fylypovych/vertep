@@ -44,6 +44,7 @@ export interface SystemStatus {
   postgres: string;
   redis: string;
   storage: string;
+  version?: string;
   system?: { state: string; reason?: string };
   telegram?: { status: string; bot_username?: string };
   queue?: { depth: number; inflight: number; dead_letter: number };

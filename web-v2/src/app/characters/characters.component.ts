@@ -123,8 +123,8 @@ export class CharactersComponent implements OnInit {
     if (!this.search.trim()) return this.characters;
     const term = this.search.toLowerCase();
     return this.characters.filter(c =>
-      c.name.toLowerCase().includes(term) ||
-      c.id.toLowerCase().includes(term)
+      (c.name || '').toLowerCase().includes(term) ||
+      (c.id || '').toLowerCase().includes(term)
     );
   }
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.16
+- Додано `POST /api/characters` у `core/api/resources.py` для створення персонажів; раніше фронтенд отримував 405 при спробі створити нового персонажа.
+- Виправлено синхронізацію версії: `/api/status.update.current_version` тепер завжди дорівнює `/api/status.version` через `application_version()` у `core/update_manager.py`.
+- Додано поле `version` до `SystemStatus` у `web-v2/src/app/core/models.ts` для передачі версії runtime у Web UI.
+- Виправлено V2 render-path: додано null-guards у `jobs.component.ts` та `characters.component.ts` при пошуку, щоб відсутні `id`/`name` не ламали вкладки.
+- Оновлено sidebar: замість хардкодного `Vertep Admin v2` тепер показує `Vertep v<runtime_version>` з `/api/status`; при недоступності API показує `...`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.15
 - Покращено команди `vertep start`, `vertep stop`, `vertep restart` у `scripts/vertep`: перевірка exit code Docker Compose, показ активних контейнерів перед зупинкою, health-check циклом до 60 с після запуску з прогресом, `docker compose ps` після старту і зупинки, `[ПОМИЛКА]`/`[УВАГА]` при збоях.
 - Виправлено `tests/test_update_security.py` і `tests/test_local_contracts.py`: виклики `read_text()` для `scripts/vertep` доповнено `encoding="utf-8"` щоб уникнути `UnicodeDecodeError` на Windows; оновлено assert під новий текст повідомлення запуску.

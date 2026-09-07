@@ -14,6 +14,20 @@ from ..state import store
 router = APIRouter()
 
 
+@router.post("/api/characters")
+def create_character(config: CharacterConfig):
+    if not config.id:
+        raise HTTPException(400, "Character ID is required")
+    if not SAFE_ID.fullmatch(config.id):
+        raise HTTPException(400, "Invalid character ID")
+    root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
+    directory = root / config.id
+    if directory.exists():
+        raise HTTPException(409, "Character already exists")
+    save_character(root, config)
+    return config
+
+
 @router.get("/api/characters")
 def characters():
     root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
