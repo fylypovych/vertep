@@ -112,7 +112,7 @@ def test_character_create_and_edit_use_localized_form():
         page.get_by_role("button", name="Скасувати").click()
         expect(page.locator("[data-testid='character-modal']")).not_to_be_visible()
 
-        page.locator("[data-testid='character-modal'] >> text=Редагувати").click()
+        page.locator("[data-testid='characters-page']").get_by_role("button", name="Редагувати").first.click()
         expect(page.locator("[data-testid='character-modal']")).to_be_visible()
         expect(page.locator("[data-testid='character-name-input']")).to_have_value("Дід Самогонщик")
 
@@ -159,6 +159,8 @@ def test_settings_shows_system_status_backends_and_update():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.17",
@@ -176,6 +178,7 @@ def test_settings_shows_system_status_backends_and_update():
         expect(page.locator("[data-testid='backends-table']")).to_be_visible()
         expect(page.locator("[data-testid='backends-table']")).to_contain_text("ollama")
         expect(page.locator("[data-testid='update-unavailable']")).not_to_be_visible()
+        assert errors == []
         browser.close()
 
 

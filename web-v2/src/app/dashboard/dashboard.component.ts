@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { VertepApiService } from '../core/api.service';
 import { Worker } from '../core/models';
@@ -9,7 +9,7 @@ import { Worker } from '../core/models';
   imports: [CommonModule],
   template: `
     <div class="space-y-6" data-testid="dashboard">
-      @if (loading) {
+      @if (loading()) {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           @for (_ of [1,2,3,4]; track $index) {
             <div class="animate-pulse bg-slate-100 rounded-xl h-24"></div>
@@ -194,7 +194,7 @@ import { Worker } from '../core/models';
   `,
 })
 export class DashboardComponent implements OnInit {
-  loading = true;
+  loading = signal(true);
   error: string | null = null;
   onlineWorkers = 0;
   activeJobs = 0;
@@ -217,13 +217,11 @@ export class DashboardComponent implements OnInit {
   }
 
   loadData(): void {
-    console.log('[DIAG][Dashboard] loadData() start');
-    this.loading = true;
+    this.loading.set(true);
     this.error = null;
 
     this.api.getStatus().subscribe({
       next: (status) => {
-        console.log('[DIAG][Dashboard] getStatus next', status);
         this.systemState = status.system?.state || 'NORMAL';
         this.systemReason = status.system?.reason || 'Штатний режим';
         this.statusCounts = {
@@ -242,24 +240,14 @@ export class DashboardComponent implements OnInit {
               { label: 'Диск', value: status.resources.disk || 0, color: 'bg-amber-500' },
             ]
           : [];
-        console.log('[DIAG][Dashboard] getStatus state assigned', {
-          systemState: this.systemState,
-          resources: this.resources,
-          statusCounts: this.statusCounts,
-        });
       },
       error: (err) => {
-        console.error('[DIAG][Dashboard] getStatus error', err);
         this.error = err.message || 'Не вдалося завантажити дані системи';
-      },
-      complete: () => {
-        console.log('[DIAG][Dashboard] getStatus complete');
       },
     });
 
     this.api.getWorkers().subscribe({
       next: (workers) => {
-        console.log('[DIAG][Dashboard] getWorkers next', workers);
         this.workers = workers;
         this.onlineWorkers = workers.filter(w => w.status === 'ONLINE').length;
         const groups: Record<string, number> = {};
@@ -271,26 +259,16 @@ export class DashboardComponent implements OnInit {
           label: this.translateRole(role),
           count,
         }));
-        this.loading = false;
-        console.log('[DIAG][Dashboard] getWorkers state assigned', {
-          onlineWorkers: this.onlineWorkers,
-          architectureItems: this.architectureItems,
-          loading: this.loading,
-        });
+        this.loading.set(false);
       },
       error: (err) => {
-        console.error('[DIAG][Dashboard] getWorkers error', err);
         this.error = err.message || 'Не вдалося завантажити воркери';
-        this.loading = false;
-      },
-      complete: () => {
-        console.log('[DIAG][Dashboard] getWorkers complete');
+        this.loading.set(false);
       },
     });
 
     this.api.getJobs().subscribe({
       next: (jobs) => {
-        console.log('[DIAG][Dashboard] getJobs next', jobs);
         this.activeJobs = jobs.filter(j => ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY'].includes(j.status)).length;
         this.queuedJobs = jobs.filter(j => ['NEW', 'QUEUED', 'PENDING'].includes(j.status)).length;
         this.statusCounts = {
@@ -299,18 +277,8 @@ export class DashboardComponent implements OnInit {
           cancelled: jobs.filter(j => j.status === 'CANCELLED').length,
           waiting: jobs.filter(j => j.status === 'WAITING_FOR_SYSTEM').length,
         };
-        console.log('[DIAG][Dashboard] getJobs state assigned', {
-          activeJobs: this.activeJobs,
-          queuedJobs: this.queuedJobs,
-          statusCounts: this.statusCounts,
-        });
       },
-      error: () => {
-        console.error('[DIAG][Dashboard] getJobs error');
-      },
-      complete: () => {
-        console.log('[DIAG][Dashboard] getJobs complete');
-      },
+      error: () => {},
     });
   }
 

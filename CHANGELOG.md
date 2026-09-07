@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.19
+- Виправлено оновлення Dashboard, Jobs, Characters і Settings у zoneless Angular: асинхронний UI state переведено на `signal()`, тому дані після HTTP-відповідей гарантовано відображаються в DOM.
+- Системний ідентифікатор нового персонажа тепер генерується автоматично, залишається незмінним під час редагування та недоступний для ручної зміни.
+- Відновлено empty state списку завдань і відображення `providers` та статусу оновлення у Settings; вилучено тимчасові `[DIAG]` логи.
+- Уточнено Browser E2E locator кнопки редагування персонажа та додано перевірку відсутності JavaScript-помилок у Settings.
+
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.18
 - Додано діагностичні `console.log` у `ApiService`, `Dashboard` і `main.ts` для трасування даних між HTTP request і component state.
 - Оновлено `tests/test_browser_e2e.py` під фактичний Web UI V2: тести використовують Angular routes `/`, `/jobs`, `/workers`, `/characters`, `/settings` та `data-testid` селектори; видалено залежність від застарілих V1 елементів `#nav button[data-panel=...]`, `#health`, `#jobs`, `#characters` тощо.

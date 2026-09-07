@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { VertepApiService } from '../core/api.service';
@@ -23,15 +23,15 @@ import { Character } from '../core/models';
         <input [(ngModel)]="search" data-testid="characters-search" placeholder="Пошук за ім'ям або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
-      @if (loading) {
+      @if (loading()) {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           @for (_ of [1,2,3,4,5,6]; track $index) {
             <div class="animate-pulse bg-slate-100 rounded-lg h-32"></div>
           }
         </div>
-      } @else if (error) {
+      } @else if (error()) {
         <div class="bg-red-50 border border-red-200 rounded-xl p-5">
-          <p class="text-red-700">{{ error }}</p>
+          <p class="text-red-700">{{ error() }}</p>
           <button (click)="loadCharacters()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
         </div>
       } @else {
@@ -63,7 +63,7 @@ import { Character } from '../core/models';
     </div>
 
     <!-- Character Form Modal -->
-    <div *ngIf="showModal" data-testid="character-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div *ngIf="showModal()" data-testid="character-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ editingCharacter ? 'Редагувати персонажа' : 'Новий персонаж' }}</h3>
         <div class="space-y-4">
@@ -73,7 +73,7 @@ import { Character } from '../core/models';
           </div>
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Системний ідентифікатор</label>
-            <input [(ngModel)]="form.id" data-testid="character-id-input" placeholder="did_samogon" [disabled]="editingCharacter !== null" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100">
+            <input [(ngModel)]="form.id" data-testid="character-id-input" placeholder="did_samogon" [disabled]="editingCharacter === null" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100">
           </div>
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
@@ -95,7 +95,7 @@ import { Character } from '../core/models';
         </div>
         <div class="flex justify-end gap-2 mt-6">
           <button (click)="closeModal()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-          <button (click)="saveCharacter()" [disabled]="saving" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving ? 'Збереження...' : 'Зберегти' }}</button>
+          <button (click)="saveCharacter()" [disabled]="saving()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
         </div>
       </div>
     </div>
@@ -103,12 +103,12 @@ import { Character } from '../core/models';
 })
 export class CharactersComponent implements OnInit {
   characters: Character[] = [];
-  loading = false;
-  error: string | null = null;
-  showModal = false;
+  loading = signal(false);
+  error = signal<string | null>(null);
+  showModal = signal(false);
   editingCharacter: Character | null = null;
   form: Partial<Character> = {};
-  saving = false;
+  saving = signal(false);
   search = '';
   page = 1;
   pageSize = 10;
@@ -138,18 +138,18 @@ export class CharactersComponent implements OnInit {
   }
 
   loadCharacters(): void {
-    this.loading = true;
-    this.error = null;
+    this.loading.set(true);
+    this.error.set(null);
     this.api.getCharacters().subscribe({
-      next: (characters) => { this.characters = characters; this.loading = false; },
-      error: (err) => { this.error = err.message; this.loading = false; },
+      next: (characters) => { this.characters = characters; this.loading.set(false); },
+      error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
   }
 
   openCreateModal(): void {
     this.editingCharacter = null;
     this.form = {
-      id: '',
+      id: this.generateId(),
       name: 'Новий персонаж',
       language: 'uk',
       enabled: true,
@@ -159,25 +159,29 @@ export class CharactersComponent implements OnInit {
       generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
       publishing: { enabled: false },
     };
-    this.showModal = true;
+    this.showModal.set(true);
+  }
+
+  private generateId(): string {
+    return `character_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
   }
 
   editCharacter(character: Character): void {
     this.editingCharacter = character;
     this.form = { ...character };
-    this.showModal = true;
+    this.showModal.set(true);
   }
 
   closeModal(): void {
-    this.showModal = false;
+    this.showModal.set(false);
     this.editingCharacter = null;
     this.form = {};
-    this.saving = false;
+    this.saving.set(false);
   }
 
   saveCharacter(): void {
     if (!this.form.id || !this.form.name) return;
-    this.saving = true;
+    this.saving.set(true);
     const payload = {
       ...this.form,
       id: this.form.id,
@@ -202,8 +206,8 @@ export class CharactersComponent implements OnInit {
         this.toast.show('Персонаж збережено', 'success');
       },
       error: (err) => {
-        this.error = err.message;
-        this.saving = false;
+        this.error.set(err.message);
+        this.saving.set(false);
         this.toast.show(err.message || 'Помилка збереження', 'error');
       },
     });

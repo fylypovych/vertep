@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { VertepApiService } from '../core/api.service';
@@ -23,7 +23,7 @@ import { Job } from '../core/models';
         <input [(ngModel)]="search" data-testid="jobs-search" placeholder="Пошук за ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
-      @if (loading) {
+      @if (loading()) {
         <div class="space-y-3">
           @for (_ of [1,2,3]; track $index) {
             <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
@@ -108,7 +108,7 @@ import { Job } from '../core/models';
 })
 export class JobsComponent implements OnInit {
   jobs: Job[] = [];
-  loading = false;
+  loading = signal(false);
   error: string | null = null;
   showCreateModal = false;
   newJobTopic = '';
@@ -141,11 +141,17 @@ export class JobsComponent implements OnInit {
   }
 
   loadJobs(): void {
-    this.loading = true;
+    this.loading.set(true);
     this.error = null;
     this.api.getJobs().subscribe({
-      next: (jobs) => { this.jobs = jobs; this.loading = false; },
-      error: (err) => { this.error = err.message; this.loading = false; },
+      next: (jobs) => {
+        this.jobs = jobs;
+        this.loading.set(false);
+      },
+      error: (err) => {
+        this.error = err.message;
+        this.loading.set(false);
+      },
     });
   }
 
