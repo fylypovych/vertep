@@ -19,7 +19,56 @@ import { SystemStatus } from '../core/models';
         } @else if (error()) {
           <p class="text-red-600">{{ error() }}</p>
         } @else {
-          <pre class="text-sm text-slate-600 bg-slate-50 p-4 rounded-lg overflow-auto">{{ systemStatus() | json }}</pre>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2" data-testid="system-info">
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Стан системи</span>
+              <span class="text-sm font-medium" [class.text-emerald-600]="systemOk" [class.text-red-600]="!systemOk">{{ systemStateLabel }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Версія</span>
+              <span class="text-sm font-medium text-slate-900">{{ systemStatus()?.version || '—' }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Ядро</span>
+              <span class="text-sm font-medium" [class.text-emerald-600]="systemStatus()?.core === 'OK'" [class.text-red-600]="systemStatus()?.core !== 'OK'">{{ systemStatus()?.core || '—' }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">База даних</span>
+              <span class="text-sm font-medium" [class.text-emerald-600]="systemStatus()?.postgres === 'OK'" [class.text-red-600]="systemStatus()?.postgres !== 'OK'">{{ systemStatus()?.postgres || '—' }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Redis</span>
+              <span class="text-sm font-medium" [class.text-emerald-600]="systemStatus()?.redis === 'OK'" [class.text-red-600]="systemStatus()?.redis !== 'OK'">{{ systemStatus()?.redis || '—' }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Сховище</span>
+              <span class="text-sm font-medium" [class.text-emerald-600]="systemStatus()?.storage === 'OK'" [class.text-red-600]="systemStatus()?.storage !== 'OK'">{{ systemStatus()?.storage || '—' }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Telegram</span>
+              <span class="text-sm font-medium" [class.text-emerald-600]="telegramOk" [class.text-slate-600]="!telegramOk">{{ telegramStatus }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Черга</span>
+              <span class="text-sm font-medium text-slate-900">{{ systemStatus()?.queue?.depth || 0 }}</span>
+            </div>
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm text-slate-500">Активні завдання</span>
+              <span class="text-sm font-medium text-slate-900">{{ activeJobsCount }}</span>
+            </div>
+            @if (systemStatus()?.ollama) {
+              <div class="flex justify-between py-2 border-b border-slate-100">
+                <span class="text-sm text-slate-500">LLM / Ollama</span>
+                <span class="text-sm font-medium" [class.text-emerald-600]="systemStatus()?.ollama !== 'STUB'" [class.text-amber-600]="systemStatus()?.ollama === 'STUB'">{{ systemStatus()?.ollama }}</span>
+              </div>
+            }
+          </div>
+          <button (click)="showAdvanced = !showAdvanced" class="mt-4 text-sm text-slate-500 hover:text-slate-700">
+            {{ showAdvanced ? 'Сховати технічні деталі' : 'Показати технічні деталі' }}
+          </button>
+          @if (showAdvanced) {
+            <pre class="mt-4 text-xs text-slate-600 bg-slate-50 p-4 rounded-lg overflow-auto max-h-64">{{ systemStatus() | json }}</pre>
+          }
         }
       </div>
 
@@ -101,6 +150,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   systemStatus = signal<SystemStatus | null>(null);
   loading = signal(false);
   error = signal<string | null>(null);
+  showAdvanced = false;
   updateStatus: string | null = null;
   private subs = new Subscription();
 
@@ -126,6 +176,41 @@ export class SettingsComponent implements OnInit, OnDestroy {
         error: (err) => { this.error.set(err.message || 'Не вдалося завантажити статус'); this.loading.set(false); },
       }),
     );
+  }
+
+  get systemOk(): boolean {
+    const s = this.systemStatus();
+    return s?.core === 'OK' && s?.postgres === 'OK' && s?.redis === 'OK';
+  }
+
+  get systemStateLabel(): string {
+    const state = this.systemStatus()?.system?.state || 'UNKNOWN';
+    const labels: Record<string, string> = {
+      'NORMAL': 'Нормальний',
+      'MAINTENANCE': 'Обслуговування',
+      'UPDATING': 'Оновлення',
+      'EMERGENCY': 'Аварія',
+      'RECOVERING': 'Відновлення',
+      'READ_ONLY': 'Тільки читання',
+    };
+    return labels[state] || state;
+  }
+
+  get telegramOk(): boolean {
+    return this.systemStatus()?.telegram?.status === 'OK';
+  }
+
+  get telegramStatus(): string {
+    const tg = this.systemStatus()?.telegram;
+    if (!tg) return 'Не налаштовано';
+    if (tg.status === 'OK') return `Підключено (${tg.bot_username || 'без імені'})`;
+    return tg.status || 'Невідомо';
+  }
+
+  get activeJobsCount(): number {
+    const s = this.systemStatus();
+    if (!s) return 0;
+    return s.orchestration?.active_jobs || 0;
   }
 
   backendSlots(): any[] {

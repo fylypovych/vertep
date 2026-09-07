@@ -22,6 +22,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import httpx
+import psutil
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -848,6 +849,18 @@ def telegram_bot_info():
     except (httpx.HTTPError, RuntimeError) as error:
         return {"configured": True, "ok": False, "error": str(error)}
 
+
+def _get_system_resources() -> dict | None:
+    try:
+        return {
+            "cpu": int(psutil.cpu_percent(interval=0.1)),
+            "ram": int(psutil.virtual_memory().percent),
+            "disk": int(psutil.disk_usage('/').percent),
+        }
+    except Exception:
+        return None
+
+
 @app.get("/api/status")
 def system_status():
     try:
@@ -871,6 +884,7 @@ def system_status():
              "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
              "telegram": _build_telegram_status(),
              "providers": provider_matrix(),
+             "resources": _get_system_resources(),
              "update": update_status(), "workers": workers()}
 
 @app.get("/status")

@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## ПРАВИЛЬНА НАЗВА: 0.0.1.20
+- Створено компонент Job Detail: перегляд усіх полів Job (ID, тема, статус, пріоритет, дата, персонаж, workflow, scenes, artifacts, історія подій).
+- Додано кнопку "Редагувати" у Job Detail: зміна теми, пріоритету, workflow; кнопку "Видалити" з confirm-діалогом.
+- Додано `VertepDatePipe` — єдиний формат дати `дд.мм.рррр год:хв` для всього Web UI.
+- Виправлено Dashboard статуси завдань: підрахунок з реальних jobs через централізовані `JOB_STATUS_GROUPS`.
+- Покращено Dashboard "Архітектура системи": показує CORE + модулі (LLM, TTS, GPU, FFmpeg, Telegram) + Worker nodes з ролями та capabilities.
+- Додано real-time ресурси (CPU, RAM, Disk) через `psutil` у `/api/status`; Dashboard показує "Недоступно" замість 0% при відсутності даних.
+- Замінено raw JSON у Settings → Система на user-friendly таблицю з state, версією, компонентами, кнопкою "Показати технічні деталі".
+- Додано 8 нових browser E2E тестів для перевірки Job Detail, статусового підрахунку, ресурсів, System settings, версії update subsystem, архітектури.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.19
 - Виправлено оновлення Dashboard, Jobs, Characters і Settings у zoneless Angular: асинхронний UI state переведено на `signal()`, тому дані після HTTP-відповідей гарантовано відображаються в DOM.

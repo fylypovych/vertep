@@ -2,6 +2,7 @@
 import { LayoutComponent } from './layout/layout.component';
 import { DashboardComponent } from './dashboard/dashboard.component';
 import { JobsComponent } from './jobs/jobs.component';
+import { JobDetailComponent } from './jobs/job-detail.component';
 import { WorkersComponent } from './workers/workers.component';
 import { CharactersComponent } from './characters/characters.component';
 import { SettingsComponent } from './settings/settings.component';
@@ -17,9 +18,10 @@ export const routes: Routes = [
     children: [
       { path: '',           component: DashboardComponent,  title: 'Дашборд' },
       { path: 'jobs',       component: JobsComponent,        title: 'Завдання' },
+      { path: 'jobs/:id',   component: JobDetailComponent,  title: 'Завдання' },
       { path: 'workers',    component: WorkersComponent,     title: 'Воркери' },
       { path: 'characters', component: CharactersComponent,  title: 'Персонажі' },
-      { path: 'settings',   component: SettingsComponent,    title: 'Налаштування' },
+      { path: 'settings',   component: SettingsComponent,   title: 'Налаштування' },
     ],
   },
   { path: '**', redirectTo: '' },

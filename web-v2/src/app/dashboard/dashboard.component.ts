@@ -3,6 +3,23 @@ import { CommonModule } from '@angular/common';
 import { VertepApiService } from '../core/api.service';
 import { Worker } from '../core/models';
 
+const JOB_STATUS_GROUPS = {
+  inProgress: ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING', 'SCRIPT_READY', 'ASSETS_READY', 'VIDEO_READY'],
+  queued: ['NEW', 'QUEUED', 'PENDING'],
+  completed: ['READY', 'PUBLISHED'],
+  waiting: ['WAITING_FOR_SYSTEM'],
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  core: 'Ядро',
+  gpu: 'GPU',
+  text: 'Текст / LLM',
+  voice: 'Voice',
+  publisher: 'Publisher',
+  backup: 'Backup',
+  monitoring: 'Monitoring',
+};
+
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -80,14 +97,27 @@ import { Worker } from '../core/models';
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div class="bg-white rounded-xl border border-slate-200 p-5">
             <h3 class="text-lg font-semibold text-slate-900 mb-4">Архітектура системи</h3>
-            <div class="flex flex-col items-center gap-3" data-testid="architecture">
-              <div class="px-4 py-2 bg-slate-900 text-white rounded-lg font-semibold">CORE</div>
-              <div class="grid grid-cols-3 gap-3 w-full max-w-md">
-                <div *ngFor="let item of architectureItems" class="border border-slate-200 rounded-lg p-3 text-center">
-                  <div class="text-sm font-medium text-slate-700">{{ item.label }}</div>
-                  <div class="text-lg font-semibold text-emerald-600">{{ item.count }}</div>
-                </div>
+            <div class="space-y-2" data-testid="architecture">
+              <div class="flex items-center">
+                <span class="px-3 py-1.5 bg-slate-900 text-white rounded-lg font-semibold text-sm">CORE</span>
+                <span class="ml-2 text-sm text-slate-500">{{ coreModules.join(' / ') || 'Base' }}</span>
               </div>
+              @if (architectureItems.length > 0) {
+                <div class="ml-4 space-y-1 border-l-2 border-slate-200 pl-4">
+                  @for (item of architectureItems; track item.role) {
+                    <div class="flex items-center text-sm">
+                      <span class="w-2 h-2 rounded-full bg-emerald-400 mr-2"></span>
+                      <span class="text-slate-700">{{ item.label }}</span>
+                      @if (item.capabilities.length > 0) {
+                        <span class="ml-2 text-xs text-slate-400">({{ item.capabilities.slice(0, 3).join(', ') }}{{ item.capabilities.length > 3 ? '...' : '' }})</span>
+                      }
+                      <span class="ml-auto text-emerald-600 font-medium">{{ item.count }}</span>
+                    </div>
+                  }
+                </div>
+              } @else {
+                <p class="text-sm text-slate-500 ml-4">Немає підключених вузлів</p>
+              }
             </div>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
@@ -129,65 +159,71 @@ import { Worker } from '../core/models';
 
         <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="resources">
           <h3 class="text-lg font-semibold text-slate-900 mb-4">Ресурси системи</h3>
-          @if (resources.length) {
+          @if (resourcesAvailable) {
             <div class="space-y-4">
-              <div *ngFor="let resource of resources">
-                <div class="flex justify-between text-sm mb-1">
-                  <span class="text-slate-600">{{ resource.label }}</span>
-                  <span class="text-slate-900 font-medium">{{ resource.value }}%</span>
+              @for (resource of resources; track resource.label) {
+                <div>
+                  <div class="flex justify-between text-sm mb-1">
+                    <span class="text-slate-600">{{ resource.label }}</span>
+                    <span class="text-slate-900 font-medium">{{ resource.value }}%</span>
+                  </div>
+                  <div class="w-full bg-slate-100 rounded-full h-2">
+                    <div class="h-2 rounded-full" [class]="resource.color" [style.width.%]="resource.value"></div>
+                  </div>
                 </div>
-                <div class="w-full bg-slate-100 rounded-full h-2">
-                  <div class="h-2 rounded-full" [class]="resource.color" [style.width.%]="resource.value"></div>
-                </div>
-              </div>
+              }
             </div>
           } @else {
-            <p class="text-sm text-slate-500">Дані про ресурси недоступні.</p>
+            <p class="text-sm text-slate-500" data-testid="resources-unavailable">Недоступно</p>
           }
         </div>
 
         <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-table-section">
           <h3 class="text-lg font-semibold text-slate-900 mb-4">Workers</h3>
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm text-left">
-              <thead class="text-xs text-slate-500 uppercase bg-slate-50">
-                <tr>
-                  <th class="px-4 py-3">Назва</th>
-                  <th class="px-4 py-3">Роль</th>
-                  <th class="px-4 py-3">Можливості</th>
-                  <th class="px-4 py-3">Статус</th>
-                  <th class="px-4 py-3">Навантаження</th>
-                  <th class="px-4 py-3">Дії</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr *ngFor="let worker of workers" class="border-t border-slate-100">
-                  <td class="px-4 py-3">
-                    <div class="font-medium text-slate-900">{{ worker.node_name }}</div>
-                    <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
-                  </td>
-                  <td class="px-4 py-3">{{ worker.role }}</td>
-                  <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
-                  <td class="px-4 py-3">
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
-                      [class.bg-emerald-50]="worker.status === 'ONLINE'"
-                      [class.text-emerald-700]="worker.status === 'ONLINE'"
-                      [class.bg-slate-100]="worker.status !== 'ONLINE'"
-                      [class.text-slate-600]="worker.status !== 'ONLINE'">
-                      <span class="w-1.5 h-1.5 rounded-full"
-                        [class.bg-emerald-500]="worker.status === 'ONLINE'"
-                        [class.bg-slate-400]="worker.status !== 'ONLINE'"></span>
-                      {{ worker.status }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-3">{{ worker.load || 0 }}%</td>
-                  <td class="px-4 py-3">
-                    <a routerLink="/workers" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">Налаштування</a>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          @if (workers.length > 0) {
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm text-left">
+                <thead class="text-xs text-slate-500 uppercase bg-slate-50">
+                  <tr>
+                    <th class="px-4 py-3">Назва</th>
+                    <th class="px-4 py-3">Роль</th>
+                    <th class="px-4 py-3">Можливості</th>
+                    <th class="px-4 py-3">Статус</th>
+                    <th class="px-4 py-3">Навантаження</th>
+                    <th class="px-4 py-3">Дії</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr *ngFor="let worker of workers" class="border-t border-slate-100">
+                    <td class="px-4 py-3">
+                      <div class="font-medium text-slate-900">{{ worker.node_name }}</div>
+                      <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
+                    </td>
+                    <td class="px-4 py-3">{{ worker.role }}</td>
+                    <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
+                    <td class="px-4 py-3">
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
+                        [class.bg-emerald-50]="worker.status === 'ONLINE'"
+                        [class.text-emerald-700]="worker.status === 'ONLINE'"
+                        [class.bg-slate-100]="worker.status !== 'ONLINE'"
+                        [class.text-slate-600]="worker.status !== 'ONLINE'">
+                        <span class="w-1.5 h-1.5 rounded-full"
+                          [class.bg-emerald-500]="worker.status === 'ONLINE'"
+                          [class.bg-slate-400]="worker.status !== 'ONLINE'"></span>
+                        {{ worker.status }}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3">{{ worker.load || 0 }}%</td>
+                    <td class="px-4 py-3">
+                      <a routerLink="/workers" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">Налаштування</a>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          } @else {
+            <p class="text-sm text-slate-500">Немає зареєстрованих воркерів</p>
+          }
         </div>
       }
     </div>
@@ -201,19 +237,21 @@ export class DashboardComponent implements OnInit {
   queuedJobs = 0;
   systemState = 'NORMAL';
   systemReason = 'Штатний режим';
-  architectureItems: { role: string; label: string; count: number }[] = [];
+  coreModules: string[] = [];
+  architectureItems: { role: string; label: string; count: number; capabilities: string[] }[] = [];
   statusCounts = { inProgress: 0, queued: 0, completed: 0, failed: 0, paused: 0, cancelled: 0, waiting: 0 };
-  resources = [
-    { label: 'CPU', value: 0, color: 'bg-emerald-500' },
-    { label: 'RAM', value: 0, color: 'bg-blue-500' },
-    { label: 'Диск', value: 0, color: 'bg-amber-500' },
-  ];
+  resources: { label: string; value: number; color: string }[] = [];
+  resourcesAvailable = false;
   workers: Worker[] = [];
 
   constructor(private api: VertepApiService) {}
 
   ngOnInit(): void {
     this.loadData();
+  }
+
+  private countByStatus(jobs: any[], statusSet: string[]): number {
+    return jobs.filter(j => statusSet.includes(j.status)).length;
   }
 
   loadData(): void {
@@ -224,22 +262,24 @@ export class DashboardComponent implements OnInit {
       next: (status) => {
         this.systemState = status.system?.state || 'NORMAL';
         this.systemReason = status.system?.reason || 'Штатний режим';
-        this.statusCounts = {
-          inProgress: (status.orchestration?.active_jobs || 0) + (status.queue?.inflight || 0),
-          queued: (status.queue?.depth || 0) + (status.scheduler?.pending || 0),
-          completed: 0,
-          failed: status.queue?.dead_letter || 0,
-          paused: 0,
-          cancelled: 0,
-          waiting: 0,
-        };
-        this.resources = status.resources
-          ? [
-              { label: 'CPU', value: status.resources.cpu || 0, color: 'bg-emerald-500' },
-              { label: 'RAM', value: status.resources.ram || 0, color: 'bg-blue-500' },
-              { label: 'Диск', value: status.resources.disk || 0, color: 'bg-amber-500' },
-            ]
-          : [];
+        if (status.providers) {
+          const modules: string[] = [];
+          const providers = status.providers as Record<string, { configured?: boolean }>;
+          if (providers['llm']?.configured) modules.push('LLM');
+          if (providers['tts']?.configured) modules.push('TTS');
+          if (providers['compute']?.configured) modules.push('GPU');
+          if (providers['assembly']?.configured) modules.push('FFmpeg');
+          if (status.telegram) modules.push('Telegram');
+          this.coreModules = modules;
+        }
+        if (status.resources && (status.resources.cpu !== undefined || status.resources.ram !== undefined || status.resources.disk !== undefined)) {
+          this.resourcesAvailable = true;
+          this.resources = [
+            { label: 'CPU', value: status.resources.cpu ?? 0, color: 'bg-emerald-500' },
+            { label: 'RAM', value: status.resources.ram ?? 0, color: 'bg-blue-500' },
+            { label: 'Диск', value: status.resources.disk ?? 0, color: 'bg-amber-500' },
+          ];
+        }
       },
       error: (err) => {
         this.error = err.message || 'Не вдалося завантажити дані системи';
@@ -250,14 +290,19 @@ export class DashboardComponent implements OnInit {
       next: (workers) => {
         this.workers = workers;
         this.onlineWorkers = workers.filter(w => w.status === 'ONLINE').length;
-        const groups: Record<string, number> = {};
+        const groups: Record<string, { count: number; capabilities: Set<string> }> = {};
         workers.filter(w => w.status === 'ONLINE').forEach(w => {
-          groups[w.role] = (groups[w.role] || 0) + 1;
+          if (!groups[w.role]) {
+            groups[w.role] = { count: 0, capabilities: new Set() };
+          }
+          groups[w.role].count++;
+          (w.capabilities || []).forEach(c => groups[w.role].capabilities.add(c));
         });
-        this.architectureItems = Object.entries(groups).map(([role, count]) => ({
+        this.architectureItems = Object.entries(groups).map(([role, data]) => ({
           role,
-          label: this.translateRole(role),
-          count,
+          label: ROLE_LABELS[role] || role,
+          count: data.count,
+          capabilities: Array.from(data.capabilities),
         }));
         this.loading.set(false);
       },
@@ -269,13 +314,16 @@ export class DashboardComponent implements OnInit {
 
     this.api.getJobs().subscribe({
       next: (jobs) => {
-        this.activeJobs = jobs.filter(j => ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY'].includes(j.status)).length;
-        this.queuedJobs = jobs.filter(j => ['NEW', 'QUEUED', 'PENDING'].includes(j.status)).length;
+        this.activeJobs = this.countByStatus(jobs, JOB_STATUS_GROUPS.inProgress);
+        this.queuedJobs = this.countByStatus(jobs, JOB_STATUS_GROUPS.queued);
         this.statusCounts = {
-          ...this.statusCounts,
-          paused: jobs.filter(j => j.status === 'PAUSED').length,
-          cancelled: jobs.filter(j => j.status === 'CANCELLED').length,
-          waiting: jobs.filter(j => j.status === 'WAITING_FOR_SYSTEM').length,
+          inProgress: this.countByStatus(jobs, JOB_STATUS_GROUPS.inProgress),
+          queued: this.countByStatus(jobs, JOB_STATUS_GROUPS.queued),
+          completed: this.countByStatus(jobs, JOB_STATUS_GROUPS.completed),
+          failed: jobs.filter(j => j.status === 'FAILED').length,
+          paused: this.countByStatus(jobs, ['PAUSED']),
+          cancelled: this.countByStatus(jobs, ['CANCELLED']),
+          waiting: this.countByStatus(jobs, JOB_STATUS_GROUPS.waiting),
         };
       },
       error: () => {},
@@ -295,18 +343,5 @@ export class DashboardComponent implements OnInit {
       'EMERGENCY': 'Аварія',
     };
     return labels[this.systemState.toUpperCase()] || this.systemState;
-  }
-
-  private translateRole(role: string): string {
-    const labels: Record<string, string> = {
-      'core': 'CORE',
-      'gpu': 'GPU',
-      'text': 'Text',
-      'voice': 'Voice',
-      'publisher': 'Publisher',
-      'backup': 'Backup',
-      'monitoring': 'Monitoring',
-    };
-    return labels[role] || role;
   }
 }

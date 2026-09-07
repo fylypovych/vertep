@@ -1,15 +1,17 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Job } from '../core/models';
+import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
 @Component({
   selector: 'app-jobs',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, VertepDatePipe],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="jobs-page">
       <div class="flex items-center justify-between mb-4">
@@ -58,7 +60,7 @@ import { Job } from '../core/models';
                       {{ job.status }}
                     </span>
                   </td>
-                  <td class="px-4 py-3">{{ job.created_at | date:'short' }}</td>
+                  <td class="px-4 py-3">{{ job.created_at | vertepDate }}</td>
                   <td class="px-4 py-3">
                     <button (click)="openJob(job.id)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Відкрити</button>
                     <button (click)="deleteJob(job.id)" class="text-red-600 hover:text-red-700 text-sm font-medium">Видалити</button>
@@ -119,7 +121,7 @@ export class JobsComponent implements OnInit {
   page = 1;
   pageSize = 10;
 
-  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
+  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router) {}
 
   ngOnInit(): void {
     this.loadJobs();
@@ -188,7 +190,7 @@ export class JobsComponent implements OnInit {
   }
 
   openJob(id: string): void {
-    window.open(`/jobs/${id}`, '_blank');
+    this.router.navigate(['/jobs', id]);
   }
 
   deleteJob(id: string): void {

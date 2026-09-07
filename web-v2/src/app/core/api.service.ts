@@ -86,6 +86,22 @@ export class VertepApiService {
     );
   }
 
+  getJob(jobId: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}`, { headers: this.getHeaders() }).pipe(
+      catchError((err) => {
+        return throwError(() => err);
+      }),
+    );
+  }
+
+  updateJob(jobId: string, payload: any): Observable<any> {
+    return this.http.patch(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}`, payload, { headers: this.getHeaders() }).pipe(
+      catchError((err) => {
+        return throwError(() => err);
+      }),
+    );
+  }
+
   getCharacters(): Observable<Character[]> {
     return this.http.get<Character[]>(`${this.baseUrl}/characters`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
