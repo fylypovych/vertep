@@ -140,7 +140,7 @@ def test_audit_log_is_hash_chained(tmp_path):
 
 
 def test_rollback_contract_verifies_backup_and_restores_database():
-    script = (Path(__file__).parents[1] / "scripts" / "vertep").read_text()
+    script = (Path(__file__).parents[1] / "scripts" / "vertep").read_text(encoding="utf-8")
     assert "sha256sum -c SHA256SUMS" in script
     assert "database-restore-required" in script
     assert "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" in script
@@ -227,7 +227,7 @@ def test_bootstrap_resume_updates_managed_env_and_preserves_unknown_settings():
 
 
 def test_signed_update_switches_runtime_images_and_host_executors():
-    command = (Path(__file__).parents[1] / "scripts/vertep").read_text()
+    command = (Path(__file__).parents[1] / "scripts/vertep").read_text(encoding="utf-8")
     runtime = (Path(__file__).parents[1] / "scripts/build-runtime-bundle.py").read_text()
     workflow = (Path(__file__).parents[1] / ".github/workflows/release.yml").read_text()
     assert 'python3 "$release_root/scripts/update-runtime-env.py"' in command

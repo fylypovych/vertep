@@ -122,6 +122,9 @@ def test_friendly_queue_workflow_and_core_role_controls():
             "scheduler": {"pending": 0, "next_run": None},
             "orchestration": {"active_jobs": 0, "active_scenes": 0},
         }))
+        page.route("**/api/system/roles", lambda route: route.fulfill(json={
+            "active_roles": ["text", "backup"], "available_roles": [], "deployment": {},
+        }))
         page.goto(V1_URL)
 
         page.locator('#nav button[data-panel="queue"]').click()
@@ -141,7 +144,12 @@ def test_friendly_queue_workflow_and_core_role_controls():
         page.locator('#nav button[data-panel="workers"]').click()
         expect(page.locator("#systemstatus")).to_be_hidden()
         expect(page.locator("#core-role-card")).to_be_visible()
-        expect(page.locator("#core-role-options input[type=checkbox]")).to_have_count(6)
+        expect(page.locator("#core-role-summary .role-summary-item")).to_have_count(6)
+        expect(page.locator("#core-role-summary .role-enabled")).to_have_count(2)
+        expect(page.locator("#core-role-summary .role-disabled")).to_have_count(4)
+        expect(page.locator('[data-role="text"] .role-state')).to_have_text("Увімкнено")
+        expect(page.locator('[data-role="gpu"] .role-state')).to_have_text("Вимкнено")
+        expect(page.locator("#core-role-card input[type=checkbox]")).to_have_count(0)
         assert errors == []
         browser.close()
 
@@ -220,10 +228,17 @@ def test_update_panel_has_progress_and_restart_control():
             "message": "Restarting active Vertep services", "log": [], "enabled": True,
         }))
         page.goto(V1_URL)
-        page.locator('#nav button[data-panel="settings"]').click()
+        page.locator('#nav button[data-panel="updates"]').click()
         expect(page.locator('#update-friendly [role="progressbar"]')).to_have_attribute("aria-valuenow", "82")
         expect(page.locator("#update-friendly")).to_contain_text("Перезапуск сервера")
         expect(page.locator("#restartserver")).to_be_visible()
+        expect(page.locator("#updates")).not_to_contain_text("Функція ще не реалізована")
+        expect(page.locator("#checkupdate")).to_be_visible()
+        expect(page.locator("#runupdate")).to_be_visible()
+        page.locator('#nav button[data-panel="settings"]').click()
+        page.get_by_role("button", name="Відкрити оновлення").click()
+        expect(page.locator("#updates")).to_be_visible()
+        expect(page.locator("#update-friendly")).to_have_count(1)
         browser.close()
 
 

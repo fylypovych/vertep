@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## ПРАВИЛЬНА НАЗВА: 0.0.1.15
+- Покращено команди `vertep start`, `vertep stop`, `vertep restart` у `scripts/vertep`: перевірка exit code Docker Compose, показ активних контейнерів перед зупинкою, health-check циклом до 60 с після запуску з прогресом, `docker compose ps` після старту і зупинки, `[ПОМИЛКА]`/`[УВАГА]` при збоях.
+- Виправлено `tests/test_update_security.py` і `tests/test_local_contracts.py`: виклики `read_text()` для `scripts/vertep` доповнено `encoding="utf-8"` щоб уникнути `UnicodeDecodeError` на Windows; оновлено assert під новий текст повідомлення запуску.
 
-## ПРАВИЛЬНА НАЗВА: 0.0.1.14
+
 - Розширено `Content-Security-Policy` у `core/app.py`: додано `img-src 'self' data:` щоб уникнути блокування inline-SVG favicon із `web/index.html` (CSP `default-src 'self'` інакше забороняє `data:` URI для зображень).
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.13

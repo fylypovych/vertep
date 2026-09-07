@@ -540,11 +540,9 @@
           <h2>Система</h2>
           <pre id="systemstatus"></pre>
           <div class="card">
-            <h3>Безпечне оновлення Vertep</h3>
-            <p class="muted">Підписані пакети надходять лише з налаштованого сервера оновлень Vertep. Активні задачі буде завершено перед встановленням.</p>
-            <button id="checkupdate" onclick="requestSystemUpdate('check')">Перевірити оновлення</button>
-            <button id="runupdate" class="danger" onclick="requestSystemUpdate('run')" disabled>Встановити оновлення</button>
-            <pre id="updatestatus">Завантаження статусу…</pre>
+            <h3>Оновлення Vertep</h3>
+            <p class="muted">Перевірка версії, безпечне встановлення та журнал доступні в розділі «Оновлення».</p>
+            <button type="button" onclick="switchPanel('updates')">Відкрити оновлення</button>
           </div>
           <div class="card">
             <h3>Захищені інтеграції</h3>
@@ -575,7 +573,16 @@
         <section id="monitoring" class="panel"><h2>Моніторинг</h2><p class="muted">Функція ще не реалізована</p></section>
         <section id="logs" class="panel"><h2>Журнали</h2><p class="muted">Функція ще не реалізована</p></section>
         <section id="notifications" class="panel"><h2>Сповіщення</h2><p class="muted">Функція ще не реалізована</p></section>
-        <section id="updates" class="panel"><h2>Оновлення</h2><p class="muted">Функція ще не реалізована</p></section>
+        <section id="updates" class="panel">
+          <h2>Оновлення</h2>
+          <div class="card">
+            <h3>Безпечне оновлення Vertep</h3>
+            <p class="muted">Підписані пакети надходять лише з налаштованого сервера оновлень Vertep. Активні задачі буде завершено перед встановленням.</p>
+            <button id="checkupdate" onclick="requestSystemUpdate('check')">Перевірити оновлення</button>
+            <button id="runupdate" class="danger" onclick="requestSystemUpdate('run')" disabled>Встановити оновлення</button>
+            <pre id="updatestatus">Завантаження статусу…</pre>
+          </div>
+        </section>
         <section id="backups" class="panel"><h2>Резервні копії</h2><p class="muted">Функція ще не реалізована</p></section>
         <section id="health-check" class="panel"><h2>Перевірка здоров'я</h2><p class="muted">Функція ще не реалізована</p></section>
       </main>

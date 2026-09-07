@@ -122,18 +122,51 @@ case "${1:-status}" in
     mapfile -t selected_services < <(selected_runtime_services)
     [[ ${#selected_services[@]} -gt 0 ]] || { echo "Deployment plan is missing; run bootstrap to repair it" >&2; exit 1; }
     cleanup_stale_compose_replacements
-    "${compose[@]}" up -d --remove-orphans "${selected_services[@]}"
-    printf 'Сервіси Vertep запущено.\n'
+    if ! "${compose[@]}" up -d --remove-orphans "${selected_services[@]}"; then
+      printf '\n[ПОМИЛКА] Docker Compose завершився з помилкою. Перевірте логи: docker compose logs\n' >&2
+      exit 1
+    fi
+    printf '\nПеревіряємо стан сервісів...\n'
+    start_ok=true
+    for attempt in {1..12}; do
+      sleep 5
+      unhealthy=$("${compose[@]}" ps --format '{{.Name}} {{.Status}}' 2>/dev/null \
+        | grep -vE '(Up|running|healthy)' | grep -v '^$' || true)
+      if [[ -z "$unhealthy" ]]; then
+        start_ok=true
+        break
+      fi
+      start_ok=false
+      printf '  Очікуємо... (%ds)\n' $((attempt * 5))
+    done
+    printf '\n'
     "${compose[@]}" ps
+    if [[ "$start_ok" == false ]]; then
+      printf '\n[УВАГА] Деякі сервіси не вийшли в робочий стан. Перевірте логи: docker compose logs\n' >&2
+      exit 1
+    fi
+    printf '\nВсі сервіси Vertep запущено і працюють.\n'
     ;;
   stop)
     printf 'Зупиняємо сервіси Vertep...\n'
     build_runtime_compose
-    "${compose[@]}" stop
-    printf 'Сервіси Vertep зупинено. Дані збережено.\n'
+    printf 'Активні контейнери:\n'
+    "${compose[@]}" ps --format '  {{.Name}}  ({{.Status}})' 2>/dev/null || true
+    printf '\n'
+    if ! "${compose[@]}" stop; then
+      printf '\n[ПОМИЛКА] Docker Compose завершився з помилкою під час зупинки.\n' >&2
+      exit 1
+    fi
+    printf '\nСтан після зупинки:\n'
+    "${compose[@]}" ps
+    printf '\nСервіси Vertep зупинено. Дані збережено.\n'
     ;;
   restart)
-    "$0" restart-runtime
+    printf 'Перезапускаємо сервіси Vertep...\n'
+    if ! "$0" restart-runtime; then
+      printf '\n[ПОМИЛКА] Перезапуск завершився з помилкою.\n' >&2
+      exit 1
+    fi
     printf 'Сервіси Vertep перезапущено.\n'
     ;;
   recover)

@@ -2,10 +2,10 @@
   "use strict";
 
   // Switch to the new v2 design (default). Persist choice in a cookie.
-  function switchDesignV2() {
+  window.switchDesignV2 = () => {
     document.cookie = "vertep_ui=v2; path=/; max-age=31536000; SameSite=Lax";
     window.location.href = "/";
-  }
+  };
 
   const textReplacements = new Map([
     ["Jobs", "Завдання"],
@@ -469,16 +469,8 @@
     card.className = "card";
     card.id = "core-role-card";
     card.innerHTML = `<h3>Локальні ролі головного вузла</h3>
-      <p class="muted">Керуйте функціями, які цей сервер виконує локально.</p>
-      <div id="core-role-options" class="role-options">
-        <label class="role-option"><input type="checkbox" value="gpu"><b>Генерація зображень (GPU)</b></label>
-        <label class="role-option"><input type="checkbox" value="text"><b>Генерація тексту</b></label>
-        <label class="role-option"><input type="checkbox" value="voice"><b>Синтез мовлення</b></label>
-        <label class="role-option"><input type="checkbox" value="publisher"><b>Публікація</b></label>
-        <label class="role-option"><input type="checkbox" value="backup"><b>Резервне копіювання</b></label>
-        <label class="role-option"><input type="checkbox" value="monitoring"><b>Моніторинг і журнали</b></label>
-      </div>
-      <div id="core-role-summary" class="role-summary">Завантаження…</div>
+      <p class="muted">Збережені налаштування функцій цього сервера. Змінити їх можна через «Налаштувати ролі».</p>
+      <div id="core-role-summary" class="role-summary" aria-live="polite">Завантаження…</div>
       <button id="open-role-wizard" type="button">Налаштувати ролі</button> <span id="core-role-result" class="muted"></span>`;
     workersPanel.querySelector("#registration")?.insertAdjacentElement("afterend", card);
   }
@@ -513,16 +505,16 @@
       else if (deployment.state === "FAILED") statusText = `Помилка: ${deploymentErrorUk(deployment.error)}`;
       else if (knownRoleStatus.queued) statusText = "Заявка в черзі на застосування ролей...";
       resultSpan.textContent = statusText;
-      if (!active.length) {
-        summary.innerHTML = `<p class="muted">Базова роль <b>CORE</b> активна. Додаткові ролі не налаштовто.</p>`;
-        return;
-      }
-      summary.innerHTML = `<div class="role-summary-grid">${active.map((roleId) => {
-        const info = (knownRoleStatus.available_roles || []).find((r) => r.id === roleId);
-        const label = roleLabelsUk[roleId] || (info && info.label) || roleId;
-        const services = info && info.services ? info.services.join(", ") : "вбудовані";
-        return `<div class="role-summary-item"><b>${esc(label)}</b><small>Компоненти: ${esc(services)}</small></div>`;
-      }).join("")}</div>`;
+      const roleIds = [...new Set([...Object.keys(roleLabelsUk), ...(knownRoleStatus.available_roles || []).map((role) => role.id), ...active])];
+      summary.innerHTML = `<div class="role-summary-heading"><b>CORE · основна роль</b><span>Увімкнено додаткових ролей: ${active.length} із ${roleIds.length}</span></div>
+        <div class="role-summary-grid">${roleIds.map((roleId) => {
+          const info = (knownRoleStatus.available_roles || []).find((role) => role.id === roleId);
+          const label = roleLabelsUk[roleId] || info?.label || roleId;
+          const enabled = active.includes(roleId);
+          return `<div class="role-summary-item ${enabled ? "role-enabled" : "role-disabled"}" data-role="${esc(roleId)}">
+            <b>${esc(label)}</b><span class="role-state">${enabled ? "Увімкнено" : "Вимкнено"}</span>
+          </div>`;
+        }).join("")}</div>`;
     } catch (error) { summary.innerHTML = `<p class="form-error visible">${esc(error.message)}</p>`; }
   };
   const openRoleWizard = async () => {
@@ -1186,18 +1178,19 @@
     if (!target) return;
     const update = status?.update;
     if (!update || (!update.state || update.state === "IDLE")) {
+      target.querySelector(".update-widget")?.remove();
       return;
     }
     const progress = update.progress ?? 0;
     const phase = update.phase || update.state;
-    const html = `<div class="state-widget">
+    const html = `<div class="state-widget update-widget">
       <div style="min-width:0">
         <div class="state-widget-title">Оновлення Vertep</div>
         <div class="state-widget-body">${esc(update.current_version || "—")} → ${esc(update.available_version || "нова")}. ${esc(update.message || phase)}</div>
         <div class="update-progress"><span style="width:${Math.min(100, Math.max(0, progress))}%"></span></div>
       </div>
       <div class="state-widget-actions">
-        <button class="secondary" onclick="switchPanel('settings')">Деталі</button>
+        <button class="secondary" onclick="switchPanel('updates')">Деталі</button>
       </div>
     </div>`;
     const existing = target.querySelector(".update-widget");
