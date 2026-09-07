@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.12
+- Винесено спільні допоміжні функції job у `core/api/job_helpers.py`, маршрути керування job — у `core/api/jobs.py`, обробку task — у `core/api/tasks.py`, керування worker — у `core/api/workers.py`.
+- Винесено маршрути реєстрації та керування вузлами у `core/api/nodes.py`, а перевірки стану, метрики, сповіщення, журнали та обслуговування — у `core/api/observability.py`.
+- Додано заготовки модулів `core/api/system.py` і `core/api/telegram.py` та `TelegramServiceHolder` у `core/state.py`; робочі системні й Telegram маршрути та життєвий цикл сервісу залишаються у `core/app.py`.
+- Додано документацію рефакторингу `docs/refactoring/large-files-refactoring.md` з картою модулів і описом життєвого циклу Telegram.
+- Відновлено сумісність публічних імпортів `core.app`, збережено поведінку маршрутів вузлів і моніторингу та усунуто дублювання маршрутів; додано перевірки унікальності API-маршрутів і переходу вузла в `DRAINING`.
+- Об’єднано незакомічені етапи рефакторингу в одну версію `0.0.1.12`; узгоджено `VERSION`, `CHANGELOG.md` та нотатки релізу.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.11
 - Продовжено рефакторинг `core/app.py`: винесено first-run/setup домен у `core/api/setup.py` (3 endpointe: `/api/setup`, `/api/setup/health`, `/api/setup/complete`) разом із хелпером `_validate_ai_backend`. Додано re-export `first_run_complete`/`_validate_ai_backend` у `core.app` для збереження публічного контракту. `app.py` зменшено до ~2159 рядків. API-контракт та тести незмінні: 256 passed, 9 skipped.
 

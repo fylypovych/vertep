@@ -314,3 +314,28 @@ def test_maintenance_dry_run_and_cleanup(tmp_path):
     os.utime(temporary, (time.time() - 3600, time.time() - 3600))
     assert str(temporary) in cleanup_temporary_files(tmp_path, older_than_hours=0, dry_run=False)
     assert not temporary.exists()
+
+
+def test_api_routes_have_unique_method_path_pairs():
+    from collections import Counter
+
+    registrations = Counter(
+        (method, route.path)
+        for route in app.routes
+        for method in getattr(route, "methods", ())
+    )
+    assert {key: count for key, count in registrations.items() if count > 1} == {}
+
+
+def test_node_drain_preserves_runtime_control(monkeypatch):
+    from core.api.nodes import control_node
+    from core.app import store
+    from core.models import NodeAction
+
+    worker = {"node_name": "test-node", "status": "READY"}
+    store.workers["test-node"] = worker
+    monkeypatch.setattr(store, "save_worker", lambda item: None)
+    result = control_node("test-node", NodeAction(action="drain", reason="test"))
+    assert result["desired_state"] == "DRAINING"
+    assert result["status"] == "DRAINING"
+    assert result["state_changed_at"]
