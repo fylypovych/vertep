@@ -52,4 +52,7 @@ export interface SystemStatus {
   orchestration?: { active_jobs: number; active_scenes: number };
   resources?: { cpu: number; ram: number; disk: number };
   providers?: Record<string, ProviderSlot>;
+  ollama?: string;
+  update?: Record<string, unknown>;
+  workers?: Worker[];
 }

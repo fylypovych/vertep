@@ -1,5 +1,6 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Subscription, timeout, take } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { SystemStatus } from '../core/models';
 
@@ -70,34 +71,38 @@ import { SystemStatus } from '../core/models';
 
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Оновлення</h3>
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
+        @if (!systemStatus || !systemStatus.update) {
+          <p class="text-sm text-slate-500">Інформація про оновлення недоступна.</p>
+        } @else {
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <p class="font-medium text-slate-900">Безпечне оновлення Vertep</p>
-              <p class="text-sm text-slate-500">Перевірка та встановлення оновлень</p>
+              <span class="text-xs text-slate-500">Поточна версія</span>
+              <p class="text-sm font-medium text-slate-900">{{ systemStatus.update['current_version'] || '—' }}</p>
             </div>
-            <button (click)="checkUpdate()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
-              Перевірити оновлення
-            </button>
+            <div>
+              <span class="text-xs text-slate-500">Доступна версія</span>
+              <p class="text-sm font-medium text-slate-900">{{ systemStatus.update['available_version'] || '—' }}</p>
+            </div>
+            <div>
+              <span class="text-xs text-slate-500">Стан</span>
+              <p class="text-sm font-medium text-slate-900">{{ systemStatus.update['state'] || '—' }}</p>
+            </div>
+            <div>
+              <span class="text-xs text-slate-500">Оновлення</span>
+              <p class="text-sm font-medium text-slate-900">{{ systemStatus.update['update_available'] ? 'Доступне' : 'Немає' }}</p>
+            </div>
           </div>
-          <div *ngIf="updateStatus" class="text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">
-            {{ updateStatus }}
-          </div>
-        </div>
+        }
       </div>
-
-      <div class="bg-white rounded-xl border border-slate-200 p-5">
-        <h3 class="text-lg font-semibold text-slate-900 mb-4">Ліцензія</h3>
-        <p class="text-sm text-slate-600">Інформація про ліцензію буде відображена тут.</p>
-      </div>
-    </div>
+     </div>
   `,
 })
-export class SettingsComponent implements OnInit {
+export class SettingsComponent implements OnInit, OnDestroy {
   systemStatus: SystemStatus | null = null;
   loading = false;
   error: string | null = null;
   updateStatus: string | null = null;
+  private subs = new Subscription();
 
   constructor(private api: VertepApiService) {}
 
@@ -105,13 +110,22 @@ export class SettingsComponent implements OnInit {
     this.loadStatus();
   }
 
+  ngOnDestroy(): void {
+    this.subs.unsubscribe();
+  }
+
   loadStatus(): void {
     this.loading = true;
     this.error = null;
-    this.api.getStatus().subscribe({
-      next: (status) => { this.systemStatus = status; this.loading = false; },
-      error: (err) => { this.error = err.message; this.loading = false; },
-    });
+    this.subs.add(
+      this.api.getStatus().pipe(
+        timeout(10000),
+        take(1),
+      ).subscribe({
+        next: (status) => { this.systemStatus = status; this.loading = false; },
+        error: (err) => { this.error = err.message || 'Не вдалося завантажити статус'; this.loading = false; },
+      }),
+    );
   }
 
   backendSlots(): any[] {
@@ -144,7 +158,6 @@ export class SettingsComponent implements OnInit {
 
   checkUpdate(): void {
     this.updateStatus = 'Перевірка оновлень...';
-    // TODO: implement update check API call
     setTimeout(() => {
       this.updateStatus = 'Оновлень немає. Використовується актуальна версія.';
     }, 2000);

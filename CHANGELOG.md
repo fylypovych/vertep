@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.17
+- Виправлено API contract V2: `api.service.ts` тепер нормалізує відповіді backend під фактичні поля — `job_id` → `id` для jobs, `workers` завжди масив, `load: 0` як fallback.
+- Оновлено `SystemStatus` у V2: додано поля `version`, `ollama`, `update`, `workers` щоб відповідали чинному `/api/status`.
+- Виправлено Dashboard: секція ресурсів показує «Дані про ресурси недоступні» якщо backend не повертає `resources`; додано null-guards.
+- Виправлено Settings: додано `timeout(10000)` і `take(1)` щоб уникнути нескінченного loading; `backendSlots()` коректно обробляє відсутні `providers`.
+- Виправлено Workers: фільтрація за `node_name`/`node_id` тепер безпечна при null значеннях.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.16
 - Додано `POST /api/characters` у `core/api/resources.py` для створення персонажів; раніше фронтенд отримував 405 при спробі створити нового персонажа.
 - Виправлено синхронізацію версії: `/api/status.update.current_version` тепер завжди дорівнює `/api/status.version` через `application_version()` у `core/update_manager.py`.

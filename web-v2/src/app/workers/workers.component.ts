@@ -167,8 +167,8 @@ export class WorkersComponent implements OnInit {
     if (!this.search.trim()) return this.workers;
     const term = this.search.toLowerCase();
     return this.workers.filter(w =>
-      w.node_name.toLowerCase().includes(term) ||
-      w.node_id.toLowerCase().includes(term)
+      (w.node_name || '').toLowerCase().includes(term) ||
+      (w.node_id || '').toLowerCase().includes(term)
     );
   }
 

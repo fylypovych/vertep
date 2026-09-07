@@ -39,15 +39,37 @@ export class VertepApiService {
   }
 
   getStatus(): Observable<SystemStatus> {
-    return this.http.get<SystemStatus>(`${this.baseUrl}/status`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+    return this.http.get<SystemStatus>(`${this.baseUrl}/status`, { headers: this.getHeaders() }).pipe(
+      catchError(this.handleError),
+      map((status) => ({
+        ...status,
+        workers: Array.isArray(status.workers) ? status.workers : [],
+      })),
+    );
   }
 
   getWorkers(): Observable<Worker[]> {
-    return this.http.get<Worker[]>(`${this.baseUrl}/workers`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+    return this.http.get<Worker[]>(`${this.baseUrl}/workers`, { headers: this.getHeaders() }).pipe(
+      catchError(this.handleError),
+      map((workers) =>
+        workers.map((w) => ({
+          ...w,
+          load: typeof w.load === 'number' ? w.load : 0,
+        })),
+      ),
+    );
   }
 
   getJobs(): Observable<Job[]> {
-    return this.http.get<Job[]>(`${this.baseUrl}/jobs`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+    return this.http.get<any[]>(`${this.baseUrl}/jobs`, { headers: this.getHeaders() }).pipe(
+      catchError(this.handleError),
+      map((jobs) =>
+        jobs.map((job) => ({
+          ...job,
+          id: job.job_id || job.id,
+        })) as Job[],
+      ),
+    );
   }
 
   getCharacters(): Observable<Character[]> {

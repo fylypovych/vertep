@@ -129,17 +129,21 @@ import { Worker } from '../core/models';
 
         <div class="bg-white rounded-xl border border-slate-200 p-5">
           <h3 class="text-lg font-semibold text-slate-900 mb-4">Ресурси системи</h3>
-          <div class="space-y-4">
-            <div *ngFor="let resource of resources">
-              <div class="flex justify-between text-sm mb-1">
-                <span class="text-slate-600">{{ resource.label }}</span>
-                <span class="text-slate-900 font-medium">{{ resource.value }}%</span>
-              </div>
-              <div class="w-full bg-slate-100 rounded-full h-2">
-                <div class="h-2 rounded-full" [class]="resource.color" [style.width.%]="resource.value"></div>
+          @if (resources.length) {
+            <div class="space-y-4">
+              <div *ngFor="let resource of resources">
+                <div class="flex justify-between text-sm mb-1">
+                  <span class="text-slate-600">{{ resource.label }}</span>
+                  <span class="text-slate-900 font-medium">{{ resource.value }}%</span>
+                </div>
+                <div class="w-full bg-slate-100 rounded-full h-2">
+                  <div class="h-2 rounded-full" [class]="resource.color" [style.width.%]="resource.value"></div>
+                </div>
               </div>
             </div>
-          </div>
+          } @else {
+            <p class="text-sm text-slate-500">Дані про ресурси недоступні.</p>
+          }
         </div>
 
         <div class="bg-white rounded-xl border border-slate-200 p-5">
@@ -229,11 +233,13 @@ export class DashboardComponent implements OnInit {
           cancelled: 0,
           waiting: 0,
         };
-        this.resources = [
-          { label: 'CPU', value: status.resources?.cpu || 0, color: 'bg-emerald-500' },
-          { label: 'RAM', value: status.resources?.ram || 0, color: 'bg-blue-500' },
-          { label: 'Диск', value: status.resources?.disk || 0, color: 'bg-amber-500' },
-        ];
+        this.resources = status.resources
+          ? [
+              { label: 'CPU', value: status.resources.cpu || 0, color: 'bg-emerald-500' },
+              { label: 'RAM', value: status.resources.ram || 0, color: 'bg-blue-500' },
+              { label: 'Диск', value: status.resources.disk || 0, color: 'bg-amber-500' },
+            ]
+          : [];
       },
       error: (err) => {
         this.error = err.message || 'Не вдалося завантажити дані системи';
