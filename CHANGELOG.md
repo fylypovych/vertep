@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.14
+- Розширено `Content-Security-Policy` у `core/app.py`: додано `img-src 'self' data:` щоб уникнути блокування inline-SVG favicon із `web/index.html` (CSP `default-src 'self'` інакше забороняє `data:` URI для зображень).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.13
 - Видалено CDN `cdn.tailwindcss.com` та inline `tailwind.config` з `web-v2/src/index.html`; Tailwind CSS 4 працює виключно через локальний PostCSS build.
 - Виправлено `web-v2/src/styles.css`: замінено `@tailwind` директиви на `@import "tailwindcss"` (Tailwind 4 синтаксис), додано `@theme` з кастомними кольорами Vertep.
