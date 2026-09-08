@@ -4,7 +4,7 @@ config/secret-store.passphrase
 __pycache__/
 .pytest_cache/
 /jobs/
-logs/
+/logs/
 backups/
 runtime/
 .vertep-last-good

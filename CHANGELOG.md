@@ -1,5 +1,11 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.22
+- Відновлено складання Web UI V2: компонент Logs тепер входить до Git і підключений до реального `GET /api/logs` із фільтрами та станами завантаження, помилки й порожнього результату.
+- Уточнено TypeScript-модель запису логу відповідно до фактичного backend contract.
+- Усунуто неоднозначність Browser E2E для версій Update Center за допомогою стабільних `data-testid` без послаблення перевірки значень.
+- Додано актуальний план завершення Web UI V2 на основі аудиту commit `3255a7a5` із чесними статусами, залежностями та acceptance criteria.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.21
 - Реалізовано Settings V2 секції: Сховище секретів (V2-501), Моделі Ollama (V2-502), Центр оновлень з rolling update та canary (V2-503), Бекапи/відновлення (V2-504), Інтеграції та сертифікати (V2-505).
 - Додано API методи: secrets CRUD, models pull/delete, update check/install/restart/readiness/rolling, backups list/create/restore, integrations status, certificates renew.

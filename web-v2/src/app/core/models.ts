@@ -245,8 +245,12 @@ export interface LogEntry {
   level: string;
   message: string;
   timestamp?: string;
+  logger?: string;
   job_id?: string;
   node_name?: string;
+  action?: string;
+  actor?: string;
+  exception?: string;
   details?: Record<string, unknown>;
 }
 

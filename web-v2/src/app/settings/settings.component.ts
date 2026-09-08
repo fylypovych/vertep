@@ -127,11 +127,11 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <span class="text-xs text-slate-500">Поточна версія</span>
-              <p class="text-sm font-medium text-slate-900">{{ systemStatus()?.update?.['current_version'] || '—' }}</p>
+              <p class="text-sm font-medium text-slate-900" data-testid="status-update-current-version">{{ systemStatus()?.update?.['current_version'] || '—' }}</p>
             </div>
             <div>
               <span class="text-xs text-slate-500">Доступна версія</span>
-              <p class="text-sm font-medium text-slate-900">{{ systemStatus()?.update?.['available_version'] || '—' }}</p>
+              <p class="text-sm font-medium text-slate-900" data-testid="status-update-available-version">{{ systemStatus()?.update?.['available_version'] || '—' }}</p>
             </div>
             <div>
               <span class="text-xs text-slate-500">Стан</span>

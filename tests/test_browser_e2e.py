@@ -311,10 +311,8 @@ def test_settings_update_shows_correct_version():
             "update": {"current_version": "0.0.1.19", "available_version": "0.0.1.20", "state": "IDLE", "update_available": True},
         }))
         page.goto(f"{BASE_URL}/settings")
-        expect(page.locator("text=Поточна версія")).to_be_visible()
-        page.locator("[data-testid='settings-page']").get_by_text("0.0.1.19").first.wait_for()
-        expect(page.locator("text=Доступна версія")).to_be_visible()
-        page.locator("[data-testid='settings-page']").get_by_text("0.0.1.20").first.wait_for()
+        expect(page.locator("[data-testid='status-update-current-version']")).to_have_text("0.0.1.19")
+        expect(page.locator("[data-testid='status-update-available-version']")).to_have_text("0.0.1.20")
         browser.close()
 
 
