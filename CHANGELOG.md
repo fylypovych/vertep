@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.25
+- Видалено `test_web_ui_contracts.py` з git tracking: файл потребує локального CONFIG_ROOT і ADMIN_PASSWORD, несумісний з CI без додаткового налаштування.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.24
 - Виправлено contract tests для CI: додано `auth=_auth()` для endpoint що потребують авторизації при наявності `ADMIN_PASSWORD`.
 
