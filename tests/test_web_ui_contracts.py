@@ -1,6 +1,7 @@
 """Contract tests for Web UI V2 — verifies backend payload shapes
 used by the Angular frontend match expected TypeScript models."""
 import json
+import os
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +10,10 @@ from core.app import app
 
 def _client():
     return TestClient(app, raise_server_exceptions=False)
+
+
+def _auth():
+    return ("admin", os.getenv("ADMIN_PASSWORD", "test-admin-pw-long"))
 
 
 # ── Jobs ──────────────────────────────────────────────────────────
@@ -114,7 +119,7 @@ def test_character_crud_contract(monkeypatch, tmp_path):
 
 def test_status_shape():
     client = _client()
-    resp = client.get("/api/status")
+    resp = client.get("/api/status", auth=_auth())
     assert resp.status_code == 200
     status = resp.json()
     for key in ("core", "postgres", "redis", "storage"):
@@ -188,10 +193,9 @@ def test_integrations_shape():
 
 # ── Secrets ───────────────────────────────────────────────────────
 
-def test_secrets_shape(monkeypatch):
-    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-pw-long")
+def test_secrets_shape():
     client = _client()
-    resp = client.get("/api/settings/secrets", auth=("admin", "test-admin-pw-long"))
+    resp = client.get("/api/settings/secrets", auth=_auth())
     assert resp.status_code == 200
     data = resp.json()
     assert "secrets" in data
@@ -202,10 +206,9 @@ def test_secrets_shape(monkeypatch):
 
 # ── System Roles ──────────────────────────────────────────────────
 
-def test_system_roles_shape(monkeypatch):
-    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-pw-long")
+def test_system_roles_shape():
     client = _client()
-    resp = client.get("/api/system/roles", auth=("admin", "test-admin-pw-long"))
+    resp = client.get("/api/system/roles", auth=_auth())
     assert resp.status_code == 200
     data = resp.json()
     for key in ("node_role", "active_roles", "available_roles"):
@@ -216,12 +219,11 @@ def test_system_roles_shape(monkeypatch):
 
 # ── Node Registration Token ───────────────────────────────────────
 
-def test_registration_token_shape(monkeypatch):
-    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-pw-long")
+def test_registration_token_shape():
     client = _client()
     resp = client.post("/api/nodes/registration-tokens",
                        json={"role": "gpu"},
-                       auth=("admin", "test-admin-pw-long"))
+                       auth=_auth())
     assert resp.status_code == 200
     token = resp.json()
     for key in ("token", "role", "expires_at"):
@@ -423,7 +425,7 @@ def test_maintenance_cleanup_dry_run():
 
 def test_registration_token_returns_ttl():
     client = _client()
-    resp = client.post("/api/nodes/registration-tokens", json={"role": "gpu"})
+    resp = client.post("/api/nodes/registration-tokens", json={"role": "gpu"}, auth=_auth())
     assert resp.status_code == 200
     token = resp.json()
     assert "token" in token
@@ -433,7 +435,7 @@ def test_registration_token_returns_ttl():
 
 def test_registration_token_rejects_invalid_role():
     client = _client()
-    resp = client.post("/api/nodes/registration-tokens", json={"role": "nonexistent"})
+    resp = client.post("/api/nodes/registration-tokens", json={"role": "nonexistent"}, auth=_auth())
     assert resp.status_code == 422
 
 
@@ -446,7 +448,7 @@ def test_node_detail_has_typed_fields():
         "node_name": node_name, "vram_mb": 4096,
         "gpu_name": "RTX 4090", "role": "gpu",
     })
-    resp = client.get(f"/api/nodes/{node_name}")
+    resp = client.get(f"/api/nodes/{node_name}", auth=_auth())
     assert resp.status_code == 200
     detail = resp.json()
     assert "hardware" in detail
@@ -464,7 +466,7 @@ def test_worker_action_drain_accepted():
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 2048, "role": "gpu",
     })
-    resp = client.post(f"/api/nodes/{node_name}/actions", json={"action": "drain"})
+    resp = client.post(f"/api/nodes/{node_name}/actions", json={"action": "drain"}, auth=_auth())
     assert resp.status_code == 200
     data = resp.json()
     assert "status" in data
@@ -476,13 +478,13 @@ def test_worker_action_logs_accepted():
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 1024, "role": "text",
     })
-    resp = client.post(f"/api/nodes/{node_name}/actions", json={"action": "logs"})
+    resp = client.post(f"/api/nodes/{node_name}/actions", json={"action": "logs"}, auth=_auth())
     assert resp.status_code == 200
 
 
 def test_worker_action_unsupported_rejected():
     client = _client()
-    resp = client.post("/api/nodes/nonexistent/actions", json={"action": "nonexistent"})
+    resp = client.post("/api/nodes/nonexistent/actions", json={"action": "nonexistent"}, auth=_auth())
     assert resp.status_code == 422
 
 
@@ -490,7 +492,7 @@ def test_worker_action_unsupported_rejected():
 
 def test_roles_get_returns_deployment_and_queued():
     client = _client()
-    resp = client.get("/api/system/roles")
+    resp = client.get("/api/system/roles", auth=_auth())
     assert resp.status_code == 200
     data = resp.json()
     assert "active_roles" in data
@@ -506,7 +508,7 @@ def test_roles_get_returns_deployment_and_queued():
 
 def test_roles_post_returns_state_and_message():
     client = _client()
-    resp = client.post("/api/system/roles", json={"roles": []})
+    resp = client.post("/api/system/roles", json={"roles": []}, auth=_auth())
     assert resp.status_code == 200
     data = resp.json()
     assert "state" in data

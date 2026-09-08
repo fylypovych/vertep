@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.24
+- Виправлено contract tests для CI: додано `auth=_auth()` для endpoint що потребують авторизації при наявності `ADMIN_PASSWORD`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.23
 - Типізовано `NodeDetail.hardware` та `NodeDetail.runtime` через `WorkerHardware`/`WorkerRuntime` замість `Record<string, unknown>`.
 - Розширено `NodeAction.action` regex: додано `update`, `rotate`, `revoke`.
