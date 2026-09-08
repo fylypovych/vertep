@@ -5,7 +5,7 @@ import { Router } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
-import { Job } from '../core/models';
+import { Job, Character, Brand, Workflow, JobCreate } from '../core/models';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
 @Component({
@@ -31,9 +31,9 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
             <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
           }
         </div>
-      } @else if (error) {
+      } @else if (error()) {
         <div class="bg-red-50 border border-red-200 rounded-xl p-5">
-          <p class="text-red-700">{{ error }}</p>
+          <p class="text-red-700">{{ error() }}</p>
           <button (click)="loadJobs()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
         </div>
       } @else {
@@ -48,9 +48,9 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
               </tr>
             </thead>
             <tbody>
-              @for (job of pagedJobs; track job.id) {
+              @for (job of pagedJobs; track job.job_id) {
                 <tr class="border-t border-slate-100">
-                  <td class="px-4 py-3 font-medium text-slate-900">{{ job.id }}</td>
+                  <td class="px-4 py-3 font-medium text-slate-900">{{ job.job_id }}</td>
                   <td class="px-4 py-3">
                     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
                       [class.bg-emerald-50]="isActive(job.status)"
@@ -62,8 +62,8 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                   </td>
                   <td class="px-4 py-3">{{ job.created_at | vertepDate }}</td>
                   <td class="px-4 py-3">
-                    <button (click)="openJob(job.id)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Відкрити</button>
-                    <button (click)="deleteJob(job.id)" class="text-red-600 hover:text-red-700 text-sm font-medium">Видалити</button>
+                    <button (click)="openJob(job.job_id)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Відкрити</button>
+                    <button (click)="deleteJob(job.job_id)" class="text-red-600 hover:text-red-700 text-sm font-medium">Видалити</button>
                   </td>
                 </tr>
               } @empty {
@@ -84,17 +84,84 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
     <!-- Create Job Modal -->
     <div *ngIf="showCreateModal" data-testid="create-job-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
+      <div class="bg-white rounded-xl p-6 w-full max-w-lg mx-4">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Нове завдання</h3>
         <div class="space-y-4">
           <div>
             <label class="block text-sm font-medium text-slate-700 mb-1">Тема</label>
-            <input [(ngModel)]="newJobTopic" data-testid="job-topic-input" placeholder="Наприклад, Історія про діда Самогонщика" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <input [(ngModel)]="newJob.topic" data-testid="job-topic-input" placeholder="Наприклад, Історія про діда Самогонщика" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
           </div>
-          <div class="flex items-center gap-2">
-            <input type="checkbox" [(ngModel)]="newJobScheduled" id="scheduled">
-            <label for="scheduled" class="text-sm text-slate-700">Запланувати</label>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Персонаж</label>
+              <select [(ngModel)]="newJob.character_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="">За замовчуванням</option>
+                @for (character of characters(); track character.id) {
+                  <option [value]="character.id">{{ character.name }} ({{ character.id }})</option>
+                }
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Бренд</label>
+              <select [(ngModel)]="newJob.brand_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="">За замовчуванням</option>
+                @for (brand of brands(); track brand.id) {
+                  <option [value]="brand.id">{{ brand.name }} ({{ brand.id }})</option>
+                }
+              </select>
+            </div>
           </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Пріоритет (1-10)</label>
+              <input type="number" [(ngModel)]="newJob.priority" min="1" max="10" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Тип завдання</label>
+              <select [(ngModel)]="newJob.task_type" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="image">Зображення</option>
+                <option value="video">Відео</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Workflow</label>
+              <select [(ngModel)]="newJob.workflow" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="">Без workflow</option>
+                @for (workflow of workflows(); track workflow.name) {
+                  <option [value]="workflow.name">{{ workflow.kind }}/{{ workflow.name }}</option>
+                }
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Співвідношення сторін</label>
+              <select [(ngModel)]="newJob.aspect_ratio" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="16:9">16:9</option>
+                <option value="9:16">9:16</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Вихідний preset</label>
+              <select [(ngModel)]="newJob.output_preset" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="youtube">YouTube</option>
+                <option value="tiktok">TikTok</option>
+                <option value="instagram">Instagram</option>
+                <option value="facebook">Facebook</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="checkbox" [(ngModel)]="newJobScheduled" id="scheduled">
+              <label for="scheduled" class="text-sm text-slate-700">Запланувати</label>
+            </div>
+          </div>
+
           <div *ngIf="newJobScheduled">
             <label class="block text-sm font-medium text-slate-700 mb-1">Дата та час</label>
             <input type="datetime-local" [(ngModel)]="newJobDate" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
@@ -111,26 +178,43 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
 export class JobsComponent implements OnInit {
   jobs: Job[] = [];
   loading = signal(false);
-  error: string | null = null;
+  error = signal<string | null>(null);
   showCreateModal = false;
-  newJobTopic = '';
-  newJobScheduled = false;
-  newJobDate = '';
   creating = false;
   search = '';
   page = 1;
   pageSize = 10;
 
+  characters = signal<Character[]>([]);
+  brands = signal<Brand[]>([]);
+  workflows = signal<Workflow[]>([]);
+
+  newJob: Partial<JobCreate> = {
+    topic: '',
+    character_id: '',
+    priority: 5,
+    task_type: 'image',
+    brand_id: '',
+    aspect_ratio: '16:9',
+    output_preset: 'youtube',
+    workflow: '',
+  };
+  newJobScheduled = false;
+  newJobDate = '';
+
   constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router) {}
 
   ngOnInit(): void {
     this.loadJobs();
+    this.loadCharacters();
+    this.loadBrands();
+    this.loadWorkflows();
   }
 
   get filteredJobs(): Job[] {
     if (!this.search.trim()) return this.jobs;
     const term = this.search.toLowerCase();
-    return this.jobs.filter(j => (j.id || '').toLowerCase().includes(term));
+    return this.jobs.filter(j => (j.job_id || '').toLowerCase().includes(term));
   }
 
   get pagedJobs(): Job[] {
@@ -138,22 +222,43 @@ export class JobsComponent implements OnInit {
     return this.filteredJobs.slice(start, start + this.pageSize);
   }
 
-  get pages(): number {
+  get pages() {
     return Math.max(1, Math.ceil(this.filteredJobs.length / this.pageSize));
   }
 
   loadJobs(): void {
     this.loading.set(true);
-    this.error = null;
+    this.error.set(null);
     this.api.getJobs().subscribe({
       next: (jobs) => {
         this.jobs = jobs;
         this.loading.set(false);
       },
       error: (err) => {
-        this.error = err.message;
+        this.error.set(err.message);
         this.loading.set(false);
       },
+    });
+  }
+
+  loadCharacters(): void {
+    this.api.getCharacters().subscribe({
+      next: (characters) => this.characters.set(characters),
+      error: () => {},
+    });
+  }
+
+  loadBrands(): void {
+    this.api.getBrands().subscribe({
+      next: (brands) => this.brands.set(brands),
+      error: () => {},
+    });
+  }
+
+  loadWorkflows(): void {
+    this.api.getWorkflows().subscribe({
+      next: (workflows) => this.workflows.set(workflows),
+      error: () => {},
     });
   }
 
@@ -162,18 +267,36 @@ export class JobsComponent implements OnInit {
   }
 
   openCreateModal(): void {
-    this.showCreateModal = true;
-    this.newJobTopic = '';
+    this.newJob = {
+      topic: '',
+      character_id: '',
+      priority: 5,
+      task_type: 'image',
+      brand_id: '',
+      aspect_ratio: '16:9',
+      output_preset: 'youtube',
+      workflow: '',
+    };
     this.newJobScheduled = false;
     this.newJobDate = '';
+    this.showCreateModal = true;
   }
 
   createJob(): void {
-    if (!this.newJobTopic.trim()) return;
+    if (!this.newJob.topic?.trim()) return;
     this.creating = true;
-    const payload: any = { topic: this.newJobTopic };
+    const payload: JobCreate = {
+      topic: this.newJob.topic,
+      character_id: this.newJob.character_id || undefined,
+      priority: this.newJob.priority || 5,
+      task_type: this.newJob.task_type || 'image',
+      brand_id: this.newJob.brand_id || undefined,
+      aspect_ratio: this.newJob.aspect_ratio || '16:9',
+      output_preset: this.newJob.output_preset || 'youtube',
+      workflow: this.newJob.workflow || undefined,
+    };
     if (this.newJobScheduled && this.newJobDate) {
-      payload.scheduled_at = this.newJobDate;
+      payload.scheduled_for = this.newJobDate;
     }
     this.api.createJob(payload).subscribe({
       next: () => {
@@ -182,7 +305,7 @@ export class JobsComponent implements OnInit {
         this.toast.show('Завдання створено', 'success');
       },
       error: (err) => {
-        this.error = err.message;
+        this.error.set(err.message);
         this.creating = false;
         this.toast.show(err.message || 'Помилка створення', 'error');
       },

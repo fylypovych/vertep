@@ -230,6 +230,21 @@ return cjson.encode(task)
         with self._lock:
             return [dict(item) for item in self._dead_letters]
 
+    def ready_tasks(self) -> list[dict]:
+        if self._redis:
+            return [json.loads(raw) for raw in self._redis.zrange("vertep:tasks:ready", 0, -1)]
+        with self._lock:
+            return [dict(row[2]) for row in self._local]
+
+    def inflight_tasks(self) -> list[dict]:
+        if self._redis:
+            raw_values = self._redis.hvals("vertep:tasks:inflight")
+            return [json.loads(raw)["task"] for raw in raw_values]
+        with self._lock:
+            return [dict(record[1]) for record in self._inflight.values()]
+        with self._lock:
+            return [dict(item) for item in self._dead_letters]
+
     def requeue_dead_letter(self, task_id: str) -> dict | None:
         if self._redis:
             rows = self._redis.lrange("vertep:tasks:dead", 0, -1)

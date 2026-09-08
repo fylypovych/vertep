@@ -4,19 +4,122 @@ export interface Worker {
   role: string;
   status: string;
   capabilities: string[];
-  load?: number;
   vram_mb?: number;
   ram_mb?: number;
-  uptime?: string;
+  free_vram_mb?: number;
   gpu_name?: string;
+  gpu_load?: number;
+  cpu_load?: number;
+  temperature?: number;
+  version?: string;
+  runtime_version?: string;
+  current_job?: string;
+  current_task?: string;
+  supported_tasks?: string[];
+  supported_workflows?: string[];
+  tested_capabilities?: string[];
+  disk_free_mb?: number;
+}
+
+export interface NodeDetail extends Worker {
+  hardware: Record<string, unknown>;
+  certificate_serial?: string;
+  certificate_expires_at?: string;
+  credential_generation?: number;
+  registered_at?: string;
+  revoked_at?: string | null;
+  runtime?: Record<string, unknown>;
+  self_test?: Record<string, unknown>;
+  update_state: {
+    desired_state?: string;
+    update_target_version?: string;
+    rollback_target_version?: string;
+    self_test_requested_at?: string | null;
+  };
+}
+
+export interface AttemptRecord {
+  attempt: number;
+  status: string;
+  started_at: string;
+  completed_at?: string;
+  node_name?: string;
+  error?: string;
+}
+
+export interface StageRecord {
+  name: string;
+  status: string;
+  attempts: AttemptRecord[];
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface SceneRecord {
+  scene_id: string;
+  index: number;
+  prompt: string;
+  video_prompt?: string;
+  voiceover?: string;
+  duration?: number;
+  status: string;
+  task_id?: string;
+  assigned_worker?: string;
+  artifact_ids: string[];
+  attempts: AttemptRecord[];
+}
+
+export interface ArtifactRecord {
+  artifact_id: string;
+  name: string;
+  kind: string;
+  size: number;
+  mime_type: string;
+  valid: boolean;
+  path?: string;
+  url?: string;
+  filename?: string;
+  created_at?: string;
+  sha256?: string;
+  scene_id?: string;
+  task_id?: string;
+  node_name?: string;
+  workflow?: string;
 }
 
 export interface Job {
-  id: string;
+  job_id: string;
+  topic: string;
+  character_id: string;
+  priority: number;
   status: string;
-  title?: string;
-  created_at?: string;
-  updated_at?: string;
+  created_at: string;
+  source: string;
+  retries: number;
+  approved: boolean;
+  approved_channels: string[];
+  approval_status: string;
+  published_to: string[];
+  publication_results: Record<string, PublicationResult>;
+  task_type: string;
+  min_vram_mb: number;
+  max_retries: number;
+  brand_id: string;
+  aspect_ratio: string;
+  output_preset: string;
+  version: number;
+  stages: Record<string, StageRecord>;
+  scenes: SceneRecord[];
+  artifacts: ArtifactRecord[];
+  active_task_ids: Record<string, string>;
+  completed_task_ids: string[];
+  script?: Record<string, unknown>;
+  events: string[];
+  output_path?: string;
+  assigned_worker?: string;
+  workflow?: string;
+  active_task_id?: string;
+  scheduled_for?: string;
 }
 
 export interface Character {
@@ -24,11 +127,49 @@ export interface Character {
   name: string;
   language: string;
   enabled: boolean;
-  system_prompt?: string;
-  voice?: { provider: string; voice: string };
-  visual?: { style: string; aspect_ratio: string };
-  generation?: { workflow: string; min_vram_mb: number; max_retries: number };
-  publishing?: { enabled: boolean };
+  system_prompt: string;
+  voice: Record<string, unknown>;
+  visual: Record<string, unknown>;
+  generation: Record<string, unknown>;
+  publishing: Record<string, unknown>;
+  workflow?: string;
+}
+
+export type ChannelType = string;
+
+export interface Brand {
+  id: string;
+  name: string;
+  enabled: boolean;
+  metadata: Record<string, unknown>;
+  publishing: Record<string, unknown>;
+}
+
+export interface Channel {
+  channel_id: string;
+  brand_id: string;
+  channel_type: string;
+  target: string;
+  enabled: boolean;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface SystemRole {
+  id: string;
+  label: string;
+  count?: number;
+  services?: string[];
+  capabilities?: string[];
+  deployment_status?: string;
+}
+
+export interface SystemRolesResponse {
+  node_role: string;
+  active_roles: string[];
+  available_roles: SystemRole[];
+  deployment?: Record<string, unknown>;
+  queued?: boolean;
 }
 
 export interface ProviderSlot {
@@ -55,4 +196,267 @@ export interface SystemStatus {
   ollama?: string;
   update?: Record<string, unknown>;
   workers?: Worker[];
+  checks?: Record<string, [boolean, string]>;
+}
+
+export interface JobCreate {
+  topic: string;
+  character_id?: string;
+  priority?: number;
+  source?: string;
+  task_type?: string;
+  min_vram_mb?: number;
+  brand_id?: string;
+  workflow?: string;
+  aspect_ratio?: string;
+  output_preset?: string;
+  scheduled_for?: string;
+}
+
+export interface JobUpdate {
+  expected_version?: number;
+  script?: Record<string, unknown>;
+  prompt?: string;
+  character_id?: string;
+  priority?: number;
+  workflow?: string;
+  topic?: string;
+}
+
+export interface Workflow {
+  kind: string;
+  name: string;
+}
+
+export interface Alert {
+  severity: 'error' | 'warning' | 'info';
+  type: string;
+  message?: string;
+  job_id?: string;
+  node_name?: string;
+  task_id?: string;
+  operation_id?: string;
+  updated_at?: string;
+  state?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface LogEntry {
+  level: string;
+  message: string;
+  timestamp?: string;
+  job_id?: string;
+  node_name?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface PublicationResult {
+  channel: string;
+  status: string;
+  url?: string;
+  id?: string;
+  error?: string;
+  upload?: { mode?: string; bytes?: number; parts?: number };
+  target?: string;
+}
+
+export interface SecretStatus {
+  secrets: Record<string, boolean>;
+  values_exposed: boolean;
+}
+
+export interface IntegrationStatus {
+  ollama: { status: string; http_status?: number; error?: string };
+  comfyui: { status: string; http_status?: number; error?: string };
+}
+
+export interface ModelInfo {
+  name: string;
+  size?: number;
+  details?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface BackupInfo {
+  snapshot_id: string;
+  created_at?: string;
+  size_bytes?: number;
+  state?: string;
+  [key: string]: unknown;
+}
+
+export interface UpdateReadiness {
+  ready: boolean;
+  active_jobs: string[];
+  busy_workers: string[];
+  queue_paused: boolean;
+  inflight: number;
+  drain_operation_id: string;
+  acknowledged_workers: string[];
+  unacknowledged_workers: string[];
+}
+
+export interface RollingStatus {
+  current_batch?: number;
+  total_batches?: number;
+  canary?: { promoted?: boolean; rolled_back?: boolean };
+  operation_id?: string;
+  state?: string;
+  [key: string]: unknown;
+}
+
+export interface QueueTask {
+  job_id: string;
+  task: string;
+  priority: number;
+  min_vram_mb: number;
+  workflow?: string;
+  topic: string;
+  script?: Record<string, unknown>;
+  task_id: string;
+  scene_id: string;
+  not_before?: string;
+  enqueued_at: string;
+}
+
+export interface DeadLetterTask extends QueueTask {
+  error: string;
+  failed_at: string;
+}
+
+export interface NodeActionPayload {
+  action: 'drain' | 'resume' | 'quarantine' | 'unquarantine' | 'self-test' | 'disable' | 'enable' | 'restart' | 'logs' | 'update';
+  reason?: string;
+}
+
+export interface RollingUpdateRequest {
+  target_version: string;
+  node_ids?: string[];
+  order?: 'workers-first' | 'core-first' | 'custom';
+  update_timeout_seconds?: number;
+  canary?: boolean;
+}
+
+export interface TelegramStatus {
+  configured: boolean;
+  webhook_url?: string;
+  public_url?: string;
+  webhook_secret_configured?: boolean;
+  allowed_chat_ids?: string;
+  admin_chat_ids?: string;
+  polling_enabled?: boolean;
+  polling_status?: string;
+  bot_username?: string;
+  last_update_id?: number;
+  last_message_at?: string;
+}
+
+export interface TelegramBotInfo {
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  id?: number;
+  is_bot?: boolean;
+}
+
+export interface UpdateStatus {
+  state: 'IDLE' | 'PENDING' | 'RUNNING' | 'FAILED' | 'ROLLED_BACK';
+  phase?: string;
+  action?: string;
+  message: string;
+  updated_at?: string;
+  current_version: string;
+  available_version?: string;
+  update_available?: boolean;
+  request_id?: string;
+  progress: number;
+  log: string[];
+  enabled: boolean;
+  pending: number;
+}
+
+export interface SystemState {
+  state: 'NORMAL' | 'MAINTENANCE' | 'UPDATING' | 'RECOVERING' | 'READ_ONLY' | 'EMERGENCY';
+  updated_at?: string;
+  reason?: string;
+  operation_id?: string;
+}
+
+export interface HealthCheck {
+  status: string;
+  service: string;
+  jobs: number;
+  checks: Record<string, [boolean, string]>;
+}
+
+export interface RegistrationTokenResponse {
+  token: string;
+  role: string;
+  expires_at: string;
+  push_token: boolean;
+}
+
+export interface NodeRegisterRequest {
+  registration_token: string;
+  node_id: string;
+  capabilities: string[];
+  hardware: Record<string, unknown>;
+  version: string;
+  csr: string;
+}
+
+export interface NodeRegisterResponse {
+  worker_id: string;
+  role: string;
+  status: string;
+  jwt: string;
+  worker_secret: string;
+  certificate: string;
+  core_certificate: string;
+  configuration: {
+    capabilities: string[];
+    heartbeat_seconds: number;
+  };
+}
+
+export interface ArtifactVerifyResponse {
+  job_id: string;
+  valid: boolean;
+  results: Array<{
+    artifact_id: string;
+    valid: boolean;
+    error?: string;
+  }>;
+}
+
+export interface QueueTaskSummary {
+  task_id: string;
+  job_id: string;
+  task: string;
+  priority: number;
+  scene_id?: string;
+  enqueued_at?: number;
+  workflow?: string;
+}
+
+export interface QueueState {
+  ready: QueueTaskSummary[];
+  inflight: QueueTaskSummary[];
+}
+
+export interface HealthHistoryEntry {
+  timestamp: string;
+  role: string;
+  status: string;
+  checks: Record<string, [boolean, string]>;
+}
+
+export interface ScheduledJob {
+  job_id: string;
+  topic: string;
+  character_id: string;
+  scheduled_for: string;
+  status: string;
+  created_at: string;
+  priority: number;
 }

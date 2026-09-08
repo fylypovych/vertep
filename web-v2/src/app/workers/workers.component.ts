@@ -1,15 +1,17 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
-import { Worker } from '../core/models';
+import { Worker, RegistrationTokenResponse } from '../core/models';
+import { NodeActionPayload } from '../core/models';
 
 @Component({
   selector: 'app-workers',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterModule],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-page">
       <div class="flex items-center justify-between mb-4">
@@ -48,27 +50,27 @@ import { Worker } from '../core/models';
               </tr>
             </thead>
             <tbody>
-              @for (worker of pagedWorkers; track worker.node_id) {
-                <tr class="border-t border-slate-100">
-                  <td class="px-4 py-3">
-                    <div class="font-medium text-slate-900">{{ worker.node_name }}</div>
-                    <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
-                  </td>
+               @for (worker of pagedWorkers; track worker.node_id) {
+                 <tr class="border-t border-slate-100">
+                   <td class="px-4 py-3">
+                     <a [routerLink]="['/workers', worker.node_id]" class="font-medium text-slate-900 hover:text-emerald-600">{{ worker.node_name }}</a>
+                     <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
+                   </td>
                   <td class="px-4 py-3">{{ worker.role }}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
                   <td class="px-4 py-3">
                     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
-                      [class.bg-emerald-50]="worker.status === 'ONLINE'"
-                      [class.text-emerald-700]="worker.status === 'ONLINE'"
-                      [class.bg-slate-100]="worker.status !== 'ONLINE'"
-                      [class.text-slate-600]="worker.status !== 'ONLINE'">
+                      [class.bg-emerald-50]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                      [class.text-emerald-700]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                      [class.bg-slate-100]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                      [class.text-slate-600]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)">
                       <span class="w-1.5 h-1.5 rounded-full"
-                        [class.bg-emerald-500]="worker.status === 'ONLINE'"
-                        [class.bg-slate-400]="worker.status !== 'ONLINE'"></span>
+                        [class.bg-emerald-500]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                        [class.bg-slate-400]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"></span>
                       {{ worker.status }}
                     </span>
                   </td>
-                  <td class="px-4 py-3">{{ worker.load || 0 }}%</td>
+                  <td class="px-4 py-3">{{ worker.gpu_load ?? worker.cpu_load ?? worker.vram_mb ?? 0 }}%{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
                   <td class="px-4 py-3">
                     <button (click)="openSettings(worker)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Налаштування</button>
                     <button (click)="deleteWorker(worker)" class="text-red-600 hover:text-red-700 text-sm font-medium">Видалити</button>
@@ -90,31 +92,70 @@ import { Worker } from '../core/models';
       }
     </div>
 
-    <!-- Worker Wizard Modal -->
+    <!-- Worker Onboarding Wizard -->
     <div *ngIf="showWizard" data-testid="worker-wizard-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Додати вузол</h3>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Назва вузла</label>
-            <input [(ngModel)]="wizard.name" placeholder="worker-01" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+
+        @if (!tokenResult()) {
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Роль</label>
+              <select [(ngModel)]="wizard.role" data-testid="worker-role-select" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="gpu">GPU-вузол</option>
+                <option value="text">Текстовий вузол</option>
+                <option value="voice">Голосовий вузол</option>
+                <option value="publisher">Вузол публікації</option>
+                <option value="backup">Вузол резервного копіювання</option>
+                <option value="monitoring">Вузол моніторингу</option>
+              </select>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+              <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
+              <button (click)="generateToken()" [disabled]="creating" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ creating ? 'Генерація...' : 'Згенерувати токен' }}</button>
+            </div>
           </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Роль</label>
-            <select [(ngModel)]="wizard.role" data-testid="worker-role-select" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-              <option value="gpu">GPU-вузол</option>
-              <option value="text">Текстовий вузол</option>
-              <option value="voice">Голосовий вузол</option>
-              <option value="publisher">Вузол публікації</option>
-              <option value="backup">Вузол резервного копіювання</option>
-              <option value="monitoring">Вузол моніторингу</option>
-            </select>
+        } @else if (pollingNode()) {
+          <div class="space-y-3">
+            <p class="text-sm text-slate-700">Очікування появи вузла в системі...</p>
+            <div class="flex items-center gap-3">
+              <div class="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+              <span class="text-sm text-slate-600">Перевірка /api/nodes</span>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
+              <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
+              <p><span class="font-medium">TTL:</span> {{ tokenResult()!.expires_at }}</p>
+              <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
+            </div>
           </div>
-        </div>
-        <div class="flex justify-end gap-2 mt-6">
-          <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-          <button (click)="createWorker()" [disabled]="creating" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ creating ? 'Створення...' : 'Додати' }}</button>
-        </div>
+        } @else if (registeredNode()) {
+          <div class="space-y-3">
+            <h4 class="text-sm font-medium text-emerald-900">Вузол зареєстровано</h4>
+            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
+              <p><span class="font-medium">ID:</span> {{ registeredNode()!.node_id }}</p>
+              <p><span class="font-medium">Назва:</span> {{ registeredNode()!.node_name }}</p>
+              <p><span class="font-medium">Роль:</span> {{ registeredNode()!.role }}</p>
+              <p><span class="font-medium">Статус:</span> {{ registeredNode()!.status }}</p>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+              <button (click)="closeWizard()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Закрити</button>
+            </div>
+          </div>
+        } @else {
+          <div class="space-y-3">
+            <p class="text-sm text-slate-700">Використовуйте ці дані для реєстрації вузла:</p>
+            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
+              <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
+              <p><span class="font-medium">TTL:</span> {{ tokenResult()!.expires_at }}</p>
+              <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
+              <p><span class="font-medium">Core URL:</span> https://{{ locationHost }}/api/nodes/register</p>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+              <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Закрити</button>
+              <button (click)="startPolling()" [disabled]="polling" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">{{ polling ? 'Очікування...' : 'Перевірити статус' }}</button>
+            </div>
+          </div>
+        }
       </div>
     </div>
 
@@ -151,11 +192,16 @@ export class WorkersComponent implements OnInit {
   selectedWorker: Worker | null = null;
   creating = false;
   actioning = false;
-  wizard: any = { name: '', role: 'gpu' };
+  wizard: any = { role: 'gpu' };
   workerAction = '';
   search = '';
   page = 1;
   pageSize = 10;
+  tokenResult = signal<RegistrationTokenResponse | null>(null);
+  pollingNode = signal(false);
+  registeredNode = signal<Worker | null>(null);
+  polling = false;
+  locationHost = window.location.host;
 
   constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
@@ -191,25 +237,73 @@ export class WorkersComponent implements OnInit {
   }
 
   openWizard(): void {
-    this.wizard = { name: '', role: 'gpu' };
+    this.wizard = { role: 'gpu' };
+    this.tokenResult.set(null);
+    this.pollingNode.set(false);
+    this.registeredNode.set(null);
     this.showWizard = true;
   }
 
-  createWorker(): void {
-    if (!this.wizard.name) return;
+  closeWizard(): void {
+    this.showWizard = false;
+    this.tokenResult.set(null);
+    this.pollingNode.set(false);
+    this.registeredNode.set(null);
+    this.loadWorkers();
+  }
+
+  generateToken(): void {
+    if (!this.wizard.role) return;
     this.creating = true;
-    this.api.createWorker(this.wizard).subscribe({
-      next: () => {
-        this.showWizard = false;
-        this.loadWorkers();
-        this.toast.show('Вузол додано', 'success');
+    this.api.createRegistrationToken(this.wizard.role).subscribe({
+      next: (token) => {
+        this.tokenResult.set(token);
+        this.creating = false;
+        this.toast.show('Токен згенеровано', 'success');
       },
       error: (err) => {
         this.error = err.message;
         this.creating = false;
-        this.toast.show(err.message || 'Помилка створення', 'error');
+        this.toast.show(err.message || 'Помилка генерації токена', 'error');
       },
     });
+  }
+
+  startPolling(): void {
+    this.polling = true;
+    this.pollingNode.set(true);
+    const token = this.tokenResult();
+    if (!token) return;
+
+    const maxAttempts = 12;
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      this.api.getNodes().subscribe({
+        next: (nodes) => {
+          const found = nodes.find(n => n.status === 'READY' || n.status === 'ONLINE');
+          if (found) {
+            clearInterval(interval);
+            this.registeredNode.set(found);
+            this.pollingNode.set(false);
+            this.polling = false;
+            this.toast.show('Вузол зареєстровано', 'success');
+          } else if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            this.pollingNode.set(false);
+            this.polling = false;
+            this.toast.show('Таймаут очікування реєстрації', 'error');
+          }
+        },
+        error: () => {
+          if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            this.pollingNode.set(false);
+            this.polling = false;
+          }
+        },
+      });
+    }, 5000);
   }
 
   openSettings(worker: Worker): void {
@@ -221,7 +315,7 @@ export class WorkersComponent implements OnInit {
   applyAction(): void {
     if (!this.selectedWorker || !this.workerAction) return;
     this.actioning = true;
-    this.api.workerAction(this.selectedWorker.node_id, this.workerAction).subscribe({
+    this.api.workerAction(this.selectedWorker.node_id, { action: this.workerAction as NodeActionPayload['action'] }).subscribe({
       next: () => {
         this.showSettings = false;
         this.loadWorkers();
@@ -236,14 +330,14 @@ export class WorkersComponent implements OnInit {
   }
 
   deleteWorker(worker: Worker): void {
-    this.confirm.confirm({ title: 'Видалити вузол', message: `Ви впевнені, що хочете видалити ${worker.node_name}?` }).subscribe((ok) => {
+    this.confirm.confirm({ title: 'Видалити вузол', message: `Ви впевнені, що хочете відкликати ${worker.node_name}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteWorker(worker.node_id).subscribe({
+      this.api.revokeNode(worker.node_id).subscribe({
         next: () => {
           this.loadWorkers();
-          this.toast.show('Вузол видалено', 'success');
+          this.toast.show('Вузол відкликано', 'success');
         },
-        error: (err) => this.toast.show(err.message || 'Помилка видалення', 'error'),
+        error: (err) => this.toast.show(err.message || 'Помилка відкликання', 'error'),
       });
     });
   }

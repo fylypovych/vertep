@@ -69,6 +69,20 @@ def delete_character(character_id: str):
     return {"deleted": character_id}
 
 
+@router.post("/api/brands")
+def create_brand(config: BrandConfig):
+    if not config.id:
+        raise HTTPException(400, "Brand ID is required")
+    if not SAFE_ID.fullmatch(config.id):
+        raise HTTPException(400, "Invalid brand ID")
+    directory = Path(os.getenv("BRANDS_ROOT", "brands")) / config.id
+    if directory.exists():
+        raise HTTPException(409, "Brand already exists")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "brand.json").write_text(config.model_dump_json(indent=2), encoding="utf-8")
+    return config
+
+
 @router.get("/api/brands")
 def brands():
     root = Path(os.getenv("BRANDS_ROOT", "brands"))

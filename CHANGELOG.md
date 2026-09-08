@@ -1,5 +1,11 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.21
+- Реалізовано Settings V2 секції: Сховище секретів (V2-501), Моделі Ollama (V2-502), Центр оновлень з rolling update та canary (V2-503), Бекапи/відновлення (V2-504), Інтеграції та сертифікати (V2-505).
+- Додано API методи: secrets CRUD, models pull/delete, update check/install/restart/readiness/rolling, backups list/create/restore, integrations status, certificates renew.
+- Розширено моделі: SecretStatus, IntegrationStatus, ModelInfo, BackupInfo, UpdateReadiness, RollingStatus.
+- Всі 258 unit-тестів та 13 browser E2E тестів проходять.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.20
 - Створено компонент Job Detail: перегляд усіх полів Job (ID, тема, статус, пріоритет, дата, персонаж, workflow, scenes, artifacts, історія подій).
 - Додано кнопку "Редагувати" у Job Detail: зміна теми, пріоритету, workflow; кнопку "Видалити" з confirm-діалогом.

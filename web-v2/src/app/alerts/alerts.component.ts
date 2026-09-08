@@ -1,0 +1,131 @@
+import { Component, OnInit, OnDestroy, signal } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { RouterModule } from '@angular/router';
+import { timer } from 'rxjs';
+import { VertepApiService } from '../core/api.service';
+import { ToastService } from '../core/services/toast.service';
+import { Alert } from '../core/models';
+
+@Component({
+  selector: 'app-alerts',
+  standalone: true,
+  imports: [CommonModule, RouterModule],
+  template: `
+    <div class="space-y-4" data-testid="alerts-page">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-semibold text-slate-900">Алерти</h3>
+        <button (click)="loadAlerts()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Оновити</button>
+      </div>
+
+      @if (loading()) {
+        <div class="space-y-3">
+          @for (_ of [1,2,3]; track $index) {
+            <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
+          }
+        </div>
+      } @else if (error()) {
+        <p class="text-red-600">{{ error() }}</p>
+      } @else if (alerts().length === 0) {
+        <p class="text-sm text-slate-500">Немає активних алертів</p>
+      } @else {
+        <div class="space-y-2">
+          @for (alert of alerts(); track alert.type + '_' + (alert.job_id || alert.node_name || alert.operation_id || $index)) {
+            <div class="bg-slate-50 rounded-lg p-3 flex items-start justify-between">
+              <div class="flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="px-2 py-0.5 rounded-full text-xs font-medium"
+                        [class.bg-red-50]="alert.severity === 'error'"
+                        [class.text-red-700]="alert.severity === 'error'"
+                        [class.bg-amber-50]="alert.severity === 'warning'"
+                        [class.text-amber-700]="alert.severity === 'warning'"
+                        [class.bg-blue-50]="alert.severity === 'info'"
+                        [class.text-blue-700]="alert.severity === 'info'">
+                    {{ alert.severity }}
+                  </span>
+                  <span class="text-sm font-medium text-slate-900">{{ alert.type }}</span>
+                </div>
+                @if (alert.message) {
+                  <p class="text-sm text-slate-600 mt-1">{{ alert.message }}</p>
+                }
+                <div class="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
+                  @if (alert.job_id) {
+                    <span>Job: {{ alert.job_id }}</span>
+                  }
+                  @if (alert.node_name) {
+                    <span>Node: {{ alert.node_name }}</span>
+                  }
+                  @if (alert.task_id) {
+                    <span>Task: {{ alert.task_id }}</span>
+                  }
+                  @if (alert.state) {
+                    <span>Стан: {{ alert.state }}</span>
+                  }
+                  @if (alert.updated_at) {
+                    <span>{{ formatDate(alert.updated_at) }}</span>
+                  }
+                </div>
+                @if (alert.details) {
+                <div class="mt-1 text-xs text-slate-500">
+                  <span class="font-mono">{{ jsonSummary(alert.details) }}</span>
+                </div>
+                }
+              </div>
+              @if (alert.job_id) {
+                <a [routerLink]="['/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium ml-2">Відкрити</a>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+  `,
+})
+export class AlertsComponent implements OnInit, OnDestroy {
+  loading = signal(false);
+  error = signal<string | null>(null);
+  alerts = signal<Alert[]>([]);
+  private pollTimer: any = null;
+
+  constructor(private api: VertepApiService, private toast: ToastService) {}
+
+  ngOnInit(): void {
+    this.loadAlerts();
+    this.pollTimer = timer(0, 10000).subscribe(() => this.loadAlerts());
+  }
+
+  ngOnDestroy(): void {
+    if (this.pollTimer) {
+      this.pollTimer.unsubscribe();
+    }
+  }
+
+  loadAlerts(): void {
+    this.loading.set(true);
+    this.error.set(null);
+    this.api.getAlerts().subscribe({
+      next: (alerts) => {
+        this.alerts.set(alerts);
+        this.loading.set(false);
+      },
+      error: (err) => {
+        this.error.set(err.message || 'Не вдалося завантажити алерти');
+        this.loading.set(false);
+      },
+    });
+  }
+
+  jsonSummary(obj: Record<string, unknown>): string {
+    try {
+      return JSON.stringify(obj);
+    } catch {
+      return '';
+    }
+  }
+
+  formatDate(timestamp: string | undefined): string {
+    if (!timestamp) {
+      return '';
+    }
+    return new Date(timestamp).toLocaleString('uk-UA');
+  }
+}

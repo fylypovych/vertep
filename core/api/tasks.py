@@ -96,6 +96,22 @@ def dead_letter_tasks():
     return task_queue.dead_letters()
 
 
+@router.get("/api/tasks/queue")
+def queue_tasks():
+    def _summary(task: dict) -> dict:
+        return {
+            "task_id": task.get("task_id", ""),
+            "job_id": task.get("job_id", ""),
+            "task": task.get("task", ""),
+            "priority": task.get("priority", 5),
+            "scene_id": task.get("scene_id", ""),
+            "enqueued_at": task.get("enqueued_at"),
+            "workflow": task.get("workflow", ""),
+        }
+    return {"ready": [_summary(t) for t in task_queue.ready_tasks()],
+            "inflight": [_summary(t) for t in task_queue.inflight_tasks()]}
+
+
 @router.post("/api/tasks/dead-letter/{task_id}/retry")
 def retry_dead_letter_task(task_id: str):
     queued = task_queue.requeue_dead_letter(task_id)

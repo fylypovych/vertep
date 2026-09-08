@@ -1,6 +1,7 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
@@ -9,7 +10,7 @@ import { Character } from '../core/models';
 @Component({
   selector: 'app-characters',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterModule],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="characters-page">
       <div class="flex items-center justify-between mb-4">
@@ -20,7 +21,7 @@ import { Character } from '../core/models';
       </div>
 
       <div class="mb-4">
-        <input [(ngModel)]="search" data-testid="characters-search" placeholder="Пошук за ім'ям або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <input [(ngModel)]="search" (input)="onSearch()" data-testid="characters-search" placeholder="Пошук за ім'ям або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
       @if (loading()) {
@@ -44,7 +45,7 @@ import { Character } from '../core/models';
               </div>
               <p class="text-sm text-slate-600 mb-3">{{ character.id }}</p>
               <div class="flex gap-2">
-                <button (click)="editCharacter(character)" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Редагувати</button>
+                <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">Редагувати</button>
                 <button (click)="deleteCharacter(character.id)" class="text-sm text-red-600 hover:text-red-700 font-medium">Видалити</button>
               </div>
             </div>
@@ -64,33 +65,72 @@ import { Character } from '../core/models';
 
     <!-- Character Form Modal -->
     <div *ngIf="showModal()" data-testid="character-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div class="bg-white rounded-xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
-        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ editingCharacter ? 'Редагувати персонажа' : 'Новий персонаж' }}</h3>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Ім'я персонажа</label>
-            <input [(ngModel)]="form.name" data-testid="character-name-input" placeholder="Наприклад, Дід Самогонщик" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      <div class="bg-white rounded-xl p-6 w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ editingId ? 'Редагувати персонажа' : 'Новий персонаж' }}</h3>
+        <div class="space-y-4 max-h-[70vh] overflow-y-auto">
+          <!-- Base metadata -->
+          <div class="border border-slate-200 rounded-lg p-3">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Основна інформація</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Назва</label>
+                <input [(ngModel)]="form.name" data-testid="character-name-input" placeholder="Наприклад, Дід Самогонщик" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Системний ID</label>
+                <input [(ngModel)]="form.id" data-testid="character-id-input" [disabled]="!editingId" placeholder="did_samogon" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm disabled:bg-slate-100">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
+                <select [(ngModel)]="form.language" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="uk">Українська</option>
+                  <option value="en">Англійська</option>
+                  <option value="pl">Польська</option>
+                  <option value="de">Німецька</option>
+                </select>
+              </div>
+              <div class="flex items-end">
+                <div class="flex items-center gap-2">
+                  <input type="checkbox" [(ngModel)]="form.enabled" id="enabled">
+                  <label for="enabled" class="text-sm text-slate-700">Персонаж активний</label>
+                </div>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-1">Workflow</label>
+                <input [(ngModel)]="form.workflow" placeholder="workflows/image/demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+            </div>
           </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Системний ідентифікатор</label>
-            <input [(ngModel)]="form.id" data-testid="character-id-input" placeholder="did_samogon" [disabled]="editingCharacter === null" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100">
+
+          <!-- System prompt -->
+          <div class="border border-slate-200 rounded-lg p-3">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Системний промпт</h4>
+            <textarea [(ngModel)]="form.system_prompt" placeholder="Опишіть стиль мовлення, характер, знання та обмеження персонажа." rows="6" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm resize-y"></textarea>
           </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
-            <select [(ngModel)]="form.language" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-              <option value="uk">Українська</option>
-              <option value="en">Англійська</option>
-              <option value="pl">Польська</option>
-              <option value="de">Німецька</option>
-            </select>
+
+          <!-- Voice config -->
+          <div class="border border-slate-200 rounded-lg p-3">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Голос (JSON)</h4>
+            <textarea [(ngModel)]="voiceJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ voiceJson }}</textarea>
           </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Опис характеру</label>
-            <textarea [(ngModel)]="form.system_prompt" placeholder="Опишіть стиль мовлення, характер, знання та обмеження персонажа." rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+
+          <!-- Visual config -->
+          <div class="border border-slate-200 rounded-lg p-3">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Візуал (JSON)</h4>
+            <textarea [(ngModel)]="visualJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ visualJson }}</textarea>
           </div>
-          <div class="flex items-center gap-2">
-            <input type="checkbox" [(ngModel)]="form.enabled" id="enabled">
-            <label for="enabled" class="text-sm text-slate-700">Персонаж активний</label>
+
+          <!-- Generation config -->
+          <div class="border border-slate-200 rounded-lg p-3">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Генерація (JSON)</h4>
+            <textarea [(ngModel)]="generationJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ generationJson }}</textarea>
+            <p class="text-xs text-slate-500 mt-1">Приклад: workflow, min_vram_mb, max_retries</p>
+          </div>
+
+          <!-- Publishing config -->
+          <div class="border border-slate-200 rounded-lg p-3">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Публікація (JSON)</h4>
+            <textarea [(ngModel)]="publishingJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ publishingJson }}</textarea>
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-6">
@@ -106,12 +146,16 @@ export class CharactersComponent implements OnInit {
   loading = signal(false);
   error = signal<string | null>(null);
   showModal = signal(false);
-  editingCharacter: Character | null = null;
+  editingId: string | null = null;
   form: Partial<Character> = {};
   saving = signal(false);
   search = '';
   page = 1;
   pageSize = 10;
+  voiceJson = '';
+  visualJson = '';
+  generationJson = '';
+  publishingJson = '';
 
   constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
@@ -141,24 +185,35 @@ export class CharactersComponent implements OnInit {
     this.loading.set(true);
     this.error.set(null);
     this.api.getCharacters().subscribe({
-      next: (characters) => { this.characters = characters; this.loading.set(false); },
+      next: (characters) => {
+        this.characters = characters.map(c => ({
+          ...c,
+          voice: typeof c.voice === 'object' ? c.voice : {},
+          visual: typeof c.visual === 'object' ? c.visual : {},
+          generation: typeof c.generation === 'object' ? c.generation : {},
+          publishing: typeof c.publishing === 'object' ? c.publishing : {},
+        }));
+        this.loading.set(false);
+      },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
   }
 
   openCreateModal(): void {
-    this.editingCharacter = null;
+    this.editingId = null;
     this.form = {
       id: this.generateId(),
       name: 'Новий персонаж',
       language: 'uk',
       enabled: true,
       system_prompt: '',
+      workflow: undefined,
       voice: { provider: 'none', voice: '' },
       visual: { style: '', aspect_ratio: '16:9' },
       generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
       publishing: { enabled: false },
     };
+    this.syncJsonFields();
     this.showModal.set(true);
   }
 
@@ -167,35 +222,56 @@ export class CharactersComponent implements OnInit {
   }
 
   editCharacter(character: Character): void {
-    this.editingCharacter = character;
+    this.editingId = character.id;
     this.form = { ...character };
+    this.syncJsonFields();
     this.showModal.set(true);
   }
 
   closeModal(): void {
     this.showModal.set(false);
-    this.editingCharacter = null;
+    this.editingId = null;
     this.form = {};
     this.saving.set(false);
   }
 
+  private syncJsonFields(): void {
+    this.voiceJson = JSON.stringify(this.form.voice || {}, null, 2);
+    this.visualJson = JSON.stringify(this.form.visual || {}, null, 2);
+    this.generationJson = JSON.stringify(this.form.generation || {}, null, 2);
+    this.publishingJson = JSON.stringify(this.form.publishing || {}, null, 2);
+  }
+
+  private parseJsonOrEmpty(text: string): Record<string, unknown> {
+    if (!text.trim()) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
   saveCharacter(): void {
-    if (!this.form.id || !this.form.name) return;
+    if (!this.form.id || !this.form.name) {
+      this.toast.show('ID та назва є обов\'язковими', 'error');
+      return;
+    }
     this.saving.set(true);
-    const payload = {
-      ...this.form,
+    const payload: Character = {
       id: this.form.id,
       name: this.form.name,
       language: this.form.language || 'uk',
       enabled: this.form.enabled !== false,
+      workflow: this.form.workflow || undefined,
       system_prompt: this.form.system_prompt || '',
-      voice: this.form.voice || { provider: 'none', voice: '' },
-      visual: this.form.visual || { style: '', aspect_ratio: '16:9' },
-      generation: this.form.generation || { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
-      publishing: this.form.publishing || { enabled: false },
+      voice: this.parseJsonOrEmpty(this.voiceJson),
+      visual: this.parseJsonOrEmpty(this.visualJson),
+      generation: this.parseJsonOrEmpty(this.generationJson),
+      publishing: this.parseJsonOrEmpty(this.publishingJson),
     };
 
-    const request = this.editingCharacter
+    const request = this.editingId
       ? this.api.updateCharacter(this.form.id, payload)
       : this.api.createCharacter(payload);
 
@@ -224,6 +300,10 @@ export class CharactersComponent implements OnInit {
         error: (err) => this.toast.show(err.message || 'Помилка видалення', 'error'),
       });
     });
+  }
+
+  onSearch(): void {
+    this.page = 1;
   }
 
   prevPage(): void {

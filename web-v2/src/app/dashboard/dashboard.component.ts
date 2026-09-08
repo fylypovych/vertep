@@ -203,17 +203,17 @@ const ROLE_LABELS: Record<string, string> = {
                     <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
                     <td class="px-4 py-3">
                       <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
-                        [class.bg-emerald-50]="worker.status === 'ONLINE'"
-                        [class.text-emerald-700]="worker.status === 'ONLINE'"
-                        [class.bg-slate-100]="worker.status !== 'ONLINE'"
-                        [class.text-slate-600]="worker.status !== 'ONLINE'">
+                        [class.bg-emerald-50]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                        [class.text-emerald-700]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                        [class.bg-slate-100]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                        [class.text-slate-600]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)">
                         <span class="w-1.5 h-1.5 rounded-full"
-                          [class.bg-emerald-500]="worker.status === 'ONLINE'"
-                          [class.bg-slate-400]="worker.status !== 'ONLINE'"></span>
+                          [class.bg-emerald-500]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
+                          [class.bg-slate-400]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"></span>
                         {{ worker.status }}
                       </span>
                     </td>
-                    <td class="px-4 py-3">{{ worker.load || 0 }}%</td>
+                    <td class="px-4 py-3">{{ worker.gpu_load ?? worker.cpu_load ?? worker.vram_mb ?? 0 }}%{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
                     <td class="px-4 py-3">
                       <a routerLink="/workers" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">Налаштування</a>
                     </td>
@@ -289,9 +289,9 @@ export class DashboardComponent implements OnInit {
     this.api.getWorkers().subscribe({
       next: (workers) => {
         this.workers = workers;
-        this.onlineWorkers = workers.filter(w => w.status === 'ONLINE').length;
+        this.onlineWorkers = workers.filter(w => ['READY', 'ONLINE', 'FREE'].includes(w.status)).length;
         const groups: Record<string, { count: number; capabilities: Set<string> }> = {};
-        workers.filter(w => w.status === 'ONLINE').forEach(w => {
+        workers.filter(w => ['READY', 'ONLINE', 'FREE'].includes(w.status)).forEach(w => {
           if (!groups[w.role]) {
             groups[w.role] = { count: 0, capabilities: new Set() };
           }

@@ -176,6 +176,7 @@ class JobUpdate(BaseModel):
     character_id: str | None = None
     priority: int | None = Field(default=None, ge=1, le=10)
     workflow: str | None = None
+    topic: str | None = None
 
 class Job(BaseModel):
     job_id: str

@@ -54,6 +54,33 @@ def nodes():
 
 
 
+@router.get("/api/nodes/{node_id}")
+def node_detail(node_id: str):
+    from datetime import datetime
+    live = None
+    for worker in store.load_workers():
+        if worker.get("node_id") == node_id or worker.get("node_name") == node_id:
+            live = worker
+            break
+    registry = {node["node_id"]: node for node in registered_nodes()}
+    record = registry.get(node_id, {})
+    if not record and not live:
+        raise HTTPException(404, "Node not found")
+    merged = {**(record or {}), **(live or {})}
+    if live:
+        merged["runtime"] = live
+        merged["status"] = live.get("status", "OFFLINE")
+        merged["certificate_serial"] = record.get("certificate_serial")
+        merged["certificate_expires_at"] = record.get("certificate_expires_at")
+        merged["credential_generation"] = record.get("credential_generation")
+        merged["registered_at"] = record.get("registered_at")
+        merged["revoked_at"] = record.get("revoked_at")
+    merged.setdefault("status", "OFFLINE")
+    merged.setdefault("capabilities", [])
+    merged.setdefault("hardware", {})
+    return merged
+
+
 @router.post("/api/nodes/{node_id}/actions")
 def control_node(node_id: str, command: NodeAction):
     worker = store.workers.get(node_id)
