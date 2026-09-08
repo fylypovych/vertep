@@ -5,7 +5,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { timer, Subscription } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
-import { NodeDetail, NodeActionPayload } from '../core/models';
+import { NodeDetail, NodeActionPayload, SelfTestResult } from '../core/models';
 
 @Component({
   selector: 'app-worker-detail',
@@ -79,7 +79,7 @@ import { NodeDetail, NodeActionPayload } from '../core/models';
             <div class="bg-white rounded-xl border border-slate-200 p-5">
               <h3 class="text-sm font-medium text-slate-500 mb-3">Дії з вузлом</h3>
               <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                @for (action of availableActions; track action.value) {
+                @for (action of availableActions(); track action.value) {
                   <button (click)="runAction({action: action.value})"
                           [disabled]="actioning()"
                           class="px-3 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">
@@ -103,7 +103,8 @@ import { NodeDetail, NodeActionPayload } from '../core/models';
                 <p class="text-xs text-slate-500">Останній heartbeat: {{ heartbeatAge() }} тому</p>
               }
               <button (click)="runAction({action: 'self-test'})"
-                      [disabled]="actioning()"
+                      [disabled]="actioning() || isBusy()"
+                      data-testid="self-test-button"
                       class="mt-3 w-full px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
                     Самодіагностика
               </button>
@@ -139,7 +140,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   actioning = signal(false);
   private pollSub: Subscription | null = null;
 
-  readonly availableActions: { value: NodeActionPayload['action']; label: string }[] = [
+  readonly allActions: { value: NodeActionPayload['action']; label: string }[] = [
     { value: 'drain', label: 'Drain' },
     { value: 'resume', label: 'Resume' },
     { value: 'quarantine', label: 'Quarantine' },
@@ -184,7 +185,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   heartbeatAge = computed(() => {
     const n = this.node();
     if (!n || !n.runtime) return null;
-    const lastSeen = n.runtime['last_seen'] as string | undefined;
+    const lastSeen = n.runtime.last_seen;
     if (!lastSeen) return null;
     const last = new Date(lastSeen);
     const now = new Date();
@@ -197,11 +198,46 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   selfTestStatus = computed(() => {
     const n = this.node();
     if (!n) return null;
-    const st = n.runtime?.['self_test'] as Record<string, unknown> | undefined;
-    const st2 = n.self_test as Record<string, unknown> | undefined;
-    const combined = st || st2;
+    const combined = n.runtime?.self_test || n.self_test;
     if (!combined || typeof combined !== 'object') return null;
     return JSON.stringify(combined, null, 2);
+  });
+
+  isBusy = computed(() => {
+    const n = this.node();
+    return !!n && (n.status === 'BUSY' || !!n.current_task);
+  });
+
+  isQuarantined = computed(() => {
+    const n = this.node();
+    return !!n && (n.status === 'QUARANTINED' || n.update_state?.desired_state === 'QUARANTINED');
+  });
+
+  isDisabled = computed(() => {
+    const n = this.node();
+    return !!n && (n.status === 'OFFLINE' && n.update_state?.desired_state === 'DISABLED');
+  });
+
+  availableActions = computed(() => {
+    const n = this.node();
+    if (!n) return [];
+    const status = n.status;
+    const desired = n.update_state?.desired_state;
+    return this.allActions.filter((a: { value: NodeActionPayload['action']; label: string }) => {
+      switch (a.value) {
+        case 'drain': return status !== 'DRAINING' && status !== 'OFFLINE' && desired !== 'DISABLED';
+        case 'resume': return status === 'DRAINING' || status === 'UPDATING' || desired === 'DRAINING';
+        case 'quarantine': return status !== 'QUARANTINED' && status !== 'OFFLINE' && desired !== 'DISABLED';
+        case 'unquarantine': return status === 'QUARANTINED' || desired === 'QUARANTINED';
+        case 'self-test': return status !== 'BUSY' && status !== 'SELF_TESTING' && status !== 'OFFLINE';
+        case 'disable': return status !== 'OFFLINE' && desired !== 'DISABLED';
+        case 'enable': return desired === 'DISABLED';
+        case 'restart': return status !== 'OFFLINE' && status !== 'UPDATING';
+        case 'update': return status !== 'OFFLINE' && status !== 'UPDATING';
+        case 'logs': return true;
+        default: return true;
+      }
+    });
   });
 
   loadNode(): void {
@@ -214,6 +250,13 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   }
 
   runAction(action: NodeActionPayload): void {
+    if (action.action === 'logs') {
+      const nodeName = this.node()?.node_name;
+      if (nodeName) {
+        this.router.navigate(['/logs'], { queryParams: { node_name: nodeName } });
+      }
+      return;
+    }
     this.actioning.set(true);
     this.api.workerAction(this.route.snapshot.paramMap.get('id') || '', action).subscribe({
       next: () => {

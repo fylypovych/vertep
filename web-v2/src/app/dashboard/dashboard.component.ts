@@ -1,7 +1,7 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { VertepApiService } from '../core/api.service';
-import { Worker } from '../core/models';
+import { Worker, Job } from '../core/models';
 
 const JOB_STATUS_GROUPS = {
   inProgress: ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING', 'SCRIPT_READY', 'ASSETS_READY', 'VIDEO_READY'],
@@ -250,7 +250,7 @@ export class DashboardComponent implements OnInit {
     this.loadData();
   }
 
-  private countByStatus(jobs: any[], statusSet: string[]): number {
+  private countByStatus(jobs: Job[], statusSet: string[]): number {
     return jobs.filter(j => statusSet.includes(j.status)).length;
   }
 

@@ -21,15 +21,46 @@ export interface Worker {
   disk_free_mb?: number;
 }
 
+export interface WorkerHardware {
+  gpu_arch?: string;
+  gpu_count?: number;
+  cpu_count?: number;
+  ram_total_mb?: number;
+  hostname?: string;
+  os?: string;
+  [key: string]: unknown;
+}
+
+export interface WorkerRuntime {
+  last_seen?: string;
+  status?: string;
+  gpu_name?: string;
+  vram_mb?: number;
+  free_vram_mb?: number;
+  gpu_load?: number;
+  cpu_load?: number;
+  temperature?: number;
+  ram_mb?: number;
+  disk_free_mb?: number;
+  current_task?: string;
+  current_job?: string;
+  self_test?: SelfTestResult;
+  capabilities?: string[];
+  tested_capabilities?: string[];
+  version?: string;
+  runtime_version?: string;
+  [key: string]: unknown;
+}
+
 export interface NodeDetail extends Worker {
-  hardware: Record<string, unknown>;
+  hardware: WorkerHardware;
   certificate_serial?: string;
   certificate_expires_at?: string;
   credential_generation?: number;
   registered_at?: string;
   revoked_at?: string | null;
-  runtime?: Record<string, unknown>;
-  self_test?: Record<string, unknown>;
+  runtime?: WorkerRuntime;
+  self_test?: SelfTestResult;
   update_state: {
     desired_state?: string;
     update_target_version?: string;
@@ -164,11 +195,28 @@ export interface SystemRole {
   deployment_status?: string;
 }
 
+export interface RolesDeploymentState {
+  state?: string;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
+  services?: string[];
+  health?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+export interface RolesUpdateResponse {
+  state: string;
+  active_roles?: string[];
+  requested_roles?: string[];
+  message?: string;
+}
+
 export interface SystemRolesResponse {
   node_role: string;
   active_roles: string[];
   available_roles: SystemRole[];
-  deployment?: Record<string, unknown>;
+  deployment?: RolesDeploymentState;
   queued?: boolean;
 }
 
@@ -463,4 +511,82 @@ export interface ScheduledJob {
   status: string;
   created_at: string;
   priority: number;
+}
+
+export interface RuntimeMetrics {
+  gpu_available: boolean;
+  gpu_name?: string;
+  gpu_profile?: string;
+  gpu_architecture?: string;
+  compute_capability?: string;
+  driver_version?: string;
+  vram_total_mb?: number;
+  vram_free_mb?: number;
+  ram_total_mb?: number;
+  ram_free_mb?: number;
+  cpu_count?: number;
+  cpu_load?: number;
+  disk_free_mb?: number;
+  temperature?: number;
+}
+
+export interface SelfTestResult {
+  status: string;
+  passed?: boolean;
+  duration_seconds?: number;
+  error?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface WorkflowDocument {
+  nodes: Record<string, { class_type: string; inputs: Record<string, unknown> }>;
+}
+
+export interface InstallationManifest {
+  installation_id: string;
+  version: string;
+  role: string;
+  node_id?: string;
+  created_at: string;
+  hardware?: Record<string, unknown>;
+}
+
+export interface CertificateStatus {
+  serial: string;
+  issuer: string;
+  subject: string;
+  not_before: string;
+  not_after: string;
+  fingerprint: string;
+}
+
+export interface SecurityCheck {
+  ok: boolean;
+  weak_or_missing: string[];
+  recommendation: string;
+}
+
+export interface BackupSnapshot {
+  snapshot_id: string;
+  created_at?: string;
+  size_bytes?: number;
+  state?: string;
+  description?: string;
+  type?: string;
+}
+
+export interface UpdateOperation {
+  state: string;
+  phase?: string;
+  message?: string;
+  started_at?: string;
+  completed_at?: string;
+  error?: string;
+}
+
+export interface WizardState {
+  role: string;
+  core_url?: string;
+  core_certificate?: string;
+  registration_token?: string;
 }

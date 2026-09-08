@@ -5,8 +5,7 @@ import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
-import { Worker, RegistrationTokenResponse } from '../core/models';
-import { NodeActionPayload } from '../core/models';
+import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
 
 @Component({
   selector: 'app-workers',
@@ -112,7 +111,7 @@ import { NodeActionPayload } from '../core/models';
             </div>
             <div class="flex justify-end gap-2 mt-6">
               <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-              <button (click)="generateToken()" [disabled]="creating" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ creating ? 'Генерація...' : 'Згенерувати токен' }}</button>
+              <button (click)="generateToken()" [disabled]="creating" data-testid="generate-token-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ creating ? 'Генерація...' : 'Згенерувати токен' }}</button>
             </div>
           </div>
         } @else if (pollingNode()) {
@@ -122,9 +121,9 @@ import { NodeActionPayload } from '../core/models';
               <div class="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
               <span class="text-sm text-slate-600">Перевірка /api/nodes</span>
             </div>
-            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
+            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1" data-testid="token-display">
               <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
-              <p><span class="font-medium">TTL:</span> {{ tokenResult()!.expires_at }}</p>
+              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at }}</p>
               <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
             </div>
           </div>
@@ -146,7 +145,7 @@ import { NodeActionPayload } from '../core/models';
             <p class="text-sm text-slate-700">Використовуйте ці дані для реєстрації вузла:</p>
             <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
               <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
-              <p><span class="font-medium">TTL:</span> {{ tokenResult()!.expires_at }}</p>
+              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at }}</p>
               <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
               <p><span class="font-medium">Core URL:</span> https://{{ locationHost }}/api/nodes/register</p>
             </div>
@@ -192,7 +191,7 @@ export class WorkersComponent implements OnInit {
   selectedWorker: Worker | null = null;
   creating = false;
   actioning = false;
-  wizard: any = { role: 'gpu' };
+  wizard: WizardState = { role: 'gpu' };
   workerAction = '';
   search = '';
   page = 1;

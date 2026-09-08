@@ -213,7 +213,7 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
           </div>
 
           @if (job()!.scenes && job()!.scenes.length > 0) {
-            <div class="mt-6">
+            <div data-testid="job-scenes" class="mt-6">
               <h4 class="text-sm font-medium text-slate-900 mb-3">Сцени</h4>
               <div class="space-y-2">
                 @for (scene of job()!.scenes; track scene.scene_id; let i = $index) {
@@ -240,7 +240,7 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
           }
 
           @if (job()!.artifacts && job()!.artifacts.length > 0) {
-            <div class="mt-6">
+            <div data-testid="job-artifacts" class="mt-6">
               <h4 class="text-sm font-medium text-slate-900 mb-3">Артефакти</h4>
               <div class="space-y-2">
                 @for (artifact of job()!.artifacts; track artifact.artifact_id) {
@@ -295,7 +295,7 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
                    <div class="flex flex-wrap gap-2">
                      @for (channel of availablePublishChannels(); track channel) {
                        <label class="flex items-center gap-1.5 text-sm">
-                         <input type="checkbox" [value]="channel" (change)="toggleChannel(channel, $any($event.target).checked)">
+                         <input type="checkbox" [value]="channel" (change)="onChannelToggle(channel, $event)">
                          {{ channelLabel(channel) }}
                        </label>
                      }
@@ -415,7 +415,7 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
           }
 
           @if (job()!.events && job()!.events.length > 0) {
-            <div class="mt-6">
+            <div data-testid="job-events" class="mt-6">
               <h4 class="text-sm font-medium text-slate-900 mb-3">Історія подій</h4>
               <div class="bg-slate-50 rounded-lg p-3 max-h-48 overflow-y-auto">
                 @for (event of structuredEvents(); track event.key) {
@@ -586,7 +586,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
           this.saving.set(false);
           this.toast.show('Завдання оновлено', 'success');
         },
-        error: (err: any) => {
+        error: (err: { status?: number; message?: string }) => {
           if (err.status === 409) {
             this.conflict.set(true);
           } else {
@@ -706,7 +706,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
           this.actionLoading.set(null);
           this.toast.show(`Дію "${this.actionLabel(action)}" застосовано`, 'success');
         },
-        error: (err: any) => {
+        error: (err: { status?: number; message?: string }) => {
           this.actionError.set(err.message || `Помилка виконання дії "${this.actionLabel(action)}"`);
           this.actionLoading.set(null);
           this.toast.show(err.message || 'Помилка виконання дії', 'error');
@@ -872,6 +872,11 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   approveBeforePublish = signal(false);
   selectedChannels = signal<string[]>([]);
+
+  onChannelToggle(channel: string, event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.toggleChannel(channel, checked);
+  }
 
   toggleChannel(channel: string, checked: boolean): void {
     if (checked) {

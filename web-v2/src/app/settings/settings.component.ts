@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription, timeout, take } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
-import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, TelegramBotInfo, IntegrationStatus, ModelInfo, BackupInfo, UpdateReadiness, RollingStatus } from '../core/models';
+import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, TelegramBotInfo, IntegrationStatus, ModelInfo, BackupInfo, UpdateReadiness, RollingStatus, CertificateStatus } from '../core/models';
 
 @Component({
   selector: 'app-settings',
@@ -145,7 +145,7 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
         }
       </div>
 
-      <!-- Roles and Capabilities (V2-304) -->
+      <!-- Roles and Capabilities (V2-404) -->
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Ролі та можливості</h3>
         @if (rolesLoading()) {
@@ -156,7 +156,7 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
         } @else if (rolesError()) {
           <p class="text-red-600">{{ rolesError() }}</p>
         } @else {
-            <div class="text-xs text-slate-500 mb-3">Активні ролі: {{ selectedRoles.length ? selectedRoles.join(', ') : 'базова конфігурація' }}</div>
+          <div class="text-xs text-slate-500 mb-3">Активні ролі: {{ selectedRoles.length ? selectedRoles.join(', ') : 'базова конфігурація' }}</div>
           <div class="flex flex-wrap gap-2 mb-3">
             @for (role of allRoles; track role.id) {
               <span class="px-2 py-1 text-xs border border-slate-200 rounded-lg"
@@ -165,10 +165,35 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
                 <input type="checkbox" [checked]="selectedRoles.includes(role.id)"
                        (change)="toggleRole(role.id, $event)" class="mr-1">
                 {{ role.label }}
+                @if (role.services && role.services.length) {
+                  <span class="text-slate-400 ml-1">({{ role.services.join(', ') }})</span>
+                }
               </span>
             }
           </div>
-          <button (click)="saveRoles()" [disabled]="savingRoles()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
+          @if (rolesSaveMessage()) {
+            <div class="mb-3 text-sm"
+                 [class.text-amber-600]="rolesSaveState() === 'QUEUED' || rolesSaveState() === 'APPLYING'"
+                 [class.text-red-600]="rolesSaveState() === 'ERROR' || rolesSaveState() === 'FAILED'"
+                 [class.text-emerald-600]="rolesSaveState() === 'COMPLETED'"
+                 data-testid="roles-deployment-status">
+              {{ rolesSaveMessage() }}
+              @if (rolesSaveState() === 'APPLYING' || rolesSaveState() === 'QUEUED') {
+                <span class="inline-block ml-2 animate-pulse">⏳</span>
+              }
+            </div>
+          }
+          @if (rolesResponse?.deployment) {
+            <div class="mb-3 text-xs text-slate-500" data-testid="roles-deployment-detail">
+              @if (rolesResponse!.deployment!.services && rolesResponse!.deployment!.services!.length) {
+                <div>Сервіси: {{ rolesResponse!.deployment!.services!.join(', ') }}</div>
+              }
+              @if (rolesResponse!.deployment!.error) {
+                <div class="text-red-600 mt-1">Помилка: {{ rolesResponse!.deployment!.error }}</div>
+              }
+            </div>
+          }
+          <button (click)="saveRoles()" [disabled]="savingRoles()" data-testid="roles-save-button" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
             {{ savingRoles() ? 'Збереження...' : 'Зберегти ролі' }}
           </button>
         }
@@ -404,9 +429,11 @@ export class SettingsComponent implements OnInit, OnDestroy {
   rolesLoading = signal(false);
   rolesError = signal<string | null>(null);
   savingRoles = signal(false);
+  rolesSaveMessage = signal<string | null>(null);
+  rolesSaveState = signal<string | null>(null);
   selectedRoles: string[] = [];
   tgStatus = signal<TelegramStatus | null>(null);
-  tgBotInfo = signal<Record<string, unknown> | null>(null);
+  tgBotInfo = signal<TelegramBotInfo | null>(null);
   tgLoading = signal(false);
   tgError = signal<string | null>(null);
 
@@ -435,7 +462,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   integrationsLoading = signal(false);
   integrationsError = signal<string | null>(null);
 
-  certificates = signal<any>(null);
+  certificates = signal<Record<string, unknown> | null>(null);
   certLoading = signal(false);
   certError = signal<string | null>(null);
 
@@ -510,7 +537,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     return s.orchestration?.active_jobs || 0;
   }
 
-  backendSlots(): any[] {
+  backendSlots(): Array<{ slot: string; label: string; backend: string; configured: boolean; options: string; env: string }> {
     const labels: Record<string, string> = {
       llm: 'LLM',
       tts: 'TTS',
@@ -738,13 +765,48 @@ export class SettingsComponent implements OnInit, OnDestroy {
 
   saveRoles(): void {
     this.savingRoles.set(true);
+    this.rolesSaveMessage.set(null);
+    this.rolesSaveState.set(null);
     this.api.updateSystemRoles(this.selectedRoles).subscribe({
-      next: () => {
+      next: (resp) => {
         this.savingRoles.set(false);
-        this.loadRoles();
+        this.rolesSaveState.set(resp.state);
+        this.rolesSaveMessage.set(resp.message || null);
+        if (resp.state === 'QUEUED') {
+          this.pollDeploymentProgress();
+        } else {
+          this.loadRoles();
+        }
       },
-      error: () => this.savingRoles.set(false),
+      error: (err) => {
+        this.savingRoles.set(false);
+        this.rolesSaveMessage.set(err.message || 'Помилка збереження');
+        this.rolesSaveState.set('ERROR');
+      },
     });
+  }
+
+  private pollDeploymentProgress(attempts = 0): void {
+    const maxAttempts = 30;
+    if (attempts >= maxAttempts) {
+      this.loadRoles();
+      return;
+    }
+    setTimeout(() => {
+      this.api.getSystemRoles().subscribe({
+        next: (resp) => {
+          this.rolesResponse = resp;
+          const state = resp.deployment?.state;
+          this.rolesSaveState.set(state || resp.queued ? 'QUEUED' : 'IDLE');
+          if (state === 'APPLYING' || resp.queued) {
+            this.pollDeploymentProgress(attempts + 1);
+          } else {
+            this.loadRoles();
+          }
+        },
+        error: () => this.pollDeploymentProgress(attempts + 1),
+      });
+    }, 5000);
   }
 
   loadTelegram(): void {

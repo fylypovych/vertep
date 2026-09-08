@@ -137,7 +137,7 @@ export class QueueComponent implements OnInit, OnDestroy {
   deadLetterTasks = signal<DeadLetterTask[]>([]);
   retrying = signal<string | null>(null);
   private subs = new Subscription();
-  private pollTimer: any = null;
+  private pollTimer: Subscription | null = null;
 
   constructor(private api: VertepApiService, private toast: ToastService) {}
 

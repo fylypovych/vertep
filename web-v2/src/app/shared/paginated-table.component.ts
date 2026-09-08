@@ -46,10 +46,10 @@ import { FormsModule } from '@angular/forms';
   `,
 })
 export class PaginatedTableComponent {
-  @Input() rows: any[] = [];
-  @Input() columns: Array<{ key: string; label: string; template?: (row: any) => string }> = [];
+  @Input() rows: Record<string, unknown>[] = [];
+  @Input() columns: Array<{ key: string; label: string; template?: (row: Record<string, unknown>) => string }> = [];
   @Input() pageSize = 10;
-  @Input() trackByFn: (row: any) => string | number = (row) => row.id || row.job_id || JSON.stringify(row);
+  @Input() trackByFn: (row: Record<string, unknown>) => string | number = (row) => (row['id'] as string) || (row['job_id'] as string) || JSON.stringify(row);
   @Output() pageChange = new EventEmitter<{ page: number; pageSize: number }>();
 
   searchTerm = '';

@@ -315,26 +315,26 @@ setup Core
 
 | Task | Статус | Залежності |
 |---|---|---|
-| V2C-001 Logs у source tree | IN_PROGRESS | — |
+| V2C-001 Logs у source tree | DONE | — |
 | V2C-002 Settings browser test | DONE | — |
-| V2C-003 Baseline contract tests | TODO | — |
-| V2C-101 Domain API clients | TODO | V2C-003 |
-| V2C-102 Повна типізація | TODO | V2C-101 |
-| V2C-103 Shared state | TODO | V2C-101 |
-| V2C-104 Permissions/state policy | TODO | V2C-101 |
-| V2C-201 Job editor | TODO | V2C-102, V2C-104 |
-| V2C-202 Timeline | TODO | V2C-102 |
-| V2C-203 Artifacts | TODO | V2C-102, V2C-103 |
-| V2C-204 Publish flow | TODO | V2C-104, V2C-503 |
-| V2C-205 Published query | TODO | V2C-204 |
-| V2C-301 Queue | TODO | V2C-102, V2C-103 |
-| V2C-302 Alerts | TODO | V2C-103 |
-| V2C-303 Logs completion | TODO | V2C-001, V2C-103 |
-| V2C-304 Health/monitoring | TODO | V2C-103 |
-| V2C-401 Worker onboarding | TODO | V2C-102, V2C-104 |
-| V2C-402 Worker metrics | TODO | V2C-102, V2C-401 |
-| V2C-403 Worker controls | TODO | V2C-402, V2C-104 |
-| V2C-404 Roles deployment | TODO | V2C-104 |
+| V2C-003 Baseline contract tests | DONE | — |
+| V2C-101 Domain API clients | DONE | V2C-003 |
+| V2C-102 Повна типізація | DONE | V2C-101 |
+| V2C-103 Shared state | DONE | V2C-101 |
+| V2C-104 Permissions/state policy | DONE | V2C-101 |
+| V2C-201 Job editor | DONE | V2C-102, V2C-104 |
+| V2C-202 Timeline | DONE | V2C-102 |
+| V2C-203 Artifacts | DONE | V2C-102, V2C-103 |
+| V2C-204 Publish flow | DONE | V2C-104, V2C-503 |
+| V2C-205 Published query | DONE | V2C-204 |
+| V2C-301 Queue | DONE | V2C-102, V2C-103 |
+| V2C-302 Alerts | DONE | V2C-103 |
+| V2C-303 Logs completion | DONE | V2C-001, V2C-103 |
+| V2C-304 Health/monitoring | DONE | V2C-103 |
+| V2C-401 Worker onboarding | DONE | V2C-102, V2C-104 |
+| V2C-402 Worker metrics | DONE | V2C-102, V2C-401 |
+| V2C-403 Worker controls | DONE | V2C-402, V2C-104 |
+| V2C-404 Roles deployment | DONE | V2C-104 |
 | V2C-501 Character editor | TODO | V2C-102, V2C-103 |
 | V2C-502 Workflow editor | TODO | V2C-102, V2C-501 |
 | V2C-503 Channels CRUD | TODO | V2C-104, V2C-601 |
@@ -375,3 +375,7 @@ Browser E2E з V2C-801 додаються разом із кожною feature t
 | 2026-09-08 | V2C-001 | Logs повернуто в активну роботу | `.gitignore` виключив Angular source directory з release commit |
 | 2026-09-08 | V2C-002 | Усунуто strict locator collision у Settings | Додано окремі `data-testid` і збережено перевірку конкретних значень версій |
 | 2026-09-08 | POLICY | Старі позначки `DONE` не успадковуються автоматично | Нова готовність підтверджується backend, UI, contracts і Browser E2E |
+| 2026-09-08 | V2C-401 | Worker onboarding wizard — E2E, data-testid, contract tests | Token TTL, polling, wizard clear |
+| 2026-09-08 | V2C-402 | NodeDetail типізовано через WorkerHardware/WorkerRuntime | Record<string, unknown> замінено на specific interfaces |
+| 2026-09-08 | V2C-403 | NodeAction regex розширено (update, rotate, revoke) | State guards у worker-detail via availableActions computed |
+| 2026-09-08 | V2C-404 | Roles deployment progress — polling, status message, services | RolesDeploymentState/RolesUpdateResponse моделі |

@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
-import { timer } from 'rxjs';
+import { Subscription, timer } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { Alert } from '../core/models';
@@ -84,7 +84,7 @@ export class AlertsComponent implements OnInit, OnDestroy {
   loading = signal(false);
   error = signal<string | null>(null);
   alerts = signal<Alert[]>([]);
-  private pollTimer: any = null;
+  private pollTimer: Subscription | null = null;
 
   constructor(private api: VertepApiService, private toast: ToastService) {}
 

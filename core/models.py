@@ -252,7 +252,7 @@ class TaskClaim(BaseModel):
 
 
 class NodeAction(BaseModel):
-    action: str = Field(pattern="^(drain|resume|quarantine|unquarantine|self-test|disable|enable|restart|logs)$")
+    action: str = Field(pattern="^(drain|resume|quarantine|unquarantine|self-test|disable|enable|restart|logs|update|rotate|revoke)$")
     reason: str = Field(default="", max_length=500)
 
 

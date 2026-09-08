@@ -1,4 +1,4 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
@@ -148,6 +148,11 @@ export class CharactersComponent implements OnInit {
   showModal = signal(false);
   editingId: string | null = null;
   form: Partial<Character> = {};
+  private originalForm: Partial<Character> | null = null;
+  private originalVoiceJson = '';
+  private originalVisualJson = '';
+  private originalGenerationJson = '';
+  private originalPublishingJson = '';
   saving = signal(false);
   search = '';
   page = 1;
@@ -224,15 +229,32 @@ export class CharactersComponent implements OnInit {
   editCharacter(character: Character): void {
     this.editingId = character.id;
     this.form = { ...character };
+    this.originalForm = { ...character };
     this.syncJsonFields();
+    this.originalVoiceJson = this.voiceJson;
+    this.originalVisualJson = this.visualJson;
+    this.originalGenerationJson = this.generationJson;
+    this.originalPublishingJson = this.publishingJson;
     this.showModal.set(true);
   }
 
   closeModal(): void {
+    if (this.editingId && this.hasUnsavedChanges()) {
+      if (!confirm('Є незбережені зміни. Закрити без збереження?')) return;
+    }
     this.showModal.set(false);
     this.editingId = null;
     this.form = {};
     this.saving.set(false);
+  }
+
+  private hasUnsavedChanges(): boolean {
+    if (!this.editingId || !this.originalForm) return false;
+    return this.form.system_prompt !== this.originalForm.system_prompt
+      || this.voiceJson !== this.originalVoiceJson
+      || this.visualJson !== this.originalVisualJson
+      || this.generationJson !== this.originalGenerationJson
+      || this.publishingJson !== this.originalPublishingJson;
   }
 
   private syncJsonFields(): void {

@@ -11,6 +11,7 @@ import {
   Channel,
   SystemRole,
   SystemRolesResponse,
+  RolesUpdateResponse,
   JobCreate,
   JobUpdate,
   ArtifactVerifyResponse,
@@ -190,8 +191,8 @@ export class VertepApiService {
     return this.http.get<SystemRolesResponse>(`${this.baseUrl}/system/roles`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  updateSystemRoles(roles: string[]): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/roles`, { roles }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  updateSystemRoles(roles: string[]): Observable<RolesUpdateResponse> {
+    return this.http.post<RolesUpdateResponse>(`${this.baseUrl}/system/roles`, { roles }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   createSession(payload: { login: string; password: string }): Observable<{ authenticated: boolean }> {
@@ -443,7 +444,8 @@ export class VertepApiService {
     return this.http.post<SystemState>(`${this.baseUrl}/system/recovery/normal`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  private handleError(error: any) {
-    return throwError(() => new Error(error?.detail || error?.message || 'API error'));
+  private handleError(error: unknown) {
+    const err = error as { detail?: string; message?: string } | undefined;
+    return throwError(() => new Error(err?.detail || err?.message || 'API error'));
   }
 }

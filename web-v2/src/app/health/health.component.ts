@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { timer } from 'rxjs';
+import { Subscription, timer } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { HealthCheck, HealthHistoryEntry } from '../core/models';
@@ -152,7 +152,7 @@ export class HealthComponent implements OnInit, OnDestroy {
   metrics = signal<Record<string, unknown>>({});
   historyLoading = signal(false);
   history = signal<HealthHistoryEntry[]>([]);
-  private pollTimer: any = null;
+  private pollTimer: Subscription | null = null;
 
   constructor(private api: VertepApiService) {}
 
@@ -215,12 +215,12 @@ export class HealthComponent implements OnInit, OnDestroy {
   }
 
   jobsByStatus(): Array<{ status: string; count: number }> {
-    const m = this.metrics() as any;
+    const m = this.metrics() as { jobs_by_status?: Record<string, number> };
     const byStatus = m?.jobs_by_status || {};
-    return Object.entries(byStatus).map(([status, count]) => ({ status, count: count as number }));
+    return Object.entries(byStatus).map(([status, count]) => ({ status, count }));
   }
 
-  objectEntries(obj: Record<string, unknown>): Array<{ key: string; value: any }> {
-    return Object.entries(obj || {}).map(([key, value]) => ({ key, value }));
+  objectEntries(obj: Record<string, unknown>): Array<{ key: string; value: [boolean, string] }> {
+    return Object.entries(obj || {}).map(([key, value]) => ({ key, value: value as [boolean, string] }));
   }
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.23
+- Типізовано `NodeDetail.hardware` та `NodeDetail.runtime` через `WorkerHardware`/`WorkerRuntime` замість `Record<string, unknown>`.
+- Розширено `NodeAction.action` regex: додано `update`, `rotate`, `revoke`.
+- Додано state guards для Worker controls (`availableActions` computed): drain/resume/quarantine/disable/enable/restart/update залежно від статусу вузла.
+- Покращено Roles deployment progress: `RolesDeploymentState`/`RolesUpdateResponse` моделі, polling після save, показ services per role, deployment error/status у Settings.
+- Додано contract tests для V2C-401–V2C-404: registration token TTL, node detail hardware, worker actions, roles deployment shape.
+- Додано Browser E2E тести для worker wizard, worker detail hardware/actions, settings roles deployment status.
+- Оновлено план завершення Web UI V2: V2C-401–V2C-404 позначено DONE.
+
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.22
 - Відновлено складання Web UI V2: компонент Logs тепер входить до Git і підключений до реального `GET /api/logs` із фільтрами та станами завантаження, помилки й порожнього результату.
 - Уточнено TypeScript-модель запису логу відповідно до фактичного backend contract.
