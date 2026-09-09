@@ -14,7 +14,7 @@ import { Job, QueueState, QueueTaskSummary, DeadLetterTask } from '../core/model
   template: `
     <div class="space-y-6" data-testid="queue-page">
       <div class="flex items-center justify-between">
-        <h3 class="text-lg font-semibold text-slate-900">Черга завдань</h3>
+        <div><h3 class="text-lg font-semibold text-slate-900">Виконання завдань</h3><p class="text-sm text-slate-500">Черга завдань: операційний стан scheduled, ready, inflight і dead-letter етапів Job lifecycle.</p></div>
         <button (click)="loadQueue()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Оновити</button>
       </div>
 
@@ -41,7 +41,7 @@ import { Job, QueueState, QueueTaskSummary, DeadLetterTask } from '../core/model
             <p class="text-2xl font-bold text-slate-900">{{ inflightCount() }}</p>
           </div>
           <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500">Dead-letter</p>
+            <p class="text-xs text-slate-500">Потребують втручання</p>
             <p class="text-2xl font-bold text-red-600">{{ deadLetterCount() }}</p>
           </div>
         </div>
@@ -71,7 +71,7 @@ import { Job, QueueState, QueueTaskSummary, DeadLetterTask } from '../core/model
                 <div class="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
                   <div>
                     <span class="text-sm font-medium text-slate-900">{{ task.task }}</span>
-                    <p class="text-xs text-slate-500">Task: {{ task.task_id }} · Scene: {{ task.scene_id }}</p>
+                    <p class="text-xs text-slate-500">Задача: {{ task.task_id }} · Сцена: {{ task.scene_id }}</p>
                   </div>
                   <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
                 </div>
@@ -88,7 +88,7 @@ import { Job, QueueState, QueueTaskSummary, DeadLetterTask } from '../core/model
                 <div class="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
                   <div>
                     <span class="text-sm font-medium text-slate-900">{{ task.task }}</span>
-                    <p class="text-xs text-slate-500">Task: {{ task.task_id }} · Scene: {{ task.scene_id }}</p>
+                    <p class="text-xs text-slate-500">Задача: {{ task.task_id }} · Сцена: {{ task.scene_id }}</p>
                   </div>
                   <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
                 </div>

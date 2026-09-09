@@ -1,5 +1,22 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.27
+- Додано модуль `presentation.ts`: централізовані мітки статусів (`statusLabel`), ролей (`roleLabel`), груп статусів (`inStatusGroup`), станів дій (`jobActionAllowed`).
+- Збагачено контекст вузлів у API: `/api/nodes` та `/api/nodes/{id}` повертають `modules`, `services`, `capability_backends`.
+- Додано показ офлайн-зареєстрованих вузлів у списку worker-ів зі статусом OFFLINE.
+- Виправлено пошук вузла за `node_id` або `node_name` у `control_node`.
+- Локалізовано Web UI V2: ролі вузлів, статуси джобів, статуси вузлів через централізовані мітки.
+- Перейменовано розділ «Воркери» → «Вузли» у sidebar та workers.
+- Додано фільтр за групами статусів (активні/в черзі/очікують/завершені/помилки) у список джобів.
+- Розширено пошук джобів: пошук по темі (topic) крім ID.
+- Зроблено карточки статистики «Активні завдання» та «Завдання в черзі» на Dashboard клікабельними посиланнями.
+- Додано секцію «Движки модулів» (capability backends) в деталях вузла.
+- Додано керування ролями жмого вузла (node roles) для core-вузла в деталях вузла.
+- Переведено форматування дат на єдиний `VertepDatePipe` у Alerts, Workers, Worker Detail, Settings, Queue.
+- Додано моделі `StoryboardVersion`, `StoryboardScene`, `NodeUpdateState` до фронтенду.
+- Додано API сторібордів (`approveStoryboard`, `rejectStoryboard`, `regenerateStoryboard`).
+- Виправлено E2E тести: `exact=True` для навігаційних посилань, CSS-селектор для Workers, видалення ручного runner.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.26
 - Додано модуль сторібордів: `StoryboardService`, `StoryboardConflict`, генерація промптів через LLM, рендеринг у Telegram з inline-клавіатурою, REST API `/api/storyboards`.
 - Розширено `JobStatus` новими станами: `STORYBOARD_QUEUED`, `STORYBOARD_GENERATING`, `STORYBOARD_PENDING_APPROVAL`, `STORYBOARD_REVISION_REQUESTED`.

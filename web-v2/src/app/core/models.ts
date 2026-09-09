@@ -19,6 +19,21 @@ export interface Worker {
   supported_workflows?: string[];
   tested_capabilities?: string[];
   disk_free_mb?: number;
+  modules?: string[];
+  services?: string[];
+  capability_backends?: Record<string, string>;
+  certificate_serial?: string;
+  certificate_expires_at?: string;
+  registered_at?: string;
+  revoked_at?: string | null;
+  update_state?: NodeUpdateState;
+}
+
+export interface NodeUpdateState {
+  desired_state?: string;
+  update_target_version?: string;
+  rollback_target_version?: string;
+  self_test_requested_at?: string | null;
 }
 
 export interface WorkerHardware {
@@ -61,12 +76,7 @@ export interface NodeDetail extends Worker {
   revoked_at?: string | null;
   runtime?: WorkerRuntime;
   self_test?: SelfTestResult;
-  update_state: {
-    desired_state?: string;
-    update_target_version?: string;
-    rollback_target_version?: string;
-    self_test_requested_at?: string | null;
-  };
+  update_state: NodeUpdateState;
 }
 
 export interface AttemptRecord {
@@ -151,6 +161,29 @@ export interface Job {
   workflow?: string;
   active_task_id?: string;
   scheduled_for?: string;
+  storyboards?: StoryboardVersion[];
+  active_storyboard_version?: number;
+}
+
+export interface StoryboardScene {
+  index: number;
+  prompt: string;
+  video_prompt: string;
+  voiceover: string;
+  duration: number;
+}
+
+export interface StoryboardVersion {
+  version: number;
+  title: string;
+  description: string;
+  hashtags: string[];
+  scenes: StoryboardScene[];
+  status: 'pending_approval' | 'approved' | 'rejected' | 'superseded';
+  revision_request?: string;
+  created_at: string;
+  decided_at?: string;
+  decided_by?: string;
 }
 
 export interface Character {

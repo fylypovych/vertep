@@ -6,6 +6,7 @@ import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, TelegramBotInfo, IntegrationStatus, ModelInfo, BackupInfo, UpdateReadiness, RollingStatus, CertificateStatus, UpdateStatus } from '../core/models';
+import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
 interface SecretGroup {
   label: string;
@@ -15,7 +16,7 @@ interface SecretGroup {
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, VertepDatePipe],
   template: `
     <div class="space-y-6" data-testid="settings-page">
       <div class="bg-white rounded-xl border border-slate-200 p-5">
@@ -400,7 +401,7 @@ interface SecretGroup {
               <div class="flex items-center justify-between py-2 border-b border-slate-100">
                 <div class="flex-1">
                   <span class="font-mono text-xs">{{ backup.snapshot_id }}</span>
-                  <span class="text-xs text-slate-500 ml-2">{{ backup.created_at || '' }}</span>
+                  <span class="text-xs text-slate-500 ml-2">{{ backup.created_at | vertepDate }}</span>
                   @if (backup.description) { <span class="text-xs text-slate-400 ml-2">{{ backup.description }}</span> }
                 </div>
                 <div class="flex items-center gap-2">

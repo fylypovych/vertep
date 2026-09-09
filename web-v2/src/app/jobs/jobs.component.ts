@@ -1,12 +1,13 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Job, Character, Brand, Workflow, JobCreate } from '../core/models';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
+import { inStatusGroup, statusLabel } from '../core/presentation';
 
 @Component({
   selector: 'app-jobs',
@@ -21,8 +22,11 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
         </button>
       </div>
 
-      <div class="mb-4">
-        <input [(ngModel)]="search" data-testid="jobs-search" placeholder="Пошук за ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+      <div class="mb-4 grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
+        <input [(ngModel)]="search" data-testid="jobs-search" placeholder="Пошук за ID або темою..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <select [(ngModel)]="statusGroup" data-testid="jobs-status-filter" class="px-3 py-2 border border-slate-200 rounded-lg text-sm">
+          <option value="">Усі стани</option><option value="active">Активні</option><option value="queued">У черзі</option><option value="waiting">Очікують</option><option value="completed">Завершені</option><option value="failed">З помилкою</option>
+        </select>
       </div>
 
       @if (loading()) {
@@ -57,7 +61,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                       [class.text-emerald-700]="isActive(job.status)"
                       [class.bg-slate-100]="!isActive(job.status)"
                       [class.text-slate-600]="!isActive(job.status)">
-                      {{ job.status }}
+                      {{ jobStatusLabel(job.status) }}
                     </span>
                   </td>
                   <td class="px-4 py-3">{{ job.created_at | vertepDate }}</td>
@@ -202,9 +206,12 @@ export class JobsComponent implements OnInit {
   newJobScheduled = false;
   newJobDate = '';
 
-  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router) {}
+  statusGroup = '';
+
+  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router, private route: ActivatedRoute) {}
 
   ngOnInit(): void {
+    this.statusGroup = this.route.snapshot.queryParamMap.get('group') || '';
     this.loadJobs();
     this.loadCharacters();
     this.loadBrands();
@@ -212,9 +219,12 @@ export class JobsComponent implements OnInit {
   }
 
   get filteredJobs(): Job[] {
-    if (!this.search.trim()) return this.jobs;
     const term = this.search.toLowerCase();
-    return this.jobs.filter(j => (j.job_id || '').toLowerCase().includes(term));
+    return this.jobs.filter(j => {
+      const matchesText = !term || `${j.job_id} ${j.topic}`.toLowerCase().includes(term);
+      const matchesGroup = !this.statusGroup || inStatusGroup(j.status, this.statusGroup as 'active' | 'queued' | 'waiting' | 'completed' | 'failed');
+      return matchesText && matchesGroup;
+    });
   }
 
   get pagedJobs(): Job[] {
@@ -263,8 +273,10 @@ export class JobsComponent implements OnInit {
   }
 
   isActive(status: string): boolean {
-    return ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY'].includes(status);
+    return inStatusGroup(status, 'active');
   }
+
+  jobStatusLabel(status: string): string { return statusLabel(status); }
 
   openCreateModal(): void {
     this.newJob = {

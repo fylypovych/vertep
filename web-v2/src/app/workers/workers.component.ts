@@ -6,15 +6,17 @@ import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
+import { roleLabel, statusLabel } from '../core/presentation';
+import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
 @Component({
   selector: 'app-workers',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-page">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-slate-900">Воркери</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Вузли Vertep</h3>
         <button (click)="openWizard()" data-testid="create-worker-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
           Додати вузол
         </button>
@@ -55,7 +57,7 @@ import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } fro
                      <a [routerLink]="['/workers', worker.node_id]" class="font-medium text-slate-900 hover:text-emerald-600">{{ worker.node_name }}</a>
                      <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
                    </td>
-                  <td class="px-4 py-3">{{ worker.role }}</td>
+                  <td class="px-4 py-3">{{ nodeRoleLabel(worker.role) }}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
                   <td class="px-4 py-3">
                     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
@@ -66,10 +68,10 @@ import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } fro
                       <span class="w-1.5 h-1.5 rounded-full"
                         [class.bg-emerald-500]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
                         [class.bg-slate-400]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"></span>
-                      {{ worker.status }}
+                      {{ nodeStatusLabel(worker.status) }}
                     </span>
                   </td>
-                  <td class="px-4 py-3">{{ worker.gpu_load ?? worker.cpu_load ?? worker.vram_mb ?? 0 }}%{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
+                  <td class="px-4 py-3">{{ nodeLoad(worker) }}{{ worker.temperature != null ? ' · ' + worker.temperature + '°C' : '' }}</td>
                   <td class="px-4 py-3">
                     <button (click)="openSettings(worker)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Налаштування</button>
                     <button (click)="deleteWorker(worker)" class="text-red-600 hover:text-red-700 text-sm font-medium">Видалити</button>
@@ -116,21 +118,21 @@ import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } fro
           </div>
         } @else if (pollingNode()) {
           <div class="space-y-3">
-            <p class="text-sm text-slate-700">Очікування появи вузла в системі...</p>
+            <p class="text-sm text-slate-700">{{ onboardingStatus() }}</p>
             <div class="flex items-center gap-3">
               <div class="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
               <span class="text-sm text-slate-600">Перевірка /api/nodes</span>
             </div>
             <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1" data-testid="token-display">
               <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
-              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at }}</p>
+              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at | vertepDate }}</p>
               <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
             </div>
           </div>
         } @else if (registeredNode()) {
           <div class="space-y-3">
             <h4 class="text-sm font-medium text-emerald-900">Вузол зареєстровано</h4>
-            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
+            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1" data-testid="token-display">
               <p><span class="font-medium">ID:</span> {{ registeredNode()!.node_id }}</p>
               <p><span class="font-medium">Назва:</span> {{ registeredNode()!.node_name }}</p>
               <p><span class="font-medium">Роль:</span> {{ registeredNode()!.role }}</p>
@@ -145,9 +147,9 @@ import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } fro
             <p class="text-sm text-slate-700">Використовуйте ці дані для реєстрації вузла:</p>
             <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
               <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
-              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at }}</p>
+              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at | vertepDate }}</p>
               <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
-              <p><span class="font-medium">Core URL:</span> https://{{ locationHost }}/api/nodes/register</p>
+              <p><span class="font-medium">Core URL:</span> {{ locationOrigin }}/api/nodes/register</p>
             </div>
             <div class="flex justify-end gap-2 mt-6">
               <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Закрити</button>
@@ -200,7 +202,9 @@ export class WorkersComponent implements OnInit {
   pollingNode = signal(false);
   registeredNode = signal<Worker | null>(null);
   polling = false;
-  locationHost = window.location.host;
+  locationOrigin = window.location.origin;
+  onboardingStatus = signal('Очікування реєстрації вузла...');
+  private knownNodeIds = new Set<string>();
 
   constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
@@ -236,11 +240,20 @@ export class WorkersComponent implements OnInit {
     });
   }
 
+  nodeRoleLabel(role: string): string { return roleLabel(role); }
+  nodeStatusLabel(status: string): string { return statusLabel(status); }
+  nodeLoad(worker: Worker): string {
+    const value = worker.gpu_load ?? worker.cpu_load;
+    return value == null ? 'Немає даних' : `${value}%`;
+  }
+
   openWizard(): void {
     this.wizard = { role: 'gpu' };
     this.tokenResult.set(null);
     this.pollingNode.set(false);
     this.registeredNode.set(null);
+    this.knownNodeIds = new Set(this.workers().map(item => item.node_id));
+    this.onboardingStatus.set('Очікування реєстрації вузла...');
     this.showWizard = true;
   }
 
@@ -281,8 +294,15 @@ export class WorkersComponent implements OnInit {
       attempts++;
       this.api.getNodes().subscribe({
         next: (nodes) => {
-          const found = nodes.find(n => n.status === 'READY' || n.status === 'ONLINE');
-          if (found) {
+          const found = nodes.find(n => !this.knownNodeIds.has(n.node_id) && n.role === token.role);
+          if (found?.certificate_serial && found.status === 'SELF_TESTING') {
+            this.onboardingStatus.set('Сертифікат видано. Виконується self-test...');
+          } else if (found?.certificate_serial) {
+            this.onboardingStatus.set('Вузол зареєстровано, сертифікат видано. Очікування self-test...');
+          } else if (found) {
+            this.onboardingStatus.set('Вузол зареєстровано. Очікування сертифіката...');
+          }
+          if (found && (found.status === 'READY' || found.status === 'ONLINE')) {
             clearInterval(interval);
             this.registeredNode.set(found);
             this.pollingNode.set(false);

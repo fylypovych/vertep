@@ -113,6 +113,25 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
             "self_test_requested_at": item.pop("self_test_requested_at", None),
         }
         result.append(item)
+    seen = {item.get("node_id") or item.get("node_name") for item in result}
+    for node_id, record in registry.items():
+        if node_id in seen or record.get("revoked_at"):
+            continue
+        if role and record.get("role") != role:
+            continue
+        if status and status != "OFFLINE":
+            continue
+        if capability and capability not in (record.get("capabilities") or []):
+            continue
+        definition = node_roles().get(record.get("role", ""), {})
+        result.append({
+            **record,
+            "node_name": node_id,
+            "status": "OFFLINE",
+            "modules": definition.get("modules", []),
+            "services": definition.get("services", []),
+            "update_state": {},
+        })
     return result
 
 

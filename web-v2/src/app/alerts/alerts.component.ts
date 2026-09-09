@@ -5,11 +5,12 @@ import { Subscription, timer } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { Alert } from '../core/models';
+import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
 @Component({
   selector: 'app-alerts',
   standalone: true,
-  imports: [CommonModule, RouterModule],
+  imports: [CommonModule, RouterModule, VertepDatePipe],
   template: `
     <div class="space-y-4" data-testid="alerts-page">
       <div class="flex items-center justify-between">
@@ -61,7 +62,7 @@ import { Alert } from '../core/models';
                     <span>Стан: {{ alert.state }}</span>
                   }
                   @if (alert.updated_at) {
-                    <span>{{ formatDate(alert.updated_at) }}</span>
+                    <span>{{ alert.updated_at | vertepDate }}</span>
                   }
                 </div>
                 @if (alert.details) {
@@ -122,10 +123,4 @@ export class AlertsComponent implements OnInit, OnDestroy {
     }
   }
 
-  formatDate(timestamp: string | undefined): string {
-    if (!timestamp) {
-      return '';
-    }
-    return new Date(timestamp).toLocaleString('uk-UA');
-  }
 }

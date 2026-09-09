@@ -74,24 +74,24 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         expect(page.locator("[data-testid='dashboard']")).to_be_visible()
         expect(page.locator("[data-testid='stat-workers']")).to_contain_text("Воркери")
         expect(page.locator("[data-testid='stat-system-state']")).to_contain_text("Нормальний")
-        expect(page.get_by_role("link", name="Завдання")).to_be_visible()
+        expect(page.get_by_role("link", name="Завдання", exact=True)).to_be_visible()
 
-        page.get_by_role("link", name="Завдання").click()
+        page.get_by_role("link", name="Завдання", exact=True).click()
         expect(page).to_have_url(f"{BASE_URL}/jobs")
         expect(page.locator("[data-testid='jobs-page']")).to_be_visible()
         expect(page.locator("[data-testid='create-job-button']")).to_contain_text("Нове завдання")
 
-        page.get_by_role("link", name="Воркери").click()
+        page.locator("a[href='/workers']").click()
         expect(page).to_have_url(f"{BASE_URL}/workers")
         expect(page.locator("[data-testid='workers-page']")).to_be_visible()
         expect(page.locator("[data-testid='create-worker-button']")).to_contain_text("Додати вузол")
 
-        page.get_by_role("link", name="Персонажі").click()
+        page.get_by_role("link", name="Персонажі", exact=True).click()
         expect(page).to_have_url(f"{BASE_URL}/characters")
         expect(page.locator("[data-testid='characters-page']")).to_be_visible()
         expect(page.locator("[data-testid='create-character-button']")).to_contain_text("Новий персонаж")
 
-        page.get_by_role("link", name="Налаштування").click()
+        page.get_by_role("link", name="Налаштування", exact=True).click()
         expect(page).to_have_url(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
         expect(page.locator("[data-testid='backends-table']")).to_be_visible()
@@ -742,14 +742,3 @@ def test_settings_roles_shows_deployment_status():
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
         assert not errors, f"pageerror: {errors}"
         browser.close()
-    os.environ.setdefault("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")
-    failed = 0
-    for name, fn in list(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"[PASS] {name}")
-            except Exception as exc:
-                print(f"[FAIL] {name}: {exc}")
-                failed += 1
-    sys.exit(1 if failed else 0)

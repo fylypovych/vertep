@@ -4,12 +4,41 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from ..models import NodeAction, utc_now
 from ..node_registry import (create_registration_token, enroll_node, registered_nodes,
-                            renew_node, revoke_node, verify_node_certificate)
+                            renew_node, revoke_node, verify_node_certificate, node_roles)
 from ..security import _valid_worker_request
 from ..state import store
 from .workers import workers
 
 router = APIRouter()
+
+CAPABILITY_BACKENDS = {
+    "text_generation": "Ollama / LLM Provider",
+    "speech_synthesis": "TTS Provider",
+    "image_generation": "ComfyUI",
+    "image_upscale": "ComfyUI",
+    "controlnet": "ComfyUI",
+    "inpainting": "ComfyUI",
+    "publishing": "Publisher Provider",
+    "backup": "Backup Service",
+    "metrics": "Prometheus",
+    "logs": "Loki",
+    "alerting": "Alertmanager",
+}
+
+
+def _node_context(node: dict) -> dict:
+    definition = node_roles().get(node.get("role", ""), {})
+    capabilities = node.get("capabilities") or definition.get("capabilities", [])
+    return {
+        **node,
+        "node_name": node.get("node_name") or node.get("node_id"),
+        "capabilities": capabilities,
+        "modules": definition.get("modules", []),
+        "services": definition.get("services", []),
+        "capability_backends": {
+            item: CAPABILITY_BACKENDS.get(item, "Vertep runtime") for item in capabilities
+        },
+    }
 
 
 @router.post("/api/nodes/registration-tokens")
@@ -48,8 +77,8 @@ async def register_node(request: Request):
 @router.get("/api/nodes")
 def nodes():
     live = {item.get("node_name"): item for item in workers()}
-    return [{**node, "runtime": live.get(node["node_id"]),
-             "status": (live.get(node["node_id"]) or {}).get("status", "OFFLINE")}
+    return [_node_context({**node, "runtime": live.get(node["node_id"]),
+             "status": (live.get(node["node_id"]) or {}).get("status", "OFFLINE")})
             for node in registered_nodes()]
 
 
@@ -78,12 +107,15 @@ def node_detail(node_id: str):
     merged.setdefault("status", "OFFLINE")
     merged.setdefault("capabilities", [])
     merged.setdefault("hardware", {})
-    return merged
+    return _node_context(merged)
 
 
 @router.post("/api/nodes/{node_id}/actions")
 def control_node(node_id: str, command: NodeAction):
     worker = store.workers.get(node_id)
+    if not worker:
+        worker = next((item for item in store.load_workers()
+                       if item.get("node_id") == node_id or item.get("node_name") == node_id), None)
     if not worker:
         raise HTTPException(404, "Worker runtime is not available")
     timestamp = utc_now()

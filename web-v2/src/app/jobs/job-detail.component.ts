@@ -8,6 +8,7 @@ import { ConfirmService } from '../core/services/confirm.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { Subscription } from 'rxjs';
 import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptRecord, PublicationResult, Channel } from '../core/models';
+import { inStatusGroup, jobActionAllowed, statusLabel } from '../core/presentation';
 
 @Component({
   selector: 'app-job-detail',
@@ -37,7 +38,7 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
                   [class.text-emerald-700]="isActiveStatus(job()!.status)"
                   [class.bg-slate-100]="!isActiveStatus(job()!.status)"
                   [class.text-slate-600]="!isActiveStatus(job()!.status)">
-                  {{ job()!.status }}
+                  {{ jobStatusLabel(job()!.status) }}
                 </span>
               </div>
               <p class="text-sm text-slate-500">ID: {{ job()!.job_id }}</p>
@@ -61,6 +62,10 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
               @if (canApprove()) {
                 <button (click)="approveJob()" [disabled]="actionLoading() === 'approve'" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити</button>
               }
+              @if (canReviewApproval()) {
+                <button (click)="requestRevision()" [disabled]="!!actionLoading()" data-testid="revision-job-button" class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">Запросити правки</button>
+                <button (click)="rejectApproval()" [disabled]="!!actionLoading()" data-testid="reject-job-button" class="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50">Відхилити</button>
+              }
               @if (canPublish()) {
                 <button (click)="publishJob()" [disabled]="actionLoading() === 'publish'" class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">Опублікувати</button>
               }
@@ -70,10 +75,10 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
                   Редагувати
                 </button>
               }
-              <button (click)="confirmDelete()" data-testid="delete-job-button"
+              @if (canDelete()) { <button (click)="confirmDelete()" data-testid="delete-job-button"
                 class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium">
                 Видалити
-              </button>
+              </button> }
               <button (click)="goBack()" data-testid="back-to-list-button"
                 class="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-sm font-medium">
                 ← Список
@@ -147,6 +152,10 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
                   <label class="block text-sm font-medium text-slate-700 mb-1">Script (JSON)</label>
                   <textarea [(ngModel)]="editForm.scriptJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-xs"></textarea>
                 </div>
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 mb-1">Prompt першої сцени</label>
+                  <textarea [(ngModel)]="editForm.prompt" rows="3" data-testid="edit-prompt-input" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                </div>
                 <div class="flex gap-2 pt-2">
                   <button (click)="saveChanges()" [disabled]="saving()"
                     class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
@@ -179,15 +188,15 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
               <p class="text-sm font-medium text-slate-900">{{ job()!.priority }}</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4">
-              <p class="text-xs text-slate-500 mb-1">Task Type</p>
-              <p class="text-sm font-medium text-slate-900">{{ job()!.task_type }}</p>
+              <p class="text-xs text-slate-500 mb-1">Тип завдання</p>
+              <p class="text-sm font-medium text-slate-900">{{ taskTypeLabel(job()!.task_type) }}</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4">
-              <p class="text-xs text-slate-500 mb-1">Aspect Ratio</p>
+              <p class="text-xs text-slate-500 mb-1">Співвідношення сторін</p>
               <p class="text-sm font-medium text-slate-900">{{ job()!.aspect_ratio }}</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4">
-              <p class="text-xs text-slate-500 mb-1">Output Preset</p>
+              <p class="text-xs text-slate-500 mb-1">Формат публікації</p>
               <p class="text-sm font-medium text-slate-900">{{ job()!.output_preset }}</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4">
@@ -212,6 +221,18 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
             }
           </div>
 
+          @if (activeStoryboard(); as storyboard) {
+            <div class="mt-6 bg-violet-50 border border-violet-200 rounded-lg p-4" data-testid="job-storyboard">
+              <h4 class="font-medium text-violet-900">Розкадровка, версія {{ storyboard.version }}</h4>
+              <p class="text-sm text-violet-800">{{ storyboard.title }}</p>
+              <div class="mt-3 space-y-2">
+                @for (scene of storyboard.scenes; track scene.index) {
+                  <div class="bg-white rounded p-3 text-sm"><strong>Сцена {{ scene.index }} · {{ scene.duration }} с</strong><p>{{ scene.voiceover }}</p><p class="text-xs text-slate-500">{{ scene.prompt }}</p></div>
+                }
+              </div>
+            </div>
+          }
+
           @if (job()!.scenes && job()!.scenes.length > 0) {
             <div data-testid="job-scenes" class="mt-6">
               <h4 class="text-sm font-medium text-slate-900 mb-3">Сцени</h4>
@@ -231,7 +252,7 @@ import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptR
                       [class.text-red-700]="scene.status === 'FAILED'"
                       [class.bg-slate-100]="!['RUNNING', 'READY', 'FAILED'].includes(scene.status)"
                       [class.text-slate-600]="!['RUNNING', 'READY', 'FAILED'].includes(scene.status)">
-                      {{ scene.status }}
+                      {{ jobStatusLabel(scene.status) }}
                     </span>
                   </div>
                 }
@@ -449,7 +470,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   workflows = signal<Workflow[]>([]);
   channelTypes = signal<string[]>([]);
   jobChannels = signal<Channel[]>([]);
-  editForm: Partial<JobUpdate> & { scriptJson?: string } = { topic: '', priority: 5, workflow: '', character_id: '' };
+  editForm: Partial<JobUpdate> & { scriptJson?: string } = { topic: '', priority: 5, workflow: '', character_id: '', prompt: '' };
   private subs = new Subscription();
 
   constructor(
@@ -534,8 +555,11 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   isActiveStatus(status: string): boolean {
-    return ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING'].includes(status);
+    return inStatusGroup(status, 'active');
   }
+
+  jobStatusLabel(status: string): string { return statusLabel(status); }
+  taskTypeLabel(value: string): string { return value === 'video' ? 'Відео' : value === 'image' ? 'Зображення' : value; }
 
   startEditing(): void {
     const j = this.job();
@@ -546,6 +570,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       workflow: j.workflow || '',
       character_id: j.character_id,
       scriptJson: j.script ? JSON.stringify(j.script, null, 2) : '',
+      prompt: String((j.script?.['scenes'] as Array<Record<string, unknown>> | undefined)?.[0]?.['prompt'] || ''),
     };
     this.editing.set(true);
     this.conflict.set(false);
@@ -565,6 +590,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       topic: this.editForm.topic,
       priority: this.editForm.priority,
       character_id: this.editForm.character_id || j.character_id,
+      prompt: this.editForm.prompt || undefined,
     };
     if (this.editForm.workflow) {
       payload.workflow = this.editForm.workflow;
@@ -625,31 +651,43 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   canPause(): boolean {
-    const s = this.job()?.status;
-    return !!s && !['PAUSED', 'CANCELLED', 'FAILED', 'PUBLISHED', 'WAITING_FOR_SYSTEM'].includes(s);
+    return jobActionAllowed('pause', this.job()?.status);
   }
 
   canResume(): boolean {
-    return this.job()?.status === 'PAUSED';
+    return jobActionAllowed('resume', this.job()?.status);
   }
 
   canRetry(): boolean {
-    return this.job()?.status === 'FAILED';
+    return jobActionAllowed('retry', this.job()?.status);
   }
 
   canRegenerate(): boolean {
-    const s = this.job()?.status;
-    return !!s && ['READY', 'ASSETS_READY', 'VIDEO_READY'].includes(s);
+    return jobActionAllowed('regenerate', this.job()?.status);
   }
 
   canCancel(): boolean {
-    const s = this.job()?.status;
-    return !!s && ['NEW', 'SCRIPTING', 'SCRIPT_READY', 'ASSET_GENERATION', 'ASSETS_READY', 'VIDEO_GENERATION', 'VIDEO_READY', 'ASSEMBLY', 'PUBLISHING'].includes(s);
+    return jobActionAllowed('cancel', this.job()?.status);
   }
 
   canApprove(): boolean {
     const j = this.job();
-    return !!j && j.status === 'READY' && !j.approved;
+    return !!j && (((j.status === 'READY' || j.status === 'PENDING_APPROVAL') && !j.approved) || this.canReviewStoryboard());
+  }
+
+  canReviewApproval(): boolean {
+    return this.job()?.status === 'PENDING_APPROVAL' || this.canReviewStoryboard();
+  }
+
+  canReviewStoryboard(): boolean {
+    const j = this.job();
+    return !!j && j.status === 'STORYBOARD_PENDING_APPROVAL' && !!j.active_storyboard_version;
+  }
+
+  canDelete(): boolean { return jobActionAllowed('delete', this.job()?.status); }
+  activeStoryboard() {
+    const j = this.job();
+    return j?.storyboards?.find(item => item.version === j.active_storyboard_version) || null;
   }
 
   actionLabel(action: string): string {
@@ -666,7 +704,47 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   pauseJob(): void { this.runAction('pause', () => this.api.pauseJob(this.job()!.job_id)); }
   resumeJob(): void { this.runAction('resume', () => this.api.resumeJob(this.job()!.job_id)); }
-  approveJob(): void { this.runAction('approve', () => this.api.approveJob(this.job()!.job_id)); }
+  approveJob(): void {
+    const j = this.job()!;
+    this.runAction('approve', () => this.canReviewStoryboard()
+      ? this.api.approveStoryboard(j.job_id, j.active_storyboard_version!)
+      : this.api.approveJob(j.job_id));
+  }
+
+  rejectStoryboard(): void {
+    const j = this.job();
+    if (!j?.active_storyboard_version) return;
+    this.confirm.confirm({ title: 'Відхилити розкадровку', message: 'Відхилити поточну версію розкадровки?' }).subscribe(ok => {
+      if (ok) this.runAction('reject', () => this.api.rejectStoryboard(j.job_id, j.active_storyboard_version!));
+    });
+  }
+
+  requestStoryboardRevision(): void {
+    const j = this.job();
+    if (!j?.active_storyboard_version) return;
+    const revision = window.prompt('Опишіть потрібні зміни до розкадровки:');
+    if (revision?.trim()) this.runAction('revision', () => this.api.regenerateStoryboard(j.job_id, j.active_storyboard_version!, revision.trim()));
+  }
+
+  rejectApproval(): void {
+    if (this.canReviewStoryboard()) {
+      this.rejectStoryboard();
+      return;
+    }
+    this.confirm.confirm({ title: 'Відхилити завдання', message: 'Відхилити це завдання?' }).subscribe(ok => {
+      if (ok) this.runAction('reject', () => this.api.cancelJob(this.job()!.job_id));
+    });
+  }
+
+  requestRevision(): void {
+    if (this.canReviewStoryboard()) {
+      this.requestStoryboardRevision();
+      return;
+    }
+    this.confirm.confirm({ title: 'Запросити правки', message: 'Повернути завдання на повторну генерацію?' }).subscribe(ok => {
+      if (ok) this.runAction('revision', () => this.api.regenerateJob(this.job()!.job_id));
+    });
+  }
 
   retryJob(): void {
     this.confirm.confirm({ title: 'Повторити завдання', message: 'Спробувати виконати завдання ще раз?' }).subscribe((ok) => {

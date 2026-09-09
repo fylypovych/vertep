@@ -86,6 +86,18 @@ export class VertepApiService {
     );
   }
 
+  approveStoryboard(jobId: string, version: number): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/approve`, { version, actor: 'web-v2' }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  rejectStoryboard(jobId: string, version: number): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/reject`, { version, actor: 'web-v2' }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  regenerateStoryboard(jobId: string, version: number, revision?: string): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/regenerate`, { version, actor: 'web-v2', revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
   updateJob(jobId: string, payload: JobUpdate): Observable<Job> {
     return this.http.patch<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}`, payload, { headers: this.getHeaders() }).pipe(
       catchError((err) => throwError(() => err)),

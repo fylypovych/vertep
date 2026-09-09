@@ -1,29 +1,14 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { Worker, Job } from '../core/models';
-
-const JOB_STATUS_GROUPS = {
-  inProgress: ['RUNNING', 'SCRIPTING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING', 'SCRIPT_READY', 'ASSETS_READY', 'VIDEO_READY'],
-  queued: ['NEW', 'QUEUED', 'PENDING'],
-  completed: ['READY', 'PUBLISHED'],
-  waiting: ['WAITING_FOR_SYSTEM'],
-};
-
-const ROLE_LABELS: Record<string, string> = {
-  core: 'Ядро',
-  gpu: 'GPU',
-  text: 'Текст / LLM',
-  voice: 'Voice',
-  publisher: 'Publisher',
-  backup: 'Backup',
-  monitoring: 'Monitoring',
-};
+import { JOB_STATUS_GROUPS, roleLabel } from '../core/presentation';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterModule],
   template: `
     <div class="space-y-6" data-testid="dashboard">
       @if (loading()) {
@@ -56,7 +41,7 @@ const ROLE_LABELS: Record<string, string> = {
               </div>
             </div>
           </div>
-          <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-active-jobs">
+          <a routerLink="/jobs" [queryParams]="{group:'active'}" aria-label="Відкрити активні завдання" class="block bg-white rounded-xl border border-slate-200 p-5 hover:border-blue-300" data-testid="stat-active-jobs">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Активні завдання</p>
@@ -67,8 +52,8 @@ const ROLE_LABELS: Record<string, string> = {
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
               </div>
             </div>
-          </div>
-          <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-queued-jobs">
+          </a>
+          <a routerLink="/jobs" [queryParams]="{group:'queued'}" aria-label="Відкрити завдання у черзі" class="block bg-white rounded-xl border border-slate-200 p-5 hover:border-amber-300" data-testid="stat-queued-jobs">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Завдань у черзі</p>
@@ -79,7 +64,7 @@ const ROLE_LABELS: Record<string, string> = {
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
               </div>
             </div>
-          </div>
+          </a>
           <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-system-state">
             <div class="flex items-center justify-between">
               <div>
@@ -250,7 +235,7 @@ export class DashboardComponent implements OnInit {
     this.loadData();
   }
 
-  private countByStatus(jobs: Job[], statusSet: string[]): number {
+  private countByStatus(jobs: Job[], statusSet: readonly string[]): number {
     return jobs.filter(j => statusSet.includes(j.status)).length;
   }
 
@@ -300,7 +285,7 @@ export class DashboardComponent implements OnInit {
         });
         this.architectureItems = Object.entries(groups).map(([role, data]) => ({
           role,
-          label: ROLE_LABELS[role] || role,
+          label: roleLabel(role),
           count: data.count,
           capabilities: Array.from(data.capabilities),
         }));
@@ -314,13 +299,13 @@ export class DashboardComponent implements OnInit {
 
     this.api.getJobs().subscribe({
       next: (jobs) => {
-        this.activeJobs = this.countByStatus(jobs, JOB_STATUS_GROUPS.inProgress);
+        this.activeJobs = this.countByStatus(jobs, [...JOB_STATUS_GROUPS.active]);
         this.queuedJobs = this.countByStatus(jobs, JOB_STATUS_GROUPS.queued);
         this.statusCounts = {
-          inProgress: this.countByStatus(jobs, JOB_STATUS_GROUPS.inProgress),
+          inProgress: this.countByStatus(jobs, [...JOB_STATUS_GROUPS.active]),
           queued: this.countByStatus(jobs, JOB_STATUS_GROUPS.queued),
           completed: this.countByStatus(jobs, JOB_STATUS_GROUPS.completed),
-          failed: jobs.filter(j => j.status === 'FAILED').length,
+          failed: this.countByStatus(jobs, [...JOB_STATUS_GROUPS.failed]),
           paused: this.countByStatus(jobs, ['PAUSED']),
           cancelled: this.countByStatus(jobs, ['CANCELLED']),
           waiting: this.countByStatus(jobs, JOB_STATUS_GROUPS.waiting),
