@@ -16,3 +16,4 @@ web-v2/node_modules/
 web-v2/dist/
 web-v2/.angular/
 test_web_ui_contracts.py
+/.codeatlas

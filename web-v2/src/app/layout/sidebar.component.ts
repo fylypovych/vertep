@@ -9,6 +9,7 @@ interface NavItem {
   label: string;
   icon: string;
   exact?: boolean;
+  queryParams?: Record<string, string>;
 }
 
 @Component({
@@ -44,6 +45,7 @@ interface NavItem {
       <nav class="flex-1 overflow-y-auto overflow-x-hidden py-4 px-2 space-y-1">
         @for (item of navItems; track item.path) {
           <a [routerLink]="item.path"
+             [queryParams]="item.queryParams"
              routerLinkActive="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
              [routerLinkActiveOptions]="{ exact: item.exact ?? false }"
              class="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
@@ -85,9 +87,10 @@ export class SidebarComponent implements OnInit {
       icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>`,
     },
     {
-      path: '/queue',
-      label: 'Черга',
+      path: '/jobs',
+      label: 'Виконання',
       icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>`,
+      queryParams: { tab: 'queue' },
     },
     {
       path: '/published',

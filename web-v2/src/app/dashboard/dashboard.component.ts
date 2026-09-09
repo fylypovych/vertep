@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { Worker, Job } from '../core/models';
-import { JOB_STATUS_GROUPS, roleLabel } from '../core/presentation';
+import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics } from '../core/presentation';
 
 @Component({
   selector: 'app-dashboard',
@@ -184,7 +184,7 @@ import { JOB_STATUS_GROUPS, roleLabel } from '../core/presentation';
                       <div class="font-medium text-slate-900">{{ worker.node_name }}</div>
                       <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
                     </td>
-                    <td class="px-4 py-3">{{ worker.role }}</td>
+                    <td class="px-4 py-3">{{ roleLabel(worker.role) }}</td>
                     <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
                     <td class="px-4 py-3">
                       <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
@@ -195,7 +195,7 @@ import { JOB_STATUS_GROUPS, roleLabel } from '../core/presentation';
                         <span class="w-1.5 h-1.5 rounded-full"
                           [class.bg-emerald-500]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
                           [class.bg-slate-400]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"></span>
-                        {{ worker.status }}
+                        {{ workerStatusLabel(worker.status) }}
                       </span>
                     </td>
                     <td class="px-4 py-3">{{ worker.gpu_load ?? worker.cpu_load ?? worker.vram_mb ?? 0 }}%{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
@@ -233,10 +233,6 @@ export class DashboardComponent implements OnInit {
 
   ngOnInit(): void {
     this.loadData();
-  }
-
-  private countByStatus(jobs: Job[], statusSet: readonly string[]): number {
-    return jobs.filter(j => statusSet.includes(j.status)).length;
   }
 
   loadData(): void {
@@ -299,16 +295,17 @@ export class DashboardComponent implements OnInit {
 
     this.api.getJobs().subscribe({
       next: (jobs) => {
-        this.activeJobs = this.countByStatus(jobs, [...JOB_STATUS_GROUPS.active]);
-        this.queuedJobs = this.countByStatus(jobs, JOB_STATUS_GROUPS.queued);
+        const stats = computeJobStatistics(jobs);
+        this.activeJobs = stats.active;
+        this.queuedJobs = stats.queued;
         this.statusCounts = {
-          inProgress: this.countByStatus(jobs, [...JOB_STATUS_GROUPS.active]),
-          queued: this.countByStatus(jobs, JOB_STATUS_GROUPS.queued),
-          completed: this.countByStatus(jobs, JOB_STATUS_GROUPS.completed),
-          failed: this.countByStatus(jobs, [...JOB_STATUS_GROUPS.failed]),
-          paused: this.countByStatus(jobs, ['PAUSED']),
-          cancelled: this.countByStatus(jobs, ['CANCELLED']),
-          waiting: this.countByStatus(jobs, JOB_STATUS_GROUPS.waiting),
+          inProgress: stats.active,
+          queued: stats.queued,
+          completed: stats.completed,
+          failed: stats.failed,
+          paused: stats.paused,
+          cancelled: stats.cancelled,
+          waiting: stats.waiting,
         };
       },
       error: () => {},
@@ -329,4 +326,7 @@ export class DashboardComponent implements OnInit {
     };
     return labels[this.systemState.toUpperCase()] || this.systemState;
   }
+
+  roleLabel(role: string): string { return roleLabel(role); }
+  workerStatusLabel(status: string): string { return workerStatusLabel(status); }
 }

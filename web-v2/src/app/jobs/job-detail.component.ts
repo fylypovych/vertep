@@ -7,8 +7,8 @@ import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { Subscription } from 'rxjs';
-import { Job, JobUpdate, Character, Workflow, StageRecord, SceneRecord, AttemptRecord, PublicationResult, Channel } from '../core/models';
-import { inStatusGroup, jobActionAllowed, statusLabel } from '../core/presentation';
+import { Job, JobUpdate, Character, Brand, Workflow, StageRecord, SceneRecord, AttemptRecord, PublicationResult, Channel } from '../core/models';
+import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTypeLabel, channelLabel } from '../core/presentation';
 
 @Component({
   selector: 'app-job-detail',
@@ -118,44 +118,92 @@ import { inStatusGroup, jobActionAllowed, statusLabel } from '../core/presentati
           @if (editing()) {
             <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <h4 class="text-sm font-medium text-blue-900 mb-3">Редагування завдання</h4>
-              <div class="space-y-4">
-                <div>
-                  <label class="block text-sm font-medium text-slate-700 mb-1">Тема</label>
-                  <input [(ngModel)]="editForm.topic" data-testid="edit-topic-input"
-                    class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="space-y-4">
                   <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-1">Персонаж</label>
-                    <select [(ngModel)]="editForm.character_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                      @for (character of characters(); track character.id) {
-                        <option [value]="character.id">{{ character.name }} ({{ character.id }})</option>
-                      }
-                    </select>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Тема</label>
+                    <input [(ngModel)]="editForm.topic" data-testid="edit-topic-input"
+                      class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Персонаж</label>
+                      <select [(ngModel)]="editForm.character_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        @for (character of characters(); track character.id) {
+                          <option [value]="character.id">{{ character.name }} ({{ character.id }})</option>
+                        }
+                      </select>
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Бренд</label>
+                      <select [(ngModel)]="editForm.brand_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">За замовчуванням</option>
+                        @for (brand of brands(); track brand.id) {
+                          <option [value]="brand.id">{{ brand.name }} ({{ brand.id }})</option>
+                        }
+                      </select>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Workflow</label>
+                      <select [(ngModel)]="editForm.workflow" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Без workflow</option>
+                        @for (workflow of workflows(); track workflow.name) {
+                          <option [value]="workflow.name">{{ workflow.kind }}/{{ workflow.name }}</option>
+                        }
+                      </select>
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Пріоритет (1-10)</label>
+                      <input type="number" [(ngModel)]="editForm.priority" min="1" max="10" data-testid="edit-priority-input"
+                        class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Тип завдання</label>
+                      <select [(ngModel)]="editForm.task_type" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="image">Зображення</option>
+                        <option value="video">Відео</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Співвідношення сторін</label>
+                      <select [(ngModel)]="editForm.aspect_ratio" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="16:9">16:9</option>
+                        <option value="9:16">9:16</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Вихідний preset</label>
+                      <select [(ngModel)]="editForm.output_preset" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="youtube">YouTube</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="facebook">Facebook</option>
+                      </select>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <input type="checkbox" [(ngModel)]="editForm.scheduled" id="edit-scheduled">
+                      <label for="edit-scheduled" class="text-sm text-slate-700">Запланувати</label>
+                    </div>
+                  </div>
+                  @if (editForm.scheduled) {
+                    <div>
+                      <label class="block text-sm font-medium text-slate-700 mb-1">Дата та час</label>
+                      <input type="datetime-local" [(ngModel)]="editForm.scheduled_for" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                  }
+                  <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Script (JSON)</label>
+                    <textarea [(ngModel)]="editForm.scriptJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-xs"></textarea>
                   </div>
                   <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-1">Workflow</label>
-                    <select [(ngModel)]="editForm.workflow" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                      <option value="">Без workflow</option>
-                      @for (workflow of workflows(); track workflow.name) {
-                        <option [value]="workflow.name">{{ workflow.kind }}/{{ workflow.name }}</option>
-                      }
-                    </select>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Prompt першої сцени</label>
+                    <textarea [(ngModel)]="editForm.prompt" rows="3" data-testid="edit-prompt-input" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                   </div>
-                </div>
-                <div>
-                  <label class="block text-sm font-medium text-slate-700 mb-1">Пріоритет (1-10)</label>
-                  <input type="number" [(ngModel)]="editForm.priority" min="1" max="10" data-testid="edit-priority-input"
-                    class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                </div>
-                <div>
-                  <label class="block text-sm font-medium text-slate-700 mb-1">Script (JSON)</label>
-                  <textarea [(ngModel)]="editForm.scriptJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-xs"></textarea>
-                </div>
-                <div>
-                  <label class="block text-sm font-medium text-slate-700 mb-1">Prompt першої сцени</label>
-                  <textarea [(ngModel)]="editForm.prompt" rows="3" data-testid="edit-prompt-input" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
-                </div>
                 <div class="flex gap-2 pt-2">
                   <button (click)="saveChanges()" [disabled]="saving()"
                     class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
@@ -467,10 +515,11 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   conflict = signal(false);
   verifying = signal<string | null>(null);
   characters = signal<Character[]>([]);
+  brands = signal<Brand[]>([]);
   workflows = signal<Workflow[]>([]);
   channelTypes = signal<string[]>([]);
   jobChannels = signal<Channel[]>([]);
-  editForm: Partial<JobUpdate> & { scriptJson?: string } = { topic: '', priority: 5, workflow: '', character_id: '', prompt: '' };
+  editForm: Partial<JobUpdate> & { scriptJson?: string; brand_id?: string; aspect_ratio?: string; output_preset?: string; task_type?: string; scheduled?: boolean; scheduled_for?: string } = { topic: '', priority: 5, workflow: '', character_id: '', prompt: '', brand_id: '', aspect_ratio: '16:9', output_preset: 'youtube', task_type: 'image', scheduled: false, scheduled_for: '' };
   private subs = new Subscription();
 
   constructor(
@@ -490,6 +539,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       this.loading.set(false);
     }
     this.loadCharacters();
+    this.loadBrands();
     this.loadWorkflows();
     this.loadChannelTypes();
   }
@@ -531,6 +581,13 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     });
   }
 
+  loadBrands(): void {
+    this.api.getBrands().subscribe({
+      next: (brands) => this.brands.set(brands),
+      error: () => {},
+    });
+  }
+
   loadWorkflows(): void {
     this.api.getWorkflows().subscribe({
       next: (workflows) => this.workflows.set(workflows),
@@ -559,7 +616,8 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   jobStatusLabel(status: string): string { return statusLabel(status); }
-  taskTypeLabel(value: string): string { return value === 'video' ? 'Відео' : value === 'image' ? 'Зображення' : value; }
+  taskTypeLabel(value: string): string { return taskTypeLabel(value); }
+  channelLabel(value: string): string { return channelLabel(value); }
 
   startEditing(): void {
     const j = this.job();
@@ -569,6 +627,12 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       priority: j.priority,
       workflow: j.workflow || '',
       character_id: j.character_id,
+      brand_id: j.brand_id || '',
+      aspect_ratio: j.aspect_ratio || '16:9',
+      output_preset: j.output_preset || 'youtube',
+      task_type: j.task_type || 'image',
+      scheduled: !!j.scheduled_for,
+      scheduled_for: j.scheduled_for ? j.scheduled_for.slice(0, 16) : '',
       scriptJson: j.script ? JSON.stringify(j.script, null, 2) : '',
       prompt: String((j.script?.['scenes'] as Array<Record<string, unknown>> | undefined)?.[0]?.['prompt'] || ''),
     };
@@ -935,11 +999,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   canPublish(): boolean {
     const j = this.job();
-    if (!j) return false;
-    if (j.status === 'READY') {
-      return this.approveBeforePublish() ? j.approved : true;
-    }
-    return this.canRetryPublish();
+    return !!j && jobActionAllowed('publish', j.status);
   }
 
   canRetryPublish(): boolean {
@@ -969,14 +1029,6 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     if (types.length) return types;
     const configured = this.jobChannels().map(c => c.channel_type);
     return configured.length ? Array.from(new Set(configured)) : ['youtube', 'tiktok', 'instagram', 'facebook', 'threads'];
-  }
-
-  channelLabel(channel: string): string {
-    const labels: Record<string, string> = {
-      youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram',
-      facebook: 'Facebook', threads: 'Threads', telegram: 'Telegram',
-    };
-    return labels[channel] || channel;
   }
 
   publishJob(): void {

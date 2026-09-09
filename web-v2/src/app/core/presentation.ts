@@ -1,3 +1,5 @@
+import { Job } from './models';
+
 export const JOB_STATUS_GROUPS = {
   active: ['SCRIPTING', 'STORYBOARD_GENERATING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING'],
   queued: ['NEW', 'STORYBOARD_QUEUED'],
@@ -32,6 +34,31 @@ export function inStatusGroup(status: string, group: keyof typeof JOB_STATUS_GRO
   return (JOB_STATUS_GROUPS[group] as readonly string[]).includes(status);
 }
 
+export interface JobStatistics {
+  total: number;
+  active: number;
+  queued: number;
+  waiting: number;
+  completed: number;
+  failed: number;
+  paused: number;
+  cancelled: number;
+}
+
+export function computeJobStatistics(jobs: Job[]): JobStatistics {
+  const stats: JobStatistics = { total: jobs.length, active: 0, queued: 0, waiting: 0, completed: 0, failed: 0, paused: 0, cancelled: 0 };
+  for (const job of jobs) {
+    if (inStatusGroup(job.status, 'active')) stats.active++;
+    else if (inStatusGroup(job.status, 'queued')) stats.queued++;
+    else if (inStatusGroup(job.status, 'waiting')) stats.waiting++;
+    else if (inStatusGroup(job.status, 'completed')) stats.completed++;
+    else if (inStatusGroup(job.status, 'failed')) stats.failed++;
+    else if (job.status === 'PAUSED') stats.paused++;
+    else if (job.status === 'CANCELLED') stats.cancelled++;
+  }
+  return stats;
+}
+
 export const JOB_ACTION_STATES: Record<string, readonly string[]> = {
   pause: [...JOB_STATUS_GROUPS.active, 'NEW', 'STORYBOARD_QUEUED'],
   resume: ['PAUSED'],
@@ -46,3 +73,25 @@ export const JOB_ACTION_STATES: Record<string, readonly string[]> = {
 export function jobActionAllowed(action: string, status?: string): boolean {
   return !!status && (JOB_ACTION_STATES[action] || []).includes(status);
 }
+
+export const WORKER_STATUS_LABELS: Record<string, string> = {
+  ONLINE: 'У мережі', FREE: 'Готовий', BUSY: 'Зайнятий', DRAINING: 'Завершує роботу',
+  UPDATING: 'Оновлюється', RECOVERING: 'Відновлюється', OFFLINE: 'Не в мережі',
+  ERROR: 'Помилка', QUARANTINED: 'Ізольований', REVOKED: 'Відкликаний', SELF_TESTING: 'Самодіагностика',
+  READY: 'Готовий',
+};
+
+export function workerStatusLabel(status?: string): string { return WORKER_STATUS_LABELS[status || ''] || status || 'Невідомо'; }
+
+export const TASK_TYPE_LABELS: Record<string, string> = {
+  image: 'Зображення', video: 'Відео',
+};
+
+export function taskTypeLabel(value?: string): string { return TASK_TYPE_LABELS[value || ''] || value || '—'; }
+
+export const CHANNEL_LABELS: Record<string, string> = {
+  youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram',
+  facebook: 'Facebook', threads: 'Threads', telegram: 'Telegram',
+};
+
+export function channelLabel(value?: string): string { return CHANNEL_LABELS[value || ''] || value || '—'; }

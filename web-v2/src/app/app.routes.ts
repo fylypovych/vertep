@@ -19,7 +19,7 @@ export const routes: Routes = [
       { path: '', loadComponent: () => import('./dashboard/dashboard.component').then(m => m.DashboardComponent), title: 'Дашборд' },
       { path: 'jobs', loadComponent: () => import('./jobs/jobs.component').then(m => m.JobsComponent), title: 'Завдання' },
       { path: 'jobs/:id', loadComponent: () => import('./jobs/job-detail.component').then(m => m.JobDetailComponent), title: 'Завдання' },
-      { path: 'queue', loadComponent: () => import('./queue/queue.component').then(m => m.QueueComponent), title: 'Черга' },
+      { path: 'queue', redirectTo: '/jobs?tab=queue', pathMatch: 'full' },
       { path: 'published', loadComponent: () => import('./published/published.component').then(m => m.PublishedComponent), title: 'Опубліковане' },
       { path: 'workers', loadComponent: () => import('./workers/workers.component').then(m => m.WorkersComponent), title: 'Воркери' },
       { path: 'workers/:id', loadComponent: () => import('./worker-detail/worker-detail.component').then(m => m.WorkerDetailComponent), title: 'Воркер' },
