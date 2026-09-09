@@ -2,7 +2,7 @@
 
 Business helpers (no route registration) used by ``core.api.jobs``,
 ``core.api.tasks`` and ``core.api.workers``, as well as by ``core.app`` lifespan
-and the watchdog.  Extracted from ``core/app.py`` so the job domain can live in
+and the watchdog.  Extracted from ``core.app.py`` so the job domain can live in
 dedicated router modules instead of one large file.
 """
 import os
@@ -21,7 +21,7 @@ from ..dispatcher import available_worker, can_retry
 from ..models import JobStatus, StageName, StageStatus, TaskResult
 from ..orchestration import (all_scenes_ready, finish_scene, initialize_plan,
                              interrupt_scene, pending_scenes, transition_stage)
-from ..pipeline import finalize_job_safe, prepare_job_safe
+from ..pipeline import finalize_job_safe, prepare_job_safe, queue_storyboard
 from ..state import result_locks, store, task_queue, workflow_registry
 
 
@@ -176,23 +176,10 @@ def _ordered_scene_files(job) -> list[Path]:
     return files
 
 
-def _prepare_and_dispatch(job) -> None:
-    while True:
-        if job.script and job.status == JobStatus.NEW:
-            initialize_plan(job)
-            assets_stage = job.stages[StageName.ASSETS.value]
-            if assets_stage.status in {StageStatus.PENDING, StageStatus.FAILED, StageStatus.PAUSED}:
-                transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
-            store.update(job, JobStatus.ASSET_GENERATION, "IMAGE TASK REDISPATCHED")
-        else:
-            prepare_job_safe(store, job)
-        if job.status != JobStatus.FAILED or not can_retry(job):
-            break
-        job.retries += 1
-        store.update(job, JobStatus.NEW, f"AUTOMATIC RETRY {job.retries}/{job.max_retries}")
-    if job.status != JobStatus.ASSET_GENERATION:
-        return
+def _dispatch_assets(store, job) -> None:
     initialize_plan(job)
+    if job.stages[StageName.ASSETS.value].status == StageStatus.PENDING:
+        transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
     if all_scenes_ready(job):
         images = _ordered_scene_files(job)
         if images:
@@ -220,6 +207,37 @@ def _prepare_and_dispatch(job) -> None:
         if all_scenes_ready(job):
             transition_stage(job, StageName.ASSETS, StageStatus.READY)
             _finalize_and_notify(job, images)
+
+
+def _prepare_and_dispatch(job) -> None:
+    from ..pipeline import generate_script
+    while True:
+        if job.script and job.status == JobStatus.NEW:
+            initialize_plan(job)
+            assets_stage = job.stages[StageName.ASSETS.value]
+            if assets_stage.status in {StageStatus.PENDING, StageStatus.FAILED, StageStatus.PAUSED}:
+                transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
+            store.update(job, JobStatus.ASSET_GENERATION, "IMAGE TASK REDISPATCHED")
+        elif job.status in {JobStatus.NEW, JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_FAILED}:
+            prepare_job_safe(store, job)
+        else:
+            break
+        if job.status != JobStatus.FAILED or not can_retry(job):
+            break
+        job.retries += 1
+        store.update(job, JobStatus.NEW, f"AUTOMATIC RETRY {job.retries}/{job.max_retries}")
+    if job.status == JobStatus.SCRIPT_PENDING_APPROVAL:
+        _progress(job, "SCRIPT_PENDING_APPROVAL")
+        return
+    if job.status == JobStatus.SCRIPT_APPROVED:
+        queue_storyboard(store, job)
+        return
+    if job.status == JobStatus.STORYBOARD_APPROVED:
+        store.transition(job, JobStatus.ASSET_GENERATION, "ASSET GENERATION STARTED")
+        _dispatch_assets(store, job)
+        return
+    if job.status == JobStatus.ASSET_GENERATION:
+        _dispatch_assets(store, job)
 
 
 def _job_action(job_id: str, status: JobStatus, event: str):

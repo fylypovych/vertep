@@ -7,7 +7,35 @@ from fastapi.testclient import TestClient
 
 from adapters.ffmpeg import FFmpegAdapter
 from core.app import app, store
+from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from core.script_agent import ScriptAgent
+from core.storyboard import StoryboardService
+
+
+def _mock_storyboard_generate(self, job_id, revision=None):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise ValueError("Job not found")
+    script = job.script or {"title": job.topic, "scenes": [{"prompt": job.topic, "voiceover": "", "duration": 1}]}
+    scenes = []
+    for i, s in enumerate(script.get("scenes", []), 1):
+        scenes.append(StoryboardScene(
+            index=i, prompt=s.get("prompt", ""), video_prompt=s.get("prompt", ""),
+            voiceover=s.get("voiceover", ""), duration=float(s.get("duration", 1)),
+        ))
+    storyboard = StoryboardVersion(
+        version=(job.storyboards[-1].version + 1 if job.storyboards else 1),
+        title=script.get("title", job.topic), description=script.get("description", ""),
+        hashtags=script.get("hashtags", []), scenes=scenes, status="pending_approval",
+    )
+    job.storyboards.append(storyboard)
+    job.active_storyboard_version = storyboard.version
+    job.storyboard_error = None
+    store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
+    return storyboard
+
+
+StoryboardService.generate = _mock_storyboard_generate
 
 
 def wait_for(client, job_id, statuses=("READY", "FAILED")):
@@ -17,6 +45,28 @@ def wait_for(client, job_id, statuses=("READY", "FAILED")):
             return job
         time.sleep(0.025)
     return job
+
+
+def approve_script(client, job_id):
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "SCRIPT_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "SCRIPT_PENDING_APPROVAL"
+    resp = client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
+    assert resp.status_code == 200
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "STORYBOARD_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "STORYBOARD_PENDING_APPROVAL"
+    storyboards = client.get(f"/api/jobs/{job_id}/storyboards").json()
+    version = storyboards[-1]["version"] if storyboards else 1
+    resp = client.post(f"/api/jobs/{job_id}/storyboards/approve", json={"version": version, "actor": "test"})
+    assert resp.status_code == 200
+    return resp.json()
 
 
 def heartbeat(client, node_name, **overrides):
@@ -63,6 +113,7 @@ def test_publisher_never_fakes_success(monkeypatch):
     monkeypatch.setenv("PUBLISHER_MOCK", "false")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Publish test"}).json()["job_id"]
+    approve_script(client, job_id)
     assert wait_for(client, job_id)["status"] == "READY"
     published = client.post(f"/api/jobs/{job_id}/publish", json=["youtube"]).json()
     assert published["status"] == "FAILED"
@@ -87,6 +138,7 @@ def test_job_rejects_workflow_outside_registry(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Workflow validation"}).json()["job_id"]
+    approve_script(client, job_id)
     wait_for(client, job_id)
     response = client.patch(f"/api/jobs/{job_id}", json={"workflow": "../../secret.json"})
     assert response.status_code == 400
@@ -97,6 +149,7 @@ def test_duplicate_worker_result_is_idempotent(monkeypatch):
     client = TestClient(app)
     heartbeat(client, "idem-worker")
     job_id = client.post("/api/jobs", json={"topic": "Idempotency", "min_vram_mb": 1}).json()["job_id"]
+    approve_script(client, job_id)
     task = None
     for _ in range(100):
         task = client.post("/api/tasks/claim", json={"node_name": "idem-worker", "vram_mb": 4096}).json().get("task")
@@ -119,6 +172,7 @@ def test_multiscene_job_fans_out_to_distinct_tasks(monkeypatch):
         ]})
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Two scenes"}).json()["job_id"]
+    approve_script(client, job_id)
     for _ in range(100):
         job = client.get(f"/api/jobs/{job_id}").json()
         if len(job.get("active_task_ids", {})) == 2:
@@ -133,6 +187,7 @@ def test_worker_cannot_submit_another_workers_task(monkeypatch):
     client = TestClient(app)
     heartbeat(client, "owner")
     job_id = client.post("/api/jobs", json={"topic": "Lease owner"}).json()["job_id"]
+    approve_script(client, job_id)
     task = None
     for _ in range(100):
         task = client.post("/api/tasks/claim", json={"node_name": "owner", "vram_mb": 4096}).json().get("task")
@@ -152,6 +207,7 @@ def test_invalid_artifact_batch_is_not_partially_written(monkeypatch):
     client = TestClient(app)
     heartbeat(client, "atomic-worker")
     job_id = client.post("/api/jobs", json={"topic": "Atomic artifacts"}).json()["job_id"]
+    approve_script(client, job_id)
     task = None
     for _ in range(100):
         task = client.post("/api/tasks/claim", json={"node_name": "atomic-worker", "vram_mb": 4096}).json().get("task")
@@ -178,6 +234,7 @@ def test_exhausted_scene_cancels_parallel_sibling(monkeypatch):
     heartbeat(client, "fatal-worker")
     heartbeat(client, "sibling-worker")
     job_id = client.post("/api/jobs", json={"topic": "Sibling cancellation"}).json()["job_id"]
+    approve_script(client, job_id)
     claimed = []
     for worker in ("fatal-worker", "sibling-worker"):
         for _ in range(100):
@@ -205,6 +262,7 @@ def test_parallel_results_trigger_single_assembly(monkeypatch):
     heartbeat(client, "parallel-a")
     heartbeat(client, "parallel-b")
     job_id = client.post("/api/jobs", json={"topic": "Parallel fan-in"}).json()["job_id"]
+    approve_script(client, job_id)
     claimed = []
     for worker in ("parallel-a", "parallel-b"):
         for _ in range(100):
@@ -234,6 +292,7 @@ def test_pause_requests_worker_cancellation(monkeypatch):
     client = TestClient(app)
     heartbeat(client, "cancel-worker")
     job_id = client.post("/api/jobs", json={"topic": "Cancel active", "min_vram_mb": 1}).json()["job_id"]
+    approve_script(client, job_id)
     task = None
     for _ in range(100):
         task = client.post("/api/tasks/claim", json={"node_name": "cancel-worker", "vram_mb": 4096}).json().get("task")
@@ -273,6 +332,7 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
                                                 "workflow": "workflows/video/demo.json"})
     assert response.status_code == 200
     job_id = response.json()["job_id"]
+    approve_script(client, job_id)
     task = None
     for _ in range(100):
         task = client.post("/api/tasks/claim", json={"node_name": "video-worker", "vram_mb": 4096,

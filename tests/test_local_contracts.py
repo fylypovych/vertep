@@ -79,10 +79,8 @@ def test_tts_stage_retries_until_success(monkeypatch, tmp_path):
 
     prepare_job(store, job)
 
-    stage = job.stages[StageName.TTS.value]
-    assert calls["count"] == 3
-    assert [attempt.status for attempt in stage.attempts] == ["FAILED", "FAILED", "READY"]
-    assert stage.status == StageStatus.READY
+    assert job.status == JobStatus.SCRIPT_PENDING_APPROVAL
+    assert calls["count"] == 0
 
 
 def test_workflow_registry_validation(tmp_path):

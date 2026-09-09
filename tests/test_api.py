@@ -8,7 +8,69 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from core.app import app, store
 from core.dispatcher import available_worker
-from core.models import Job, JobStatus, utc_now
+from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, utc_now
+
+
+def _mock_storyboard_generate(self, job_id, revision=None):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise ValueError("Job not found")
+    script = job.script or {"title": job.topic, "scenes": [{"prompt": job.topic, "voiceover": "", "duration": 1}]}
+    scenes = []
+    for i, s in enumerate(script.get("scenes", []), 1):
+        scenes.append(StoryboardScene(
+            index=i, prompt=s.get("prompt", ""), video_prompt=s.get("prompt", ""),
+            voiceover=s.get("voiceover", ""), duration=float(s.get("duration", 1)),
+        ))
+    storyboard = StoryboardVersion(
+        version=(job.storyboards[-1].version + 1 if job.storyboards else 1),
+        title=script.get("title", job.topic), description=script.get("description", ""),
+        hashtags=script.get("hashtags", []), scenes=scenes, status="pending_approval",
+    )
+    job.storyboards.append(storyboard)
+    job.active_storyboard_version = storyboard.version
+    job.storyboard_error = None
+    store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
+    return storyboard
+
+
+from core.storyboard import StoryboardService
+StoryboardService.generate = _mock_storyboard_generate
+
+
+def _approve_script_and_storyboard(client, job_id):
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "SCRIPT_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "SCRIPT_PENDING_APPROVAL"
+    resp = client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
+    assert resp.status_code == 200
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "STORYBOARD_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "STORYBOARD_PENDING_APPROVAL"
+    storyboards = client.get(f"/api/jobs/{job_id}/storyboards").json()
+    version = storyboards[-1]["version"] if storyboards else 1
+    resp = client.post(f"/api/jobs/{job_id}/storyboards/approve", json={"version": version, "actor": "test"})
+    assert resp.status_code == 200
+
+
+def _approve_storyboard(client, job_id):
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "STORYBOARD_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "STORYBOARD_PENDING_APPROVAL"
+    storyboards = client.get(f"/api/jobs/{job_id}/storyboards").json()
+    version = storyboards[-1]["version"] if storyboards else 1
+    resp = client.post(f"/api/jobs/{job_id}/storyboards/approve", json={"version": version, "actor": "test"})
+    assert resp.status_code == 200
+
 
 def test_health_and_job_flow():
     client = TestClient(app)
@@ -16,8 +78,15 @@ def test_health_and_job_flow():
     assert response.status_code == 200
     response = client.post("/api/jobs", json={"topic": "Test topic"})
     assert response.status_code == 200
-    assert response.json()["status"] in {"NEW", "SCRIPTING", "SCRIPT_READY", "ASSET_GENERATION", "ASSETS_READY", "ASSEMBLY", "READY"}
     job_id = response.json()["job_id"]
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "SCRIPT_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "SCRIPT_PENDING_APPROVAL"
+    client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
+    _approve_storyboard(client, job_id)
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "READY":
@@ -52,6 +121,7 @@ def test_regenerate_preserves_inputs_and_replaces_generated_artifacts(monkeypatc
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Regeneration"}).json()["job_id"]
+    _approve_script_and_storyboard(client, job_id)
     for _ in range(200):
         before = client.get(f"/api/jobs/{job_id}").json()
         if before["status"] in {"READY", "FAILED"}:
@@ -73,6 +143,7 @@ def test_job_export_import_and_optimistic_lock(monkeypatch):
     client = TestClient(app)
     created = client.post("/api/jobs", json={"topic": "Portable project"}).json()
     job_id = created["job_id"]
+    _approve_script_and_storyboard(client, job_id)
     for _ in range(200):
         current = client.get(f"/api/jobs/{job_id}").json()
         if current["status"] in {"READY", "FAILED"}:
@@ -272,6 +343,14 @@ def test_distributed_worker_result(monkeypatch):
     assert heartbeat.status_code == 200
     created = client.post("/api/jobs", json={"topic": "Distributed topic", "min_vram_mb": 128}).json()
     job_id = created["job_id"]
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "SCRIPT_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "SCRIPT_PENDING_APPROVAL"
+    client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
+    _approve_storyboard(client, job_id)
     task = None
     for _ in range(100):
         response = client.post("/api/tasks/claim", json={"node_name": "gpu-real", "gpu_name": "GTX 1060",

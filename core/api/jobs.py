@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from adapters.providers import providers
@@ -23,6 +24,7 @@ from ..dispatcher import can_retry
 from ..file_validation import validate_signature
 from ..models import JobCreate, JobStatus, JobUpdate, StageName, StageStatus
 from ..orchestration import initialize_plan, transition_stage
+from ..pipeline import approve_script, generate_script, queue_storyboard, regenerate_script, request_script_revision
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state, jobs_may_be_created
 from .job_helpers import (_job_action, _job_is_due,
@@ -203,6 +205,52 @@ def approve_job(job_id: str):
         raise HTTPException(404, "Job not found")
     job.approved = True
     return store.event(job, "JOB APPROVED")
+
+
+class ScriptAction(BaseModel):
+    actor: str = Field(default="api", min_length=1, max_length=200)
+
+
+class ScriptRevision(ScriptAction):
+    revision: str | None = Field(default=None, max_length=4000)
+
+
+@router.post("/api/jobs/{job_id}/script/approve")
+def approve_script_endpoint(job_id: str, body: ScriptAction):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        job = approve_script(store, job, body.actor)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    executor.submit(_prepare_and_dispatch, job)
+    return job
+
+
+@router.post("/api/jobs/{job_id}/script/revision")
+def revise_script(job_id: str, body: ScriptRevision):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        job = request_script_revision(store, job, body.revision or "", body.actor)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    return job
+
+
+@router.post("/api/jobs/{job_id}/script/regenerate")
+def regenerate_script_endpoint(job_id: str, body: ScriptRevision):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        job = regenerate_script(store, job, body.revision)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    executor.submit(_prepare_and_dispatch, job)
+    return job
 
 
 @router.delete("/api/jobs/{job_id}")

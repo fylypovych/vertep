@@ -18,6 +18,7 @@ def pytest_configure(config):
     os.environ["JOB_ROOT"] = str(_TEST_STATE_ROOT / "jobs")
     os.environ["UPDATE_STATE_DIR"] = str(_TEST_STATE_ROOT / "update")
     os.environ["SYSTEM_STATE_BACKEND"] = "file"
+    os.environ["RATE_LIMIT_PER_MINUTE"] = "10000"
 
 
 def pytest_unconfigure(config):

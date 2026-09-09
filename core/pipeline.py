@@ -3,7 +3,7 @@ import os
 import shutil
 import threading
 from pathlib import Path
-from .models import Job, JobStatus, utc_now
+from .models import Job, JobStatus, utc_now, job_transition_allowed
 from adapters.providers import providers
 from adapters.telegram import TelegramAdapter
 from .logging_config import configure_logging
@@ -52,7 +52,7 @@ class JobStore:
                     job.status = JobStatus.READY
                     job.events.append(f"{utc_now()} VIDEO RECOVERED AS READY")
                     self.repository.save_job(job)
-                elif original_status in {JobStatus.SCRIPTING, JobStatus.SCRIPT_READY,
+                elif original_status in {JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_READY,
                                           JobStatus.ASSET_GENERATION, JobStatus.ASSETS_READY,
                                           JobStatus.VIDEO_GENERATION, JobStatus.VIDEO_READY,
                                           JobStatus.ASSEMBLY}:
@@ -119,16 +119,18 @@ class JobStore:
             logger.info(event, extra={"job_id": job.job_id})
             return job
 
+    def transition(self, job: Job, status: JobStatus, event: str) -> Job:
+        if not job_transition_allowed(job.status, status):
+            raise ValueError(f"Invalid job transition: {job.status.value} -> {status.value}")
+        return self.update(job, status, event)
+
     def _save(self, job: Job) -> None:
         self.repository.save_job(job)
 
     def save_worker(self, worker: dict) -> None:
         self.repository.save_worker(worker)
 
-def prepare_job(store: JobStore, job: Job) -> Job:
-    if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
-        return job
-    initialize_plan(job)
+def _load_character_prompt(job: Job) -> tuple[str, dict | None]:
     character_root = Path(os.getenv("CHARACTERS_ROOT", "characters")) / job.character_id
     prompt_path = character_root / "system_prompt.txt"
     system_prompt = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
@@ -139,6 +141,13 @@ def prepare_job(store: JobStore, job: Job) -> Job:
         character = character.model_dump()
     except Exception:
         pass
+    return system_prompt, character
+
+def generate_script(store: JobStore, job: Job) -> Job:
+    if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
+        return job
+    initialize_plan(job)
+    system_prompt, character = _load_character_prompt(job)
     if job.script is not None:
         job.script = normalize_script(job.script, job.topic)
         transition_stage(job, StageName.SCRIPT, StageStatus.RUNNING)
@@ -147,7 +156,7 @@ def prepare_job(store: JobStore, job: Job) -> Job:
         script_error = None
         for script_attempt in range(1, max(1, job.max_retries) + 1):
             transition_stage(job, StageName.SCRIPT, StageStatus.RUNNING)
-            store.update(job, JobStatus.SCRIPTING, f"SCRIPT STARTED {script_attempt}/{job.max_retries}")
+            store.transition(job, JobStatus.SCRIPT_GENERATING, f"SCRIPT GENERATING {script_attempt}/{job.max_retries}")
             try:
                 job.script = normalize_script(providers.llm().generate_script(job.topic, system_prompt, character), job.topic)
                 break
@@ -156,6 +165,7 @@ def prepare_job(store: JobStore, job: Job) -> Job:
                 transition_stage(job, StageName.SCRIPT, StageStatus.FAILED, str(error))
                 store.event(job, f"SCRIPT FAILED {script_attempt}/{job.max_retries}: {error}")
         else:
+            store.transition(job, JobStatus.SCRIPT_FAILED, f"SCRIPT GENERATION FAILED: {script_error}")
             raise RuntimeError(f"Script generation failed after {job.max_retries} attempts: {script_error}")
     initialize_plan(job)
     (store.root / job.job_id / "script.json").write_text(json.dumps(job.script, indent=2), encoding="utf-8")
@@ -163,51 +173,51 @@ def prepare_job(store: JobStore, job: Job) -> Job:
         "title": job.script.get("title", job.topic), "language": "uk",
         "source": job.source, "character_id": job.character_id
     }, indent=2), encoding="utf-8")
-    voice_path = character_root / "voice.json"
-    try:
-        voice_config = json.loads(voice_path.read_text(encoding="utf-8")) if voice_path.exists() else {}
-    except ValueError:
-        voice_config = {}
-    tts = providers.tts(voice_config.get("provider"))
-    scene_audio = []
-    for tts_attempt in range(1, max(1, job.max_retries) + 1):
-        transition_stage(job, StageName.TTS, StageStatus.RUNNING)
-        scene_audio = []
-        tts_results = []
-        for scene in job.scenes:
-            if not scene.voiceover or tts.provider == "none":
-                continue
-            audio_path = store.root / job.job_id / "audio" / f"{scene.scene_id}.wav"
-            result = tts.synthesize(scene.voiceover, audio_path, scene.duration, voice_config)
-            tts_results.append((scene, audio_path, result))
-            if audio_path.exists():
-                scene_audio.append(audio_path)
-        failed_tts = next((item for _, _, item in tts_results
-                           if item.get("status") in {"FAILED", "NOT_CONFIGURED"}), None)
-        if not failed_tts:
-            transition_stage(job, StageName.TTS, StageStatus.READY)
-            break
-        transition_stage(job, StageName.TTS, StageStatus.FAILED, failed_tts.get("error"))
-        store.event(job, f"TTS FAILED {tts_attempt}/{job.max_retries}: {failed_tts.get('error', 'unknown error')}")
-    else:
-        raise RuntimeError(f"TTS failed after {job.max_retries} attempts: {failed_tts.get('error', 'unknown error')}")
-    for scene, audio_path, _ in tts_results:
-        if audio_path.exists():
-            artifact = register_artifact(job, store.root, audio_path, "audio", scene_id=scene.scene_id,
-                                         workflow=f"tts:{tts.provider}")
-            scene.artifact_ids.append(artifact.artifact_id)
-    if scene_audio:
-        combined_audio = store.root / job.job_id / "audio" / "voice.wav"
-        providers.assembly().concat_audio(scene_audio, combined_audio)
-        register_artifact(job, store.root, combined_audio, "audio", workflow="ffmpeg:concat")
-    store.event(job, "TTS READY" if scene_audio else "TTS SKIPPED")
-    store.update(job, JobStatus.SCRIPT_READY, "SCRIPT READY")
-    initialize_plan(job)
-    transition_stage(job, StageName.SCRIPT, StageStatus.READY)
-    transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
-    _progress(job, "SCRIPT_READY")
-    store.update(job, JobStatus.ASSET_GENERATION, "IMAGE TASK DISPATCHED")
-    _progress(job, "ASSET_GENERATION")
+    store.transition(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT PENDING APPROVAL")
+    _progress(job, "SCRIPT_PENDING_APPROVAL")
+    return job
+
+def approve_script(store: JobStore, job: Job, actor: str = "api") -> Job:
+    if job.status != JobStatus.SCRIPT_PENDING_APPROVAL and job.status != JobStatus.SCRIPT_REVISION_REQUESTED:
+        raise ValueError(f"Cannot approve script in status {job.status.value}")
+    job.approved = True
+    job.approval_status = "approved"
+    job.version += 1
+    store.transition(job, JobStatus.SCRIPT_APPROVED, f"SCRIPT APPROVED by {actor}")
+    _progress(job, "SCRIPT_APPROVED")
+    return job
+
+def request_script_revision(store: JobStore, job: Job, revision: str, actor: str = "api") -> Job:
+    if job.status != JobStatus.SCRIPT_PENDING_APPROVAL:
+        raise ValueError(f"Cannot request script revision in status {job.status.value}")
+    job.approval_status = "revision_requested"
+    job.version += 1
+    store.transition(job, JobStatus.SCRIPT_REVISION_REQUESTED, f"SCRIPT REVISION REQUESTED by {actor}: {revision}")
+    _progress(job, "SCRIPT_REVISION_REQUESTED")
+    return job
+
+def regenerate_script(store: JobStore, job: Job, revision: str | None = None) -> Job:
+    if job.status != JobStatus.SCRIPT_REVISION_REQUESTED:
+        raise ValueError(f"Cannot regenerate script in status {job.status.value}")
+    job.script = None
+    job.scenes = []
+    job.stages = {}
+    job.artifacts = [a for a in job.artifacts if a.kind == "input"]
+    job.active_task_id = None
+    job.active_task_ids.clear()
+    job.completed_task_ids.clear()
+    job.assigned_worker = None
+    job.output_path = None
+    job.version += 1
+    store.transition(job, JobStatus.SCRIPT_GENERATING, "SCRIPT REGENERATING")
+    return generate_script(store, job)
+
+def queue_storyboard(store: JobStore, job: Job, revision: str | None = None) -> Job:
+    from .storyboard import StoryboardService
+    job.storyboard_error = None
+    store.transition(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    service = StoryboardService(store, executor=None)
+    service.generate(job.job_id, revision)
     return job
 
 def _write_subtitles(store: JobStore, job: Job) -> Path | None:
@@ -276,6 +286,15 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
     store.update(job, JobStatus.READY, "JOB READY")
     _progress(job, "READY")
+    return job
+
+def prepare_job(store: JobStore, job: Job) -> Job:
+    if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
+        return job
+    if job.status == JobStatus.NEW:
+        store.transition(job, JobStatus.SCRIPT_QUEUED, "SCRIPT QUEUED")
+    if job.script is None and job.status in {JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_FAILED}:
+        generate_script(store, job)
     return job
 
 def prepare_job_safe(store: JobStore, job: Job) -> Job:

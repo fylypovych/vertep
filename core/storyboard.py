@@ -102,7 +102,7 @@ class StoryboardService:
         job.approved = True
         job.approval_status = "approved"
         job.version += 1
-        self.store.update(job, JobStatus.SCRIPT_READY,
+        self.store.update(job, JobStatus.STORYBOARD_APPROVED,
                           f"STORYBOARD {version} APPROVED by {actor}")
         return job
 
