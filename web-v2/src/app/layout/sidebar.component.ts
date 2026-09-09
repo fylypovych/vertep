@@ -23,7 +23,9 @@ interface NavItem {
       [class.fixed]="isMobile"
       [class.relative]="!isMobile"
       [class.-translate-x-full]="isMobile && collapsed"
-      [class.translate-x-0]="!collapsed">
+      [class.translate-x-0]="!collapsed"
+      role="navigation"
+      aria-label="Навігація">
 
       <!-- Logo -->
       <div class="flex items-center h-16 px-4 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
@@ -45,6 +47,7 @@ interface NavItem {
              routerLinkActive="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
              [routerLinkActiveOptions]="{ exact: item.exact ?? false }"
              class="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+             [attr.aria-label]="collapsed ? item.label : null"
              [title]="collapsed ? item.label : ''">
             <span class="flex-shrink-0 w-5 h-5" [innerHTML]="item.icon"></span>
             <span class="whitespace-nowrap transition-opacity duration-200"

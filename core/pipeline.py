@@ -139,19 +139,24 @@ def prepare_job(store: JobStore, job: Job) -> Job:
         character = character.model_dump()
     except Exception:
         pass
-    script_error = None
-    for script_attempt in range(1, max(1, job.max_retries) + 1):
+    if job.script is not None:
+        job.script = normalize_script(job.script, job.topic)
         transition_stage(job, StageName.SCRIPT, StageStatus.RUNNING)
-        store.update(job, JobStatus.SCRIPTING, f"SCRIPT STARTED {script_attempt}/{job.max_retries}")
-        try:
-            job.script = normalize_script(providers.llm().generate_script(job.topic, system_prompt, character), job.topic)
-            break
-        except (ValueError, TypeError) as error:
-            script_error = error
-            transition_stage(job, StageName.SCRIPT, StageStatus.FAILED, str(error))
-            store.event(job, f"SCRIPT FAILED {script_attempt}/{job.max_retries}: {error}")
+        store.event(job, "APPROVED STORYBOARD USED AS SCRIPT")
     else:
-        raise RuntimeError(f"Script generation failed after {job.max_retries} attempts: {script_error}")
+        script_error = None
+        for script_attempt in range(1, max(1, job.max_retries) + 1):
+            transition_stage(job, StageName.SCRIPT, StageStatus.RUNNING)
+            store.update(job, JobStatus.SCRIPTING, f"SCRIPT STARTED {script_attempt}/{job.max_retries}")
+            try:
+                job.script = normalize_script(providers.llm().generate_script(job.topic, system_prompt, character), job.topic)
+                break
+            except (ValueError, TypeError) as error:
+                script_error = error
+                transition_stage(job, StageName.SCRIPT, StageStatus.FAILED, str(error))
+                store.event(job, f"SCRIPT FAILED {script_attempt}/{job.max_retries}: {error}")
+        else:
+            raise RuntimeError(f"Script generation failed after {job.max_retries} attempts: {script_error}")
     initialize_plan(job)
     (store.root / job.job_id / "script.json").write_text(json.dumps(job.script, indent=2), encoding="utf-8")
     (store.root / job.job_id / "metadata.json").write_text(json.dumps({

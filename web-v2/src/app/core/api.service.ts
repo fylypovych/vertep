@@ -22,6 +22,8 @@ import {
   NodeActionPayload,
   NodeDetail,
   RollingUpdateRequest,
+  RollingStatus,
+  UpdateReadiness,
   HealthCheck,
   UpdateStatus,
   SystemState,
@@ -32,6 +34,9 @@ import {
   Workflow,
   DeadLetterTask,
   QueueState,
+  SetupStatus,
+  SetupHealth,
+  SetupCompleteResult,
 } from './models';
 
 @Injectable()
@@ -277,12 +282,12 @@ export class VertepApiService {
     return this.http.get<UpdateStatus>(`${this.baseUrl}/system/update`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  checkUpdate(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/check`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  checkUpdate(): Observable<UpdateStatus> {
+    return this.http.post<UpdateStatus>(`${this.baseUrl}/system/update/check`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  installUpdate(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/run`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  installUpdate(): Observable<UpdateStatus> {
+    return this.http.post<UpdateStatus>(`${this.baseUrl}/system/update/run`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getIntegrations(): Observable<Record<string, unknown>> {
@@ -293,12 +298,12 @@ export class VertepApiService {
     return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/restart`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getUpdateReadiness(): Observable<{ ready: boolean; active_jobs: string[]; busy_workers: string[]; queue_paused: boolean; inflight: number; drain_operation_id: string; acknowledged_workers: string[]; unacknowledged_workers: string[] }> {
-    return this.http.get<{ ready: boolean; active_jobs: string[]; busy_workers: string[]; queue_paused: boolean; inflight: number; drain_operation_id: string; acknowledged_workers: string[]; unacknowledged_workers: string[] }>(`${this.baseUrl}/system/update/readiness`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getUpdateReadiness(): Observable<UpdateReadiness> {
+    return this.http.get<UpdateReadiness>(`${this.baseUrl}/system/update/readiness`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getRollingStatus(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/update/rolling`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getRollingStatus(): Observable<RollingStatus> {
+    return this.http.get<RollingStatus>(`${this.baseUrl}/system/update/rolling`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   startRollingUpdate(payload: RollingUpdateRequest): Observable<Record<string, unknown>> {
@@ -440,8 +445,24 @@ export class VertepApiService {
     return this.http.delete<{ deleted: boolean }>(`${this.baseUrl}/settings/logo`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
+  getLogo(): Observable<Blob> {
+    return this.http.get(`${this.baseUrl}/settings/logo`, { responseType: 'blob', headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
   recoverToNormal(): Observable<SystemState> {
     return this.http.post<SystemState>(`${this.baseUrl}/system/recovery/normal`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  getSetupStatus(token: string): Observable<SetupStatus> {
+    return this.http.get<SetupStatus>(`${this.baseUrl}/setup`, { headers: this.getHeaders().set('X-Vertep-Setup-Token', token) }).pipe(catchError(this.handleError));
+  }
+
+  getSetupHealth(token: string): Observable<SetupHealth> {
+    return this.http.get<SetupHealth>(`${this.baseUrl}/setup/health`, { headers: this.getHeaders().set('X-Vertep-Setup-Token', token) }).pipe(catchError(this.handleError));
+  }
+
+  completeSetup(token: string, payload: Record<string, unknown>): Observable<SetupCompleteResult> {
+    return this.http.post<SetupCompleteResult>(`${this.baseUrl}/setup/complete`, payload, { headers: this.getHeaders().set('X-Vertep-Setup-Token', token) }).pipe(catchError(this.handleError));
   }
 
   private handleError(error: unknown) {

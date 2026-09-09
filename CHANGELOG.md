@@ -1,5 +1,20 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.26
+- Додано модуль сторібордів: `StoryboardService`, `StoryboardConflict`, генерація промптів через LLM, рендеринг у Telegram з inline-клавіатурою, REST API `/api/storyboards`.
+- Розширено `JobStatus` новими станами: `STORYBOARD_QUEUED`, `STORYBOARD_GENERATING`, `STORYBOARD_PENDING_APPROVAL`, `STORYBOARD_REVISION_REQUESTED`.
+- Перероблено `pipeline.prepare_job`: затверджений сторіборд використовується як сценарій без повторної генерації LLM, нормалізація викликається до початку циклу ретраїв.
+- Переведено Web UI V2 маршрути на lazy-завантаження (`loadComponent`) для зменшення первинного бандлу.
+- Додано компонент Setup (`setup.component`) з моделями `SetupStatus`, `SetupHealth`, `SetupCompleteResult`.
+- Виправлено реактивність Workers: `loading` замінено на `loading()` signal для коректного оновлення DOM.
+- Покращено Brands: додано обробник `channelChanged` для оновлення списку каналів після зміни.
+- Додано `description` до `BackupInfo`, розширено моделі Update Center.
+- Інтегровано `ToastService` та `ConfirmService` у Settings для зворотного зв'язку користувача.
+- Додано змінні середовища для сторібордів: `OLLAMA_STORYBOARD_MODEL`, `OLLAMA_STORYBOARD_TIMEOUT`, `OLLAMA_STORYBOARD_MAX_RETRIES`, `STORYBOARD_TARGET_DURATION`.
+- Покращено Browser E2E тести: додано стандартний мок `/api/status`, нові тести для сторібордів та setup.
+- Додано unit-тести сторібордів (`test_storyboard.py`).
+- Оновлено план завершення Web UI V2.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.25
 - Видалено `test_web_ui_contracts.py` з git tracking: файл потребує локального CONFIG_ROOT і ADMIN_PASSWORD, несумісний з CI без додаткового налаштування.
 

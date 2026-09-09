@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
+import { ConfirmService } from '../core/services/confirm.service';
 import { Channel } from '../core/models';
 
 @Component({
@@ -21,11 +22,15 @@ import { Channel } from '../core/models';
       } @else {
         <div class="space-y-1">
           @for (ch of channels; track ch.channel_id) {
-            <div class="flex items-center justify-between text-sm">
+            <div class="flex items-center justify-between text-sm py-1">
               <span>{{ ch.channel_type }}: {{ ch.target }}</span>
-              <span class="text-xs" [class.text-emerald-600]="ch.enabled" [class.text-slate-400]="!ch.enabled">
-                {{ ch.enabled ? 'Активний' : 'Неактивний' }}
-              </span>
+              <div class="flex items-center gap-2">
+                <span class="text-xs" [class.text-emerald-600]="ch.enabled" [class.text-slate-400]="!ch.enabled">
+                  {{ ch.enabled ? 'Активний' : 'Неактивний' }}
+                </span>
+                <button (click)="toggleChannel(ch)" class="text-xs text-blue-600 hover:text-blue-700" data-testid="channel-toggle">{{ ch.enabled ? 'Вимкнути' : 'Увімкнути' }}</button>
+                <button (click)="deleteChannel(ch)" class="text-xs text-red-600 hover:text-red-700" data-testid="channel-delete">Видалити</button>
+              </div>
             </div>
           }
         </div>
@@ -61,11 +66,16 @@ export class BrandChannelsComponent implements OnInit {
   @Input() brandId = '';
   @Input() channels: Channel[] = [];
   @Output() channelAdded = new EventEmitter<Channel>();
+  @Output() channelChanged = new EventEmitter<void>();
   showCreate = false;
   newChannel: { channel_type: string; target: string } = { channel_type: '', target: '' };
   channelTypes: string[] = [];
 
-  constructor(private api: VertepApiService, private toast: ToastService) {}
+  constructor(
+    private api: VertepApiService,
+    private toast: ToastService,
+    private confirm: ConfirmService,
+  ) {}
 
   ngOnInit(): void {
     this.api.getChannelTypes().subscribe({ next: (types) => this.channelTypes = types });
@@ -90,6 +100,23 @@ export class BrandChannelsComponent implements OnInit {
         this.toast.show('Канал створено', 'success');
       },
       error: (err) => this.toast.show(err.message || 'Помилка створення каналу', 'error'),
+    });
+  }
+
+  toggleChannel(ch: Channel): void {
+    this.api.updateChannel(ch.channel_id, { enabled: !ch.enabled }).subscribe({
+      next: () => { this.channelChanged.emit(); this.toast.show('Канал оновлено', 'success'); },
+      error: (err) => this.toast.show(err.message || 'Помилка оновлення', 'error'),
+    });
+  }
+
+  deleteChannel(ch: Channel): void {
+    this.confirm.confirm({ title: 'Видалити канал', message: `Видалити ${ch.channel_type}:${ch.target}?` }).subscribe((ok) => {
+      if (!ok) return;
+      this.api.deleteChannel(ch.channel_id).subscribe({
+        next: () => { this.channelChanged.emit(); this.toast.show('Канал видалено', 'success'); },
+        error: (err) => this.toast.show(err.message || 'Помилка видалення', 'error'),
+      });
     });
   }
 }

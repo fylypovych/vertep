@@ -69,6 +69,9 @@ from .api.resources import router as resources_router
 from .api.settings import router as settings_router
 from .api.models import router as models_router
 from .api.setup import router as setup_router, _validate_ai_backend, first_run_complete
+from .api.storyboards import router as storyboards_router
+from .storyboard import StoryboardConflict, StoryboardService
+from .storyboard_telegram import render_storyboard, storyboard_keyboard
 
 from .api.jobs import (router as jobs_router, cancel_job, retry_job,
                        approve_job, publish_job)
@@ -252,6 +255,7 @@ app.include_router(tasks_router)
 app.include_router(workers_router)
 app.include_router(nodes_router)
 app.include_router(observability_router)
+app.include_router(storyboards_router)
 
 @app.get("/setup", include_in_schema=False)
 def setup_page(request: Request):
@@ -398,6 +402,8 @@ def _handle_telegram_callback(callback: dict) -> dict:
         return _handle_publish_channel(callback, chat_id, payload)
     elif action == "publish_all":
         return _handle_publish_all(callback, chat_id, payload)
+    elif action in {"sb_ok", "sb_regen", "sb_edit", "sb_reject"}:
+        return _handle_storyboard_callback(callback, chat_id, action, payload)
 
     job_id = payload
     job = store.jobs.get(job_id)
@@ -435,8 +441,8 @@ def _send_character_selection(chat_id: str, brand_id: str) -> dict:
         pending = _telegram_pending_character.get(chat_id, {}).get("pending", {})
         job = _create_job_from_telegram(pending, brand_id, character_id)
         _telegram_pending_character.pop(chat_id, None)
-        _send_approval_request(job)
-        TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: NEW\nПерсонажів не знайдено, використовується {character_id}.")
+        _queue_storyboard(job, chat_id)
+        TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: {job.status.value}\nПерсонажів не знайдено, використовується {character_id}. Генерую розкадровку…")
         return job.model_dump(mode="json")
     keyboard = {"inline_keyboard": [
         [{"text": f"👤 {char['name']}", "callback_data": f"select_character:{char['id']}"}] for char in characters
@@ -460,10 +466,84 @@ def _handle_character_selection(callback: dict, chat_id: str, character_id: str)
         TelegramAdapter().answer_callback(callback_id, f"Помилка: невідомий персонаж {character_id}")
         raise HTTPException(400, f"Unknown character: {character_id}") from error
     job = _create_job_from_telegram(pending, brand_id, character_id)
-    _send_approval_request(job)
-    TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: {job.status.value}\nОчікує затвердження.")
-    TelegramAdapter().answer_callback(callback_id, f"Job {job.job_id} створено. Очікує затвердження.")
+    _queue_storyboard(job, chat_id)
+    TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: {job.status.value}\nГенерую розкадровку…")
+    TelegramAdapter().answer_callback(callback_id, f"Job {job.job_id} створено. Генерую розкадровку.")
     return job.model_dump(mode="json")
+
+
+def _queue_storyboard(job, chat_id: str, revision: str | None = None) -> None:
+    service = StoryboardService(store)
+    service.store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    executor.submit(_generate_storyboard_and_notify, job.job_id, chat_id, revision)
+
+
+def _generate_storyboard_and_notify(job_id: str, chat_id: str, revision: str | None = None) -> None:
+    try:
+        storyboard = StoryboardService(store).generate(job_id, revision)
+        chunks = render_storyboard(store.jobs[job_id], storyboard)
+        for index, chunk in enumerate(chunks):
+            markup = storyboard_keyboard(job_id, storyboard.version) if index == len(chunks) - 1 else None
+            TelegramAdapter().send_message(chat_id, chunk, markup)
+    except Exception as error:
+        logger.error("Storyboard generation failed: %s", error, extra={"job_id": job_id})
+        try:
+            TelegramAdapter().send_message(chat_id, f"❌ Не вдалося створити розкадровку {job_id}: {error}")
+        except Exception:
+            pass
+
+
+def _regenerate_storyboard_and_notify(job_id: str, version: int, chat_id: str,
+                                      revision: str | None = None) -> None:
+    try:
+        storyboard = StoryboardService(store).regenerate(
+            job_id, version, f"telegram:{chat_id}", revision
+        )
+        # regenerate() is synchronous when the service has no executor.
+        active = StoryboardService(store).get(job_id, storyboard.active_storyboard_version)
+        chunks = render_storyboard(storyboard, active)
+        for index, chunk in enumerate(chunks):
+            markup = storyboard_keyboard(job_id, active.version) if index == len(chunks) - 1 else None
+            TelegramAdapter().send_message(chat_id, chunk, markup)
+    except Exception as error:
+        logger.error("Storyboard regeneration failed: %s", error, extra={"job_id": job_id})
+        try:
+            TelegramAdapter().send_message(chat_id, f"❌ Не вдалося оновити розкадровку {job_id}: {error}")
+        except Exception:
+            pass
+
+
+def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    job_id, separator, raw_version = payload.partition(":")
+    if not separator or not raw_version.isdigit():
+        return TelegramAdapter().answer_callback(callback_id, "Некоректна версія розкадровки")
+    version = int(raw_version)
+    service = StoryboardService(store)
+    try:
+        if action == "sb_ok":
+            job = service.approve(job_id, version, f"telegram:{chat_id}")
+            executor.submit(_prepare_and_dispatch, job)
+            text = f"✅ Розкадровку {version} схвалено. Pipeline продовжено."
+        elif action == "sb_reject":
+            service.reject(job_id, version, f"telegram:{chat_id}")
+            text = f"❌ Розкадровку {version} відхилено."
+        elif action == "sb_edit":
+            job = store.jobs.get(job_id)
+            if not job or job.active_storyboard_version != version:
+                raise StoryboardConflict("Версія розкадровки вже неактуальна")
+            job.storyboard_revision_chat_id = chat_id
+            job.storyboard_revision_version = version
+            store.event(job, f"STORYBOARD {version} AWAITS REVISION TEXT")
+            text = "Надішліть одним повідомленням, що потрібно змінити."
+        else:
+            executor.submit(_regenerate_storyboard_and_notify, job_id, version, chat_id)
+            text = "🔄 Генерую нову версію розкадровки."
+        return TelegramAdapter().answer_callback(callback_id, text)
+    except KeyError:
+        return TelegramAdapter().answer_callback(callback_id, "Job або розкадровку не знайдено")
+    except StoryboardConflict as error:
+        return TelegramAdapter().answer_callback(callback_id, str(error))
 
 
 def _handle_approve_job(callback: dict, chat_id: str, job_id: str) -> dict:
@@ -607,6 +687,15 @@ def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: d
         else:
             publish_job(job.job_id)
         return TelegramAdapter().send_message(chat_id, f"{job.job_id}: {job.status.value}")
+    revision_job = next((job for job in store.jobs.values()
+                         if job.storyboard_revision_chat_id == chat_id), None)
+    if revision_job and revision_job.storyboard_revision_version:
+        version = revision_job.storyboard_revision_version
+        revision_job.storyboard_revision_chat_id = None
+        revision_job.storyboard_revision_version = None
+        executor.submit(_regenerate_storyboard_and_notify,
+                        revision_job.job_id, version, chat_id, text)
+        return TelegramAdapter().send_message(chat_id, "✍️ Правки прийнято. Генерую нову версію…")
     attachments = {key: message.get(key) for key in ("photo", "video", "document", "audio") if message.get(key)}
     _telegram_pending_brands[chat_id] = {"text": text, "source_id": source_id, "message": message, "attachments": attachments}
     brands_dir = Path(os.getenv("BRANDS_ROOT", "brands"))
@@ -674,9 +763,9 @@ def _create_job_from_telegram(pending: dict, brand_id: str, character_id: str | 
         raise HTTPException(400, f"Unknown character: {character_id}") from error
     job = store.create(text, character_id, int(os.getenv("TELEGRAM_DEFAULT_PRIORITY", "5")), source)
     job.brand_id = brand_id
-    job.status = JobStatus.PENDING_APPROVAL
+    job.status = JobStatus.STORYBOARD_QUEUED
     job.approval_status = "pending"
-    store.update(job, JobStatus.PENDING_APPROVAL, f"PENDING_APPROVAL for brand {brand_id or 'default'}")
+    store.update(job, JobStatus.STORYBOARD_QUEUED, f"STORYBOARD QUEUED for brand {brand_id or 'default'}")
     if source_id:
         store.repository.record_telegram_update(chat_id, source_id, message)
     if pending.get("attachments"):

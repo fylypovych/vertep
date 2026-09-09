@@ -7,7 +7,7 @@ import { ToastService, Toast } from '../core/services/toast.service';
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="fixed top-4 right-4 z-50 space-y-2">
+    <div class="fixed top-4 right-4 z-50 space-y-2" role="status" aria-live="polite" aria-label="Сповіщення">
       @for (toast of toasts; track toast.id) {
         <div class="px-4 py-3 rounded-lg border shadow-lg text-sm font-medium"
              [class.bg-emerald-50]="toast.type === 'success'"

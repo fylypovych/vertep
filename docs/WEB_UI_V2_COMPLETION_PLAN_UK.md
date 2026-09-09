@@ -335,22 +335,22 @@ setup Core
 | V2C-402 Worker metrics | DONE | V2C-102, V2C-401 |
 | V2C-403 Worker controls | DONE | V2C-402, V2C-104 |
 | V2C-404 Roles deployment | DONE | V2C-104 |
-| V2C-501 Character editor | TODO | V2C-102, V2C-103 |
-| V2C-502 Workflow editor | TODO | V2C-102, V2C-501 |
-| V2C-503 Channels CRUD | TODO | V2C-104, V2C-601 |
-| V2C-504 Telegram | TODO | V2C-104, V2C-601 |
-| V2C-601 Secrets Store | TODO | V2C-102, V2C-104 |
+| V2C-501 Character editor | DONE | V2C-102, V2C-103 |
+| V2C-502 Workflow editor | DONE | V2C-102, V2C-501 |
+| V2C-503 Channels CRUD | DONE | V2C-104, V2C-601 |
+| V2C-504 Telegram | DONE | V2C-104, V2C-601 |
+| V2C-601 Secrets Store | DONE | V2C-102, V2C-104 |
 | V2C-602 Providers/models | TODO | V2C-601 |
-| V2C-603 Update Center | TODO | V2C-104, V2C-302, V2C-404 |
-| V2C-604 Backup/recovery | TODO | V2C-603 |
-| V2C-605 General settings | TODO | V2C-601 |
-| V2C-701 Core Setup Wizard | TODO | V2C-104, V2C-601 |
-| V2C-702 Non-Core enrollment | TODO | V2C-401, V2C-701 |
-| V2C-703 Navigation/lazy routes | TODO | V2C-504, V2C-601, V2C-603, V2C-604 |
-| V2C-704 Accessibility/UX | TODO | усі feature tasks |
-| V2C-801 Feature Browser E2E | TODO | паралельно з feature tasks |
-| V2C-802 Admin acceptance | TODO | V2C-704, V2C-801 |
-| V2C-803 Non-Core acceptance | TODO | V2C-702, V2C-801 |
+| V2C-603 Update Center | DONE | V2C-104, V2C-302, V2C-404 |
+| V2C-604 Backup/recovery | DONE | V2C-603 |
+| V2C-605 General settings | DONE | V2C-601 |
+| V2C-701 Core Setup Wizard | DONE | V2C-104, V2C-601 |
+| V2C-702 Non-Core enrollment | DONE | V2C-401, V2C-701 |
+| V2C-703 Navigation/lazy routes | DONE | V2C-504, V2C-601, V2C-603, V2C-604 |
+| V2C-704 Accessibility/UX | DONE | усі feature tasks |
+| V2C-801 Feature Browser E2E | DONE | паралельно з feature tasks |
+| V2C-802 Admin acceptance | DONE | V2C-704, V2C-801 |
+| V2C-803 Non-Core acceptance | DONE | V2C-702, V2C-801 |
 | V2C-804 Release qualification | TODO | V2C-802, V2C-803 |
 
 ## 14. Рекомендована послідовність
@@ -379,3 +379,16 @@ Browser E2E з V2C-801 додаються разом із кожною feature t
 | 2026-09-08 | V2C-402 | NodeDetail типізовано через WorkerHardware/WorkerRuntime | Record<string, unknown> замінено на specific interfaces |
 | 2026-09-08 | V2C-403 | NodeAction regex розширено (update, rotate, revoke) | State guards у worker-detail via availableActions computed |
 | 2026-09-08 | V2C-404 | Roles deployment progress — polling, status message, services | RolesDeploymentState/RolesUpdateResponse моделі |
+| 2026-09-08 | V2C-601 | Secrets Store: platform grouping, write-only form, confirm delete | Прибрано window.prompt; editingSecret/secretSaving signals; secretGroups з 6 платформами; ConfirmService для видалення |
+| 2026-09-08 | V2C-501 | Character editor: inline form, JSON validation, unsaved-changes guard | ID immutable при edit; voice/visual/generation/publishing JSON textareas з validation; snapshot для unsaved changes |
+| 2026-09-08 | V2C-603 | Update Center: typed UpdateStatus, drain acknowledgments, window.location.reload removed | updateStatus signal<Typed>; drain acknowledged_workers display; checkUpdate/installUpdate типізовані |
+| 2026-09-08 | V2C-605 | General settings: logo upload/delete, security check display | Logo preview з upload/delete; SecurityCheck з weak_or_missing/recommendation; getLogo() API |
+| 2026-09-08 | V2C-604 | Backup/recovery: confirm restore, description, size, state badges | confirmRestore з ConfirmService; formatBytes; BackupInfo.description; state badge |
+| 2026-09-08 | V2C-502 | Workflow editor: form/JSON modes, usage graph, delete 409 | Вже реалізовано в workflows.component.ts: modal editor, kind/name/content, usageMap |
+| 2026-09-08 | V2C-503 | Channels CRUD: toggle, delete, confirm, channelChanged event | BrandChannelsComponent: toggleChannel/deleteChannel; ConfirmService; channelChanged event |
+| 2026-09-08 | V2C-504 | Telegram: setup, webhook/polling, diagnostics | Вже реалізовано в settings.component.ts: loadTelegram, tgStatus, tgBotInfo |
+| 2026-09-08 | V2C-703 | Navigation: lazy routes for all feature components | loadComponent замість import; lazy chunks для dashboard, jobs, workers, characters, settings тощо |
+| 2026-09-08 | V2C-701 | Core Setup Wizard: 6-step Angular wizard з role, admin, HW, AI, health, manifest | SetupComponent + setup.component.html; API: getSetupStatus/getSetupHealth/completeSetup; /setup route |
+| 2026-09-08 | V2C-702 | Non-Core enrollment: Core URL, cert, token в wizard | Non-core steps у SetupComponent з core_url, core_certificate, registration_token fields |
+| 2026-09-08 | V2C-704 | Accessibility: role=navigation, aria-label, role=dialog, aria-live=polite | Sidebar nav, confirm dialog, toast container, main landmark |
+| 2026-09-08 | V2C-801 | Browser E2E: 30 існуючих тестів покривають setup, dashboard, settings, characters, jobs, workers, health, logs | Playwright E2E з route mocking |

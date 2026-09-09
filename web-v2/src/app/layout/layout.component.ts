@@ -22,7 +22,7 @@ import { SidebarService } from '../core/services/sidebar.service';
       <!-- Main area -->
       <div class="flex flex-1 flex-col min-w-0 overflow-hidden">
         <app-header />
-        <main class="flex-1 overflow-y-auto p-4 lg:p-6">
+        <main class="flex-1 overflow-y-auto p-4 lg:p-6" role="main" aria-label="Основний вміст">
           <router-outlet></router-outlet>
         </main>
       </div>

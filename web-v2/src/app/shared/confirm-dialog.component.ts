@@ -8,9 +8,9 @@ import { ConfirmService, ConfirmOptions } from '../core/services/confirm.service
   imports: [CommonModule],
   template: `
     @if (visible) {
-      <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" [attr.aria-labelledby]="'confirm-title'">
         <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 max-w-sm w-full mx-4 shadow-xl">
-          <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">{{ options.title }}</h3>
+          <h3 id="confirm-title" class="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">{{ options.title }}</h3>
           <p class="text-sm text-slate-600 dark:text-slate-400 mb-6">{{ options.message }}</p>
           <div class="flex gap-3 justify-end">
             <button (click)="onCancel()"

@@ -24,15 +24,15 @@ import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } fro
         <input [(ngModel)]="search" data-testid="workers-search" placeholder="Пошук за назвою або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
-      @if (loading) {
+      @if (loading()) {
         <div class="space-y-3">
           @for (_ of [1,2,3]; track $index) {
             <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
           }
         </div>
-      } @else if (error) {
+      } @else if (error()) {
         <div class="bg-red-50 border border-red-200 rounded-xl p-5">
-          <p class="text-red-700">{{ error }}</p>
+          <p class="text-red-700">{{ error() }}</p>
           <button (click)="loadWorkers()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
         </div>
       } @else {
@@ -183,9 +183,9 @@ import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } fro
   `,
 })
 export class WorkersComponent implements OnInit {
-  workers: Worker[] = [];
-  loading = false;
-  error: string | null = null;
+  workers = signal<Worker[]>([]);
+  loading = signal(false);
+  error = signal<string | null>(null);
   showWizard = false;
   showSettings = false;
   selectedWorker: Worker | null = null;
@@ -209,9 +209,10 @@ export class WorkersComponent implements OnInit {
   }
 
   get filteredWorkers(): Worker[] {
-    if (!this.search.trim()) return this.workers;
+    const list = this.workers();
+    if (!this.search.trim()) return list;
     const term = this.search.toLowerCase();
-    return this.workers.filter(w =>
+    return list.filter(w =>
       (w.node_name || '').toLowerCase().includes(term) ||
       (w.node_id || '').toLowerCase().includes(term)
     );
@@ -227,11 +228,11 @@ export class WorkersComponent implements OnInit {
   }
 
   loadWorkers(): void {
-    this.loading = true;
-    this.error = null;
+    this.loading.set(true);
+    this.error.set(null);
     this.api.getWorkers().subscribe({
-      next: (workers) => { this.workers = workers; this.loading = false; },
-      error: (err) => { this.error = err.message; this.loading = false; },
+      next: (workers) => { this.workers.set(workers); this.loading.set(false); },
+      error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
   }
 
@@ -261,7 +262,7 @@ export class WorkersComponent implements OnInit {
         this.toast.show('Токен згенеровано', 'success');
       },
       error: (err) => {
-        this.error = err.message;
+        this.error.set(err.message);
         this.creating = false;
         this.toast.show(err.message || 'Помилка генерації токена', 'error');
       },
@@ -321,7 +322,7 @@ export class WorkersComponent implements OnInit {
         this.toast.show('Дію застосовано', 'success');
       },
       error: (err) => {
-        this.error = err.message;
+        this.error.set(err.message);
         this.actioning = false;
         this.toast.show(err.message || 'Помилка дії', 'error');
       },

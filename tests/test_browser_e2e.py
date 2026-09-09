@@ -12,6 +12,27 @@ except ImportError:
 
 BASE_URL = os.getenv("VERTEP_URL", "http://127.0.0.1:8080")
 
+# Standard /api/status mock used by sidebar and header on every page load.
+DEFAULT_STATUS = {
+    "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
+    "version": "0.0.1.99",
+    "system": {"state": "NORMAL"},
+    "queue": {"depth": 0, "inflight": 0, "dead_letter": 0},
+    "scheduler": {"pending": 0, "next_run": None},
+    "orchestration": {"active_jobs": 0, "active_scenes": 0},
+    "providers": {
+        "llm": {"backend": "ollama", "options": [], "env": "", "configured": True},
+        "tts": {"backend": "none", "options": [], "env": "", "configured": True},
+    },
+    "update": {"current_version": "0.0.1.99", "state": "IDLE"},
+}
+
+
+def _mock_status(page, overrides=None):
+    """Register a /api/status route so sidebar/header never hit the real server."""
+    data = {**DEFAULT_STATUS, **(overrides or {})}
+    page.route("**/api/status", lambda route: route.fulfill(json=data))
+
 
 def test_setup_page_loads():
     with sync_playwright() as p:
@@ -86,6 +107,7 @@ def test_character_create_and_edit_use_localized_form():
         errors = []
         saved = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         character = {
             "id": "did_samogon", "name": "Дід Самогонщик", "language": "uk",
             "enabled": True, "system_prompt": "Говорить українською.",
@@ -128,6 +150,7 @@ def test_worker_wizard_role_labels_are_ukrainian():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_status(page)
         page.goto(f"{BASE_URL}/workers")
         expect(page.locator("[data-testid='workers-page']")).to_be_visible()
 
@@ -143,6 +166,7 @@ def test_jobs_list_shows_empty_state_and_create_form():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_status(page)
         page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs")
         expect(page.locator("[data-testid='jobs-page']")).to_be_visible()
@@ -161,6 +185,7 @@ def test_job_detail_view_and_edit():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
 
         job_id = "test-job-001"
         job = {
@@ -203,6 +228,7 @@ def test_jobs_delete_button_is_present():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_status(page)
 
         jobs = [{"job_id": "job-1", "topic": "Test", "status": "READY",
                  "created_at": "2026-09-07T12:00:00Z", "priority": 5, "character_id": "c1"}]
@@ -354,6 +380,7 @@ def test_logs_page_loads_empty():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/logs")
         expect(page.locator("[data-testid='logs-page']")).to_be_visible()
@@ -368,6 +395,7 @@ def test_logs_page_shows_entries():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[
             {"level": "INFO", "message": "Core started", "timestamp": "2026-09-08T10:00:00Z", "node_name": "core"},
             {"level": "ERROR", "message": "Worker failed", "timestamp": "2026-09-08T10:01:00Z", "node_name": "gpu-1", "job_id": "j-001"},
@@ -386,6 +414,7 @@ def test_logs_page_shows_api_error():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(status=500, json={"detail": "Internal error"}))
         page.goto(f"{BASE_URL}/logs")
         expect(page.locator("[data-testid='error-state']")).to_be_visible()
@@ -399,6 +428,7 @@ def test_logs_page_filter_level():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[
             {"level": "ERROR", "message": "Only error", "timestamp": "2026-09-08T10:00:00Z"},
         ]))
@@ -424,6 +454,7 @@ def test_job_detail_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/jobs/j-001", lambda route: route.fulfill(json={
             "job_id": "j-001", "topic": "Test Job", "status": "READY",
             "priority": 5, "created_at": "2026-09-08T10:00:00Z",
@@ -455,6 +486,7 @@ def test_queue_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/tasks/queue**", lambda route: route.fulfill(json={
             "ready": [], "inflight": [],
         }))
@@ -473,6 +505,7 @@ def test_alerts_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/alerts**", lambda route: route.fulfill(json=[
             {"severity": "error", "type": "JOB_FAILED", "message": "Test failure", "job_id": "j-001"},
         ]))
@@ -490,6 +523,7 @@ def test_health_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/health**", lambda route: route.fulfill(json={
             "status": "healthy", "service": "core", "jobs": 0,
             "checks": {"postgres": [True, "OK"]},
@@ -515,6 +549,7 @@ def test_published_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/jobs**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/published")
         expect(page.locator("[data-testid='published-page']")).to_be_visible()
@@ -532,6 +567,7 @@ def test_workers_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/workers**", lambda route: route.fulfill(json=[
             {"node_id": "n1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
              "capabilities": ["image_generation"], "vram_mb": 8192, "gpu_name": "RTX 4090"},
@@ -550,6 +586,7 @@ def test_worker_detail_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/nodes/n1**", lambda route: route.fulfill(json={
             "node_id": "n1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
             "capabilities": ["image_generation"], "vram_mb": 8192, "gpu_name": "RTX 4090",
@@ -571,6 +608,7 @@ def test_characters_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/characters**", lambda route: route.fulfill(json=[
             {"id": "char1", "name": "Дід Самогон", "language": "uk", "enabled": True,
              "system_prompt": "Test", "voice": {}, "visual": {}, "generation": {}, "publishing": {}},
@@ -589,6 +627,7 @@ def test_workflows_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/workflows**", lambda route: route.fulfill(json=[
             {"kind": "image", "name": "demo.json"},
         ]))
@@ -607,6 +646,7 @@ def test_brands_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/brands**", lambda route: route.fulfill(json=[
             {"id": "brand1", "name": "Test Brand", "enabled": True, "metadata": {}, "publishing": {}},
         ]))
@@ -644,7 +684,7 @@ def test_worker_wizard_opens_and_shows_token():
         expect(page.locator("[data-testid='workers-page']")).to_be_visible()
         page.locator("[data-testid='create-worker-button']").click()
         page.locator("[data-testid='generate-token-button']").click()
-        expect(page.locator("[data-testid='token-display']")).to_contain_text("VT-AAAA-BBBB-CCCC")
+        expect(page.locator("text=VT-AAAA-BBBB-CCCC")).to_be_visible()
         assert not errors, f"pageerror: {errors}"
         browser.close()
 
@@ -656,6 +696,7 @@ def test_worker_detail_shows_hardware_and_actions():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
         page.route("**/api/nodes/n1**", lambda route: route.fulfill(json={
             "node_id": "n1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
             "capabilities": ["image_generation"], "vram_mb": 8192, "gpu_name": "RTX 4090",
@@ -682,16 +723,7 @@ def test_settings_roles_shows_deployment_status():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.route("**/api/status", lambda route: route.fulfill(json={
-            "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
-            "version": "0.0.1.99", "system": {"state": "NORMAL"},
-            "queue": {"depth": 0, "inflight": 0, "dead_letter": 0},
-            "scheduler": {"pending": 0, "next_run": None},
-            "orchestration": {"active_jobs": 0, "active_scenes": 0},
-            "providers": {"llm": {"backend": "ollama", "options": [], "env": "", "configured": True},
-                          "tts": {"backend": "none", "options": [], "env": "", "configured": True}},
-            "update": {"current_version": "0.0.1.99", "state": "IDLE"},
-        }))
+        _mock_status(page, {"update": {"current_version": "0.0.1.99", "state": "IDLE"}})
         page.route("**/api/system/roles", lambda route: route.fulfill(json={
             "node_role": "core", "active_roles": [],
             "available_roles": [
@@ -701,6 +733,10 @@ def test_settings_roles_shows_deployment_status():
             "deployment": {"state": None, "error": None},
             "queued": False,
         }))
+        # Catch-all for other settings API calls
+        for pattern in ["**/api/secrets**", "**/api/models/**", "**/api/system/update/**",
+                        "**/api/system/backups**", "**/api/settings/**", "**/api/security/**"]:
+            page.route(pattern, lambda route: route.fulfill(json={}))
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()

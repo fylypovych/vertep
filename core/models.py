@@ -9,6 +9,12 @@ class JobStatus(str, Enum):
     NEW = "NEW"
     WAITING_FOR_SYSTEM = "WAITING_FOR_SYSTEM"
     SCRIPTING = "SCRIPTING"
+    STORYBOARD_QUEUED = "STORYBOARD_QUEUED"
+    STORYBOARD_GENERATING = "STORYBOARD_GENERATING"
+    STORYBOARD_PENDING_APPROVAL = "STORYBOARD_PENDING_APPROVAL"
+    STORYBOARD_REVISION_REQUESTED = "STORYBOARD_REVISION_REQUESTED"
+    STORYBOARD_REJECTED = "STORYBOARD_REJECTED"
+    STORYBOARD_FAILED = "STORYBOARD_FAILED"
     SCRIPT_READY = "SCRIPT_READY"
     ASSET_GENERATION = "ASSET_GENERATION"
     ASSETS_READY = "ASSETS_READY"
@@ -156,6 +162,29 @@ class ArtifactRecord(BaseModel):
     workflow: str | None = None
     created_at: str
 
+
+class StoryboardScene(BaseModel):
+    index: int = Field(ge=1)
+    prompt: str = Field(min_length=1, max_length=4000)
+    video_prompt: str = Field(min_length=1, max_length=4000)
+    voiceover: str = Field(default="", max_length=10000)
+    duration: float = Field(gt=0, le=600)
+
+
+class StoryboardVersion(BaseModel):
+    version: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=5000)
+    hashtags: list[str] = Field(default_factory=list, max_length=100)
+    scenes: list[StoryboardScene] = Field(min_length=1, max_length=200)
+    prompt_version: str = "1"
+    model: str = ""
+    status: str = Field(pattern="^(pending_approval|approved|rejected|superseded)$")
+    revision_request: str | None = Field(default=None, max_length=4000)
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    decided_at: str | None = None
+    decided_by: str | None = None
+
 class JobCreate(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
     character_id: str = Field(default="did_samogon", pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
@@ -211,6 +240,12 @@ class Job(BaseModel):
     scenes: list[SceneRecord] = Field(default_factory=list)
     artifacts: list[ArtifactRecord] = Field(default_factory=list)
     scheduled_for: str | None = None
+    storyboards: list[StoryboardVersion] = Field(default_factory=list)
+    active_storyboard_version: int | None = None
+    storyboard_attempt: int = 0
+    storyboard_error: str | None = None
+    storyboard_revision_chat_id: str | None = None
+    storyboard_revision_version: int | None = None
 
 class WorkerHeartbeat(BaseModel):
     node_name: str

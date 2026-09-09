@@ -3,7 +3,14 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription, timeout, take } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
-import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, TelegramBotInfo, IntegrationStatus, ModelInfo, BackupInfo, UpdateReadiness, RollingStatus, CertificateStatus } from '../core/models';
+import { ToastService } from '../core/services/toast.service';
+import { ConfirmService } from '../core/services/confirm.service';
+import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, TelegramBotInfo, IntegrationStatus, ModelInfo, BackupInfo, UpdateReadiness, RollingStatus, CertificateStatus, UpdateStatus } from '../core/models';
+
+interface SecretGroup {
+  label: string;
+  secrets: string[];
+}
 
 @Component({
   selector: 'app-settings',
@@ -247,28 +254,48 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
         }
       </div>
 
-      <!-- Secrets Store (V2-501) -->
+      <!-- Secrets Store (V2C-601) -->
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Сховище секретів</h3>
         @if (secretsLoading()) {
           <div class="animate-pulse space-y-2"><div class="h-5 bg-slate-200 rounded w-full"></div><div class="h-5 bg-slate-200 rounded w-1/2"></div></div>
         } @else if (secretsError()) {
           <p class="text-red-600">{{ secretsError() }}</p>
-        } @else if (secrets()) {
+        } @else {
           <div class="text-xs text-slate-500 mb-3">Значення ніколи не читаються назад. Показується лише configured/missing.</div>
-          <div class="space-y-2">
-            @for (name of secretNames; track name) {
-              <div class="flex items-center justify-between py-2 border-b border-slate-100">
-                <span class="font-mono text-sm">{{ name }}</span>
-                <span class="text-xs" [class.text-emerald-600]="secrets()![name]" [class.text-slate-400]="!secrets()![name]">
-                  {{ secrets()![name] ? 'Налаштовано' : 'Відсутнє' }}
-                </span>
+          @for (group of secretGroups; track group.label) {
+            <div class="mb-3">
+              <h4 class="text-xs font-medium text-slate-500 uppercase mb-1">{{ group.label }}</h4>
+              @for (name of group.secrets; track name) {
+                <div class="flex items-center justify-between py-2 border-b border-slate-100">
+                  <span class="font-mono text-sm">{{ name }}</span>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs" [class.text-emerald-600]="secrets()?.[name]" [class.text-slate-400]="!secrets()?.[name]">
+                      {{ secrets()?.[name] ? 'Налаштовано' : 'Відсутнє' }}
+                    </span>
+                    <button (click)="editSecret(name)" class="text-xs text-emerald-600 hover:text-emerald-700" data-testid="secret-edit-btn">Змінити</button>
+                    @if (secrets()?.[name]) {
+                      <button (click)="confirmDeleteSecret(name)" class="text-xs text-red-500 hover:text-red-600" data-testid="secret-delete-btn">Видалити</button>
+                    }
+                  </div>
+                </div>
+              }
+            </div>
+          }
+          @if (editingSecret()) {
+            <div class="mt-3 bg-slate-50 rounded-lg p-3 border border-slate-200" data-testid="secret-form">
+              <div class="text-sm font-medium text-slate-700 mb-2">
+                {{ secrets()?.[editingSecret()!] ? 'Оновити' : 'Додати' }}: <span class="font-mono">{{ editingSecret() }}</span>
               </div>
-            }
-          </div>
-          <div class="mt-3">
-            <button (click)="addSecret()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Додати/оновити секрет</button>
-          </div>
+              <input type="password" #secretInput placeholder="Значення секрету" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="secret-value-input">
+              <div class="flex gap-2 mt-2">
+                <button (click)="saveSecret(secretInput)" [disabled]="secretSaving()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50" data-testid="secret-save-btn">
+                  {{ secretSaving() ? 'Збереження...' : 'Зберегти' }}
+                </button>
+                <button (click)="cancelSecretEdit()" class="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800">Скасувати</button>
+              </div>
+            </div>
+          }
         }
       </div>
 
@@ -335,8 +362,12 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
               <div class="mt-3 text-xs">
                 <div>Active jobs: {{ readiness()!.active_jobs.length }}</div>
                 <div>Busy workers: {{ readiness()!.busy_workers.length }}</div>
+                <div>Drain acknowledged: {{ readiness()!.acknowledged_workers.length }}</div>
                 <div>Unacknowledged: {{ readiness()!.unacknowledged_workers.length }}</div>
                 <div>Queue paused: {{ readiness()!.queue_paused ? 'Так' : 'Ні' }}</div>
+                @if (readiness()!.drain_operation_id) {
+                  <div class="mt-1">Drain operation: <span class="font-mono">{{ readiness()!.drain_operation_id }}</span></div>
+                }
               </div>
             }
             @if (rollingStatus()) {
@@ -354,11 +385,11 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
         }
       </div>
 
-      <!-- Backup/recovery (V2-504) -->
+      <!-- Backup/Recovery (V2C-604) -->
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Бекапи та відновлення</h3>
         @if (backupsLoading()) {
-          <div class="animate-pulse"><div class="h-5 bg-slate-200 rounded w-full"></div></div>
+          <div class="animate-pulse space-y-2"><div class="h-5 bg-slate-200 rounded w-full"></div></div>
         } @else if (backupsError()) {
           <p class="text-red-600">{{ backupsError() }}</p>
         } @else if (backups().length === 0) {
@@ -367,17 +398,25 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
           <div class="space-y-2">
             @for (backup of backups(); track backup.snapshot_id) {
               <div class="flex items-center justify-between py-2 border-b border-slate-100">
-                <div>
+                <div class="flex-1">
                   <span class="font-mono text-xs">{{ backup.snapshot_id }}</span>
                   <span class="text-xs text-slate-500 ml-2">{{ backup.created_at || '' }}</span>
+                  @if (backup.description) { <span class="text-xs text-slate-400 ml-2">{{ backup.description }}</span> }
                 </div>
-                <button (click)="restoreBackup(backup.snapshot_id)" class="text-xs text-blue-600 hover:text-blue-700">Відновити</button>
+                <div class="flex items-center gap-2">
+                  @if (backup.size_bytes) { <span class="text-xs text-slate-500">{{ formatBytes(backup.size_bytes) }}</span> }
+                  @if (backup.state) {
+                    <span class="text-xs px-1.5 py-0.5 rounded" [class.bg-emerald-50]="backup.state === 'ok'" [class.text-emerald-700]="backup.state === 'ok'"
+                      [class.bg-red-50]="backup.state === 'error'" [class.text-red-700]="backup.state === 'error'">{{ backup.state }}</span>
+                  }
+                  <button (click)="confirmRestore(backup.snapshot_id)" class="text-xs text-blue-600 hover:text-blue-700" data-testid="backup-restore">Відновити</button>
+                </div>
               </div>
             }
           </div>
         }
         <div class="mt-3 flex gap-2">
-          <button (click)="createBackup()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Створити бекап</button>
+          <button (click)="createBackup()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700" data-testid="backup-create">Створити бекап</button>
           <button (click)="recoverToNormal()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відновити до NORMAL</button>
         </div>
       </div>
@@ -399,6 +438,55 @@ import { SystemStatus, SystemRole, SystemRolesResponse, TelegramStatus, Telegram
               <span class="text-sm">ComfyUI</span>
               <span class="text-xs font-medium" [class.text-emerald-600]="integrations()!.comfyui.status === 'ONLINE'" [class.text-red-600]="integrations()!.comfyui.status !== 'ONLINE'">{{ integrations()!.comfyui.status }}</span>
             </div>
+          </div>
+        }
+      </div>
+
+      <!-- Logo (V2C-605) -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5">
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">Логотип</h3>
+        <div class="flex items-center gap-4">
+          <div class="w-16 h-16 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden bg-slate-50">
+            @if (logoUrl()) {
+              <img [src]="logoUrl()" alt="Logo" class="max-w-full max-h-full object-contain">
+            } @else {
+              <span class="text-2xl text-slate-300">V</span>
+            }
+          </div>
+          <div class="flex gap-2">
+            <label class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer">
+              Завантажити
+              <input type="file" accept="image/*" (change)="uploadLogoFile($event)" class="hidden" data-testid="logo-upload">
+            </label>
+            @if (logoUrl()) {
+              <button (click)="deleteLogoFile()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">Видалити</button>
+            }
+          </div>
+        </div>
+      </div>
+
+      <!-- Security Check (V2C-605) -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5">
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">Безпека</h3>
+        @if (secLoading()) {
+          <p class="text-sm text-slate-500">Завантаження...</p>
+        } @else if (secCheck()) {
+          <div class="space-y-2">
+            <div class="flex justify-between py-2 border-b border-slate-100">
+              <span class="text-sm">Статус</span>
+              <span class="text-sm font-medium" [class.text-emerald-600]="secCheck()!.ok" [class.text-red-600]="!secCheck()!.ok">{{ secCheck()!.ok ? 'OK' : 'Увага' }}</span>
+            </div>
+            @if (secCheck()!.weak_or_missing.length) {
+              <div class="text-sm text-slate-700">
+                <p class="font-medium mb-1">Слабкі/відсутні:</p>
+                <ul class="list-disc pl-5 space-y-0.5">
+                  @for (item of secCheck()!.weak_or_missing; track item) {
+                    <li class="text-xs text-slate-600">{{ item }}</li>
+                  }
+                </ul>
+              </div>
+            }
+            <p class="text-xs text-slate-500">{{ secCheck()!.recommendation }}</p>
           </div>
         }
       </div>
@@ -440,6 +528,17 @@ export class SettingsComponent implements OnInit, OnDestroy {
   secrets = signal<Record<string, boolean> | null>(null);
   secretsLoading = signal(false);
   secretsError = signal<string | null>(null);
+  editingSecret = signal<string | null>(null);
+  secretSaving = signal(false);
+
+  readonly secretGroups: SecretGroup[] = [
+    { label: 'Telegram', secrets: ['telegram_bot_token'] },
+    { label: 'YouTube', secrets: ['youtube_client_secret'] },
+    { label: 'Facebook', secrets: ['facebook_access_token'] },
+    { label: 'TikTok', secrets: ['tiktok_client_secret'] },
+    { label: 'Email (SMTP)', secrets: ['smtp_password'] },
+    { label: 'Зовнішній AI', secrets: ['external_ai_api_key'] },
+  ];
 
   models = signal<ModelInfo[]>([]);
   modelsLoading = signal(false);
@@ -447,7 +546,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   modelName = '';
   pullingModel = signal(false);
 
-  updateStatus = signal<any>(null);
+  updateStatus = signal<UpdateStatus | null>(null);
   updateLoading = signal(false);
   updateError = signal<string | null>(null);
   updateInstalling = signal(false);
@@ -466,7 +565,11 @@ export class SettingsComponent implements OnInit, OnDestroy {
   certLoading = signal(false);
   certError = signal<string | null>(null);
 
-  constructor(private api: VertepApiService) {}
+  logoUrl = signal<string | null>(null);
+  secCheck = signal<{ ok: boolean; weak_or_missing: string[]; recommendation: string } | null>(null);
+  secLoading = signal(false);
+
+  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
   ngOnInit(): void {
     this.loadStatus();
@@ -478,10 +581,8 @@ export class SettingsComponent implements OnInit, OnDestroy {
     this.loadBackups();
     this.loadIntegrations();
     this.loadCertificates();
-  }
-
-  get secretNames(): string[] {
-    return ['jwt_secret', 'worker_secret', 'postgres_password', 'redis_password', 'encryption_key', 'internal_api_key', 'session_secret'];
+    this.loadLogo();
+    this.loadSecurityCheck();
   }
 
   ngOnDestroy(): void {
@@ -584,7 +685,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
 
   restartSystem(): void {
     this.api.restartSystem().subscribe({
-      next: () => window.location.reload(),
+      next: () => this.toast.show('Систему перезапущено', 'success'),
       error: (err) => this.updateError.set(err.message),
     });
   }
@@ -598,14 +699,46 @@ export class SettingsComponent implements OnInit, OnDestroy {
     });
   }
 
-  addSecret(): void {
-    const name = prompt('Назва секрету:');
-    if (!name) return;
-    const value = prompt(`Значення для ${name}:`);
-    if (!value) return;
+  editSecret(name: string): void {
+    this.editingSecret.set(name);
+  }
+
+  cancelSecretEdit(): void {
+    this.editingSecret.set(null);
+  }
+
+  saveSecret(input: HTMLInputElement): void {
+    const name = this.editingSecret();
+    const value = input.value;
+    if (!name || !value) return;
+    this.secretSaving.set(true);
     this.api.updateSecret(name, value).subscribe({
-      next: () => this.loadSecrets(),
-      error: (err) => this.secretsError.set(err.message),
+      next: () => {
+        this.secretSaving.set(false);
+        this.editingSecret.set(null);
+        this.toast.show('Секрет збережено', 'success');
+        this.loadSecrets();
+      },
+      error: (err) => {
+        this.secretSaving.set(false);
+        this.secretsError.set(err.message);
+      },
+    });
+  }
+
+  confirmDeleteSecret(name: string): void {
+    this.confirm.confirm({
+      title: 'Видалити секрет',
+      message: `Ви впевнені, що хочете видалити ${name}? Ця дія необоротна.`,
+    }).subscribe((ok) => {
+      if (!ok) return;
+      this.api.deleteSecret(name).subscribe({
+        next: () => {
+          this.toast.show('Секрет видалено', 'success');
+          this.loadSecrets();
+        },
+        error: (err) => this.secretsError.set(err.message),
+      });
     });
   }
 
@@ -809,6 +942,45 @@ export class SettingsComponent implements OnInit, OnDestroy {
     }, 5000);
   }
 
+  loadLogo(): void {
+    this.api.getLogo().subscribe({
+      next: (blob) => {
+        const url = URL.createObjectURL(blob);
+        this.logoUrl.set(url);
+      },
+      error: () => this.logoUrl.set(null),
+    });
+  }
+
+  uploadLogoFile(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    this.api.uploadLogo(file).subscribe({
+      next: () => { this.toast.show('Логотип завантажено', 'success'); this.loadLogo(); },
+      error: (err) => this.toast.show(err.message || 'Помилка завантаження', 'error'),
+    });
+    input.value = '';
+  }
+
+  deleteLogoFile(): void {
+    this.confirm.confirm({ title: 'Видалити логотип', message: 'Видалити логотип дашборду?' }).subscribe((ok) => {
+      if (!ok) return;
+      this.api.deleteLogo().subscribe({
+        next: () => { this.toast.show('Логотип видалено', 'success'); this.logoUrl.set(null); },
+        error: (err) => this.toast.show(err.message || 'Помилка видалення', 'error'),
+      });
+    });
+  }
+
+  loadSecurityCheck(): void {
+    this.secLoading.set(true);
+    this.api.getSecurityCheck().subscribe({
+      next: (check) => { this.secCheck.set(check); this.secLoading.set(false); },
+      error: () => this.secLoading.set(false),
+    });
+  }
+
   loadTelegram(): void {
     this.tgLoading.set(true);
     this.tgError.set(null);
@@ -820,5 +992,23 @@ export class SettingsComponent implements OnInit, OnDestroy {
       next: (info) => this.tgBotInfo.set(info),
       error: () => {},
     });
+  }
+
+  confirmRestore(snapshotId: string): void {
+    this.confirm.confirm({ title: 'Відновити бекап', message: `Відновити snapshot ${snapshotId}? Поточна конфігурація буде замінена.` }).subscribe((ok) => {
+      if (!ok) return;
+      this.api.restoreBackup(snapshotId).subscribe({
+        next: () => { this.toast.show('Бекап відновлено', 'success'); this.loadUpdateStatus(); },
+        error: (err) => this.toast.show(err.message || 'Помилка відновлення', 'error'),
+      });
+    });
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
   }
 }

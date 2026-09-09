@@ -334,6 +334,7 @@ export interface BackupInfo {
   created_at?: string;
   size_bytes?: number;
   state?: string;
+  description?: string;
   [key: string]: unknown;
 }
 
@@ -582,6 +583,27 @@ export interface UpdateOperation {
   started_at?: string;
   completed_at?: string;
   error?: string;
+}
+
+export interface SetupStatus {
+  configured: boolean;
+  installation: string | null;
+  hardware: Record<string, unknown>;
+  backends: string[];
+  selected_role: string | null;
+  roles: Record<string, { label: string; modules: string[]; capabilities: string[] }>;
+}
+
+export interface SetupHealth {
+  ready: boolean;
+  checks: Record<string, string>;
+}
+
+export interface SetupCompleteResult {
+  installation_id: string;
+  core_url?: string;
+  core_certificate?: string;
+  registration_token?: string;
 }
 
 export interface WizardState {
