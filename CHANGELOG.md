@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.30
+- Синхронізовано життєвий цикл сценарію та розкадровки: `SCRIPT_*` статуси узгоджено з `presentation.ts` та `job-detail` (approve/revision для сценарію).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.27
 - Додано модуль `presentation.ts`: централізовані мітки статусів (`statusLabel`), ролей (`roleLabel`), груп статусів (`inStatusGroup`), станів дій (`jobActionAllowed`).
 - Збагачено контекст вузлів у API: `/api/nodes` та `/api/nodes/{id}` повертають `modules`, `services`, `capability_backends`.

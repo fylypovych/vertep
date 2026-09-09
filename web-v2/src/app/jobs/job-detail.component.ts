@@ -269,6 +269,34 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
             }
           </div>
 
+          @if (job()!.status === 'SCRIPT_PENDING_APPROVAL' || job()!.status === 'SCRIPT_REVISION_REQUESTED' || job()!.status === 'SCRIPT_FAILED') {
+            <div class="mt-6 bg-amber-50 border border-amber-200 rounded-lg p-4" data-testid="job-script">
+              <h4 class="font-medium text-amber-900">Сценарій — {{ jobStatusLabel(job()!.status) }}</h4>
+              @if (job()!.script; as script) {
+                <p class="text-sm text-amber-900 mt-1 font-medium">{{ script['title'] }}</p>
+                <p class="text-sm text-amber-800">{{ script['description'] || '' }}</p>
+                @if (script['scenes']; as scenes) {
+                  <div class="mt-3 space-y-2">
+                    @for (scene of scenes; track $index) {
+                      <div class="bg-white rounded p-3 text-sm"><strong>Сцена {{ $index + 1 }}</strong><p class="text-xs text-slate-500">{{ $any(scene)['prompt'] }}</p><p>{{ $any(scene)['voiceover'] || '' }}</p></div>
+                    }
+                  </div>
+                }
+              } @else {
+                <p class="text-sm text-amber-700 mt-1">Сценарій у черзі генерації...</p>
+              }
+              <div class="mt-3 flex gap-2 flex-wrap">
+                @if (canApprove() && canReviewScript()) {
+                  <button (click)="approveJob()" data-testid="approve-script-button" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Затвердити сценарій</button>
+                  <button (click)="requestRevision()" data-testid="revision-script-button" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Запитати правки</button>
+                }
+                @if (job()!.status === 'SCRIPT_FAILED') {
+                  <button (click)="regenerateScriptAction()" data-testid="regenerate-script-button" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати</button>
+                }
+              </div>
+            </div>
+          }
+
           @if (activeStoryboard(); as storyboard) {
             <div class="mt-6 bg-violet-50 border border-violet-200 rounded-lg p-4" data-testid="job-storyboard">
               <h4 class="font-medium text-violet-900">Розкадровка, версія {{ storyboard.version }}</h4>
@@ -736,16 +764,24 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   canApprove(): boolean {
     const j = this.job();
-    return !!j && (((j.status === 'READY' || j.status === 'PENDING_APPROVAL') && !j.approved) || this.canReviewStoryboard());
+    if (!j) return false;
+    if (this.canReviewScript() || this.canReviewStoryboard()) return true;
+    return (j.status === 'READY' || j.status === 'PENDING_APPROVAL') && !j.approved;
   }
 
   canReviewApproval(): boolean {
-    return this.job()?.status === 'PENDING_APPROVAL' || this.canReviewStoryboard();
+    const s = this.job()?.status;
+    return s === 'PENDING_APPROVAL' || this.canReviewScript() || this.canReviewStoryboard();
   }
 
   canReviewStoryboard(): boolean {
     const j = this.job();
     return !!j && j.status === 'STORYBOARD_PENDING_APPROVAL' && !!j.active_storyboard_version;
+  }
+
+  canReviewScript(): boolean {
+    const s = this.job()?.status;
+    return s === 'SCRIPT_PENDING_APPROVAL' || s === 'SCRIPT_REVISION_REQUESTED';
   }
 
   canDelete(): boolean { return jobActionAllowed('delete', this.job()?.status); }
@@ -770,9 +806,23 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   resumeJob(): void { this.runAction('resume', () => this.api.resumeJob(this.job()!.job_id)); }
   approveJob(): void {
     const j = this.job()!;
+    if (this.canReviewScript()) {
+      this.runAction('approve', () => this.api.approveScript(j.job_id));
+      return;
+    }
     this.runAction('approve', () => this.canReviewStoryboard()
       ? this.api.approveStoryboard(j.job_id, j.active_storyboard_version!)
       : this.api.approveJob(j.job_id));
+  }
+
+  requestScriptRevision(): void {
+    const revision = window.prompt('Опишіть потрібні зміни до сценарію:');
+    if (revision?.trim()) this.runAction('revision', () => this.api.requestScriptRevision(this.job()!.job_id, revision.trim()));
+  }
+
+  regenerateScriptAction(): void {
+    const revision = window.prompt('Залиште коментар для регенерації (необовʼязково):') || undefined;
+    this.runAction('regenerate', () => this.api.regenerateScript(this.job()!.job_id, revision));
   }
 
   rejectStoryboard(): void {
@@ -791,6 +841,12 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   rejectApproval(): void {
+    if (this.canReviewScript()) {
+      this.confirm.confirm({ title: 'Відхилити сценарій', message: 'Скасувати завдання зі сценарієм?' }).subscribe(ok => {
+        if (ok) this.runAction('reject', () => this.api.cancelJob(this.job()!.job_id));
+      });
+      return;
+    }
     if (this.canReviewStoryboard()) {
       this.rejectStoryboard();
       return;
@@ -801,6 +857,10 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   requestRevision(): void {
+    if (this.canReviewScript()) {
+      this.requestScriptRevision();
+      return;
+    }
     if (this.canReviewStoryboard()) {
       this.requestStoryboardRevision();
       return;

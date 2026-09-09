@@ -12,7 +12,8 @@ from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, utc_
 
 
 def _mock_storyboard_generate(self, job_id, revision=None):
-    job = store.jobs.get(job_id)
+    target_store = getattr(self, "store", store)
+    job = target_store.jobs.get(job_id)
     if not job:
         raise ValueError("Job not found")
     script = job.script or {"title": job.topic, "scenes": [{"prompt": job.topic, "voiceover": "", "duration": 1}]}
@@ -30,12 +31,16 @@ def _mock_storyboard_generate(self, job_id, revision=None):
     job.storyboards.append(storyboard)
     job.active_storyboard_version = storyboard.version
     job.storyboard_error = None
-    store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
+    target_store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
     return storyboard
 
 
-from core.storyboard import StoryboardService
-StoryboardService.generate = _mock_storyboard_generate
+import pytest
+from core.storyboard import StoryboardService as _StoryboardService
+
+@pytest.fixture(autouse=True)
+def _mock_storyboard_for_api(monkeypatch):
+    monkeypatch.setattr(_StoryboardService, "generate", _mock_storyboard_generate)
 
 
 def _approve_script_and_storyboard(client, job_id):

@@ -70,7 +70,7 @@ def test_storyboard_version_approval_and_stale_version_guard(job_store):
         service.approve(job.job_id, 1, "tester")
 
     service.approve(job.job_id, 2, "tester")
-    assert job.status == JobStatus.SCRIPT_READY
+    assert job.status == JobStatus.STORYBOARD_APPROVED
     assert job.script["scenes"][0]["prompt"] == "Українське місто"
     assert job.storyboards[-1].decided_by == "tester"
 

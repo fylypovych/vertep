@@ -1,19 +1,23 @@
 import { Job } from './models';
 
 export const JOB_STATUS_GROUPS = {
-  active: ['SCRIPTING', 'STORYBOARD_GENERATING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING'],
-  queued: ['NEW', 'STORYBOARD_QUEUED'],
-  waiting: ['WAITING_FOR_SYSTEM', 'PENDING_APPROVAL', 'STORYBOARD_PENDING_APPROVAL', 'STORYBOARD_REVISION_REQUESTED'],
-  completed: ['SCRIPT_READY', 'ASSETS_READY', 'VIDEO_READY', 'READY', 'PUBLISHED'],
-  failed: ['FAILED', 'STORYBOARD_FAILED'],
+  active: ['SCRIPT_GENERATING', 'STORYBOARD_GENERATING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING'],
+  queued: ['NEW', 'SCRIPT_QUEUED', 'STORYBOARD_QUEUED'],
+  waiting: ['WAITING_FOR_SYSTEM', 'PENDING_APPROVAL', 'SCRIPT_PENDING_APPROVAL', 'SCRIPT_REVISION_REQUESTED', 'STORYBOARD_PENDING_APPROVAL', 'STORYBOARD_REVISION_REQUESTED'],
+  completed: ['SCRIPT_READY', 'SCRIPT_APPROVED', 'STORYBOARD_APPROVED', 'ASSETS_READY', 'VIDEO_READY', 'READY', 'PUBLISHED'],
+  failed: ['FAILED', 'SCRIPT_FAILED', 'STORYBOARD_FAILED'],
 } as const;
 
 const STATUS_LABELS: Record<string, string> = {
-  NEW: 'Нове', WAITING_FOR_SYSTEM: 'Очікує систему', SCRIPTING: 'Створення сценарію',
+  NEW: 'Нове', WAITING_FOR_SYSTEM: 'Очікує систему',
+  SCRIPT_QUEUED: 'Сценарій у черзі', SCRIPT_GENERATING: 'Створення сценарію',
+  SCRIPT_PENDING_APPROVAL: 'Сценарій очікує затвердження', SCRIPT_REVISION_REQUESTED: 'Запитані правки сценарію',
+  SCRIPT_APPROVED: 'Сценарій затверджено', SCRIPT_FAILED: 'Помилка сценарію',
   STORYBOARD_QUEUED: 'Розкадровка в черзі', STORYBOARD_GENERATING: 'Створення розкадровки',
   STORYBOARD_PENDING_APPROVAL: 'Розкадровка очікує затвердження',
   STORYBOARD_REVISION_REQUESTED: 'Запитані правки', STORYBOARD_REJECTED: 'Розкадровку відхилено',
-  STORYBOARD_FAILED: 'Помилка розкадровки', SCRIPT_READY: 'Сценарій готовий',
+  STORYBOARD_FAILED: 'Помилка розкадровки', STORYBOARD_APPROVED: 'Розкадровка затверджена',
+  SCRIPTING: 'Створення сценарію', SCRIPT_READY: 'Сценарій готовий',
   ASSET_GENERATION: 'Створення матеріалів', ASSETS_READY: 'Матеріали готові',
   VIDEO_GENERATION: 'Створення відео', VIDEO_READY: 'Відео готове', ASSEMBLY: 'Монтаж',
   PENDING_APPROVAL: 'Очікує затвердження', READY: 'Готове', PUBLISHING: 'Публікація',
@@ -60,14 +64,14 @@ export function computeJobStatistics(jobs: Job[]): JobStatistics {
 }
 
 export const JOB_ACTION_STATES: Record<string, readonly string[]> = {
-  pause: [...JOB_STATUS_GROUPS.active, 'NEW', 'STORYBOARD_QUEUED'],
+  pause: [...JOB_STATUS_GROUPS.active, 'NEW', 'SCRIPT_QUEUED', 'STORYBOARD_QUEUED'],
   resume: ['PAUSED'],
-  retry: ['FAILED', 'STORYBOARD_FAILED'],
-  regenerate: ['READY', 'ASSETS_READY', 'VIDEO_READY'],
-  cancel: [...JOB_STATUS_GROUPS.active, ...JOB_STATUS_GROUPS.queued, 'SCRIPT_READY', 'ASSETS_READY', 'VIDEO_READY'],
-  approve: ['READY', 'PENDING_APPROVAL', 'STORYBOARD_PENDING_APPROVAL'],
+  retry: ['FAILED', 'SCRIPT_FAILED', 'STORYBOARD_FAILED'],
+  regenerate: ['READY', 'ASSETS_READY', 'VIDEO_READY', 'SCRIPT_FAILED', 'STORYBOARD_FAILED'],
+  cancel: [...JOB_STATUS_GROUPS.active, ...JOB_STATUS_GROUPS.queued, ...JOB_STATUS_GROUPS.waiting, 'SCRIPT_READY', 'SCRIPT_APPROVED', 'STORYBOARD_APPROVED', 'ASSETS_READY', 'VIDEO_READY'],
+  approve: ['READY', 'PENDING_APPROVAL', 'SCRIPT_PENDING_APPROVAL', 'STORYBOARD_PENDING_APPROVAL'],
   publish: ['READY', 'FAILED'],
-  delete: ['NEW', 'PAUSED', 'READY', 'FAILED', 'CANCELLED', 'PUBLISHED', 'STORYBOARD_REJECTED', 'STORYBOARD_FAILED'],
+  delete: ['NEW', 'PAUSED', 'READY', 'FAILED', 'CANCELLED', 'PUBLISHED', 'STORYBOARD_REJECTED', 'STORYBOARD_FAILED', 'SCRIPT_FAILED', 'SCRIPT_REVISION_REQUESTED'],
 };
 
 export function jobActionAllowed(action: string, status?: string): boolean {

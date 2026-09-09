@@ -9,11 +9,12 @@ from adapters.ffmpeg import FFmpegAdapter
 from core.app import app, store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from core.script_agent import ScriptAgent
-from core.storyboard import StoryboardService
+from core.storyboard import StoryboardService as _StoryboardServiceOrig
 
 
 def _mock_storyboard_generate(self, job_id, revision=None):
-    job = store.jobs.get(job_id)
+    target_store = getattr(self, "store", store)
+    job = target_store.jobs.get(job_id)
     if not job:
         raise ValueError("Job not found")
     script = job.script or {"title": job.topic, "scenes": [{"prompt": job.topic, "voiceover": "", "duration": 1}]}
@@ -31,11 +32,16 @@ def _mock_storyboard_generate(self, job_id, revision=None):
     job.storyboards.append(storyboard)
     job.active_storyboard_version = storyboard.version
     job.storyboard_error = None
-    store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
+    target_store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
     return storyboard
 
 
-StoryboardService.generate = _mock_storyboard_generate
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _mock_storyboard_for_features(monkeypatch):
+    monkeypatch.setattr(_StoryboardServiceOrig, "generate", _mock_storyboard_generate)
 
 
 def wait_for(client, job_id, statuses=("READY", "FAILED")):
