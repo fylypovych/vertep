@@ -87,6 +87,9 @@ services:
       SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      BACKUP_PG_DUMP_CMD: "pg_dump -h postgres -p 5432 -U vertep -d vertep -Fc -f /tmp/vertep.dump"
+      BACKUP_REDIS_DUMP_CMD: "redis-cli -u redis://:${REDIS_PASSWORD}@redis:6379/0 BGSAVE"
+      BACKUP_PG_RESTORE_CMD: "pg_restore -h postgres -p 5432 -U vertep -d vertep -c"
     secrets: [secret_store_passphrase, postgres_password, redis_password]
     volumes:
       - ./config:/data/config
@@ -109,8 +112,14 @@ services:
   migrate:
     image: ${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}
     command: ["python", "/app/scripts/migrate.py"]
+    env_file: .env
     environment:
       DATABASE_URL: "host=postgres port=5432 dbname=vertep user=vertep password=${POSTGRES_PASSWORD}"
+      JOB_ROOT: /data/storage/jobs
+      CHARACTERS_ROOT: /data/storage/characters
+      BRANDS_ROOT: /data/storage/brands
+      WORKFLOWS_ROOT: /data/storage/workflows
+    volumes: ["./storage:/data/storage", "./config:/data/config"]
     depends_on:
       postgres: {condition: service_healthy}
     restart: "no"

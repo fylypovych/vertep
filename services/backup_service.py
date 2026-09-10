@@ -165,6 +165,15 @@ def _remote_copy(destination: Path) -> None:
         pass
 
 
+def _pg_dump_default() -> str | None:
+    return "pg_dump -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep} -d ${POSTGRES_DB:-vertep} -Fc -f /tmp/vertep.dump"
+
+
+def _redis_dump_default() -> str | None:
+    redis_url = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379/0")
+    return f"redis-cli -u {redis_url} BGSAVE"
+
+
 def _archive(destination: Path) -> None:
     with tarfile.open(destination, "w:gz") as archive:
         for label, root in _sources():
@@ -174,29 +183,21 @@ def _archive(destination: Path) -> None:
                 if path.is_file() and not path.is_symlink():
                     archive.add(path, arcname=(Path(label) / path.relative_to(root)).as_posix(),
                                 recursive=False)
-        # Optional DB dumps
-        pg_cmd = os.getenv("BACKUP_PG_DUMP_CMD", "").strip()
+        pg_cmd = os.getenv("BACKUP_PG_DUMP_CMD", _pg_dump_default() or "").strip()
         if pg_cmd:
             try:
                 result = subprocess.run(pg_cmd, shell=True, timeout=120, capture_output=True)
-                if result.returncode == 0 and result.stdout:
-                    with tempfile.NamedTemporaryFile(suffix=".sql", delete=False, mode="wb") as out:
-                        out.write(result.stdout)
-                        out_path = Path(out.name)
-                    archive.add(str(out_path), arcname="db/postgres.sql", recursive=False)
-                    out_path.unlink(missing_ok=True)
+                if result.returncode == 0 and Path("/tmp/vertep.dump").exists():
+                    archive.add("/tmp/vertep.dump", arcname="db/postgres.dump", recursive=False)
+                    Path("/tmp/vertep.dump").unlink(missing_ok=True)
             except Exception:
                 pass
-        redis_cmd = os.getenv("BACKUP_REDIS_DUMP_CMD", "").strip()
+        redis_cmd = os.getenv("BACKUP_REDIS_DUMP_CMD", _redis_dump_default() or "").strip()
         if redis_cmd:
             try:
                 result = subprocess.run(redis_cmd, shell=True, timeout=60, capture_output=True)
-                if result.returncode == 0 and result.stdout:
-                    with tempfile.NamedTemporaryFile(suffix=".rdb", delete=False, mode="wb") as out:
-                        out.write(result.stdout)
-                        out_path = Path(out.name)
-                    archive.add(str(out_path), arcname="db/redis.rdb", recursive=False)
-                    out_path.unlink(missing_ok=True)
+                if result.returncode == 0 and Path("/var/lib/redis/dump.rdb").exists():
+                    archive.add("/var/lib/redis/dump.rdb", arcname="db/redis.rdb", recursive=False)
             except Exception:
                 pass
 
@@ -317,6 +318,8 @@ def restore_snapshot(snapshot_id: str) -> dict:
     with _restore_lock:
         _restore_progress[snapshot_id] = {"status": "running", "progress": 5, "message": "Перевірка цілісності...", "started_at": time.time()}
     try:
+        if not _core_available():
+            raise HTTPException(503, "CORE недоступний, відновлення заборонено")
         _set_restore_progress(snapshot_id, 10, "Розшифрування...")
         restore_root = root / "restore"
         restore_root.mkdir(parents=True, exist_ok=True)
@@ -329,35 +332,57 @@ def restore_snapshot(snapshot_id: str) -> dict:
             _set_restore_progress(snapshot_id, 40, "Розпакування...")
             with tarfile.open(decrypted, "r:gz") as tar:
                 _safe_extract(tar, extracted)
-            _set_restore_progress(snapshot_id, 60, "Відновлення файлів...")
-            restored = []
+            _set_restore_progress(snapshot_id, 60, "Очищення старих файлів...")
             destinations = dict(_sources())
             for label, destination in destinations.items():
                 source_root = extracted / label
                 if not source_root.is_dir():
                     continue
                 destination.mkdir(parents=True, exist_ok=True)
+                snapshot_files = set()
                 for item in sorted(source_root.rglob("*")):
                     relative = item.relative_to(source_root)
                     target = destination / relative
                     if item.is_dir():
                         target.mkdir(parents=True, exist_ok=True)
+                        snapshot_files.add(target)
                     elif item.is_file() and not item.is_symlink():
                         target.parent.mkdir(parents=True, exist_ok=True)
                         temporary_target = target.with_name(f".{target.name}.restore-{os.getpid()}")
                         shutil.copy2(item, temporary_target)
                         temporary_target.replace(target)
-                        restored.append(f"{label}/{relative.as_posix()}")
+                        snapshot_files.add(target)
+                for existing in sorted(destination.rglob("*")):
+                    if existing in snapshot_files:
+                        continue
+                    if existing.is_file() or (existing.is_symlink() and not existing.is_dir()):
+                        existing.unlink(missing_ok=True)
+            _set_restore_progress(snapshot_id, 70, "Відновлення бази даних...")
+            db_root = extracted / "db"
+            if db_root.is_dir():
+                pg_dump = db_root / "postgres.dump"
+                if pg_dump.exists():
+                    pg_restore = os.getenv("BACKUP_PG_RESTORE_CMD", "pg_restore -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep} -d ${POSTGRES_DB:-vertep} -c")
+                    subprocess.run(pg_restore, shell=True, timeout=300, capture_output=True)
+                redis_rdb = db_root / "redis.rdb"
+                if redis_rdb.exists():
+                    redis_data = Path(os.getenv("REDIS_DATA_DIR", "/var/lib/redis"))
+                    redis_data.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(redis_rdb, redis_data / "dump.rdb")
             _set_restore_progress(snapshot_id, 85, "Перевірка після відновлення...")
-            # Post-restore health verification: ensure at least one file restored and sources writable
+            health = _core_health_check()
+            if health is not None and health.get("status") not in (None, "", "HEALTHY", "OK"):
+                raise RuntimeError(f"CORE health check failed after restore: {health}")
             _post_restore_health_check(destinations)
         _set_restore_progress(snapshot_id, 100, "Відновлення завершено", status="done")
-        return {"snapshot_id": snapshot_id, "restored": restored, "sha256": encrypted_digest, "status": "done"}
+        return {"snapshot_id": snapshot_id, "restored": [], "sha256": encrypted_digest, "status": "done"}
     except HTTPException:
+        _set_emergency("Restore failed")
         with _restore_lock:
             _restore_progress[snapshot_id] = {"status": "error", "progress": 0, "message": reason if not allowed else "Помилка відновлення", "started_at": _restore_progress.get(snapshot_id, {}).get("started_at")}
         raise
     except Exception as error:
+        _set_emergency(f"Restore failed: {error}")
         with _restore_lock:
             _restore_progress[snapshot_id] = {"status": "error", "progress": 0, "message": str(error)[:500], "started_at": _restore_progress.get(snapshot_id, {}).get("started_at")}
         raise HTTPException(500, f"Restore failed: {error}") from error
@@ -404,6 +429,53 @@ def restore_progress(snapshot_id: str) -> dict:
             return {"snapshot_id": snapshot_id, "status": "unknown", "progress": 0, "message": "Немає даних про прогрес"}
         raise HTTPException(404, "Snapshot не знайдено")
     return {"snapshot_id": snapshot_id, **entry}
+
+
+def _pg_dump_default() -> str | None:
+    return "pg_dump -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep} -d ${POSTGRES_DB:-vertep} -Fc -f /tmp/vertep.dump"
+
+
+def _redis_dump_default() -> str | None:
+    redis_url = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379/0")
+    return f"redis-cli -u {redis_url} BGSAVE"
+
+
+def _core_available() -> bool:
+    core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
+    if not core_url:
+        return True
+    try:
+        req = urllib.request.Request(f"{core_url}/api/health")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _set_emergency(reason: str) -> None:
+    core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
+    if not core_url:
+        return
+    try:
+        payload = json.dumps({"reason": reason, "operation_id": None}).encode("utf-8")
+        req = urllib.request.Request(f"{core_url}/api/system/state", data=payload,
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return
+    except Exception:
+        pass
+
+
+def _core_health_check() -> dict | None:
+    core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
+    if not core_url:
+        return None
+    try:
+        req = urllib.request.Request(f"{core_url}/api/health")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
 
 
 def _safe_extract(archive: tarfile.TarFile, destination: Path) -> None:

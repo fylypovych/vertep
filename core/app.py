@@ -507,6 +507,8 @@ def _queue_storyboard(job, chat_id: str, revision: str | None = None) -> None:
 def _generate_storyboard_and_notify(job_id: str, chat_id: str, revision: str | None = None) -> None:
     try:
         storyboard = StoryboardService(store).generate(job_id, revision)
+        from .storyboard_telegram import send_storyboard_images
+        send_storyboard_images(chat_id, store.jobs[job_id], storyboard, store.root)
         chunks = render_storyboard(store.jobs[job_id], storyboard)
         for index, chunk in enumerate(chunks):
             markup = storyboard_keyboard(job_id, storyboard.version) if index == len(chunks) - 1 else None
@@ -527,6 +529,8 @@ def _regenerate_storyboard_and_notify(job_id: str, version: int, chat_id: str,
         )
         # regenerate() is synchronous when the service has no executor.
         active = StoryboardService(store).get(job_id, storyboard.active_storyboard_version)
+        from .storyboard_telegram import send_storyboard_images
+        send_storyboard_images(chat_id, store.jobs[job_id], active, store.root)
         chunks = render_storyboard(storyboard, active)
         for index, chunk in enumerate(chunks):
             markup = storyboard_keyboard(job_id, active.version) if index == len(chunks) - 1 else None
@@ -577,16 +581,6 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
             text = "🔁 Перегенеровую всі превʼю розкадровки."
             job = store.jobs.get(job_id)
             if job:
-                for tid in list(job.image_storyboard_task_ids.keys()):
-                    # fallback for demo/tests
-                    import base64 as _b64
-                    demo = _b64.b64encode(b"P6\n2 2\n255\n" + bytes((90, 110, 80)) * 4).decode()
-                    from .image_storyboard import handle_image_result as _h
-                    try: _h(store, job, tid, True, image_base64=demo)
-                    except Exception: pass
-                    from .state import task_queue as _tq3
-                    _tq3.ack(tid)
-                # mark ready->approved if fully regenerated via fallback
                 sb = next((s for s in job.storyboards if s.version == version), None)
                 if sb and all(s.image_artifact_id for s in sb.scenes):
                     sb.image_status = "ready"

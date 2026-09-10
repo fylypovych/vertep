@@ -50,19 +50,18 @@ def ensure_persistent_user_data(*, seed_overwrite: bool = False) -> dict:
         p.mkdir(parents=True, exist_ok=True)
     marker = c_root.parent / ".seed-initialized"
     migrated: dict[str,int] = {}
-    # migrate legacy image-layer path /app/<name> only (not ./<name> on dev host — it contains demo seed that would pollute prod storage)
-    for label, dst in (("characters", c_root), ("brands", b_root), ("workflows", w_root)):
-        for cand in [Path(f"/app/{label}")]:
-            try:
-                if cand.resolve() == dst.resolve():
-                    continue
-            except OSError:
-                pass
-            if cand.is_dir():
-                migrated[label] = migrated.get(label, 0) + _copy_missing(cand, dst, overwrite=False)
-    should_seed = not marker.exists()
     seeded: dict[str,int] = {}
+    should_seed = not marker.exists()
     if should_seed:
+        for label, dst in (("characters", c_root), ("brands", b_root), ("workflows", w_root)):
+            for cand in [Path(f"/app/{label}")]:
+                try:
+                    if cand.resolve() == dst.resolve():
+                        continue
+                except OSError:
+                    pass
+                if cand.is_dir():
+                    migrated[label] = migrated.get(label, 0) + _copy_missing(cand, dst, overwrite=False)
         any_content = any(any(p.is_file() for p in r.rglob("*")) for r in (c_root, b_root, w_root))
         if any_content and any(migrated.values()):
             should_seed = False
@@ -83,4 +82,4 @@ def ensure_persistent_user_data(*, seed_overwrite: bool = False) -> dict:
                     seeded[label] = seeded.get(label, 0) + _copy_missing(src, dst, overwrite=seed_overwrite)
         try: marker.write_text(json.dumps({"seeded":seeded,"migrated":migrated})+"\n", encoding="utf-8")
         except OSError: pass
-    return {"characters_root":str(c_root),"brands_root":str(b_root),"workflows_root":str(w_root),"seeded":seeded,"migrated":migrated,"seed_skipped": not should_seed}
+    return {"characters_root":str(c_root),"brands_root":str(b_root),"workflows_root":str(w_root),"seeded":seeded if not should_seed else {},"migrated":migrated,"seed_skipped": not should_seed}

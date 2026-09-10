@@ -46,6 +46,10 @@ def queue_image_storyboard(store, job: Job, storyboard_version: int, scene_index
         task = _image_task_for(job, storyboard_version, scene, storyboard.image_version)
         enqueued = task_queue.enqueue(task)
         job.image_storyboard_task_ids[enqueued["task_id"]] = scene.scene_id
+        job.image_storyboard_task_versions[enqueued["task_id"]] = {
+            "storyboard_version": storyboard_version,
+            "image_version": storyboard.image_version,
+        }
         store.repository.record_task(enqueued, "QUEUED", None)
         queued += 1
     store.event(job, f"IMAGE STORYBOARD {storyboard_version}:{storyboard.image_version} QUEUED {queued} scene(s)")
@@ -57,6 +61,19 @@ def handle_image_result(store, job: Job, task_id: str, success: bool, image_base
     from .artifacts import register_artifact
     from .file_validation import validate_signature
     scene_id = job.image_storyboard_task_ids.get(task_id)
+    if scene_id is None:
+        return job
+    versions = job.image_storyboard_task_versions.get(task_id)
+    if versions:
+        if versions.get("storyboard_version") != job.active_storyboard_version:
+            job.image_storyboard_task_ids.pop(task_id, None)
+            job.image_storyboard_task_versions.pop(task_id, None)
+            return job
+        storyboard = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
+        if storyboard and versions.get("image_version") != storyboard.image_version:
+            job.image_storyboard_task_ids.pop(task_id, None)
+            job.image_storyboard_task_versions.pop(task_id, None)
+            return job
     storyboard = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
     scene = next((s for s in (storyboard.scenes if storyboard else []) if s.scene_id == scene_id), None) if storyboard else None
     if not success:
@@ -64,6 +81,7 @@ def handle_image_result(store, job: Job, task_id: str, success: bool, image_base
             storyboard.image_status = "pending"
         job.image_storyboard_error = error or "unknown error"
         job.image_storyboard_task_ids.pop(task_id, None)
+        job.image_storyboard_task_versions.pop(task_id, None)
         store.event(job, f"IMAGE STORYBOARD SCENE {scene.index if scene else '?'} FAILED: {error}")
         return job
     raw_images: list[tuple[str, bytes]] = []
@@ -100,6 +118,7 @@ def handle_image_result(store, job: Job, task_id: str, success: bool, image_base
     scene.image_artifact_id = artifact.artifact_id
     scene.artifact_id = artifact.artifact_id
     job.image_storyboard_task_ids.pop(task_id, None)
+    job.image_storyboard_task_versions.pop(task_id, None)
     if storyboard and all(s.image_artifact_id for s in storyboard.scenes):
         storyboard.image_status = "ready"
         store.event(job, f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY")

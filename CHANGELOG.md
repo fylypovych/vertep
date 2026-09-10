@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.37
+- Виправлено `UnboundLocalError` у `core/persistent_data.py` при повторному запуску `ensure_persistent_user_data()`.
+- Розширено storyboard: додано `image_storyboard_task_versions` для відстеження версій завдань, `image_prompt_history` для історії промптів та `send_storyboard_images` для відправки превʼю в Telegram.
+- Оновлено `services/backup_service.py`: додано дефолтні команди `pg_dump`/`redis-cli BGSAVE`, змінено логіку restore на роботу з дампами, додано post-restore health check та переведення в EMERGENCY при помилці.
+- Додано `BACKUP_PG_RESTORE_CMD` у `deploy/docker-compose.yml`, розширено `migrate` service змінними середовища та volumes.
+- Оновлено `.gitignore` та `AGENTS.md`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.36
+- Розширено `services/backup_service.py`: retention за віком і кількістю snapshot, налаштовувана команда remote copy та команди dump PostgreSQL/Redis, показ inventory і прогресу restore.
+- Додано перевірку стану перед restore, облік помилок і перевірку доступності каталогів після відновлення; у CORE додано endpoints стану системи та прогресу restore.
+- Розширено `scripts/restore.sh` підтримкою `.vtbackup` через Backup Service, перевіркою стану системи й доступності CORE після restore; додано параметри backup у `.env.example`.
+- Додано тести retention, блокування restore в EMERGENCY, прогресу та додаткових джерел backup.
+- До commit включено допоміжні файли `patch_settings.py`, `patch_settings2.py` та `settings.patch`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.35
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.34
+- Додано у Web UI показ складу backup, прогресу restore та стану системи; керування кнопками й опитування прогресу відновлення.
+- Розширено API service методами читання стану системи та прогресу restore, а `BackupInfo` — полями inventory, retention і remote copy.
+- Додано тестовий workflow `workflows/image/test_persist.json` із вузлом `LoadImage`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.34
 - Дозакрито Issue #6: негативний тест блокування відео до `image_status == "approved"` та перевірка збереження старих артефактів при `regenerate`; розширено REST-контракт на `images/approve|revision|regenerate`.
 - Доповнено Issue #32: вирівняно `docker-compose.yml` під prod (`JOB_ROOT=/data/storage/jobs`, видалено окремий volume `jobs`), додано інтеграційні тести CRUD→recreate→видалення→recreate та backup→wipe→restore для персонажів/брендів/workflow/jobs (295 passed).

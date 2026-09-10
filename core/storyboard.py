@@ -156,11 +156,15 @@ class StoryboardService:
         storyboard.image_status = "pending"
         targets = set(scene_indexes) if scene_indexes else {s.index for s in storyboard.scenes}
         for scene in storyboard.scenes:
-            if scene.index in targets:
-                scene.image_artifact_id = None
-                scene.image_version = storyboard.image_version
-                if revision:
-                    scene.image_prompt = revision
+            if scene.index not in targets:
+                continue
+            if scene.image_prompt:
+                scene.image_prompt_history.append({
+                    "prompt": scene.image_prompt,
+                    "image_version": storyboard.image_version - 1,
+                })
+            scene.image_prompt = revision or scene.prompt
+            scene.image_version = storyboard.image_version
         job.version += 1
         self.store.event(job, f"IMAGE STORYBOARD {version}:{storyboard.image_version} REVISION by {actor}")
         from .image_storyboard import queue_image_storyboard

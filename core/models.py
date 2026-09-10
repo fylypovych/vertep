@@ -225,6 +225,7 @@ class StoryboardScene(BaseModel):
     scene_id: str | None = None
     artifact_id: str | None = None
     image_prompt: str | None = None
+    image_prompt_history: list[dict] = Field(default_factory=list)
     image_artifact_id: str | None = None
     image_version: int | None = None
 
@@ -309,6 +310,7 @@ class Job(BaseModel):
     storyboard_revision_chat_id: str | None = None
     storyboard_revision_version: int | None = None
     image_storyboard_task_ids: dict[str, str] = Field(default_factory=dict)
+    image_storyboard_task_versions: dict[str, dict[str, int]] = Field(default_factory=dict)
     image_storyboard_error: str | None = None
 
 class WorkerHeartbeat(BaseModel):

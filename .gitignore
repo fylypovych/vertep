@@ -17,3 +17,8 @@ web-v2/dist/
 web-v2/.angular/
 test_web_ui_contracts.py
 /.codeatlas
+/.agents/skills
+/.claude/agents
+/.codex/agents
+/.github/agents
+/.opencode/agents

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from .models import Job, StoryboardVersion
 
 
@@ -30,6 +32,29 @@ def render_storyboard(job: Job, storyboard: StoryboardVersion, limit: int = 3900
     if current:
         chunks.append(current)
     return chunks
+
+
+def send_storyboard_images(chat_id: str, job: Job, storyboard: StoryboardVersion, store_root: Path) -> None:
+    from adapters.telegram import TelegramAdapter
+    adapter = TelegramAdapter()
+    if not adapter.configured():
+        return
+    for scene in storyboard.scenes:
+        if not scene.image_artifact_id:
+            continue
+        folder = Path(job.job_id) / "storyboard" / f"v{storyboard.image_version}"
+        candidates = [
+            store_root / folder / f"scene-{scene.index:03d}-v{storyboard.image_version}.png",
+            store_root / folder / f"scene-{scene.index:03d}-v{storyboard.image_version}.jpg",
+        ]
+        photo_path = next((p for p in candidates if p.exists()), None)
+        if not photo_path:
+            continue
+        caption = f"Сцена {scene.index} · {storyboard.title}"
+        try:
+            adapter.send_photo(str(chat_id), str(photo_path), caption=caption[:1024])
+        except Exception:
+            pass
 
 
 def storyboard_keyboard(job_id: str, version: int, image_version: int | None = None) -> dict:
