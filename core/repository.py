@@ -56,6 +56,19 @@ class FileRepository(StateRepository):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.worker_file = self.root / ".workers.json"
+        self.channel_file = self.root / ".channels.json"
+
+    def _load_channels(self) -> dict[str, Channel]:
+        try:
+            data = json.loads(self.channel_file.read_text(encoding="utf-8"))
+            return {cid: Channel.model_validate(c) for cid, c in data.items()}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_channels(self, channels: dict[str, Channel]) -> None:
+        temporary = self.channel_file.with_suffix(".tmp")
+        temporary.write_text(json.dumps({cid: c.model_dump(mode="json") for cid, c in channels.items()}, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.channel_file)
 
     def load_jobs(self) -> Iterable[Job]:
         for path in self.root.glob("*/job.json"):
@@ -75,7 +88,6 @@ class FileRepository(StateRepository):
         temporary.replace(directory / "job.json")
 
     def delete_job(self, job_id: str) -> None:
-        # JobStore owns removal of the complete artifact directory.
         return None
 
     def save_worker(self, worker: dict) -> None:
@@ -103,6 +115,7 @@ class FileRepository(StateRepository):
 
     def append_event(self, job_id: str, created_at: str, message: str) -> None:
         path = self.root / job_id / "events.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"created_at": created_at, "message": message}, ensure_ascii=False) + "\n")
 
@@ -128,6 +141,26 @@ class FileRepository(StateRepository):
         temporary.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
         temporary.replace(path)
 
+    def list_channels(self, brand_id: str | None = None) -> list[Channel]:
+        channels = self._load_channels()
+        if brand_id:
+            return [c for c in channels.values() if c.brand_id == brand_id]
+        return list(channels.values())
+
+    def get_channel(self, channel_id: str) -> Channel | None:
+        channels = self._load_channels()
+        return channels.get(channel_id)
+
+    def save_channel(self, channel: Channel) -> None:
+        channels = self._load_channels()
+        channels[channel.channel_id] = channel
+        self._save_channels(channels)
+
+    def delete_channel(self, channel_id: str) -> None:
+        channels = self._load_channels()
+        channels.pop(channel_id, None)
+        self._save_channels(channels)
+
 
 class MemoryRepository(StateRepository):
     def __init__(self):
@@ -136,6 +169,7 @@ class MemoryRepository(StateRepository):
         self.events: list[dict] = []
         self.tasks: dict[str, dict] = {}
         self.telegram_updates: dict[str, dict] = {}
+        self.channels: dict[str, Channel] = {}
 
     def load_jobs(self) -> Iterable[Job]:
         return list(self.jobs.values())
@@ -173,6 +207,20 @@ class MemoryRepository(StateRepository):
 
     def record_telegram_update(self, chat_id: str, message_id: str, payload: dict) -> None:
         self.telegram_updates[f"{chat_id}:{message_id}"] = dict(payload)
+
+    def list_channels(self, brand_id: str | None = None) -> list[Channel]:
+        if brand_id:
+            return [c for c in self.channels.values() if c.brand_id == brand_id]
+        return list(self.channels.values())
+
+    def get_channel(self, channel_id: str) -> Channel | None:
+        return self.channels.get(channel_id)
+
+    def save_channel(self, channel: Channel) -> None:
+        self.channels[channel.channel_id] = channel
+
+    def delete_channel(self, channel_id: str) -> None:
+        self.channels.pop(channel_id, None)
 
 
 class PostgresRepository(StateRepository):
@@ -270,20 +318,7 @@ class PostgresRepository(StateRepository):
             cursor.execute("INSERT INTO telegram_updates(chat_id,message_id,payload) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING",
                            (chat_id, message_id, json.dumps(payload)))
 
-    def _ensure_channels_table(self) -> None:
-        with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
-            cursor.execute("""CREATE TABLE IF NOT EXISTS channels (
-                channel_id TEXT PRIMARY KEY,
-                brand_id TEXT NOT NULL,
-                channel_type TEXT NOT NULL,
-                target TEXT NOT NULL,
-                enabled BOOLEAN DEFAULT true,
-                created_at TIMESTAMPTZ DEFAULT now(),
-                metadata JSONB DEFAULT '{}')""")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_brand ON channels(brand_id)")
-
     def list_channels(self, brand_id: str | None = None) -> list[Channel]:
-        self._ensure_channels_table()
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
             if brand_id:
                 cursor.execute("SELECT channel_id, brand_id, channel_type, target, enabled, created_at, metadata FROM channels WHERE brand_id=%s ORDER BY created_at", (brand_id,))
@@ -295,7 +330,6 @@ class PostgresRepository(StateRepository):
                     for row in cursor.fetchall()]
 
     def get_channel(self, channel_id: str) -> Channel | None:
-        self._ensure_channels_table()
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
             cursor.execute("SELECT channel_id, brand_id, channel_type, target, enabled, created_at, metadata FROM channels WHERE channel_id=%s", (channel_id,))
             row = cursor.fetchone()
@@ -306,7 +340,6 @@ class PostgresRepository(StateRepository):
                            metadata=row[6] if isinstance(row[6], dict) else json.loads(row[6]) if row[6] else {})
 
     def save_channel(self, channel: Channel) -> None:
-        self._ensure_channels_table()
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
             cursor.execute("""INSERT INTO channels(channel_id, brand_id, channel_type, target, enabled, created_at, metadata)
                 VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(channel_id) DO UPDATE SET
@@ -315,7 +348,6 @@ class PostgresRepository(StateRepository):
                  channel.enabled, channel.created_at, json.dumps(channel.metadata)))
 
     def delete_channel(self, channel_id: str) -> None:
-        self._ensure_channels_table()
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
             cursor.execute("DELETE FROM channels WHERE channel_id=%s", (channel_id,))
 

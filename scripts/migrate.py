@@ -75,6 +75,23 @@ def migrate(root: Path) -> list[str]:
     return applied_now
 
 
+def backfill_job_sequences(connection) -> None:
+    """Ensure job_sequences reflects the maximum sequence from jobs table."""
+    for row in connection.execute("""
+        SELECT EXTRACT(YEAR FROM created_at)::INTEGER as yr,
+               COALESCE(MAX(split_part(job_id, '-', 2)::BIGINT), 0) as seq
+        FROM jobs
+        WHERE job_id ~ '^[0-9]{4}-[0-9]+$'
+        GROUP BY yr
+    """):
+        yr, seq = row
+        connection.execute(
+            """INSERT INTO job_sequences(year,next_value) VALUES(%s,%s)
+            ON CONFLICT(year) DO UPDATE SET next_value=GREATEST(job_sequences.next_value, excluded.next_value)""",
+            (yr, seq),
+        )
+
+
 if __name__ == "__main__":
     for name in migrate(Path(os.getenv("MIGRATIONS_ROOT", "/app/db"))):
         print(f"Applied {name}")
