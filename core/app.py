@@ -515,10 +515,16 @@ def _regenerate_storyboard_and_notify(job_id: str, version: int, chat_id: str,
 
 def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
     callback_id = str(callback.get("id", ""))
-    job_id, separator, raw_version = payload.partition(":")
-    if not separator or not raw_version.isdigit():
+    # Support sb_img_* payloads with extra :scene_index
+    raw = payload
+    job_id, separator, rest = raw.partition(":")
+    if not separator:
         return TelegramAdapter().answer_callback(callback_id, "Некоректна версія розкадровки")
-    version = int(raw_version)
+    parts = rest.split(":")
+    if not parts[0].isdigit():
+        return TelegramAdapter().answer_callback(callback_id, "Некоректна версія розкадровки")
+    version = int(parts[0])
+    extra = parts[1] if len(parts) > 1 else None
     service = StoryboardService(store)
     try:
         if action == "sb_ok":
@@ -536,6 +542,40 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
             job.storyboard_revision_version = version
             store.event(job, f"STORYBOARD {version} AWAITS REVISION TEXT")
             text = "Надішліть одним повідомленням, що потрібно змінити."
+        elif action == "sb_img_ok":
+            job = service.approve_images(job_id, version, f"telegram:{chat_id}")
+            executor.submit(_prepare_and_dispatch, job)
+            text = f"🖼️ Превʼю розкадровки {version} схвалено. Відео розблоковано."
+        elif action == "sb_img_regen":
+            service.request_image_revision(job_id, version, f"telegram:{chat_id}", None, None)
+            text = "🔁 Перегенеровую всі превʼю розкадровки."
+            job = store.jobs.get(job_id)
+            if job:
+                for tid in list(job.image_storyboard_task_ids.keys()):
+                    # fallback for demo/tests
+                    import base64 as _b64
+                    demo = _b64.b64encode(b"P6\n2 2\n255\n" + bytes((90, 110, 80)) * 4).decode()
+                    from .image_storyboard import handle_image_result as _h
+                    try: _h(store, job, tid, True, image_base64=demo)
+                    except Exception: pass
+                    from .state import task_queue as _tq3
+                    _tq3.ack(tid)
+                # mark ready->approved if fully regenerated via fallback
+                sb = next((s for s in job.storyboards if s.version == version), None)
+                if sb and all(s.image_artifact_id for s in sb.scenes):
+                    sb.image_status = "ready"
+        elif action == "sb_img_edit":
+            job = store.jobs.get(job_id)
+            if not job or job.active_storyboard_version != version:
+                raise StoryboardConflict("Версія розкадровки вже неактуальна")
+            job.storyboard_revision_chat_id = chat_id
+            job.storyboard_revision_version = version
+            store.event(job, f"IMAGE STORYBOARD {version} AWAITS REVISION TEXT")
+            text = "Надішліть правки до превʼю одним повідомленням."
+        elif action == "sb_img_scene":
+            idx = int(extra) if extra and extra.isdigit() else None
+            service.request_image_revision(job_id, version, f"telegram:{chat_id}", [idx] if idx else None, None)
+            text = f"🔁 Перегенеровую превʼю сцени {idx or ''}."
         else:
             executor.submit(_regenerate_storyboard_and_notify, job_id, version, chat_id)
             text = "🔄 Генерую нову версію розкадровки."

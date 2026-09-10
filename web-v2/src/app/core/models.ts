@@ -171,6 +171,11 @@ export interface StoryboardScene {
   video_prompt: string;
   voiceover: string;
   duration: number;
+  scene_id?: string;
+  artifact_id?: string;
+  image_prompt?: string;
+  image_artifact_id?: string;
+  image_version?: number;
 }
 
 export interface StoryboardVersion {
@@ -184,6 +189,8 @@ export interface StoryboardVersion {
   created_at: string;
   decided_at?: string;
   decided_by?: string;
+  image_version: number;
+  image_status: 'pending' | 'generating' | 'ready' | 'approved' | 'superseded';
 }
 
 export interface Character {

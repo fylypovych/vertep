@@ -2,6 +2,7 @@ import base64
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -28,9 +29,18 @@ def _mock_storyboard_generate(self, job_id, revision=None):
         version=(job.storyboards[-1].version + 1 if job.storyboards else 1),
         title=script.get("title", job.topic), description=script.get("description", ""),
         hashtags=script.get("hashtags", []), scenes=scenes, status="pending_approval",
+        image_status="approved", image_version=1,
     )
+    # Mock image previews as already approved so video generation is not blocked (Issue #6)
+    for scene in storyboard.scenes:
+        scene.scene_id = f"sb-{storyboard.version}-{scene.index}"
+        scene.image_prompt = scene.prompt
+        scene.image_version = 1
+        scene.image_artifact_id = f"mock-art-{scene.index}"
+        scene.artifact_id = scene.image_artifact_id
     job.storyboards.append(storyboard)
     job.active_storyboard_version = storyboard.version
+    job.active_image_version = storyboard.image_version
     job.storyboard_error = None
     target_store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
     return storyboard
@@ -356,3 +366,71 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
     assert completed["status"] == "READY"
     assert any(item["kind"] == "video_scene" for item in completed["artifacts"])
     assert b"ftyp" in client.get(f"/jobs/{job_id}/final/video.mp4").content[:32]
+
+
+def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("DEMO_MODE", "true")
+
+    def _fake_assemble(self, output, **kwargs):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"ftypmp42" + b"\x00" * 100)
+        return output
+
+    def _fake_probe(self, path):
+        return {"format": "mp4", "validated": "container"}
+
+    monkeypatch.setattr(FFmpegAdapter, "assemble", _fake_assemble)
+    monkeypatch.setattr(FFmpegAdapter, "probe", _fake_probe)
+    client = TestClient(app)
+    heartbeat(client, "image-worker", supported_tasks=["image"], capabilities=["image_generation"])
+    heartbeat(client, "voice-worker", supported_tasks=["voice"], capabilities=["speech_synthesis"], role="voice")
+    job_id = client.post("/api/jobs", json={"topic": "TTS pipeline test",
+                                            "character_id": "did_samogon"}).json()["job_id"]
+    approve_script(client, job_id)
+    image_task = None
+    for _ in range(100):
+        resp = client.post("/api/tasks/claim", json={"node_name": "image-worker", "vram_mb": 4096})
+        body = resp.json()
+        image_task = body.get("task")
+        print(f"CLAIM iteration={_}, status={resp.status_code}, task_job={image_task.get('job_id') if image_task else None}, task_type={image_task.get('task') if image_task else None}")
+        if image_task and image_task.get("job_id") == job_id:
+            break
+        time.sleep(0.01)
+    print(f"FINAL image_task={image_task}")
+    assert image_task
+    ppm = b"P6\n2 2\n255\n" + bytes((0, 0, 255)) * 4
+    image_result = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": image_task["task_id"],
+                               "node_name": "image-worker", "success": True,
+                               "filename": "scene.ppm", "image_base64": base64.b64encode(ppm).decode()})
+    assert image_result.status_code == 200
+    tts_task = None
+    for _ in range(100):
+        tts_task = client.post("/api/tasks/claim", json={"node_name": "voice-worker", "vram_mb": 0}).json().get("task")
+        if tts_task and tts_task["job_id"] == job_id:
+            break
+        time.sleep(0.01)
+    assert tts_task
+    assert tts_task.get("task") == "voice"
+    assert tts_task.get("provider") == "none"
+    assert tts_task.get("voice") is None
+    import io as _io
+    import math as _math
+    import struct as _struct
+    import wave as _wave
+    _buf = _io.BytesIO()
+    _w = _wave.open(_buf, "wb")
+    _w.setnchannels(1); _w.setsampwidth(2); _w.setframerate(44100)
+    _w.writeframes(b"".join(_struct.pack("<h", int(12000 * _math.sin(2 * _math.pi * 440 * i / 44100))) for i in range(44100))); _w.close()
+    wav = _buf.getvalue()
+    tts_result = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": tts_task["task_id"],
+                                 "node_name": "voice-worker", "success": True,
+                                 "artifacts": [{"filename": "speech.wav", "data_base64": base64.b64encode(wav).decode()}]})
+    assert tts_result.status_code == 200
+    completed = wait_for(client, job_id)
+    assert completed["status"] == "READY"
+    audio_artifacts = [item for item in completed["artifacts"] if item["kind"] == "audio"]
+    assert audio_artifacts
+    audio_path = Path(store.root) / job_id / "audio" / audio_artifacts[0]["filename"]
+    assert audio_path.exists()
+    assert audio_path.read_bytes() == wav

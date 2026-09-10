@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, signal } from '@angular/core';
+﻿import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription, timeout, take } from 'rxjs';
@@ -446,6 +446,7 @@ interface SecretGroup {
       <!-- Logo (V2C-605) -->
       <div class="bg-white rounded-xl border border-slate-200 p-5">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">Логотип</h3>
+        @if (logoError()) { <p role="alert" class="text-sm text-red-600 mb-3">{{ logoError() }}</p> }
         <div class="flex items-center gap-4">
           <div class="w-16 h-16 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden bg-slate-50">
             @if (logoUrl()) {
@@ -456,8 +457,8 @@ interface SecretGroup {
           </div>
           <div class="flex gap-2">
             <label class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer">
-              Завантажити
-              <input type="file" accept="image/*" (change)="uploadLogoFile($event)" class="hidden" data-testid="logo-upload">
+              {{ logoUploading() ? 'Завантаження...' : 'Завантажити' }}
+              <input [disabled]="logoUploading()" type="file" accept="image/*" (change)="uploadLogoFile($event)" class="hidden" data-testid="logo-upload">
             </label>
             @if (logoUrl()) {
               <button (click)="deleteLogoFile()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">Видалити</button>
@@ -567,6 +568,8 @@ export class SettingsComponent implements OnInit, OnDestroy {
   certError = signal<string | null>(null);
 
   logoUrl = signal<string | null>(null);
+  logoUploading = signal(false);
+  logoError = signal<string | null>(null);
   secCheck = signal<{ ok: boolean; weak_or_missing: string[]; recommendation: string } | null>(null);
   secLoading = signal(false);
 
@@ -956,12 +959,25 @@ export class SettingsComponent implements OnInit, OnDestroy {
   uploadLogoFile(event: Event): void {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
-    if (!file) return;
-    this.api.uploadLogo(file).subscribe({
-      next: () => { this.toast.show('Логотип завантажено', 'success'); this.loadLogo(); },
-      error: (err) => this.toast.show(err.message || 'Помилка завантаження', 'error'),
-    });
+    if (!file || this.logoUploading()) return;
     input.value = '';
+    this.logoError.set(null);
+    if (!file.type.startsWith('image/') || file.size > 2 * 1024 * 1024 || !file.size) {
+      this.logoError.set('Виберіть непорожнє зображення розміром до 2 МБ.');
+      return;
+    }
+    this.logoUploading.set(true);
+    this.api.uploadLogo(file).subscribe({
+      next: () => {
+        this.logoUploading.set(false);
+        this.toast.show('Логотип завантажено', 'success');
+        this.loadLogo();
+      },
+      error: (err) => {
+        this.logoUploading.set(false);
+        this.logoError.set(err.message || 'Не вдалося завантажити логотип');
+      },
+    });
   }
 
   deleteLogoFile(): void {

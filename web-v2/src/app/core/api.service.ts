@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@angular/core';
+﻿import { Injectable, Inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
@@ -96,6 +96,18 @@ export class VertepApiService {
 
   regenerateStoryboard(jobId: string, version: number, revision?: string): Observable<Job> {
     return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/regenerate`, { version, actor: 'web-v2', revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  approveImageStoryboard(jobId: string, version: number): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/approve`, { version, actor: 'web-v2' }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  revisionImageStoryboard(jobId: string, version: number, opts: { scene_indexes?: number[]; revision?: string } = {}): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/revision`, { version, actor: 'web-v2', scene_indexes: opts.scene_indexes, revision: opts.revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  regenerateImageStoryboard(jobId: string, version: number, revision?: string): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/regenerate`, { version, actor: 'web-v2', revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   updateJob(jobId: string, payload: JobUpdate): Observable<Job> {
@@ -460,9 +472,9 @@ export class VertepApiService {
   }
 
   uploadLogo(file: File): Observable<{ saved: boolean }> {
-    const form = new FormData();
-    form.append('file', file);
-    return this.http.post<{ saved: boolean }>(`${this.baseUrl}/settings/logo`, form, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+    return this.http.put<{ saved: boolean }>(`${this.baseUrl}/settings/logo`, file, {
+      headers: this.getHeaders().set('Content-Type', file.type),
+    }).pipe(catchError(this.handleError));
   }
 
   deleteLogo(): Observable<{ deleted: boolean }> {

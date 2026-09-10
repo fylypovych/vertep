@@ -25,7 +25,7 @@ def current_tested_capabilities(worker: dict, now: datetime | None = None) -> se
     return declared & attested
 
 
-def available_worker(workers: list[dict], job: Job) -> dict | None:
+def available_worker(workers: list[dict], job: Job, task_type: str | None = None, min_vram_mb: int | None = None) -> dict | None:
     now = datetime.now(timezone.utc)
     candidates: list[dict] = []
     for worker in workers:
@@ -43,15 +43,17 @@ def available_worker(workers: list[dict], job: Job) -> dict | None:
         available_vram = worker.get("free_vram_mb")
         if available_vram is None:
             available_vram = worker.get("vram_mb", 0)
-        if available_vram < job.min_vram_mb:
+        required_vram = min_vram_mb if min_vram_mb is not None else job.min_vram_mb
+        if available_vram < required_vram:
             continue
+        effective_task_type = task_type or job.task_type
         required_capability = {"image": "image_generation", "video": "video_generation",
                                "text": "text_generation", "voice": "speech_synthesis",
-                               "publish": "publishing"}.get(job.task_type, job.task_type)
+                               "publish": "publishing"}.get(effective_task_type, effective_task_type)
         capabilities = tested_capabilities if require_self_test else set(worker.get("capabilities") or [])
         if capabilities and required_capability not in capabilities:
             continue
-        if not capabilities and job.task_type not in worker.get("supported_tasks", ["image"]):
+        if not capabilities and effective_task_type not in worker.get("supported_tasks", ["image"]):
             continue
         supported_workflows = worker.get("supported_workflows", ["*"])
         if "*" not in supported_workflows and (job.workflow or "") not in supported_workflows:

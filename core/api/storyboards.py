@@ -59,6 +59,35 @@ def approve_storyboard(job_id: str, body: StoryboardAction):
     return job
 
 
+class ImageStoryboardAction(BaseModel):
+    version: int = Field(ge=1)
+    image_version: int | None = None
+    actor: str = Field(default="api", min_length=1, max_length=200)
+    scene_indexes: list[int] | None = None
+    revision: str | None = Field(default=None, max_length=4000)
+
+
+@router.post("/api/jobs/{job_id}/storyboards/images/approve")
+def approve_image_storyboard(job_id: str, body: ImageStoryboardAction):
+    job = _translate(lambda: _service().approve_images(job_id, body.version, body.actor))
+    executor.submit(_prepare_and_dispatch, job)
+    return job
+
+
+@router.post("/api/jobs/{job_id}/storyboards/images/revision")
+def revision_image_storyboard(job_id: str, body: ImageStoryboardAction):
+    return _translate(lambda: _service().request_image_revision(
+        job_id, body.version, body.actor, body.scene_indexes, body.revision
+    ))
+
+
+@router.post("/api/jobs/{job_id}/storyboards/images/regenerate")
+def regenerate_image_storyboard(job_id: str, body: ImageStoryboardAction):
+    return _translate(lambda: _service().request_image_revision(
+        job_id, body.version, body.actor, body.scene_indexes, body.revision
+    ))
+
+
 @router.post("/api/jobs/{job_id}/storyboards/reject")
 def reject_storyboard(job_id: str, body: StoryboardAction):
     return _translate(lambda: _service().reject(job_id, body.version, body.actor))

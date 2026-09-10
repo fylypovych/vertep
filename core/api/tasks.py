@@ -21,8 +21,9 @@ from ..security import _valid_worker_request
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state
 from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
-                          _ordered_scene_files, _scene_for_task, _select_worker,
-                          _serialize_job_result, _task_for)
+                          _dispatch_tts, _has_voice_worker, _ordered_scene_files, _pending_voice_scenes,
+                          _scene_for_task, _select_worker, _serialize_job_result,
+                          _task_for, _tts_task_for)
 
 router = APIRouter()
 
@@ -46,7 +47,31 @@ def claim_task(payload: TaskClaim, request: Request):
         if not task:
             break
         job = store.jobs.get(task["job_id"])
-        worker = _select_worker([worker_data], job) if job else None
+        if task.get("kind") == "image_storyboard":
+            sb_version = task.get("storyboard_version")
+            if job.status != JobStatus.STORYBOARD_PENDING_APPROVAL or job.active_storyboard_version != sb_version:
+                task_queue.ack(task["task_id"])
+                continue
+            worker = _select_worker([worker_data], job, task_type="image", min_vram_mb=task.get("min_vram_mb")) if job else None
+            if not worker:
+                held_tasks.append(task["task_id"])
+                continue
+            for held_task_id in held_tasks:
+                task_queue.release(held_task_id)
+            held_tasks.clear()
+            store.workers[payload.node_name] = worker_data
+            store.workers[payload.node_name]["status"] = "BUSY"
+            store.workers[payload.node_name]["current_job"] = job.job_id
+            store.workers[payload.node_name]["current_task"] = task["task_id"]
+            store.save_worker(store.workers[payload.node_name])
+            store.event(job, f"{payload.node_name} IMAGE STORYBOARD CLAIMED {task.get('scene_id')}")
+            store.repository.record_task(task, "CLAIMED", payload.node_name)
+            return {"task": task}
+        scene = _scene_for_task(job, task.get("task_id", ""))
+        is_tts = job.status == JobStatus.TTS_GENERATING and task.get("task") == "voice"
+        effective_task_type = task.get("task") if is_tts else job.task_type
+        effective_min_vram = task.get("min_vram_mb") if is_tts else None
+        worker = _select_worker([worker_data], job, task_type=effective_task_type, min_vram_mb=effective_min_vram) if job else None
         if job and worker:
             for held_task_id in held_tasks:
                 task_queue.release(held_task_id)
@@ -54,10 +79,19 @@ def claim_task(payload: TaskClaim, request: Request):
         else:
             held_tasks.append(task["task_id"])
             continue
-        scene = _scene_for_task(job, task.get("task_id", ""))
-        if job.status != JobStatus.ASSET_GENERATION or not scene:
+        if not ((job.status == JobStatus.ASSET_GENERATION and scene) or (is_tts and scene)):
             task_queue.ack(task["task_id"])
             continue
+        if is_tts:
+            scene.assigned_worker = payload.node_name
+            store.workers[payload.node_name] = worker_data
+            store.workers[payload.node_name]["status"] = "BUSY"
+            store.workers[payload.node_name]["current_job"] = job.job_id
+            store.workers[payload.node_name]["current_task"] = task["task_id"]
+            store.save_worker(store.workers[payload.node_name])
+            store.event(job, f"{payload.node_name} TTS ASSIGNED TO {scene.scene_id}")
+            store.repository.record_task(task, "CLAIMED", payload.node_name)
+            return {"task": task}
         start_scene(scene, task["task_id"], payload.node_name)
         job.assigned_worker = payload.node_name
         store.workers[payload.node_name] = worker_data
@@ -142,6 +176,114 @@ def task_result(result: TaskResult, request: Request):
     job = store.jobs.get(result.job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    if result.task_id in job.image_storyboard_task_ids:
+        from ..image_storyboard import handle_image_result
+        worker = store.workers.get(result.node_name)
+        if worker:
+            desired_status = worker.get("desired_state")
+            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            store.save_worker(worker)
+        try:
+            handle_image_result(store, job, result.task_id, result.success, result.image_base64, result.error, result.artifacts or result.images)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        from ..state import task_queue as _tq2
+        _tq2.ack(result.task_id)
+        store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "image", "kind": "image_storyboard"}, "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
+        if not result.success:
+            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "kind": "image_storyboard"}, result.error)
+        return job
+    is_tts = result.task_id in job.tts_active_task_ids
+    if is_tts:
+        if result.task_id in job.completed_task_ids:
+            return job
+        scene = _scene_for_task(job, result.task_id)
+        if not scene or scene.assigned_worker != result.node_name:
+            raise HTTPException(409, "TTS result does not match the active task")
+        if job.status in {JobStatus.CANCELLED, JobStatus.PAUSED}:
+            raise HTTPException(409, f"Job is {job.status.value}")
+        worker = store.workers.get(result.node_name)
+        if worker:
+            desired_status = worker.get("desired_state")
+            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status, "current_job": None,
+                           "current_task": None, "last_seen": utc_now()})
+            store.save_worker(worker)
+        if not result.success:
+            task_queue.ack(result.task_id)
+            store.repository.record_task(_tts_task_for(job, scene) | {"task_id": result.task_id}, "FAILED", result.node_name, result.error)
+            job.tts_active_task_ids.pop(result.task_id, None)
+            scene.assigned_worker = None
+            if len(scene.attempts) < job.max_retries:
+                store.event(job, f"{scene.scene_id} TTS FAILED, RETRY {len(scene.attempts)}/{job.max_retries}: {result.error or 'unknown error'}")
+                delay = float(os.getenv("RETRY_BACKOFF_BASE", "2")) * (2 ** max(0, job.retries - 1))
+                _enqueue_tts_task(job, scene)
+                return job
+            transition_stage(job, StageName.TTS, StageStatus.FAILED, result.error or "unknown error")
+            return store.update(job, JobStatus.FAILED, f"TTS FAILED: {result.error or 'unknown error'}")
+        artifacts = result.artifacts or []
+        if not artifacts:
+            raise HTTPException(400, "Successful TTS result has no artifact")
+        saved_artifacts = []
+        prepared_images = []
+        total_size = 0
+        for artifact_index, artifact in enumerate(artifacts, 1):
+            try:
+                encoded = artifact.get("data_base64") or artifact.get("image_base64")
+                data = base64.b64decode(encoded, validate=True)
+            except (KeyError, TypeError, ValueError, binascii.Error) as error:
+                raise HTTPException(400, "Invalid base64 artifact") from error
+            total_size += len(data)
+            max_artifact_bytes = int(os.getenv("MAX_ARTIFACT_BYTES", "26214400"))
+            if total_size > max_artifact_bytes:
+                raise HTTPException(413, "Artifacts are too large")
+            supplied_name = Path(artifact.get("filename", f"{scene.scene_id}.wav")).name
+            suffix = Path(supplied_name).suffix.lower()
+            allowed_suffixes = {".wav", ".ogg", ".mp3", ".aac", ".m4a"}
+            if suffix not in allowed_suffixes:
+                raise HTTPException(400, f"Unsupported audio artifact type: {suffix}")
+            try:
+                validate_signature(data, suffix)
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from error
+            filename = f"voice-{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"voice-{scene.scene_id}-{artifact_index:03d}{suffix}"
+            audio_path = store.root / job.job_id / "audio" / filename
+            prepared_images.append((audio_path, data))
+        temporary_images = []
+        try:
+            for audio_path, data in prepared_images:
+                temporary = audio_path.with_name(f".{audio_path.name}.{result.task_id[:8]}.part")
+                temporary.write_bytes(data)
+                temporary_images.append((temporary, audio_path))
+            for temporary, audio_path in temporary_images:
+                temporary.replace(audio_path)
+        except OSError as error:
+            for temporary, _ in temporary_images:
+                temporary.unlink(missing_ok=True)
+            raise HTTPException(500, "Could not persist audio artifacts") from error
+        for audio_path, _ in prepared_images:
+            saved_artifacts.append(register_artifact(job, store.root, audio_path, "audio",
+                                                     scene_id=scene.scene_id, task_id=result.task_id,
+                                                     node_name=result.node_name, workflow=job.workflow))
+        task_queue.ack(result.task_id)
+        store.repository.record_task(_tts_task_for(job, scene) | {"task_id": result.task_id}, "COMPLETED", result.node_name)
+        job.completed_task_ids.append(result.task_id)
+        job.tts_active_task_ids.pop(result.task_id, None)
+        if not job.tts_active_task_ids:
+            transition_stage(job, StageName.TTS, StageStatus.READY)
+            store.transition(job, JobStatus.TTS_READY, "TTS COMPLETED")
+            if job.task_type in {"image", "video"}:
+                ordered_images = _ordered_scene_files(job)
+                if ordered_images:
+                    executor.submit(_finalize_and_notify, job, ordered_images)
+                else:
+                    transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED, "Missing images for assembly")
+                    store.update(job, JobStatus.FAILED, "MISSING IMAGES FOR ASSEMBLY")
+            elif job.task_type == "voice":
+                terminal = JobStatus.READY
+                return store.update(job, terminal, "VOICE TASK COMPLETED")
+        return store.event(job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
     if result.task_id in job.completed_task_ids:
         completed_scene = next((item for item in job.scenes if item.task_id == result.task_id), None)
         owner = completed_scene.attempts[-1].node_name if completed_scene and completed_scene.attempts else None
@@ -250,6 +392,19 @@ def task_result(result: TaskResult, request: Request):
         saved_artifacts.append(register_artifact(job, store.root, image_path, artifact_kind,
                                                  scene_id=scene.scene_id, task_id=result.task_id,
                                                  node_name=result.node_name, workflow=job.workflow))
+    if not result.success:
+        task_queue.ack(result.task_id)
+        store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id}, "FAILED", result.node_name, result.error)
+        fail_scene(scene, result.error or "unknown error")
+        job.active_task_ids.pop(result.task_id, None)
+        scene.assigned_worker = None
+        if len(scene.attempts) < job.max_retries:
+            store.event(job, f"{scene.scene_id} FAILED, RETRY {len(scene.attempts)}/{job.max_retries}: {result.error or 'unknown error'}")
+            delay = float(os.getenv("RETRY_BACKOFF_BASE", "2")) * (2 ** max(0, job.retries - 1))
+            _enqueue_job_task(job, scene, new_attempt=True)
+            return job
+        transition_stage(job, StageName.ASSETS, StageStatus.FAILED, result.error or "unknown error")
+        return store.update(job, JobStatus.FAILED, f"ASSET GENERATION FAILED: {result.error or 'unknown error'}")
     task_queue.ack(result.task_id)
     store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id}, "COMPLETED", result.node_name)
     job.completed_task_ids.append(result.task_id)
@@ -262,6 +417,10 @@ def task_result(result: TaskResult, request: Request):
         if job.task_type in {"text", "voice", "backup", "publish"}:
             terminal = JobStatus.PUBLISHED if job.task_type == "publish" else JobStatus.READY
             return store.update(job, terminal, f"{job.task_type.upper()} TASK COMPLETED")
+        if _pending_voice_scenes(job) and _has_voice_worker(store):
+            store.transition(job, JobStatus.TTS_GENERATING, "TTS GENERATION STARTED")
+            _dispatch_tts(store, job)
+            return job
         ordered_images = _ordered_scene_files(job)
         executor.submit(_finalize_and_notify, job, ordered_images)
     return store.event(job, f"RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")

@@ -299,12 +299,32 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
 
           @if (activeStoryboard(); as storyboard) {
             <div class="mt-6 bg-violet-50 border border-violet-200 rounded-lg p-4" data-testid="job-storyboard">
-              <h4 class="font-medium text-violet-900">Розкадровка, версія {{ storyboard.version }}</h4>
+              <h4 class="font-medium text-violet-900">Розкадровка, версія {{ storyboard.version }} · превʼю v{{ storyboard.image_version }} ({{ storyboard.image_status }})</h4>
               <p class="text-sm text-violet-800">{{ storyboard.title }}</p>
-              <div class="mt-3 space-y-2">
+              <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 @for (scene of storyboard.scenes; track scene.index) {
-                  <div class="bg-white rounded p-3 text-sm"><strong>Сцена {{ scene.index }} · {{ scene.duration }} с</strong><p>{{ scene.voiceover }}</p><p class="text-xs text-slate-500">{{ scene.prompt }}</p></div>
+                  <div class="bg-white rounded p-3 text-sm">
+                    <strong>Сцена {{ scene.index }} · {{ scene.duration }} с</strong>
+                    <p>{{ scene.voiceover }}</p>
+                    <p class="text-xs text-slate-500">{{ scene.prompt }}</p>
+                    @if (scene.image_artifact_id) {
+                      <p class="text-xs text-emerald-600 mt-1">Превʼю: {{ scene.image_artifact_id }} (v{{ scene.image_version }})</p>
+                      <a [href]="'/api/jobs/' + job()!.job_id + '/artifacts/' + scene.image_artifact_id + '/download'" class="text-xs text-emerald-600 hover:underline">Відкрити превʼю</a>
+                    } @else {
+                      <p class="text-xs text-amber-600 mt-1">Превʼю генерується... ({{ storyboard.image_status }})</p>
+                    }
+                    <div class="mt-2 flex gap-2">
+                      <button (click)="regenerateImageScene(scene.index)" class="text-xs px-2 py-1 border rounded">Перегенерувати сцену</button>
+                    </div>
+                  </div>
                 }
+              </div>
+              <div class="mt-3 flex gap-2 flex-wrap">
+                @if (storyboard.image_status === 'ready') {
+                  <button (click)="approveImageStoryboard()" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Затвердити превʼю розкадровки</button>
+                }
+                <button (click)="regenerateImageStoryboardAll()" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати всі превʼю</button>
+                <button (click)="revisionImageStoryboard()" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до превʼю</button>
               </div>
             </div>
           }
@@ -795,6 +815,25 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   activeStoryboard() {
     const j = this.job();
     return j?.storyboards?.find(item => item.version === j.active_storyboard_version) || null;
+  }
+
+  approveImageStoryboard(): void {
+    const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
+    this.runAction('approve', () => this.api.approveImageStoryboard(j.job_id, sb.version));
+  }
+  regenerateImageScene(index: number): void {
+    const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
+    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { scene_indexes: [index] }));
+  }
+  regenerateImageStoryboardAll(): void {
+    const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
+    this.runAction('approve', () => this.api.regenerateImageStoryboard(j.job_id, sb.version));
+  }
+  revisionImageStoryboard(): void {
+    const rev = window.prompt('Опишіть правки до превʼю (prompt для сцени):');
+    if (rev === null) return;
+    const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
+    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { revision: rev }));
   }
 
   actionLabel(action: string): string {

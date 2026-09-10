@@ -27,9 +27,17 @@ def _mock_storyboard_generate(self, job_id, revision=None):
         version=(job.storyboards[-1].version + 1 if job.storyboards else 1),
         title=script.get("title", job.topic), description=script.get("description", ""),
         hashtags=script.get("hashtags", []), scenes=scenes, status="pending_approval",
+        image_status="approved", image_version=1,
     )
+    for scene in storyboard.scenes:
+        scene.scene_id = f"sb-{storyboard.version}-{scene.index}"
+        scene.image_prompt = scene.prompt
+        scene.image_version = 1
+        scene.image_artifact_id = f"mock-art-{scene.index}"
+        scene.artifact_id = scene.image_artifact_id
     job.storyboards.append(storyboard)
     job.active_storyboard_version = storyboard.version
+    job.active_image_version = storyboard.image_version
     job.storyboard_error = None
     target_store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
     return storyboard

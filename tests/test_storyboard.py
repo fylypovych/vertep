@@ -63,12 +63,29 @@ def test_storyboard_version_approval_and_stale_version_guard(job_store):
     first = service.generate(job.job_id)
     assert job.status == JobStatus.STORYBOARD_PENDING_APPROVAL
     assert first.version == 1
+    # Issue #6: storyboard cannot be approved before image previews are approved
+    with pytest.raises(StoryboardConflict):
+        service.approve(job.job_id, 1, "tester")
+    # Simulate GPU worker completing image previews and approving them
+    for scene in first.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    first.image_status = "ready"
+    service.approve_images(job.job_id, 1, "tester")
+    assert first.image_status == "approved"
+
     service.regenerate(job.job_id, 1, "tester", "Зроби динамічніше")
     assert job.active_storyboard_version == 2
     assert first.status == "superseded"
     with pytest.raises(StoryboardConflict):
         service.approve(job.job_id, 1, "tester")
 
+    second = next(s for s in job.storyboards if s.version == 2)
+    with pytest.raises(StoryboardConflict):
+        service.approve(job.job_id, 2, "tester")
+    for scene in second.scenes:
+        scene.image_artifact_id = f"artifact2-{scene.index}"
+    second.image_status = "ready"
+    service.approve_images(job.job_id, 2, "tester")
     service.approve(job.job_id, 2, "tester")
     assert job.status == JobStatus.STORYBOARD_APPROVED
     assert job.script["scenes"][0]["prompt"] == "Українське місто"

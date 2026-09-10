@@ -91,8 +91,15 @@ def synthesize_voice(text: str, voice: str = "default", speed: int = 150) -> byt
 
 def execute_voice(task: dict) -> list[dict]:
     endpoint = os.getenv("TTS_URL", "http://tts:8090").rstrip("/") + "/synthesize"
-    response = httpx.post(endpoint, json={"text": task["topic"],
-                          "voice": task.get("voice") or os.getenv("TTS_VOICE", "default")}, timeout=180)
+    voice = task.get("voice") or os.getenv("TTS_VOICE", "default")
+    provider = task.get("provider")
+    if provider:
+        voice = f"{provider}:{voice}" if voice != "default" else provider
+    payload = {"text": task["topic"], "voice": voice}
+    speed = task.get("speed")
+    if speed is not None:
+        payload["speed"] = int(speed)
+    response = httpx.post(endpoint, json=payload, timeout=180)
     response.raise_for_status()
     content_type = response.headers.get("content-type", "")
     if "json" in content_type:

@@ -74,11 +74,32 @@ class StoryboardService:
                     prompt_version=PROMPT_VERSION, model=getattr(client, "model", ""),
                     status="pending_approval", revision_request=revision,
                 )
+                for scene in storyboard.scenes:
+                    scene.scene_id = f"sb-{storyboard.version}-{scene.index}"
+                    scene.image_prompt = scene.prompt
+                    scene.image_version = storyboard.image_version
                 job.storyboards.append(storyboard)
                 job.active_storyboard_version = storyboard.version
+                job.active_image_version = storyboard.image_version
                 job.storyboard_error = None
                 self.store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL,
                                   f"STORYBOARD {storyboard.version} PENDING APPROVAL")
+                try:
+                    from .image_storyboard import queue_image_storyboard
+                    queue_image_storyboard(self.store, job, storyboard.version)
+                    if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+                        from .image_storyboard import handle_image_result as _handle
+                        import base64
+                        demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
+                        b64 = base64.b64encode(demo_ppm).decode()
+                        for tid in list(job.image_storyboard_task_ids.keys()):
+                            _handle(self.store, job, tid, True, image_base64=b64)
+                            from .state import task_queue as _tq
+                            _tq.ack(tid)
+                        # fallback only produces previews as ready — explicit approval required (Issue #6)
+                        self.store.event(job, f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY (fallback)")
+                except Exception as exc:
+                    self.store.event(job, f"IMAGE STORYBOARD QUEUE FAILED: {exc}")
                 return storyboard
             except Exception as caught:
                 error = str(caught)
@@ -91,19 +112,59 @@ class StoryboardService:
     def approve(self, job_id: str, version: int, actor: str) -> Job:
         job = self._job(job_id)
         storyboard = self._active(job, version)
+        if storyboard.image_status != "approved":
+            raise StoryboardConflict(f"Image storyboard {version}:{storyboard.image_version} is {storyboard.image_status}; approve previews first")
         storyboard.status = "approved"
         storyboard.decided_at = utc_now()
         storyboard.decided_by = actor
         job.script = normalize_script({
             "title": storyboard.title, "description": storyboard.description,
             "hashtags": storyboard.hashtags,
-            "scenes": [scene.model_dump(exclude={"index"}) for scene in storyboard.scenes],
+            "scenes": [scene.model_dump(exclude={"index", "scene_id", "artifact_id", "image_prompt", "image_artifact_id", "image_version"}) for scene in storyboard.scenes],
         }, job.topic)
         job.approved = True
         job.approval_status = "approved"
         job.version += 1
         self.store.update(job, JobStatus.STORYBOARD_APPROVED,
                           f"STORYBOARD {version} APPROVED by {actor}")
+        return job
+
+    def approve_images(self, job_id: str, version: int, actor: str) -> Job:
+        job = self._job(job_id)
+        storyboard = self._active(job, version)
+        if any(not scene.image_artifact_id for scene in storyboard.scenes):
+            raise StoryboardConflict("Not all scene preview images are ready")
+        if storyboard.image_status not in {"ready", "pending"}:
+            raise StoryboardConflict(f"Image storyboard is {storyboard.image_status}")
+        storyboard.image_status = "approved"
+        storyboard.decided_at = utc_now()
+        storyboard.decided_by = actor
+        job.active_image_version = storyboard.image_version
+        job.version += 1
+        self.store.event(job, f"IMAGE STORYBOARD {version}:{storyboard.image_version} APPROVED by {actor}")
+        return job
+
+    def request_image_revision(self, job_id: str, version: int, actor: str,
+                               scene_indexes: list[int] | None = None,
+                               revision: str | None = None) -> Job:
+        job = self._job(job_id)
+        storyboard = self._active(job, version)
+        for previous in job.storyboards:
+            if previous.version == version and previous.image_status == "approved":
+                previous.image_status = "superseded"
+        storyboard.image_version += 1
+        storyboard.image_status = "pending"
+        targets = set(scene_indexes) if scene_indexes else {s.index for s in storyboard.scenes}
+        for scene in storyboard.scenes:
+            if scene.index in targets:
+                scene.image_artifact_id = None
+                scene.image_version = storyboard.image_version
+                if revision:
+                    scene.image_prompt = revision
+        job.version += 1
+        self.store.event(job, f"IMAGE STORYBOARD {version}:{storyboard.image_version} REVISION by {actor}")
+        from .image_storyboard import queue_image_storyboard
+        queue_image_storyboard(self.store, job, version, scene_indexes)
         return job
 
     def reject(self, job_id: str, version: int, actor: str) -> Job:

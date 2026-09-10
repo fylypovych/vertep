@@ -17,11 +17,12 @@ from fastapi import HTTPException, Request
 from adapters.telegram import TelegramAdapter
 
 from ..artifacts import register_artifact
+from ..configuration import load_character
 from ..dispatcher import available_worker, can_retry
-from ..models import JobStatus, StageName, StageStatus, TaskResult
+from ..models import JobStatus, SceneRecord, StageName, StageStatus, TaskResult
 from ..orchestration import (all_scenes_ready, finish_scene, initialize_plan,
                              interrupt_scene, pending_scenes, transition_stage)
-from ..pipeline import finalize_job_safe, prepare_job_safe, queue_storyboard
+from ..pipeline import JobStore, finalize_job_safe, prepare_job_safe, queue_storyboard
 from ..state import result_locks, store, task_queue, workflow_registry
 
 
@@ -55,17 +56,22 @@ def _job_is_due(job) -> bool:
 
 
 def _scene_for_task(job, task_id: str):
-    scene_id = job.active_task_ids.get(task_id)
+    scene_id = job.active_task_ids.get(task_id) or job.tts_active_task_ids.get(task_id)
     return next((scene for scene in job.scenes if scene.scene_id == scene_id), None)
 
 
-def _select_worker(workers: list[dict], job):
+def _select_worker(workers: list[dict], job, task_type: str | None = None, min_vram_mb: int | None = None):
     dispatcher_url = os.getenv("DISPATCHER_URL", "").rstrip("/")
     if not dispatcher_url:
-        return available_worker(workers, job)
+        return available_worker(workers, job, task_type=task_type, min_vram_mb=min_vram_mb)
     try:
+        payload = {"workers": workers, "job": job.model_dump(mode="json")}
+        if task_type:
+            payload["task_type"] = task_type
+        if min_vram_mb is not None:
+            payload["min_vram_mb"] = min_vram_mb
         response = httpx.post(f"{dispatcher_url}/select",
-                              json={"workers": workers, "job": job.model_dump(mode="json")}, timeout=3)
+                              json=payload, timeout=3)
         response.raise_for_status()
         return response.json().get("worker")
     except (httpx.HTTPError, ValueError):
@@ -111,6 +117,29 @@ def _enqueue_job_task(job, scene=None, *, new_attempt: bool = False, delay: floa
     store.repository.record_task(queued, "QUEUED")
     suffix = f" FOR {scene.scene_id}" if scene is not None else ""
     store.event(job, f"TASK {queued['task_id']} QUEUED{suffix}")
+    return queued
+
+
+def _tts_task_for(job, scene) -> dict:
+    character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id)
+    voice_config = character.voice or {}
+    return {"job_id": job.job_id, "task": "voice", "priority": job.priority,
+            "min_vram_mb": 0, "workflow": job.workflow or "",
+            "topic": scene.voiceover or scene.prompt or job.topic,
+            "task_id": None, "scene_id": scene.scene_id,
+            "voice": voice_config.get("voice"),
+            "provider": voice_config.get("provider"),
+            "language": voice_config.get("language"),
+            "speed": voice_config.get("speed", 150)}
+
+
+def _enqueue_tts_task(job, scene) -> dict:
+    task = _tts_task_for(job, scene)
+    queued = task_queue.enqueue(task)
+    scene.task_id = queued["task_id"]
+    job.tts_active_task_ids[queued["task_id"]] = scene.scene_id
+    store.repository.record_task(queued, "QUEUED")
+    store.event(job, f"TTS TASK {queued['task_id']} QUEUED FOR {scene.scene_id}")
     return queued
 
 
@@ -209,6 +238,33 @@ def _dispatch_assets(store, job) -> None:
             _finalize_and_notify(job, images)
 
 
+def _pending_voice_scenes(job) -> list[SceneRecord]:
+    initialize_plan(job)
+    tts_scene_ids = set(job.tts_active_task_ids.values())
+    return [scene for scene in job.scenes
+            if scene.status == StageStatus.READY and scene.scene_id not in tts_scene_ids and scene.voiceover]
+
+
+def _has_voice_worker(store: JobStore) -> bool:
+    return any(
+        "speech_synthesis" in (worker.get("capabilities") or []) or worker.get("role") == "voice"
+        for worker in store.workers.values()
+    )
+
+
+def _dispatch_tts(store, job) -> None:
+    initialize_plan(job)
+    if job.stages[StageName.TTS.value].status == StageStatus.PENDING:
+        transition_stage(job, StageName.TTS, StageStatus.RUNNING)
+    if not job.tts_active_task_ids and not _pending_voice_scenes(job):
+        transition_stage(job, StageName.TTS, StageStatus.READY)
+        if job.task_type in {"image", "video"}:
+            store.transition(job, JobStatus.ASSETS_READY, "TTS SKIPPED; NO VOICEOVER")
+        return
+    queued = [_enqueue_tts_task(job, scene)
+              for scene in _pending_voice_scenes(job)]
+
+
 def _prepare_and_dispatch(job) -> None:
     from ..pipeline import generate_script
     while True:
@@ -233,11 +289,31 @@ def _prepare_and_dispatch(job) -> None:
         queue_storyboard(store, job)
         return
     if job.status == JobStatus.STORYBOARD_APPROVED:
+        sb = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
+        if sb and sb.image_status != "approved":
+            store.event(job, f"IMAGE STORYBOARD NOT APPROVED (status={sb.image_status}); enqueue preview images")
+            from ..image_storyboard import queue_image_storyboard
+            if not all(s.image_artifact_id for s in sb.scenes):
+                queue_image_storyboard(store, job, sb.version)
+                if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+                    from ..image_storyboard import handle_image_result as _handle
+                    import base64
+                    demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
+                    b64 = base64.b64encode(demo_ppm).decode()
+                    for tid in list(job.image_storyboard_task_ids.keys()):
+                        _handle(store, job, tid, True, image_base64=b64)
+                        from ..state import task_queue as _tq
+                        _tq.ack(tid)
+                    store.event(job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
+            # No explicit image approval yet — wait for user action (Issue #6 rule)
+            return
         store.transition(job, JobStatus.ASSET_GENERATION, "ASSET GENERATION STARTED")
         _dispatch_assets(store, job)
         return
     if job.status == JobStatus.ASSET_GENERATION:
         _dispatch_assets(store, job)
+    if job.status == JobStatus.TTS_GENERATING:
+        _dispatch_tts(store, job)
 
 
 def _job_action(job_id: str, status: JobStatus, event: str):
@@ -258,16 +334,33 @@ def _job_action(job_id: str, status: JobStatus, event: str):
                 scene.status = StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED
                 scene.task_id = None
                 scene.assigned_worker = None
+        for task_id, scene_id in list(job.tts_active_task_ids.items()):
+            scene = next((item for item in job.scenes if item.scene_id == scene_id), None)
+            worker = scene.assigned_worker if scene else None
+            if worker:
+                task_queue.request_cancel(worker, task_id)
+            task_queue.discard(task_id)
+            store.repository.record_task(_tts_task_for(job, scene) | {"task_id": task_id},
+                                         task_status, worker)
+            if scene:
+                scene.task_id = None
         job.active_task_ids.clear()
+        job.tts_active_task_ids.clear()
         job.active_task_id = None
         job.assigned_worker = None
         if job.stages and job.stages[StageName.ASSETS.value].status == StageStatus.RUNNING:
             transition_stage(job, StageName.ASSETS,
                              StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
+        if job.stages and job.stages[StageName.TTS.value].status == StageStatus.RUNNING:
+            transition_stage(job, StageName.TTS,
+                             StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
     elif status == JobStatus.NEW:
         for scene in job.scenes:
             if scene.status == StageStatus.PAUSED:
                 scene.status = StageStatus.PENDING
-        if job.stages and job.stages[StageName.ASSETS.value].status == StageStatus.PAUSED:
-            transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
+        if job.stages:
+            if job.stages[StageName.ASSETS.value].status == StageStatus.PAUSED:
+                transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
+            if job.stages[StageName.TTS.value].status == StageStatus.PAUSED:
+                transition_stage(job, StageName.TTS, StageStatus.RUNNING)
     return store.update(job, status, event)

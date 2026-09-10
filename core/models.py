@@ -32,6 +32,8 @@ class JobStatus(str, Enum):
     VIDEO_APPROVED = "VIDEO_APPROVED"
     VIDEO_FAILED = "VIDEO_FAILED"
     ASSEMBLY = "ASSEMBLY"
+    TTS_GENERATING = "TTS_GENERATING"
+    TTS_READY = "TTS_READY"
     PENDING_APPROVAL = "PENDING_APPROVAL"
     READY = "READY"
     PUBLISHING = "PUBLISHING"
@@ -57,9 +59,11 @@ JOB_STATE_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.STORYBOARD_APPROVED: {JobStatus.ASSET_GENERATION, JobStatus.CANCELLED},
     JobStatus.STORYBOARD_REJECTED: {JobStatus.CANCELLED, JobStatus.STORYBOARD_QUEUED},
     JobStatus.STORYBOARD_FAILED: {JobStatus.STORYBOARD_QUEUED, JobStatus.CANCELLED},
-    JobStatus.ASSET_GENERATION: {JobStatus.ASSETS_READY, JobStatus.FAILED, JobStatus.PAUSED, JobStatus.CANCELLED},
-    JobStatus.ASSETS_READY: {JobStatus.VIDEO_GENERATION, JobStatus.PAUSED, JobStatus.CANCELLED},
+    JobStatus.ASSET_GENERATION: {JobStatus.ASSETS_READY, JobStatus.TTS_GENERATING, JobStatus.FAILED, JobStatus.PAUSED, JobStatus.CANCELLED},
+    JobStatus.ASSETS_READY: {JobStatus.TTS_GENERATING, JobStatus.VIDEO_GENERATION, JobStatus.PAUSED, JobStatus.CANCELLED},
     JobStatus.VIDEO_GENERATION: {JobStatus.VIDEO_PENDING_APPROVAL, JobStatus.VIDEO_FAILED, JobStatus.CANCELLED},
+    JobStatus.TTS_GENERATING: {JobStatus.TTS_READY, JobStatus.FAILED, JobStatus.PAUSED, JobStatus.CANCELLED},
+    JobStatus.TTS_READY: {JobStatus.VIDEO_GENERATION, JobStatus.ASSEMBLY, JobStatus.PAUSED, JobStatus.CANCELLED},
     JobStatus.VIDEO_PENDING_APPROVAL: {JobStatus.VIDEO_APPROVED, JobStatus.VIDEO_REVISION_REQUESTED, JobStatus.VIDEO_FAILED, JobStatus.CANCELLED},
     JobStatus.VIDEO_REVISION_REQUESTED: {JobStatus.VIDEO_GENERATION, JobStatus.CANCELLED},
     JobStatus.VIDEO_APPROVED: {JobStatus.ASSEMBLY, JobStatus.CANCELLED},
@@ -69,7 +73,7 @@ JOB_STATE_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.READY: {JobStatus.PUBLISHING, JobStatus.PAUSED, JobStatus.CANCELLED},
     JobStatus.PUBLISHING: {JobStatus.PUBLISHED, JobStatus.FAILED, JobStatus.CANCELLED},
     JobStatus.PUBLISHED: {JobStatus.CANCELLED},
-    JobStatus.FAILED: {JobStatus.NEW, JobStatus.SCRIPT_QUEUED, JobStatus.STORYBOARD_QUEUED, JobStatus.VIDEO_GENERATION, JobStatus.CANCELLED},
+    JobStatus.FAILED: {JobStatus.NEW, JobStatus.SCRIPT_QUEUED, JobStatus.STORYBOARD_QUEUED, JobStatus.VIDEO_GENERATION, JobStatus.TTS_GENERATING, JobStatus.CANCELLED},
     JobStatus.PAUSED: {JobStatus.NEW, JobStatus.CANCELLED},
     JobStatus.CANCELLED: set(),
 }
@@ -218,6 +222,11 @@ class StoryboardScene(BaseModel):
     video_prompt: str = Field(min_length=1, max_length=4000)
     voiceover: str = Field(default="", max_length=10000)
     duration: float = Field(gt=0, le=600)
+    scene_id: str | None = None
+    artifact_id: str | None = None
+    image_prompt: str | None = None
+    image_artifact_id: str | None = None
+    image_version: int | None = None
 
 
 class StoryboardVersion(BaseModel):
@@ -233,6 +242,8 @@ class StoryboardVersion(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     decided_at: str | None = None
     decided_by: str | None = None
+    image_version: int = 1
+    image_status: str = Field(default="pending", pattern="^(pending|generating|ready|approved|superseded)$")
 
 class JobCreate(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
@@ -281,6 +292,7 @@ class Job(BaseModel):
     workflow: str | None = None
     active_task_id: str | None = None
     active_task_ids: dict[str, str] = Field(default_factory=dict)
+    tts_active_task_ids: dict[str, str] = Field(default_factory=dict)
     completed_task_ids: list[str] = Field(default_factory=list)
     aspect_ratio: str = "16:9"
     output_preset: str = "youtube"
@@ -291,10 +303,13 @@ class Job(BaseModel):
     scheduled_for: str | None = None
     storyboards: list[StoryboardVersion] = Field(default_factory=list)
     active_storyboard_version: int | None = None
+    active_image_version: int | None = None
     storyboard_attempt: int = 0
     storyboard_error: str | None = None
     storyboard_revision_chat_id: str | None = None
     storyboard_revision_version: int | None = None
+    image_storyboard_task_ids: dict[str, str] = Field(default_factory=dict)
+    image_storyboard_error: str | None = None
 
 class WorkerHeartbeat(BaseModel):
     node_name: str
