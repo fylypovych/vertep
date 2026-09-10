@@ -1,4 +1,4 @@
-﻿import { Injectable, Inject } from '@angular/core';
+import { Injectable, Inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
@@ -358,6 +358,14 @@ export class VertepApiService {
     return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/backups/${encodeURIComponent(snapshotId)}/restore`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
+  getRestoreProgress(snapshotId: string): Observable<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/backups/${encodeURIComponent(snapshotId)}/restore/progress`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  getSystemState(): Observable<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/state`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
   getLicense(): Observable<Record<string, unknown>> {
     return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/license`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
@@ -506,3 +514,4 @@ export class VertepApiService {
     return throwError(() => new Error(err?.detail || err?.message || 'API error'));
   }
 }
+

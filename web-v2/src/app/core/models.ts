@@ -375,6 +375,10 @@ export interface BackupInfo {
   size_bytes?: number;
   state?: string;
   description?: string;
+  inventory?: Array<{ label: string; path: string }>;
+  retention_days?: number;
+  max_snapshots?: number;
+  remote_copy?: boolean;
   [key: string]: unknown;
 }
 
