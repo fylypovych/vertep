@@ -33,6 +33,17 @@ def _backup_root() -> Path:
 
 
 def _sources() -> list[tuple[str, Path]]:
+    raw = os.getenv("BACKUP_SOURCES", "").strip()
+    if raw:
+        sources: list[tuple[str, Path]] = []
+        for item in raw.split(","):
+            item = item.strip()
+            if not item or ":" not in item:
+                continue
+            label, path = item.split(":", 1)
+            sources.append((label.strip(), Path(path.strip())))
+        if sources:
+            return sources
     return [("config", Path(os.getenv("BACKUP_CONFIG_ROOT", "/data/config"))),
             ("storage", Path(os.getenv("BACKUP_STORAGE_ROOT", "/data/storage")))]
 

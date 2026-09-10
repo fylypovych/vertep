@@ -90,6 +90,32 @@ from .security import (_authenticate_user, _hash_secret, _session_token, _valid_
 @asynccontextmanager
 async def lifespan(_app):
     global telegram_polling_service
+    # Issue 32: migrate ephemeral characters/brands/workflows to persistent storage on startup.
+    try:
+        from .persistent_data import ensure_persistent_user_data, persistent_characters_root, persistent_brands_root, workflows_persistent_root
+        res = ensure_persistent_user_data()
+        os.environ.setdefault("CHARACTERS_ROOT", str(persistent_characters_root()))
+        os.environ.setdefault("BRANDS_ROOT", str(persistent_brands_root()))
+        os.environ.setdefault("WORKFLOWS_ROOT", str(workflows_persistent_root()))
+        # Re-point the already-imported registry if it was created with the old fallback.
+        try:
+            from .state import workflow_registry as _wr
+            env_wf = os.getenv("WORKFLOWS_ROOT")
+            if env_wf and str(_wr.root) != env_wf:
+                _wr.root = env_wf
+        except Exception:
+            pass
+        try:
+            from .state import logger as _lg
+            _lg.info("Persistent user-data ensured at startup: %s", res)
+        except Exception:
+            pass
+    except Exception as _e:
+        try:
+            from .state import logger as _lg2
+            _lg2.warning("Persistent user-data ensure failed: %s", _e)
+        except Exception:
+            pass
     if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
         write_node_crl()
     for recovered_job in list(store.jobs.values()):

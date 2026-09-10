@@ -11,10 +11,14 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
       DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
       UPDATE_STATE_DIR: /var/lib/vertep/update
+      JOB_ROOT: /data/jobs
+      CHARACTERS_ROOT: /data/storage/characters
+      BRANDS_ROOT: /data/storage/brands
+      WORKFLOWS_ROOT: /data/storage/workflows
     volumes:
+      - storage:/data/storage
       - jobs:/data/jobs
       - logs:/data/logs
-      - ./characters:/app/characters:ro
       - ./runtime/update:/var/lib/vertep/update
     depends_on:
       redis:
@@ -31,8 +35,9 @@ services:
     environment:
       NODE_NAME: ${NODE_NAME:-gpu-demo-01}
       CORE_ADDRESS: ${CORE_ADDRESS:-http://core:8080}
+      WORKFLOWS_ROOT: /data/storage/workflows
     volumes:
-      - ./workflows:/app/workflows:ro
+      - storage:/data/storage
       - logs:/data/logs
     depends_on:
       - core
@@ -63,6 +68,7 @@ services:
       timeout: 3s
       retries: 20
 volumes:
+  storage:
   jobs:
   redis-data:
   postgres-data:

@@ -1,5 +1,13 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.33
+- Реалізовано Issue #16: завершено Backup/Restore та Backup Node — реальний backup-сервіс із AES-256-GCM шифруванням, retention policy, remote storage hooks, кастомними inventory джерелами, restore progress, system-state gating та post-restore health verification.
+- Розширено `services/backup_service.py`: підтримка `BACKUP_SOURCES`, `BACKUP_RETENTION_DAYS`, `BACKUP_MAX_SNAPSHOTS`, `BACKUP_REMOTE_CMD`, `BACKUP_CORE_URL`, `BACKUP_PG_DUMP_CMD`, `BACKUP_REDIS_DUMP_CMD`; додано `/snapshots/{id}/restore/progress` та `/system/status`.
+- Оновлено `core/app.py`: додано `/api/system/state` та проксі `/api/system/backups/{snapshot_id}/restore/progress`.
+- Оновлено Web UI V2: `SettingsComponent` з inventory, прогрес restore, system-state попередженням, disable кнопок та polling прогресу; розширено `BackupInfo` та API service.
+- Оновлено `scripts/restore.sh`: гейти за станом, `.vtbackup` підтримка, post-restore health check.
+- Додано тести: retention, emergency block, restore progress, custom sources; усі 312 тестів проходять.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.32
 - Реалізовано image storyboard для Issue #6: після approval сценарію генерується `StoryboardVersion` із `preview` зображеннями кожної сцени через GPU Worker/ComfyUI (`queue_image_storyboard`), зберігається зв'язок `scene → prompt → artifact → version` (`image_artifact_id`, `image_version`, `image_status`).
 - Додано цикл затвердження image storyboard: `POST /api/jobs/{id}/storyboards/images/{approve|revision|regenerate}` з версіонуванням, підтримкою `scene_indexes` та `revision`; `StoryboardService.approve_images` / `request_image_revision` з `409` при застарілій версії.
