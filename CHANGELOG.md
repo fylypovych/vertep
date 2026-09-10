@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.38
+- Додано regression-тест для Telegram creation feedback: помилки вибору персонажа та збереження Job показуються користувачу, а невдалий запит можна повторити.
+- Додано browser tests для відображення API-помилки створення Job і автоматичного оновлення списку Job після Telegram creation.
+- Задокументовано історичні release notes `0.0.1.35` і `0.0.1.36`; поточний release включає зміни storyboard approval, Backup/Restore та міграції channels.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.37
 - Виправлено `UnboundLocalError` у `core/persistent_data.py` при повторному запуску `ensure_persistent_user_data()`.
 - Розширено storyboard: додано `image_storyboard_task_versions` для відстеження версій завдань, `image_prompt_history` для історії промптів та `send_storyboard_images` для відправки превʼю в Telegram.

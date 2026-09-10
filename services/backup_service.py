@@ -62,9 +62,6 @@ def _key() -> bytes:
         key_file = os.getenv("BACKUP_ENCRYPTION_KEY_FILE", "")
         if key_file:
             encoded = Path(key_file).read_text(encoding="ascii").strip()
-        # Bootstrap has historically stored a 32-byte key as 64 hexadecimal
-        # characters. API deployments may provide the same key as base64.
-        # Accept both representations so existing backups remain readable.
         value = (bytes.fromhex(encoded) if re.fullmatch(r"[0-9a-fA-F]{64}", encoded)
                  else base64.b64decode(encoded, validate=True))
     except (OSError, ValueError) as error:
@@ -172,6 +169,11 @@ def _pg_dump_default() -> str | None:
 def _redis_dump_default() -> str | None:
     redis_url = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379/0")
     return f"redis-cli -u {redis_url} BGSAVE"
+
+
+def _command_exists(command: str) -> bool:
+    import shutil
+    return shutil.which(command.split()[0]) is not None
 
 
 def _archive(destination: Path) -> None:
@@ -314,7 +316,6 @@ def restore_snapshot(snapshot_id: str) -> dict:
     encrypted_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     if not secrets.compare_digest(encrypted_digest, str(receipt.get("sha256", ""))):
         raise HTTPException(409, "Checksum snapshot не збігається")
-    # Initialize progress
     with _restore_lock:
         _restore_progress[snapshot_id] = {"status": "running", "progress": 5, "message": "Перевірка цілісності...", "started_at": time.time()}
     try:
@@ -362,8 +363,10 @@ def restore_snapshot(snapshot_id: str) -> dict:
             if db_root.is_dir():
                 pg_dump = db_root / "postgres.dump"
                 if pg_dump.exists():
-                    pg_restore = os.getenv("BACKUP_PG_RESTORE_CMD", "pg_restore -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep} -d ${POSTGRES_DB:-vertep} -c")
-                    subprocess.run(pg_restore, shell=True, timeout=300, capture_output=True)
+                    pg_restore = os.getenv("BACKUP_PG_RESTORE_CMD", f"pg_restore -h ${{POSTGRES_HOST:-postgres}} -p ${{POSTGRES_PORT:-5432}} -U ${{POSTGRES_USER:-vertep}} -d ${{POSTGRES_DB:-vertep}} -c {pg_dump}")
+                    result = subprocess.run(pg_restore, shell=True, timeout=300, capture_output=True)
+                    if result.returncode != 0:
+                        raise RuntimeError(f"pg_restore failed: {result.stderr.decode()}")
                 redis_rdb = db_root / "redis.rdb"
                 if redis_rdb.exists():
                     redis_data = Path(os.getenv("REDIS_DATA_DIR", "/var/lib/redis"))
@@ -398,21 +401,18 @@ def _set_restore_progress(snapshot_id: str, progress: int, message: str, status:
 
 
 def _post_restore_health_check(destinations: dict[str, Path]) -> None:
-    """Verify that restore produced a healthy state: destinations exist and writable, at least one file present."""
     total_files = 0
     for label, destination in destinations.items():
         if not destination.exists():
             raise RuntimeError(f"Post-restore check failed: {label} missing at {destination}")
         if not os.access(destination, os.W_OK):
             raise RuntimeError(f"Post-restore check failed: {label} not writable")
-        # Count files
         try:
             total_files += sum(1 for p in destination.rglob("*") if p.is_file())
         except Exception:
             pass
-    # We don't fail if storage is empty — config must exist
     if total_files == 0:
-        pass  # Allow empty restore (e.g. fresh install)
+        pass
 
 
 @app.get("/snapshots/{snapshot_id}/restore/progress")
@@ -422,7 +422,6 @@ def restore_progress(snapshot_id: str) -> dict:
     with _restore_lock:
         entry = _restore_progress.get(snapshot_id)
     if entry is None:
-        # If snapshot exists but no progress tracked, report done if file exists
         root = _backup_root()
         source = root / f"{snapshot_id}.vtbackup"
         if source.exists():
@@ -462,8 +461,8 @@ def _set_emergency(reason: str) -> None:
                                      headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return
-    except Exception:
-        pass
+    except Exception as error:
+        raise RuntimeError(f"Failed to set EMERGENCY via core API: {error}") from error
 
 
 def _core_health_check() -> dict | None:

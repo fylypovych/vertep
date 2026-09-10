@@ -117,6 +117,7 @@ class StoryboardService:
         storyboard.status = "approved"
         storyboard.decided_at = utc_now()
         storyboard.decided_by = actor
+        storyboard.approved_script = job.script
         job.script = normalize_script({
             "title": storyboard.title, "description": storyboard.description,
             "hashtags": storyboard.hashtags,
@@ -150,7 +151,7 @@ class StoryboardService:
         job = self._job(job_id)
         storyboard = self._active(job, version)
         for previous in job.storyboards:
-            if previous.version == version and previous.image_status == "approved":
+            if previous.image_status == "approved":
                 previous.image_status = "superseded"
         storyboard.image_version += 1
         storyboard.image_status = "pending"
@@ -165,6 +166,7 @@ class StoryboardService:
                 })
             scene.image_prompt = revision or scene.prompt
             scene.image_version = storyboard.image_version
+            scene.image_artifact_id = None
         job.version += 1
         self.store.event(job, f"IMAGE STORYBOARD {version}:{storyboard.image_version} REVISION by {actor}")
         from .image_storyboard import queue_image_storyboard
@@ -177,7 +179,15 @@ class StoryboardService:
         storyboard.status = "rejected"
         storyboard.decided_at = utc_now()
         storyboard.decided_by = actor
-        job.approval_status = "rejected"
+        for previous in reversed(job.storyboards):
+            if previous.version != version and previous.status == "approved" and previous.approved_script:
+                job.script = previous.approved_script
+                job.approved = True
+                job.approval_status = "approved"
+                break
+        else:
+            job.approved = False
+            job.approval_status = "rejected"
         job.version += 1
         return self.store.update(job, JobStatus.STORYBOARD_REJECTED,
                                  f"STORYBOARD {version} REJECTED by {actor}")

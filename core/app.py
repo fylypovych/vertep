@@ -71,7 +71,6 @@ from .api.models import router as models_router
 from .api.setup import router as setup_router, _validate_ai_backend, first_run_complete
 from .api.storyboards import router as storyboards_router
 from .storyboard import StoryboardConflict, StoryboardService
-from .storyboard_telegram import render_storyboard, storyboard_keyboard
 
 from .api.jobs import (router as jobs_router, cancel_job, retry_job,
                        approve_job, publish_job)
@@ -267,7 +266,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
         return response
 
 app.add_middleware(AdminAuthMiddleware)
@@ -484,17 +483,29 @@ def _handle_character_selection(callback: dict, chat_id: str, character_id: str)
         return TelegramAdapter().answer_callback(callback_id, "Сесію закрито. Почніть спочатку.")
     pending = pending_data["pending"]
     brand_id = pending_data["brand_id"]
-    _telegram_pending_character.pop(chat_id, None)
-    TelegramAdapter().answer_callback(callback_id, f"Персонаж {character_id} обрано. Створюю завдання…")
+    adapter = TelegramAdapter()
+    # A callback acknowledgement is not confirmation that a Job was saved.
+    try:
+        adapter.answer_callback(callback_id, "Перевіряю персонажа…")
+    except Exception:
+        logger.warning("Telegram callback acknowledgement failed")
     try:
         load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
-    except Exception as error:
-        TelegramAdapter().answer_callback(callback_id, f"Помилка: невідомий персонаж {character_id}")
-        raise HTTPException(400, f"Unknown character: {character_id}") from error
-    job = _create_job_from_telegram(pending, brand_id, character_id)
-    _queue_storyboard(job, chat_id)
-    TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: {job.status.value}\nГенерую розкадровку…")
-    TelegramAdapter().answer_callback(callback_id, f"Job {job.job_id} створено. Генерую розкадровку.")
+        job = _create_job_from_telegram(pending, brand_id, character_id)
+    except Exception:
+        logger.exception("Telegram Job creation failed", extra={"character_id": character_id})
+        adapter.send_message(chat_id, "❌ Не вдалося завершити створення завдання. Перевірте конфігурацію персонажа та сховище. Вибір збережено — можна повторити спробу.")
+        return {"status": "creation_failed"}
+    _telegram_pending_character.pop(chat_id, None)
+    try:
+        adapter.send_message(chat_id, f"✅ Завдання {job.job_id} збережено. Воно доступне в адмінці у списку «Завдання».")
+    except Exception:
+        logger.warning("Telegram Job confirmation failed", extra={"job_id": job.job_id})
+    try:
+        _queue_storyboard(job, chat_id)
+    except Exception:
+        logger.exception("Telegram storyboard queue failed", extra={"job_id": job.job_id})
+        adapter.send_message(chat_id, f"❌ Завдання {job.job_id} збережено, але обробку не вдалося запустити. Перевірте його стан в адмінці.")
     return job.model_dump(mode="json")
 
 
@@ -506,13 +517,7 @@ def _queue_storyboard(job, chat_id: str, revision: str | None = None) -> None:
 
 def _generate_storyboard_and_notify(job_id: str, chat_id: str, revision: str | None = None) -> None:
     try:
-        storyboard = StoryboardService(store).generate(job_id, revision)
-        from .storyboard_telegram import send_storyboard_images
-        send_storyboard_images(chat_id, store.jobs[job_id], storyboard, store.root)
-        chunks = render_storyboard(store.jobs[job_id], storyboard)
-        for index, chunk in enumerate(chunks):
-            markup = storyboard_keyboard(job_id, storyboard.version) if index == len(chunks) - 1 else None
-            TelegramAdapter().send_message(chat_id, chunk, markup)
+        StoryboardService(store).generate(job_id, revision)
     except Exception as error:
         logger.error("Storyboard generation failed: %s", error, extra={"job_id": job_id})
         try:
@@ -524,17 +529,9 @@ def _generate_storyboard_and_notify(job_id: str, chat_id: str, revision: str | N
 def _regenerate_storyboard_and_notify(job_id: str, version: int, chat_id: str,
                                       revision: str | None = None) -> None:
     try:
-        storyboard = StoryboardService(store).regenerate(
+        StoryboardService(store).regenerate(
             job_id, version, f"telegram:{chat_id}", revision
         )
-        # regenerate() is synchronous when the service has no executor.
-        active = StoryboardService(store).get(job_id, storyboard.active_storyboard_version)
-        from .storyboard_telegram import send_storyboard_images
-        send_storyboard_images(chat_id, store.jobs[job_id], active, store.root)
-        chunks = render_storyboard(storyboard, active)
-        for index, chunk in enumerate(chunks):
-            markup = storyboard_keyboard(job_id, active.version) if index == len(chunks) - 1 else None
-            TelegramAdapter().send_message(chat_id, chunk, markup)
     except Exception as error:
         logger.error("Storyboard regeneration failed: %s", error, extra={"job_id": job_id})
         try:

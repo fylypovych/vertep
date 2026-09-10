@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64, binascii, os
 from pathlib import Path
 from .models import Job
+from adapters.telegram import TelegramAdapter
 
 
 def _image_task_for(job: Job, storyboard_version: int, scene, image_version: int) -> dict:
@@ -122,4 +123,15 @@ def handle_image_result(store, job: Job, task_id: str, success: bool, image_base
     if storyboard and all(s.image_artifact_id for s in storyboard.scenes):
         storyboard.image_status = "ready"
         store.event(job, f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY")
+        if job.source.startswith("telegram:"):
+            chat_id = job.source.split(":", 2)[1]
+            try:
+                from .storyboard_telegram import send_storyboard_images, storyboard_keyboard, render_storyboard
+                send_storyboard_images(chat_id, job, storyboard, store.root)
+                chunks = render_storyboard(job, storyboard)
+                for index, chunk in enumerate(chunks):
+                    markup = storyboard_keyboard(job.job_id, storyboard.version) if index == len(chunks) - 1 else None
+                    TelegramAdapter().send_message(chat_id, chunk, markup)
+            except Exception:
+                pass
     return job

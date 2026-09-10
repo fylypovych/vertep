@@ -245,6 +245,7 @@ class StoryboardVersion(BaseModel):
     decided_by: str | None = None
     image_version: int = 1
     image_status: str = Field(default="pending", pattern="^(pending|generating|ready|approved|superseded)$")
+    approved_script: dict[str, Any] | None = Field(default=None)
 
 class JobCreate(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
