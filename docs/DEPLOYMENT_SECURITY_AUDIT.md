@@ -1,5 +1,7 @@
 # Deployment Wizard: technical and security audit
 
+> Історичний аудит. Наведені нижче статуси та послідовність робіт відображають стан на дату аудиту. Актуальні завдання, пріоритети й результати ведуться виключно в [GitHub Issues](https://github.com/fylypovych/vertep/issues).
+
 Date: 2026-08-24
 
 ## Executive conclusion

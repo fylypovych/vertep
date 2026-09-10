@@ -275,10 +275,10 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
               @if (job()!.script; as script) {
                 <p class="text-sm text-amber-900 mt-1 font-medium">{{ script['title'] }}</p>
                 <p class="text-sm text-amber-800">{{ script['description'] || '' }}</p>
-                @if (script['scenes']; as scenes) {
+                @if (scriptScenes().length) {
                   <div class="mt-3 space-y-2">
-                    @for (scene of scenes; track $index) {
-                      <div class="bg-white rounded p-3 text-sm"><strong>Сцена {{ $index + 1 }}</strong><p class="text-xs text-slate-500">{{ $any(scene)['prompt'] }}</p><p>{{ $any(scene)['voiceover'] || '' }}</p></div>
+                    @for (scene of scriptScenes(); track $index) {
+                      <div class="bg-white rounded p-3 text-sm"><strong>Сцена {{ $index + 1 }}</strong><p class="text-xs text-slate-500">{{ scene['prompt'] }}</p><p>{{ scene['voiceover'] || '' }}</p></div>
                     }
                   </div>
                 }
@@ -533,6 +533,13 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
 })
 export class JobDetailComponent implements OnInit, OnDestroy {
   job = signal<Job | null>(null);
+  scriptScenes(): Record<string, unknown>[] {
+    const scenes = this.job()?.script?.['scenes'];
+    return Array.isArray(scenes)
+      ? scenes.filter((scene): scene is Record<string, unknown> =>
+          typeof scene === 'object' && scene !== null && !Array.isArray(scene))
+      : [];
+  }
   loading = signal(true);
   error = signal<string | null>(null);
   editing = signal(false);

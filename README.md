@@ -1,5 +1,7 @@
 # Vertep
 
+Завдання та стан розробки ведуться в [GitHub Issues](https://github.com/fylypovych/vertep/issues). Старі файли планів видалено після перенесення вимог; правила для агентів — у [AGENTS.md](AGENTS.md#29-робота-через-github-issues).
+
 Vertep is a modular content-factory orchestrator for Ubuntu Server 24.04. CORE owns jobs and dispatches GPU work; WORKER runs replaceable ComfyUI workflows and returns artifacts; CORE assembles a valid MP4 with FFmpeg.
 
 ## Production installation
