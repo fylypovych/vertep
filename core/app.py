@@ -1308,6 +1308,19 @@ async def system_backups():
     return await _internal_api("GET", "BACKUP_URL", "/snapshots")
 
 
+@app.get("/api/system/state")
+def system_state_api():
+    from .system_state import get_system_state
+    return get_system_state()
+
+
+@app.get("/api/system/backups/{snapshot_id}/restore/progress")
+async def restore_progress_proxy(snapshot_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(422, "Invalid snapshot identifier")
+    return await _internal_api("GET", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore/progress")
+
+
 @app.get("/api/system/license")
 async def system_license():
     return await _internal_api("GET", "LICENSE_MANAGER_URL", "/status")

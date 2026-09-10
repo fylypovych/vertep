@@ -116,3 +116,89 @@ def test_scheduler_filters_future_jobs():
         {"job_id": "ready", "scheduled_for": None, "priority": 1},
     ], "limit": 10})
     assert [item["job_id"] for item in response.json()["jobs"]] == ["ready"]
+
+
+def test_backup_service_retention_removes_old_snapshots(monkeypatch, tmp_path):
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir()
+    storage.mkdir()
+    (config / "a.txt").write_text("v1", encoding="utf-8")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"r" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_MAX_SNAPSHOTS", "2")
+    client = TestClient(backup_service.app)
+    for i in range(3):
+        (config / "a.txt").write_text(f"v{i}", encoding="utf-8")
+        resp = client.post("/snapshots", json={"job_id": f"job-{i}", "request": {}})
+        assert resp.status_code == 200
+    data = client.get("/snapshots").json()
+    assert len(data["snapshots"]) == 2
+
+
+def test_backup_service_blocks_restore_in_emergency(monkeypatch, tmp_path):
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir()
+    storage.mkdir()
+    (config / "a.txt").write_text("v1", encoding="utf-8")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"e" * 32).decode("ascii"))
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: {"state": "EMERGENCY"})
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
+    assert resp.status_code == 200
+    snap_id = resp.json()["snapshot_id"]
+    restored = client.post(f"/snapshots/{snap_id}/restore")
+    assert restored.status_code == 409
+    assert "EMERGENCY" in restored.text
+
+
+def test_backup_service_restore_progress_endpoint(monkeypatch, tmp_path):
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir()
+    storage.mkdir()
+    (config / "a.txt").write_text("hello", encoding="utf-8")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"p" * 32).decode("ascii"))
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
+    snap_id = resp.json()["snapshot_id"]
+    # Before restore — unknown progress
+    prog = client.get(f"/snapshots/{snap_id}/restore/progress")
+    assert prog.status_code == 200
+    assert prog.json()["status"] == "unknown"
+    # After restore — done
+    client.post(f"/snapshots/{snap_id}/restore")
+    prog2 = client.get(f"/snapshots/{snap_id}/restore/progress")
+    assert prog2.status_code == 200
+    assert prog2.json()["status"] == "done"
+    assert prog2.json()["progress"] == 100
+
+
+def test_backup_service_custom_sources(monkeypatch, tmp_path):
+    config, storage, backups, custom = tmp_path / "config", tmp_path / "storage", tmp_path / "backups", tmp_path / "custom"
+    config.mkdir()
+    storage.mkdir()
+    custom.mkdir()
+    (custom / "secret.txt").write_text("custom-data", encoding="utf-8")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_SOURCES", f"custom:{custom}")
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"c" * 32).decode("ascii"))
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
+    assert resp.status_code == 200
+    assert any(item["label"] == "custom" for item in resp.json()["inventory"])
+    # Wipe and restore
+    (custom / "secret.txt").write_text("changed", encoding="utf-8")
+    snap_id = resp.json()["snapshot_id"]
+    client.post(f"/snapshots/{snap_id}/restore")
+    assert (custom / "secret.txt").read_text(encoding="utf-8") == "custom-data"
