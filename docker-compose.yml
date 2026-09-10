@@ -11,13 +11,12 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
       DATABASE_URL: postgresql://vertep:${POSTGRES_PASSWORD}@postgres:5432/vertep
       UPDATE_STATE_DIR: /var/lib/vertep/update
-      JOB_ROOT: /data/jobs
+      JOB_ROOT: /data/storage/jobs
       CHARACTERS_ROOT: /data/storage/characters
       BRANDS_ROOT: /data/storage/brands
       WORKFLOWS_ROOT: /data/storage/workflows
     volumes:
       - storage:/data/storage
-      - jobs:/data/jobs
       - logs:/data/logs
       - ./runtime/update:/var/lib/vertep/update
     depends_on:
@@ -69,7 +68,6 @@ services:
       retries: 20
 volumes:
   storage:
-  jobs:
   redis-data:
   postgres-data:
   logs:

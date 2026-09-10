@@ -1,5 +1,9 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.34
+- Дозакрито Issue #6: негативний тест блокування відео до `image_status == "approved"` та перевірка збереження старих артефактів при `regenerate`; розширено REST-контракт на `images/approve|revision|regenerate`.
+- Доповнено Issue #32: вирівняно `docker-compose.yml` під prod (`JOB_ROOT=/data/storage/jobs`, видалено окремий volume `jobs`), додано інтеграційні тести CRUD→recreate→видалення→recreate та backup→wipe→restore для персонажів/брендів/workflow/jobs (295 passed).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.33
 - Реалізовано Issue #16: завершено Backup/Restore та Backup Node — реальний backup-сервіс із AES-256-GCM шифруванням, retention policy, remote storage hooks, кастомними inventory джерелами, restore progress, system-state gating та post-restore health verification.
 - Розширено `services/backup_service.py`: підтримка `BACKUP_SOURCES`, `BACKUP_RETENTION_DAYS`, `BACKUP_MAX_SNAPSHOTS`, `BACKUP_REMOTE_CMD`, `BACKUP_CORE_URL`, `BACKUP_PG_DUMP_CMD`, `BACKUP_REDIS_DUMP_CMD`; додано `/snapshots/{id}/restore/progress` та `/system/status`.

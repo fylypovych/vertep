@@ -50,7 +50,7 @@ def ensure_persistent_user_data(*, seed_overwrite: bool = False) -> dict:
         p.mkdir(parents=True, exist_ok=True)
     marker = c_root.parent / ".seed-initialized"
     migrated: dict[str,int] = {}
-    # migrate legacy image-layer paths only inside the appliance (/app/*) — not on developer host ./characters
+    # migrate legacy image-layer path /app/<name> only (not ./<name> on dev host — it contains demo seed that would pollute prod storage)
     for label, dst in (("characters", c_root), ("brands", b_root), ("workflows", w_root)):
         for cand in [Path(f"/app/{label}")]:
             try:

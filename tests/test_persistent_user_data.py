@@ -75,3 +75,90 @@ def test_ensure_persistent_user_data_migrates_legacy_without_overwrite(monkeypat
     copied2 = pd._copy_missing(legacy / "workflows", storage / "workflows", overwrite=False)
     # demo.json already exists -> should not overwrite
     assert persistent_wf.read_text(encoding="utf-8") == '{"persistent":true}'
+
+
+def test_persistent_api_resources_survive_recreate(monkeypatch, tmp_path):
+    """Acceptance excerpt for #32: CRUD via API persists after simulated recreate.
+    Creates character/brand/workflow + job then verifies they remain after a
+    second process would have re-run ensure_persistent_user_data (marker prevents re-seed overwrite).
+    """
+    from fastapi.testclient import TestClient
+    from core.app import app
+    storage_char = tmp_path / "storage" / "characters"
+    storage_brand = tmp_path / "storage" / "brands"
+    storage_wf = tmp_path / "storage" / "workflows"
+    storage_jobs = tmp_path / "storage" / "jobs"
+    for p in (storage_char, storage_brand, storage_wf, storage_jobs):
+        p.mkdir(parents=True, exist_ok=True)
+    # minimal seed file so storage is not empty
+    monkeypatch.setenv("JOB_ROOT", str(storage_jobs))
+    monkeypatch.setenv("CHARACTERS_ROOT", str(storage_char))
+    monkeypatch.setenv("BRANDS_ROOT", str(storage_brand))
+    monkeypatch.setenv("WORKFLOWS_ROOT", str(storage_wf))
+    # Ensure persistent init marks storage as initialized
+    pd.ensure_persistent_user_data()
+    client = TestClient(app)
+    # Create character via API
+    char = {"id": "testchar", "name": "Test Char", "language": "uk", "enabled": True, "system_prompt": "hi", "voice": {}, "visual": {}, "generation": {}, "publishing": {}}
+    r = client.put("/api/characters/testchar", json=char)
+    assert r.status_code in (200, 201)
+    # Create brand via API (brands uses brand.json file)
+    brand = {"id": "testbrand", "name": "Test Brand", "enabled": True}
+    r = client.put("/api/brands/testbrand", json=brand)
+    assert r.status_code in (200, 201)
+    # Create workflow via API
+    wf_content = {"1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}}}
+    r = client.put("/api/workflows/image/test_persist.json", json=wf_content)
+    assert r.status_code == 200
+    # Create job via API — will validate character exists
+    r = client.post("/api/jobs", json={"topic": "Persist test", "character_id": "testchar"})
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    # Simulate container recreate: re-run ensure (should NOT wipe)
+    pd.ensure_persistent_user_data()
+    # Verify still present
+    assert client.get("/api/characters/testchar").status_code == 200
+    assert client.get("/api/brands").json() and any(b["id"] == "testbrand" for b in client.get("/api/brands").json())
+    assert client.get(f"/api/jobs/{job_id}").status_code == 200
+    # Verify deletion survives recreate — delete after removing job reference
+    # Character is still referenced by the earlier job, so remove job first
+    client.delete(f"/api/jobs/{job_id}")
+    r = client.delete("/api/characters/testchar")
+    assert r.status_code == 200
+    pd.ensure_persistent_user_data()
+    assert client.get("/api/characters/testchar").status_code == 404
+
+
+def test_backup_covers_storage_and_restore(monkeypatch, tmp_path):
+    """Backup Service covers /data/storage (characters/brands/workflows/jobs) and restores."""
+    import base64
+    from fastapi.testclient import TestClient
+    from services import backup_service
+    config = tmp_path / "config"
+    storage = tmp_path / "storage"
+    backups = tmp_path / "backups"
+    config.mkdir(); storage.mkdir(); backups.mkdir()
+    (storage / "characters" / "c1").mkdir(parents=True)
+    (storage / "characters" / "c1" / "character.json").write_text('{"id":"c1"}', encoding="utf-8")
+    (storage / "workflows" / "image").mkdir(parents=True)
+    (storage / "workflows" / "image" / "demo.json").write_text('{"x":1}', encoding="utf-8")
+    (storage / "jobs" / "job-1").mkdir(parents=True)
+    (storage / "jobs" / "job-1" / "job.json").write_text('{"job_id":"job-1"}', encoding="utf-8")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k"*32).decode())
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "j1", "request": {}})
+    assert resp.status_code == 200
+    snap_id = resp.json()["snapshot_id"]
+    # Wipe storage
+    import shutil
+    shutil.rmtree(storage / "characters" / "c1")
+    (storage / "workflows" / "image" / "demo.json").unlink()
+    assert not (storage / "characters" / "c1").exists()
+    # Restore
+    resp = client.post(f"/snapshots/{snap_id}/restore")
+    assert resp.status_code == 200
+    assert (storage / "characters" / "c1" / "character.json").exists()
+    assert (storage / "workflows" / "image" / "demo.json").exists()

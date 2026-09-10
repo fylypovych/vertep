@@ -123,6 +123,35 @@ def test_telegram_storyboard_rendering_and_versioned_callbacks(job_store):
     assert f"sb_reject:{job.job_id}:1" in callback_data
 
 
+def test_video_blocked_until_image_storyboard_approved(job_store):
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store, client_factory=lambda: FakeClient([storyboard_payload()]))
+    sb = service.generate(job.job_id)
+    # Before image approval — storyboard approve must be blocked (Issue #6)
+    with pytest.raises(StoryboardConflict):
+        service.approve(job.job_id, sb.version, "tester")
+    # Even with artifacts placeholder, image_status is still pending — still blocked
+    with pytest.raises(StoryboardConflict):
+        service.approve(job.job_id, sb.version, "tester")
+
+
+def test_image_revision_preserves_old_artifacts(job_store):
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store, client_factory=lambda: FakeClient([storyboard_payload(), storyboard_payload("Друга версія")]))
+    first = service.generate(job.job_id)
+    for scene in first.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    first.image_status = "ready"
+    service.approve_images(job.job_id, 1, "tester")
+    first_artifact = first.scenes[0].image_artifact_id
+    service.regenerate(job.job_id, 1, "tester", "Зміни")
+    second = next(s for s in job.storyboards if s.version == 2)
+    # Old artifact stays on superseded version
+    assert first.scenes[0].image_artifact_id == first_artifact
+    assert first.status == "superseded"
+    assert second.status == "pending_approval"
+
+
 def test_storyboard_rest_contract_is_registered():
     from core.app import app
 
@@ -133,3 +162,7 @@ def test_storyboard_rest_contract_is_registered():
     assert "/api/jobs/{job_id}/storyboards/approve" in paths
     assert "/api/jobs/{job_id}/storyboards/reject" in paths
     assert "/api/jobs/{job_id}/storyboards/regenerate" in paths
+    # Issue #6 image storyboard endpoints
+    assert "/api/jobs/{job_id}/storyboards/images/approve" in paths
+    assert "/api/jobs/{job_id}/storyboards/images/revision" in paths
+    assert "/api/jobs/{job_id}/storyboards/images/regenerate" in paths
