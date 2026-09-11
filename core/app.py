@@ -429,6 +429,10 @@ def _handle_telegram_callback(callback: dict) -> dict:
         return _handle_publish_all(callback, chat_id, payload)
     elif action in {"sb_ok", "sb_regen", "sb_edit", "sb_reject"}:
         return _handle_storyboard_callback(callback, chat_id, action, payload)
+    elif action in {"sc_ok", "sc_regen", "sc_edit", "sc_reject"}:
+        return _handle_script_callback(callback, chat_id, action, payload)
+    elif action in {"vid_ok", "vid_regen", "vid_edit", "vid_reject"}:
+        return _handle_video_callback(callback, chat_id, action, payload)
 
     job_id = payload
     job = store.jobs.get(job_id)
@@ -526,6 +530,22 @@ def _generate_storyboard_and_notify(job_id: str, chat_id: str, revision: str | N
             pass
 
 
+def _regenerate_script_and_notify(job_id: str, chat_id: str, revision: str | None = None) -> None:
+    """Regenerate script after revision request from Telegram."""
+    try:
+        from .pipeline import regenerate_script
+        job = store.jobs.get(job_id)
+        if not job:
+            return
+        regenerate_script(store, job)
+    except Exception as error:
+        logger.error("Script regeneration failed: %s", error, extra={"job_id": job_id})
+        try:
+            TelegramAdapter().send_message(chat_id, f"❌ Помилка перегенерації сценарію {job_id}: {error}")
+        except Exception:
+            pass
+
+
 def _regenerate_storyboard_and_notify(job_id: str, version: int, chat_id: str,
                                       revision: str | None = None) -> None:
     try:
@@ -601,6 +621,120 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
         return TelegramAdapter().answer_callback(callback_id, "Job або розкадровку не знайдено")
     except StoryboardConflict as error:
         return TelegramAdapter().answer_callback(callback_id, str(error))
+
+
+def _handle_script_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    job_id = payload
+    job = store.jobs.get(job_id)
+    if not job:
+        return TelegramAdapter().answer_callback(callback_id, "Job не знайдено")
+    from .pipeline import approve_script, request_script_revision, regenerate_script
+    from .storyboard_telegram import render_script, script_keyboard
+    try:
+        if action == "sc_ok":
+            job = approve_script(store, job, f"telegram:{chat_id}")
+            executor.submit(_prepare_and_dispatch, job)
+            text = f"✅ Сценарій {job_id} схвалено."
+        elif action == "sc_edit":
+            if job.status not in {JobStatus.SCRIPT_PENDING_APPROVAL,
+                                  JobStatus.SCRIPT_REVISION_REQUESTED}:
+                raise ValueError(f"Сценарій не очікує правок (status={job.status.value})")
+            job.script_revision_chat_id = chat_id
+            job.script_revision_pending = True
+            store.event(job, f"SCRIPT AWAITS REVISION TEXT")
+            text = "Надішліть одним повідомленням, що потрібно змінити у сценарії."
+        elif action == "sc_regen":
+            if job.status == JobStatus.SCRIPT_REVISION_REQUESTED:
+                job = regenerate_script(store, job)
+                executor.submit(_prepare_and_dispatch, job)
+                text = "🔄 Перегенеровую сценарій…"
+            elif job.status == JobStatus.SCRIPT_PENDING_APPROVAL:
+                job.script = None
+                job.version += 1
+                store.transition(job, JobStatus.SCRIPT_REVISION_REQUESTED,
+                                 f"SCRIPT REGENERATION REQUESTED by telegram:{chat_id}")
+                executor.submit(_prepare_and_dispatch, job)
+                text = "🔄 Перегенеровую сценарій…"
+            else:
+                text = f"Неможливо перегенерувати (status={job.status.value})"
+        elif action == "sc_reject":
+            store.update(job, JobStatus.CANCELLED, "SCRIPT REJECTED via Telegram")
+            text = f"❌ Сценарій {job_id} відхилено."
+        else:
+            text = f"Невідома дія: {action}"
+        return TelegramAdapter().answer_callback(callback_id, text)
+    except ValueError as error:
+        return TelegramAdapter().answer_callback(callback_id, str(error))
+
+
+def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    job_id = payload
+    job = store.jobs.get(job_id)
+    if not job:
+        return TelegramAdapter().answer_callback(callback_id, "Job не знайдено")
+    from .pipeline import approve_video, request_video_revision, regenerate_video
+    try:
+        if action == "vid_ok":
+            job = approve_video(store, job, f"telegram:{chat_id}")
+            text = f"✅ Відео {job_id} схвалено."
+        elif action == "vid_edit":
+            if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
+                raise ValueError(f"Відео не очікує правок (status={job.status.value})")
+            job.video_revision_chat_id = chat_id
+            job.video_revision_pending = True
+            store.event(job, "VIDEO AWAITS REVISION TEXT")
+            text = "Надішліть одним повідомленням, що потрібно змінити у відео."
+        elif action == "vid_regen":
+            if job.status == JobStatus.VIDEO_PENDING_APPROVAL:
+                job = request_video_revision(store, job, "regenerate", f"telegram:{chat_id}")
+                executor.submit(_finalize_video_regenerate, job)
+                text = "🔄 Перегенеровую відео…"
+            elif job.status == JobStatus.VIDEO_REVISION_REQUESTED:
+                executor.submit(_finalize_video_regenerate, job)
+                text = "🔄 Перегенеровую відео…"
+            else:
+                text = f"Неможливо перегенерувати (status={job.status.value})"
+        elif action == "vid_reject":
+            store.update(job, JobStatus.CANCELLED, "VIDEO REJECTED via Telegram")
+            text = f"❌ Відео {job_id} відхилено."
+        else:
+            text = f"Невідома дія: {action}"
+        return TelegramAdapter().answer_callback(callback_id, text)
+    except ValueError as error:
+        return TelegramAdapter().answer_callback(callback_id, str(error))
+
+
+def _finalize_video_regenerate(job) -> None:
+    """Re-run assembly for video revision."""
+    try:
+        from .pipeline import finalize_job_safe
+        job = store.jobs.get(job.job_id)
+        if not job:
+            return
+        from pathlib import Path
+        image_dir = store.root / job.job_id / "frames"
+        images = sorted(image_dir.glob("*.png")) if image_dir.exists() else []
+        if not images:
+            image_dir = store.root / job.job_id / "storyboard"
+            images = sorted(image_dir.glob("**/*.png"), key=lambda p: p.name)
+        if images:
+            job.status = JobStatus.ASSETS_READY
+            finalize_job_safe(store, job, images)
+        else:
+            store.update(job, JobStatus.FAILED, "NO IMAGES FOR RE-ASSEMBLY")
+            TelegramAdapter().send_message(
+                job.source.split(":", 2)[1],
+                f"❌ Не знайдено кадрів для перезбірки {job.job_id}.",
+            )
+    except Exception as error:
+        logger.error("Video regeneration failed: %s", error, extra={"job_id": job.job_id})
+        try:
+            chat_id = job.source.split(":", 2)[1]
+            TelegramAdapter().send_message(chat_id, f"❌ Помилка перегенерування {job.job_id}: {error}")
+        except Exception:
+            pass
 
 
 def _handle_approve_job(callback: dict, chat_id: str, job_id: str) -> dict:
@@ -753,6 +887,35 @@ def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: d
         executor.submit(_regenerate_storyboard_and_notify,
                         revision_job.job_id, version, chat_id, text)
         return TelegramAdapter().send_message(chat_id, "✍️ Правки прийнято. Генерую нову версію…")
+    # --- Script revision text ---
+    script_rev_job = next((job for job in store.jobs.values()
+                           if job.script_revision_chat_id == chat_id
+                           and job.script_revision_pending), None)
+    if script_rev_job:
+        script_rev_job.script_revision_chat_id = None
+        script_rev_job.script_revision_pending = False
+        from .pipeline import request_script_revision, regenerate_script
+        try:
+            request_script_revision(store, script_rev_job, text, f"telegram:{chat_id}")
+            executor.submit(_regenerate_script_and_notify,
+                            script_rev_job.job_id, chat_id, text)
+            return TelegramAdapter().send_message(chat_id, "✍️ Правки до сценарію прийнято. Генерую нову версію…")
+        except Exception as error:
+            return TelegramAdapter().send_message(chat_id, f"❌ Помилка: {error}")
+    # --- Video revision text ---
+    video_rev_job = next((job for job in store.jobs.values()
+                          if job.video_revision_chat_id == chat_id
+                          and job.video_revision_pending), None)
+    if video_rev_job:
+        video_rev_job.video_revision_chat_id = None
+        video_rev_job.video_revision_pending = False
+        from .pipeline import request_video_revision
+        try:
+            request_video_revision(store, video_rev_job, text, f"telegram:{chat_id}")
+            executor.submit(_finalize_video_regenerate, video_rev_job)
+            return TelegramAdapter().send_message(chat_id, "✍️ Правки до відео прийнято. Перезбираю…")
+        except Exception as error:
+            return TelegramAdapter().send_message(chat_id, f"❌ Помилка: {error}")
     attachments = {key: message.get(key) for key in ("photo", "video", "document", "audio") if message.get(key)}
     _telegram_pending_brands[chat_id] = {"text": text, "source_id": source_id, "message": message, "attachments": attachments}
     brands_dir = Path(os.getenv("BRANDS_ROOT", "brands"))

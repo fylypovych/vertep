@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.48
+- Додано Telegram approval flow для сценаріїв: callback-хендлери `sc_ok`, `sc_regen`, `sc_edit`, `sc_reject` у `core/app.py`, функції `render_script()`, `script_keyboard()`, `_send_script_approval_to_telegram()` у `core/storyboard_telegram.py` та `core/pipeline.py`.
+- Додано Telegram approval flow для відео: callback-хендлери `vid_ok`, `vid_regen`, `vid_edit`, `vid_reject` у `core/app.py`, функції `video_approval_keyboard()`, `send_video_for_approval()`, `approve_video()`, `request_video_revision()`, `regenerate_video()` у `core/pipeline.py` та `core/storyboard_telegram.py`.
+- Розширено `JOB_STATE_TRANSITIONS`: додано `VIDEO_READY` до можливих переходів з `VIDEO_APPROVED` у `core/models.py`.
+- Оновлено `_prepare_and_dispatch()`: обробка статусів `VIDEO_PENDING_APPROVAL` та `VIDEO_REVISION_REQUESTED` у `core/api/job_helpers.py`.
+- Додано тести Telegram approval flow: `tests/test_telegram_approval_flow.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.47
 - Виправлено нумерацію версій: commit `7d57408a` мав назву "0.0.1.39" замість "0.0.1.46". Оновлено `VERSION`, `CHANGELOG.md` та release notes.
 

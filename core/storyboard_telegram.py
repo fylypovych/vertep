@@ -3,6 +3,87 @@ from pathlib import Path
 from .models import Job, StoryboardVersion
 
 
+def render_script(script: dict, job_id: str, limit: int = 3900) -> list[str]:
+    """Format a script dict into Telegram-friendly text chunks."""
+    title = script.get("title", "")
+    description = script.get("description", "")
+    hashtags = script.get("hashtags", [])
+    scenes = script.get("scenes", [])
+    blocks = [f"📝 Сценарій {job_id}\n{title}\n{description}".strip()]
+    if hashtags:
+        blocks.append("Хештеги: " + " ".join(f"#{h}" for h in hashtags))
+    for i, scene in enumerate(scenes, 1):
+        blocks.append(
+            f"Сцена {i} · {scene.get('duration', 5)}с\n"
+            f"Кадр: {scene.get('prompt', '—')}\n"
+            f"Рух: {scene.get('video_prompt', '—')}\n"
+            f"Текст: {scene.get('voiceover', '—')}"
+        )
+    chunks: list[str] = []
+    current = ""
+    for block in blocks:
+        candidate = f"{current}\n\n{block}" if current else block
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        while len(block) > limit:
+            chunks.append(block[:limit])
+            block = block[limit:]
+        current = block
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def script_keyboard(job_id: str) -> dict:
+    """Inline keyboard for script approval."""
+    return {"inline_keyboard": [
+        [
+            {"text": "✅ Схвалити сценарій", "callback_data": f"sc_ok:{job_id}"},
+            {"text": "🔄 Перегенерувати", "callback_data": f"sc_regen:{job_id}"},
+        ],
+        [
+            {"text": "✍️ Запросити правки", "callback_data": f"sc_edit:{job_id}"},
+            {"text": "❌ Відхилити", "callback_data": f"sc_reject:{job_id}"},
+        ],
+    ]}
+
+
+def video_approval_keyboard(job_id: str) -> dict:
+    """Inline keyboard for video approval."""
+    return {"inline_keyboard": [
+        [
+            {"text": "✅ Схвалити відео", "callback_data": f"vid_ok:{job_id}"},
+            {"text": "🔄 Перегенерувати", "callback_data": f"vid_regen:{job_id}"},
+        ],
+        [
+            {"text": "✍️ Запросити правки", "callback_data": f"vid_edit:{job_id}"},
+            {"text": "❌ Відхилити", "callback_data": f"vid_reject:{job_id}"},
+        ],
+    ]}
+
+
+def send_video_for_approval(chat_id: str, job: Job) -> None:
+    """Send the rendered video to the Telegram chat for approval."""
+    from adapters.telegram import TelegramAdapter
+    adapter = TelegramAdapter()
+    if not adapter.configured():
+        return
+    video_path = job.output_path
+    if not video_path:
+        return
+    path = Path(video_path)
+    if not path.exists():
+        return
+    caption = f"🎥 Відео {job.job_id} готове. Затвердити?"
+    try:
+        adapter.send_video(str(chat_id), str(path), caption=caption[:1024])
+    except Exception:
+        pass
+
+
 def render_storyboard(job: Job, storyboard: StoryboardVersion, limit: int = 3900) -> list[str]:
     header = (f"🎬 Розкадровка {job.job_id}, версія {storyboard.version} · превʼю v{storyboard.image_version} ({storyboard.image_status})\n"
               f"{storyboard.title}\n{storyboard.description}".strip())

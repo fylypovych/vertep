@@ -174,7 +174,10 @@ def generate_script(store: JobStore, job: Job) -> Job:
         "source": job.source, "character_id": job.character_id
     }, indent=2), encoding="utf-8")
     store.transition(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT PENDING APPROVAL")
-    _progress(job, "SCRIPT_PENDING_APPROVAL")
+    if job.source.startswith("telegram:"):
+        _send_script_approval_to_telegram(job)
+    else:
+        _progress(job, "SCRIPT_PENDING_APPROVAL")
     return job
 
 def approve_script(store: JobStore, job: Job, actor: str = "api") -> Job:
@@ -241,6 +244,95 @@ def _write_subtitles(store: JobStore, job: Job) -> Path | None:
     path.write_text("\n".join(blocks), encoding="utf-8")
     return path
 
+def _send_video_approval_to_telegram(job: Job) -> None:
+    """Send video approval request to Telegram admin chats."""
+    chat_id = job.source.split(":", 2)[1]
+    from .storyboard_telegram import send_video_for_approval, video_approval_keyboard
+    try:
+        send_video_for_approval(chat_id, job)
+    except Exception:
+        pass
+    try:
+        TelegramAdapter().send_message(
+            chat_id,
+            f"🎥 Відео {job.job_id} зібрано. Затвердити для публікації?",
+            video_approval_keyboard(job.job_id),
+        )
+    except Exception:
+        logger.warning("Telegram video approval notification failed",
+                       extra={"job_id": job.job_id})
+    for admin_chat in _admin_chat_ids():
+        try:
+            send_video_for_approval(admin_chat, job)
+            TelegramAdapter().send_message(
+                admin_chat,
+                f"🎥 Відео {job.job_id} потребує затвердження.",
+                video_approval_keyboard(job.job_id),
+            )
+        except Exception:
+            pass
+
+
+def _send_script_approval_to_telegram(job: Job) -> None:
+    """Send script approval request to Telegram admin chats."""
+    chat_id = job.source.split(":", 2)[1]
+    from .storyboard_telegram import render_script, script_keyboard
+    script = job.script or {}
+    try:
+        chunks = render_script(script, job.job_id)
+        keyboard = script_keyboard(job.job_id)
+        for index, chunk in enumerate(chunks):
+            markup = keyboard if index == len(chunks) - 1 else None
+            TelegramAdapter().send_message(chat_id, chunk, markup)
+    except Exception:
+        logger.warning("Telegram script approval notification failed",
+                       extra={"job_id": job.job_id})
+    for admin_chat in _admin_chat_ids():
+        if admin_chat == chat_id:
+            continue
+        try:
+            chunks = render_script(script, job.job_id)
+            keyboard = script_keyboard(job.job_id)
+            for index, chunk in enumerate(chunks):
+                markup = keyboard if index == len(chunks) - 1 else None
+                TelegramAdapter().send_message(admin_chat, chunk, markup)
+        except Exception:
+            pass
+
+
+def approve_video(store: JobStore, job: Job, actor: str = "api") -> Job:
+    """Approve assembled video and transition to READY."""
+    if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
+        raise ValueError(f"Cannot approve video in status {job.status.value}")
+    store.transition(job, JobStatus.VIDEO_APPROVED, f"VIDEO APPROVED by {actor}")
+    store.transition(job, JobStatus.VIDEO_READY, "VIDEO READY")
+    store.transition(job, JobStatus.READY, f"VIDEO APPROVED; JOB READY by {actor}")
+    _progress(job, "VIDEO_APPROVED")
+    return job
+
+
+def request_video_revision(store: JobStore, job: Job, revision: str, actor: str = "api") -> Job:
+    """Request video revision — re-run assembly."""
+    if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
+        raise ValueError(f"Cannot request video revision in status {job.status.value}")
+    store.transition(job, JobStatus.VIDEO_REVISION_REQUESTED,
+                     f"VIDEO REVISION REQUESTED by {actor}: {revision}")
+    return job
+
+
+def regenerate_video(store: JobStore, job: Job) -> Job:
+    """Re-run assembly after video revision request."""
+    if job.status != JobStatus.VIDEO_REVISION_REQUESTED:
+        raise ValueError(f"Cannot regenerate video in status {job.status.value}")
+    store.transition(job, JobStatus.ASSEMBLY, "VIDEO REGENERATING")
+    return job
+
+
+def _admin_chat_ids() -> list[str]:
+    from .telegram_store import get_admin_chat_ids
+    return get_admin_chat_ids()
+
+
 def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
         return job
@@ -284,6 +376,10 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     job.output_path = str(output)
     store.update(job, JobStatus.VIDEO_READY, "VIDEO READY")
     transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
+    if job.source.startswith("telegram:"):
+        store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, "VIDEO PENDING APPROVAL")
+        _send_video_approval_to_telegram(job)
+        return job
     store.update(job, JobStatus.READY, "JOB READY")
     _progress(job, "READY")
     return job
