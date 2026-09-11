@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.51
+- Виправлено TS4111 у `web-v2/src/app/dashboard/dashboard.component.ts`: доступ до властивостей `statusCounts` через дужки замість крапки для індекс-сігнатури.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.50
 - Виправлено `test_health_check_structure` у `tests/test_bootstrap_wizard.py`: додано `CONFIG_ROOT` у `tmp_path` для уникнення `PermissionError` на CI.
 - Виправлено `GitHubActionsTrigger.run` у `scripts/release.py`: `workflow_dispatch` використовує `main` замість commit SHA.

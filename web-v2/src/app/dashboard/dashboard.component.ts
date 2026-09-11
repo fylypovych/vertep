@@ -99,33 +99,33 @@ import { ErrorStateComponent } from '../shared/error-state.component';
             <h3 class="text-lg font-semibold text-slate-900 mb-4">Статуси завдань</h3>
             <div class="grid grid-cols-2 gap-4" data-testid="job-statuses">
               <div class="text-center">
-                <div class="text-3xl font-bold text-blue-600">{{ metric(statusCounts.inProgress) }}</div>
+                <div class="text-3xl font-bold text-blue-600">{{ metric(statusCounts['inProgress']) }}</div>
                 <div class="text-sm text-slate-500">В процесі</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-amber-600">{{ metric(statusCounts.queued) }}</div>
+                <div class="text-3xl font-bold text-amber-600">{{ metric(statusCounts['queued']) }}</div>
                 <div class="text-sm text-slate-500">Очікують</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-emerald-600">{{ metric(statusCounts.completed) }}</div>
+                <div class="text-3xl font-bold text-emerald-600">{{ metric(statusCounts['completed']) }}</div>
                 <div class="text-sm text-slate-500">Завершено</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-red-600">{{ metric(statusCounts.failed) }}</div>
+                <div class="text-3xl font-bold text-red-600">{{ metric(statusCounts['failed']) }}</div>
                 <div class="text-sm text-slate-500">Помилки</div>
               </div>
             </div>
             <div class="grid grid-cols-3 gap-4 mt-4">
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts.paused) }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['paused']) }}</div>
                 <div class="text-xs text-slate-500">Призупинено</div>
               </div>
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts.cancelled) }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['cancelled']) }}</div>
                 <div class="text-xs text-slate-500">Скасовано</div>
               </div>
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts.waiting) }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['waiting']) }}</div>
                 <div class="text-xs text-slate-500">Очікують систему</div>
               </div>
             </div>
