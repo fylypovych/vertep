@@ -141,6 +141,7 @@ class TelegramPollingService:
         self._running = False
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._consecutive_failures = 0
 
     def _load_offset(self) -> int:
         try:
@@ -161,11 +162,16 @@ class TelegramPollingService:
                 "last_update_id": self.last_update_id,
                 "last_message_at": self.last_message_at,
             }
+            data = json.dumps(payload, ensure_ascii=False, indent=2)
             temporary = self.offset_file.parent / (self.offset_file.name + ".tmp")
-            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            fh = temporary.open("w", encoding="utf-8")
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+            fh.close()
             temporary.replace(self.offset_file)
-        except OSEError:
-            pass
+        except OSError as error:
+            logger.error("Failed to persist Telegram polling offset: %s", error)
 
     def start(self) -> None:
         with self._lock:
@@ -213,6 +219,7 @@ class TelegramPollingService:
                         self.last_update_id = update_id
                         self.offset = update_id + 1
                         self._save_offset()
+                        self._consecutive_failures = 0
             except httpx.HTTPStatusError as error:
                 if error.response.status_code == 429:
                     retry_after = 5
@@ -220,21 +227,27 @@ class TelegramPollingService:
                         retry_after = int(error.response.json().get("parameters", {}).get("retry_after", 5))
                     except Exception:
                         pass
-                    logger.warning("Telegram rate limited, sleeping %ds", retry_after)
+                    logger.warning("Telegram rate limited (429), sleeping %ds", retry_after)
+                    self.last_error = f"429 rate limited, retry_after={retry_after}s"
                     time.sleep(retry_after)
                     continue
                 self.last_error = str(error)
                 logger.error("Telegram polling HTTP error: %s", error)
             except (httpx.HTTPError, OSError, RuntimeError) as error:
                 self.last_error = str(error)
-                logger.error("Telegram polling error: %s", error)
+                logger.error("Telegram polling transport error: %s", error)
             except Exception as error:
                 self.last_error = str(error)
-                logger.error("Telegram polling unexpected error: %s", error)
+                logger.exception("Telegram polling unexpected error: %s", error)
             with self._lock:
                 if not self._running:
                     break
-            delay = int(os.getenv("TELEGRAM_POLLING_RETRY_DELAY", "5"))
+            delay = min(
+                int(os.getenv("TELEGRAM_POLLING_RETRY_DELAY", "5")) * (2 ** self._consecutive_failures),
+                int(os.getenv("TELEGRAM_POLLING_MAX_RETRY_DELAY", "300")),
+            )
+            self._consecutive_failures = min(self._consecutive_failures + 1, 10)
+            logger.warning("Telegram polling retrying in %ds (attempt %d)", delay, self._consecutive_failures)
             time.sleep(delay)
 
         logger.info("Telegram polling stopped")

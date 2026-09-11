@@ -4,36 +4,26 @@ import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { Worker, Job } from '../core/models';
 import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics } from '../core/presentation';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterModule],
+  imports: [CommonModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="space-y-6" data-testid="dashboard">
       @if (loading()) {
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          @for (_ of [1,2,3,4]; track $index) {
-            <div class="animate-pulse bg-slate-100 rounded-xl h-24"></div>
-          }
-        </div>
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          @for (_ of [1,2]; track $index) {
-            <div class="animate-pulse bg-slate-100 rounded-xl h-64"></div>
-          }
-        </div>
+        <app-loading-state />
       } @else if (error) {
-        <div class="bg-red-50 border border-red-200 rounded-xl p-5">
-          <p class="text-red-700">{{ error }}</p>
-          <button (click)="loadData()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
-        </div>
+        <app-error-state [message]="error" (retry)="loadData()" />
       } @else {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-workers">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Воркери</p>
-                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ onlineWorkers }}</p>
+                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(onlineWorkers) }}</p>
                 <p class="text-xs text-slate-400 mt-1">У мережі</p>
               </div>
               <div class="w-12 h-12 bg-emerald-50 rounded-lg flex items-center justify-center text-emerald-600">
@@ -45,7 +35,7 @@ import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics }
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Активні завдання</p>
-                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ activeJobs }}</p>
+                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(activeJobs) }}</p>
                 <p class="text-xs text-slate-400 mt-1">В процесі</p>
               </div>
               <div class="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
@@ -57,7 +47,7 @@ import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics }
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">Завдань у черзі</p>
-                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ queuedJobs }}</p>
+                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(queuedJobs) }}</p>
                 <p class="text-xs text-slate-400 mt-1">Очікують</p>
               </div>
               <div class="w-12 h-12 bg-amber-50 rounded-lg flex items-center justify-center text-amber-600">
@@ -109,33 +99,33 @@ import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics }
             <h3 class="text-lg font-semibold text-slate-900 mb-4">Статуси завдань</h3>
             <div class="grid grid-cols-2 gap-4" data-testid="job-statuses">
               <div class="text-center">
-                <div class="text-3xl font-bold text-blue-600">{{ statusCounts.inProgress }}</div>
+                <div class="text-3xl font-bold text-blue-600">{{ metric(statusCounts.inProgress) }}</div>
                 <div class="text-sm text-slate-500">В процесі</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-amber-600">{{ statusCounts.queued }}</div>
+                <div class="text-3xl font-bold text-amber-600">{{ metric(statusCounts.queued) }}</div>
                 <div class="text-sm text-slate-500">Очікують</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-emerald-600">{{ statusCounts.completed }}</div>
+                <div class="text-3xl font-bold text-emerald-600">{{ metric(statusCounts.completed) }}</div>
                 <div class="text-sm text-slate-500">Завершено</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-red-600">{{ statusCounts.failed }}</div>
+                <div class="text-3xl font-bold text-red-600">{{ metric(statusCounts.failed) }}</div>
                 <div class="text-sm text-slate-500">Помилки</div>
               </div>
             </div>
             <div class="grid grid-cols-3 gap-4 mt-4">
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ statusCounts.paused }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts.paused) }}</div>
                 <div class="text-xs text-slate-500">Призупинено</div>
               </div>
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ statusCounts.cancelled }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts.cancelled) }}</div>
                 <div class="text-xs text-slate-500">Скасовано</div>
               </div>
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ statusCounts.waiting }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts.waiting) }}</div>
                 <div class="text-xs text-slate-500">Очікують систему</div>
               </div>
             </div>
@@ -150,16 +140,22 @@ import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics }
                 <div>
                   <div class="flex justify-between text-sm mb-1">
                     <span class="text-slate-600">{{ resource.label }}</span>
-                    <span class="text-slate-900 font-medium">{{ resource.value }}%</span>
+                    <span class="text-slate-900 font-medium">{{ resource.value == null ? 'Немає даних' : resource.value + '%' }}</span>
                   </div>
                   <div class="w-full bg-slate-100 rounded-full h-2">
-                    <div class="h-2 rounded-full" [class]="resource.color" [style.width.%]="resource.value"></div>
+                    @if (resource.value != null) {
+                      <div class="h-2 rounded-full" [class]="resource.color" [style.width.%]="resource.value"></div>
+                    }
                   </div>
                 </div>
               }
             </div>
           } @else {
-            <p class="text-sm text-slate-500" data-testid="resources-unavailable">Недоступно</p>
+            <div class="text-center py-6 text-slate-400" data-testid="resources-empty">
+              <svg class="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+              <p class="text-sm">Немає даних про ресурси</p>
+              <p class="text-xs text-slate-300 mt-1">Дані з'являться після підключення вузлів</p>
+            </div>
           }
         </div>
 
@@ -198,7 +194,7 @@ import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics }
                         {{ workerStatusLabel(worker.status) }}
                       </span>
                     </td>
-                    <td class="px-4 py-3">{{ worker.gpu_load ?? worker.cpu_load ?? worker.vram_mb ?? 0 }}%{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
+                    <td class="px-4 py-3">{{ worker.gpu_load ?? worker.cpu_load == null ? 'Немає даних' : (worker.gpu_load ?? worker.cpu_load) + '%' }}{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
                     <td class="px-4 py-3">
                       <a routerLink="/workers" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">Налаштування</a>
                     </td>
@@ -217,15 +213,15 @@ import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics }
 export class DashboardComponent implements OnInit {
   loading = signal(true);
   error: string | null = null;
-  onlineWorkers = 0;
-  activeJobs = 0;
-  queuedJobs = 0;
+  onlineWorkers: number | null = null;
+  activeJobs: number | null = null;
+  queuedJobs: number | null = null;
   systemState = 'NORMAL';
   systemReason = 'Штатний режим';
   coreModules: string[] = [];
   architectureItems: { role: string; label: string; count: number; capabilities: string[] }[] = [];
-  statusCounts = { inProgress: 0, queued: 0, completed: 0, failed: 0, paused: 0, cancelled: 0, waiting: 0 };
-  resources: { label: string; value: number; color: string }[] = [];
+  statusCounts = { inProgress: null, queued: null, completed: null, failed: null, paused: null, cancelled: null, waiting: null } as Record<string, number | null>;
+  resources: { label: string; value: number | null; color: string }[] = [];
   resourcesAvailable = false;
   workers: Worker[] = [];
 
@@ -256,9 +252,9 @@ export class DashboardComponent implements OnInit {
         if (status.resources && (status.resources.cpu !== undefined || status.resources.ram !== undefined || status.resources.disk !== undefined)) {
           this.resourcesAvailable = true;
           this.resources = [
-            { label: 'CPU', value: status.resources.cpu ?? 0, color: 'bg-emerald-500' },
-            { label: 'RAM', value: status.resources.ram ?? 0, color: 'bg-blue-500' },
-            { label: 'Диск', value: status.resources.disk ?? 0, color: 'bg-amber-500' },
+            { label: 'CPU', value: status.resources.cpu ?? null, color: 'bg-emerald-500' },
+            { label: 'RAM', value: status.resources.ram ?? null, color: 'bg-blue-500' },
+            { label: 'Диск', value: status.resources.disk ?? null, color: 'bg-amber-500' },
           ];
         }
       },
@@ -329,4 +325,5 @@ export class DashboardComponent implements OnInit {
 
   roleLabel(role: string): string { return roleLabel(role); }
   workerStatusLabel(status: string): string { return workerStatusLabel(status); }
+  metric(value: number | null): string | number { return value == null ? 'Немає даних' : value; }
 }

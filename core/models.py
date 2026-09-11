@@ -371,7 +371,7 @@ class IntegrationSecretUpdate(BaseModel):
 
 
 class TelegramSetup(BaseModel):
-    public_url: str | None = None
+    public_url: str | None = Field(default=None, description="Legacy webhook URL — polling is now the default transport")
     webhook_secret: str | None = None
     allowed_chat_ids: str | None = None
     admin_chat_ids: str | None = None

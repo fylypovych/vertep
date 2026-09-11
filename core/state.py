@@ -30,7 +30,7 @@ result_locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
 _telegram_pending_brands: dict[str, dict] = {}
 _telegram_pending_character: dict[str, dict] = {}
 # Telegram service holder - mutates in place, never rebound.
-# Owned by core.app lifespan; routes in core.api.telegram access .service.
+# Owned by core.app lifespan; polling/service status accessed by core.app routes.
 class TelegramServiceHolder:
     def __init__(self) -> None:
         self.service: TelegramPollingService | None = None

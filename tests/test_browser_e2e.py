@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Browser E2E smoke tests for Vertep Web UI V2."""
 import os
+import socket
 import sys
+from pathlib import Path
+
+import pytest
 
 try:
     from playwright.sync_api import sync_playwright, expect
@@ -11,6 +15,26 @@ except ImportError:
 
 
 BASE_URL = os.getenv("VERTEP_URL", "http://127.0.0.1:8080")
+
+
+def _has_live_server() -> bool:
+    """Return True only when the app host/port is reachable."""
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(BASE_URL)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _has_live_server(),
+    reason=f"Browser E2E requires a running app at {BASE_URL}; skipping without an active server.",
+)
 
 # Standard /api/status mock used by sidebar and header on every page load.
 DEFAULT_STATUS = {
@@ -929,3 +953,142 @@ def test_storyboard_stale_version_conflict():
         expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("stale")
         assert errors == [], f"pageerror: {errors}"
         browser.close()
+
+
+# ── First Run Wizard Browser E2E ────────────────────────────────────
+
+SETUP_ROLES = {
+    "core": {"label": "Основний сервер", "modules": ["proxy", "core", "postgres"],
+             "capabilities": ["scheduling", "api"]},
+    "gpu": {"label": "GPU Worker", "modules": ["comfyui"],
+            "capabilities": ["image_generation", "video_generation"]},
+    "text": {"label": "Text Worker", "modules": ["ollama"],
+             "capabilities": ["text_generation"]},
+}
+
+
+def _setup_api_response(configured=False, selected_role=None, hardware=None):
+    return {
+        "configured": configured, "selected_role": selected_role,
+        "hardware": hardware or {"cpu": "x86_64", "ram_mb": 8192,
+                                  "gpu": {"vendor": "none", "name": "N/A"},
+                                  "docker_version": "24.0.7"},
+        "roles": SETUP_ROLES,
+    }
+
+
+def _mock_setup(page, configured=False, selected_role=None, hardware=None):
+    page.route("**/api/setup", lambda route: route.fulfill(
+        json=_setup_api_response(configured, selected_role, hardware)))
+
+
+def test_setup_wizard_navigates_all_steps():
+    """Wizard step navigation: forward and backward through all sections."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_setup(page)
+        page.goto(f"{BASE_URL}/setup?token=ci")
+        expect(page.locator("body")).to_contain_text("Перший запуск")
+        sections = page.locator("main section")
+        count = sections.count()
+        assert count >= 7, f"Expected at least 7 wizard sections, got {count}"
+        back_btn = page.locator("#back")
+        expect(back_btn).to_have_css("visibility: hidden")
+        for _ in range(count - 1):
+            page.locator("#next").click()
+            page.wait_for_timeout(100)
+        expect(back_btn).to_have_css("visibility: visible")
+        page.locator("#back").click()
+        page.wait_for_timeout(100)
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()
+
+
+def test_setup_wizard_core_hides_connection_fields():
+    """Core role selection hides core connection form."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _mock_setup(page)
+        page.goto(f"{BASE_URL}/setup?token=ci")
+        core_conn = page.locator("#coreConnection")
+        expect(core_conn).to_have_css("display: none")
+        page.locator("#nodeRole").select_option("gpu")
+        page.wait_for_timeout(100)
+        expect(core_conn).to_have_css("display: block")
+        expect(page.locator("#coreUrl")).to_be_visible()
+        page.locator("#nodeRole").select_option("core")
+        page.wait_for_timeout(100)
+        expect(core_conn).to_have_css("display: none")
+        browser.close()
+
+
+def test_setup_wizard_configured_redirects_home():
+    """If already configured, setup page redirects to /."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _mock_setup(page, configured=True)
+        page.goto(f"{BASE_URL}/setup?token=ci")
+        page.wait_for_timeout(500)
+        assert page.url.rstrip("/") == BASE_URL or page.url == f"{BASE_URL}/"
+        browser.close()
+
+
+def test_setup_wizard_shows_hardware():
+    """Hardware section shows detected hardware info."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        hw = {"cpu": "AMD Ryzen 9", "ram_mb": 32768,
+              "gpu": {"vendor": "nvidia", "name": "RTX 4090"},
+              "docker_version": "24.0.7"}
+        _mock_setup(page, hardware=hw)
+        page.goto(f"{BASE_URL}/setup?token=ci")
+        for _ in range(4):
+            page.locator("#next").click()
+            page.wait_for_timeout(100)
+        expect(page.locator("#hardware")).to_contain_text("RTX 4090")
+        browser.close()
+
+
+def test_setup_wizard_health_check_displays_results():
+    """Health check step fetches and renders check results."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _mock_setup(page)
+        page.route("**/api/setup/health", lambda route: route.fulfill(json={
+            "ready": True, "checks": {"core": "OK", "postgresql": "OK", "redis": "OK"}
+        }))
+        page.goto(f"{BASE_URL}/setup?token=ci")
+        steps_count = page.locator("main section").count()
+        for _ in range(steps_count - 2):
+            page.locator("#next").click()
+            page.wait_for_timeout(100)
+        page.wait_for_timeout(500)
+        expect(page.locator("#health")).to_contain_text("postgresql")
+        browser.close()
+
+
+def test_setup_wizard_back_button_hidden_on_first_step():
+    """Back button is invisible on step 0."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _mock_setup(page)
+        page.goto(f"{BASE_URL}/setup?token=ci")
+        expect(page.locator("#back")).to_have_css("visibility: hidden")
+        page.locator("#next").click()
+        page.wait_for_timeout(100)
+        expect(page.locator("#back")).to_have_css("visibility: visible")
+        browser.close()
+
+
+def test_setup_wizard_password_minimum_length():
+    """Password field has minlength=12 attribute."""
+    html = Path("web/setup.html").read_text(encoding="utf-8")
+    assert 'minlength="12"' in html

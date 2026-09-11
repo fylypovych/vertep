@@ -296,12 +296,54 @@ def orchestrate_release(
     return version
 
 
+class GitHubActionsTrigger:
+    """Trigger and monitor a GitHub Actions workflow run via the `gh` CLI."""
+
+    def run(self, root: Path, *, workflow: str, sha: str) -> str:
+        gh_run(root, ["workflow", "run", workflow, "--ref", sha])
+        time.sleep(20)
+        result = gh_run_json(root, [
+            "run", "list", "--workflow", workflow, "--limit", "1",
+            "--json", "databaseId",
+        ])
+        if not result:
+            raise RuntimeError(
+                f"Не вдалося отримати run_id для workflow «{workflow}»"
+            )
+        return str(result[0]["databaseId"])
+
+    def wait(self, root: Path, *, run_id: str, timeout: int) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            result = gh_run_json(
+                root, ["run", "view", run_id, "--json", "status,conclusion"]
+            )
+            if result.get("conclusion"):
+                return result
+            time.sleep(10)
+        return {}
+
+    def failed_jobs(self, root: Path, *, run_id: str) -> str:
+        result = gh_run(
+            root, ["run", "view", run_id, "--json", "jobs",
+                   "-q", '.jobs[] | select(.conclusion == "failure") | .name'],
+        )
+        return result
+
+    def verify(self, root: Path, *, version: str, expected_sha: str) -> None:
+        verify_release(root, version=version, expected_sha=expected_sha)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Підготувати єдиний нумерований коміт релізу Vertep"
     )
     parser.add_argument("--skip-tests", action="store_true",
                         help="пропустити перевірку (не рекомендовано)")
+    parser.add_argument("--release", action="store_true",
+                        help="виконати повний реліз: пуш + GitHub Actions + верифікація")
+    parser.add_argument("--timeout", type=int, default=10800,
+                        help="таймаут очікування workflow у секундах (за замовчуванням 10800)")
     parser.add_argument("--show-next", action="store_true",
                         help="показати наступний номер без змін")
     parser.add_argument("--check", action="store_true",
@@ -314,6 +356,13 @@ def main() -> None:
             return
         if args.check:
             print(check_release(root))
+            return
+        if args.release:
+            trigger = GitHubActionsTrigger()
+            version = orchestrate_release(
+                root, skip_tests=args.skip_tests, timeout=args.timeout, trigger=trigger
+            )
+            print(f"Реліз {version} успішно створено та пройдено всі перевірки.")
             return
         version = prepare_release(root, skip_tests=args.skip_tests)
     except (RuntimeError, subprocess.CalledProcessError) as error:

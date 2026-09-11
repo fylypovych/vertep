@@ -6,11 +6,18 @@ import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { Alert } from '../core/models';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
+import { EmptyStateComponent } from '../shared/empty-state.component';
+
+const SEVERITY_LABELS: Record<string, string> = {
+  error: 'Помилка', warning: 'Попередження', info: 'Інформація',
+};
 
 @Component({
   selector: 'app-alerts',
   standalone: true,
-  imports: [CommonModule, RouterModule, VertepDatePipe],
+  imports: [CommonModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
   template: `
     <div class="space-y-4" data-testid="alerts-page">
       <div class="flex items-center justify-between">
@@ -19,15 +26,11 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
       </div>
 
       @if (loading()) {
-        <div class="space-y-3">
-          @for (_ of [1,2,3]; track $index) {
-            <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
-          }
-        </div>
+        <app-loading-state />
       } @else if (error()) {
-        <p class="text-red-600">{{ error() }}</p>
+        <app-error-state [message]="error()!" (retry)="loadAlerts()" />
       } @else if (alerts().length === 0) {
-        <p class="text-sm text-slate-500">Немає активних алертів</p>
+        <app-empty-state message="Немає активних алертів" />
       } @else {
         <div class="space-y-2">
           @for (alert of alerts(); track alert.type + '_' + (alert.job_id || alert.node_name || alert.operation_id || $index)) {
@@ -41,7 +44,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                         [class.text-amber-700]="alert.severity === 'warning'"
                         [class.bg-blue-50]="alert.severity === 'info'"
                         [class.text-blue-700]="alert.severity === 'info'">
-                    {{ alert.severity }}
+                    {{ severityLabel(alert.severity) }}
                   </span>
                   <span class="text-sm font-medium text-slate-900">{{ alert.type }}</span>
                 </div>
@@ -49,27 +52,12 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                   <p class="text-sm text-slate-600 mt-1">{{ alert.message }}</p>
                 }
                 <div class="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
-                  @if (alert.job_id) {
-                    <span>Job: {{ alert.job_id }}</span>
-                  }
-                  @if (alert.node_name) {
-                    <span>Node: {{ alert.node_name }}</span>
-                  }
-                  @if (alert.task_id) {
-                    <span>Task: {{ alert.task_id }}</span>
-                  }
-                  @if (alert.state) {
-                    <span>Стан: {{ alert.state }}</span>
-                  }
-                  @if (alert.updated_at) {
-                    <span>{{ alert.updated_at | vertepDate }}</span>
-                  }
+                  @if (alert.job_id) { <span>Job: {{ alert.job_id }}</span> }
+                  @if (alert.node_name) { <span>Node: {{ alert.node_name }}</span> }
+                  @if (alert.task_id) { <span>Task: {{ alert.task_id }}</span> }
+                  @if (alert.state) { <span>Стан: {{ alert.state }}</span> }
+                  @if (alert.updated_at) { <span>{{ alert.updated_at | vertepDate }}</span> }
                 </div>
-                @if (alert.details) {
-                <div class="mt-1 text-xs text-slate-500">
-                  <span class="font-mono">{{ jsonSummary(alert.details) }}</span>
-                </div>
-                }
               </div>
               @if (alert.job_id) {
                 <a [routerLink]="['/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium ml-2">Відкрити</a>
@@ -94,33 +82,16 @@ export class AlertsComponent implements OnInit, OnDestroy {
     this.pollTimer = timer(0, 10000).subscribe(() => this.loadAlerts());
   }
 
-  ngOnDestroy(): void {
-    if (this.pollTimer) {
-      this.pollTimer.unsubscribe();
-    }
-  }
+  ngOnDestroy(): void { if (this.pollTimer) this.pollTimer.unsubscribe(); }
 
   loadAlerts(): void {
     this.loading.set(true);
     this.error.set(null);
     this.api.getAlerts().subscribe({
-      next: (alerts) => {
-        this.alerts.set(alerts);
-        this.loading.set(false);
-      },
-      error: (err) => {
-        this.error.set(err.message || 'Не вдалося завантажити алерти');
-        this.loading.set(false);
-      },
+      next: (alerts) => { this.alerts.set(alerts); this.loading.set(false); },
+      error: (err) => { this.error.set(err.message || 'Не вдалося завантажити алерти'); this.loading.set(false); },
     });
   }
 
-  jsonSummary(obj: Record<string, unknown>): string {
-    try {
-      return JSON.stringify(obj);
-    } catch {
-      return '';
-    }
-  }
-
+  severityLabel(severity?: string): string { return SEVERITY_LABELS[severity || ''] || severity || '—'; }
 }

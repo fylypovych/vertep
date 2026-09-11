@@ -8,11 +8,14 @@ import { ConfirmService } from '../core/services/confirm.service';
 import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
 import { roleLabel, statusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
+import { EmptyStateComponent } from '../shared/empty-state.component';
 
 @Component({
   selector: 'app-workers',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe],
+  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-page">
       <div class="flex items-center justify-between mb-4">
@@ -27,16 +30,9 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
       </div>
 
       @if (loading()) {
-        <div class="space-y-3">
-          @for (_ of [1,2,3]; track $index) {
-            <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
-          }
-        </div>
+        <app-loading-state />
       } @else if (error()) {
-        <div class="bg-red-50 border border-red-200 rounded-xl p-5">
-          <p class="text-red-700">{{ error() }}</p>
-          <button (click)="loadWorkers()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
-        </div>
+        <app-error-state [message]="error()!" (retry)="loadWorkers()" />
       } @else {
         <div class="overflow-x-auto">
           <table class="w-full text-sm text-left" data-testid="workers-table">

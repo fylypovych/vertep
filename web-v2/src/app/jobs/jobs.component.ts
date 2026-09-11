@@ -7,13 +7,16 @@ import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Job, Character, Brand, Workflow, JobCreate, QueueState, DeadLetterTask } from '../core/models';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
+import { EmptyStateComponent } from '../shared/empty-state.component';
 import { inStatusGroup, statusLabel } from '../core/presentation';
 import { Subscription, timer } from 'rxjs';
 
 @Component({
   selector: 'app-jobs',
   standalone: true,
-  imports: [CommonModule, FormsModule, VertepDatePipe, RouterModule],
+  imports: [CommonModule, FormsModule, VertepDatePipe, RouterModule, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="jobs-page">
       <div class="flex items-center justify-between mb-4">
@@ -39,16 +42,9 @@ import { Subscription, timer } from 'rxjs';
         </div>
 
         @if (loading()) {
-          <div class="space-y-3">
-            @for (_ of [1,2,3]; track $index) {
-              <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
-            }
-          </div>
+          <app-loading-state />
         } @else if (error()) {
-          <div class="bg-red-50 border border-red-200 rounded-xl p-5">
-            <p class="text-red-700">{{ error() }}</p>
-            <button (click)="loadJobs()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
-          </div>
+          <app-error-state [message]="error()!" (retry)="loadJobs()" />
         } @else {
           <div class="overflow-x-auto">
             <table class="w-full text-sm text-left" data-testid="jobs-table">

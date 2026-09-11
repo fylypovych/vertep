@@ -1000,20 +1000,11 @@ def telegram_setup(body: TelegramSetup):
     token = secrets.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise HTTPException(400, "TELEGRAM_BOT_TOKEN is not configured")
-    public_url = body.public_url or os.getenv("PUBLIC_URL", "")
     webhook_secret = body.webhook_secret or os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    allowed_chat_ids = body.allowed_chat_ids
-    admin_chat_ids = body.admin_chat_ids
     if webhook_secret:
         os.environ["TELEGRAM_WEBHOOK_SECRET"] = webhook_secret
-    save_telegram_settings(allowed_chat_ids=allowed_chat_ids, admin_chat_ids=admin_chat_ids)
-    if not public_url:
-        return {"status": "saved", "message": "Settings saved; webhook not configured (PUBLIC_URL is not set)"}
-    try:
-        adapter = TelegramAdapter()
-        return adapter.set_webhook(public_url, webhook_secret)
-    except (RuntimeError, httpx.HTTPError) as error:
-        raise HTTPException(502, str(error)) from error
+    save_telegram_settings(allowed_chat_ids=body.allowed_chat_ids, admin_chat_ids=body.admin_chat_ids)
+    return {"status": "saved", "message": "Telegram polling configuration saved; webhook is legacy"}
 
 
 def _start_telegram_polling() -> None:
@@ -1134,6 +1125,8 @@ def _build_telegram_status() -> dict:
         "bot_username": _get_bot_username(),
         "last_update_id": telegram_polling_service.last_update_id if telegram_polling_service else None,
         "last_message_at": telegram_polling_service.last_message_at if telegram_polling_service else None,
+        "last_error": telegram_polling_service.last_error if telegram_polling_service else None,
+        "consecutive_failures": telegram_polling_service._consecutive_failures if telegram_polling_service else 0,
     }
 
 

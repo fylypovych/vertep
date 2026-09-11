@@ -118,8 +118,8 @@ export class SidebarComponent implements OnInit {
       icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14m14 0v2a2 2 0 002 2h2M5 19h14M5 19l1.5-1.5M5 19l-1.5 1.5M12 12a3 3 0 100-6 3 3 0 000 6z"/></svg>`,
     },
     {
-      path: '/operations',
-      label: 'Операції',
+      path: '/alerts',
+      label: 'Алерти',
       icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>`,
     },
     {

@@ -282,6 +282,7 @@ def test_telegram_setup_saves_chat_ids_without_public_url(monkeypatch, tmp_path)
     assert response.status_code == 200
     result = response.json()
     assert result["status"] == "saved"
+    assert "polling" in result["message"]
     status = client.get("/api/telegram/status").json()
     assert status["allowed_chat_ids"] == "111,222"
     assert status["admin_chat_ids"] == "333"
@@ -325,6 +326,60 @@ def test_telegram_polling_service_persists_offset(tmp_path, monkeypatch):
     assert loaded.offset == 123
     assert loaded.last_update_id == 123
     assert loaded.last_message_at == "2026-09-02T16:21:00+03:00"
+
+
+def test_telegram_polling_restart_continues_from_persisted_offset(tmp_path):
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "telegram_polling_state.json"
+    processed = []
+    service = TelegramPollingService(token="test-token", on_update=processed.append, offset_file=state_file)
+    service.offset = 100
+    service.last_update_id = 99
+    service._save_offset()
+    restarted = TelegramPollingService(token="test-token", on_update=processed.append, offset_file=state_file)
+    assert restarted.offset == 100
+    assert restarted.last_update_id == 99
+    assert processed == []
+
+
+def test_telegram_polling_offset_save_failure_does_not_crash(monkeypatch, tmp_path):
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "telegram_polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    service.offset = 42
+    service.last_update_id = 41
+    original_open = open
+    def failing_open(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr("builtins.open", failing_open)
+    service._save_offset()
+    assert service.offset == 42
+    assert service.last_update_id == 41
+    assert service._consecutive_failures == 0
+
+
+def test_telegram_polling_backoff_on_error(tmp_path, monkeypatch):
+    from adapters.telegram import TelegramPollingService
+    monkeypatch.setenv("TELEGRAM_POLLING_RETRY_DELAY", "1")
+    monkeypatch.setenv("TELEGRAM_POLLING_MAX_RETRY_DELAY", "10")
+    state_file = tmp_path / "telegram_polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    monkeypatch.setattr(TelegramPollingService, "_delete_webhook", lambda self: None)
+    call_count = [0]
+    def failing_get_updates(self):
+        call_count[0] += 1
+        if call_count[0] >= 3:
+            self._running = False
+        raise OSError("network down")
+    monkeypatch.setattr(TelegramPollingService, "_get_updates", failing_get_updates)
+    delays = []
+    monkeypatch.setattr("time.sleep", lambda s: delays.append(s))
+    service._running = True
+    service._run()
+    assert call_count[0] == 3
+    assert len(delays) == 2
+    assert delays[0] == 1
+    assert delays[1] == 2
 
 def test_dispatcher_respects_vram():
     job = Job(job_id="2026-999999", topic="image", character_id="did_samogon", priority=5,

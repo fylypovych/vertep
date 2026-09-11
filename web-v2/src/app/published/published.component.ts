@@ -5,12 +5,16 @@ import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
+import { EmptyStateComponent } from '../shared/empty-state.component';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
 import { Job, PublicationResult, Channel } from '../core/models';
+import { statusLabel } from '../core/presentation';
 
 @Component({
   selector: 'app-published',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe],
+  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe, EmptyStateComponent, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="space-y-6" data-testid="published-page">
       <div class="flex items-center justify-between">
@@ -28,15 +32,11 @@ import { Job, PublicationResult, Channel } from '../core/models';
       </div>
 
       @if (loading()) {
-        <div class="space-y-3">
-          @for (_ of [1,2,3]; track $index) {
-            <div class="animate-pulse bg-slate-100 rounded-lg h-20"></div>
-          }
-        </div>
+        <app-loading-state />
       } @else if (error()) {
-        <p class="text-red-600">{{ error() }}</p>
+        <app-error-state [message]="error()!" (retry)="loadPublished()" />
       } @else if (filteredJobs().length === 0) {
-        <p class="text-sm text-slate-500">Немає опублікованих матеріалів</p>
+        <app-empty-state message="Немає опублікованих матеріалів" />
       } @else {
         <div class="space-y-3">
           @for (job of filteredJobs(); track job.job_id) {
@@ -47,7 +47,7 @@ import { Job, PublicationResult, Channel } from '../core/models';
                   <p class="text-xs text-slate-500">ID: {{ job.job_id }} · {{ job.created_at | vertepDate }}</p>
                 </div>
                 <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700">
-                  {{ job.status }}
+                  {{ jobStatusLabel(job.status) }}
                 </span>
               </div>
 
@@ -190,4 +190,6 @@ export class PublishedComponent implements OnInit {
       },
     });
   }
+
+  jobStatusLabel(status: string): string { return statusLabel(status); }
 }

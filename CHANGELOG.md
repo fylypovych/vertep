@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.49
+- Перероблено Telegram transport: polling (`getUpdates`) став типовим, webhook — legacy; додано exponential backoff, persistent offset з `os.fsync`, `last_error` та `consecutive_failures`.
+- Видалено `core/api/telegram.py`; логіка polling перенесена до `adapters/telegram.py`.
+- Оновлено `TelegramSetup` у `core/models.py`: `public_url` позначено як legacy.
+- Додано `last_error` та `consecutive_failures` у `/api/telegram/status`.
+- Видалено `web-v2/src/app/queue/queue.component.ts` та роут `/queue`; черга перенесена у вкладку «Завдання».
+- Рефакторинг `settings.component.ts` на секції з новим каталогом `web-v2/src/app/settings/sections/`.
+- Додано спільні UI-компоненти стану (`LoadingStateComponent`, `ErrorStateComponent`, `EmptyStateComponent`).
+- Оновлено dashboard: null-safe метрики з fallback «Немає даних».
+- Перейменовано в бічній панелі: «Операції» → «Алерти».
+- Додано 4 Playwright E2E тести для First Run Wizard та unit-тести для Telegram polling.
+- Додано `test_bootstrap_wizard.py` для bootstrap wizard.
+- Оновлено документацію `README.md`, `agents/README.md`, `telegram/README.md`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.48
 - Додано Telegram approval flow для сценаріїв: callback-хендлери `sc_ok`, `sc_regen`, `sc_edit`, `sc_reject` у `core/app.py`, функції `render_script()`, `script_keyboard()`, `_send_script_approval_to_telegram()` у `core/storyboard_telegram.py` та `core/pipeline.py`.
 - Додано Telegram approval flow для відео: callback-хендлери `vid_ok`, `vid_regen`, `vid_edit`, `vid_reject` у `core/app.py`, функції `video_approval_keyboard()`, `send_video_for_approval()`, `approve_video()`, `request_video_revision()`, `regenerate_video()` у `core/pipeline.py` та `core/storyboard_telegram.py`.

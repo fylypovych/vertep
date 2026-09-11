@@ -3,12 +3,15 @@ import { CommonModule } from '@angular/common';
 import { Subscription, timer } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
 import { HealthCheck, HealthHistoryEntry } from '../core/models';
+import { roleLabel } from '../core/presentation';
 
 @Component({
   selector: 'app-health',
   standalone: true,
-  imports: [CommonModule, VertepDatePipe],
+  imports: [CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="space-y-6" data-testid="health-page">
       <div class="flex items-center justify-between">
@@ -17,13 +20,9 @@ import { HealthCheck, HealthHistoryEntry } from '../core/models';
       </div>
 
       @if (loading()) {
-        <div class="space-y-3">
-          @for (_ of [1,2,3]; track $index) {
-            <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
-          }
-        </div>
+        <app-loading-state />
       } @else if (error()) {
-        <p class="text-red-600">{{ error() }}</p>
+        <app-error-state [message]="error()!" (retry)="loadHealth()" />
       } @else {
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div class="bg-slate-50 rounded-lg p-4">
