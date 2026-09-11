@@ -510,8 +510,13 @@ export class VertepApiService {
   }
 
   private handleError(error: unknown) {
-    const err = error as { detail?: string; message?: string } | undefined;
-    return throwError(() => new Error(err?.detail || err?.message || 'API error'));
+    const httpErr = error as { error?: { detail?: string }; detail?: string; status?: number; message?: string } | undefined;
+    const detail = httpErr?.error?.detail || httpErr?.detail;
+    const message = detail || httpErr?.message || 'API error';
+    const status = httpErr?.status;
+    const err = new Error(message) as Error & { status?: number };
+    err.status = status;
+    return throwError(() => err);
   }
 }
 

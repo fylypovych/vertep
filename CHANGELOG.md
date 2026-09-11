@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.39
+- Виправлено `handleError` в `api.service.ts`: коректно витягує `detail` з `HttpErrorResponse.error.detail` та зберігає HTTP `status` для подальшої обробки 409 conflicts.
+- Додано обробку 409 conflict у `runAction` компонента `job-detail`: при 409 встановлюється `conflict` signal для відображення блоку «Конфлікт версії».
+- Додано українські мітки `revision` (Правки) та `reject` (Відхилення) до `actionLabel` в `job-detail.component.ts`.
+- Оновлено browser E2E тест `test_script_backend_error_shows_error_and_no_crash`: перевіряється реальний текст помилки з бекенду замість загального «Помилка».
+- Додано конфігурацію production build в `angular.json` (`outputHashing`, `optimization`, `extractLicenses`).
+- Додано тести для role services: CRUD, recreate, backup→wipe→restore для персонажів/брендів/workflow/jobs.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.38
 - Додано regression-тест для Telegram creation feedback: помилки вибору персонажа та збереження Job показуються користувачу, а невдалий запит можна повторити.
 - Додано browser tests для відображення API-помилки створення Job і автоматичного оновлення списку Job після Telegram creation.

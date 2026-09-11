@@ -202,3 +202,131 @@ def test_backup_service_custom_sources(monkeypatch, tmp_path):
     snap_id = resp.json()["snapshot_id"]
     client.post(f"/snapshots/{snap_id}/restore")
     assert (custom / "secret.txt").read_text(encoding="utf-8") == "custom-data"
+
+
+def test_backup_service_checksum_verification_rejects_corrupted_snapshot(monkeypatch, tmp_path):
+    """Corrupted backup file must fail with 409 and not restore any data."""
+    import shutil
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir()
+    storage.mkdir()
+    (config / "installation.json").write_text('{"id":"original"}', encoding="utf-8")
+    (storage / "artifact.bin").write_bytes(b"original-content")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
+    assert resp.status_code == 200
+    receipt = resp.json()
+    snap_id = receipt["snapshot_id"]
+    encrypted_file = backups / receipt["file"]
+    # Corrupt the encrypted backup file
+    corrupted = encrypted_file.read_bytes()[:-10] + b"CORRUPTED!"
+    encrypted_file.write_bytes(corrupted)
+    # Modify source data
+    (config / "installation.json").write_text('{"id":"changed"}', encoding="utf-8")
+    (storage / "artifact.bin").write_bytes(b"changed-content")
+    # Restore must fail with checksum mismatch
+    restored = client.post(f"/snapshots/{snap_id}/restore")
+    assert restored.status_code == 409
+    assert "Checksum" in restored.text or "checksum" in restored.text.lower()
+    # Original data must NOT be restored (still changed)
+    assert (config / "installation.json").read_text(encoding="utf-8") == '{"id":"changed"}'
+    assert (storage / "artifact.bin").read_bytes() == b"changed-content"
+
+
+def test_backup_service_failed_restore_sets_emergency(monkeypatch, tmp_path):
+    """Failed restore must call _set_emergency and not leave system in false NORMAL."""
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir()
+    storage.mkdir()
+    (config / "a.txt").write_text("v1", encoding="utf-8")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"f" * 32).decode("ascii"))
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+    # Mock _core_available to return False, causing HTTPException 503 inside try block
+    monkeypatch.setattr(backup_service, "_core_available", lambda: False)
+    # Mock _set_emergency to capture call
+    emergency_called = {"called": False, "reason": None}
+    def mock_set_emergency(reason: str):
+        emergency_called["called"] = True
+        emergency_called["reason"] = reason
+    monkeypatch.setattr(backup_service, "_set_emergency", mock_set_emergency)
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
+    assert resp.status_code == 200
+    snap_id = resp.json()["snapshot_id"]
+    restored = client.post(f"/snapshots/{snap_id}/restore")
+    assert restored.status_code == 503
+    assert emergency_called["called"] is True
+    assert "Restore failed" in emergency_called["reason"]
+
+
+def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path):
+    """Full integration: backup config + storage + pg_dump/redis, wipe all, restore, verify."""
+    import shutil
+    from pathlib import Path
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir()
+    storage.mkdir()
+    # Config data
+    (config / "installation.json").write_text('{"id":"inst-1","secret":"cfg-secret"}', encoding="utf-8")
+    (config / "license.json").write_text('{"key":"license-key"}', encoding="utf-8")
+    # Storage data (characters, workflows, jobs)
+    (storage / "characters" / "char1").mkdir(parents=True)
+    (storage / "characters" / "char1" / "character.json").write_text('{"id":"char1","name":"Char 1"}', encoding="utf-8")
+    (storage / "workflows" / "image").mkdir(parents=True)
+    (storage / "workflows" / "image" / "wf1.json").write_text('{"class_type":"Test"}', encoding="utf-8")
+    (storage / "jobs" / "job-1").mkdir(parents=True)
+    (storage / "jobs" / "job-1" / "job.json").write_text('{"job_id":"job-1","topic":"Test"}', encoding="utf-8")
+    # DB dump files will be created by pg_dump/redis commands (mocked)
+    pg_dump_path = Path("/tmp/vertep.dump")
+    redis_dump_path = Path("/var/lib/redis/dump.rdb")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"i" * 32).decode("ascii"))
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+    # Mock pg_dump and redis-cli to create dummy dump files
+    def mock_run(cmd, shell=True, timeout=None, capture_output=True):
+        if "pg_dump" in cmd:
+            pg_dump_path.parent.mkdir(parents=True, exist_ok=True)
+            pg_dump_path.write_bytes(b"PG_DUMP_CONTENT")
+            return type("Result", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+        if "redis-cli" in cmd and "BGSAVE" in cmd:
+            redis_dump_path.parent.mkdir(parents=True, exist_ok=True)
+            redis_dump_path.write_bytes(b"REDIS_RDB_CONTENT")
+            return type("Result", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+        if "pg_restore" in cmd:
+            return type("Result", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+        return type("Result", (), {"returncode": 1, "stdout": b"", "stderr": b""})()
+    monkeypatch.setattr(backup_service.subprocess, "run", mock_run)
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "full-backup", "request": {}})
+    assert resp.status_code == 200
+    snap_id = resp.json()["snapshot_id"]
+    receipt = resp.json()
+    # Verify inventory includes config, storage, and db
+    assert any(item["label"] == "config" for item in receipt["inventory"])
+    assert any(item["label"] == "storage" for item in receipt["inventory"])
+    # Wipe ALL data
+    (config / "installation.json").unlink()
+    (config / "license.json").unlink()
+    shutil.rmtree(storage / "characters" / "char1")
+    (storage / "workflows" / "image" / "wf1.json").unlink()
+    (storage / "jobs" / "job-1" / "job.json").unlink()
+    # Restore
+    restored = client.post(f"/snapshots/{snap_id}/restore")
+    assert restored.status_code == 200
+    # Verify config restored
+    assert (config / "installation.json").read_text(encoding="utf-8") == '{"id":"inst-1","secret":"cfg-secret"}'
+    assert (config / "license.json").read_text(encoding="utf-8") == '{"key":"license-key"}'
+    # Verify storage restored
+    assert (storage / "characters" / "char1" / "character.json").exists()
+    assert (storage / "workflows" / "image" / "wf1.json").exists()
+    assert (storage / "jobs" / "job-1" / "job.json").exists()

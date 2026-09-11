@@ -742,3 +742,190 @@ def test_settings_roles_shows_deployment_status():
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
         assert not errors, f"pageerror: {errors}"
         browser.close()
+def _script_job(job_id="job-script-01", status="SCRIPT_PENDING_APPROVAL"):
+    """Minimal Job in script review state (i.0.0.0.4)."""
+    return {
+        "job_id": job_id, "topic": "Сценарій до затвердження", "character_id": "did_samogon",
+        "priority": 5, "status": status, "created_at": "2026-09-08T10:00:00Z",
+        "source": "web", "retries": 0, "approved": False, "approval_status": "pending",
+        "published_to": [], "task_type": "image", "min_vram_mb": 4096, "max_retries": 3,
+        "brand_id": "brand01", "aspect_ratio": "16:9", "output_preset": "youtube",
+        "version": 1, "stages": {}, "scenes": [], "artifacts": [], "events": ["SCRIPT_PENDING_APPROVAL"],
+        "script": {
+            "title": "Новий ролик",
+            "description": "Короткий опис ролика",
+            "scenes": [
+                {"prompt": "перша сцена", "voiceover": "озвучка 1", "duration": 3},
+                {"prompt": "друга сцена", "voiceover": "озвучка 2", "duration": 4},
+            ],
+        },
+    }
+
+
+def test_script_approval_happy_path():
+    """i.0.0.0.4: script approve posts to backend and removes the approve button."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
+
+        job = _script_job()
+        approved_job = {**job, "status": "SCRIPT_APPROVED", "approved": True, "approval_status": "approved"}
+
+        def handle_detail(route):
+            if route.request.method == "POST":
+                route.fulfill(json=approved_job)
+            else:
+                route.fulfill(json=job)
+
+        page.route("**/api/jobs/job-script-01/script/approve", lambda route: route.fulfill(json=approved_job))
+        page.route("**/api/jobs/job-script-01", handle_detail)
+        page.goto(f"{BASE_URL}/jobs/job-script-01")
+
+        expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
+        expect(page.locator("[data-testid='job-script']")).to_be_visible()
+        expect(page.locator("[data-testid='approve-script-button']")).to_be_visible()
+        expect(page.locator("[data-testid='job-script']")).to_contain_text("Новий ролик")
+
+        page.locator("[data-testid='approve-script-button']").click()
+        expect(page.locator("[data-testid='approve-script-button']")).not_to_be_visible()
+        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Сценарій затверджено")
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()
+
+
+def test_script_revision_happy_path():
+    """i.0.0.0.4: script revision prompt posts revision to backend."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
+
+        revised = None
+        job = _script_job()
+        revised_job = {**job, "status": "SCRIPT_REVISION_REQUESTED"}
+
+        def handle_revision(route):
+            nonlocal revised
+            revised = route.request.post_data_json
+            route.fulfill(json=revised_job)
+
+        page.on("dialog", lambda dialog: dialog.accept("зробити сцени коротшими"))
+        page.route("**/api/jobs/job-script-01/script/revision", handle_revision)
+        page.route("**/api/jobs/job-script-01", lambda route: route.fulfill(json=job))
+        page.goto(f"{BASE_URL}/jobs/job-script-01")
+
+        page.locator("[data-testid='revision-script-button']").click()
+        assert revised is not None, "script/revision call was not made"
+        assert revised.get("revision") == "зробити сцени коротшими", revised
+        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Запитані правки")
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()
+def test_script_backend_error_shows_error_and_no_crash():
+    """i.0.0.0.4: backend error on approve surfaces an action error without crashing the page."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
+
+        job = _script_job()
+
+        def handle_approve(route):
+            route.fulfill(status=500, content_type="application/json",
+                          body='{"detail": "Сценарій недоступний для затвердження"}')
+
+        page.route("**/api/jobs/job-script-01", lambda route: route.fulfill(json=job))
+        page.route("**/api/jobs/job-script-01/script/approve", handle_approve)
+        page.goto(f"{BASE_URL}/jobs/job-script-01")
+
+        page.locator("[data-testid='approve-script-button']").click()
+        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Сценарій недоступний для затвердження")
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()
+
+
+def _storyboard_job(job_id="job-sb-01"):
+    """Minimal Job in storyboard review state with ready image previews (i.0.0.0.4)."""
+    return {
+        "job_id": job_id, "topic": "Розкадровка до затвердження", "character_id": "did_samogon",
+        "priority": 5, "status": "STORYBOARD_PENDING_APPROVAL", "created_at": "2026-09-08T10:00:00Z",
+        "source": "web", "retries": 0, "approved": False, "approval_status": "pending",
+        "published_to": [], "task_type": "image", "min_vram_mb": 4096, "max_retries": 3,
+        "brand_id": "brand01", "aspect_ratio": "16:9", "output_preset": "youtube",
+        "version": 1, "stages": {}, "scenes": [], "artifacts": [], "events": ["STORYBOARD_PENDING_APPROVAL"],
+        "active_storyboard_version": 1,
+        "storyboards": [{
+            "version": 1, "title": "Розкадровка v1", "description": "Опис",
+            "hashtags": ["#test"], "status": "pending_approval", "created_at": "2026-09-08T10:00:00Z",
+            "image_version": 1, "image_status": "ready",
+            "scenes": [
+                {"index": 1, "prompt": "кадр 1", "video_prompt": "рух 1", "voiceover": "голос 1",
+                 "duration": 3, "scene_id": "s1", "image_artifact_id": "art-s1", "image_version": 1},
+                {"index": 2, "prompt": "кадр 2", "video_prompt": "рух 2", "voiceover": "голос 2",
+                 "duration": 4, "scene_id": "s2", "image_artifact_id": "art-s2", "image_version": 1},
+            ],
+        }],
+    }
+
+
+def test_storyboard_review_with_artifacts_and_approve():
+    """i.0.0.0.4: storyboard renders scene previews from real artifacts and approves the storyboard."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
+
+        job = _storyboard_job()
+        approved_job = {**job, "status": "STORYBOARD_APPROVED", "approved": True,
+                        "approval_status": "approved"}
+
+        page.route("**/api/jobs/job-sb-01", lambda route: route.fulfill(json=job))
+        page.route("**/api/jobs/job-sb-01/artifacts/art-s1/download", lambda route: route.fulfill(body=b"x"))
+        page.route("**/api/jobs/job-sb-01/artifacts/art-s2/download", lambda route: route.fulfill(body=b"x"))
+        page.route("**/api/jobs/job-sb-01/storyboards/approve", lambda route: route.fulfill(json=approved_job))
+        page.goto(f"{BASE_URL}/jobs/job-sb-01")
+
+        expect(page.locator("[data-testid='job-storyboard']")).to_be_visible()
+        expect(page.locator("[data-testid='job-storyboard']")).to_contain_text("Розкадровка v1")
+        expect(page.locator("[data-testid='job-storyboard']")).to_contain_text("кадр 1")
+        preview_link = page.locator("[data-testid='job-storyboard'] a[href*='/artifacts/art-s1/download']")
+        expect(preview_link).to_be_visible()
+
+        # Approve the storyboard via the general approve button (canReviewStoryboard).
+        page.get_by_role("button", name="Схвалити", exact=True).click()
+        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Розкадровка затверджена")
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()
+
+
+def test_storyboard_stale_version_conflict():
+    """i.0.0.0.4: stale-version conflict (409) on image preview approval surfaces an error."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_status(page)
+
+        job = _storyboard_job()
+
+        def handle_images_approve(route):
+            route.fulfill(status=409, content_type="application/json",
+                          body='{"detail": "Storyboard version 1 is stale; active version is 2"}')
+
+        page.route("**/api/jobs/job-sb-01", lambda route: route.fulfill(json=job))
+        page.route("**/api/jobs/job-sb-01/storyboards/images/approve", handle_images_approve)
+        page.goto(f"{BASE_URL}/jobs/job-sb-01")
+
+        page.get_by_role("button", name="Затвердити превʼю розкадровки").click()
+        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("stale")
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()

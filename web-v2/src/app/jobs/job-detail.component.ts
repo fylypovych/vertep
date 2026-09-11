@@ -844,6 +844,8 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       regenerate: 'Регенерація',
       cancel: 'Скасування',
       approve: 'Схвалення',
+      revision: 'Правки',
+      reject: 'Відхилення',
     };
     return labels[action] || action;
   }
@@ -955,6 +957,9 @@ export class JobDetailComponent implements OnInit, OnDestroy {
           this.toast.show(`Дію "${this.actionLabel(action)}" застосовано`, 'success');
         },
         error: (err: { status?: number; message?: string }) => {
+          if (err.status === 409) {
+            this.conflict.set(true);
+          }
           this.actionError.set(err.message || `Помилка виконання дії "${this.actionLabel(action)}"`);
           this.actionLoading.set(null);
           this.toast.show(err.message || 'Помилка виконання дії', 'error');
