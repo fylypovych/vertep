@@ -2,13 +2,48 @@
 
 ## Unreleased
 
-## ПРАВИЛЬНА НАЗВА: 0.0.1.39
+## ПРАВИЛЬНА НАЗВА: 0.0.1.47
+- Виправлено нумерацію версій: commit `7d57408a` мав назву "0.0.1.39" замість "0.0.1.46". Оновлено `VERSION`, `CHANGELOG.md` та release notes.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.46
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.39
 - Виправлено `handleError` в `api.service.ts`: коректно витягує `detail` з `HttpErrorResponse.error.detail` та зберігає HTTP `status` для подальшої обробки 409 conflicts.
 - Додано обробку 409 conflict у `runAction` компонента `job-detail`: при 409 встановлюється `conflict` signal для відображення блоку «Конфлікт версії».
 - Додано українські мітки `revision` (Правки) та `reject` (Відхилення) до `actionLabel` в `job-detail.component.ts`.
 - Оновлено browser E2E тест `test_script_backend_error_shows_error_and_no_crash`: перевіряється реальний текст помилки з бекенду замість загального «Помилка».
 - Додано конфігурацію production build в `angular.json` (`outputHashing`, `optimization`, `extractLicenses`).
 - Додано тести для role services: CRUD, recreate, backup→wipe→restore для персонажів/брендів/workflow/jobs.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.45
+- Видалено тимчасові файли: `error-context.md`, `playwright-report/`, `test-results/.last-run.json`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.44
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.36
+- Порожній commit.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.43
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.36
+- Оновлено `AGENTS.md`: розширено правила версіонування, роботи з Issues та Provider/Adapter Layer.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.42
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.42
+- Розширено `core/repository.py`: додано операції persistent user data (backfill, migrate, backup, restore).
+- Оновлено `db/010_persistent_user_data_backfill.backfill.py`: реалізовано backfill та міграцію persistent user data з deduplication.
+- Додано тести `tests/test_backfill.py` та `tests/test_repository.py`.
+- Замінено `web-v2/tests/admin.spec.ts` на `web-v2/tests/brands-crud.spec.ts`: CRUD-тест брендів через Playwright.
+- Оновлено `scripts/migrate.py` та `scripts/vertep`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.41
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.35
+- Відновлено `AGENTS.md` після випадкового видалення (0.0.1.39); видалено `AGENTS.md.tmp`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.40
+## ОРИГІНАЛЬНА НАЗВА: tmp
+- Тимчасовий commit: створено `AGENTS.md.tmp`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.39
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.34
+- Випадково очищено `AGENTS.md` до одного рядка (відновлено в 0.0.1.41).
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.38
 - Додано regression-тест для Telegram creation feedback: помилки вибору персонажа та збереження Job показуються користувачу, а невдалий запит можна повторити.
