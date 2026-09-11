@@ -212,7 +212,8 @@ class TestSetupAPI:
         assert "/api/setup/health" in paths
         assert "/api/setup/complete" in paths
 
-    def test_health_check_structure(self):
+    def test_health_check_structure(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
         from core.api.setup import first_run_health
         result = first_run_health()
         assert "ready" in result and "checks" in result

@@ -300,7 +300,9 @@ class GitHubActionsTrigger:
     """Trigger and monitor a GitHub Actions workflow run via the `gh` CLI."""
 
     def run(self, root: Path, *, workflow: str, sha: str) -> str:
-        gh_run(root, ["workflow", "run", workflow, "--ref", sha])
+        # GitHub workflow_dispatch accepts branch/tag refs, not bare commit SHAs.
+        # Using "main" — prepare_release already pushed HEAD there.
+        gh_run(root, ["workflow", "run", workflow, "--ref", "main"])
         time.sleep(20)
         result = gh_run_json(root, [
             "run", "list", "--workflow", workflow, "--limit", "1",

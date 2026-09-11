@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.50
+- Виправлено `test_health_check_structure` у `tests/test_bootstrap_wizard.py`: додано `CONFIG_ROOT` у `tmp_path` для уникнення `PermissionError` на CI.
+- Виправлено `GitHubActionsTrigger.run` у `scripts/release.py`: `workflow_dispatch` використовує `main` замість commit SHA.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.49
 - Перероблено Telegram transport: polling (`getUpdates`) став типовим, webhook — legacy; додано exponential backoff, persistent offset з `os.fsync`, `last_error` та `consecutive_failures`.
 - Видалено `core/api/telegram.py`; логіка polling перенесена до `adapters/telegram.py`.
