@@ -1,5 +1,19 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.58
+- Уточнено AGENTS.md: аудит Issues не дозволяє push/release; створення гілок потребує прямого доручення користувача; staged зміни не можна скидати.
+- Відновлено документальну послідовність 0.0.1.55 → 0.0.1.56 → 0.0.1.57; додано відсутні release notes, синхронізовано поточну версію без переписування Git history.
+- Прибрано повторений заголовок 0.0.1.53 та уточнено обмеження video revision у нотатках 0.0.1.55; невиконаний acceptance обліковується в Issue #49.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.57
+- Commit 1c1ed3f45d2425aa08cea04d4bdfedc8ce0d0f6f видалив із відстеження Git 30 145 файлів web-v2/node_modules (Issue #45). package.json/package-lock.json збережено; історичні blobs залишаються в Git history.
+- У цьому історичному commit VERSION і release notes не оновлювалися; документацію відновлено в 0.0.1.58.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.56
+## ОРИГІНАЛЬНА НАЗВА: 0.0.1.55
+- Merge commit 6ce64b5d458e863e9a30cf53b334a76f8bb3de49 інтегрував af08c40f709432994933e451021b3c0aba972942 у main; дерево збігається з другим parent, додаткових змін реалізації немає.
+- Оригінальна назва дублює 0.0.1.55; правильний документальний номер — 0.0.1.56. SHA та історію не змінено.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.55
 - `i.0.0.0.7` (Issue #10): введено відео-апробацію. `finalize_job()` тепер переводить усі job у `VIDEO_PENDING_APPROVAL` після збірки відео; попередньо для Telegram надсилається клавіатура затвердження, для web — відображується превʼю та кнопки затвердження/правок/регенерації.
 - Додано API-ендпоінти `/api/jobs/{id}/video/approve`, `/api/jobs/{id}/video/revision`, `/api/jobs/{id}/video/regenerate` з валідацією стану та actor-трекінгом.
@@ -24,7 +38,7 @@
 - Додано browser E2E: header/sidebar metadata збігається з URL, localization scan (без raw English-міток), collapsed sidebar з icons/tooltips без overflow, loading state резолвиться в контент/error.
 - `.github/workflows/browser-e2e.yml`: піднято rate limit для smoke-тестів.
 - Оновлено/додано тести: `test_browser_e2e.py`, `test_features.py`, `test_api.py`, `test_role_executor.py`, `test_voice_pipeline.py`, `test_image_storyboard_e2e.py`, `test_publisher_live_adapters.py`, новий `tests/test_publish_task_helpers.py`.
-## ПРАВИЛЬНА НАЗВА: 0.0.1.53
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.53
 - Реалізовано TTS-пайплайн на Voice Worker (Issue `i.0.0.0.6`): character voice config (provider/voice/language/model/speed) потрапляє у диспетчеризовану voice-задачу через `_tts_task_for()` у `core/api/job_helpers.py`.
 - Voice Worker через `execute_role_task` (нові `_resolve_voice_config()` та `synthesize_voice` у `worker/role_executor.py`) генерує реальний audio-артефакт із верифікованим `audio_contract/v1` (provider/voice/language/model/engine/mime_type/size/sha256/text_sha256/duration).
