@@ -85,14 +85,20 @@ def _valid_session(token: str) -> tuple[str, str] | None:
         return None
 
 
+def _load_all_users() -> dict:
+    from .first_run import user_store
+    users = {}
+    try:
+        users.update(json.loads(os.getenv("USERS_JSON", "{}")))
+    except ValueError:
+        pass
+    users.update(user_store())
+    return users
 def _authenticate_user(user: str, password: str) -> str | None:
     configured = configured_user()
     if configured and secrets.compare_digest(user, configured[0]) and _verify_hash(password, configured[1]["password_hash"]):
         return str(configured[1].get("role", "admin"))
-    try:
-        users = json.loads(os.getenv("USERS_JSON", "{}"))
-    except ValueError:
-        users = {}
+    users = _load_all_users()
     record = users.get(user)
     if isinstance(record, dict) and _verify_hash(password, str(record.get("password_hash", ""))):
         return str(record.get("role", "viewer"))

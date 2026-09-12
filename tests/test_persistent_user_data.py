@@ -96,6 +96,12 @@ def test_persistent_api_resources_survive_recreate(monkeypatch, tmp_path):
     monkeypatch.setenv("BRANDS_ROOT", str(storage_brand))
     monkeypatch.setenv("WORKFLOWS_ROOT", str(storage_wf))
     # Ensure persistent init marks storage as initialized
+    import core.app as core_app
+    import core.state
+    monkeypatch.setattr(core.state.workflow_registry, "root", storage_wf)
+    monkeypatch.setattr(core_app.workflow_registry, "root", storage_wf)
+    (storage_wf / "image").mkdir(parents=True, exist_ok=True)
+    (storage_wf / "image" / "demo.json").write_text('{"1": {"class_type": "LoadImage", "inputs": {"image": "demo.png"}}}', encoding="utf-8")
     pd.ensure_persistent_user_data()
     client = TestClient(app)
     # Create character via API
@@ -108,7 +114,7 @@ def test_persistent_api_resources_survive_recreate(monkeypatch, tmp_path):
     assert r.status_code in (200, 201)
     # Create workflow via API
     wf_content = {"1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}}}
-    r = client.put("/api/workflows/image/test_persist.json", json=wf_content)
+    r = client.put("/api/workflows/image/test_persist_abc.json", json=wf_content)
     assert r.status_code == 200
     # Create job via API — will validate character exists
     r = client.post("/api/jobs", json={"topic": "Persist test", "character_id": "testchar"})

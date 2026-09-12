@@ -194,7 +194,7 @@ export interface StoryboardVersion {
 }
 
 export interface Character {
-  id: string;
+  id?: string;
   name: string;
   language: string;
   enabled: boolean;
@@ -581,6 +581,21 @@ export interface SelfTestResult {
   duration_seconds?: number;
   error?: string;
   details?: Record<string, unknown>;
+}
+
+export interface UserProfile {
+  user: string;
+  role: 'admin' | 'viewer';
+}
+
+export interface ChangePasswordRequest {
+  old_password: string;
+  new_password: string;
+}
+
+export interface ChangePasswordResponse {
+  ok: boolean;
+  message: string;
 }
 
 export interface WorkflowDocument {

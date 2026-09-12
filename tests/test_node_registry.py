@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from core.node_registry import (create_registration_token, enroll_node, registered_nodes,
-                                create_node_csr, renew_node, revoke_node,
+                                create_node_csr, record_self_test, renew_node, revoke_node,
                                 verify_node_certificate, verify_node_token)
 
 
@@ -75,3 +75,24 @@ def test_role_catalog_is_extensible_without_registry_changes(monkeypatch, tmp_pa
     result = enroll_node(token["token"], "future-01", [], {}, "2.0.0",
                          create_node_csr("future-01", tmp_path / "future-pki"))
     assert result["configuration"]["capabilities"] == ["new_engine"]
+
+
+def test_self_test_records_runtime_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    token = create_registration_token("gpu", 900)
+    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
+    enroll_node(token["token"], "gpu-01", ["image_generation"],
+                {"gpu": "RTX 4090", "vram_mb": 24576}, "1.5.0", csr)
+    assert registered_nodes()[0]["runtime_status"] == "PENDING_SELF_TEST"
+    record = record_self_test("gpu-01", "passed", ["image_generation", "image_upscale"])
+    assert record["runtime_status"] == "ONLINE"
+    node = registered_nodes()[0]
+    assert node["runtime_status"] == "ONLINE"
+    assert node["self_test_capabilities"] == ["image_generation", "image_upscale"]
+    failed = record_self_test("gpu-01", "failed", ["image_generation"])
+    assert failed["runtime_status"] == "OFFLINE"
+    assert registered_nodes()[0]["runtime_status"] == "OFFLINE"
+    with pytest.raises(ValueError):
+        record_self_test("gpu-01", "weird", [])
+    with pytest.raises(KeyError):
+        record_self_test("no-such-node", "passed", [])

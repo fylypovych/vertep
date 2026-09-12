@@ -23,7 +23,7 @@ def test_brand_and_workflow_delete_endpoints(monkeypatch, tmp_path):
     workflow = {"1": {"class_type": "SaveImage", "inputs": {"filename_prefix": "vertep"}}}
     assert client.put("/api/workflows/image/test.json", json=workflow).status_code == 200
     assert client.delete("/api/workflows/image/test.json").json() == {
-        "deleted": "workflows/image/test.json"}
+        "deleted": "workflows/image/test.json", "dependencies": None, "archived": True}
 
 
 def test_workflow_delete_rejects_character_reference(monkeypatch, tmp_path):

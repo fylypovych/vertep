@@ -14,6 +14,8 @@ runtime/
 node_modules/
 web-v2/node_modules/
 web-v2/dist/
+web-v2/test-results/
+web-v2/playwright-report/
 web-v2/.angular/
 test_web_ui_contracts.py
 /.codeatlas

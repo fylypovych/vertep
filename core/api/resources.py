@@ -1,4 +1,5 @@
 """Characters, Brands and Channels routes for the Vertep CORE web application."""
+import json
 import os
 import shutil
 import uuid
@@ -16,9 +17,7 @@ router = APIRouter()
 
 @router.post("/api/characters")
 def create_character(config: CharacterConfig):
-    if not config.id:
-        raise HTTPException(400, "Character ID is required")
-    if not SAFE_ID.fullmatch(config.id):
+    if config.id and not SAFE_ID.fullmatch(config.id):
         raise HTTPException(400, "Invalid character ID")
     root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
     directory = root / config.id
@@ -60,13 +59,80 @@ def put_character(character_id: str, config: CharacterConfig):
 
 @router.delete("/api/characters/{character_id}")
 def delete_character(character_id: str):
-    if any(job.character_id == character_id for job in store.jobs.values()):
-        raise HTTPException(409, "Character is referenced by jobs")
+    if not SAFE_ID.fullmatch(character_id):
+        raise HTTPException(400, "Invalid character ID")
+
+    # Collect structured dependencies
+    dependent_jobs = [
+        {"job_id": job.job_id, "topic": job.topic, "status": job.status.value}
+        for job in store.jobs.values()
+        if job.character_id == character_id
+    ]
+
+    dependent_brands = []
+    brand_root = Path(os.getenv("BRANDS_ROOT", "brands"))
+    if brand_root.exists():
+        for brand_dir in brand_root.iterdir():
+            if brand_dir.is_dir():
+                char_ref = brand_dir / "character.json"
+                if char_ref.exists():
+                    try:
+                        data = read_json(char_ref)
+                        if data.get("character_id") == character_id:
+                            dependent_brands.append({"brand_id": brand_dir.name})
+                    except Exception:
+                        pass
+
+    dependencies = {
+        "jobs": dependent_jobs,
+        "brands": dependent_brands,
+    }
+
+    has_dependencies = bool(dependent_jobs or dependent_brands)
+
     directory = Path(os.getenv("CHARACTERS_ROOT", "characters")) / character_id
     if not directory.is_dir():
         raise HTTPException(404, "Character not found")
+
+    if has_dependencies:
+        raise HTTPException(409, "Character is referenced by other resources", headers={"X-Dependencies": json.dumps(dependencies)})
+
     shutil.rmtree(directory)
     return {"deleted": character_id}
+
+
+@router.get("/api/characters/{character_id}/usage")
+def character_usage(character_id: str):
+    if not SAFE_ID.fullmatch(character_id):
+        raise HTTPException(400, "Invalid character ID")
+
+    dependent_jobs = [
+        {"job_id": job.job_id, "topic": job.topic, "status": job.status.value, "created_at": job.created_at}
+        for job in store.jobs.values()
+        if job.character_id == character_id
+    ]
+
+    dependent_brands = []
+    brand_root = Path(os.getenv("BRANDS_ROOT", "brands"))
+    if brand_root.exists():
+        for brand_dir in brand_root.iterdir():
+            if brand_dir.is_dir():
+                char_ref = brand_dir / "character.json"
+                if char_ref.exists():
+                    try:
+                        data = read_json(char_ref)
+                        if data.get("character_id") == character_id:
+                            dependent_brands.append({"brand_id": brand_dir.name})
+                    except Exception:
+                        pass
+
+    return {
+        "character_id": character_id,
+        "jobs": dependent_jobs,
+        "brands": dependent_brands,
+        "total_jobs": len(dependent_jobs),
+        "total_brands": len(dependent_brands),
+    }
 
 
 @router.post("/api/brands")

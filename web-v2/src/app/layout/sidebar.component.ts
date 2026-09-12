@@ -1,8 +1,9 @@
-﻿import { Component, OnInit } from '@angular/core';
+﻿import { Component, OnInit, computed, inject } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { SidebarService } from '../core/services/sidebar.service';
 import { VertepApiService } from '../core/api.service';
+import { PolicyService } from '../core/services/policy.service';
 
 interface NavItem {
   path: string;
@@ -10,6 +11,7 @@ interface NavItem {
   icon: string;
   exact?: boolean;
   queryParams?: Record<string, string>;
+  adminOnly?: boolean;
 }
 
 @Component({
@@ -43,7 +45,7 @@ interface NavItem {
 
       <!-- Navigation -->
       <nav class="flex-1 overflow-y-auto overflow-x-hidden py-4 px-2 space-y-1">
-        @for (item of navItems; track item.path) {
+        @for (item of visibleNavItems(); track item.path) {
           <a [routerLink]="item.path"
              [queryParams]="item.queryParams"
              routerLinkActive="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
@@ -126,8 +128,14 @@ export class SidebarComponent implements OnInit {
       path: '/settings',
       label: 'Налаштування',
       icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
+      adminOnly: true,
     },
   ];
+
+  visibleNavItems = computed(() => {
+    const isAdmin = this.policy.userRole() === 'admin';
+    return this.navItems.filter(item => !item.adminOnly || isAdmin);
+  });
 
   get collapsed(): boolean {
     return this.sidebarService.collapsed();
@@ -139,7 +147,7 @@ export class SidebarComponent implements OnInit {
 
   runtimeVersion: string | null = null;
 
-  constructor(private sidebarService: SidebarService, private api: VertepApiService) {}
+  constructor(private sidebarService: SidebarService, private api: VertepApiService, private policy: PolicyService) {}
 
   ngOnInit(): void {
     this.api.getStatus().subscribe({

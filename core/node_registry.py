@@ -161,14 +161,19 @@ def enroll_node(token: str, requested_id: str, capabilities: list[str], hardware
         certificate, core_certificate, certificate_serial, certificate_expires_at = _issue_certificate(node_id, csr)
         registry["tokens"].pop(token_key)
         registry["nodes"][node_id] = {"node_id": node_id, "role": role,
-            "capabilities": effective, "hardware": hardware, "version": version,
-            "secret_hash": _token_hash(node_secret),
-            "status": "READY", "credential_generation": 1,
-            "certificate_serial": certificate_serial, "certificate_expires_at": certificate_expires_at,
-            "registered_at": datetime.now(timezone.utc).isoformat()}
+             "capabilities": effective, "hardware": hardware, "version": version,
+             "secret_hash": _token_hash(node_secret),
+             "status": "READY", "runtime_status": "PENDING_SELF_TEST",
+             "self_test_capabilities": [], "last_self_test_at": None,
+             "credential_generation": 1,
+             "certificate_serial": certificate_serial, "certificate_expires_at": certificate_expires_at,
+             "registered_at": datetime.now(timezone.utc).isoformat()}
         _save(registry)
     jwt = issue_node_token(node_id, role, 1)
-    return {"worker_id": node_id, "role": role, "status": "READY", "jwt": jwt,
+    return {"worker_id": node_id, "role": role, "status": "READY",
+            "runtime_status": "PENDING_SELF_TEST",
+            "self_test_capabilities": [], "last_self_test_at": None,
+            "jwt": jwt,
             "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": core_certificate,
             "configuration": {"capabilities": effective, "heartbeat_seconds": 15}}
@@ -228,17 +233,19 @@ def renew_node(node_id: str, csr: str) -> dict:
     if _postgres_enabled():
         with _connect() as connection:
             previous = connection.execute("SELECT certificate_serial FROM registered_nodes WHERE node_id=%s",
-                                          (node_id,)).fetchone()
+                                           (node_id,)).fetchone()
             row = connection.execute("""UPDATE registered_nodes SET secret_hash=%s,
                 credential_generation=credential_generation+1,certificate_serial=%s,
-                certificate_expires_at=%s WHERE node_id=%s AND status<>'REVOKED'
+                certificate_expires_at=%s,runtime_status='PENDING_SELF_TEST',
+                self_test_capabilities='[]'::jsonb,last_self_test_at=NULL
+                WHERE node_id=%s AND status<>'REVOKED'
                 RETURNING role,credential_generation,capabilities""",
                 (_token_hash(node_secret), serial, expires, node_id)).fetchone()
             if row and previous and previous[0]:
                 _record_revoked_serial(previous[0], datetime.now(timezone.utc), connection)
         if not row:
             raise KeyError(node_id)
-        role, generation, capabilities = row
+        role, generation, capabilities = row[0], row[1], row[2]
     else:
         with _lock:
             registry = _load()
@@ -250,16 +257,57 @@ def renew_node(node_id: str, csr: str) -> dict:
             node["credential_generation"] = int(node.get("credential_generation", 1)) + 1
             node["certificate_serial"] = serial
             node["certificate_expires_at"] = expires
+            node["runtime_status"] = "PENDING_SELF_TEST"
+            node["last_self_test_at"] = None
+            node["self_test_capabilities"] = []
             if previous_serial:
                 registry.setdefault("revoked_serials", []).append({
                     "serial": previous_serial, "revoked_at": datetime.now(timezone.utc).isoformat()})
             _save(registry)
             role, generation, capabilities = node["role"], node["credential_generation"], node["capabilities"]
     write_node_crl()
+    jwt = issue_node_token(node_id, role, generation)
     return {"worker_id": node_id, "role": role, "status": "READY",
-            "jwt": issue_node_token(node_id, role, generation), "worker_secret": node_secret,
+            "runtime_status": "PENDING_SELF_TEST",
+            "self_test_capabilities": [], "last_self_test_at": None,
+            "jwt": jwt, "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": ca_certificate,
             "configuration": {"capabilities": capabilities, "heartbeat_seconds": 15}}
+
+
+def record_self_test(node_id: str, status: str, capabilities: list[str] | None = None) -> dict:
+    """Record a worker self-test result, separating enrollment from runtime readiness."""
+    clean = sorted({item for item in (capabilities or [])
+                    if isinstance(item, str) and re.fullmatch(r"[a-z][a-z0-9_]{1,63}", item)})
+    if status not in {"passed", "failed"}:
+        raise ValueError("Self-test status must be 'passed' or 'failed'")
+    now = datetime.now(timezone.utc).isoformat()
+    if _postgres_enabled():
+        import json as json_module
+        with _connect() as connection:
+            row = connection.execute("""UPDATE registered_nodes
+                SET runtime_status=%s, self_test_capabilities=%s, last_self_test_at=now()
+                WHERE node_id=%s AND status<>'REVOKED'
+                RETURNING node_id, runtime_status""",
+                ("ONLINE" if status == "passed" else "OFFLINE",
+                 json_module.dumps(clean), node_id)).fetchone()
+        if not row:
+            raise KeyError(node_id)
+        record = {"node_id": node_id, "runtime_status": row[1], "self_test_capabilities": clean,
+                  "last_self_test_at": now}
+    else:
+        with _lock:
+            registry = _load()
+            node = registry.get("nodes", {}).get(node_id)
+            if not node or node.get("status") == "REVOKED":
+                raise KeyError(node_id)
+            node["runtime_status"] = "ONLINE" if status == "passed" else "OFFLINE"
+            node["self_test_capabilities"] = clean
+            node["last_self_test_at"] = now
+            _save(registry)
+            record = {"node_id": node_id, "runtime_status": node["runtime_status"],
+                      "self_test_capabilities": clean, "last_self_test_at": now}
+    return record
 
 
 def node_roles() -> dict:
@@ -299,18 +347,22 @@ def _enroll_postgres(token: str, node_id: str, clean_capabilities: list[str], ha
         node_secret = secrets.token_urlsafe(48)
         certificate, core_certificate, serial, expires = _issue_certificate(node_id, csr)
         connection.execute("""INSERT INTO registered_nodes(node_id,role,capabilities,hardware,version,
-            secret_hash,status,credential_generation,certificate_serial,certificate_expires_at)
-            VALUES(%s,%s,%s::jsonb,%s::jsonb,%s,%s,'READY',1,%s,%s)
-            ON CONFLICT(node_id) DO UPDATE SET role=excluded.role,capabilities=excluded.capabilities,
-            hardware=excluded.hardware,version=excluded.version,secret_hash=excluded.secret_hash,status='READY',
-            credential_generation=registered_nodes.credential_generation+1,
-            certificate_serial=excluded.certificate_serial,certificate_expires_at=excluded.certificate_expires_at,
-            registered_at=now(),revoked_at=NULL""",
-            (node_id, role, json_module.dumps(effective), json_module.dumps(hardware), version,
-             _token_hash(node_secret), serial, expires))
+             secret_hash,status,runtime_status,self_test_capabilities,last_self_test_at,
+             credential_generation,certificate_serial,certificate_expires_at)
+             VALUES(%s,%s,%s::jsonb,%s::jsonb,%s,%s,'READY','PENDING_SELF_TEST','[]'::jsonb,NULL,1,%s,%s)
+             ON CONFLICT(node_id) DO UPDATE SET role=excluded.role,capabilities=excluded.capabilities,
+             hardware=excluded.hardware,version=excluded.version,secret_hash=excluded.secret_hash,status='READY',
+             runtime_status='PENDING_SELF_TEST',
+             credential_generation=registered_nodes.credential_generation+1,
+             certificate_serial=excluded.certificate_serial,certificate_expires_at=excluded.certificate_expires_at,
+             registered_at=now(),revoked_at=NULL""",
+             (node_id, role, json_module.dumps(effective), json_module.dumps(hardware), version,
+              _token_hash(node_secret), serial, expires))
         generation = connection.execute("SELECT credential_generation FROM registered_nodes WHERE node_id=%s",
                                         (node_id,)).fetchone()[0]
     return {"worker_id": node_id, "role": role, "status": "READY",
+            "runtime_status": "PENDING_SELF_TEST",
+            "self_test_capabilities": [], "last_self_test_at": None,
             "jwt": issue_node_token(node_id, role, generation), "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": core_certificate,
             "configuration": {"capabilities": effective, "heartbeat_seconds": 15}}

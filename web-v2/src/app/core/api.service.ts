@@ -37,6 +37,9 @@ import {
   SetupStatus,
   SetupHealth,
   SetupCompleteResult,
+  UserProfile,
+  ChangePasswordRequest,
+  ChangePasswordResponse,
 } from './models';
 
 @Injectable()
@@ -234,6 +237,16 @@ export class VertepApiService {
 
   getSession(): Observable<{ authenticated: boolean; user?: string; role?: string }> {
     return this.http.get<{ authenticated: boolean; user?: string; role?: string }>(`${this.baseUrl}/session`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  getUserProfile(): Observable<UserProfile> {
+    return this.http.get<{ authenticated: boolean; user?: string; role?: string }>(`${this.baseUrl}/session`, { headers: this.getHeaders() }).pipe(
+      map(r => ({ user: r.user || '', role: (r.role as 'admin' | 'viewer') || 'viewer' }))
+    );
+  }
+
+  changePassword(payload: ChangePasswordRequest): Observable<ChangePasswordResponse> {
+    return this.http.put<ChangePasswordResponse>(`${this.baseUrl}/session/password`, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getAlerts(): Observable<Alert[]> {

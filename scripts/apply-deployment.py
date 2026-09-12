@@ -118,15 +118,19 @@ def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.r
                 continue
             if item.get("Service") in selected:
                 rows.append(item)
-        # Unit-test runners and old Compose clients may not expose JSON output.
         if not rows:
-            return
+            raise RuntimeError("Compose inventory is empty or malformed")
+        found_services = {item.get("Service") for item in rows}
+        missing = required_running - found_services
+        if missing:
+            raise RuntimeError("Missing services in inventory: " + ", ".join(sorted(missing)))
         ready = {item.get("Service") for item in rows
                  if ((item.get("State") == "running" and (item.get("Health") or "healthy") == "healthy")
-                     or (item.get("Service") == "migrate" and item.get("State") == "exited"))}
+                     or (item.get("Service") == "migrate" and item.get("State") == "exited" and item.get("ExitCode", 0) == 0))}
         failed = [item.get("Service") for item in rows
                   if item.get("Health") == "unhealthy"
-                  or (item.get("State") == "exited" and item.get("Service") != "migrate")]
+                  or (item.get("State") == "exited" and item.get("Service") != "migrate")
+                  or (item.get("Service") == "migrate" and item.get("State") == "exited" and item.get("ExitCode", 0) != 0)]
         if failed:
             raise RuntimeError("Selected services failed health checks: " + ", ".join(sorted(failed)))
         if required_running <= ready:
@@ -162,7 +166,23 @@ def apply(root: Path, runner=subprocess.run) -> dict:
     managed_ollama = request.get("ai_backend") == "ollama" and "ollama" in plan["services"]
     if managed_ollama and (not isinstance(model, str) or not SAFE_MODEL.fullmatch(model)):
         raise ValueError("Некоректна назва Ollama model")
-    update_env(root / ".env", {
+
+    env_path = root / ".env"
+    plan_path = root / "config/deployment-plan.json"
+    previous_env = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    previous_plan = plan_path.read_text(encoding="utf-8") if plan_path.exists() else ""
+
+    def restore() -> None:
+        if previous_env:
+            env_path.write_text(previous_env, encoding="utf-8")
+        else:
+            env_path.unlink(missing_ok=True)
+        if previous_plan:
+            plan_path.write_text(previous_plan, encoding="utf-8")
+        else:
+            plan_path.unlink(missing_ok=True)
+
+    update_env(env_path, {
         "NODE_ROLE": role,
         "NODE_ADDITIONAL_ROLES": ",".join(plan.get("additional_roles", [])),
         "NODE_CAPABILITIES": ",".join(sorted({capability
@@ -176,7 +196,7 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         "CORE_ADDRESS": core_url,
         "REGISTRATION_TOKEN": "",
     })
-    atomic_json(root / "config/deployment-plan.json", plan)
+    atomic_json(plan_path, plan)
     compose = ["docker", "compose", "--env-file", str(root / ".env"),
                "-f", str(root / "docker-compose.yml")]
     if environment_value(root / ".env", "GPU_VENDOR") == "amd" and (root / "docker-compose.amd.yml").is_file():
@@ -229,6 +249,7 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         request_path.unlink()
         return status
     except Exception as error:
+        restore()
         status.update({"state": "FAILED", "error": str(error),
                        "updated_at": datetime.now(timezone.utc).isoformat()})
         atomic_json(root / "config/deployment-status.json", status)

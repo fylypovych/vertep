@@ -194,6 +194,30 @@ def ensure_secret_store() -> dict:
 
 def installation() -> dict:
     return _read("installation.json")
+def user_store() -> dict:
+    value = _read("users.json")
+    return value if isinstance(value, dict) else {}
+
+
+def save_user(username: str, record: dict) -> None:
+    users = user_store()
+    users[username] = record
+    _write("users.json", users)
+
+
+def load_all_users() -> dict:
+    """Merge persistent user store with env-provided USERS_JSON.
+
+    Entries stored on disk (e.g. after a self-service password change) take
+    precedence over the read-only USERS_JSON environment variable.
+    """
+    users = {}
+    try:
+        users.update(json.loads(os.getenv("USERS_JSON", "{}")))
+    except ValueError:
+        pass
+    users.update(user_store())
+    return users
 
 
 def is_configured() -> bool:

@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## ПРАВИЛЬНА НАЗВА: 0.0.1.52
+- `i.0.0.0.27` (Issue #29): Завершено user profile, account management та RBAC UX. Додано profile dropdown в header замість прямої logout-кнопки: окремі дії «Профіль», «Змінити пароль», «Вийти».
+- Додано Profile page у `web-v2/src/app/profile/`: логін, роль, перелік дозволених дій та форма зміни пароля (без shell).
+- Backend RBAC у `core/app.py`: viewer повністю заблокований від admin mutations (403) через middleware; admin-only для `/api/characters`, `/api/brands`, `/api/workflows`, `/api/system/*`, `/api/settings`, `/api/nodes`; CSRF обовʼязковий для всіх mutation запитів.
+- Self-service `/api/session*` (login, logout, change password) дозволено для viewer; logout працює як окрема дія.
+- Зміна пароля через `PUT /api/session/password` тепер підтримує будь-якого авторизованого користувача; додано persistent user store (`users.json`) з merge env `USERS_JSON` у `_authenticate_user`.
+- Route-level authorization на frontend: `AdminGuard` для `/settings`, `adminOnly` navigation у sidebar (viewer не бачить admin-пунктів).
+- System-state guards узгоджені backend+frontend через `PolicyService` (`MAINTENANCE`, `UPDATING`, `EMERGENCY`, `RECOVERING`, `READ_ONLY`); заблоковані дії (create/delete job) disabled з поясненням причини.
+- Виправлено DI: `BaseApiService` та `SystemApiService` стали `providedIn: 'root'`; `AdminGuard` — `providedIn: 'root'`, що усуває помилку бутстрапу застосунку.
+- Додано RBAC backend-тести (`tests/test_backend_contracts.py`) та Playwright E2E (`web-v2/tests/rbac.spec.ts`): admin/viewer nav, forbidden mutation через API (403) та system-state blocking.
+- Автоматична генерація `character_id` (12 символів у нижньому регістрі); `CharacterConfig.id` став опційним; structured delete dependencies та `GET /api/characters/{id}/usage`.
+- Перероблено workflow registry: `validate_workflow` повертає структурований результат, force-overwrite, версіювання з `load_version`/`restore_version`, `/form`-схема, structured usage та delete з залежностями.
+- Оновлено `core/api/nodes.py` та node registry; `scripts/apply-deployment.py`; webhook Telegram вимкнено за замовчуванням (polling — primary).
+- Frontend: `workers` autopolling, роут `/queue`, `scheduled_for` у створенні job, auto-ID characters, unsaved-guard для character detail.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.51
 - Виправлено TS4111 у `web-v2/src/app/dashboard/dashboard.component.ts`: доступ до властивостей `statusCounts` через дужки замість крапки для індекс-сігнатури.

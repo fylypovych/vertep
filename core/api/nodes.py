@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from ..models import NodeAction, utc_now
 from ..node_registry import (create_registration_token, enroll_node, registered_nodes,
-                            renew_node, revoke_node, verify_node_certificate, node_roles)
+                             renew_node, record_self_test, revoke_node, verify_node_certificate, node_roles)
 from ..security import _valid_worker_request
 from ..state import store
 from .workers import workers
@@ -191,3 +191,27 @@ async def renew_node_credentials(node_id: str, request: Request):
         raise HTTPException(404, "Node is missing or revoked") from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@router.post("/api/nodes/{node_id}/self-test")
+async def submit_node_self_test(node_id: str, request: Request):
+    """Record a worker self-test result, separating enrollment from runtime readiness."""
+    if not _valid_worker_request(node_id, request):
+        raise HTTPException(401, "Node credentials are not valid")
+    payload = await request.json()
+    status = str(payload.get("status", "")).lower()
+    capabilities = payload.get("capabilities") or []
+    if not isinstance(capabilities, list) or len(capabilities) > 32:
+        raise HTTPException(422, "Invalid capabilities payload")
+    try:
+        record = record_self_test(node_id, status, capabilities)
+    except KeyError as error:
+        raise HTTPException(404, "Node is missing or revoked") from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    live = store.workers.get(node_id)
+    if live:
+        live["self_test"] = {"status": status, "capabilities": record["self_test_capabilities"]}
+        live.setdefault("self_test_at", record["last_self_test_at"])
+        store.save_worker(live)
+    return record

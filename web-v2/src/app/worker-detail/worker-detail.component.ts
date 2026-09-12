@@ -7,7 +7,7 @@ import { timer, Subscription } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { NodeDetail, NodeActionPayload, SelfTestResult, SystemRole, SystemRolesResponse } from '../core/models';
-import { roleLabel, statusLabel as localizedStatus } from '../core/presentation';
+import { roleLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
 @Component({
@@ -211,11 +211,11 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   statusLabel = computed(() => {
     const n = this.node();
     if (!n) return 'Не визначено';
-    return localizedStatus(n.status);
+    return workerStatusLabel(n.status);
   });
 
   roleName(role: string): string { return roleLabel(role); }
-  nodeStatus(status: string): string { return localizedStatus(status); }
+  nodeStatus(status: string): string { return workerStatusLabel(status); }
   capabilityBackends(): Array<{ capability: string; backend: string }> {
     return Object.entries(this.node()?.capability_backends || {}).map(([capability, backend]) => ({ capability, backend }));
   }

@@ -155,23 +155,22 @@ class TelegramPollingService:
         return 0
 
     def _save_offset(self) -> None:
+        self.offset_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "offset": self.offset,
+            "last_update_id": self.last_update_id,
+            "last_message_at": self.last_message_at,
+        }
+        data = json.dumps(payload, ensure_ascii=False, indent=2)
+        temporary = self.offset_file.parent / (self.offset_file.name + ".tmp")
+        fh = temporary.open("w", encoding="utf-8")
         try:
-            self.offset_file.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "offset": self.offset,
-                "last_update_id": self.last_update_id,
-                "last_message_at": self.last_message_at,
-            }
-            data = json.dumps(payload, ensure_ascii=False, indent=2)
-            temporary = self.offset_file.parent / (self.offset_file.name + ".tmp")
-            fh = temporary.open("w", encoding="utf-8")
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
+        finally:
             fh.close()
-            temporary.replace(self.offset_file)
-        except OSError as error:
-            logger.error("Failed to persist Telegram polling offset: %s", error)
+        temporary.replace(self.offset_file)
 
     def start(self) -> None:
         with self._lock:
@@ -206,20 +205,22 @@ class TelegramPollingService:
                     break
             try:
                 updates = self._get_updates()
+                if not updates:
+                    continue
+                self._consecutive_failures = 0
+                self.last_error = None
+                in_memory_offset = self.offset
                 for update in updates:
                     with self._lock:
                         if not self._running:
                             break
-                    try:
-                        self.on_update(update)
-                    except Exception as error:
-                        logger.error("Telegram update processing failed: %s", error)
+                    self.on_update(update)
                     update_id = update.get("update_id")
                     if update_id is not None:
+                        in_memory_offset = update_id + 1
                         self.last_update_id = update_id
-                        self.offset = update_id + 1
-                        self._save_offset()
-                        self._consecutive_failures = 0
+                self.offset = in_memory_offset
+                self._save_offset()
             except httpx.HTTPStatusError as error:
                 if error.response.status_code == 429:
                     retry_after = 5

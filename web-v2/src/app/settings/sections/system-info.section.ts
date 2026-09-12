@@ -59,6 +59,28 @@ import { SystemStatus } from '../../core/models';
             <p class="text-sm font-medium text-slate-900">{{ status()?.update?.['update_available'] ? 'Доступне' : 'Немає' }}</p>
           </div>
         </div>
+        @if (backendsList.length) {
+          <div class="mt-4 overflow-x-auto">
+            <table class="w-full text-sm text-left" data-testid="backends-table">
+              <thead class="text-xs text-slate-500 uppercase bg-slate-50">
+                <tr>
+                  <th class="px-4 py-2">Движок</th>
+                  <th class="px-4 py-2">Налаштовано</th>
+                  <th class="px-4 py-2">Бекенд</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (entry of backendsList; track entry[0]) {
+                  <tr class="border-t border-slate-100">
+                    <td class="px-4 py-2">{{ entry[0] }}</td>
+                    <td class="px-4 py-2">{{ entry[1]?.['configured'] ? 'Так' : 'Ні' }}</td>
+                    <td class="px-4 py-2">{{ entry[1]?.['backend'] || '—' }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
       }
     </div>
   `,
@@ -81,6 +103,12 @@ export class SystemInfoSectionComponent implements OnInit {
       EMERGENCY: 'Аварія', FAILED: 'Помилка', ERROR: 'Помилка',
     };
     return labels[state] ?? state;
+  }
+
+  get backendsList(): [string, Record<string, unknown>][] {
+    const providers = this.status()?.providers;
+    if (!providers) return [];
+    return Object.entries(providers as unknown as Record<string, Record<string, unknown>>);
   }
 
   constructor(private api: VertepApiService) {}

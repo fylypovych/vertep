@@ -2,11 +2,12 @@ import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
+import { Subscription, timer } from 'rxjs';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
-import { roleLabel, statusLabel } from '../core/presentation';
+import { roleLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -201,11 +202,34 @@ export class WorkersComponent implements OnInit {
   locationOrigin = window.location.origin;
   onboardingStatus = signal('Очікування реєстрації вузла...');
   private knownNodeIds = new Set<string>();
+  private pollTimer: Subscription | null = null;
+  private pollingInterval = 5000;
 
   constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
   ngOnInit(): void {
     this.loadWorkers();
+    this.startAutoPolling();
+  }
+
+  ngOnDestroy(): void {
+    this.stopAutoPolling();
+  }
+
+  private startAutoPolling(): void {
+    this.stopAutoPolling();
+    this.pollTimer = timer(0, this.pollingInterval).subscribe(() => {
+      if (!this.showWizard) {
+        this.loadWorkers();
+      }
+    });
+  }
+
+  private stopAutoPolling(): void {
+    if (this.pollTimer) {
+      this.pollTimer.unsubscribe();
+      this.pollTimer = null;
+    }
   }
 
   get filteredWorkers(): Worker[] {
@@ -237,7 +261,7 @@ export class WorkersComponent implements OnInit {
   }
 
   nodeRoleLabel(role: string): string { return roleLabel(role); }
-  nodeStatusLabel(status: string): string { return statusLabel(status); }
+  nodeStatusLabel(status: string): string { return workerStatusLabel(status); }
   nodeLoad(worker: Worker): string {
     const value = worker.gpu_load ?? worker.cpu_load;
     return value == null ? 'Немає даних' : `${value}%`;

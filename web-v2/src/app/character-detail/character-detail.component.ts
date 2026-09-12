@@ -5,6 +5,7 @@ import { RouterModule, ActivatedRoute, Router } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
+import { CanComponentDeactivate } from '../core/services/unsaved-guard.service';
 import { Character } from '../core/models';
 
 @Component({
@@ -123,7 +124,7 @@ import { Character } from '../core/models';
     </div>
   `,
 })
-export class CharacterDetailComponent implements OnInit {
+export class CharacterDetailComponent implements OnInit, CanComponentDeactivate {
   loading = signal(true);
   error = signal<string | null>(null);
   saving = signal(false);
@@ -163,7 +164,7 @@ export class CharacterDetailComponent implements OnInit {
     this.error.set(null);
     this.api.getCharacter(id).subscribe({
       next: (c) => {
-        this.formId = c.id; this.name = c.name; this.language = c.language || 'uk';
+        this.formId = c.id ?? ''; this.name = c.name; this.language = c.language || 'uk';
         this.enabled = c.enabled !== false; this.workflow = c.workflow || '';
         this.systemPrompt = c.system_prompt || '';
         this.voiceJson = this.stringify(c.voice); this.visualJson = this.stringify(c.visual);
@@ -178,12 +179,14 @@ export class CharacterDetailComponent implements OnInit {
     if (!this.formId || !this.name) { this.toast.show('ID та назва обов\'язкові', 'error'); return; }
     this.saving.set(true);
     const payload: Character = {
-      id: this.formId, name: this.name, language: this.language, enabled: this.enabled,
+      name: this.name, language: this.language, enabled: this.enabled,
       workflow: this.workflow || undefined, system_prompt: this.systemPrompt,
       voice: this.parseJson(this.voiceJson), visual: this.parseJson(this.visualJson),
       generation: this.parseJson(this.generationJson), publishing: this.parseJson(this.publishingJson),
     };
-    const req = this.isEdit ? this.api.updateCharacter(this.formId, payload) : this.api.createCharacter(payload);
+    const req = this.isEdit
+      ? this.api.updateCharacter(this.formId, payload)
+      : this.api.createCharacter(payload);
     req.subscribe({
       next: () => {
         this.saving.set(false);
@@ -211,7 +214,16 @@ export class CharacterDetailComponent implements OnInit {
     catch { errMap[field].set('Невалідний JSON'); }
   }
 
-  hasUnsavedChanges(): boolean { return this.snapshot() !== this.originalSnapshot; }
+  hasUnsavedChanges(): boolean {
+    return this.snapshot() !== this.originalSnapshot;
+  }
+
+  canDeactivate(): boolean {
+    if (this.hasUnsavedChanges()) {
+      return confirm('Є незбережені зміни. Закрити без збереження?');
+    }
+    return true;
+  }
   private snapshot(): string {
     return JSON.stringify({ id: this.formId, name: this.name, language: this.language, enabled: this.enabled,
       workflow: this.workflow, sp: this.systemPrompt, vj: this.voiceJson, vij: this.visualJson,

@@ -42,7 +42,7 @@ import { EmptyStateComponent } from '../shared/empty-state.component';
               <p class="text-sm text-slate-600 mb-3">{{ character.id }}</p>
               <div class="flex gap-2">
                 <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">Редагувати</button>
-                <button (click)="deleteCharacter(character.id)" class="text-sm text-red-600 hover:text-red-700 font-medium">Видалити</button>
+                <button (click)="deleteCharacter(character.id!)" class="text-sm text-red-600 hover:text-red-700 font-medium">Видалити</button>
               </div>
             </div>
           } @empty {
@@ -203,7 +203,6 @@ export class CharactersComponent implements OnInit {
   openCreateModal(): void {
     this.editingId = null;
     this.form = {
-      id: this.generateId(),
       name: 'Новий персонаж',
       language: 'uk',
       enabled: true,
@@ -223,7 +222,7 @@ export class CharactersComponent implements OnInit {
   }
 
   editCharacter(character: Character): void {
-    this.editingId = character.id;
+    this.editingId = character.id ?? null;
     this.form = { ...character };
     this.originalForm = { ...character };
     this.syncJsonFields();
@@ -271,13 +270,12 @@ export class CharactersComponent implements OnInit {
   }
 
   saveCharacter(): void {
-    if (!this.form.id || !this.form.name) {
-      this.toast.show('ID та назва є обов\'язковими', 'error');
+    if (!this.form.name) {
+      this.toast.show('Назва є обов\'язковою', 'error');
       return;
     }
     this.saving.set(true);
     const payload: Character = {
-      id: this.form.id,
       name: this.form.name,
       language: this.form.language || 'uk',
       enabled: this.form.enabled !== false,
@@ -290,7 +288,7 @@ export class CharactersComponent implements OnInit {
     };
 
     const request = this.editingId
-      ? this.api.updateCharacter(this.form.id, payload)
+      ? this.api.updateCharacter(this.editingId, payload)
       : this.api.createCharacter(payload);
 
     request.subscribe({

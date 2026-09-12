@@ -12,6 +12,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 import { EmptyStateComponent } from '../shared/empty-state.component';
 import { inStatusGroup, statusLabel } from '../core/presentation';
 import { Subscription, timer } from 'rxjs';
+import { PolicyService } from '../core/services/policy.service';
 
 @Component({
   selector: 'app-jobs',
@@ -22,7 +23,7 @@ import { Subscription, timer } from 'rxjs';
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">Завдання</h3>
         @if (view() === 'list') {
-          <button (click)="openCreateModal()" data-testid="create-job-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+          <button (click)="openCreateModal()" data-testid="create-job-button" [disabled]="!canCreateJob" [title]="createJobReason || 'Створити нове завдання'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
             Нове завдання
           </button>
         }
@@ -72,7 +73,7 @@ import { Subscription, timer } from 'rxjs';
                     <td class="px-4 py-3">{{ job.created_at | vertepDate }}</td>
                     <td class="px-4 py-3">
                       <button (click)="openJob(job.job_id)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Відкрити</button>
-                      <button (click)="deleteJob(job.job_id)" class="text-red-600 hover:text-red-700 text-sm font-medium">Видалити</button>
+                      <button (click)="deleteJob(job.job_id)" [disabled]="!canDeleteJob" [title]="deleteJobReason || 'Видалити' || ''" class="text-red-600 hover:text-red-700 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">Видалити</button>
                     </td>
                   </tr>
                 } @empty {
@@ -343,11 +344,17 @@ export class JobsComponent implements OnInit, OnDestroy {
   private queueSubs = new Subscription();
   private pollTimer: Subscription | null = null;
 
-  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router, private route: ActivatedRoute) {}
+  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router, private route: ActivatedRoute, private policy: PolicyService) {}
+
+  get canCreateJob(): boolean { return this.policy.can('create_job').allowed; }
+  get createJobReason(): string | null { return this.policy.disabledReason('create_job'); }
+  get canDeleteJob(): boolean { return this.policy.can('delete_job').allowed; }
+  get deleteJobReason(): string | null { return this.policy.disabledReason('delete_job'); }
 
   ngOnInit(): void {
     const tab = this.route.snapshot.queryParamMap.get('tab');
-    this.view.set(tab === 'queue' ? 'queue' : 'list');
+    const isQueuePath = this.route.snapshot.url.some(s => s.path === 'queue');
+    this.view.set((tab === 'queue' || isQueuePath) ? 'queue' : 'list');
     this.statusGroup = this.route.snapshot.queryParamMap.get('group') || '';
     this.loadJobs();
     this.loadCharacters();
@@ -531,10 +538,8 @@ export class JobsComponent implements OnInit, OnDestroy {
       aspect_ratio: this.newJob.aspect_ratio || '16:9',
       output_preset: this.newJob.output_preset || 'youtube',
       workflow: this.newJob.workflow || undefined,
+      scheduled_for: this.newJobScheduled && this.newJobDate ? this.newJobDate : undefined,
     };
-    if (this.newJobScheduled && this.newJobDate) {
-      payload.scheduled_for = this.newJobDate;
-    }
     this.api.createJob(payload).subscribe({
       next: () => {
         this.showCreateModal = false;

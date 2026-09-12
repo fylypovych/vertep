@@ -86,12 +86,35 @@ def test_tts_stage_retries_until_success(monkeypatch, tmp_path):
 def test_workflow_registry_validation(tmp_path):
     registry = WorkflowRegistry(tmp_path)
     workflow = {"1": {"class_type": "SaveImage", "inputs": {"text": "{{TOPIC}}"}}}
-    assert validate_workflow(workflow) == []
+    assert validate_workflow(workflow)["valid"] is True
     registry.save("image", "test.json", workflow)
     assert registry.list()[0]["valid"] is True
-    assert registry.load("image", "test.json") == workflow
-    assert registry.delete("image", "test.json") == {"deleted": "workflows/image/test.json"}
+    assert registry.load("image", "test.json")["workflow"] == workflow
+    assert registry.delete("image", "test.json") == {
+        "deleted": "workflows/image/test.json", "dependencies": None, "archived": True}
     assert registry.list() == []
+
+
+def test_workflow_registry_usage_lists_dependent_jobs_and_characters(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "chars"))
+    registry = WorkflowRegistry(tmp_path)
+    workflow = {"1": {"class_type": "SaveImage", "inputs": {"text": "{{TOPIC}}"}}}
+    registry.save("image", "demo.json", workflow)
+    from core.state import store
+    store.jobs.clear()
+    from core.models import Job, JobStatus
+    store.jobs["job-1"] = Job(job_id="job-1", topic="test", character_id="ch-1", priority=5,
+                              status=JobStatus.READY, created_at="2026-01-01T00:00:00+00:00",
+                              workflow="workflows/image/demo.json")
+    chars = tmp_path / "chars"
+    char_dir = chars / "ch-1"
+    char_dir.mkdir(parents=True)
+    (char_dir / "character.json").write_text(json.dumps(
+        {"id": "ch-1", "workflow": "workflows/image/demo.json"}), encoding="utf-8")
+    usage = registry.usage("image", "demo.json")
+    assert usage["total_jobs"] == 1
+    assert usage["total_characters"] == 1
+    assert usage["characters"][0]["character_id"] == "ch-1"
 
 
 def test_roles_metrics_and_worker_log_ingestion(monkeypatch):

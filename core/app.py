@@ -51,7 +51,8 @@ from .system_state import (SystemState, dispatch_allowed, get_system_state,
 from .health_checks import run_checks as _run_health_checks, health_status as _health_status
 from .first_run import (complete_setup, configured_user, is_configured, session_secret,
                         setup_status, config_root, integration_secret_status,
-                        set_integration_secret, installation)
+                        set_integration_secret, installation, load_all_users,
+                        save_user, user_store)
 from .telegram_store import (get_admin_chat_ids, get_allowed_chat_ids, is_allowed_chat,
                              is_admin_chat, load_telegram_settings, save_telegram_settings)
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
@@ -240,7 +241,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         if not session_identity and not basic_role:
             return Response("Authentication required", 401, {"WWW-Authenticate": 'Basic realm="Vertep"'})
         actor, role = session_identity or (user, basic_role)
-        if request.method != "GET" and role == "viewer":
+        if request.method != "GET" and role == "viewer" and not request.url.path.startswith("/api/session"):
             return Response("Insufficient role", 403)
         if request.method in {"PUT", "DELETE"} and request.url.path.startswith(("/api/characters", "/api/brands", "/api/workflows")) and role != "admin":
             return Response("Administrator role required", 403)
@@ -354,6 +355,40 @@ def session_info(request: Request):
     return {"authenticated": bool(identity), "user": identity[0] if identity else None,
             "role": identity[1] if identity else None}
 
+@app.put("/api/session/password")
+def change_password(request: Request, payload: dict):
+    identity = _valid_session(request.cookies.get("vertep_session", ""))
+    if not identity:
+        return Response(content=json.dumps({"detail": "Unauthorized"}), status_code=401, media_type="application/json")
+    user, role = identity
+    old_password = payload.get("old_password", "")
+    new_password = payload.get("new_password", "")
+    if not old_password or not new_password:
+        return Response(content=json.dumps({"detail": "Old and new passwords required"}), status_code=400, media_type="application/json")
+    if len(new_password) < 12:
+        return Response(content=json.dumps({"detail": "Password must be at least 12 characters"}), status_code=400, media_type="application/json")
+    if old_password == new_password:
+        return Response(content=json.dumps({"detail": "New password must be different from old"}), status_code=400, media_type="application/json")
+    configured = configured_user()
+    if configured and configured[0] == user:
+        if not _verify_hash(old_password, configured[1]["password_hash"]):
+            return Response(content=json.dumps({"detail": "Current password is incorrect"}), status_code=400, media_type="application/json")
+        admin_data = dict(configured[1])
+        admin_data["password_hash"] = password_hash(new_password)
+        inst = installation()
+        inst["administrator"] = admin_data
+        _write("installation.json", inst)
+    else:
+        record = load_all_users().get(user)
+        if not isinstance(record, dict):
+            return Response(content=json.dumps({"detail": "User not found"}), status_code=404, media_type="application/json")
+        if not isinstance(record.get("password_hash"), str) or not _verify_hash(old_password, record["password_hash"]):
+            return Response(content=json.dumps({"detail": "Current password is incorrect"}), status_code=400, media_type="application/json")
+        updated = dict(record)
+        updated["password_hash"] = password_hash(new_password)
+        save_user(user, updated)
+    return {"ok": True, "message": "Password changed successfully"}
+
 @app.get("/api/events")
 async def event_stream():
     async def generate():
@@ -382,6 +417,8 @@ async def event_stream():
 # Worker and Task routes are defined in core/api/workers.py / core/api/tasks.py
 @app.post("/api/telegram/webhook")
 def telegram_webhook(update: dict, request: Request):
+    if os.getenv("TELEGRAM_WEBHOOK_ENABLED", "").lower() not in {"1", "true", "yes"}:
+        raise HTTPException(404, "Telegram webhook is disabled; use polling as the primary integration")
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
     if webhook_secret and not secrets.compare_digest(request.headers.get("x-telegram-bot-api-secret-token", ""), webhook_secret):
         raise HTTPException(401, "Invalid Telegram webhook secret")

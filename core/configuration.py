@@ -7,8 +7,17 @@ from pydantic import BaseModel, Field
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
 
+import secrets
+import string
+
+
+def generate_character_id() -> str:
+    alphabet = string.ascii_lowercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(12))
+
+
 class CharacterConfig(BaseModel):
-    id: str = Field(pattern=SAFE_ID.pattern)
+    id: str | None = Field(default=None, pattern=SAFE_ID.pattern)
     name: str = Field(min_length=1, max_length=120)
     language: str = Field(default="uk", min_length=2, max_length=12)
     enabled: bool = True
@@ -18,6 +27,10 @@ class CharacterConfig(BaseModel):
     visual: dict = Field(default_factory=dict)
     generation: dict = Field(default_factory=dict)
     publishing: dict = Field(default_factory=dict)
+
+    def model_post_init(self, __context) -> None:
+        if self.id is None:
+            object.__setattr__(self, 'id', generate_character_id())
 
 
 class BrandConfig(BaseModel):

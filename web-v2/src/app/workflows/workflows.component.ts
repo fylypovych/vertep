@@ -167,9 +167,20 @@ export class WorkflowsComponent implements OnInit {
   }
 
   closeEditor(): void {
+    if (this.hasUnsavedChanges()) {
+      if (!confirm('Є незбережені зміни. Закрити без збереження?')) return;
+    }
     this.showEditor.set(false);
     this.editingWf = null;
     this.editorForm = { kind: 'image', name: '', content: '' };
+  }
+
+  hasUnsavedChanges(): boolean {
+    if (!this.editorForm.name.trim() && !this.editorForm.content.trim()) return false;
+    if (this.editingWf) {
+      return this.editorForm.content.trim() !== JSON.stringify(this.editingWf, null, 2).trim();
+    }
+    return this.editorForm.name.trim().length > 0 || this.editorForm.content.trim().length > 0;
   }
 
   saveWorkflow(): void {

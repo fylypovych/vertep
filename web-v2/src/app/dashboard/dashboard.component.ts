@@ -220,7 +220,7 @@ export class DashboardComponent implements OnInit {
   systemReason = 'Штатний режим';
   coreModules: string[] = [];
   architectureItems: { role: string; label: string; count: number; capabilities: string[] }[] = [];
-  statusCounts = { inProgress: null, queued: null, completed: null, failed: null, paused: null, cancelled: null, waiting: null } as Record<string, number | null>;
+  statusCounts: Record<string, number | null> = { inProgress: null, queued: null, completed: null, failed: null, paused: null, cancelled: null, waiting: null };
   resources: { label: string; value: number | null; color: string }[] = [];
   resourcesAvailable = false;
   workers: Worker[] = [];

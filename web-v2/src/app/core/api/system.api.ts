@@ -5,7 +5,7 @@ import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
 import { SystemStatus, HealthCheck, UpdateStatus, SystemState, SystemRolesResponse, SecretStatus, TelegramStatus, RollingUpdateRequest } from '../models';
 
-@Injectable()
+@Injectable({ providedIn: 'root' })
 export class SystemApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}

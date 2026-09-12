@@ -172,7 +172,16 @@ def test_job_export_import_and_optimistic_lock(monkeypatch):
     assert imported.json()["job_id"] != job_id
     assert imported.json()["source"] == "import"
 
+def test_telegram_webhook_is_disabled_by_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_ENABLED", raising=False)
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "999")
+    client = TestClient(app)
+    response = client.post("/api/telegram/webhook", json={"message": {"message_id": 1, "text": "hi", "chat": {"id": 42}}})
+    assert response.status_code == 404
+
+
 def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "999")
     brand_root = tmp_path / "brands"
     brand_root.mkdir(parents=True, exist_ok=True)
@@ -220,6 +229,7 @@ def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
 
 
 def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "999")
@@ -291,6 +301,7 @@ def test_telegram_setup_saves_chat_ids_without_public_url(monkeypatch, tmp_path)
 
 def test_telegram_start_command_does_not_create_job(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "42")
     brand_root = tmp_path / "brands"
     brand_root.mkdir(parents=True, exist_ok=True)
@@ -380,6 +391,36 @@ def test_telegram_polling_backoff_on_error(tmp_path, monkeypatch):
     assert len(delays) == 2
     assert delays[0] == 1
     assert delays[1] == 2
+
+def test_telegram_polling_handler_failure_does_not_advance_offset(tmp_path, monkeypatch):
+    from adapters.telegram import TelegramPollingService
+    monkeypatch.setenv("TELEGRAM_POLLING_RETRY_DELAY", "1")
+    state_file = tmp_path / "telegram_polling_state.json"
+    processed = []
+    def failing_update(update):
+        if update.get("update_id") == 100:
+            raise RuntimeError("handler boom")
+        processed.append(update["update_id"])
+    service = TelegramPollingService(token="test-token", on_update=failing_update, offset_file=state_file)
+    service.offset = 99
+    monkeypatch.setattr(TelegramPollingService, "_delete_webhook", lambda self: None)
+    calls = []
+    def fake_get_updates(self):
+        calls.append(self.offset)
+        if len(calls) == 1:
+            return [{"update_id": 100, "message": {"message_id": 1, "text": "boom", "chat": {"id": 42}}}]
+        self._running = False
+        return []
+    monkeypatch.setattr(TelegramPollingService, "_get_updates", fake_get_updates)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    service._running = True
+    service._run()
+    assert service.offset == 99
+    assert processed == []
+    service._save_offset()
+    reloaded = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    assert reloaded.offset == 99
+
 
 def test_dispatcher_respects_vram():
     job = Job(job_id="2026-999999", topic="image", character_id="did_samogon", priority=5,
