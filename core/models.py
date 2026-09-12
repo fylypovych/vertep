@@ -317,6 +317,7 @@ class Job(BaseModel):
     image_storyboard_task_ids: dict[str, str] = Field(default_factory=dict)
     image_storyboard_task_versions: dict[str, dict[str, int]] = Field(default_factory=dict)
     image_storyboard_error: str | None = None
+    storyboard_task_id: str | None = None
     script_revision_chat_id: str | None = None
     script_revision_pending: bool = False
     video_revision_chat_id: str | None = None
@@ -350,6 +351,7 @@ class WorkerHeartbeat(BaseModel):
     cpu_load: float | None = None
     runtime_version: str | None = None
     self_test: dict[str, Any] = Field(default_factory=dict)
+    voice_catalog: dict[str, Any] = Field(default_factory=dict)
 
 class TaskClaim(BaseModel):
     node_name: str
@@ -359,6 +361,7 @@ class TaskClaim(BaseModel):
     supported_tasks: list[str] = Field(default_factory=lambda: ["image"])
     supported_workflows: list[str] = Field(default_factory=lambda: ["*"])
     capabilities: list[str] = Field(default_factory=lambda: ["image_generation"])
+    voice_catalog: dict[str, Any] = Field(default_factory=dict)
 
 
 class NodeAction(BaseModel):
@@ -396,8 +399,8 @@ class TaskResult(BaseModel):
     image_base64: str | None = None
     filename: str = "scene-001.png"
     error: str | None = None
-    images: list[dict[str, str]] = Field(default_factory=list)
-    artifacts: list[dict[str, str]] = Field(default_factory=list)
+    images: list[dict[str, Any]] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
 class WorkerLogBatch(BaseModel):
     node_name: str

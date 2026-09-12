@@ -19,8 +19,8 @@ from .queue import TaskQueue
 from .logging_config import configure_logging
 from .workflows import WorkflowRegistry
 
-store = JobStore(os.getenv("JOB_ROOT", "jobs"))
 executor = ThreadPoolExecutor(max_workers=2)
+store = JobStore(os.getenv("JOB_ROOT", "jobs"))
 task_queue = TaskQueue()
 logger = configure_logging("core")
 workflow_registry = WorkflowRegistry(os.getenv("WORKFLOWS_ROOT", "workflows"))

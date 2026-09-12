@@ -11,9 +11,10 @@ from core.dispatcher import available_worker
 from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, utc_now
 
 
-def _mock_storyboard_generate(self, job_id, revision=None):
+def _mock_storyboard_queue(self, job, revision=None):
     target_store = getattr(self, "store", store)
-    job = target_store.jobs.get(job_id)
+    if not hasattr(job, "job_id"):
+        job = target_store.jobs.get(job)
     if not job:
         raise ValueError("Job not found")
     script = job.script or {"title": job.topic, "scenes": [{"prompt": job.topic, "voiceover": "", "duration": 1}]}
@@ -39,6 +40,7 @@ def _mock_storyboard_generate(self, job_id, revision=None):
     job.active_storyboard_version = storyboard.version
     job.active_image_version = storyboard.image_version
     job.storyboard_error = None
+    job.storyboard_task_id = "mock-task-id"
     target_store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
     return storyboard
 
@@ -48,7 +50,7 @@ from core.storyboard import StoryboardService as _StoryboardService
 
 @pytest.fixture(autouse=True)
 def _mock_storyboard_for_api(monkeypatch):
-    monkeypatch.setattr(_StoryboardService, "generate", _mock_storyboard_generate)
+    monkeypatch.setattr(_StoryboardService, "queue", _mock_storyboard_queue)
 
 
 def _approve_script_and_storyboard(client, job_id):

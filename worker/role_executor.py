@@ -1,6 +1,7 @@
 """Capability-specific task executors used by the universal node agent."""
 
 import base64
+import hashlib
 import json
 import os
 
@@ -49,6 +50,55 @@ def execute_text(task: dict) -> list[dict]:
     return [_artifact("response.txt", "text", text.encode("utf-8"))]
 
 
+def execute_storyboard(task: dict) -> list[dict]:
+    from core.storyboard_prompt import PROMPT_VERSION, build_storyboard_prompt
+    from core.script_schema import normalize_script
+    from core.configuration import load_character, read_json
+    from core.models import StoryboardScene
+    from pathlib import Path
+    import json as _json
+
+    endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/generate"
+    model = os.getenv("OLLAMA_STORYBOARD_MODEL") or os.getenv("OLLAMA_MODEL", "llama3.2")
+    payload = {"model": model, "prompt": task["prompt"], "stream": False, "format": "json"}
+    timeout = task.get("timeout", 300)
+    response = httpx.post(endpoint, json=payload, timeout=timeout)
+    response.raise_for_status()
+    raw = response.json().get("response", "")
+    if not raw:
+        raise RuntimeError("Ollama returned empty response for storyboard")
+    data = _json.loads(raw)
+    script = normalize_script(data, task["topic"])
+    scenes = [StoryboardScene(index=index, **scene)
+              for index, scene in enumerate(script["scenes"], 1)]
+    target = float(os.getenv("STORYBOARD_TARGET_DURATION", "60"))
+    tolerance = float(os.getenv("STORYBOARD_DURATION_TOLERANCE", "0.15"))
+    total_duration = sum(scene.duration for scene in scenes)
+    if abs(total_duration - target) > target * tolerance:
+        raise ValueError(
+            f"Storyboard duration {total_duration:g}s is outside "
+            f"{target:g}s ± {tolerance:.0%}"
+        )
+    for scene in scenes:
+        scene.scene_id = f"sb-{task['storyboard_version']}-{scene.index}"
+        scene.image_prompt = scene.prompt
+        scene.image_version = task.get("image_version", 1)
+    artifact = {
+        "version": task["storyboard_version"],
+        "title": script["title"],
+        "description": script.get("description", ""),
+        "hashtags": script.get("hashtags", []),
+        "scenes": [scene.model_dump() for scene in scenes],
+        "prompt_version": PROMPT_VERSION,
+        "model": model,
+        "status": "pending_approval",
+        "revision_request": task.get("revision"),
+        "image_version": task.get("image_version", 1),
+        "image_status": "pending",
+    }
+    return [_artifact("storyboard.json", "storyboard", _json.dumps(artifact, ensure_ascii=False).encode("utf-8"))]
+
+
 def list_text_models() -> list[dict]:
     endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/tags"
     response = httpx.get(endpoint, timeout=30)
@@ -89,25 +139,101 @@ def synthesize_voice(text: str, voice: str = "default", speed: int = 150) -> byt
     return response.content
 
 
+def _resolve_voice_config(task: dict) -> dict:
+    """Resolve the effective character voice configuration for a voice task.
+
+    The character voice config (``provider``/``voice``/``language``/``model``/
+    ``speed``) is what actually drives the synthesis request.  We never fall
+    back to a silent placeholder: an explicitly disabled provider or an empty
+    voice id is a hard error so the job can retry/fail loudly instead of
+    producing a bogus audio artifact.
+    """
+    provider = (
+        str(task.get("provider") or os.getenv("TTS_PROVIDER", "none"))
+    ).strip().lower()
+    if provider in {"disabled", "off", "false"}:
+        raise RuntimeError(
+            f"TTS provider is disabled for character "
+            f"'{task.get('character_id') or 'unknown'}'; no synthesis requested"
+        )
+    voice = str(
+        task.get("voice") or os.getenv("TTS_VOICE", "default")
+    ).strip()
+    if not voice:
+        raise RuntimeError("Character voice has no voice identifier; cannot synthesize")
+    return {
+        "provider": provider or "none",
+        "voice": voice,
+        "language": str(task.get("language") or os.getenv("TTS_LANGUAGE", "uk")),
+        "model": str(
+            task.get("model") or task.get("engine") or os.getenv("TTS_MODEL") or ""
+        ).strip(),
+        "speed": int(task.get("speed") or os.getenv("TTS_SPEED", "150")),
+        "character_id": task.get("character_id"),
+        "scene_id": task.get("scene_id"),
+    }
+
+
 def execute_voice(task: dict) -> list[dict]:
+    """Synthesize speech on the Voice Worker.
+
+    Produces a real audio artifact carrying a verifiable ``contract`` that
+    records exactly which character voice config (provider / voice / language /
+    model / speed) was used and a sha256 of the resulting bytes so CORE can
+    validate the artifact end-to-end.
+    """
+    config = _resolve_voice_config(task)
     endpoint = os.getenv("TTS_URL", "http://tts:8090").rstrip("/") + "/synthesize"
-    voice = task.get("voice") or os.getenv("TTS_VOICE", "default")
-    provider = task.get("provider")
-    if provider:
-        voice = f"{provider}:{voice}" if voice != "default" else provider
-    payload = {"text": task["topic"], "voice": voice}
-    speed = task.get("speed")
-    if speed is not None:
-        payload["speed"] = int(speed)
+    payload = {
+        "text": task["topic"],
+        "voice": config["voice"],
+        "speed": config["speed"],
+    }
+    # The character voice config parameterizes the synthesis request; the
+    # runtime may ignore fields it does not support (e.g. model/language).
+    if config["language"]:
+        payload["language"] = config["language"]
+    if config["model"]:
+        payload["model"] = config["model"]
+    payload["provider"] = config["provider"]
     response = httpx.post(endpoint, json=payload, timeout=180)
     response.raise_for_status()
     content_type = response.headers.get("content-type", "")
     if "json" in content_type:
-        encoded = response.json().get("audio_base64")
+        body = response.json()
+        encoded = body.get("audio_base64")
+        if not encoded:
+            raise RuntimeError("TTS runtime returned no audio")
         data = base64.b64decode(encoded, validate=True)
+        mime_type = body.get("mime_type", "audio/wav")
+        engine = body.get("engine", "")
+        duration = body.get("duration")
     else:
         data = response.content
-    return [_artifact("speech.wav", "audio", data)]
+        mime_type = content_type or "audio/wav"
+        engine = ""
+        duration = None
+    if not data:
+        raise RuntimeError("TTS runtime returned empty audio")
+    name = f"speech-{config['scene_id'] or 'voice'}.wav"
+    contract = {
+        "format": "audio_contract/v1",
+        "provider": config["provider"],
+        "voice": config["voice"],
+        "language": config["language"],
+        "model": config["model"] or None,
+        "engine": engine or None,
+        "mime_type": mime_type,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "text_sha256": hashlib.sha256(task["topic"].encode("utf-8")).hexdigest(),
+        "duration": duration,
+        "scene_id": config["scene_id"],
+        "character_id": config["character_id"],
+    }
+    artifact = _artifact(name, "audio", data)
+    artifact["contract"] = contract
+    return [artifact]
 
 
 def execute_publisher(task: dict) -> list[dict]:
@@ -178,8 +304,9 @@ def execute_video(task: dict) -> list[dict]:
 
 EXECUTORS = {"text": execute_text, "voice": execute_voice,
              "publish": execute_publisher, "backup": execute_backup,
-             "image": execute_image, "video": execute_video}
-ROLE_TASKS = {"text": {"text"}, "voice": {"voice"}, "publisher": {"publish"},
+             "image": execute_image, "video": execute_video,
+             "storyboard": execute_storyboard}
+ROLE_TASKS = {"text": {"text", "storyboard"}, "voice": {"voice"}, "publisher": {"publish"},
               "backup": {"backup"}, "gpu": {"image", "video"}}
 
 

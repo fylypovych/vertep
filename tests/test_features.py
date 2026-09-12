@@ -13,9 +13,10 @@ from core.script_agent import ScriptAgent
 from core.storyboard import StoryboardService as _StoryboardServiceOrig
 
 
-def _mock_storyboard_generate(self, job_id, revision=None):
+def _mock_storyboard_queue(self, job, revision=None):
     target_store = getattr(self, "store", store)
-    job = target_store.jobs.get(job_id)
+    if not hasattr(job, "job_id"):
+        job = target_store.jobs.get(job)
     if not job:
         raise ValueError("Job not found")
     script = job.script or {"title": job.topic, "scenes": [{"prompt": job.topic, "voiceover": "", "duration": 1}]}
@@ -42,6 +43,7 @@ def _mock_storyboard_generate(self, job_id, revision=None):
     job.active_storyboard_version = storyboard.version
     job.active_image_version = storyboard.image_version
     job.storyboard_error = None
+    job.storyboard_task_id = "mock-task-id"
     target_store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {storyboard.version} PENDING APPROVAL")
     return storyboard
 
@@ -51,7 +53,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _mock_storyboard_for_features(monkeypatch):
-    monkeypatch.setattr(_StoryboardServiceOrig, "generate", _mock_storyboard_generate)
+    monkeypatch.setattr(_StoryboardServiceOrig, "queue", _mock_storyboard_queue)
 
 
 def wait_for(client, job_id, statuses=("READY", "FAILED")):

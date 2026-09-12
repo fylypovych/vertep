@@ -4,8 +4,6 @@ import json
 import os
 from pathlib import Path
 
-from adapters.llm_clients import OllamaClient
-
 from .configuration import load_character, read_json
 from .models import Job, JobStatus, StoryboardScene, StoryboardVersion, utc_now
 from .script_schema import normalize_script
@@ -17,97 +15,137 @@ class StoryboardConflict(ValueError):
 
 
 class StoryboardService:
-    def __init__(self, store, executor=None, client_factory=None) -> None:
+    def __init__(self, store, executor=None) -> None:
         self.store = store
         self.executor = executor
-        self.client_factory = client_factory or self._ollama_client
-
-    @staticmethod
-    def _ollama_client():
-        return OllamaClient(
-            model=os.getenv("OLLAMA_STORYBOARD_MODEL") or os.getenv("OLLAMA_MODEL", "llama3.2"),
-            timeout=float(os.getenv("OLLAMA_STORYBOARD_TIMEOUT", "300")),
-        )
 
     def queue(self, job: Job, revision: str | None = None) -> Job:
         job.storyboard_error = None
         self.store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
-        if self.executor is None:
-            self.generate(job.job_id, revision)
-        else:
-            self.executor.submit(self.generate, job.job_id, revision)
-        return job
 
-    def generate(self, job_id: str, revision: str | None = None) -> StoryboardVersion:
-        job = self._job(job_id)
-        attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
         brand = read_json(Path(os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
         prompt = build_storyboard_prompt(job, character, brand, revision)
-        error = None
-        for attempt in range(1, attempts + 1):
-            job.storyboard_attempt = attempt
-            self.store.update(job, JobStatus.STORYBOARD_GENERATING,
-                              f"STORYBOARD GENERATING {attempt}/{attempts}")
-            try:
-                client = self.client_factory()
-                raw = client.complete(prompt, format_json=True)
-                payload = json.loads(raw)
-                script = normalize_script(payload, job.topic)
-                scenes = [StoryboardScene(index=index, **scene)
-                          for index, scene in enumerate(script["scenes"], 1)]
-                target = float(os.getenv("STORYBOARD_TARGET_DURATION", "60"))
-                tolerance = float(os.getenv("STORYBOARD_DURATION_TOLERANCE", "0.15"))
-                total_duration = sum(scene.duration for scene in scenes)
-                if abs(total_duration - target) > target * tolerance:
-                    raise ValueError(
-                        f"Storyboard duration {total_duration:g}s is outside "
-                        f"{target:g}s ± {tolerance:.0%}"
-                    )
-                for previous in job.storyboards:
-                    if previous.status == "pending_approval":
-                        previous.status = "superseded"
-                storyboard = StoryboardVersion(
-                    version=(job.storyboards[-1].version + 1 if job.storyboards else 1),
-                    title=script["title"], description=script.get("description", ""),
-                    hashtags=script.get("hashtags", []), scenes=scenes,
-                    prompt_version=PROMPT_VERSION, model=getattr(client, "model", ""),
-                    status="pending_approval", revision_request=revision,
-                )
-                for scene in storyboard.scenes:
-                    scene.scene_id = f"sb-{storyboard.version}-{scene.index}"
-                    scene.image_prompt = scene.prompt
-                    scene.image_version = storyboard.image_version
-                job.storyboards.append(storyboard)
-                job.active_storyboard_version = storyboard.version
-                job.active_image_version = storyboard.image_version
-                job.storyboard_error = None
-                self.store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL,
-                                  f"STORYBOARD {storyboard.version} PENDING APPROVAL")
-                try:
-                    from .image_storyboard import queue_image_storyboard
-                    queue_image_storyboard(self.store, job, storyboard.version)
-                    if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
-                        from .image_storyboard import handle_image_result as _handle
-                        import base64
-                        demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
-                        b64 = base64.b64encode(demo_ppm).decode()
-                        for tid in list(job.image_storyboard_task_ids.keys()):
-                            _handle(self.store, job, tid, True, image_base64=b64)
-                            from .state import task_queue as _tq
-                            _tq.ack(tid)
-                        # fallback only produces previews as ready — explicit approval required (Issue #6)
-                        self.store.event(job, f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY (fallback)")
-                except Exception as exc:
-                    self.store.event(job, f"IMAGE STORYBOARD QUEUE FAILED: {exc}")
-                return storyboard
-            except Exception as caught:
-                error = str(caught)
-                job.storyboard_error = error
-                self.store.event(job, f"STORYBOARD FAILED {attempt}/{attempts}: {error}")
-        self.store.update(job, JobStatus.STORYBOARD_FAILED,
-                          f"STORYBOARD FAILED after {attempts} attempts: {error}")
-        raise RuntimeError(job.storyboard_error or "Storyboard generation failed")
+
+        version = (job.storyboards[-1].version + 1 if job.storyboards else 1)
+        image_version = 1
+        if job.storyboards:
+            image_version = job.storyboards[-1].image_version
+
+        task = {
+            "job_id": job.job_id,
+            "task": "storyboard",
+            "priority": job.priority,
+            "topic": job.topic,
+            "prompt": prompt,
+            "storyboard_version": version,
+            "image_version": image_version,
+            "revision": revision,
+            "timeout": int(os.getenv("OLLAMA_STORYBOARD_TIMEOUT", "300")),
+        }
+
+        from .state import task_queue
+        queued = task_queue.enqueue(task)
+        job.storyboard_task_id = queued["task_id"]
+        job.active_task_id = queued["task_id"]
+        self.store.repository.record_task(queued, "QUEUED")
+        self.store.event(job, f"STORYBOARD TASK {queued['task_id']} QUEUED for version {version}")
+
+        if self.executor is not None:
+            self.executor.submit(self._process_queue, job.job_id)
+        else:
+            self._process_queue(job.job_id)
+
+        return job
+
+    def _process_queue(self, job_id: str) -> None:
+        from .state import task_queue
+        from .queue import TaskQueue
+        job = self._job(job_id)
+        task_id = job.storyboard_task_id
+        while True:
+            task = task_queue.claim()
+            if not task or task.get("task_id") != task_id:
+                break
+            if task.get("task") != "storyboard":
+                task_queue.release(task["task_id"])
+                break
+            break
+
+    def handle_result(self, job_id: str, task_id: str, success: bool, artifacts: list[dict] | None, error: str | None) -> Job:
+        import base64
+        job = self._job(job_id)
+        if job.storyboard_task_id != task_id:
+            return job
+
+        if not success:
+            attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
+            current_attempt = getattr(job, "storyboard_attempt", 0) + 1
+            job.storyboard_attempt = current_attempt
+            job.storyboard_error = error
+            self.store.event(job, f"STORYBOARD FAILED {current_attempt}/{attempts}: {error}")
+            if current_attempt < attempts:
+                self.queue(job, job.storyboards[-1].revision_request if job.storyboards else None)
+                return job
+            self.store.update(job, JobStatus.STORYBOARD_FAILED,
+                              f"STORYBOARD FAILED after {attempts} attempts: {error}")
+            raise RuntimeError(job.storyboard_error or "Storyboard generation failed")
+
+        artifact = next((a for a in artifacts if a["kind"] == "storyboard"), None)
+        if not artifact:
+            raise RuntimeError("No storyboard artifact in result")
+
+        data = json.loads(base64.b64decode(artifact["data_base64"]).decode("utf-8"))
+        scenes = [StoryboardScene(**scene) for scene in data["scenes"]]
+        for scene in scenes:
+            scene.scene_id = f"sb-{data['version']}-{scene.index}"
+            scene.image_prompt = scene.prompt
+            scene.image_version = data.get("image_version", 1)
+
+        for previous in job.storyboards:
+            if previous.status == "pending_approval":
+                previous.status = "superseded"
+
+        storyboard = StoryboardVersion(
+            version=data["version"],
+            title=data["title"],
+            description=data["description"],
+            hashtags=data["hashtags"],
+            scenes=scenes,
+            prompt_version=data["prompt_version"],
+            model=data["model"],
+            status="pending_approval",
+            revision_request=data.get("revision_request"),
+            image_version=data.get("image_version", 1),
+            image_status=data.get("image_status", "pending"),
+        )
+
+        job.storyboards.append(storyboard)
+        job.active_storyboard_version = storyboard.version
+        job.active_image_version = storyboard.image_version
+        job.storyboard_error = None
+        job.storyboard_task_id = None
+        job.active_task_id = None
+        self.store.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL,
+                          f"STORYBOARD {storyboard.version} PENDING APPROVAL")
+
+        try:
+            from .image_storyboard import queue_image_storyboard
+            queue_image_storyboard(self.store, job, storyboard.version)
+            if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+                from .image_storyboard import handle_image_result as _handle
+                import base64
+                demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
+                b64 = base64.b64encode(demo_ppm).decode()
+                for tid in list(job.image_storyboard_task_ids.keys()):
+                    _handle(self.store, job, tid, True, image_base64=b64)
+                    from .state import task_queue as _tq
+                    _tq.ack(tid)
+                self.store.event(job, f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY (fallback)")
+        except Exception as exc:
+            self.store.event(job, f"IMAGE STORYBOARD QUEUE FAILED: {exc}")
+
+        return job
 
     def approve(self, job_id: str, version: int, actor: str) -> Job:
         job = self._job(job_id)

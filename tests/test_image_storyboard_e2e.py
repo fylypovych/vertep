@@ -3,15 +3,15 @@ from fastapi.testclient import TestClient
 from core.app import app, store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
 
-def _mock_gen(self, job_id, revision=None):
+def _mock_queue(self, job, revision=None):
     tgt = getattr(self, "store", store)
-    job = tgt.jobs.get(job_id)
     script = job.script or {"title": job.topic, "scenes": [{"prompt": job.topic, "voiceover": "", "duration": 1}]}
     scenes = [StoryboardScene(index=i, prompt=s.get("prompt",""), video_prompt=s.get("prompt",""), voiceover=s.get("voiceover",""), duration=float(s.get("duration",1))) for i,s in enumerate(script.get("scenes",[]),1)]
     sb = StoryboardVersion(version=(job.storyboards[-1].version+1 if job.storyboards else 1), title=script.get("title",job.topic), description=script.get("description",""), hashtags=script.get("hashtags",[]), scenes=scenes, status="pending_approval", image_status="pending", image_version=1)
     for sc in sb.scenes:
         sc.scene_id=f"sb-{sb.version}-{sc.index}"; sc.image_prompt=sc.prompt; sc.image_version=1
     job.storyboards.append(sb); job.active_storyboard_version=sb.version; job.active_image_version=sb.image_version
+    job.storyboard_task_id = "mock-task-id"
     tgt.update(job, JobStatus.STORYBOARD_PENDING_APPROVAL, f"STORYBOARD {sb.version} PENDING APPROVAL")
     from core.image_storyboard import queue_image_storyboard
     queue_image_storyboard(tgt, job, sb.version)
@@ -20,7 +20,7 @@ def _mock_gen(self, job_id, revision=None):
 def test_image_storyboard_e2e(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK","false")
     from core.storyboard import StoryboardService as Svc
-    monkeypatch.setattr(Svc, "generate", _mock_gen)
+    monkeypatch.setattr(Svc, "queue", _mock_queue)
     client=TestClient(app)
     client.post("/api/workers/heartbeat", json={"node_name":"gpu-worker","vram_mb":8192,"capabilities":["image_generation"],"supported_tasks":["image"]})
     job_id=client.post("/api/jobs", json={"topic":"E2E storyboard","character_id":"did_samogon"}).json()["job_id"]

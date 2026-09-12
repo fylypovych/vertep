@@ -1,4 +1,5 @@
 import base64
+import hashlib
 
 from worker import role_executor
 
@@ -38,6 +39,46 @@ def test_voice_and_publisher_require_valid_runtime_receipts(monkeypatch):
         assert "publication receipt" in str(error)
     else:
         raise AssertionError("invalid publisher receipt was accepted")
+
+
+def test_voice_worker_emits_verifiable_audio_contract(monkeypatch):
+    audio = b"RIFF\x04\x00\x00\x00WAVE"
+    monkeypatch.setattr(role_executor.httpx, "post", lambda *args, **kwargs:
+                        Response({"audio_base64": base64.b64encode(audio).decode(),
+                                  "mime_type": "audio/wav", "engine": "espeak-ng"}))
+    [artifact] = role_executor.execute_role_task("voice", {
+        "task": "voice", "topic": "привіт", "provider": "mock", "voice": "uk",
+        "language": "uk", "scene_id": "scene-001", "character_id": "voicechar",
+        "speed": 160})
+    assert base64.b64decode(artifact["data_base64"]) == audio
+    contract = artifact["contract"]
+    assert contract["format"] == "audio_contract/v1"
+    assert contract["provider"] == "mock"
+    assert contract["voice"] == "uk"
+    assert contract["language"] == "uk"
+    assert contract["engine"] == "espeak-ng"
+    assert contract["scene_id"] == "scene-001"
+    assert contract["character_id"] == "voicechar"
+    assert contract["sha256"] == hashlib.sha256(audio).hexdigest()
+    assert contract["size"] == len(audio)
+
+
+def test_voice_worker_rejects_disabled_provider_without_calling_runtime(monkeypatch):
+    called = {"post": False}
+
+    def _post(*args, **kwargs):
+        called["post"] = True
+        return Response({})
+
+    monkeypatch.setattr(role_executor.httpx, "post", _post)
+    try:
+        role_executor.execute_role_task("voice", {"task": "voice", "topic": "x",
+                                                   "provider": "disabled"})
+    except RuntimeError as error:
+        assert "disabled" in str(error)
+    else:
+        raise AssertionError("disabled provider was accepted")
+    assert called["post"] is False
 
 
 def test_role_cannot_execute_another_roles_task():

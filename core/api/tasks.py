@@ -21,7 +21,9 @@ from ..security import _valid_worker_request
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state
 from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
+                          _character_voice_enabled,
                           _dispatch_tts, _has_voice_worker, _ordered_scene_files, _pending_voice_scenes,
+                          _persist_tts_contract,
                           _scene_for_task, _select_worker, _serialize_job_result,
                           _task_for, _tts_task_for)
 
@@ -67,11 +69,32 @@ def claim_task(payload: TaskClaim, request: Request):
             store.event(job, f"{payload.node_name} IMAGE STORYBOARD CLAIMED {task.get('scene_id')}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
+        if task.get("task") == "storyboard":
+            if job.status != JobStatus.STORYBOARD_QUEUED or job.storyboard_task_id != task.get("task_id"):
+                task_queue.ack(task["task_id"])
+                continue
+            worker = _select_worker([worker_data], job, task_type="text") if job else None
+            if not worker:
+                held_tasks.append(task["task_id"])
+                continue
+            for held_task_id in held_tasks:
+                task_queue.release(held_task_id)
+            held_tasks.clear()
+            store.workers[payload.node_name] = worker_data
+            store.workers[payload.node_name]["status"] = "BUSY"
+            store.workers[payload.node_name]["current_job"] = job.job_id
+            store.workers[payload.node_name]["current_task"] = task["task_id"]
+            store.save_worker(store.workers[payload.node_name])
+            store.event(job, f"{payload.node_name} STORYBOARD CLAIMED {task['task_id']}")
+            store.repository.record_task(task, "CLAIMED", payload.node_name)
+            return {"task": task}
         scene = _scene_for_task(job, task.get("task_id", ""))
         is_tts = job.status == JobStatus.TTS_GENERATING and task.get("task") == "voice"
         effective_task_type = task.get("task") if is_tts else job.task_type
         effective_min_vram = task.get("min_vram_mb") if is_tts else None
-        worker = _select_worker([worker_data], job, task_type=effective_task_type, min_vram_mb=effective_min_vram) if job else None
+        voice_requirements = {"voice": task.get("voice"), "model": task.get("model")} if is_tts else None
+        worker = _select_worker([worker_data], job, task_type=effective_task_type, min_vram_mb=effective_min_vram,
+                                voice_requirements=voice_requirements) if job else None
         if job and worker:
             for held_task_id in held_tasks:
                 task_queue.release(held_task_id)
@@ -194,6 +217,24 @@ def task_result(result: TaskResult, request: Request):
         if not result.success:
             _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "kind": "image_storyboard"}, result.error)
         return job
+    if job.storyboard_task_id == result.task_id:
+        from ..storyboard import StoryboardService
+        worker = store.workers.get(result.node_name)
+        if worker:
+            desired_status = worker.get("desired_state")
+            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            store.save_worker(worker)
+        try:
+            StoryboardService(store).handle_result(job.job_id, result.task_id, result.success, result.artifacts, result.error)
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(400, str(error)) from error
+        from ..state import task_queue as _tq2
+        _tq2.ack(result.task_id)
+        store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
+        if not result.success:
+            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, result.error)
+        return job
     is_tts = result.task_id in job.tts_active_task_ids
     if is_tts:
         if result.task_id in job.completed_task_ids:
@@ -249,10 +290,10 @@ def task_result(result: TaskResult, request: Request):
                 raise HTTPException(400, str(error)) from error
             filename = f"voice-{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"voice-{scene.scene_id}-{artifact_index:03d}{suffix}"
             audio_path = store.root / job.job_id / "audio" / filename
-            prepared_images.append((audio_path, data))
+            prepared_images.append((audio_path, data, artifact.get("contract")))
         temporary_images = []
         try:
-            for audio_path, data in prepared_images:
+            for audio_path, data, _contract in prepared_images:
                 temporary = audio_path.with_name(f".{audio_path.name}.{result.task_id[:8]}.part")
                 temporary.write_bytes(data)
                 temporary_images.append((temporary, audio_path))
@@ -262,10 +303,15 @@ def task_result(result: TaskResult, request: Request):
             for temporary, _ in temporary_images:
                 temporary.unlink(missing_ok=True)
             raise HTTPException(500, "Could not persist audio artifacts") from error
-        for audio_path, _ in prepared_images:
+        for audio_path, data, contract in prepared_images:
             saved_artifacts.append(register_artifact(job, store.root, audio_path, "audio",
                                                      scene_id=scene.scene_id, task_id=result.task_id,
                                                      node_name=result.node_name, workflow=job.workflow))
+            try:
+                saved_artifacts.extend(_persist_tts_contract(store, job, scene, result,
+                                                             audio_path, data, contract))
+            except (ValueError, OSError) as error:
+                raise HTTPException(400, f"Invalid audio contract: {error}") from error
         task_queue.ack(result.task_id)
         store.repository.record_task(_tts_task_for(job, scene) | {"task_id": result.task_id}, "COMPLETED", result.node_name)
         job.completed_task_ids.append(result.task_id)
@@ -417,7 +463,7 @@ def task_result(result: TaskResult, request: Request):
         if job.task_type in {"text", "voice", "backup", "publish"}:
             terminal = JobStatus.PUBLISHED if job.task_type == "publish" else JobStatus.READY
             return store.update(job, terminal, f"{job.task_type.upper()} TASK COMPLETED")
-        if _pending_voice_scenes(job) and _has_voice_worker(store):
+        if _pending_voice_scenes(job) and _character_voice_enabled(job) and _has_voice_worker(store):
             store.transition(job, JobStatus.TTS_GENERATING, "TTS GENERATION STARTED")
             _dispatch_tts(store, job)
             return job

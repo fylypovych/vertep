@@ -1,5 +1,16 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.53
+- Реалізовано TTS-пайплайн на Voice Worker (Issue `i.0.0.0.6`): character voice config (provider/voice/language/model/speed) потрапляє у диспетчеризовану voice-задачу через `_tts_task_for()` у `core/api/job_helpers.py`.
+- Voice Worker через `execute_role_task` (нові `_resolve_voice_config()` та `synthesize_voice` у `worker/role_executor.py`) генерує реальний audio-артефакт із верифікованим `audio_contract/v1` (provider/voice/language/model/engine/mime_type/size/sha256/text_sha256/duration).
+- CORE валідує sha256 контракту та зберігає його як sidecar-артефакт (`audio_contract` у `_persist_tts_contract()`), відхиляючи підроблений payload із невідповідним digest (400).
+- Dispatcher фільтрує voice-вузли за `voice_catalog` через `_voice_ready()` (voices/models); `available_worker()` приймає `voice_requirements`.
+- Worker анонсує каталог голосів/моделей через нову `voice_catalog()` у `worker/service.py` (env `TTS_VOICES`/`TTS_MODELS` або живий runtime `/voices`); включено в heartbeat і claim.
+- Якщо в character config `provider` явно вимкнено (`disabled`/`off`/`false`), стадія TTS чисто пропускається через `_character_voice_enabled()` замість синтезу, який Worker відхилив би.
+- Storyboard-генерацію винесено з CORE в асинхронну задачу: `StoryboardService.queue()/handle_result()` у `core/storyboard.py`, CORE лише ставить `storyboard`-задачу; новий `execute_storyboard()` у `worker/role_executor.py` виконує генерацію на Text Worker через Ollama.
+- Додано claim/result-обробку `storyboard`-задачі та поле `storyboard_task_id` у `core/models.py`/`core/api/tasks.py`; виправлено порядок ініціалізації `state.py` (executor до store) та проброс executor у `core/pipeline.py`.
+- Розширено моделі: `voice_catalog` у `WorkerHeartbeat`/`TaskClaim`; `TaskResult.images`/`artifacts` типізовані як `dict[str, Any]`.
+- Додано новий integration-тест `tests/test_voice_pipeline.py` (передача конфігу в voice-задачу, контракт Worker, валідація CORE, відхилення підробки, вибір вузла за каталогом, повний voice e2e) та оновлено `tests/test_role_executor.py`, `tests/test_storyboard.py`, `tests/test_features.py`, `tests/test_api.py`, `tests/test_image_storyboard_e2e.py`.
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.52
 - `i.0.0.0.27` (Issue #29): Завершено user profile, account management та RBAC UX. Додано profile dropdown в header замість прямої logout-кнопки: окремі дії «Профіль», «Змінити пароль», «Вийти».
 - Додано Profile page у `web-v2/src/app/profile/`: логін, роль, перелік дозволених дій та форма зміни пароля (без shell).

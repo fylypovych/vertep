@@ -118,6 +118,34 @@ def node_capabilities() -> list[str]:
         raw = defaults.get(role, "")
     return sorted({item.strip() for item in raw.split(",") if item.strip()})
 
+
+def voice_catalog() -> dict:
+    """Advertise which voices/models this node can synthesize.
+
+    Driven by ``TTS_VOICES`` / ``TTS_MODELS`` (comma-separated) or the live TTS
+    runtime's ``/voices`` catalog when available.  An empty result means the
+    node accepts any voice request (backward compatible with existing workers);
+    a non-empty ``voices`` / ``models`` list lets CORE pick ready nodes and
+    refuse to dispatch a voice to a node that cannot honour the character's
+    voice/model requirements.
+    """
+    voices = [item.strip() for item in os.getenv("TTS_VOICES", "").split(",") if item.strip()]
+    models = [item.strip() for item in os.getenv("TTS_MODELS", "").split(",") if item.strip()]
+    if not voices and not models:
+        url = os.getenv("TTS_URL", "http://tts:8090").rstrip("/")
+        try:
+            catalog = httpx.get(f"{url}/voices", timeout=10).json()
+            if isinstance(catalog, dict):
+                voices = [str(item.get("id", item)) for item in catalog.get("voices", [])]
+        except (httpx.HTTPError, ValueError):
+            voices = []
+    result: dict[str, list[str]] = {}
+    if voices:
+        result["voices"] = sorted(set(voices))
+    if models:
+        result["models"] = sorted(set(models))
+    return result
+
 def enroll(client: httpx.Client, core: str, node_name: str, metrics: dict,
            capabilities: list[str]) -> str:
     config_path = Path(os.getenv("NODE_CONFIG_PATH", "/data/config/node-credentials.json"))
@@ -294,6 +322,7 @@ def main() -> None:
                "status": worker_status(metrics, require_gpu),
                "supported_tasks": supported_tasks, "supported_workflows": supported_workflows,
                "role": configured_role(), "capabilities": capabilities,
+               "voice_catalog": voice_catalog() if "speech_synthesis" in capabilities else {},
                "version": os.getenv("VERTEP_VERSION")}
     adapter = providers.compute()
     self_test = role_self_test(configured_role(), metrics, adapter)
@@ -355,7 +384,8 @@ def main() -> None:
                                                                          "free_vram_mb": payload.get("free_vram_mb"),
                                                                          "supported_tasks": supported_tasks,
                                                                          "supported_workflows": supported_workflows,
-                                                                         "capabilities": capabilities}).json().get("task")
+                                                                         "capabilities": capabilities,
+                                                                     "voice_catalog": payload.get("voice_catalog") or {}}).json().get("task")
                     if task:
                         logger.info("Task claimed", extra={"job_id": task["job_id"], "node_name": payload["node_name"]})
                         payload.update({"current_job": task["job_id"], "current_task": task["task_id"], "status": "BUSY"})

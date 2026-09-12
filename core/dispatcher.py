@@ -25,7 +25,25 @@ def current_tested_capabilities(worker: dict, now: datetime | None = None) -> se
     return declared & attested
 
 
-def available_worker(workers: list[dict], job: Job, task_type: str | None = None, min_vram_mb: int | None = None) -> dict | None:
+def _voice_ready(worker: dict, requirements: dict | None) -> bool:
+    if not requirements:
+        return True
+    catalog = worker.get("voice_catalog") or {}
+    plural = {"voice": "voices", "model": "models"}
+    for key, required in requirements.items():
+        if not required:
+            continue
+        supported = catalog.get(plural.get(key, key))
+        if not supported:
+            continue  # no catalog advertised → assume the node can handle it
+        if "*" in supported or required in supported:
+            continue
+        return False
+    return True
+
+
+def available_worker(workers: list[dict], job: Job, task_type: str | None = None, min_vram_mb: int | None = None,
+                     voice_requirements: dict | None = None) -> dict | None:
     now = datetime.now(timezone.utc)
     candidates: list[dict] = []
     for worker in workers:
@@ -57,6 +75,8 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
             continue
         supported_workflows = worker.get("supported_workflows", ["*"])
         if "*" not in supported_workflows and (job.workflow or "") not in supported_workflows:
+            continue
+        if effective_task_type == "voice" and voice_requirements and not _voice_ready(worker, voice_requirements):
             continue
         candidates.append(worker)
     if not candidates:

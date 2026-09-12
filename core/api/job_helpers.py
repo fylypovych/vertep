@@ -5,6 +5,8 @@ Business helpers (no route registration) used by ``core.api.jobs``,
 and the watchdog.  Extracted from ``core.app.py`` so the job domain can live in
 dedicated router modules instead of one large file.
 """
+import hashlib
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -60,16 +62,20 @@ def _scene_for_task(job, task_id: str):
     return next((scene for scene in job.scenes if scene.scene_id == scene_id), None)
 
 
-def _select_worker(workers: list[dict], job, task_type: str | None = None, min_vram_mb: int | None = None):
+def _select_worker(workers: list[dict], job, task_type: str | None = None, min_vram_mb: int | None = None,
+                   voice_requirements: dict | None = None):
     dispatcher_url = os.getenv("DISPATCHER_URL", "").rstrip("/")
     if not dispatcher_url:
-        return available_worker(workers, job, task_type=task_type, min_vram_mb=min_vram_mb)
+        return available_worker(workers, job, task_type=task_type, min_vram_mb=min_vram_mb,
+                                voice_requirements=voice_requirements)
     try:
         payload = {"workers": workers, "job": job.model_dump(mode="json")}
         if task_type:
             payload["task_type"] = task_type
         if min_vram_mb is not None:
             payload["min_vram_mb"] = min_vram_mb
+        if voice_requirements:
+            payload["voice_requirements"] = voice_requirements
         response = httpx.post(f"{dispatcher_url}/select",
                               json=payload, timeout=3)
         response.raise_for_status()
@@ -127,10 +133,38 @@ def _tts_task_for(job, scene) -> dict:
             "min_vram_mb": 0, "workflow": job.workflow or "",
             "topic": scene.voiceover or scene.prompt or job.topic,
             "task_id": None, "scene_id": scene.scene_id,
+            "character_id": job.character_id,
             "voice": voice_config.get("voice"),
             "provider": voice_config.get("provider"),
-            "language": voice_config.get("language"),
+            "language": voice_config.get("language") or character.language or "uk",
+            "model": voice_config.get("model") or voice_config.get("engine"),
+            "engine": voice_config.get("engine"),
             "speed": voice_config.get("speed", 150)}
+
+
+def _persist_tts_contract(store, job, scene, result, audio_path, data, contract) -> list:
+    """Validate and persist a verifiable audio contract for a Voice Worker artifact.
+
+    The contract is produced by the Voice Worker and declares which character
+    voice config (provider/voice/...) actually drove the synthesis plus a sha256
+    of the audio bytes.  We re-check the digest against what CORE received and
+    store the contract as a sidecar artifact so the audio is verifiable after the
+    fact.  A missing contract is tolerated (legacy workers) but a malformed one
+    is rejected.
+    """
+    if not isinstance(contract, dict):
+        return []
+    expected = contract.get("sha256")
+    if expected:
+        if not isinstance(expected, str) or expected != hashlib.sha256(data).hexdigest():
+            raise ValueError("Audio contract sha256 does not match artifact payload")
+    if not contract.get("provider") or not contract.get("voice"):
+        raise ValueError("Audio contract must declare provider and voice")
+    contract_path = audio_path.with_suffix(".contract.json")
+    contract_path.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+    return [register_artifact(job, store.root, contract_path, "audio_contract",
+                              scene_id=scene.scene_id, task_id=result.task_id,
+                              node_name=result.node_name)]
 
 
 def _enqueue_tts_task(job, scene) -> dict:
@@ -245,6 +279,21 @@ def _pending_voice_scenes(job) -> list[SceneRecord]:
             if scene.status == StageStatus.READY and scene.scene_id not in tts_scene_ids and scene.voiceover]
 
 
+def _character_voice_enabled(job) -> bool:
+    """Whether the character's voice config requests TTS synthesis.
+
+    An explicitly disabled provider (``disabled``/``off``/``false``/empty) means
+    no voice is wanted, so CORE skips the TTS stage cleanly instead of enqueuing
+    a synthesis task that the Voice Worker would reject.
+    """
+    try:
+        character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id)
+        provider = (character.voice or {}).get("provider")
+    except Exception:
+        return False
+    return bool(provider) and str(provider).strip().lower() not in {"disabled", "off", "false"}
+
+
 def _has_voice_worker(store: JobStore) -> bool:
     return any(
         "speech_synthesis" in (worker.get("capabilities") or []) or worker.get("role") == "voice"
@@ -256,6 +305,11 @@ def _dispatch_tts(store, job) -> None:
     initialize_plan(job)
     if job.stages[StageName.TTS.value].status == StageStatus.PENDING:
         transition_stage(job, StageName.TTS, StageStatus.RUNNING)
+    if _pending_voice_scenes(job) and not _character_voice_enabled(job):
+        transition_stage(job, StageName.TTS, StageStatus.READY)
+        if job.task_type in {"image", "video"}:
+            store.transition(job, JobStatus.ASSETS_READY, "TTS SKIPPED; VOICE DISABLED")
+        return
     if not job.tts_active_task_ids and not _pending_voice_scenes(job):
         transition_stage(job, StageName.TTS, StageStatus.READY)
         if job.task_type in {"image", "video"}:
@@ -352,6 +406,15 @@ def _job_action(job_id: str, status: JobStatus, event: str):
                                          task_status, worker)
             if scene:
                 scene.task_id = None
+        if job.storyboard_task_id:
+            task_id = job.storyboard_task_id
+            worker = job.assigned_worker
+            if worker:
+                task_queue.request_cancel(worker, task_id)
+            task_queue.discard(task_id)
+            store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "storyboard"},
+                                         task_status, worker)
+            job.storyboard_task_id = None
         job.active_task_ids.clear()
         job.tts_active_task_ids.clear()
         job.active_task_id = None

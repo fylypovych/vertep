@@ -25,7 +25,7 @@ def _progress(job: Job, text: str) -> None:
         logger.warning("Telegram progress notification failed", extra={"job_id": job.job_id})
 
 class JobStore:
-    def __init__(self, root: str = "jobs", repository: StateRepository | None = None) -> None:
+    def __init__(self, root: str = "jobs", repository: StateRepository | None = None, executor=None) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs: dict[str, Job] = {}
@@ -33,6 +33,7 @@ class JobStore:
         self.lock = threading.Lock()
         self.sequence = 0
         self.repository = repository or build_repository(root)
+        self.executor = executor
         self._load()
         self.workers = {worker["node_name"]: worker for worker in self.repository.load_workers()}
 
@@ -219,8 +220,8 @@ def queue_storyboard(store: JobStore, job: Job, revision: str | None = None) -> 
     from .storyboard import StoryboardService
     job.storyboard_error = None
     store.transition(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
-    service = StoryboardService(store, executor=None)
-    service.generate(job.job_id, revision)
+    service = StoryboardService(store, executor=store.executor)
+    service.queue(job, revision)
     return job
 
 def _write_subtitles(store: JobStore, job: Job) -> Path | None:
