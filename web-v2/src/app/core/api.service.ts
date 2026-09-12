@@ -475,6 +475,18 @@ export class VertepApiService {
     return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/script/regenerate`, { actor, revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
+  approveVideo(jobId: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/video/approve`, { actor }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  requestVideoRevision(jobId: string, revision: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/video/revision`, { actor, revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  regenerateVideo(jobId: string): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/video/regenerate`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
   publishJob(jobId: string, channels?: string[]): Observable<Job> {
     const qs = channels?.length ? `?channels=${encodeURIComponent(channels.join(','))}` : '';
     return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/publish${qs}`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));

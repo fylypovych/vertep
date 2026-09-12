@@ -1,5 +1,16 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.55
+- `i.0.0.0.7` (Issue #10): введено відео-апробацію. `finalize_job()` тепер переводить усі job у `VIDEO_PENDING_APPROVAL` після збірки відео; попередньо для Telegram надсилається клавіатура затвердження, для web — відображується превʼю та кнопки затвердження/правок/регенерації.
+- Додано API-ендпоінти `/api/jobs/{id}/video/approve`, `/api/jobs/{id}/video/revision`, `/api/jobs/{id}/video/regenerate` з валідацією стану та actor-трекінгом.
+- `publish_job` явно блокує публікацію для `VIDEO_PENDING_APPROVAL`/`VIDEO_REVISION_REQUESTED`/`VIDEO_APPROVED`.
+- `approve_video` виконує послідовні переходи `VIDEO_PENDING_APPROVAL → VIDEO_APPROVED → VIDEO_READY → READY`.
+- `regenerate_video` переводить у `ASSEMBLY` для повторного запуску збірки; `_finalize_video_regenerate()` використовує збережені кадри.
+- `core/api/job_helpers.py:_prepare_and_dispatch()` — прибрано dead code (дублікатні `if` для `VIDEO_PENDING_APPROVAL`/`VIDEO_REVISION_REQUESTED`).
+- `core/models.py:JOB_STATE_TRANSITIONS` — додано `VIDEO_READY → {READY, CANCELLED}`.
+- Web UI (`web-v2`): додано статуси `VIDEO_PENDING_APPROVAL`/`VIDEO_REVISION_REQUESTED`/`VIDEO_APPROVED` у `presentation.ts`, video-превʼю та кнопки у `job-detail.component.ts`, методи `approveVideo`/`requestVideoRevision`/`regenerateVideo` у `api.service.ts`.
+- Адаптовано тести: `test_api.py`, `test_features.py`, `test_voice_pipeline.py`, `test_image_storyboard_e2e.py` — auto-approve відео перед очікуванням `READY`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.54
 - `i.0.0.0.1` (Issue #4): генерацію сценарію винесено з CORE на Text Worker. `core/pipeline.py:generate_script()` тепер ставить `script`-задачу через `_enqueue_script_task()` у `core/api/job_helpers.py`, а виконання LLM відбувається у `execute_script()` у `worker/role_executor.py` (Ollama) через штатний task-result contract.
 - Додано lifecycle сценарію в CORE: `SCRIPT_QUEUED → SCRIPT_GENERATING → SCRIPT_PENDING_APPROVAL → SCRIPT_APPROVED`, обробка результату у `_handle_script_result()` (успіх → нормалізація + approval; невдача → retry до `max_retries`, далі `SCRIPT_FAILED`).

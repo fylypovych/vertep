@@ -528,12 +528,7 @@ def _prepare_and_dispatch(job) -> None:
         _progress(job, "SCRIPT_PENDING_APPROVAL")
         return
     if job.status in {JobStatus.VIDEO_PENDING_APPROVAL, JobStatus.VIDEO_REVISION_REQUESTED}:
-        return
-    if job.status == JobStatus.VIDEO_PENDING_APPROVAL:
-        _progress(job, "VIDEO_PENDING_APPROVAL")
-        return
-    if job.status == JobStatus.VIDEO_REVISION_REQUESTED:
-        _progress(job, "VIDEO_REVISION_REQUESTED")
+        _progress(job, job.status.value)
         return
     if job.status == JobStatus.SCRIPT_APPROVED:
         queue_storyboard(store, job)

@@ -219,8 +219,11 @@ def _heartbeat(client, node_name, **overrides):
 
 def _wait_for(client, job_id, statuses=("READY", "FAILED")):
     job = None
-    for _ in range(400):
+    for _ in range(600):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "VIDEO_PENDING_APPROVAL":
+            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
+            continue
         if job["status"] in statuses:
             return job
         time.sleep(0.025)

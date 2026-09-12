@@ -3,7 +3,7 @@ import { Job } from './models';
 export const JOB_STATUS_GROUPS = {
   active: ['SCRIPT_GENERATING', 'STORYBOARD_GENERATING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING'],
   queued: ['NEW', 'SCRIPT_QUEUED', 'STORYBOARD_QUEUED'],
-  waiting: ['WAITING_FOR_SYSTEM', 'PENDING_APPROVAL', 'SCRIPT_PENDING_APPROVAL', 'SCRIPT_REVISION_REQUESTED', 'STORYBOARD_PENDING_APPROVAL', 'STORYBOARD_REVISION_REQUESTED'],
+  waiting: ['WAITING_FOR_SYSTEM', 'PENDING_APPROVAL', 'SCRIPT_PENDING_APPROVAL', 'SCRIPT_REVISION_REQUESTED', 'STORYBOARD_PENDING_APPROVAL', 'STORYBOARD_REVISION_REQUESTED', 'VIDEO_PENDING_APPROVAL', 'VIDEO_REVISION_REQUESTED'],
   completed: ['SCRIPT_READY', 'SCRIPT_APPROVED', 'STORYBOARD_APPROVED', 'ASSETS_READY', 'VIDEO_READY', 'READY', 'PUBLISHED'],
   failed: ['FAILED', 'SCRIPT_FAILED', 'STORYBOARD_FAILED'],
 } as const;
@@ -20,6 +20,9 @@ const STATUS_LABELS: Record<string, string> = {
   SCRIPTING: 'Створення сценарію', SCRIPT_READY: 'Сценарій готовий',
   ASSET_GENERATION: 'Створення матеріалів', ASSETS_READY: 'Матеріали готові',
   VIDEO_GENERATION: 'Створення відео', VIDEO_READY: 'Відео готове', ASSEMBLY: 'Монтаж',
+  VIDEO_PENDING_APPROVAL: 'Відео очікує затвердження',
+  VIDEO_REVISION_REQUESTED: 'Запитані правки відео', VIDEO_APPROVED: 'Відео затверджене',
+  VIDEO_FAILED: 'Помилка відео',
   PENDING_APPROVAL: 'Очікує затвердження', READY: 'Готове', PUBLISHING: 'Публікація',
   PUBLISHED: 'Опубліковано', FAILED: 'Помилка', PAUSED: 'Призупинено', CANCELLED: 'Скасовано',
   ONLINE: 'У мережі', FREE: 'Готовий', BUSY: 'Зайнятий', DRAINING: 'Завершує роботу',
@@ -70,6 +73,9 @@ export const JOB_ACTION_STATES: Record<string, readonly string[]> = {
   regenerate: ['READY', 'ASSETS_READY', 'VIDEO_READY', 'SCRIPT_FAILED', 'STORYBOARD_FAILED'],
   cancel: [...JOB_STATUS_GROUPS.active, ...JOB_STATUS_GROUPS.queued, ...JOB_STATUS_GROUPS.waiting, 'SCRIPT_READY', 'SCRIPT_APPROVED', 'STORYBOARD_APPROVED', 'ASSETS_READY', 'VIDEO_READY'],
   approve: ['READY', 'PENDING_APPROVAL', 'SCRIPT_PENDING_APPROVAL', 'STORYBOARD_PENDING_APPROVAL'],
+  video_approve: ['VIDEO_PENDING_APPROVAL'],
+  video_revision: ['VIDEO_PENDING_APPROVAL'],
+  video_regenerate: ['VIDEO_REVISION_REQUESTED'],
   publish: ['READY', 'FAILED'],
   delete: ['NEW', 'PAUSED', 'READY', 'FAILED', 'CANCELLED', 'PUBLISHED', 'STORYBOARD_REJECTED', 'STORYBOARD_FAILED', 'SCRIPT_FAILED', 'SCRIPT_REVISION_REQUESTED'],
 };
