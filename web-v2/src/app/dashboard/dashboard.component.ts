@@ -160,7 +160,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
         </div>
 
         <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-table-section">
-          <h3 class="text-lg font-semibold text-slate-900 mb-4">Workers</h3>
+          <h3 class="text-lg font-semibold text-slate-900 mb-4">Воркери</h3>
           @if (workers.length > 0) {
             <div class="overflow-x-auto">
               <table class="w-full text-sm text-left">

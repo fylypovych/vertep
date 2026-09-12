@@ -1,5 +1,19 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.54
+- `i.0.0.0.1` (Issue #4): генерацію сценарію винесено з CORE на Text Worker. `core/pipeline.py:generate_script()` тепер ставить `script`-задачу через `_enqueue_script_task()` у `core/api/job_helpers.py`, а виконання LLM відбувається у `execute_script()` у `worker/role_executor.py` (Ollama) через штатний task-result contract.
+- Додано lifecycle сценарію в CORE: `SCRIPT_QUEUED → SCRIPT_GENERATING → SCRIPT_PENDING_APPROVAL → SCRIPT_APPROVED`, обробка результату у `_handle_script_result()` (успіх → нормалізація + approval; невдача → retry до `max_retries`, далі `SCRIPT_FAILED`).
+- Обробка worker loss/timeout/cancellation для script-задачі: heartbeat timeout ⇒ `task_queue.release` + `prepare_job_safe` requeue; cancel ⇒ `request_cancel` + `discard` + очищення `script_task_id`.
+- Оновлено модель `Job` (`script_task_id`, `script_attempt`, `script_error`; замість застарілих revision-chat полів), `regenerate_script`/revision-loop, `prepare_job`. Поле `publish_task_ids`/`publish_attempt`/`publish_error` для Publisher-задач.
+- Publisher Worker: `execute_publisher()` у `worker/role_executor.py` тепер запускає платформові адаптери напряму (`LIVE_PUBLISHERS`) або `PUBLISHER_MOCK`; повертає `publication_receipt`-артефакт.
+- YouTube publisher: додано `_TokenProvider` із прозорим refresh OAuth-токена при 401 (refresh token/client id/secret з env або integration secret store); розширено `INTEGRATION_SECRET_NAMES` (`youtube_refresh_token`, `youtube_client_id`).
+- Додано CORE-side fallback публікації окремої платформи (`_do_publish_single`) та `/api/settings` integrations returns publisher provider matrix через `provider_matrix()`.
+- `i.0.0.0.28` (Issue #30): Web UI navigation/localization/accessibility/responsive. Уніфіковано термінологію навігації («Вузли»/«Вузол») у sidebar, header `PAGE_TITLES` та `app.routes.ts`; прибрано сирий `Workers` у dashboard.
+- Завершено header route metadata для всіх роутів (queue, published, workflows, brands, operations, alerts, logs, health) з `data-testid` для E2E-перевірки; `data-testid` додано в sidebar nav та publication/token/approve/publish елементи.
+- Додано browser E2E: header/sidebar metadata збігається з URL, localization scan (без raw English-міток), collapsed sidebar з icons/tooltips без overflow, loading state резолвиться в контент/error.
+- `.github/workflows/browser-e2e.yml`: піднято rate limit для smoke-тестів.
+- Оновлено/додано тести: `test_browser_e2e.py`, `test_features.py`, `test_api.py`, `test_role_executor.py`, `test_voice_pipeline.py`, `test_image_storyboard_e2e.py`, `test_publisher_live_adapters.py`, новий `tests/test_publish_task_helpers.py`.
+## ПРАВИЛЬНА НАЗВА: 0.0.1.53
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.53
 - Реалізовано TTS-пайплайн на Voice Worker (Issue `i.0.0.0.6`): character voice config (provider/voice/language/model/speed) потрапляє у диспетчеризовану voice-задачу через `_tts_task_for()` у `core/api/job_helpers.py`.
 - Voice Worker через `execute_role_task` (нові `_resolve_voice_config()` та `synthesize_voice` у `worker/role_executor.py`) генерує реальний audio-артефакт із верифікованим `audio_contract/v1` (provider/voice/language/model/engine/mime_type/size/sha256/text_sha256/duration).

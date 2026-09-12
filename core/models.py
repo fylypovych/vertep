@@ -318,10 +318,12 @@ class Job(BaseModel):
     image_storyboard_task_versions: dict[str, dict[str, int]] = Field(default_factory=dict)
     image_storyboard_error: str | None = None
     storyboard_task_id: str | None = None
-    script_revision_chat_id: str | None = None
-    script_revision_pending: bool = False
-    video_revision_chat_id: str | None = None
-    video_revision_pending: bool = False
+    script_task_id: str | None = None
+    script_attempt: int = 0
+    script_error: str | None = None
+    publish_task_ids: dict[str, str] = Field(default_factory=dict)
+    publish_attempt: int = 0
+    publish_error: str | None = None
 
 class WorkerHeartbeat(BaseModel):
     node_name: str

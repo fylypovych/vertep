@@ -10,8 +10,16 @@ import { PolicyService, UserRole, SystemMode } from '../core/services/policy.ser
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '':           { title: 'Дашборд',      subtitle: 'Огляд системи Vertep' },
   'jobs':       { title: 'Завдання',      subtitle: 'Управління завданнями' },
-  'workers':    { title: 'Воркери',       subtitle: 'Вузли та їх стан' },
+  'queue':      { title: 'Черга',         subtitle: 'Черга виконання' },
+  'published':  { title: 'Опубліковане',  subtitle: 'Опублікований контент' },
+  'workers':    { title: 'Вузли',         subtitle: 'Вузли та їх стан' },
   'characters': { title: 'Персонажі',     subtitle: 'Персонажі контенту' },
+  'workflows':  { title: 'Сценарії',      subtitle: 'Сценарії обробки' },
+  'brands':     { title: 'Бренди',        subtitle: 'Бренди та канали' },
+  'operations': { title: 'Операції',      subtitle: 'Операції системи' },
+  'alerts':     { title: 'Алерти',        subtitle: 'Попередження системи' },
+  'logs':       { title: 'Журнали',       subtitle: 'Журнали подій' },
+  'health':     { title: 'Стан системи',  subtitle: 'Діагностика системи' },
   'settings':   { title: 'Налаштування',  subtitle: 'Системні налаштування' },
   'profile':    { title: 'Профіль',       subtitle: 'Профіль користувача' },
 };

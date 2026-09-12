@@ -34,7 +34,7 @@ import { SystemRole, SystemRolesResponse } from '../../core/models';
             {{ saveMessage() }}
           </div>
         }
-        <button (click)="saveRoles()" [disabled]="saving()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
+        <button (click)="saveRoles()" [disabled]="saving()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50" data-testid="roles-save-button">
           {{ saving() ? 'Збереження...' : 'Зберегти ролі' }}
         </button>
       }

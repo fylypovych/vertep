@@ -60,7 +60,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                 <button (click)="confirmCancel()" [disabled]="actionLoading() === 'cancel'" class="px-3 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 text-sm font-medium disabled:opacity-50">Скасувати</button>
               }
               @if (canApprove()) {
-                <button (click)="approveJob()" [disabled]="actionLoading() === 'approve'" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити</button>
+                <button (click)="approveJob()" [disabled]="actionLoading() === 'approve'" data-testid="approve-final-button" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити</button>
               }
               @if (canReviewApproval()) {
                 <button (click)="requestRevision()" [disabled]="!!actionLoading()" data-testid="revision-job-button" class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">Запросити правки</button>
@@ -422,7 +422,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                    <input type="checkbox" id="approve-before-publish" [(ngModel)]="approveBeforePublish">
                    <label for="approve-before-publish" class="text-sm text-slate-700">Схвалювати перед публікацією</label>
                  </div>
-                 <button (click)="publishJob()" [disabled]="actionLoading() === 'publish'" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">
+                 <button (click)="publishJob()" [disabled]="actionLoading() === 'publish'" data-testid="publish-confirm-button" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">
                    {{ actionLoading() === 'publish' ? 'Публікація...' : 'Опублікувати' }}
                  </button>
                </div>
@@ -432,7 +432,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
            @if (hasPublicationResults()) {
              <div class="mt-6">
                <h4 class="text-sm font-medium text-slate-900 mb-3">Результати публікації</h4>
-               <div class="space-y-2">
+               <div class="space-y-2" data-testid="publication-results">
                  @for (result of publicationResults(); track result.channel) {
                    <div class="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
                      <div>

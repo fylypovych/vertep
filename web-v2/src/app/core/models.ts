@@ -360,6 +360,7 @@ export interface SecretStatus {
 export interface IntegrationStatus {
   ollama: { status: string; http_status?: number; error?: string };
   comfyui: { status: string; http_status?: number; error?: string };
+  publisher?: Record<string, { configured: boolean }>;
 }
 
 export interface ModelInfo {

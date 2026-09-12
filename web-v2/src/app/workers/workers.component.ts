@@ -142,7 +142,7 @@ import { EmptyStateComponent } from '../shared/empty-state.component';
         } @else {
           <div class="space-y-3">
             <p class="text-sm text-slate-700">Використовуйте ці дані для реєстрації вузла:</p>
-            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1">
+            <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1" data-testid="token-display">
               <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
               <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at | vertepDate }}</p>
               <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>

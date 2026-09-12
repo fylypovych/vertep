@@ -4,6 +4,8 @@ import base64
 import hashlib
 import json
 import os
+import time as _time
+import uuid
 
 import httpx
 from adapters.providers import providers
@@ -48,6 +50,37 @@ def execute_text(task: dict) -> list[dict]:
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("Ollama returned no generated text")
     return [_artifact("response.txt", "text", text.encode("utf-8"))]
+
+
+def execute_script(task: dict) -> list[dict]:
+    """Generate a video script on the Text Worker via Ollama.
+
+    Mirrors the contract of ``core.script_agent.ScriptAgent.generate_script``
+    but runs on the worker so CORE never performs LLM inference.  In
+    ``DEMO_MODE`` a deterministic demo script is returned without any network
+    call (used by local fallback / tests).
+    """
+    from core.script_prompt import build_script_prompt
+    from core.script_schema import normalize_script
+
+    if os.getenv("DEMO_MODE", "true").lower() == "true":
+        from core.script_agent import ScriptAgent
+        script = ScriptAgent().generate_script(task["topic"], task.get("system_prompt", ""), task.get("character"))
+        return [_artifact("script.json", "script", json.dumps(script, ensure_ascii=False).encode("utf-8"))]
+
+    endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/generate"
+    model = os.getenv("OLLAMA_SCRIPT_MODEL") or os.getenv("OLLAMA_MODEL", "llama3.2")
+    prompt = task.get("prompt") or build_script_prompt(task["topic"], task.get("system_prompt", ""), task.get("character"))
+    payload = {"model": model, "prompt": prompt, "stream": False, "format": "json"}
+    timeout = int(task.get("timeout", os.getenv("OLLAMA_SCRIPT_TIMEOUT", "300")))
+    response = httpx.post(endpoint, json=payload, timeout=timeout)
+    response.raise_for_status()
+    raw = response.json().get("response", "")
+    if not raw:
+        raise RuntimeError("Ollama returned empty response for script generation")
+    data = json.loads(raw)
+    script = normalize_script(data, task["topic"])
+    return [_artifact("script.json", "script", json.dumps(script, ensure_ascii=False).encode("utf-8"))]
 
 
 def execute_storyboard(task: dict) -> list[dict]:
@@ -237,14 +270,43 @@ def execute_voice(task: dict) -> list[dict]:
 
 
 def execute_publisher(task: dict) -> list[dict]:
-    endpoint = os.getenv("PUBLISHER_URL", "http://publisher-worker:8091").rstrip("/") + "/publish"
-    response = httpx.post(endpoint, json={"job_id": task["job_id"], "payload": task}, timeout=180)
-    response.raise_for_status()
-    receipt = response.json()
-    if not isinstance(receipt, dict) or not receipt.get("publication_id"):
-        raise RuntimeError("Publisher returned no publication receipt")
+    """Publish a video to a platform via the Publisher Worker.
+
+    Runs the platform adapter directly (YoutubePublisher, TikTokPublisher, etc.)
+    using ``PUBLISHER_MOCK`` for sandbox mode.  Returns a ``publication_receipt``
+    artifact carrying platform, remote_id, url, timestamp, status/error.
+    """
+    import time as _time
+
+    channel = task["channel"]
+    video_path = task.get("video_path", "")
+    metadata = task.get("metadata", {})
+    if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
+        receipt = {
+            "channel": channel, "status": "PUBLISHED",
+            "id": f"mock-{uuid.uuid4().hex[:12]}",
+            "remote_id": f"mock-{uuid.uuid4().hex[:12]}",
+            "url": f"https://example.invalid/{channel}/mock-{uuid.uuid4().hex[:8]}",
+            "timestamp": _time.time(),
+            "upload": {"mode": "mock", "bytes": os.path.getsize(video_path) if video_path and os.path.isfile(video_path) else 0},
+        }
+        return [_artifact("publication.json", "publication_receipt",
+                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+    from publishers import LIVE_PUBLISHERS
+    publisher = LIVE_PUBLISHERS.get(channel)
+    if publisher is None or not publisher.configured():
+        return [_artifact("publication.json", "publication_receipt",
+                          json.dumps({"channel": channel, "status": "NOT_CONFIGURED",
+                                        "error": f"{publisher.credential_env if publisher else 'unknown'} is missing"},
+                                       sort_keys=True).encode("utf-8"))]
+    try:
+        result = publisher.publish(video_path, metadata)
+    except Exception as error:
+        result = {"channel": channel, "status": "FAILED", "error": str(error)}
+    result.setdefault("channel", channel)
+    result.setdefault("timestamp", _time.time())
     return [_artifact("publication.json", "publication_receipt",
-                      json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+                      json.dumps(result, sort_keys=True).encode("utf-8"))]
 
 
 def execute_backup(task: dict) -> list[dict]:
@@ -302,11 +364,11 @@ def execute_video(task: dict) -> list[dict]:
     return artifacts
 
 
-EXECUTORS = {"text": execute_text, "voice": execute_voice,
+EXECUTORS = {"text": execute_text, "script": execute_script, "voice": execute_voice,
              "publish": execute_publisher, "backup": execute_backup,
              "image": execute_image, "video": execute_video,
              "storyboard": execute_storyboard}
-ROLE_TASKS = {"text": {"text", "storyboard"}, "voice": {"voice"}, "publisher": {"publish"},
+ROLE_TASKS = {"text": {"text", "script", "storyboard"}, "voice": {"voice"}, "publisher": {"publish"},
               "backup": {"backup"}, "gpu": {"image", "video"}}
 
 

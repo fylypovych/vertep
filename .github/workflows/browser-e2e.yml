@@ -38,6 +38,7 @@ jobs:
         run: |
           cp .env.example .env
           printf '\nNODE_NAME=ci-worker\nCORE_ADDRESS=http://127.0.0.1:8080\nPOSTGRES_PASSWORD=ci-only\n' >> .env
+          printf 'RATE_LIMIT_PER_MINUTE=100000\nSETUP_RATE_LIMIT_PER_10_MINUTES=100000\n' >> .env
       - name: Start CORE for smoke tests
         run: |
           python -m uvicorn core.app:app --host 127.0.0.1 --port 8080 &

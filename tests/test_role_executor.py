@@ -25,20 +25,24 @@ def test_text_executor_returns_utf8_artifact(monkeypatch):
     assert base64.b64decode(artifact["data_base64"]).decode() == "Вітаю"
 
 
-def test_voice_and_publisher_require_valid_runtime_receipts(monkeypatch):
-    audio = b"RIFF\x04\x00\x00\x00WAVE"
-    monkeypatch.setattr(role_executor.httpx, "post", lambda *args, **kwargs:
-                        Response({"audio_base64": base64.b64encode(audio).decode()}))
-    [artifact] = role_executor.execute_role_task("voice", {"task": "voice", "topic": "hello"})
-    assert base64.b64decode(artifact["data_base64"]) == audio
+def test_publisher_executor_returns_receipt(monkeypatch):
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    [artifact] = role_executor.execute_role_task("publisher", {"task": "publish", "channel": "youtube",
+        "topic": "x", "job_id": "j", "video_path": "", "metadata": {}})
+    assert artifact["filename"] == "publication.json"
+    assert artifact["kind"] == "publication_receipt"
+    import json as _json
+    receipt = _json.loads(base64.b64decode(artifact["data_base64"]).decode("utf-8"))
+    assert receipt["channel"] == "youtube"
+    assert receipt["status"] == "PUBLISHED"
 
-    monkeypatch.setattr(role_executor.httpx, "post", lambda *args, **kwargs: Response({}))
-    try:
-        role_executor.execute_role_task("publisher", {"task": "publish", "topic": "x", "job_id": "j"})
-    except RuntimeError as error:
-        assert "publication receipt" in str(error)
-    else:
-        raise AssertionError("invalid publisher receipt was accepted")
+
+def test_publisher_executor_rejects_unconfigured_channel(monkeypatch):
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    [artifact] = role_executor.execute_role_task("publisher", {"task": "publish", "channel": "youtube",
+        "topic": "x", "job_id": "j", "video_path": "", "metadata": {}})
+    receipt = base64.b64decode(artifact["data_base64"]).decode("utf-8")
+    assert "NOT_CONFIGURED" in receipt
 
 
 def test_voice_worker_emits_verifiable_audio_contract(monkeypatch):
@@ -79,6 +83,16 @@ def test_voice_worker_rejects_disabled_provider_without_calling_runtime(monkeypa
     else:
         raise AssertionError("disabled provider was accepted")
     assert called["post"] is False
+
+
+def test_script_executor_returns_script_artifact():
+    import json
+    [artifact] = role_executor.execute_role_task("text", {"task": "script", "topic": "тест",
+                       "system_prompt": "", "character": {}})
+    assert artifact["filename"] == "script.json"
+    assert artifact["kind"] == "script"
+    data = json.loads(base64.b64decode(artifact["data_base64"]).decode("utf-8"))
+    assert "title" in data and "scenes" in data
 
 
 def test_role_cannot_execute_another_roles_task():

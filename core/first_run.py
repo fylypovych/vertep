@@ -22,6 +22,7 @@ INTEGRATION_SECRET_NAMES = frozenset({
     "smtp_password", "telegram_bot_token", "youtube_client_secret",
     "facebook_access_token", "tiktok_client_secret", "external_ai_api_key",
     "license_key", "ssh_private_key",
+    "youtube_refresh_token", "youtube_client_id",
 })
 
 

@@ -2,6 +2,8 @@ import base64, time
 from fastapi.testclient import TestClient
 from core.app import app, store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
+from worker import role_executor
+from core.script_agent import ScriptAgent
 
 def _mock_queue(self, job, revision=None):
     tgt = getattr(self, "store", store)
@@ -23,9 +25,18 @@ def test_image_storyboard_e2e(monkeypatch):
     monkeypatch.setattr(Svc, "queue", _mock_queue)
     client=TestClient(app)
     client.post("/api/workers/heartbeat", json={"node_name":"gpu-worker","vram_mb":8192,"capabilities":["image_generation"],"supported_tasks":["image"]})
+    client.post("/api/workers/heartbeat", json={"node_name":"text-worker","vram_mb":0,"role":"text","capabilities":["text_generation"],"supported_tasks":["text"]})
+    monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
+        "title": topic, "scenes": [{"prompt": topic, "voiceover": "", "duration": 1}]})
     job_id=client.post("/api/jobs", json={"topic":"E2E storyboard","character_id":"did_samogon"}).json()["job_id"]
     for _ in range(100):
         j=client.get(f"/api/jobs/{job_id}").json()
+        if j["status"]=="SCRIPT_QUEUED":
+            resp=client.post("/api/tasks/claim", json={"node_name":"text-worker","vram_mb":0})
+            task=resp.json().get("task")
+            if task and task.get("task")=="script":
+                [artifact]=role_executor.execute_role_task("text", task)
+                client.post("/api/tasks/result", json={"job_id":job_id,"task_id":task["task_id"],"node_name":"text-worker","success":True,"artifacts":[artifact]})
         if j["status"]=="SCRIPT_PENDING_APPROVAL": break
         time.sleep(0.02)
     assert j["status"]=="SCRIPT_PENDING_APPROVAL"

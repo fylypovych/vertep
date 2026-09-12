@@ -274,35 +274,40 @@ def publish_job(job_id: str, channels: list[str] | None = None):
     unknown = [channel for channel in targets if channel not in publisher.available_channels()]
     if unknown:
         raise HTTPException(400, f"Unknown publishers: {', '.join(unknown)}")
-    metadata = (job.script or {}) | {"job_id": job.job_id, "character_id": job.character_id,
-                                     "brand_id": job.brand_id}
-    results = {}
-    attempts = max(1, int(os.getenv("PUBLISH_MAX_RETRIES", str(job.max_retries))))
-    for attempt in range(1, attempts + 1):
-        transition_stage(job, StageName.PUBLISH, StageStatus.RUNNING)
-        store.update(job, JobStatus.PUBLISHING, f"PUBLISHING {attempt}/{attempts}: {', '.join(targets)}")
+    from .job_helpers import _enqueue_publish_task, _has_publisher_worker, _publish_local
+    has_publisher = _has_publisher_worker(store)
+    transition_stage(job, StageName.PUBLISH, StageStatus.RUNNING)
+    job.publish_attempt = 0
+    job.publish_error = None
+    local_fallback = os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true"
+    if not has_publisher and local_fallback:
         results = {}
         for channel in targets:
-            try:
-                results[channel] = publisher.publish(channel, job.output_path or "", metadata)
-            except Exception as error:
-                from ..state import logger
-                logger.exception("Publisher failed", extra={"job_id": job.job_id, "action": channel})
-                results[channel] = {"channel": channel, "status": "FAILED", "error": str(error)}
-        failed = [result for result in results.values() if result.get("status") != "PUBLISHED"]
-        if not failed:
+            results[channel] = _publish_local(store, job, channel)
+            receipt = job.publication_results.get(channel, results[channel])
+            if receipt.get("status") == "PUBLISHED":
+                job.published_to.append(channel)
+        all_published = all(results[ch].get("status") == "PUBLISHED" for ch in targets)
+        if all_published:
             transition_stage(job, StageName.PUBLISH, StageStatus.READY)
-            break
-        error = "; ".join(str(result.get("error") or result.get("status")) for result in failed)
+            return store.update(job, JobStatus.PUBLISHED, "PUBLISHED")
+        not_configured = any(results[ch].get("status") == "NOT_CONFIGURED" for ch in targets)
+        if not_configured:
+            transition_stage(job, StageName.PUBLISH, StageStatus.FAILED, "NOT_CONFIGURED")
+            return store.update(job, JobStatus.FAILED, "PUBLISHING FAILED OR NOT CONFIGURED")
+        error = "; ".join(f"{ch}: {results[ch].get('error', results[ch].get('status'))}" for ch in targets)
         transition_stage(job, StageName.PUBLISH, StageStatus.FAILED, error)
-        if any(result.get("status") == "NOT_CONFIGURED" for result in failed):
-            break
-        store.event(job, f"PUBLISH RETRY {attempt}/{attempts}: {error}")
-    job.publication_results.update(results)
-    job.published_to = [channel for channel, result in results.items() if result["status"] == "PUBLISHED"]
-    if len(job.published_to) == len(targets):
-        return store.update(job, JobStatus.PUBLISHED, "PUBLISHED")
-    return store.update(job, JobStatus.FAILED, "PUBLISHING FAILED OR NOT CONFIGURED")
+        job.publish_error = error
+        return store.update(job, JobStatus.FAILED, "PUBLISHING FAILED")
+    queued_tasks = []
+    for channel in targets:
+        queued = _enqueue_publish_task(store, job, channel)
+        if queued is not None:
+            queued_tasks.append((channel, queued["task_id"]))
+    if not queued_tasks:
+        return store.update(job, JobStatus.PUBLISHED, "PUBLISHED (no channels)")
+    store.update(job, JobStatus.PUBLISHING, f"PUBLISHING {len(queued_tasks)} channel(s) via Publisher Worker")
+    return job
 
 
 @router.get("/jobs/{job_id}/final/video.mp4")

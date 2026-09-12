@@ -1,6 +1,7 @@
 from unittest.mock import patch, MagicMock
 
 import time
+import os
 import base64
 import json
 from pathlib import Path
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 from core.app import app, store
 from core.dispatcher import available_worker
 from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, utc_now
+from worker import role_executor
 
 
 def _mock_storyboard_queue(self, job, revision=None):
@@ -48,14 +50,39 @@ def _mock_storyboard_queue(self, job, revision=None):
 import pytest
 from core.storyboard import StoryboardService as _StoryboardService
 
+
+def _complete_script_task(client, job_id, node_name="text-worker"):
+    """Register a text worker, claim/execute the script task, and submit the result."""
+    client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "vram_mb": 0,
+        "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+    })
+    task = None
+    for _ in range(100):
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        task = resp.json().get("task")
+        if task and task.get("task") == "script" and task.get("job_id") == job_id:
+            break
+        time.sleep(0.01)
+    assert task and task.get("task") == "script"
+    [artifact] = role_executor.execute_role_task("text", task)
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]})
+    assert response.status_code == 200
+    return artifact
+
 @pytest.fixture(autouse=True)
 def _mock_storyboard_for_api(monkeypatch):
     monkeypatch.setattr(_StoryboardService, "queue", _mock_storyboard_queue)
 
 
 def _approve_script_and_storyboard(client, job_id):
+    local_fallback = os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true"
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if not local_fallback and job["status"] == "SCRIPT_QUEUED":
+            _complete_script_task(client, job_id)
         if job["status"] == "SCRIPT_PENDING_APPROVAL":
             break
         time.sleep(0.025)
@@ -108,6 +135,9 @@ def test_health_and_job_flow():
             break
         time.sleep(0.025)
     assert job["status"] == "READY"
+    video = client.get(f"/jobs/{job_id}/final/video.mp4")
+    assert video.status_code == 200
+    assert b"ftyp" in video.content[:32]
     video = client.get(f"/jobs/{job_id}/final/video.mp4")
     assert video.status_code == 200
     assert b"ftyp" in video.content[:32]
@@ -456,6 +486,8 @@ def test_distributed_worker_result(monkeypatch):
     job_id = created["job_id"]
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "SCRIPT_QUEUED":
+            _complete_script_task(client, job_id)
         if job["status"] == "SCRIPT_PENDING_APPROVAL":
             break
         time.sleep(0.025)

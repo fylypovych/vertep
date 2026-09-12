@@ -44,7 +44,7 @@ interface NavItem {
       </div>
 
       <!-- Navigation -->
-      <nav class="flex-1 overflow-y-auto overflow-x-hidden py-4 px-2 space-y-1">
+      <nav class="flex-1 overflow-y-auto overflow-x-hidden py-4 px-2 space-y-1" data-testid="sidebar-nav">
         @for (item of visibleNavItems(); track item.path) {
           <a [routerLink]="item.path"
              [queryParams]="item.queryParams"

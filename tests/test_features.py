@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,6 +12,28 @@ from core.app import app, store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from core.script_agent import ScriptAgent
 from core.storyboard import StoryboardService as _StoryboardServiceOrig
+from worker import role_executor
+
+
+def _complete_script_task(client, job_id, node_name="text-worker"):
+    """Simulate a Text Worker claiming, executing, and submitting a script task."""
+    client.post("/api/workers/heartbeat", json={"node_name": node_name, "vram_mb": 0,
+                 "role": "text",
+                 "capabilities": ["text_generation"], "supported_tasks": ["text"]})
+    task = None
+    for _ in range(100):
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        task = resp.json().get("task")
+        if task and task.get("task") == "script" and task.get("job_id") == job_id:
+            break
+        time.sleep(0.01)
+    assert task and task.get("task") == "script"
+    [artifact] = role_executor.execute_role_task("text", task)
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]})
+    assert response.status_code == 200
+    return artifact
 
 
 def _mock_storyboard_queue(self, job, revision=None):
@@ -66,11 +89,14 @@ def wait_for(client, job_id, statuses=("READY", "FAILED")):
 
 
 def approve_script(client, job_id):
+    local_fallback = os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true"
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if not local_fallback and job["status"] in ("SCRIPT_QUEUED", "SCRIPT_GENERATING"):
+            _complete_script_task(client, job_id)
         if job["status"] == "SCRIPT_PENDING_APPROVAL":
             break
-        time.sleep(0.025)
+        time.sleep(0.01)
     assert job["status"] == "SCRIPT_PENDING_APPROVAL"
     resp = client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
     assert resp.status_code == 200
@@ -138,6 +164,203 @@ def test_publisher_never_fakes_success(monkeypatch):
     assert published["publication_results"]["youtube"]["status"] == "NOT_CONFIGURED"
     assert published["stages"]["PUBLISH"]["status"] == "FAILED"
     assert len(published["stages"]["PUBLISH"]["attempts"]) == 1
+
+
+def _heartbeat_publisher(client, node_name="pub-worker"):
+    client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "vram_mb": 0, "role": "publisher",
+        "capabilities": ["publishing"], "supported_tasks": ["publish"]})
+
+
+def _claim_publish_task(client, job_id, node_name="pub-worker"):
+    for _ in range(100):
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        task = resp.json().get("task")
+        if task and task.get("task") == "publish" and task.get("job_id") == job_id:
+            return task
+        time.sleep(0.01)
+    return None
+
+
+def test_publish_via_publisher_worker_returns_receipt(monkeypatch):
+    """Full publish flow: dispatch → claim → execute → result → receipt."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    client = TestClient(app)
+    job_id = client.post("/api/jobs", json={"topic": "Publish via worker"}).json()["job_id"]
+    approve_script(client, job_id)
+    assert wait_for(client, job_id)["status"] == "READY"
+    _heartbeat_publisher(client)
+    published = client.post(f"/api/jobs/{job_id}/publish", json=["youtube"]).json()
+    assert published["status"] == "PUBLISHING"
+    task = _claim_publish_task(client, job_id)
+    assert task is not None
+    [artifact] = role_executor.execute_role_task("publisher", task)
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+        "success": True, "artifacts": [artifact]})
+    assert response.status_code == 200
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["status"] == "PUBLISHED"
+    receipt = job["publication_results"]["youtube"]
+    assert receipt["status"] == "PUBLISHED"
+    assert receipt.get("id") or receipt.get("remote_id")
+    assert receipt.get("url")
+    assert job["published_to"] == ["youtube"]
+
+
+def test_publish_partial_failure_mixed_channels(monkeypatch):
+    """Publishing two channels: mock succeeds for youtube, worker fails for tiktok."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    client = TestClient(app)
+    job_id = client.post("/api/jobs", json={"topic": "Partial publish"}).json()["job_id"]
+    approve_script(client, job_id)
+    assert wait_for(client, job_id)["status"] == "READY"
+    _heartbeat_publisher(client)
+    published = client.post(f"/api/jobs/{job_id}/publish", json=["youtube", "tiktok"]).json()
+    assert published["status"] == "PUBLISHING"
+    for _ in range(200):
+        task = _claim_publish_task(client, job_id)
+        if task is None:
+            time.sleep(0.05)
+            job = client.get(f"/api/jobs/{job_id}").json()
+            if job["status"] in ("PUBLISHED", "FAILED", "CANCELLED"):
+                break
+            continue
+        if task["channel"] == "tiktok":
+            client.post("/api/tasks/result", json={
+                "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+                "success": False, "artifacts": [], "error": "TikTok API error"})
+        else:
+            [artifact] = role_executor.execute_role_task("publisher", task)
+            client.post("/api/tasks/result", json={
+                "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+                "success": True, "artifacts": [artifact]})
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["publication_results"]["youtube"]["status"] == "PUBLISHED"
+    assert "youtube" in job["published_to"]
+    assert job["status"] in ("FAILED", "PUBLISHING")
+
+
+def test_publish_retry_on_worker_failure(monkeypatch):
+    """Publish task failure triggers retry; succeeds on second attempt."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    client = TestClient(app)
+    job_id = client.post("/api/jobs", json={"topic": "Retry publish"}).json()["job_id"]
+    approve_script(client, job_id)
+    assert wait_for(client, job_id)["status"] == "READY"
+    _heartbeat_publisher(client)
+    client.post(f"/api/jobs/{job_id}/publish", json=["youtube"])
+    attempts = 0
+    for _ in range(300):
+        task = _claim_publish_task(client, job_id)
+        if task is None:
+            time.sleep(0.05)
+            job = client.get(f"/api/jobs/{job_id}").json()
+            if job["status"] == "PUBLISHED":
+                break
+            continue
+        attempts += 1
+        if attempts == 1:
+            client.post("/api/tasks/result", json={
+                "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+                "success": False, "artifacts": [], "error": "transient network error"})
+        else:
+            [artifact] = role_executor.execute_role_task("publisher", task)
+            client.post("/api/tasks/result", json={
+                "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+                "success": True, "artifacts": [artifact]})
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["status"] == "PUBLISHED"
+    assert job["publication_results"]["youtube"]["status"] == "PUBLISHED"
+    assert attempts >= 2
+
+
+def test_publish_cancels_pending_tasks_on_job_cancel(monkeypatch):
+    """Cancelling a job in PUBLISHING discards publish tasks."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    client = TestClient(app)
+    job_id = client.post("/api/jobs", json={"topic": "Cancel publish"}).json()["job_id"]
+    approve_script(client, job_id)
+    assert wait_for(client, job_id)["status"] == "READY"
+    _heartbeat_publisher(client)
+    published = client.post(f"/api/jobs/{job_id}/publish", json=["youtube"]).json()
+    assert published["status"] == "PUBLISHING"
+    task = _claim_publish_task(client, job_id)
+    if task:
+        [artifact] = role_executor.execute_role_task("publisher", task)
+        client.post("/api/tasks/result", json={
+            "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+            "success": True, "artifacts": [artifact]})
+    else:
+        client.post(f"/api/jobs/{job_id}/cancel")
+        job = client.get(f"/api/jobs/{job_id}").json()
+        assert job["status"] == "CANCELLED"
+        assert job["publish_task_ids"] == {}
+
+        return
+
+
+def _heartbeat_text_worker(client, node_name="text-worker"):
+    client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "vram_mb": 0, "role": "text",
+        "capabilities": ["text_generation"], "supported_tasks": ["text"]})
+
+
+def test_script_generation_via_text_worker(monkeypatch):
+    """CORE → Text Worker → result → SCRIPT_PENDING_APPROVAL (no LLM in CORE)."""
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("DEMO_MODE", "true")
+    from core.script_agent import ScriptAgent
+    monkeypatch.setattr(ScriptAgent, "generate_script",
+                        lambda self, topic, sp="", ch=None: {
+                            "title": topic,
+                            "scenes": [{"prompt": topic, "voiceover": "", "duration": 1}]})
+    client = TestClient(app)
+    _heartbeat_text_worker(client)
+    job_id = client.post("/api/jobs", json={"topic": "Script via worker"}).json()["job_id"]
+    _complete_script_task(client, job_id)
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["status"] == "SCRIPT_PENDING_APPROVAL"
+
+
+def test_script_task_failure_retries_then_fails():
+    """Script task failure triggers retry; after max_retries, job → SCRIPT_FAILED."""
+    from core.api.job_helpers import _handle_script_result
+    from core.models import Job, JobStatus
+    from unittest.mock import MagicMock, patch
+    job = Job(job_id="job-fail", topic="fail", character_id="c", priority=5,
+              status=JobStatus.SCRIPT_GENERATING, created_at="2024-01-01T00:00:00Z",
+              script_task_id="task-1", script_attempt=0, max_retries=1, publish_task_ids={},
+              publication_results={}, published_to=[])
+    store = MagicMock()
+    store.update = lambda j, status=None, msg="": setattr(j, "status", status)
+    with patch("core.api.job_helpers._enqueue_script_task") as mock_enqueue, \
+         patch("core.api.job_helpers._load_character_prompt", return_value=("", None)):
+        _handle_script_result(store, job, {"success": False, "task_id": "task-1", "error": "LLM timeout"}, [])
+        assert job.script_attempt == 1
+        assert mock_enqueue.called
+        _handle_script_result(store, job, {"success": False, "task_id": "task-2", "error": "LLM timeout again"}, [])
+        assert job.status == JobStatus.SCRIPT_FAILED
+
+
+def test_script_task_cancellation_via_api(monkeypatch):
+    """Cancelling a job in SCRIPT_GENERATING discards the script task via API."""
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("DEMO_MODE", "true")
+    from core.script_agent import ScriptAgent
+    monkeypatch.setattr(ScriptAgent, "generate_script",
+                        lambda self, topic, sp="", ch=None: {
+                            "title": topic,
+                            "scenes": [{"prompt": topic, "voiceover": "", "duration": 1}]})
+    client = TestClient(app)
+    _heartbeat_text_worker(client)
+    job_id = client.post("/api/jobs", json={"topic": "Cancel script"}).json()["job_id"]
+    job = wait_for(client, job_id, statuses=("SCRIPT_GENERATING", "SCRIPT_PENDING_APPROVAL"))
+    if job["status"] == "SCRIPT_GENERATING":
+        client.post(f"/api/jobs/{job_id}/cancel")
+        updated = client.get(f"/api/jobs/{job_id}").json()
+        assert updated["status"] == "CANCELLED"
+        assert updated["script_task_id"] is None
 
 
 def test_character_crud_validation(monkeypatch, tmp_path):

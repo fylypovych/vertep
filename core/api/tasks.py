@@ -88,6 +88,45 @@ def claim_task(payload: TaskClaim, request: Request):
             store.event(job, f"{payload.node_name} STORYBOARD CLAIMED {task['task_id']}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
+        if task.get("task") == "script":
+            if job.status != JobStatus.SCRIPT_GENERATING or job.script_task_id != task.get("task_id"):
+                task_queue.ack(task["task_id"])
+                continue
+            worker = _select_worker([worker_data], job, task_type="text", min_vram_mb=0) if job else None
+            if not worker:
+                held_tasks.append(task["task_id"])
+                continue
+            for held_task_id in held_tasks:
+                task_queue.release(held_task_id)
+            held_tasks.clear()
+            store.workers[payload.node_name] = worker_data
+            store.workers[payload.node_name]["status"] = "BUSY"
+            store.workers[payload.node_name]["current_job"] = job.job_id
+            store.workers[payload.node_name]["current_task"] = task["task_id"]
+            store.save_worker(store.workers[payload.node_name])
+            store.event(job, f"{payload.node_name} SCRIPT CLAIMED {task['task_id']}")
+            store.repository.record_task(task, "CLAIMED", payload.node_name)
+            return {"task": task}
+        if task.get("task") == "publish":
+            channel = task.get("channel")
+            if job.status != JobStatus.PUBLISHING or job.publish_task_ids.get(task.get("task_id")) != channel:
+                task_queue.ack(task["task_id"])
+                continue
+            worker = _select_worker([worker_data], job, task_type="publish", min_vram_mb=0) if job else None
+            if not worker:
+                held_tasks.append(task["task_id"])
+                continue
+            for held_task_id in held_tasks:
+                task_queue.release(held_task_id)
+            held_tasks.clear()
+            store.workers[payload.node_name] = worker_data
+            store.workers[payload.node_name]["status"] = "BUSY"
+            store.workers[payload.node_name]["current_job"] = job.job_id
+            store.workers[payload.node_name]["current_task"] = task["task_id"]
+            store.save_worker(store.workers[payload.node_name])
+            store.event(job, f"{payload.node_name} PUBLISH CLAIMED {task['task_id']} for {channel}")
+            store.repository.record_task(task, "CLAIMED", payload.node_name)
+            return {"task": task}
         scene = _scene_for_task(job, task.get("task_id", ""))
         is_tts = job.status == JobStatus.TTS_GENERATING and task.get("task") == "voice"
         effective_task_type = task.get("task") if is_tts else job.task_type
@@ -234,6 +273,67 @@ def task_result(result: TaskResult, request: Request):
         store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
         if not result.success:
             _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, result.error)
+        return job
+    if job.script_task_id == result.task_id:
+        from ..api.job_helpers import _handle_script_result
+        worker = store.workers.get(result.node_name)
+        if worker:
+            desired_status = worker.get("desired_state")
+            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            store.save_worker(worker)
+        try:
+            _handle_script_result(store, job, {"success": result.success, "task_id": result.task_id,
+                                               "error": result.error}, result.artifacts or [])
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(400, str(error)) from error
+        from ..state import task_queue as _tq2
+        _tq2.ack(result.task_id)
+        store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "script"},
+                                     "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
+        if not result.success:
+            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "script"}, result.error)
+        return job
+    if result.task_id in job.publish_task_ids:
+        from ..api.job_helpers import _handle_publish_result
+        worker = store.workers.get(result.node_name)
+        if worker:
+            desired_status = worker.get("desired_state")
+            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            store.save_worker(worker)
+        channel = job.publish_task_ids.get(result.task_id, "unknown")
+        try:
+            _handle_publish_result(store, job, {"success": result.success, "task_id": result.task_id,
+                                               "error": result.error}, result.artifacts or [], channel)
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(400, str(error)) from error
+        from ..state import task_queue as _tq2
+        _tq2.ack(result.task_id)
+        if result.success:
+            store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "publish",
+                                          "channel": channel}, "COMPLETED", result.node_name, result.error)
+        else:
+            store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "publish",
+                                          "channel": channel}, "FAILED", result.node_name, result.error)
+            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "publish",
+                              "channel": channel}, result.error)
+        remaining = list(job.publish_task_ids.keys())
+        if not remaining:
+            all_published = all(r.get("status") == "PUBLISHED" for r in job.publication_results.values())
+            not_configured = any(r.get("status") == "NOT_CONFIGURED" for r in job.publication_results.values())
+            failed = any(r.get("status") == "FAILED" for r in job.publication_results.values())
+            if all_published and job.publication_results:
+                transition_stage(job, StageName.PUBLISH, StageStatus.READY)
+                store.update(job, JobStatus.PUBLISHED, "PUBLISHED")
+            elif not_configured and not failed and not all_published:
+                transition_stage(job, StageName.PUBLISH, StageStatus.FAILED, "NOT CONFIGURED")
+                store.update(job, JobStatus.FAILED, "PUBLISHING FAILED OR NOT CONFIGURED")
+            elif failed:
+                transition_stage(job, StageName.PUBLISH, StageStatus.FAILED, job.publish_error or "publish failed")
+                store.update(job, JobStatus.FAILED, "PUBLISHING FAILED")
+            else:
+                store.event(job, f"PUBLISH: {len(job.publication_results)} channel(s) resolved, no pending tasks")
         return job
     is_tts = result.task_id in job.tts_active_task_ids
     if is_tts:

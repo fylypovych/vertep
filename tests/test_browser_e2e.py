@@ -58,6 +58,13 @@ def _mock_status(page, overrides=None):
     page.route("**/api/status", lambda route: route.fulfill(json=data))
 
 
+def _mock_session(page, role="admin"):
+    """Register /api/session so Auth/Admin guards pass deterministically in CI."""
+    page.route("**/api/session", lambda route: route.fulfill(json={
+        "authenticated": True, "user": "ci", "role": role,
+    }))
+
+
 def test_setup_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -78,6 +85,7 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.19",
@@ -190,6 +198,7 @@ def test_jobs_list_shows_empty_state_and_create_form():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs")
@@ -303,6 +312,7 @@ def test_settings_shows_user_friendly_system_info():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.19",
@@ -353,6 +363,7 @@ def test_settings_update_shows_correct_version():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.19",
@@ -518,7 +529,7 @@ def test_queue_page_loads():
         page.route("**/api/jobs**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/queue")
         expect(page.locator("[data-testid='queue-page']")).to_be_visible()
-        expect(page.locator("[data-testid='queue-page']")).to_contain_text("Черга завдань")
+        expect(page.locator("[data-testid='queue-page']")).to_contain_text("Виконання завдань")
         assert not errors, f"pageerror: {errors}"
         browser.close()
 
@@ -747,6 +758,7 @@ def test_settings_roles_shows_deployment_status():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page, {"update": {"current_version": "0.0.1.99", "state": "IDLE"}})
         page.route("**/api/system/roles", lambda route: route.fulfill(json={
             "node_role": "core", "active_roles": [],
@@ -763,6 +775,7 @@ def test_settings_roles_shows_deployment_status():
             page.route(pattern, lambda route: route.fulfill(json={}))
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
+        page.locator("button", has_text="Ролі").first.click()
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
         assert not errors, f"pageerror: {errors}"
         browser.close()
@@ -793,6 +806,7 @@ def test_script_approval_happy_path():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
 
         job = _script_job()
@@ -827,6 +841,7 @@ def test_script_revision_happy_path():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
 
         revised = None
@@ -856,6 +871,7 @@ def test_script_backend_error_shows_error_and_no_crash():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
 
         job = _script_job()
@@ -996,11 +1012,11 @@ def test_setup_wizard_navigates_all_steps():
         count = sections.count()
         assert count >= 7, f"Expected at least 7 wizard sections, got {count}"
         back_btn = page.locator("#back")
-        expect(back_btn).to_have_css("visibility: hidden")
+        expect(back_btn).to_have_css("visibility", "hidden")
         for _ in range(count - 1):
             page.locator("#next").click()
             page.wait_for_timeout(100)
-        expect(back_btn).to_have_css("visibility: visible")
+        expect(back_btn).to_have_css("visibility", "visible")
         page.locator("#back").click()
         page.wait_for_timeout(100)
         assert errors == [], f"pageerror: {errors}"
@@ -1015,14 +1031,14 @@ def test_setup_wizard_core_hides_connection_fields():
         _mock_setup(page)
         page.goto(f"{BASE_URL}/setup?token=ci")
         core_conn = page.locator("#coreConnection")
-        expect(core_conn).to_have_css("display: none")
+        expect(core_conn).to_have_css("display", "none")
         page.locator("#nodeRole").select_option("gpu")
         page.wait_for_timeout(100)
-        expect(core_conn).to_have_css("display: block")
+        expect(core_conn).to_have_css("display", "block")
         expect(page.locator("#coreUrl")).to_be_visible()
         page.locator("#nodeRole").select_option("core")
         page.wait_for_timeout(100)
-        expect(core_conn).to_have_css("display: none")
+        expect(core_conn).to_have_css("display", "none")
         browser.close()
 
 
@@ -1060,6 +1076,7 @@ def test_setup_wizard_health_check_displays_results():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         _mock_setup(page)
         page.route("**/api/setup/health", lambda route: route.fulfill(json={
             "ready": True, "checks": {"core": "OK", "postgresql": "OK", "redis": "OK"}
@@ -1070,7 +1087,7 @@ def test_setup_wizard_health_check_displays_results():
             page.locator("#next").click()
             page.wait_for_timeout(100)
         page.wait_for_timeout(500)
-        expect(page.locator("#health")).to_contain_text("postgresql")
+        expect(page.locator("#health")).to_contain_text("PostgreSQL")
         browser.close()
 
 
@@ -1081,10 +1098,10 @@ def test_setup_wizard_back_button_hidden_on_first_step():
         page = browser.new_page()
         _mock_setup(page)
         page.goto(f"{BASE_URL}/setup?token=ci")
-        expect(page.locator("#back")).to_have_css("visibility: hidden")
+        expect(page.locator("#back")).to_have_css("visibility", "hidden")
         page.locator("#next").click()
         page.wait_for_timeout(100)
-        expect(page.locator("#back")).to_have_css("visibility: visible")
+        expect(page.locator("#back")).to_have_css("visibility", "visible")
         browser.close()
 
 
@@ -1092,3 +1109,316 @@ def test_setup_wizard_password_minimum_length():
     """Password field has minlength=12 attribute."""
     html = Path("web/setup.html").read_text(encoding="utf-8")
     assert 'minlength="12"' in html
+
+
+def _ready_job(job_id="job-ready-01", status="READY"):
+    """Minimal Job in READY state (final/video approval + publication)."""
+    return {
+        "job_id": job_id, "topic": "Ролик готовий до затвердження", "character_id": "did_samogon",
+        "priority": 5, "status": status, "created_at": "2026-09-08T10:00:00Z", "source": "web",
+        "retries": 0, "approved": False, "approval_status": "pending", "approved_channels": [],
+        "published_to": [], "task_type": "video", "min_vram_mb": 4096, "max_retries": 3,
+        "brand_id": "brand01", "aspect_ratio": "16:9", "output_preset": "youtube",
+        "version": 1, "stages": {}, "scenes": [], "artifacts": [], "events": [status],
+        "script": {"title": "Ролик до затвердження", "scenes": [], "hashtags": [], "description": ""},
+        "storyboards": [], "publication_results": {},
+        "character": "did_samogon", "workflow": "img2vid", "channel_types": [],
+    }
+
+
+def test_final_video_approval_of_ready_job():
+    """i.0.0.0.17: final (video) approval of a READY job posts /jobs/{id}/approve."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        console_errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
+        _mock_session(page)
+        _mock_status(page)
+        job = _ready_job("job-final-01")
+        approved_job = {**job, "status": "PUBLISHING", "approved": True, "approval_status": "approved"}
+
+        page.route("**/api/jobs/job-final-01/approve", lambda route: route.fulfill(json=approved_job))
+        page.route("**/api/jobs/job-final-01", lambda route: route.fulfill(json=job))
+        page.route("**/api/channels/types", lambda route: route.fulfill(json=["youtube", "tiktok"]))
+        page.route("**/api/brands/**/channels", lambda route: route.fulfill(json=[]))
+        page.goto(f"{BASE_URL}/jobs/job-final-01")
+
+        expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
+        expect(page.locator("[data-testid='approve-final-button']")).to_be_visible()
+        page.locator("[data-testid='approve-final-button']").click()
+        expect(page.locator("[data-testid='approve-final-button']")).not_to_be_visible()
+        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Публікація")
+        assert errors == [], f"pageerror: {errors}"
+        assert console_errors == [], f"console.error: {console_errors}"
+        browser.close()
+def test_publication_flow_launches_and_shows_result():
+    """i.0.0.0.17: publication flow posts /jobs/{id}/publish and renders results."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        console_errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
+        _mock_session(page)
+        _mock_status(page)
+        job = _ready_job("job-ready-01")
+        published_job = {
+            **job, "status": "PUBLISHED", "approved": True,
+            "published_to": ["youtube"],
+            "publication_results": {
+                "youtube": {"channel": "youtube", "status": "PUBLISHED", "url": "https://youtu.be/abc123", "error": None},
+            },
+        }
+
+        page.route("**/api/jobs/job-ready-01/publish", lambda route: route.fulfill(json=published_job))
+        page.route("**/api/jobs/job-ready-01", lambda route: route.fulfill(json=job))
+        page.route("**/api/channels/types", lambda route: route.fulfill(json=["youtube", "tiktok"]))
+        page.route("**/api/brands/**/channels", lambda route: route.fulfill(json=[]))
+        page.goto(f"{BASE_URL}/jobs/job-ready-01")
+
+        expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
+        expect(page.locator("[data-testid='publish-confirm-button']")).to_be_visible()
+        page.locator("[data-testid='publish-confirm-button']").click()
+        expect(page.locator("[data-testid='publication-results']")).to_be_visible()
+        expect(page.locator("[data-testid='publication-results']")).to_contain_text("YouTube")
+        expect(page.locator("[data-testid='publication-results']")).to_contain_text("PUBLISHED")
+        assert errors == [], f"pageerror: {errors}"
+        assert console_errors == [], f"console.error: {console_errors}"
+        browser.close()
+
+
+def test_fleet_enrollment_issues_token_and_exposes_register_endpoint():
+    """i.0.0.0.17: fleet enrollment issues a registration token and shows the register URL."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        console_errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
+        _mock_session(page)
+        _mock_status(page)
+        requested_roles = []
+
+        def handle_token(route):
+            requested_roles.append(route.request.post_data_json)
+            route.fulfill(json={
+                "token": "VT-ENR-LL-ROLE01", "role": "gpu",
+                "expires_at": "2026-09-08T12:00:00Z", "push_token": False,
+            })
+
+        page.route("**/api/nodes/registration-tokens", handle_token)
+        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
+        page.goto(f"{BASE_URL}/workers")
+        expect(page.locator("[data-testid='workers-page']")).to_be_visible()
+
+        page.locator("[data-testid='create-worker-button']").click()
+        page.locator("[data-testid='worker-role-select']").select_option("gpu")
+        page.locator("[data-testid='generate-token-button']").click()
+        expect(page.locator("[data-testid='token-display']")).to_contain_text("VT-ENR-LL-ROLE01")
+        expect(page.locator("[data-testid='token-display']")).to_contain_text("/api/nodes/register")
+        assert requested_roles, "registration-tokens POST was not made"
+        assert errors == [], f"pageerror: {errors}"
+        assert console_errors == [], f"console.error: {console_errors}"
+        browser.close()
+def test_update_critical_mutations_install_and_canary():
+    """i.0.0.0.17: update critical mutations (install / promote / rollback) hit the backend."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        console_errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        _mock_session(page)
+        _mock_status(page)
+
+        update_status = {
+            "current_version": "0.0.1.53", "available_version": "0.0.2.0",
+            "state": "IDLE", "update_available": True,
+        }
+        post_calls = []
+
+        page.route("**/api/system/update", lambda route: route.fulfill(json=update_status))
+        page.route("**/api/system/update/readiness", lambda route: route.fulfill(
+            json={"ready": True, "inflight": 0, "busy_workers": []}))
+        page.route("**/api/system/update/rolling", lambda route: route.fulfill(
+            json={"state": "IDLE", "current_batch": 0, "total_batches": 0}))
+        page.route("**/api/system/update/rolling/promote", lambda route: (post_calls.append("promote"), route.fulfill(json={"ok": True}))[1])
+        page.route("**/api/system/update/rolling/rollback", lambda route: (post_calls.append("rollback"), route.fulfill(json={"ok": True}))[1])
+        page.route("**/api/system/update/rolling/cancel", lambda route: (post_calls.append("cancel"), route.fulfill(json={"ok": True}))[1])
+        page.route("**/api/system/update/run", lambda route: (post_calls.append("install"), route.fulfill(json=update_status))[1])
+        page.route("**/api/system/recovery/normal", lambda route: (post_calls.append("recover"), route.fulfill(json={"state": "NORMAL"}))[1])
+
+        page.goto(f"{BASE_URL}/settings")
+        expect(page.locator("[data-testid='settings-page']")).to_be_visible()
+        page.locator("button", has_text="Оновлення").first.click()
+        expect(page.locator("[data-testid='settings-update']")).to_be_visible()
+
+        page.locator("[data-testid='update-install']").click()
+        page.locator("[data-testid='update-promote-canary']").click()
+        page.locator("[data-testid='update-rollback-canary']").click()
+        page.locator("[data-testid='update-recover-normal']").click()
+
+        assert "install" in post_calls, post_calls
+        assert "promote" in post_calls, post_calls
+        assert "rollback" in post_calls, post_calls
+        assert "recover" in post_calls, post_calls
+        assert errors == [], f"pageerror: {errors}"
+        assert console_errors == [], f"console.error: {console_errors}"
+        browser.close()
+def test_backup_critical_mutations_create_and_restore():
+    """i.0.0.0.17: backup critical mutations (create / restore) hit the backend."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        console_errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        _mock_session(page)
+        _mock_status(page)
+
+        post_calls = []
+        snapshots = [{"snapshot_id": "snap-1", "created_at": "2026-09-08T10:00:00Z", "state": "ok"}]
+
+        def handle_backups(route):
+            if route.request.method == "POST":
+                post_calls.append("create")
+                snapshots.append({"snapshot_id": "snap-2", "created_at": "2026-09-08T11:00:00Z", "state": "ok"})
+            route.fulfill(json={"snapshots": snapshots})
+
+        page.route("**/api/system/backups/*/restore/progress", lambda route: route.fulfill(json={"progress": 100, "message": "ok"}))
+        page.route("**/api/system/backups", handle_backups)
+        page.route("**/api/system/backups/*/restore", lambda route: (post_calls.append("restore"), route.fulfill(json={"ok": True}))[1])
+
+        page.goto(f"{BASE_URL}/settings")
+        expect(page.locator("[data-testid='settings-page']")).to_be_visible()
+        page.locator("button", has_text="Бекапи").first.click()
+        expect(page.locator("[data-testid='settings-backup']")).to_be_visible()
+
+        page.locator("[data-testid='backup-create-button']").click()
+        expect(page.locator("[data-testid='backup-restore-button']").first).to_be_visible()
+        page.locator("[data-testid='backup-restore-button']").first.click()
+        page.get_by_role("button", name="Підтвердити").click()
+
+        assert "create" in post_calls, post_calls
+        assert "restore" in post_calls, post_calls
+        assert errors == [], f"pageerror: {errors}"
+        assert console_errors == [], f"console.error: {console_errors}"
+        browser.close()
+
+
+def _mock_chrome_data(page):
+    """i.0.0.0.28: generic list endpoints so header/sidebar chrome tests avoid page errors."""
+    _mock_session(page)
+    _mock_status(page)
+    page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
+    page.route("**/api/workers", lambda route: route.fulfill(json=[]))
+    page.route("**/api/characters", lambda route: route.fulfill(json=[]))
+    page.route("**/api/workflows", lambda route: route.fulfill(json=[]))
+    page.route("**/api/brands", lambda route: route.fulfill(json=[]))
+
+
+def test_header_metadata_matches_navigation():
+    """i.0.0.0.28: header title/subtitle follow the URL and sidebar active state is correct."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_chrome_data(page)
+
+        page.goto(f"{BASE_URL}/")
+        expect(page.locator("[data-testid='header-title']")).to_have_text("Дашборд")
+        expect(page.locator("[data-testid='header-subtitle']")).to_have_text("Огляд системи Vertep")
+        # Sidebar active link highlights the dashboard.
+        expect(page.locator("[data-testid='sidebar-nav'] a[aria-current='page']").first).to_have_text("Дашборд")
+
+        page.goto(f"{BASE_URL}/jobs")
+        expect(page.locator("[data-testid='header-title']")).to_have_text("Завдання")
+        expect(page.locator("[data-testid='sidebar-nav'] a[aria-current='page']").first).to_have_text("Завдання")
+
+        page.goto(f"{BASE_URL}/workers")
+        expect(page.locator("[data-testid='header-title']")).to_have_text("Вузли")
+        page.goto(f"{BASE_URL}/characters")
+        expect(page.locator("[data-testid='header-title']")).to_have_text("Персонажі")
+
+        page.goto(f"{BASE_URL}/logs")
+        expect(page.locator("[data-testid='header-title']")).to_have_text("Журнали")
+
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()
+
+
+def test_localization_scan_no_raw_english_chrome():
+    """i.0.0.0.28: sidebar/header chrome carries no stray English UI labels."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _mock_chrome_data(page)
+        page.goto(f"{BASE_URL}/")
+
+        nav_text = page.locator("[data-testid='sidebar-nav']").inner_text()
+        chrome_text = (
+            page.locator("[data-testid='header-title']").inner_text()
+            + " "
+            + page.locator("[data-testid='header-subtitle']").inner_text()
+        )
+        forbidden = ["Workers", "Timeline", "Task Type", "Queue View", "Status Bar"]
+        found = [term for term in forbidden if term in nav_text or term in chrome_text]
+        assert found == [], f"raw English UI labels found in chrome: {found}"
+        browser.close()
+
+
+def test_collapsed_sidebar_icons_tooltips_no_overflow():
+    """i.0.0.0.28: collapsed sidebar exposes icons with tooltips and no page overflow."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_chrome_data(page)
+        page.goto(f"{BASE_URL}/")
+
+        page.locator("button[aria-label='Перемикач меню']").click()
+        nav = page.locator("[data-testid='sidebar-nav']")
+        expect(nav).to_be_visible()
+        # First sidebar link (Дашборд) keeps an icon and exposes its label as a tooltip.
+        link = nav.locator("a").first
+        expect(link).to_have_attribute("title", "Дашборд")
+
+        overflow = page.evaluate(
+            "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        assert overflow <= 0, f"horizontal overflow in collapsed layout: {overflow}px"
+        assert errors == [], f"pageerror: {errors}"
+        browser.close()
+
+
+def test_loading_state_resolves_to_content_or_error():
+    """i.0.0.0.28: loading state does not hang forever — it resolves to data or error."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _mock_session(page)
+        _mock_status(page)
+        page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
+        page.goto(f"{BASE_URL}/")
+
+        # Dashboard must reach a terminal state — loading must not hang forever.
+        page.wait_for_timeout(2000)
+        expect(page.locator("[data-testid='loading-state']")).not_to_be_visible()
+        terminal_states = page.locator(
+            "[data-testid='empty-state'], [data-testid='error-state'], [data-testid='workers-table-section'], [data-testid='stat-workers']"
+        )
+        expect(terminal_states.first).to_be_visible()
+        browser.close()

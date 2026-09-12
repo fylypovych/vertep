@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 
 from ..first_run import config_root, integration_secret_status, set_integration_secret
 from ..models import IntegrationSecretUpdate
+from adapters.providers import provider_matrix
 
 router = APIRouter()
 
@@ -24,6 +25,8 @@ def integrations():
             result[name] = {"status": "ONLINE", "http_status": response.status_code}
         except httpx.HTTPError as error:
             result[name] = {"status": "OFFLINE", "error": str(error)}
+    matrix = provider_matrix()
+    result["publisher"] = matrix.get("publisher", {}).get("platforms", {})
     return result
 
 

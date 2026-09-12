@@ -19,6 +19,7 @@ import json
 import math
 import struct
 import time
+import os
 import base64
 import io
 import wave
@@ -39,6 +40,26 @@ from core.storyboard import StoryboardService
 from worker import role_executor
 from core.api.job_helpers import _persist_tts_contract, _tts_task_for
 from core.orchestration import initialize_plan
+
+
+def _complete_script_task(client, job_id, node_name="text-worker"):
+    """Simulate a Text Worker claiming, executing, and submitting a script task."""
+    client.post("/api/workers/heartbeat", json={"node_name": node_name, "vram_mb": 0,
+                 "role": "text",
+                 "capabilities": ["text_generation"], "supported_tasks": ["text"]})
+    task = None
+    for _ in range(100):
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        task = resp.json().get("task")
+        if task and task.get("task") == "script" and task.get("job_id") == job_id:
+            break
+        time.sleep(0.01)
+    assert task and task.get("task") == "script"
+    [artifact] = role_executor.execute_role_task("text", task)
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]})
+    assert response.status_code == 200
 
 
 def _write_character(root: Path, character_id: str) -> Path:
@@ -207,8 +228,11 @@ def _wait_for(client, job_id, statuses=("READY", "FAILED")):
 
 
 def _approve_script(client, job_id):
+    local_fallback = os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true"
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if not local_fallback and job["status"] == "SCRIPT_QUEUED":
+            _complete_script_task(client, job_id)
         if job["status"] == "SCRIPT_PENDING_APPROVAL":
             break
         time.sleep(0.025)

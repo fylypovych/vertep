@@ -14,7 +14,7 @@ import { VertepDatePipe } from '../../shared/vertep-date.pipe';
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-backup">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">Бекапи</h3>
-        <button (click)="createBackup()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Створити</button>
+        <button (click)="createBackup()" data-testid="backup-create-button" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Створити</button>
       </div>
       @if (loading()) {
         <div class="animate-pulse space-y-2"><div class="h-5 bg-slate-200 rounded w-full"></div></div>
@@ -35,7 +35,7 @@ import { VertepDatePipe } from '../../shared/vertep-date.pipe';
                 <span class="text-sm font-medium text-slate-900">{{ backup.snapshot_id }}</span>
                 <span class="text-xs text-slate-500 ml-2">{{ backup.created_at | vertepDate }}</span>
               </div>
-              <button (click)="confirmRestore(backup.snapshot_id)" [disabled]="restoring() === backup.snapshot_id" class="text-xs text-blue-600 disabled:opacity-50">
+              <button (click)="confirmRestore(backup.snapshot_id)" [disabled]="restoring() === backup.snapshot_id" data-testid="backup-restore-button" class="text-xs text-blue-600 disabled:opacity-50">
                 {{ restoring() === backup.snapshot_id ? 'Відновлення...' : 'Відновити' }}
               </button>
             </div>

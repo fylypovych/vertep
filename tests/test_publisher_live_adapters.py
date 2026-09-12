@@ -261,3 +261,48 @@ def test_provider_routes_to_live_adapter(monkeypatch, tmp_path):
 
     assert result["status"] == "PUBLISHED"
     assert result["id"] == "vid-live"
+
+
+# ---------------------------------------------------------------------------
+# OAuth token refresh lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_youtube_refresh_token_refreshes_on_401(monkeypatch, tmp_path):
+    """On 401, YouTube publisher uses the refresh token to get a new access token and retries."""
+    monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN", "refresh-123")
+    monkeypatch.setenv("YOUTUBE_CLIENT_ID", "client-id")
+    monkeypatch.setenv("YOUTUBE_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "expired-token")
+    fake = FakeTransport([
+        httpx.Response(401, json={"error": "Invalid Credentials"}),
+        httpx.Response(200, json={"access_token": "refreshed-token", "expires_in": 3600,
+                                  "scope": "https://www.googleapis.com/auth/youtube.upload", "token_type": "Bearer"}),
+        httpx.Response(200, json={}, headers={"Location": "https://u.example/1"}),
+        httpx.Response(200, json={"id": "vid-401"}),
+    ])
+    publisher = YoutubePublisher(transport=fake)
+    result = publisher.publish(_mp4(tmp_path, size=128), {"title": "Тест"})
+
+    assert result["status"] == "PUBLISHED"
+    assert result["id"] == "vid-401"
+    methods = [m for m, *_ in fake.requests]
+    assert methods == ["POST", "POST", "POST", "PUT"]
+    token_req = fake.requests[1]
+    assert token_req[2]["data"]["refresh_token"] == "refresh-123"
+    assert token_req[2]["data"]["grant_type"] == "refresh_token"
+    upload_headers = fake.requests[3][2]["headers"]
+    assert upload_headers["Authorization"] == "Bearer refreshed-token"
+
+
+def test_youtube_no_refresh_token_returns_401_error(monkeypatch, tmp_path):
+    """Without a refresh token, a 401 surfaces as FAILED."""
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "expired-token")
+    monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN", raising=False)
+    fake = FakeTransport([
+        httpx.Response(401, json={"error": "Invalid Credentials"}),
+    ])
+    publisher = YoutubePublisher(transport=fake)
+    result = publisher.publish(_mp4(tmp_path), {"topic": "x"})
+    assert result["status"] == "FAILED"
+    assert "401" in result["error"]

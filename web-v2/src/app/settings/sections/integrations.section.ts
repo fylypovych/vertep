@@ -28,6 +28,21 @@ import { IntegrationStatus } from '../../core/models';
               {{ integrations()!.comfyui.status }}
             </span>
           </div>
+          @if (integrations()!.publisher) {
+            <div class="pt-2 border-t border-slate-200 mt-2">
+              <p class="text-xs font-semibold text-slate-500 uppercase mb-1">Канали публікації</p>
+              <div class="space-y-1">
+                @for (channel of publisherChannels(); track channel) {
+                  <div class="flex justify-between py-1">
+                    <span class="text-sm">{{ channel.label }}</span>
+                    <span class="text-xs font-medium" [class.text-emerald-600]="channel.configured" [class.text-red-600]="!channel.configured">
+                      {{ channel.configured ? 'Налаштовано' : 'Не налаштовано' }}
+                    </span>
+                  </div>
+                }
+              </div>
+            </div>
+          }
         </div>
       }
     </div>
@@ -46,5 +61,18 @@ export class IntegrationsSectionComponent implements OnInit {
       next: (data) => { this.integrations.set(data as unknown as IntegrationStatus); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
+  }
+
+  publisherChannels(): { label: string; configured: boolean }[] {
+    const pub = this.integrations()?.publisher;
+    if (!pub) { return []; }
+    const labels: Record<string, string> = {
+      youtube: 'YouTube', tiktok: 'TikTok', facebook: 'Facebook',
+      instagram: 'Instagram', threads: 'Threads',
+    };
+    return Object.entries(pub).map(([key, val]) => ({
+      label: labels[key] || key,
+      configured: val?.configured ?? false,
+    }));
   }
 }

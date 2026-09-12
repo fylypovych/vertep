@@ -52,13 +52,13 @@ import { UpdateStatus, UpdateReadiness, RollingStatus } from '../../core/models'
           </div>
         }
         <div class="flex gap-2">
-          <button (click)="installUpdate()" [disabled]="installing()" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
+          <button (click)="installUpdate()" [disabled]="installing()" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
             {{ installing() ? 'Оновлення...' : 'Оновити' }}
           </button>
-          <button (click)="cancelRolling()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Скасувати rolling</button>
-          <button (click)="promoteCanary()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Promote canary</button>
-          <button (click)="rollbackCanary()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Rollback canary</button>
-          <button (click)="recoverToNormal()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відновити до NORMAL</button>
+          <button (click)="cancelRolling()" data-testid="update-cancel-rolling" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Скасувати rolling</button>
+          <button (click)="promoteCanary()" data-testid="update-promote-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Promote canary</button>
+          <button (click)="rollbackCanary()" data-testid="update-rollback-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Rollback canary</button>
+          <button (click)="recoverToNormal()" data-testid="update-recover-normal" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відновити до NORMAL</button>
         </div>
       }
     </div>

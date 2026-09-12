@@ -25,6 +25,8 @@ from ..models import JobStatus, SceneRecord, StageName, StageStatus, TaskResult
 from ..orchestration import (all_scenes_ready, finish_scene, initialize_plan,
                              interrupt_scene, pending_scenes, transition_stage)
 from ..pipeline import JobStore, finalize_job_safe, prepare_job_safe, queue_storyboard
+from ..script_prompt import build_script_prompt
+from ..script_schema import normalize_script
 from ..state import result_locks, store, task_queue, workflow_registry
 
 
@@ -177,6 +179,176 @@ def _enqueue_tts_task(job, scene) -> dict:
     return queued
 
 
+def _script_task_for(job, system_prompt: str, character: dict | None) -> dict:
+    return {"job_id": job.job_id, "task": "script", "priority": job.priority,
+            "topic": job.topic, "task_id": None,
+            "system_prompt": system_prompt, "character": character or {},
+            "task_type": "text"}
+
+
+def _enqueue_script_task(job_store, job, system_prompt: str = "", character: dict | None = None) -> dict | None:
+    workers = list(job_store.workers.values())
+    has_text_worker = any(
+        "text" in (worker.get("supported_tasks") or []) or worker.get("role") == "text"
+        for worker in workers
+    )
+    if not has_text_worker and os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+        _generate_script_local(job_store, job, system_prompt, character)
+        return None
+    task = _script_task_for(job, system_prompt, character)
+    queued = task_queue.enqueue(task)
+    job.script_task_id = queued["task_id"]
+    job.active_task_id = queued["task_id"]
+    job_store.repository.record_task(queued, "QUEUED")
+    job_store.event(job, f"SCRIPT TASK {queued['task_id']} QUEUED")
+    job_store.update(job, JobStatus.SCRIPT_GENERATING, f"SCRIPT TASK {queued['task_id']} ASSIGNED")
+    return queued
+
+
+def _load_character_prompt(job) -> tuple[str, dict | None]:
+    character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id)
+    system_prompt = (character.system_prompt or "").strip()
+    character_dict = character.model_dump() if character else None
+    return system_prompt, character_dict
+
+
+def _generate_script_local(job_store, job, system_prompt: str, character: dict | None) -> None:
+    from ..script_agent import ScriptAgent
+    script = ScriptAgent().generate_script(job.topic, system_prompt, character)
+    job.script = normalize_script(script, job.topic)
+    job.script_attempt = 0
+    job.script_error = None
+    job_store.update(job, JobStatus.SCRIPT_GENERATING, "SCRIPT GENERATING (LOCAL FALLBACK)")
+    _write_script_files(job_store, job)
+    job_store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT GENERATED (LOCAL FALLBACK)")
+
+
+def _write_script_files(store, job) -> None:
+    if job.script:
+        (store.root / job.job_id / "script.json").write_text(json.dumps(job.script, indent=2), encoding="utf-8")
+        (store.root / job.job_id / "metadata.json").write_text(json.dumps({
+            "title": job.script.get("title", job.topic), "language": "uk",
+            "source": job.source, "character_id": job.character_id
+        }, indent=2), encoding="utf-8")
+
+
+def _handle_script_result(store, job, result, artifacts) -> None:
+    success = result.get("success", False)
+    task_id = result.get("task_id")
+    if task_id and job.script_task_id == task_id:
+        job.script_task_id = None
+    if success:
+        script_artifact = next((a for a in artifacts if a.get("kind") == "script"), None)
+        if script_artifact:
+            import base64
+            data = base64.b64decode(script_artifact["data_base64"])
+            data_dict = json.loads(data.decode("utf-8"))
+            job.script = normalize_script(data_dict, job.topic)
+        job.active_task_id = None
+        job.script_attempt = 0
+        job.script_error = None
+        _write_script_files(store, job)
+        store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT GENERATED; AWAITING APPROVAL")
+        if job.source.startswith("telegram:"):
+            from ..pipeline import _send_script_approval_to_telegram
+            try:
+                _send_script_approval_to_telegram(job)
+            except Exception as exc:
+                store.event(job, f"TELEGRAM SCRIPT APPROVAL NOTIFICATION FAILED: {exc}")
+    else:
+        error = result.get("error") or "UNKNOWN SCRIPT GENERATION ERROR"
+        job.script_error = error
+        store.event(job, f"SCRIPT TASK FAILED: {error}")
+        job.script_attempt = (job.script_attempt or 0) + 1
+        if job.script_attempt <= job.max_retries:
+            system_prompt, character = _load_character_prompt(job)
+            _enqueue_script_task(store, job, system_prompt, character)
+        else:
+            store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
+
+
+def _has_publisher_worker(job_store) -> bool:
+    return any(
+        "publish" in (worker.get("supported_tasks") or []) or worker.get("role") == "publisher"
+        for worker in job_store.workers.values()
+    )
+
+
+def _publish_task_for(job, channel: str) -> dict:
+    return {"job_id": job.job_id, "task": "publish", "priority": job.priority,
+            "channel": channel, "topic": job.topic, "task_id": None,
+            "video_path": job.output_path or "",
+            "metadata": {"job_id": job.job_id, "topic": job.topic,
+                         "character_id": job.character_id, "brand_id": job.brand_id,
+                         **(job.script or {})},
+            "task_type": "publish"}
+
+
+def _enqueue_publish_task(job_store, job, channel: str) -> dict | None:
+    has_publisher = _has_publisher_worker(job_store)
+    if not has_publisher and os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+        _publish_local(job_store, job, channel)
+        return None
+    task = _publish_task_for(job, channel)
+    queued = task_queue.enqueue(task)
+    job.publish_task_ids[queued["task_id"]] = channel
+    job_store.repository.record_task(queued, "QUEUED")
+    job_store.event(job, f"PUBLISH TASK {queued['task_id']} QUEUED FOR {channel}")
+    job_store.update(job, JobStatus.PUBLISHING, f"PUBLISHING {channel}: TASK {queued['task_id']} ASSIGNED")
+    return queued
+
+
+def _publish_local(job_store, job, channel: str) -> dict:
+    from ..pipeline import _do_publish_single
+    result = _do_publish_single(job, channel)
+    job.publication_results[channel] = result
+    if result.get("status") == "PUBLISHED":
+        channel_str = ",".join(result.get("channels", [channel]))
+        job.published_to.append(channel_str)
+    elif result.get("status") == "NOT_CONFIGURED":
+        job.publish_error = result.get("error", "NOT_CONFIGURED")
+    job.publish_attempt = 0
+    job_store.event(job, f"PUBLISHED {channel}: {result.get('status')}")
+    return result
+
+
+def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> None:
+    success = result.get("success", False)
+    task_id = result.get("task_id")
+    if task_id and job.publish_task_ids.get(task_id) == channel:
+        job.publish_task_ids.pop(task_id, None)
+    if job.active_task_id == task_id:
+        job.active_task_id = None
+    if success:
+        receipt_artifact = next((a for a in artifacts if a.get("kind") == "publication_receipt"), None)
+        if receipt_artifact:
+            import base64 as _b64
+            data = _b64.b64decode(receipt_artifact["data_base64"])
+            receipt = json.loads(data.decode("utf-8"))
+            job.publication_results[channel] = receipt
+            if receipt.get("status") == "PUBLISHED":
+                job.published_to.append(channel)
+            elif receipt.get("status") == "NOT_CONFIGURED":
+                job.publish_error = receipt.get("error", "NOT_CONFIGURED")
+                job_store.event(job, f"PUBLISH {channel} NOT CONFIGURED; NO RETRY")
+                return
+            else:
+                job.publish_error = receipt.get("error", "UNKNOWN")
+        job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH TASK {task_id} COMPLETED FOR {channel}")
+    else:
+        error = result.get("error") or "UNKNOWN PUBLISH ERROR"
+        job.publish_error = error
+        job_store.event(job, f"PUBLISH TASK FAILED for {channel}: {error}")
+        job.publish_attempt = (job.publish_attempt or 0) + 1
+        if job.publish_attempt <= job.max_retries:
+            job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_attempt}/{job.max_retries}: {channel}")
+            _enqueue_publish_task(job_store, job, channel)
+        else:
+            job.publish_error = error
+            job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": error})
+            job_store.update(job, JobStatus.FAILED, f"PUBLISH FAILED AFTER {job.publish_attempt} ATTEMPTS")
+
+
 def _recover_stale_workers() -> None:
     now = datetime.now(timezone.utc)
     timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "45"))
@@ -198,6 +370,23 @@ def _recover_stale_workers() -> None:
             interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
             job.assigned_worker = None
             store.event(job, f"{worker.get('node_name')} OFFLINE; TASK {current_task} REQUEUED")
+            worker["current_job"] = None
+            worker["current_task"] = None
+        elif job and job.script_task_id == current_task and job.status == JobStatus.SCRIPT_GENERATING:
+            task_queue.release(current_task)
+            job.script_task_id = None
+            job.assigned_worker = None
+            from ..pipeline import prepare_job_safe
+            prepare_job_safe(store, job)
+            store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
+            worker["current_job"] = None
+            worker["current_task"] = None
+        elif job and current_task in job.publish_task_ids and job.status == JobStatus.PUBLISHING:
+            task_queue.release(current_task)
+            channel = job.publish_task_ids.pop(current_task, None)
+            job.assigned_worker = None
+            _enqueue_publish_task(job_store, job, channel)
+            store.event(job, f"PUBLISH TASK {current_task} REQUEUED FOR {channel}")
             worker["current_job"] = None
             worker["current_task"] = None
 
@@ -320,7 +509,6 @@ def _dispatch_tts(store, job) -> None:
 
 
 def _prepare_and_dispatch(job) -> None:
-    from ..pipeline import generate_script
     while True:
         if job.script and job.status == JobStatus.NEW:
             initialize_plan(job)
@@ -415,6 +603,23 @@ def _job_action(job_id: str, status: JobStatus, event: str):
             store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "storyboard"},
                                          task_status, worker)
             job.storyboard_task_id = None
+        if job.script_task_id:
+            task_id = job.script_task_id
+            worker = job.assigned_worker
+            if worker:
+                task_queue.request_cancel(worker, task_id)
+            task_queue.discard(task_id)
+            store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "script"},
+                                         task_status, worker)
+            job.script_task_id = None
+        for task_id, channel in list(job.publish_task_ids.items()):
+            worker = job.assigned_worker
+            if worker:
+                task_queue.request_cancel(worker, task_id)
+            task_queue.discard(task_id)
+            store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "publish",
+                                           "channel": channel}, task_status, worker)
+        job.publish_task_ids.clear()
         job.active_task_ids.clear()
         job.tts_active_task_ids.clear()
         job.active_task_id = None
@@ -424,6 +629,9 @@ def _job_action(job_id: str, status: JobStatus, event: str):
                              StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
         if job.stages and job.stages[StageName.TTS.value].status == StageStatus.RUNNING:
             transition_stage(job, StageName.TTS,
+                             StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
+        if job.stages and job.stages.get(StageName.SCRIPT.value) and job.stages[StageName.SCRIPT.value].status == StageStatus.RUNNING:
+            transition_stage(job, StageName.SCRIPT,
                              StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
     elif status == JobStatus.NEW:
         for scene in job.scenes:

@@ -153,32 +153,16 @@ def generate_script(store: JobStore, job: Job) -> Job:
         job.script = normalize_script(job.script, job.topic)
         transition_stage(job, StageName.SCRIPT, StageStatus.RUNNING)
         store.event(job, "APPROVED STORYBOARD USED AS SCRIPT")
-    else:
-        script_error = None
-        for script_attempt in range(1, max(1, job.max_retries) + 1):
-            transition_stage(job, StageName.SCRIPT, StageStatus.RUNNING)
-            store.transition(job, JobStatus.SCRIPT_GENERATING, f"SCRIPT GENERATING {script_attempt}/{job.max_retries}")
-            try:
-                job.script = normalize_script(providers.llm().generate_script(job.topic, system_prompt, character), job.topic)
-                break
-            except (ValueError, TypeError) as error:
-                script_error = error
-                transition_stage(job, StageName.SCRIPT, StageStatus.FAILED, str(error))
-                store.event(job, f"SCRIPT FAILED {script_attempt}/{job.max_retries}: {error}")
+        store.transition(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT PENDING APPROVAL")
+        if job.source.startswith("telegram:"):
+            _send_script_approval_to_telegram(job)
         else:
-            store.transition(job, JobStatus.SCRIPT_FAILED, f"SCRIPT GENERATION FAILED: {script_error}")
-            raise RuntimeError(f"Script generation failed after {job.max_retries} attempts: {script_error}")
-    initialize_plan(job)
-    (store.root / job.job_id / "script.json").write_text(json.dumps(job.script, indent=2), encoding="utf-8")
-    (store.root / job.job_id / "metadata.json").write_text(json.dumps({
-        "title": job.script.get("title", job.topic), "language": "uk",
-        "source": job.source, "character_id": job.character_id
-    }, indent=2), encoding="utf-8")
-    store.transition(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT PENDING APPROVAL")
-    if job.source.startswith("telegram:"):
-        _send_script_approval_to_telegram(job)
-    else:
-        _progress(job, "SCRIPT_PENDING_APPROVAL")
+            _progress(job, "SCRIPT_PENDING_APPROVAL")
+        return job
+    from .api.job_helpers import _enqueue_script_task
+    queued = _enqueue_script_task(store, job, system_prompt, character)
+    if queued is not None:
+        return job
     return job
 
 def approve_script(store: JobStore, job: Job, actor: str = "api") -> Job:
@@ -208,12 +192,15 @@ def regenerate_script(store: JobStore, job: Job, revision: str | None = None) ->
     job.stages = {}
     job.artifacts = [a for a in job.artifacts if a.kind == "input"]
     job.active_task_id = None
+    job.script_task_id = None
+    job.script_attempt = 0
+    job.script_error = None
     job.active_task_ids.clear()
     job.completed_task_ids.clear()
     job.assigned_worker = None
     job.output_path = None
     job.version += 1
-    store.transition(job, JobStatus.SCRIPT_GENERATING, "SCRIPT REGENERATING")
+    store.transition(job, JobStatus.SCRIPT_QUEUED, "SCRIPT REGENERATING")
     return generate_script(store, job)
 
 def queue_storyboard(store: JobStore, job: Job, revision: str | None = None) -> Job:
@@ -334,6 +321,23 @@ def _admin_chat_ids() -> list[str]:
     return get_admin_chat_ids()
 
 
+def _do_publish_single(job: Job, channel: str) -> dict:
+    """Direct (CORE-side) publication to a single channel — used by local fallback.
+
+    Returns the publication receipt dict. This is the synchronous, non-task-queue
+    path; when a Publisher Worker is available the task goes through the queue
+    instead.
+    """
+    from adapters.providers import providers
+    video_path = job.output_path or ""
+    metadata = (job.script or {}) | {"job_id": job.job_id, "character_id": job.character_id,
+                                     "brand_id": job.brand_id}
+    publisher = providers.publisher()
+    if channel not in publisher.available_channels():
+        return {"channel": channel, "status": "FAILED", "error": f"Unknown channel: {channel}"}
+    return publisher.publish(channel, video_path, metadata)
+
+
 def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
         return job
@@ -390,7 +394,7 @@ def prepare_job(store: JobStore, job: Job) -> Job:
         return job
     if job.status == JobStatus.NEW:
         store.transition(job, JobStatus.SCRIPT_QUEUED, "SCRIPT QUEUED")
-    if job.script is None and job.status in {JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_FAILED}:
+    if job.script is None and job.status in {JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_FAILED}:
         generate_script(store, job)
     return job
 
