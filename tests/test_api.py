@@ -131,6 +131,13 @@ def test_health_and_job_flow():
     _approve_storyboard(client, job_id)
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "VIDEO_PENDING_APPROVAL":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "VIDEO_PENDING_APPROVAL"
+    client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "READY":
             break
         time.sleep(0.025)
@@ -169,6 +176,8 @@ def test_regenerate_preserves_inputs_and_replaces_generated_artifacts(monkeypatc
     _approve_script_and_storyboard(client, job_id)
     for _ in range(200):
         before = client.get(f"/api/jobs/{job_id}").json()
+        if before["status"] == "VIDEO_PENDING_APPROVAL":
+            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
         if before["status"] in {"READY", "FAILED"}:
             break
         time.sleep(0.025)
@@ -191,6 +200,8 @@ def test_job_export_import_and_optimistic_lock(monkeypatch):
     _approve_script_and_storyboard(client, job_id)
     for _ in range(200):
         current = client.get(f"/api/jobs/{job_id}").json()
+        if current["status"] == "VIDEO_PENDING_APPROVAL":
+            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
         if current["status"] in {"READY", "FAILED"}:
             break
         time.sleep(0.025)
@@ -511,6 +522,8 @@ def test_distributed_worker_result(monkeypatch):
     assert response.status_code == 200
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "VIDEO_PENDING_APPROVAL":
+            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
         if job["status"] in {"READY", "FAILED"}:
             break
         time.sleep(0.025)

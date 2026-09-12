@@ -62,11 +62,42 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
               @if (canApprove()) {
                 <button (click)="approveJob()" [disabled]="actionLoading() === 'approve'" data-testid="approve-final-button" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити</button>
               }
+              @if (canApproveVideo()) {
+                <button (click)="approveVideo()" [disabled]="actionLoading() === 'video_approve'" data-testid="approve-video-button" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити відео</button>
+              }
+              @if (canReviewVideo()) {
+                <button (click)="requestVideoRevision()" [disabled]="!!actionLoading()" data-testid="revision-video-button" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до відео</button>
+              }
+              @if (canRegenerateVideo()) {
+                <button (click)="regenerateVideo()" [disabled]="actionLoading() === 'video_regenerate'" data-testid="regenerate-video-button" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Регенерувати відео</button>
+              }
               @if (canReviewApproval()) {
                 <button (click)="requestRevision()" [disabled]="!!actionLoading()" data-testid="revision-job-button" class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">Запросити правки</button>
                 <button (click)="rejectApproval()" [disabled]="!!actionLoading()" data-testid="reject-job-button" class="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50">Відхилити</button>
               }
-              @if (canPublish()) {
+           @if (canReviewVideo() || canApproveVideo()) {
+             <div class="mt-6 bg-indigo-50 border border-indigo-200 rounded-lg p-4" data-testid="video-approval-section">
+               <h4 class="font-medium text-indigo-900 mb-2">Відео — {{ jobStatusLabel(job()!.status) }}</h4>
+               <div class="aspect-video bg-black rounded-lg mb-3">
+                 @if (videoUrl()) {
+                   <video [src]="videoUrl()" controls class="w-full h-full object-contain"></video>
+                 } @else {
+                   <div class="flex items-center justify-center h-full text-slate-400 text-sm">Відео недоступне</div>
+                 }
+               </div>
+               <div class="flex gap-2 flex-wrap">
+                 @if (canApproveVideo()) {
+                   <button (click)="approveVideo()" [disabled]="actionLoading() === 'video_approve'" data-testid="approve-video-button" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Схвалити відео</button>
+                 }
+                 @if (canReviewVideo() && !canApproveVideo()) {
+                   <button (click)="regenerateVideo()" [disabled]="actionLoading() === 'video_regenerate'" data-testid="regenerate-video-button" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Регенерувати відео</button>
+                 }
+                 <button (click)="requestVideoRevision()" [disabled]="!!actionLoading()" data-testid="revision-video-button" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до відео</button>
+               </div>
+             </div>
+           }
+
+           @if (canPublish()) {
                 <button (click)="publishJob()" [disabled]="actionLoading() === 'publish'" class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">Опублікувати</button>
               }
               @if (!editing()) {
@@ -553,6 +584,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
 })
 export class JobDetailComponent implements OnInit, OnDestroy {
   job = signal<Job | null>(null);
+  videoArtifactUrl = signal<string | null>(null);
   scriptScenes(): Record<string, unknown>[] {
     const scenes = this.job()?.script?.['scenes'];
     return Array.isArray(scenes)
@@ -612,6 +644,9 @@ export class JobDetailComponent implements OnInit, OnDestroy {
         next: (job) => {
           this.job.set(job as Job);
           this.loadJobChannels(job as Job);
+          if ((job as Job).output_path) {
+            this.videoArtifactUrl.set(`/api/jobs/${encodeURIComponent((job as Job).job_id)}/final/video.mp4`);
+          }
           this.loading.set(false);
         },
         error: (err) => {
@@ -806,9 +841,53 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     return !!j && j.status === 'STORYBOARD_PENDING_APPROVAL' && !!j.active_storyboard_version;
   }
 
-  canReviewScript(): boolean {
+   canReviewScript(): boolean {
     const s = this.job()?.status;
     return s === 'SCRIPT_PENDING_APPROVAL' || s === 'SCRIPT_REVISION_REQUESTED';
+  }
+
+  videoUrl(): string | null {
+    return this.videoArtifactUrl();
+  }
+
+  canReviewVideo(): boolean {
+    const j = this.job();
+    if (!j) return false;
+    return j.status === 'VIDEO_PENDING_APPROVAL' || j.status === 'VIDEO_REVISION_REQUESTED';
+  }
+
+  canApproveVideo(): boolean {
+    return this.job()?.status === 'VIDEO_PENDING_APPROVAL';
+  }
+
+  canRegenerateVideo(): boolean {
+    return this.job()?.status === 'VIDEO_REVISION_REQUESTED';
+  }
+
+  approveVideo(): void {
+    const j = this.job();
+    if (!j) return;
+    this.runAction('video_approve', () => this.api.approveVideo(j.job_id));
+  }
+
+  requestVideoRevision(): void {
+    const j = this.job();
+    if (!j) return;
+    const revision = window.prompt('Опишіть потрібні зміни до відео:');
+    if (revision === null) return;
+    this.runAction('video_revision', () => this.api.requestVideoRevision(j.job_id, revision.trim() || ''));
+  }
+
+  regenerateVideo(): void {
+    const j = this.job();
+    if (!j) return;
+    this.confirm.confirm({
+      title: 'Регенерувати відео',
+      message: 'Збудувати відео повторно з поточними кадрами та налаштуваннями?',
+    }).subscribe((ok) => {
+      if (!ok) return;
+      this.runAction('video_regenerate', () => this.api.regenerateVideo(j.job_id));
+    });
   }
 
   canDelete(): boolean { return jobActionAllowed('delete', this.job()?.status); }
@@ -846,6 +925,9 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       approve: 'Схвалення',
       revision: 'Правки',
       reject: 'Відхилення',
+      video_approve: 'Схвалення відео',
+      video_revision: 'Правки до відео',
+      video_regenerate: 'Регенерація відео',
     };
     return labels[action] || action;
   }

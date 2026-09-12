@@ -89,6 +89,8 @@ def test_image_storyboard_e2e(monkeypatch):
     # Need image worker to complete asset generation
     for _ in range(80):
         j=client.get(f"/api/jobs/{job_id}").json()
+        if j["status"]=="VIDEO_PENDING_APPROVAL":
+            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor":"test"})
         if j["status"]=="READY": break
         # dispatch may need worker claim
         t=client.post("/api/tasks/claim", json={"node_name":"gpu-worker","vram_mb":8192}).json().get("task")

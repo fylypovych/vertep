@@ -24,7 +24,7 @@ from ..dispatcher import can_retry
 from ..file_validation import validate_signature
 from ..models import JobCreate, JobStatus, JobUpdate, StageName, StageStatus
 from ..orchestration import initialize_plan, transition_stage
-from ..pipeline import approve_script, generate_script, queue_storyboard, regenerate_script, request_script_revision
+from ..pipeline import approve_script, approve_video, generate_script, queue_storyboard, regenerate_script, regenerate_video, request_script_revision, request_video_revision
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state, jobs_may_be_created
 from .job_helpers import (_job_action, _job_is_due,
@@ -253,6 +253,43 @@ def regenerate_script_endpoint(job_id: str, body: ScriptRevision):
     return job
 
 
+@router.post("/api/jobs/{job_id}/video/approve")
+def approve_video_endpoint(job_id: str, body: ScriptAction):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        job = approve_video(store, job, body.actor)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    return job
+
+
+@router.post("/api/jobs/{job_id}/video/revision")
+def revise_video(job_id: str, body: ScriptRevision):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        job = request_video_revision(store, job, body.revision or "", body.actor)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    return job
+
+
+@router.post("/api/jobs/{job_id}/video/regenerate")
+def regenerate_video_endpoint(job_id: str):
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        job = regenerate_video(store, job)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    executor.submit(_prepare_and_dispatch, job)
+    return job
+
+
 @router.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str):
     if not store.delete(job_id):
@@ -267,6 +304,8 @@ def publish_job(job_id: str, channels: list[str] | None = None):
         raise HTTPException(404, "Job not found")
     retryable_publish_failure = (job.status == JobStatus.FAILED and bool(job.publication_results)
                                  and bool(job.output_path) and Path(job.output_path).is_file())
+    if job.status in {JobStatus.VIDEO_PENDING_APPROVAL, JobStatus.VIDEO_REVISION_REQUESTED, JobStatus.VIDEO_APPROVED}:
+        raise HTTPException(409, f"Job is awaiting video approval (status: {job.status.value})")
     if job.status != JobStatus.READY and not retryable_publish_failure:
         raise HTTPException(409, "Job is not ready")
     targets = channels or ["youtube"]

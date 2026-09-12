@@ -381,12 +381,11 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     job.output_path = str(output)
     store.update(job, JobStatus.VIDEO_READY, "VIDEO READY")
     transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
+    store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, "VIDEO PENDING APPROVAL")
     if job.source.startswith("telegram:"):
-        store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, "VIDEO PENDING APPROVAL")
         _send_video_approval_to_telegram(job)
-        return job
-    store.update(job, JobStatus.READY, "JOB READY")
-    _progress(job, "READY")
+    else:
+        _progress(job, "VIDEO_PENDING_APPROVAL")
     return job
 
 def prepare_job(store: JobStore, job: Job) -> Job:
