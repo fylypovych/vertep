@@ -1,6 +1,35 @@
 import { test, expect } from '@playwright/test';
 
+const STATUS_GROUPS: Record<string, string[]> = {
+  active: ['SCRIPT_GENERATING', 'STORYBOARD_GENERATING', 'ASSET_GENERATION', 'VIDEO_GENERATION', 'ASSEMBLY', 'PUBLISHING', 'TTS_GENERATING'],
+  queued: ['NEW', 'SCRIPT_QUEUED', 'STORYBOARD_QUEUED'],
+  waiting: ['WAITING_FOR_SYSTEM', 'PENDING_APPROVAL', 'SCRIPT_PENDING_APPROVAL', 'SCRIPT_REVISION_REQUESTED', 'STORYBOARD_PENDING_APPROVAL', 'STORYBOARD_REVISION_REQUESTED', 'VIDEO_PENDING_APPROVAL', 'VIDEO_REVISION_REQUESTED'],
+  completed: ['SCRIPT_READY', 'SCRIPT_APPROVED', 'STORYBOARD_APPROVED', 'ASSETS_READY', 'VIDEO_READY', 'VIDEO_APPROVED', 'READY', 'PUBLISHED'],
+  failed: ['FAILED', 'SCRIPT_FAILED', 'STORYBOARD_FAILED', 'VIDEO_FAILED'],
+};
+
+function paginated(jobs: any[], url: string) {
+  const u = new URL(url);
+  const statusGroup = u.searchParams.get('status_group') || '';
+  const search = (u.searchParams.get('search') || '').toLowerCase();
+  const page = Number(u.searchParams.get('page') || '1');
+  const perPage = Number(u.searchParams.get('per_page') || '10');
+  let items = jobs;
+  if (statusGroup) {
+    const allowed = STATUS_GROUPS[statusGroup] || [];
+    items = items.filter(j => allowed.includes(j.status));
+  }
+  if (search) {
+    items = items.filter(j => (j.job_id + ' ' + j.topic).toLowerCase().includes(search));
+  }
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const chunk = items.slice((page - 1) * perPage, page * perPage);
+  return { items: chunk, total, page, per_page: perPage, pages, has_more: page < pages };
+}
+
 function mockApi(page: any, actions: { method: string; url: string; handler: (route: any) => void }[] = []) {
+  const mutable: any[] = [];
   return page.route('**/api/**', async (route: any) => {
     const r = route.request();
     const p = new URL(r.url()).pathname;
@@ -9,6 +38,12 @@ function mockApi(page: any, actions: { method: string; url: string; handler: (ro
     if (action) { action.handler(route); return; }
     if (p.endsWith('/session')) return route.fulfill({ json: { username: 'admin', role: 'admin' } });
     if (p.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
+    if (p === '/api/jobs' && m === 'GET') return route.fulfill({ json: paginated(mutable, r.url()) });
+    if (p === '/api/jobs' && m === 'POST') {
+      const created = { job_id: 'new_1', ...r.postDataJSON(), status: 'READY', created_at: new Date().toISOString() };
+      mutable.push(created);
+      return route.fulfill({ json: created });
+    }
     if (p.endsWith('/tasks/queue')) return route.fulfill({ json: { ready: [], inflight: [] } });
     if (p.endsWith('/tasks/dead-letter')) return route.fulfill({ json: [] });
     if (p.endsWith('/characters')) return route.fulfill({ json: [] });

@@ -1,5 +1,13 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.59
+- Додано структуроване сховище подій job: модель `JobEvent` та поле `Job.event_log`; `JobStore.event()`/`update()` фіксують події з реальним timestamp і структурованими полями (state, attempt, node, task_id, artifact_id, error); події створення та відновлення після рестарту також записуються в `event_log`.
+- Розширено `GET /api/jobs` серверними фільтрами та пагінацією: `status`, `status_group`, `search`, `page`/`per_page`; додано групи статусів `STATUS_GROUPS`; legacy plain-array контракт без параметрів збережено.
+- Додано endpoint `GET /api/jobs/{job_id}/events` — структурована часова лінія job із реальних подій backend без парсингу рядків.
+- Web UI V2: список job переведено на серверну пагінацію/фільтрацію (`listPage`, сигнали `pagedJobs`/`total`/`pages`, `onSearchChange`/`onGroupChange`); додано API `events()`/`listJobsPage()` та типи `JobEvent`/`JobListQuery`/`JobPage`.
+- Job-detail: банер конфлікту версії показує актуальну та локальну версію та кнопку «Застосувати зміни знову» (`reapplyAfterConflict()`); таймлайн рендериться зі структурованої `event_log` (type/state/node/task_id/artifact_id/error).
+- Тести: нові backend contract тести `tests/test_job_workspace_contracts.py`; Playwright-тести `jobs-actions`/`jobs-crud` оновлено під paginated відповіді API.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.58
 - Уточнено AGENTS.md: аудит Issues не дозволяє push/release; створення гілок потребує прямого доручення користувача; staged зміни не можна скидати.
 - Відновлено документальну послідовність 0.0.1.55 → 0.0.1.56 → 0.0.1.57; додано відсутні release notes, синхронізовано поточну версію без переписування Git history.

@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
-import { Job, JobCreate, JobUpdate, ArtifactRecord, ArtifactVerifyResponse, DeadLetterTask, QueueState, ScheduledJob } from '../models';
+import { Job, JobCreate, JobUpdate, JobEvent, JobPage, JobListQuery, ArtifactRecord, ArtifactVerifyResponse, DeadLetterTask, QueueState, ScheduledJob } from '../models';
 
 @Injectable()
 export class JobsApiService {
@@ -12,6 +12,18 @@ export class JobsApiService {
 
   list(): Observable<Job[]> {
     return this.http.get<Job[]>(`${this.base.url}/jobs`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  listPage(query: JobListQuery = {}): Observable<JobPage> {
+    const params = new URLSearchParams();
+    if (query.statusGroup) params.set('status_group', query.statusGroup);
+    if (query.search) params.set('search', query.search);
+    if (query.page) params.set('page', String(query.page));
+    if (query.perPage) params.set('per_page', String(query.perPage));
+    const qs = params.toString();
+    return this.http.get<JobPage>(`${this.base.url}/jobs${qs ? '?' + qs : ''}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  events(jobId: string): Observable<JobEvent[]> {
+    return this.http.get<JobEvent[]>(`${this.base.url}/jobs/${this.base.enc(jobId)}/events`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
   get(jobId: string): Observable<Job> {
     return this.http.get<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));

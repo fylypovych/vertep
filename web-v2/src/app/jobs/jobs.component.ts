@@ -36,8 +36,8 @@ import { PolicyService } from '../core/services/policy.service';
 
       @if (view() === 'list') {
         <div class="mb-4 grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
-          <input [(ngModel)]="search" data-testid="jobs-search" placeholder="Пошук за ID або темою..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-          <select [(ngModel)]="statusGroup" data-testid="jobs-status-filter" class="px-3 py-2 border border-slate-200 rounded-lg text-sm">
+          <input [(ngModel)]="search" (ngModelChange)="onSearchChange()" data-testid="jobs-search" placeholder="Пошук за ID або темою..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+          <select [(ngModel)]="statusGroup" (ngModelChange)="onGroupChange()" data-testid="jobs-status-filter" class="px-3 py-2 border border-slate-200 rounded-lg text-sm">
             <option value="">Усі стани</option><option value="active">Активні</option><option value="queued">У черзі</option><option value="waiting">Очікують</option><option value="completed">Завершені</option><option value="failed">З помилкою</option>
           </select>
         </div>
@@ -58,7 +58,7 @@ import { PolicyService } from '../core/services/policy.service';
                 </tr>
               </thead>
               <tbody>
-                @for (job of pagedJobs; track job.job_id) {
+                @for (job of pagedJobs(); track job.job_id) {
                   <tr class="border-t border-slate-100">
                     <td class="px-4 py-3 font-medium text-slate-900">{{ job.job_id }}</td>
                     <td class="px-4 py-3">
@@ -82,11 +82,11 @@ import { PolicyService } from '../core/services/policy.service';
               </tbody>
             </table>
           </div>
-          @if (pages > 1) {
+          @if (pages() > 1) {
             <div class="flex items-center justify-between mt-4">
               <button (click)="prevPage()" [disabled]="page === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Назад</button>
-              <span class="text-sm text-slate-600">Сторінка {{ page }} з {{ pages }}</span>
-              <button (click)="nextPage()" [disabled]="page === pages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Вперед</button>
+              <span class="text-sm text-slate-600">Сторінка {{ page }} з {{ pages() }}</span>
+              <button (click)="nextPage()" [disabled]="page === pages()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Вперед</button>
             </div>
           }
         }
@@ -303,7 +303,9 @@ import { PolicyService } from '../core/services/policy.service';
 })
 export class JobsComponent implements OnInit, OnDestroy {
   view = signal<'list' | 'queue'>('list');
-  jobs: Job[] = [];
+  pagedJobs = signal<Job[]>([]);
+  total = signal(0);
+  pages = signal(1);
   loading = signal(false);
   error = signal<string | null>(null);
   showCreateModal = false;
@@ -395,30 +397,31 @@ export class JobsComponent implements OnInit, OnDestroy {
     }
   }
 
-  get filteredJobs(): Job[] {
-    const term = this.search.toLowerCase();
-    return this.jobs.filter(j => {
-      const matchesText = !term || `${j.job_id} ${j.topic}`.toLowerCase().includes(term);
-      const matchesGroup = !this.statusGroup || inStatusGroup(j.status, this.statusGroup as 'active' | 'queued' | 'waiting' | 'completed' | 'failed');
-      return matchesText && matchesGroup;
-    });
+  onSearchChange(): void {
+    this.page = 1;
+    this.loadJobs();
   }
 
-  get pagedJobs(): Job[] {
-    const start = (this.page - 1) * this.pageSize;
-    return this.filteredJobs.slice(start, start + this.pageSize);
-  }
-
-  get pages() {
-    return Math.max(1, Math.ceil(this.filteredJobs.length / this.pageSize));
+  onGroupChange(): void {
+    this.page = 1;
+    this.loadJobs();
   }
 
   loadJobs(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getJobs().subscribe({
-      next: (jobs) => {
-        this.jobs = jobs;
+    this.api.listJobsPage({ statusGroup: this.statusGroup || undefined, search: this.search || undefined, page: this.page, perPage: this.pageSize }).subscribe({
+      next: (result) => {
+        if (Array.isArray(result)) {
+          // Legacy plain-array response (any consumer that still serves it).
+          this.pagedJobs.set(result);
+          this.total.set(result.length);
+          this.pages.set(Math.max(1, Math.ceil(result.length / this.pageSize)));
+        } else {
+          this.pagedJobs.set(result.items || []);
+          this.total.set(result.total || 0);
+          this.pages.set(Math.max(1, result.pages || 1));
+        }
         this.loading.set(false);
       },
       error: (err) => {
@@ -572,10 +575,16 @@ export class JobsComponent implements OnInit, OnDestroy {
   }
 
   prevPage(): void {
-    if (this.page > 1) this.page--;
+    if (this.page > 1) {
+      this.page--;
+      this.loadJobs();
+    }
   }
 
   nextPage(): void {
-    if (this.page < this.pages) this.page++;
+    if (this.page < this.pages()) {
+      this.page++;
+      this.loadJobs();
+    }
   }
 }

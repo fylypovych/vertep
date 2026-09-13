@@ -11,7 +11,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.responses import Response
@@ -31,6 +31,21 @@ from .job_helpers import (_job_action, _job_is_due,
                           _prepare_and_dispatch, _validate_workflow_reference)
 
 router = APIRouter()
+
+
+# Server-side equivalents of the Web UI status groups (see web-v2 presentation.ts).
+STATUS_GROUPS: dict[str, set[str]] = {
+    "active": {"SCRIPT_GENERATING", "STORYBOARD_GENERATING", "ASSET_GENERATION",
+               "VIDEO_GENERATION", "ASSEMBLY", "PUBLISHING", "TTS_GENERATING"},
+    "queued": {"NEW", "SCRIPT_QUEUED", "STORYBOARD_QUEUED"},
+    "waiting": {"WAITING_FOR_SYSTEM", "PENDING_APPROVAL", "SCRIPT_PENDING_APPROVAL",
+                "SCRIPT_REVISION_REQUESTED", "STORYBOARD_PENDING_APPROVAL",
+                "STORYBOARD_REVISION_REQUESTED", "VIDEO_PENDING_APPROVAL",
+                "VIDEO_REVISION_REQUESTED"},
+    "completed": {"SCRIPT_READY", "SCRIPT_APPROVED", "STORYBOARD_APPROVED", "ASSETS_READY",
+                  "VIDEO_READY", "VIDEO_APPROVED", "READY", "PUBLISHED"},
+    "failed": {"FAILED", "SCRIPT_FAILED", "STORYBOARD_FAILED", "VIDEO_FAILED"},
+}
 
 
 @router.post("/api/jobs")
@@ -72,8 +87,49 @@ def create_job(request: JobCreate):
 
 
 @router.get("/api/jobs")
-def list_jobs():
-    return list(store.jobs.values())
+def list_jobs(status: str | None = Query(default=None),
+              status_group: str | None = Query(default=None),
+              search: str | None = Query(default=None),
+              page: int | None = Query(default=None, ge=1),
+              per_page: int | None = Query(default=None, ge=1, le=200)):
+    """List jobs with optional server-side filters and pagination.
+
+    Filters mirror the Web UI local groups (``active``/``queued``/``waiting``/
+    ``completed``/``failed``) plus an exact-status filter and a case-insensitive
+    search over topic and job id. When ``page`` is supplied a JSON envelope is
+    returned: ``{items, total, page, per_page, pages, has_more}``. Without any
+    query parameters the legacy plain-array contract is preserved so existing
+    consumers (SSE feed, scheduler polling, legacy UI) are unaffected.
+    """
+    jobs = list(store.jobs.values())
+    if status:
+        jobs = [job for job in jobs if job.status.value == status or job.status.name == status]
+    if status_group:
+        allowed = STATUS_GROUPS.get(status_group)
+        if allowed is not None:
+            jobs = [job for job in jobs if job.status.value in allowed]
+    if search:
+        needle = search.lower()
+        jobs = [job for job in jobs if needle in job.topic.lower() or needle in job.job_id.lower()]
+    if page is None:
+        return jobs
+    per_page = per_page or 20
+    total = len(jobs)
+    ordered = sorted(jobs, key=lambda job: job.created_at, reverse=True)
+    start = (page - 1) * per_page
+    items = ordered[start:start + per_page]
+    pages = (total + per_page - 1) // per_page if total else 0
+    return {"items": items, "total": total, "page": page, "per_page": per_page,
+            "pages": pages, "has_more": page < pages}
+
+
+@router.get("/api/jobs/{job_id}/events")
+def job_structured_events(job_id: str):
+    """Return the structured timeline for a job (real backend events, no parsing)."""
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return [event.model_dump(mode="json") for event in job.event_log]
 
 
 @router.get("/api/jobs/{job_id}")

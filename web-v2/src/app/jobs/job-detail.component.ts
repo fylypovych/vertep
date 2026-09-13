@@ -139,10 +139,17 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
           }
 
           @if (conflict()) {
-            <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6" data-testid="job-conflict-banner">
               <h4 class="text-sm font-medium text-red-900 mb-2">Конфлікт версії</h4>
-              <p class="text-sm text-red-700">Завдання було змінено іншим користувачем. Перезавантажте актуальний стан перед редагуванням.</p>
-              <button (click)="reloadJob()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Перезавантажити</button>
+              @if (conflictLocalVersion() !== null && conflictActualVersion() !== null) {
+                <p class="text-sm text-red-700 mb-1">Актуальна версія: <b>{{ conflictActualVersion() }}</b> · ваша локальна база: <b>{{ conflictLocalVersion() }}</b>. Завдання змінив інший користувач.</p>
+              } @else {
+                <p class="text-sm text-red-700 mb-1">Завдання було змінено іншим користувачем. Перезавантажте актуальний стан перед редагуванням.</p>
+              }
+              <div class="flex gap-3 mt-2">
+                <button (click)="reapplyAfterConflict()" class="text-sm px-3 py-1.5 bg-red-600 text-white rounded hover:bg-red-700 font-medium">Застосувати зміни знову</button>
+                <button (click)="reloadJob()" class="text-sm text-red-600 hover:text-red-700 font-medium">Перезавантажити</button>
+              </div>
             </div>
           }
 
@@ -571,7 +578,25 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                     @if (event.timestamp) {
                       <span class="text-slate-400">{{ event.timestamp | vertepDate }}</span>
                     }
+                    @if (event.type && event.type !== 'info') {
+                      <span class="inline-block px-1 rounded text-[10px] uppercase tracking-wide bg-slate-200 text-slate-600 mr-1">{{ event.type }}</span>
+                    }
+                    @if (event.state) {
+                      <span class="inline-block px-1 rounded text-[10px] bg-emerald-100 text-emerald-700 mr-1">{{ event.state }}</span>
+                    }
                     {{ event.message }}
+                    @if (event.node) {
+                      <a [routerLink]="['/workers', event.node]" class="text-blue-600 hover:underline">@ {{ event.node }}</a>
+                    }
+                    @if (event.task_id) {
+                      <span class="text-slate-400">· #{{ event.task_id }}</span>
+                    }
+                    @if (event.artifact_id) {
+                      <a [href]="'/api/jobs/' + job()!.job_id + '/artifacts/' + event.artifact_id + '/download'" class="text-emerald-600 hover:underline">· артефакт</a>
+                    }
+                    @if (event.error) {
+                      <span class="text-red-600">· {{ event.error }}</span>
+                    }
                   </div>
                 }
               </div>
@@ -600,6 +625,8 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   actionError = signal<string | null>(null);
   regenerateWarning = signal(false);
   conflict = signal(false);
+  conflictLocalVersion = signal<number | null>(null);
+  conflictActualVersion = signal<number | null>(null);
   verifying = signal<string | null>(null);
   characters = signal<Character[]>([]);
   brands = signal<Brand[]>([]);
@@ -639,6 +666,8 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     this.loading.set(true);
     this.error.set(null);
     this.conflict.set(false);
+    this.conflictLocalVersion.set(null);
+    this.conflictActualVersion.set(null);
     this.subs.add(
       this.api.getJob(jobId).subscribe({
         next: (job) => {
@@ -662,6 +691,25 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     if (jobId) {
       this.loadJob(jobId);
     }
+  }
+
+  reapplyAfterConflict(): void {
+    const jobId = this.route.snapshot.paramMap.get('id');
+    if (!jobId) return;
+    this.conflict.set(false);
+    this.conflictLocalVersion.set(null);
+    this.conflictActualVersion.set(null);
+    this.api.getJob(jobId).subscribe({
+      next: (fresh) => {
+        this.job.set(fresh as Job);
+        this.loadJobChannels(fresh as Job);
+        if (this.editing()) {
+          // Re-submit the still-open form against the fresh version.
+          this.saveChanges();
+        }
+      },
+      error: (err) => this.toast.show(err.message || 'Не вдалося перезавантажити завдання', 'error'),
+    });
   }
 
   loadCharacters(): void {
@@ -769,6 +817,9 @@ export class JobDetailComponent implements OnInit, OnDestroy {
         error: (err: { status?: number; message?: string }) => {
           if (err.status === 409) {
             this.conflict.set(true);
+            this.conflictLocalVersion.set(j.version);
+            const match = (err.message || '').match(/current version is (\d+)/);
+            this.conflictActualVersion.set(match ? Number(match[1]) : null);
           } else {
             this.toast.show(err.message || 'Помилка оновлення', 'error');
           }
@@ -1105,9 +1156,22 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     return labels[name] || name;
   }
 
-  structuredEvents(): Array<{ key: string; message: string; timestamp?: string }> {
+  structuredEvents(): Array<{ key: string; message: string; timestamp?: string; type?: string; state?: string; node?: string; task_id?: string; artifact_id?: string; error?: string }> {
     const j = this.job();
     if (!j) return [];
+    if (Array.isArray(j.event_log) && j.event_log.length) {
+      return j.event_log.map((event, idx) => ({
+        key: `ev-${idx}-${event.timestamp || idx}`,
+        timestamp: event.timestamp,
+        message: event.message,
+        type: event.type,
+        state: event.state,
+        node: event.node,
+        task_id: event.task_id,
+        artifact_id: event.artifact_id,
+        error: event.error,
+      }));
+    }
     return j.events.map((event, idx) => {
       const timestampMatch = event.match(/^(\d{4}-\d{2}-\d{2}T[\d:]+Z?)\s+/);
       if (timestampMatch) {

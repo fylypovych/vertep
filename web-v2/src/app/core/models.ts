@@ -156,6 +156,7 @@ export interface Job {
   completed_task_ids: string[];
   script?: Record<string, unknown>;
   events: string[];
+  event_log?: JobEvent[];
   output_path?: string;
   assigned_worker?: string;
   workflow?: string;
@@ -163,6 +164,34 @@ export interface Job {
   scheduled_for?: string;
   storyboards?: StoryboardVersion[];
   active_storyboard_version?: number;
+}
+
+export interface JobEvent {
+  timestamp: string;
+  type: string;
+  message: string;
+  state?: string;
+  attempt?: number;
+  node?: string;
+  task_id?: string;
+  artifact_id?: string;
+  error?: string;
+}
+
+export interface JobListQuery {
+  statusGroup?: string;
+  search?: string;
+  page?: number;
+  perPage?: number;
+}
+
+export interface JobPage {
+  items: Job[];
+  total: number;
+  page: number;
+  per_page: number;
+  pages: number;
+  has_more: boolean;
 }
 
 export interface StoryboardScene {

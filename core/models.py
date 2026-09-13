@@ -270,6 +270,26 @@ class JobUpdate(BaseModel):
     workflow: str | None = None
     topic: str | None = None
 
+class JobEvent(BaseModel):
+    """Structured timeline record for a job.
+
+    Unlike the legacy ``Job.events`` list of plain strings, an event carries a
+    real, machine-readable ``timestamp`` produced by the backend together with
+    structured context (state, attempt, node/worker, task, artifact, error).
+    The Web UI renders this timeline directly instead of parsing line prefixes
+    or fabricating timestamps.
+    """
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    type: str = "info"
+    message: str
+    state: str | None = None
+    attempt: int | None = None
+    node: str | None = None
+    task_id: str | None = None
+    artifact_id: str | None = None
+    error: str | None = None
+
+
 class Job(BaseModel):
     job_id: str
     topic: str
@@ -279,6 +299,7 @@ class Job(BaseModel):
     created_at: str
     script: dict[str, Any] | None = None
     events: list[str] = Field(default_factory=list)
+    event_log: list[JobEvent] = Field(default_factory=list)
     output_path: str | None = None
     retries: int = 0
     source: str = "web"

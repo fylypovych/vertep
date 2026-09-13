@@ -14,6 +14,9 @@ import {
   RolesUpdateResponse,
   JobCreate,
   JobUpdate,
+  JobEvent,
+  JobPage,
+  JobListQuery,
   ArtifactVerifyResponse,
   ArtifactRecord,
   RegistrationTokenResponse,
@@ -79,6 +82,24 @@ export class VertepApiService {
 
   getJobs(): Observable<Job[]> {
     return this.http.get<Job[]>(`${this.baseUrl}/jobs`, { headers: this.getHeaders() }).pipe(
+      catchError((err) => throwError(() => err)),
+    );
+  }
+
+  listJobsPage(query: JobListQuery = {}): Observable<JobPage> {
+    const params = new URLSearchParams();
+    if (query.statusGroup) params.set('status_group', query.statusGroup);
+    if (query.search) params.set('search', query.search);
+    if (query.page) params.set('page', String(query.page));
+    if (query.perPage) params.set('per_page', String(query.perPage));
+    const qs = params.toString();
+    return this.http.get<JobPage>(`${this.baseUrl}/jobs${qs ? '?' + qs : ''}`, { headers: this.getHeaders() }).pipe(
+      catchError((err) => throwError(() => err)),
+    );
+  }
+
+  getJobEvents(jobId: string): Observable<JobEvent[]> {
+    return this.http.get<JobEvent[]>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/events`, { headers: this.getHeaders() }).pipe(
       catchError((err) => throwError(() => err)),
     );
   }

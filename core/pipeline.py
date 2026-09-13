@@ -3,7 +3,7 @@ import os
 import shutil
 import threading
 from pathlib import Path
-from .models import Job, JobStatus, utc_now, job_transition_allowed
+from .models import Job, JobEvent, JobStatus, utc_now, job_transition_allowed
 from adapters.providers import providers
 from adapters.telegram import TelegramAdapter
 from .logging_config import configure_logging
@@ -48,10 +48,14 @@ class JobStore:
                 if original_status == JobStatus.PUBLISHING:
                     job.status = JobStatus.READY
                     job.events.append(f"{utc_now()} PUBLISHING INTERRUPTED; RETURNED TO READY")
+                    job.event_log.append(JobEvent(message="PUBLISHING INTERRUPTED; RETURNED TO READY",
+                                                  type="status", state="READY"))
                     self.repository.save_job(job)
                 elif original_status == JobStatus.VIDEO_READY and (self.root / job.job_id / "final" / "video.mp4").is_file():
                     job.status = JobStatus.READY
                     job.events.append(f"{utc_now()} VIDEO RECOVERED AS READY")
+                    job.event_log.append(JobEvent(message="VIDEO RECOVERED AS READY",
+                                                  type="status", state="READY"))
                     self.repository.save_job(job)
                 elif original_status in {JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_READY,
                                           JobStatus.ASSET_GENERATION, JobStatus.ASSETS_READY,
@@ -60,6 +64,8 @@ class JobStore:
                     recover_after_restart(job)
                     job.status = JobStatus.NEW
                     job.events.append(f"{utc_now()} RECOVERED AFTER RESTART")
+                    job.event_log.append(JobEvent(message="RECOVERED AFTER RESTART",
+                                                  type="status", state="NEW"))
                     self.repository.save_job(job)
                 self.jobs[job.job_id] = job
                 self.sequence = max(self.sequence, int(job.job_id.split("-")[-1]))
@@ -83,7 +89,8 @@ class JobStore:
                       output_preset=output_preset,
                       scheduled_for=scheduled_for,
                       max_retries=int(os.getenv("MAX_RETRIES", "3")),
-                      events=[f"{utc_now()} JOB CREATED"])
+                      events=[f"{utc_now()} JOB CREATED"],
+                      event_log=[JobEvent(message="JOB CREATED", type="create", state="NEW")])
             directory = self.root / job_id
             for name in ("references", "images", "video", "audio", "subtitles", "final"):
                 (directory / name).mkdir(parents=True, exist_ok=True)
@@ -101,20 +108,33 @@ class JobStore:
             shutil.rmtree(self.root / job_id, ignore_errors=True)
             return True
 
-    def event(self, job: Job, message: str) -> Job:
+    def event(self, job: Job, message: str, *, type: str = "info",
+              state: str | None = None, attempt: int | None = None,
+              node: str | None = None, task_id: str | None = None,
+              artifact_id: str | None = None, error: str | None = None) -> Job:
         with self.lock:
             created_at = utc_now()
             job.events.append(f"{created_at} {message}")
+            job.event_log.append(JobEvent(timestamp=created_at, message=message, type=type,
+                                          state=state, attempt=attempt, node=node,
+                                          task_id=task_id, artifact_id=artifact_id, error=error))
             self._save(job)
             self.repository.append_event(job.job_id, created_at, message)
             logger.info(message, extra={"job_id": job.job_id})
             return job
 
-    def update(self, job: Job, status: JobStatus, event: str) -> Job:
+    def update(self, job: Job, status: JobStatus, event: str,
+               *, attempt: int | None = None, node: str | None = None,
+               task_id: str | None = None, artifact_id: str | None = None,
+               error: str | None = None, state: str | None = None) -> Job:
         with self.lock:
             job.status = status
             created_at = utc_now()
             job.events.append(f"{created_at} {event}")
+            job.event_log.append(JobEvent(timestamp=created_at, message=event, type="status",
+                                          state=state or status.value, attempt=attempt,
+                                          node=node, task_id=task_id,
+                                          artifact_id=artifact_id, error=error))
             self._save(job)
             self.repository.append_event(job.job_id, created_at, event)
             logger.info(event, extra={"job_id": job.job_id})
