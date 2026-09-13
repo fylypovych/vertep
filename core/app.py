@@ -55,6 +55,11 @@ from .first_run import (complete_setup, configured_user, is_configured, session_
                         save_user, user_store)
 from .telegram_store import (get_admin_chat_ids, get_allowed_chat_ids, is_allowed_chat,
                              is_admin_chat, load_telegram_settings, save_telegram_settings)
+from .operations import (create_operation, get_operation, list_operations,
+                         begin_operation, advance_operation, complete_operation, fail_operation,
+                         is_operation_in_progress, audit_entry, OperationStatus)
+from .update_manager import request_update, update_status
+from .pipeline import regenerate_script
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
@@ -136,6 +141,8 @@ from .state import (store, executor, task_queue, logger, workflow_registry,
                     _telegram_pending_brands, _telegram_pending_character)
 last_maintenance = 0.0
 telegram_polling_service: TelegramPollingService | None = None
+_telegram_system_callbacks: set[str] = set()
+_telegram_system_restore: dict[str, dict] = {}
 
 
 # Authentication and credential helpers were extracted to core/security.py.
@@ -245,7 +252,9 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return Response("Insufficient role", 403)
         if request.method in {"PUT", "DELETE"} and request.url.path.startswith(("/api/characters", "/api/brands", "/api/workflows")) and role != "admin":
             return Response("Administrator role required", 403)
-        if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles", "/api/system/recovery")) and role != "admin":
+        if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles", "/api/system/recovery", "/api/system/restart", "/api/system/test")) and role != "admin":
+            return Response("Administrator role required", 403)
+        if request.method != "GET" and request.url.path.startswith("/api/system/backups") and role != "admin":
             return Response("Administrator role required", 403)
         if request.method != "GET" and request.url.path.startswith("/api/settings") and role != "admin":
             return Response("Administrator role required", 403)
@@ -446,11 +455,267 @@ def _is_admin_chat(chat_id: str) -> bool:
     return is_admin_chat(chat_id)
 
 
+def _format_operation(operation: dict) -> str:
+    """Format a persisted system-operation record as readable text for Telegram."""
+    status = operation.get("status", "UNKNOWN")
+    op_type = operation.get("type", "?")
+    op_id = str(operation.get("operation_id", ""))[:8]
+    progress = operation.get("progress", 0)
+    phase = operation.get("current_phase") or "—"
+    error = operation.get("error")
+    lines = [
+        f"Операція {op_type} (#{op_id})",
+        f"Статус: {status} · прогрес {progress}% · фаза: {phase}",
+    ]
+    if error:
+        lines.append(f"Помилка: {error}")
+    return "\n".join(lines)
+
+
+def _send_system_menu(chat_id: str) -> dict:
+    menu = {
+        "inline_keyboard": [
+            [
+                {"text": "📊 Статус", "callback_data": "sys_status:menu"},
+                {"text": "🔄 Оновлення", "callback_data": "sys_update:menu"},
+                {"text": "🔁 Рестарт", "callback_data": "sys_restart:menu"},
+            ],
+            [
+                {"text": "💾 Резервна копія", "callback_data": "sys_backup:menu"},
+                {"text": "♻️ Відновлення", "callback_data": "sys_restore:menu"},
+                {"text": "🧪 Тест", "callback_data": "sys_test:menu"},
+            ],
+        ]
+    }
+    return TelegramAdapter().send_message(chat_id, "🛠 Керування системою:", reply_markup=menu)
+
+
+def _sync_internal_api(method: str, base_environment: str, path: str,
+                       payload: dict | None = None, timeout: float = 30.0) -> dict | None:
+    """Synchronous wrapper around an internal service API.
+
+    Returns the parsed JSON body, or ``None`` when the service is not
+    configured / unreachable.  Telegram handlers must never raise on a
+    missing backend — they degrade to an error message instead.
+    """
+    base = os.getenv(base_environment, "").rstrip("/")
+    if not base:
+        return None
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.request(method, f"{base}{path}", json=payload)
+            if response.status_code >= 400:
+                return {"_error": f"HTTP {response.status_code}: {response.text[:200]}"}
+            return response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+def _format_workers_summary() -> str:
+    """One-line summary of registered nodes for Telegram status."""
+    nodes = _sync_internal_api("GET", "CORE_API_URL", "/api/nodes") \
+        or _sync_internal_api("GET", "BACKUP_URL", "/api/nodes")
+    if not nodes or not isinstance(nodes, list):
+        return "Вузли: unavailable"
+    online = sum(1 for n in nodes if (n.get("runtime_status") or n.get("status")) == "ONLINE")
+    return f"Вузли: {online}/{len(nodes)} online"
+
+
+def _format_jobs_summary() -> str:
+    """One-line summary of active/queued/failed jobs for Telegram status."""
+    data = _sync_internal_api("GET", "CORE_API_URL", "/api/jobs",
+                              {"per_page": 100, "page": 1}) or {}
+    jobs = data if isinstance(data, list) else data.get("jobs", [])
+    if not isinstance(jobs, list):
+        return "Jobs: unavailable"
+    active = {"PROCESSING", "SCRIPTING", "ASSET_GENERATION", "VIDEO_GENERATION",
+              "ASSEMBLY", "PUBLISHING"}
+    queued = {"NEW", "WAITING_FOR_SYSTEM"}
+    failed = {"FAILED"}
+    counts = {"active": 0, "queued": 0, "failed": 0}
+    for job in jobs:
+        status = str(job.get("status", "")).upper()
+        if status in active:
+            counts["active"] += 1
+        elif status in queued:
+            counts["queued"] += 1
+        elif status in failed:
+            counts["failed"] += 1
+    return (f"Jobs: {counts['active']} active / {counts['queued']} queued "
+            f"/ {counts['failed']} failed")
+
+
+def _format_last_backup() -> str:
+    """Last backup line for Telegram status."""
+    data = _sync_internal_api("GET", "BACKUP_URL", "/snapshots")
+    snapshots = (data or {}).get("snapshots", []) if isinstance(data, dict) else []
+    if not snapshots:
+        return "Останній backup: unavailable"
+    latest = snapshots[0]
+    return (f"Останній backup: {latest.get('snapshot_id', '?')} "
+            f"({latest.get('created_at', '?')})")
+
+
+def _system_status_text() -> str:
+    state = get_system_state()
+    update = {}
+    try:
+        update = update_status() or {}
+    except Exception:
+        pass
+    state_name = state.get("state", "NORMAL")
+    update_state = update.get("state", "IDLE")
+    current = update.get("current_version") or "?"
+    lines = [f"Система: {state_name}", f"Оновлення: {update_state} (поточна {current})"]
+    available = update.get("available_version")
+    if available:
+        lines.append(f"Доступна версія: {available}")
+    lines.append(_format_workers_summary())
+    lines.append(_format_jobs_summary())
+    lines.append(_format_last_backup())
+    operations = list_operations(5)
+    if operations:
+        lines.append("Останні операції:")
+        for op in operations:
+            lines.append(f"  • {_format_operation(op)}")
+    return "\n".join(lines)
+
+
+def _send_confirmation(chat_id: str, message: str, confirm_data: str,
+                       cancel_data: str = "sys_cancel") -> dict:
+    """Send a two-step confirmation prompt with Confirm / Cancel inline keyboard."""
+    keyboard = {"inline_keyboard": [
+        [{"text": "✅ Підтвердити", "callback_data": confirm_data},
+         {"text": "❌ Скасувати", "callback_data": cancel_data}],
+    ]}
+    return TelegramAdapter().send_message(chat_id, message, reply_markup=keyboard)
+
+
+def _send_backups_list(chat_id: str, backups: list[dict]) -> dict:
+    """Show available backups for restore selection."""
+    if not backups:
+        return TelegramAdapter().send_message(
+            chat_id, "Недоступні резервні копії. Перевірте Backup Node.")
+    keyboard = {"inline_keyboard": [
+        [{"text": f"💾 {b.get('snapshot_id', '?')[:18]} ({b.get('created_at', '?')[:16]})",
+          "callback_data": f"sys_restore_select:{b.get('snapshot_id')}"}]
+        for b in backups[:10]
+    ]}
+    keyboard["inline_keyboard"].append(
+        [{"text": "❌ Скасувати", "callback_data": "sys_restore_cancel"}])
+    return TelegramAdapter().send_message(
+        chat_id, "Оберіть резервну копію для відновлення:", reply_markup=keyboard)
+
+
+def _send_nodes_list(chat_id: str, nodes: list[dict], prefix: str) -> dict:
+    """Show registered nodes for target selection (restart / test node)."""
+    if not nodes:
+        return TelegramAdapter().send_message(chat_id, "Немає зареєстрованих вузлів.")
+    keyboard = {"inline_keyboard": [
+        [{"text": f"🖥 {n.get('node_id', '?')} [{n.get('role', '?')}]",
+          "callback_data": f"{prefix}:{n.get('node_id')}"}]
+        for n in nodes[:10]
+    ]}
+    keyboard["inline_keyboard"].append(
+        [{"text": "❌ Скасувати", "callback_data": "sys_cancel"}])
+    return TelegramAdapter().send_message(
+        chat_id, "Оберіть вузол:", reply_markup=keyboard)
+
+
+def _call_backup_api(method: str, path: str, payload: dict | None = None,
+                     timeout: float = 120.0) -> dict | None:
+    """Call the Backup Service directly (synchronous)."""
+    return _sync_internal_api(method, "BACKUP_URL", path, payload, timeout=timeout)
+
+
+def _call_core_api(method: str, path: str, payload: dict | None = None,
+                   timeout: float = 30.0) -> dict | None:
+    """Call the CORE API directly (synchronous)."""
+    return _sync_internal_api(method, "CORE_API_URL", path, payload, timeout=timeout)
+
+
+def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
+    callback_id = str(callback.get("id", ""))
+    if action == "sys_status":
+        return TelegramAdapter().answer_callback(callback_id, _system_status_text())
+    if action in {"sys_update", "sys_update_confirm"}:
+        try:
+            request_update("update")
+            op = create_operation("update", f"telegram:{chat_id}")
+            begin_operation(op["operation_id"], "Запит на оновлення прийнято")
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Оновлення заплановано. ID операції: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Оновлення не запущено: {error}")
+    if action == "sys_update_cancel":
+        return TelegramAdapter().answer_callback(
+            callback_id, "Оновлення скасовується через Web UI: Налаштування → Оновлення."
+        )
+    if action == "sys_restart":
+        return TelegramAdapter().answer_callback(
+            callback_id, "Перезапуск виконується через Web UI: Налаштування → Система → Перезапуск."
+        )
+    if action in {"sys_backup", "sys_backup_confirm"}:
+        try:
+            op = create_operation("backup", f"telegram:{chat_id}")
+            begin_operation(op["operation_id"], "Створення резервної копії")
+            advance_operation(op["operation_id"], "snapshot", 10, "Snapshot заплановано")
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Резервна копія запланована. ID операції: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Backup не запущено: {error}")
+    if action in {"sys_backup_cancel", "sys_restore_cancel"}:
+        return TelegramAdapter().answer_callback(callback_id, "Операцію скасовано.")
+    if action == "sys_restore":
+        return TelegramAdapter().answer_callback(
+            callback_id, "Відновлення виконується через Web UI: Налаштування → Резервне копіювання → Відновлення."
+        )
+    if action in {"sys_restore_select", "sys_restore_confirm"}:
+        try:
+            op = create_operation("restore", f"telegram:{chat_id}")
+            begin_operation(op["operation_id"], "Відновлення")
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Відновлення заплановано. ID операції: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Відновлення не запущено: {error}")
+    if action == "sys_test":
+        return TelegramAdapter().answer_callback(
+            callback_id, "Швидкий / повний тест вузла через Web UI: Налаштування → Тестування."
+        )
+    if action in {"sys_test_quick", "sys_test_full", "sys_test_node"}:
+        try:
+            op = create_operation("test", f"telegram:{chat_id}")
+            begin_operation(op["operation_id"], action)
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Тест заплановано. ID операції: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Тест не запущено: {error}")
+    return TelegramAdapter().answer_callback(callback_id, "Невідома системна операція.")
 def _handle_telegram_callback(callback: dict) -> dict:
     data = str(callback.get("data", ""))
     action, _, payload = data.partition(":")
     callback_id = str(callback.get("id", ""))
     chat_id = str(callback.get("message", {}).get("chat", {}).get("id", "unknown"))
+
+    # System operations (admin only)
+    if action in {"sys_status", "sys_update", "sys_update_confirm", "sys_update_cancel",
+                  "sys_restart", "sys_restart_confirm", "sys_restart_cancel",
+                  "sys_restart_select", "sys_backup", "sys_backup_confirm", "sys_backup_cancel",
+                  "sys_restore", "sys_restore_select", "sys_restore_confirm", "sys_restore_cancel",
+                  "sys_test", "sys_test_quick", "sys_test_full", "sys_test_node",
+                  "sys_test_node_select", "sys_cancel"}:
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
+        if callback_id and callback_id in _telegram_system_callbacks:
+            return TelegramAdapter().answer_callback(callback_id, "Операцію вже оброблено.")
+        _telegram_system_callbacks.add(callback_id)
+        if len(_telegram_system_callbacks) > 10000:
+            _telegram_system_callbacks.clear()
+        return _handle_system_callback(callback, chat_id, action, payload)
 
     if action == "select_brand":
         return _handle_brand_selection(callback, chat_id, payload)
@@ -464,7 +729,8 @@ def _handle_telegram_callback(callback: dict) -> dict:
         return _handle_publish_channel(callback, chat_id, payload)
     elif action == "publish_all":
         return _handle_publish_all(callback, chat_id, payload)
-    elif action in {"sb_ok", "sb_regen", "sb_edit", "sb_reject"}:
+    elif action in {"sb_ok", "sb_regen", "sb_edit", "sb_reject",
+                    "sb_img_ok", "sb_img_regen", "sb_img_edit", "sb_img_scene"}:
         return _handle_storyboard_callback(callback, chat_id, action, payload)
     elif action in {"sc_ok", "sc_regen", "sc_edit", "sc_reject"}:
         return _handle_script_callback(callback, chat_id, action, payload)
@@ -599,7 +865,8 @@ def _regenerate_storyboard_and_notify(job_id: str, version: int, chat_id: str,
 
 def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
     callback_id = str(callback.get("id", ""))
-    # Support sb_img_* payloads with extra :scene_index
+    # Image callbacks carry the reviewed image_version (and, for sb_img_scene, the
+    # scene index) so that stale image callbacks are rejected server-side (Issue #36).
     raw = payload
     job_id, separator, rest = raw.partition(":")
     if not separator:
@@ -608,7 +875,8 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
     if not parts[0].isdigit():
         return TelegramAdapter().answer_callback(callback_id, "Некоректна версія розкадровки")
     version = int(parts[0])
-    extra = parts[1] if len(parts) > 1 else None
+    image_version = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    scene_index = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
     service = StoryboardService(store)
     try:
         if action == "sb_ok":
@@ -624,14 +892,17 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
                 raise StoryboardConflict("Версія розкадровки вже неактуальна")
             job.storyboard_revision_chat_id = chat_id
             job.storyboard_revision_version = version
+            job.storyboard_image_revision_pending = False
             store.event(job, f"STORYBOARD {version} AWAITS REVISION TEXT")
             text = "Надішліть одним повідомленням, що потрібно змінити."
         elif action == "sb_img_ok":
-            job = service.approve_images(job_id, version, f"telegram:{chat_id}")
+            job = service.approve_images(job_id, version, f"telegram:{chat_id}",
+                                         expected_image_version=image_version)
             executor.submit(_prepare_and_dispatch, job)
             text = f"🖼️ Превʼю розкадровки {version} схвалено. Відео розблоковано."
         elif action == "sb_img_regen":
-            service.request_image_revision(job_id, version, f"telegram:{chat_id}", None, None)
+            service.request_image_revision(job_id, version, f"telegram:{chat_id}", None, None,
+                                           expected_image_version=image_version)
             text = "🔁 Перегенеровую всі превʼю розкадровки."
             job = store.jobs.get(job_id)
             if job:
@@ -644,12 +915,14 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
                 raise StoryboardConflict("Версія розкадровки вже неактуальна")
             job.storyboard_revision_chat_id = chat_id
             job.storyboard_revision_version = version
+            job.storyboard_image_revision_pending = True
             store.event(job, f"IMAGE STORYBOARD {version} AWAITS REVISION TEXT")
             text = "Надішліть правки до превʼю одним повідомленням."
         elif action == "sb_img_scene":
-            idx = int(extra) if extra and extra.isdigit() else None
-            service.request_image_revision(job_id, version, f"telegram:{chat_id}", [idx] if idx else None, None)
-            text = f"🔁 Перегенеровую превʼю сцени {idx or ''}."
+            service.request_image_revision(job_id, version, f"telegram:{chat_id}",
+                                           [scene_index] if scene_index else None, None,
+                                           expected_image_version=image_version)
+            text = f"🔁 Перегенеровую превʼю сцени {scene_index or ''}."
         else:
             executor.submit(_regenerate_storyboard_and_notify, job_id, version, chat_id)
             text = "🔄 Генерую нову версію розкадровки."
@@ -882,6 +1155,16 @@ def _send_approval_request(job) -> None:
 def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: dict) -> dict:
     if text == "/start":
         return TelegramAdapter().send_message(chat_id, "Vertep Bot підключений.\nНадішліть тему для створення контенту.")
+    if text in {"/system", "/admin"}:
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().send_message(chat_id, "Доступ заборонено.")
+        return _send_system_menu(chat_id)
+    if text.startswith("/operation "):
+        operation_id = text.split(maxsplit=1)[1].strip()
+        operation = get_operation(operation_id)
+        if not operation:
+            return TelegramAdapter().send_message(chat_id, "Операцію не знайдено.")
+        return TelegramAdapter().send_message(chat_id, _format_operation(operation))
     if text.startswith("/status"):
         active = sum(job.status not in {JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED, JobStatus.CANCELLED}
                      for job in store.jobs.values())
@@ -1496,6 +1779,22 @@ async def system_backups():
 @app.get("/api/system/state")
 def system_state_api():
     from .system_state import get_system_state
+    return get_system_state()
+
+
+@app.post("/api/system/state")
+def set_emergency_state(payload: dict | None = None):
+    """Durably switch CORE to EMERGENCY.
+
+    Called by the Backup Node when a restore fails (Issue #36/#16). The node POSTs
+    here and then GETs back to verify the state actually changed; unavailability of
+    this endpoint must not be treated as confirmation the system is safe.
+    """
+    from .system_state import SystemState, get_system_state, set_system_state
+    body = payload or {}
+    reason = str(body.get("reason") or "EMERGENCY")[:500]
+    operation_id = body.get("operation_id")
+    set_system_state(SystemState.EMERGENCY, reason, operation_id)
     return get_system_state()
 
 

@@ -1,6 +1,7 @@
 import base64
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from services import (backup_service, certificate_service, dispatcher_service,
@@ -60,6 +61,82 @@ def test_backup_service_creates_encrypted_snapshot_and_receipt(monkeypatch, tmp_
     assert (storage / "artifact.bin").read_bytes() == b"content that must not remain plaintext"
 
 
+def test_backup_remote_copy_failure_surfaces(monkeypatch, tmp_path):
+    """A configured remote copy that fails must fail the snapshot, not fake success."""
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir(); storage.mkdir(); backups.mkdir()
+    (storage / "artifact.bin").write_bytes(b"data")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_REMOTE_CMD", "false {file}")
+
+    class Fail:
+        returncode = 1
+        stderr = b"remote storage down"
+
+    monkeypatch.setattr(backup_service.subprocess, "run", lambda *a, **k: Fail())
+    client = TestClient(backup_service.app, raise_server_exceptions=False)
+    resp = client.post("/snapshots", json={"job_id": "rc-fail", "request": {}})
+    assert resp.status_code == 500
+    # No receipt reflecting a false remote-copy success
+    assert not list(backups.glob("*.json"))
+
+
+def test_backup_receipt_records_real_remote_copy(monkeypatch, tmp_path):
+    """The receipt reflects the ACTUAL remote copy outcome, not the mere presence of the command."""
+    config, storage, backups = tmp_path / "config", tmp_path / "storage", tmp_path / "backups"
+    config.mkdir(); storage.mkdir(); backups.mkdir()
+    (storage / "artifact.bin").write_bytes(b"data")
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_REMOTE_CMD", "true {file}")
+
+    class Ok:
+        returncode = 0
+        stderr = b""
+
+    monkeypatch.setattr(backup_service.subprocess, "run", lambda *a, **k: Ok())
+    client = TestClient(backup_service.app)
+    resp = client.post("/snapshots", json={"job_id": "rc-ok", "request": {}})
+    assert resp.status_code == 200
+    assert resp.json()["remote_copy"] is True
+
+
+def test_is_restore_allowed_denies_when_core_state_unavailable(monkeypatch):
+    """Unavailability of the CORE state API must not be treated as a safe-restore confirm."""
+    monkeypatch.setenv("BACKUP_CORE_URL", "http://core:8080")
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+    allowed, reason = backup_service._is_restore_allowed()
+    assert allowed is False
+    assert "недоступний" in reason
+
+
+def test_set_emergency_verifies_real_core_state_change(monkeypatch):
+    """_set_emergency must confirm the ACTUAL CORE state changed to EMERGENCY."""
+    monkeypatch.setenv("BACKUP_CORE_URL", "http://core:8080")
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    monkeypatch.setattr(backup_service.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+    # POST succeeded but state did NOT actually become EMERGENCY -> must raise.
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: {"state": "NORMAL"})
+    with pytest.raises(RuntimeError, match="EMERGENCY state was not confirmed"):
+        backup_service._set_emergency("boom")
+    # State actually became EMERGENCY -> no error.
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: {"state": "EMERGENCY"})
+    backup_service._set_emergency("boom")
 def test_backup_service_accepts_bootstrap_hex_key(monkeypatch, tmp_path):
     key_file = tmp_path / "backup.key"
     key_file.write_text("6b" * 32, encoding="ascii")

@@ -107,10 +107,13 @@ def handle_image_result(store, job: Job, task_id: str, success: bool, image_base
     if not raw_images:
         raise ValueError("No image data provided")
     fname, data = raw_images[0]
-    folder = store.root / job.job_id / "storyboard" / f"v{storyboard.image_version}"
+    # Issue #6: path must include BOTH storyboard version and image version so
+    # different storyboard versions with the same image_version never overwrite
+    # an older artifact (which would silently change its checksum).
+    folder = store.root / job.job_id / "storyboard" / f"sb{storyboard.version}" / f"v{storyboard.image_version}"
     folder.mkdir(parents=True, exist_ok=True)
     suffix = Path(fname).suffix or ".png"
-    safe_name = f"scene-{scene.index:03d}-v{storyboard.image_version}{suffix}"
+    safe_name = f"scene-{scene.index:03d}-sb{storyboard.version}-v{storyboard.image_version}{suffix}"
     path = folder / safe_name
     path.write_bytes(data)
     artifact = register_artifact(job, store.root, path, "storyboard_image",

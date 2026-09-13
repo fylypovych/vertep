@@ -168,9 +168,16 @@ class StoryboardService:
                           f"STORYBOARD {version} APPROVED by {actor}")
         return job
 
-    def approve_images(self, job_id: str, version: int, actor: str) -> Job:
+    def approve_images(self, job_id: str, version: int, actor: str,
+                       expected_image_version: int | None = None) -> Job:
         job = self._job(job_id)
         storyboard = self._active(job, version)
+        # Issue #6: verify the exact image version the client actually reviewed.
+        # A stale request for v1 must NOT approve v2 (or vice versa).
+        if expected_image_version is not None and expected_image_version != storyboard.image_version:
+            raise StoryboardConflict(
+                f"Image storyboard {version}:{storyboard.image_version} does not match reviewed version {expected_image_version}"
+            )
         if any(not scene.image_artifact_id for scene in storyboard.scenes):
             raise StoryboardConflict("Not all scene preview images are ready")
         if storyboard.image_status not in {"ready", "pending"}:
@@ -185,9 +192,14 @@ class StoryboardService:
 
     def request_image_revision(self, job_id: str, version: int, actor: str,
                                scene_indexes: list[int] | None = None,
-                               revision: str | None = None) -> Job:
+                               revision: str | None = None,
+                               expected_image_version: int | None = None) -> Job:
         job = self._job(job_id)
         storyboard = self._active(job, version)
+        if expected_image_version is not None and expected_image_version != storyboard.image_version:
+            raise StoryboardConflict(
+                f"Image storyboard {version}:{storyboard.image_version} does not match reviewed version {expected_image_version}"
+            )
         for previous in job.storyboards:
             if previous.image_status == "approved":
                 previous.image_status = "superseded"

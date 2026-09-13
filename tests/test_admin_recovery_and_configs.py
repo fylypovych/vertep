@@ -67,3 +67,17 @@ def test_administrator_can_recover_only_after_health_checks(monkeypatch, tmp_pat
     response = TestClient(core_app.app).post("/api/system/recovery/normal")
     assert response.status_code == 200
     assert get_system_state()["state"] == "NORMAL"
+
+
+def test_core_post_system_state_sets_emergency(monkeypatch, tmp_path):
+    """CORE must expose a real mutating state route so the Backup Node can set EMERGENCY."""
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    client = TestClient(core_app.app)
+    resp = client.post("/api/system/state", json={"reason": "restore failed"})
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "EMERGENCY"
+    got = client.get("/api/system/state").json()
+    assert got["state"] == "EMERGENCY"
+    assert got["reason"] == "restore failed"
+    # Reset so we don't pollute other tests running in the same process.
+    set_system_state(SystemState.NORMAL, "test reset", state_dir=tmp_path)

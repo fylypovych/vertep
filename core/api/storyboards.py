@@ -69,7 +69,9 @@ class ImageStoryboardAction(BaseModel):
 
 @router.post("/api/jobs/{job_id}/storyboards/images/approve")
 def approve_image_storyboard(job_id: str, body: ImageStoryboardAction):
-    job = _translate(lambda: _service().approve_images(job_id, body.version, body.actor))
+    job = _translate(lambda: _service().approve_images(
+        job_id, body.version, body.actor, expected_image_version=body.image_version
+    ))
     executor.submit(_prepare_and_dispatch, job)
     return job
 
@@ -77,14 +79,16 @@ def approve_image_storyboard(job_id: str, body: ImageStoryboardAction):
 @router.post("/api/jobs/{job_id}/storyboards/images/revision")
 def revision_image_storyboard(job_id: str, body: ImageStoryboardAction):
     return _translate(lambda: _service().request_image_revision(
-        job_id, body.version, body.actor, body.scene_indexes, body.revision
+        job_id, body.version, body.actor, body.scene_indexes, body.revision,
+        expected_image_version=body.image_version,
     ))
 
 
 @router.post("/api/jobs/{job_id}/storyboards/images/regenerate")
 def regenerate_image_storyboard(job_id: str, body: ImageStoryboardAction):
     return _translate(lambda: _service().request_image_revision(
-        job_id, body.version, body.actor, body.scene_indexes, body.revision
+        job_id, body.version, body.actor, body.scene_indexes, body.revision,
+        expected_image_version=body.image_version,
     ))
 
 

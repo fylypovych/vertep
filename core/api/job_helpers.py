@@ -535,7 +535,43 @@ def _dispatch_tts(store, job) -> None:
               for scene in _pending_voice_scenes(job)]
 
 
+def _image_storyboard_gate(store, job) -> bool:
+    """Block video/image asset generation until the ACTIVE image storyboard is approved.
+
+    Issue #36/#6: Resume/Retry and other re-dispatches reset the job to NEW while the
+    script is already ready. Without this gate ``_dispatch_assets`` would start video
+    asset generation even though the current preview images were never approved by the
+    operator. Returns ``True`` when the pipeline must wait (missing preview images are
+    (re)queued, with LOCAL_WORKER_FALLBACK first-pass generation kept functional).
+    """
+    if not job.storyboards or not job.active_storyboard_version:
+        return False
+    sb = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
+    if sb is None or sb.image_status == "approved":
+        return False
+    from ..image_storyboard import queue_image_storyboard
+    if not all(s.image_artifact_id for s in sb.scenes):
+        queue_image_storyboard(store, job, sb.version)
+        if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+            from ..image_storyboard import handle_image_result as _handle
+            import base64
+            demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
+            b64 = base64.b64encode(demo_ppm).decode()
+            for tid in list(job.image_storyboard_task_ids.keys()):
+                _handle(store, job, tid, True, image_base64=b64)
+                from ..state import task_queue as _tq
+                _tq.ack(tid)
+            store.event(job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
+    store.event(job, f"IMAGE STORYBOARD {sb.version} NOT APPROVED (status={sb.image_status}); waiting for approval")
+    return True
+
+
 def _prepare_and_dispatch(job) -> None:
+    # Issue #36: never start video/image assets without an approved, current image
+    # storyboard — this closes the Resume/Retry bypass (status reset to NEW while the
+    # script is already ready does not authorize asset generation).
+    if _image_storyboard_gate(store, job):
+        return
     while True:
         if job.script and job.status == JobStatus.NEW:
             initialize_plan(job)

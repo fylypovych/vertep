@@ -334,6 +334,7 @@ class Job(BaseModel):
     storyboard_error: str | None = None
     storyboard_revision_chat_id: str | None = None
     storyboard_revision_version: int | None = None
+    storyboard_image_revision_pending: bool = False
     script_revision_chat_id: str | None = None
     script_revision_pending: bool = False
     video_revision_chat_id: str | None = None

@@ -112,12 +112,16 @@ class TelegramAdapter:
         response.raise_for_status()
         return response.json()
 
-    def send_photo(self, chat_id: str, photo_path: str, caption: str = "") -> dict:
+    def send_photo(self, chat_id: str, photo_path: str, caption: str = "",
+                   reply_markup: dict | None = None) -> dict:
         if not self.configured():
             return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+        data = {"chat_id": chat_id, "caption": caption[:1024]}
+        if reply_markup:
+            data["reply_markup"] = reply_markup
         with open(photo_path, "rb") as photo_file:
             response = httpx.post(f"{self.base_url}/sendPhoto",
-                                  data={"chat_id": chat_id, "caption": caption[:1024]},
+                                  data=data,
                                   files={"photo": photo_file}, timeout=60)
         response.raise_for_status()
         return response.json()

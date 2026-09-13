@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from core.models import JobStatus
+from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from core.pipeline import JobStore
 from core.storyboard import StoryboardConflict, StoryboardService
 from core.storyboard_telegram import render_storyboard, storyboard_keyboard
@@ -220,6 +220,63 @@ def test_image_revision_preserves_old_artifacts(job_store):
     assert first.scenes[0].image_artifact_id == first_artifact
     assert first.status == "superseded"
     assert second.status == "pending_approval"
+
+
+def test_stale_image_approval_rejected_by_reviewed_version(job_store):
+    """Issue #36/#6: a stale image approval/revision must not act on a newer image_version.
+
+    The client transmits the image_version it actually reviewed; approving with a value
+    that no longer matches the current image_version is a conflict, not a silent success.
+    """
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+    service.queue(job)
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, True, [_storyboard_artifact(1)], None)
+    sb = job.storyboards[0]
+    for scene in sb.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    sb.image_status = "ready"
+    assert sb.image_version == 1
+
+    # Reviewing v1 when the current image version is v2 is stale -> rejected.
+    with pytest.raises(StoryboardConflict):
+        service.approve_images(job.job_id, sb.version, "tester", expected_image_version=2)
+    with pytest.raises(StoryboardConflict):
+        service.request_image_revision(job.job_id, sb.version, "tester", [1], "x",
+                                       expected_image_version=2)
+    # The storyboard was not silently approved by the stale request.
+    assert sb.image_status == "ready"
+
+    # Matching reviewed version succeeds.
+    service.approve_images(job.job_id, sb.version, "tester", expected_image_version=1)
+    assert sb.image_status == "approved"
+
+
+def test_image_storyboard_gate_blocks_unapproved_video_assets(job_store, monkeypatch):
+    """Issue #36/#6: Resume/Retry (job reset to NEW with a ready script) must not start
+    video/image assets while the ACTIVE image storyboard is not approved.
+    """
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    from core.api.job_helpers import _image_storyboard_gate
+
+    job = job_store.create("Нова тема", "hero", 5)
+    job.script = {"title": "Тема", "scenes": [{"prompt": "p", "duration": 1}]}
+    scenes = [StoryboardScene(index=i, prompt=f"p{i}", video_prompt=f"v{i}",
+                              voiceover="", duration=1, image_prompt=f"p{i}",
+                              image_artifact_id=f"art-{i}") for i in (1, 2)]
+    sb = StoryboardVersion(version=1, title="Тема", description="", hashtags=[],
+                           scenes=scenes, status="pending_approval",
+                           image_status="ready", image_version=1)
+    job.storyboards = [sb]
+    job.active_storyboard_version = 1
+
+    # Preview images exist but were never approved -> gate blocks asset generation.
+    assert _image_storyboard_gate(job_store, job) is True
+
+    # Once the active image storyboard is approved, the gate opens.
+    sb.image_status = "approved"
+    assert _image_storyboard_gate(job_store, job) is False
 
 
 def test_storyboard_rest_contract_is_registered():

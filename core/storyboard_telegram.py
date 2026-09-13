@@ -123,41 +123,53 @@ def send_storyboard_images(chat_id: str, job: Job, storyboard: StoryboardVersion
     for scene in storyboard.scenes:
         if not scene.image_artifact_id:
             continue
-        folder = Path(job.job_id) / "storyboard" / f"v{storyboard.image_version}"
-        candidates = [
-            store_root / folder / f"scene-{scene.index:03d}-v{storyboard.image_version}.png",
-            store_root / folder / f"scene-{scene.index:03d}-v{storyboard.image_version}.jpg",
-        ]
-        photo_path = next((p for p in candidates if p.exists()), None)
+        # Issue #36: resolve the ACTUAL artifact file registered for this scene instead
+        # of rebuilding the path from the current image-version folder. After a partial
+        # revision unchanged scenes still reference their older artifact; looking them
+        # up only inside the newest image-version directory would silently skip them.
+        photo_path = next((store_root / job.job_id / artifact.path
+                           for artifact in job.artifacts
+                           if artifact.artifact_id == scene.image_artifact_id
+                           and artifact.kind == "storyboard_image"
+                           and (store_root / job.job_id / artifact.path).is_file()), None)
         if not photo_path:
             continue
         caption = f"Сцена {scene.index} · {storyboard.title}"
+        markup = image_storyboard_keyboard(job.job_id, storyboard.version, scene.index,
+                                           storyboard.image_version)
         try:
-            adapter.send_photo(str(chat_id), str(photo_path), caption=caption[:1024])
+            adapter.send_photo(str(chat_id), str(photo_path), caption=caption[:1024], reply_markup=markup)
         except Exception:
             pass
 
 
 def storyboard_keyboard(job_id: str, version: int, image_version: int | None = None) -> dict:
-    # Keep legacy callbacks; add image storyboard controls
+    # Keep legacy callbacks; add image storyboard controls carrying the reviewed
+    # image_version so stale image callbacks are rejected server-side (Issue #36).
     base = [
         {"text": "✅ Схвалити", "callback_data": f"sb_ok:{job_id}:{version}"},
         {"text": "🔄 Перегенерувати", "callback_data": f"sb_regen:{job_id}:{version}"},
         {"text": "✍️ Запросити правки", "callback_data": f"sb_edit:{job_id}:{version}"},
         {"text": "❌ Відхилити", "callback_data": f"sb_reject:{job_id}:{version}"},
     ]
+    reviewed = _imgv(image_version)
     image_row = [
-        {"text": "🖼️ Схвалити превʼю", "callback_data": f"sb_img_ok:{job_id}:{version}"},
-        {"text": "🔁 Перегенерувати превʼю", "callback_data": f"sb_img_regen:{job_id}:{version}"},
-        {"text": "✏️ Правки превʼю", "callback_data": f"sb_img_edit:{job_id}:{version}"},
+        {"text": "🖼️ Схвалити превʼю", "callback_data": f"sb_img_ok:{job_id}:{version}:{reviewed}"},
+        {"text": "🔁 Перегенерувати превʼю", "callback_data": f"sb_img_regen:{job_id}:{version}:{reviewed}"},
+        {"text": "✏️ Правки превʼю", "callback_data": f"sb_img_edit:{job_id}:{version}:{reviewed}"},
     ]
     return {"inline_keyboard": [base, image_row]}
 
 
-def image_storyboard_keyboard(job_id: str, version: int, scene_index: int | None = None) -> dict:
+def _imgv(image_version: int | None) -> str:
+    return str(image_version) if image_version else ""
+
+
+def image_storyboard_keyboard(job_id: str, version: int, scene_index: int | None = None,
+                              image_version: int | None = None) -> dict:
     if scene_index is not None:
         return {"inline_keyboard": [[
-            {"text": f"🔁 Сцена {scene_index}", "callback_data": f"sb_img_scene:{job_id}:{version}:{scene_index}"},
-            {"text": "🖼️ Схвалити превʼю", "callback_data": f"sb_img_ok:{job_id}:{version}"},
+            {"text": f"🔁 Сцена {scene_index}", "callback_data": f"sb_img_scene:{job_id}:{version}:{_imgv(image_version)}:{scene_index}"},
+            {"text": "🖼️ Схвалити превʼю", "callback_data": f"sb_img_ok:{job_id}:{version}:{_imgv(image_version)}"},
         ]]}
-    return storyboard_keyboard(job_id, version)
+    return storyboard_keyboard(job_id, version, image_version)
