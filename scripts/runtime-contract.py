@@ -27,6 +27,8 @@ def build_contract(artifact_root: Path, version: str, sequence: int, channel: st
     images = json.loads(image_lock.read_text(encoding="utf-8"))
     if not isinstance(roles, dict) or not isinstance(images, dict):
         raise ValueError("Role catalog and image lock must be JSON objects")
+    roles = {name: value for name, value in roles.items()
+             if name not in {"version", "catalog_sha256"}}
 
     required_services = sorted({service for role in roles.values()
                                 for service in role.get("services", [])})

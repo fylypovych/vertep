@@ -16,6 +16,8 @@ def test_each_role_has_an_isolated_valid_plan():
     planner = module()
     roles = json.loads(Path("config/node_roles.json").read_text())
     for role, definition in roles.items():
+        if not isinstance(definition, dict):
+            continue
         plan = planner.create_plan(roles, role, "1.2.3")
         assert planner.verify_plan(plan)
         assert plan["services"] == definition["services"]

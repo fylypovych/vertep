@@ -389,6 +389,33 @@ def _recover_stale_workers() -> None:
             store.event(job, f"PUBLISH TASK {current_task} REQUEUED FOR {channel}")
             worker["current_job"] = None
             worker["current_task"] = None
+        elif job and current_task in job.tts_active_task_ids and job.status == JobStatus.TTS_GENERATING:
+            # Deterministic worker-loss recovery for Voice tasks: release the
+            # lease, mark the scene lost and re-dispatch the remaining TTS so
+            # the Job is never silently dropped.
+            scene = next((s for s in job.scenes if s.scene_id == job.tts_active_task_ids.get(current_task)), None)
+            task_queue.release(current_task)
+            job.tts_active_task_ids.pop(current_task, None)
+            job.assigned_worker = None
+            if scene:
+                scene.assigned_worker = None
+                interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
+            _dispatch_tts(store, job)
+            store.event(job, f"{worker.get('node_name')} OFFLINE; TTS TASK {current_task} REQUEUED")
+            worker["current_job"] = None
+            worker["current_task"] = None
+        elif job and job.storyboard_task_id == current_task and job.status in {JobStatus.STORYBOARD_QUEUED,
+                                                                               JobStatus.STORYBOARD_GENERATING}:
+            # Worker loss during storyboard generation: release the lease and
+            # re-queue the storyboard so the Job stays on the lifecycle path.
+            task_queue.release(current_task)
+            job.storyboard_task_id = None
+            job.assigned_worker = None
+            from ..pipeline import queue_storyboard as _queue_storyboard
+            _queue_storyboard(store, job)
+            store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
+            worker["current_job"] = None
+            worker["current_task"] = None
 
 
 def _demo_image(path: Path) -> None:

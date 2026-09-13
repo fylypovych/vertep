@@ -61,17 +61,25 @@ def validate_root_metadata(metadata: dict, root_keys: Path, trusted_version: int
     signatures = metadata.get("signatures")
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
         raise ValueError("Root metadata version must be a positive integer")
+    if (not isinstance(trusted_version, int) or isinstance(trusted_version, bool)
+            or trusted_version < 0):
+        raise ValueError("Trusted root metadata version is invalid")
     if version < trusted_version:
         raise RuntimeError("Root metadata rollback was rejected")
     metadata_sha256 = hashlib.sha256(canonical_metadata(metadata)).hexdigest()
-    if version == trusted_version and trusted_sha256 and metadata_sha256 != trusted_sha256:
-        raise RuntimeError("Root metadata equivocates at a trusted version")
+    if version == trusted_version and trusted_sha256:
+        if not isinstance(trusted_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", trusted_sha256):
+            raise ValueError("Trusted root metadata digest is invalid")
+        if metadata_sha256 != trusted_sha256:
+            raise RuntimeError("Root metadata equivocates at a trusted version")
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
         raise ValueError("Root metadata threshold must be a positive integer")
     if not isinstance(keys, dict) or not keys:
         raise ValueError("Root metadata has no release keys")
-    if not isinstance(signatures, list):
-        raise ValueError("Root metadata signatures must be a list")
+    if threshold > len(keys):
+        raise ValueError("Root metadata threshold exceeds the release key count")
+    if not isinstance(signatures, list) or not signatures:
+        raise ValueError("Root metadata signatures must be a non-empty list")
     expires_at = _timestamp(metadata.get("expires_at"), "expires_at")
     if expires_at <= (now or datetime.now(timezone.utc)).astimezone(timezone.utc):
         raise RuntimeError("Root metadata has expired")
@@ -102,8 +110,10 @@ def validate_root_metadata(metadata: dict, root_keys: Path, trusted_version: int
                 not isinstance(channel, str) or not re.fullmatch(r"[a-z0-9-]{1,32}", channel)
                 for channel in channels):
             raise ValueError("Release key channels are invalid")
-        normalized[key_id] = {"sha256": digest, "channels": channels,
-                              "revoked": value.get("revoked") is True}
+        revoked = value.get("revoked", False)
+        if not isinstance(revoked, bool):
+            raise ValueError("Release key revocation state must be boolean")
+        normalized[key_id] = {"sha256": digest, "channels": channels, "revoked": revoked}
     return {"version": version, "expires_at": expires_at.isoformat(),
             "metadata_sha256": metadata_sha256,
             "release_keys": normalized, "verified_root_keys": sorted(verified)}

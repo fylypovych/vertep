@@ -145,6 +145,9 @@ def validate_release_contract(contract: dict, artifact_root: Path | None = None,
             catalog = json.loads((artifact_root / catalog_file).read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             raise RuntimeError("Role catalog is unreadable") from error
+        if isinstance(catalog, dict):
+            catalog = {name: value for name, value in catalog.items()
+                       if name not in {"version", "catalog_sha256"}}
         if not isinstance(catalog, dict) or set(catalog) != set(profiles):
             raise RuntimeError("Signed role inventory does not match the role catalog")
         for role, definition in catalog.items():

@@ -69,7 +69,8 @@ def create_job(request: JobCreate):
         raise HTTPException(400, f"Invalid workflow: {error}") from error
     job = store.create(request.topic, request.character_id, request.priority, request.source,
                        request.task_type, request.min_vram_mb, request.brand_id, request.workflow,
-                       request.aspect_ratio, request.output_preset, request.scheduled_for)
+                       request.aspect_ratio, request.output_preset, request.scheduled_for,
+                       request.required_tags)
     if not dispatch_allowed():
         store.update(job, JobStatus.WAITING_FOR_SYSTEM,
                      f"WAITING FOR SYSTEM: {get_system_state()['state']}")

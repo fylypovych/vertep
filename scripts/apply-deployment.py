@@ -205,6 +205,7 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
     selected = set(plan["services"])
     all_services = BOOTSTRAP_SERVICES | {service for definition in roles.values()
+                                        if isinstance(definition, dict)
                                         for service in definition["services"]}
     unwanted = sorted(all_services - selected)
     status = {"state": "APPLYING", "role": role,

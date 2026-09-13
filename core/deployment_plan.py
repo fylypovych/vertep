@@ -9,6 +9,9 @@ def create_plan(roles: dict, role: str, version: str,
                 additional_roles: list[str] | None = None) -> dict:
     if role not in roles:
         raise ValueError(f"Unsupported node role: {role}")
+    definition = roles[role]
+    if not isinstance(definition, dict) or "services" not in definition:
+        raise ValueError(f"Invalid role definition: {role}")
     extras = sorted(set(additional_roles or []))
     if extras and role != "core":
         raise ValueError("Additional roles can only be activated on Core")

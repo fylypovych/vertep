@@ -2,9 +2,10 @@ import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { Subscription, timer } from 'rxjs';
-import { VertepApiService } from '../core/api.service';
+import { OperationsApiService } from '../core/api/operations.api';
 import { ToastService } from '../core/services/toast.service';
 import { Alert } from '../core/models';
+import { RemoteState } from '../core/state/remote-state';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -25,15 +26,15 @@ const SEVERITY_LABELS: Record<string, string> = {
         <button (click)="loadAlerts()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Оновити</button>
       </div>
 
-      @if (loading()) {
+      @if (list.loading()) {
         <app-loading-state />
-      } @else if (error()) {
-        <app-error-state [message]="error()!" (retry)="loadAlerts()" />
-      } @else if (alerts().length === 0) {
+      } @else if (list.failed()) {
+        <app-error-state [message]="list.error()!" (retry)="loadAlerts()" />
+      } @else if (list.data().length === 0) {
         <app-empty-state message="Немає активних алертів" />
       } @else {
         <div class="space-y-2">
-          @for (alert of alerts(); track alert.type + '_' + (alert.job_id || alert.node_name || alert.operation_id || $index)) {
+          @for (alert of list.data(); track alert.type + '_' + (alert.job_id || alert.node_name || alert.operation_id || $index)) {
             <div class="bg-slate-50 rounded-lg p-3 flex items-start justify-between">
               <div class="flex-1">
                 <div class="flex items-center gap-2">
@@ -70,12 +71,10 @@ const SEVERITY_LABELS: Record<string, string> = {
   `,
 })
 export class AlertsComponent implements OnInit, OnDestroy {
-  loading = signal(false);
-  error = signal<string | null>(null);
-  alerts = signal<Alert[]>([]);
+  readonly list = new RemoteState<Alert[]>([]);
   private pollTimer: Subscription | null = null;
 
-  constructor(private api: VertepApiService, private toast: ToastService) {}
+  constructor(private ops: OperationsApiService, private toast: ToastService) {}
 
   ngOnInit(): void {
     this.loadAlerts();
@@ -85,12 +84,7 @@ export class AlertsComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void { if (this.pollTimer) this.pollTimer.unsubscribe(); }
 
   loadAlerts(): void {
-    this.loading.set(true);
-    this.error.set(null);
-    this.api.getAlerts().subscribe({
-      next: (alerts) => { this.alerts.set(alerts); this.loading.set(false); },
-      error: (err) => { this.error.set(err.message || 'Не вдалося завантажити алерти'); this.loading.set(false); },
-    });
+    this.list.run(() => this.ops.alerts(), 'Не вдалося завантажити алерти');
   }
 
   severityLabel(severity?: string): string { return SEVERITY_LABELS[severity || ''] || severity || '—'; }

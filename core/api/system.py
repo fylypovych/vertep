@@ -32,7 +32,8 @@ def recover_normal_operation():
 def local_roles_status():
     from ..node_registry import node_roles
     definitions = node_roles()
-    return {"roles": [{"id": r, "label": d.get("label", r)} for r, d in definitions.items() if r != "core"]}
+    return {"roles": [{"id": r, "label": d.get("label", r)} for r, d in definitions.items()
+                       if r != "core" and isinstance(d, dict)]}
 
 
 @router.post("/api/system/roles")

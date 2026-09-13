@@ -42,6 +42,16 @@ def reset_in_process_api_state():
         setup_request_windows.clear()
         store.jobs.clear()
         store.workers.clear()
+        # File-backed repository persists workers/channels to disk; drop those
+        # so a worker written by one test cannot leak into another test's fleet.
+        repository = getattr(store, "repository", None)
+        for attribute in ("worker_file", "channel_file"):
+            path = getattr(repository, attribute, None)
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         if task_queue.backend == "local":
             with task_queue._lock:
                 task_queue._local.clear()
@@ -49,6 +59,7 @@ def reset_in_process_api_state():
                 task_queue._cancellations.clear()
                 task_queue._dead_letters.clear()
                 task_queue._sequence = 0
+                task_queue._generation = 0
         # Очищення стану Telegram
         from core.app import _telegram_pending_brands, _telegram_pending_character
         _telegram_pending_brands.clear()

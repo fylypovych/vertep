@@ -314,7 +314,8 @@ def node_roles() -> dict:
     path = Path(os.getenv("NODE_ROLES_FILE", "config/node_roles.json"))
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
+        return {name: definition for name, definition in value.items()
+                if name not in {"version", "catalog_sha256"}} if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
 

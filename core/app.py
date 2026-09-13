@@ -1314,6 +1314,7 @@ def local_roles_status():
                           if service not in {"worker", "update-agent"}],
              "capabilities": definition.get("capabilities", [])}
             for role, definition in definitions.items() if role != "core"
+            and isinstance(definition, dict)
         ],
         "deployment": deployment,
         "queued": queued,

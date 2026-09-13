@@ -75,7 +75,7 @@ class JobStore:
     def create(self, topic: str, character_id: str, priority: int, source: str = "web",
                task_type: str = "image", min_vram_mb: int = 0, brand_id: str = "brand01",
                workflow: str | None = None, aspect_ratio: str = "16:9", output_preset: str = "youtube",
-               scheduled_for: str | None = None) -> Job:
+               scheduled_for: str | None = None, required_tags: list[str] | None = None) -> Job:
         with self.lock:
             year = int(utc_now()[:4])
             self.sequence = self.repository.next_job_sequence(year, self.sequence)
@@ -88,6 +88,7 @@ class JobStore:
                       aspect_ratio=aspect_ratio,
                       output_preset=output_preset,
                       scheduled_for=scheduled_for,
+                      required_tags=list(required_tags or []),
                       max_retries=int(os.getenv("MAX_RETRIES", "3")),
                       events=[f"{utc_now()} JOB CREATED"],
                       event_log=[JobEvent(message="JOB CREATED", type="create", state="NEW")])

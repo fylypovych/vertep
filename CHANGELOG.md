@@ -1,5 +1,21 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.60
+- #25: додано окремі Web UI API clients для Queue, Publishing, Operations, Setup, Storyboard і Session; типізовані SessionResponse, OperationAck, LogQuery, StoryboardActionRequest, PublishRequest та BackupListResponse.
+- #25: додано RemoteState/RemoteMutation для станів запитів і мутацій; Alerts та секцію Backup переведено на OperationsApiService, зі станами завантаження, помилок, повтору та блокуванням повторної мутації під час виконання.
+- #26: у Fleet detail уніфіковано update_state; уточнено вихід із quarantine, додано revoke через node actions та відкликання runtime-only Worker через endpoint revoke. Це зміни контракту й станів, а не завершена реалізація restart/update на host.
+- #28: Queue API отримав scheduled/ready/inflight/dead_letter, totals, пагінацію dead-letter, generation/refresh та job_status; повторне додавання queued/inflight task через retry повертає 409.
+- #28: додано облік мутацій черги, перевірку membership, RLock для вкладених операцій та детермінований порядок повернення прострочених leases. Dispatcher враховує composite load score, required_tags/scheduler_tags та scheduler_dispatch_count при виборі Worker.
+- #28: додано recovery-гілки для втраченого Voice/Storyboard Worker із поверненням завдань у dispatch; required_tags передаються із JobCreate до JobStore.
+- #27: розширено root metadata CLI параметрами version, existing-metadata та revoked; validator перевіряє однакову версію з іншим digest, threshold і boolean revocation. Оновлено документацію rotation/recovery; повний signing flow залишається незавершеним.
+- #27: каталог ролей отримав version/catalog_sha256; runtime manifest, validator, registry та deployment враховують службові metadata поля окремо від ролей. Qualification розширено перевірками required images, platform/digest, manifest і SBOM та налаштовано на каталог фактично зібраного runtime bundle.
+- #31: додано статичний CORE generation gate, документ класифікації викликів і посилання в AGENTS.md. Gate містить тимчасові винятки; повне усунення direct execution у CORE цим релізом не заявляється.
+- #33: додано qualify_infrastructure.py із каталогом S01–S08, вибором сценаріїв, запуском наявних pytest targets і JSON proof version/commit/environment/result/error; автоматизована infrastructure acceptance залишається частковою.
+- Додано файли contract tests для API clients, Fleet controls, Queue semantics, key lifecycle, CORE generation gate та infrastructure harness; уточнено ізоляцію file-backed Worker/channel стану між тестами та перевірку metadata каталогу в deployment tests. Наявність тестів не означає їх успішного виконання.
+- #55: в AGENTS.md заборонено самовільно вигадувати функціональність або розширювати acceptance під час реалізації, аудиту, перенесення чи закриття Issues.
+- #58: додано явний workflow_dispatch параметр skip_tests (за замовчуванням false); цей реліз підготовлено без запуску тестів за прямим дорученням користувача, автоматичний CI для його commit пропущено. Збірка, підписування й перевірка релізних артефактів залишаються обов'язковими.
+- Межі виконання: #23 уже задокументовано у 0.0.1.59; закриття #23/#25/#26/#27/#28/#31/#33 означало перенесення залишку, а не завершення всього scope. Невиконані вимоги залишаються в #56, реальні випробування — у #57 та пов'язаному #35. Відомий збій Popen(..., check=True) у generate-root-metadata.py не виправлений цим релізом; результати попереднього аудиту не є новим тестовим прогоном.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.59
 - Додано структуроване сховище подій job: модель `JobEvent` та поле `Job.event_log`; `JobStore.event()`/`update()` фіксують події з реальним timestamp і структурованими полями (state, attempt, node, task_id, artifact_id, error); події створення та відновлення після рестарту також записуються в `event_log`.
 - Розширено `GET /api/jobs` серверними фільтрами та пагінацією: `status`, `status_group`, `search`, `page`/`per_page`; додано групи статусів `STATUS_GROUPS`; legacy plain-array контракт без параметрів збережено.

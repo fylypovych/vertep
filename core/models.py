@@ -260,6 +260,7 @@ class JobCreate(BaseModel):
     aspect_ratio: str = Field(default="16:9", pattern="^(16:9|9:16)$")
     output_preset: str = "youtube"
     scheduled_for: str | None = None
+    required_tags: list[str] = Field(default_factory=list)
 
 class JobUpdate(BaseModel):
     expected_version: int | None = Field(default=None, ge=1)
@@ -325,6 +326,7 @@ class Job(BaseModel):
     scenes: list[SceneRecord] = Field(default_factory=list)
     artifacts: list[ArtifactRecord] = Field(default_factory=list)
     scheduled_for: str | None = None
+    required_tags: list[str] = Field(default_factory=list)
     storyboards: list[StoryboardVersion] = Field(default_factory=list)
     active_storyboard_version: int | None = None
     active_image_version: int | None = None

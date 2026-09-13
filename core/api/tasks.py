@@ -9,7 +9,7 @@ import binascii
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..artifacts import register_artifact
 from ..file_validation import validate_signature
@@ -21,8 +21,8 @@ from ..security import _valid_worker_request
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state
 from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
-                          _character_voice_enabled,
-                          _dispatch_tts, _has_voice_worker, _ordered_scene_files, _pending_voice_scenes,
+                          _character_voice_enabled, _dispatch_tts, _has_voice_worker,
+                          _job_is_due, _ordered_scene_files, _pending_voice_scenes,
                           _persist_tts_contract,
                           _scene_for_task, _select_worker, _serialize_job_result,
                           _task_for, _tts_task_for)
@@ -193,8 +193,10 @@ def dead_letter_tasks():
 
 
 @router.get("/api/tasks/queue")
-def queue_tasks():
+def queue_tasks(limit: int = Query(default=50, ge=1, le=500), offset: int = Query(default=0, ge=0),
+                include_dead_letter: bool = True, refresh: int | None = Query(default=None, ge=0)):
     def _summary(task: dict) -> dict:
+        job = store.jobs.get(task.get("job_id"))
         return {
             "task_id": task.get("task_id", ""),
             "job_id": task.get("job_id", ""),
@@ -203,13 +205,53 @@ def queue_tasks():
             "scene_id": task.get("scene_id", ""),
             "enqueued_at": task.get("enqueued_at"),
             "workflow": task.get("workflow", ""),
+            # The Queue is an operational view of the Job lifecycle: each task
+            # carries the owning Job's durable status so the UI never has to
+            # reconcile a separate, contradictory queue model.
+            "job_status": job.status.value if job else None,
+            "kind": task.get("kind"),
         }
-    return {"ready": [_summary(t) for t in task_queue.ready_tasks()],
-            "inflight": [_summary(t) for t in task_queue.inflight_tasks()]}
+
+    def _scheduled() -> list[dict]:
+        rows = []
+        for job in store.jobs.values():
+            if job.status == JobStatus.NEW and job.scheduled_for and not _job_is_due(job):
+                rows.append({"job_id": job.job_id, "topic": job.topic,
+                             "job_status": job.status.value, "task_type": job.task_type,
+                             "priority": job.priority, "scheduled_for": job.scheduled_for,
+                             "required_tags": list(job.required_tags or [])})
+        return sorted(rows, key=lambda row: (row["scheduled_for"], row["job_id"]))
+
+    ready = [_summary(t) for t in task_queue.ready_tasks()]
+    inflight = [_summary(t) for t in task_queue.inflight_tasks()]
+    scheduled = _scheduled()
+    dead_letter_all = [_summary(t) for t in task_queue.dead_letters()]
+    dead_letter = dead_letter_all[offset:offset + limit] if include_dead_letter else []
+    generation = task_queue.generation()
+    return {
+        "scheduled": scheduled,
+        "ready": ready,
+        "inflight": inflight,
+        "dead_letter": dead_letter,
+        "total": {
+            "scheduled": len(scheduled),
+            "ready": len(ready),
+            "inflight": len(inflight),
+            "dead_letter": len(dead_letter_all),
+        },
+        "pagination": {"offset": offset, "limit": limit, "dead_letter_total": len(dead_letter_all)},
+        "generation": generation,
+        "unchanged": refresh is not None and refresh == generation,
+        "refreshed_at": utc_now(),
+    }
 
 
 @router.post("/api/tasks/dead-letter/{task_id}/retry")
 def retry_dead_letter_task(task_id: str):
+    # Retry conflict semantics: never re-enqueue a task that is still being
+    # processed (inflight lease) or already present on the ready queue.
+    if task_queue.has_task(task_id):
+        raise HTTPException(409, "Task already queued or inflight")
     queued = task_queue.requeue_dead_letter(task_id)
     if not queued:
         raise HTTPException(404, "Dead-letter task not found")

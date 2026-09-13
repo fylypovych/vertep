@@ -2,8 +2,10 @@
 """Deterministic preflight gates for a Vertep appliance release artifact."""
 
 import argparse
+import hashlib
 import json
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -17,8 +19,19 @@ FORBIDDEN_BY_ROLE = {
     "monitoring": {"core", "migrate", "postgres", "redis", "comfyui", "ollama", "tts"},
 }
 
+REQUIRED_IMAGES = {
+    "core", "worker", "comfyui", "tts", "publisher-worker", "backup-service",
+    "proxy", "postgres", "redis", "ollama", "monitoring", "grafana",
+    "log-store", "log-collector", "update-agent", "license-manager",
+    "dispatcher", "scheduler", "certificate-manager",
+}
 
-def qualify(root: Path, run_compose: bool = False) -> dict:
+REQUIRED_PLATFORMS = {"linux/amd64", "linux/arm64"}
+ARM64_EXEMPT_SERVICES = {"comfyui"}
+
+
+def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = None) -> dict:
+    artifact_root = artifact_root or root
     checks: list[dict] = []
 
     def record(name: str, passed: bool, detail: str = "") -> None:
@@ -31,8 +44,8 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
                 "scripts/apply-deployment.py", "installer/vertep-deployment.service",
                 "installer/vertep-deployment.path",
                 "services/tts_service.py", "services/publisher_service.py", "services/backup_service.py",
-                "services/license_service.py", "services/dispatcher_service.py",
-                "services/scheduler_service.py", "services/certificate_service.py",
+                "services/license_service.py", "services/dispatcher_service.py", "services/scheduler_service.py",
+                "services/certificate_service.py",
                 "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
                 "docker/proxy/Dockerfile", "docker/proxy/entrypoint.sh", "docker/monitoring/Dockerfile",
                 "docker/log-store/Dockerfile", "docker/log-collector/Dockerfile",
@@ -97,6 +110,84 @@ def qualify(root: Path, run_compose: bool = False) -> dict:
         result = subprocess.run(["docker", "compose", "-f", str(root / "deploy/docker-compose.yml"),
                                  "config", "--quiet"], capture_output=True, text=True, check=False)
         record("docker_compose_config", result.returncode == 0, result.stderr[-1000:])
+
+    # Cross-artifact/version/SHA/SBOM consistency checks
+    try:
+        roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
+        record("role_catalog_version", "version" in roles, "role catalog missing version field")
+        record("role_catalog_sha256", "catalog_sha256" in roles, "role catalog missing catalog_sha256 field")
+    except (OSError, ValueError, KeyError) as error:
+        record("role_catalog_version", False, str(error))
+        record("role_catalog_sha256", False, str(error))
+
+    # Arm64 ComfyUI qualification gate
+    arm64_comfyui_issue = False
+    arm64_comfyui_detail = ""
+    try:
+        roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
+        if ("gpu" in roles and "comfyui" in roles["gpu"].get("services", [])
+                and "comfyui" not in ARM64_EXEMPT_SERVICES):
+            arm64_comfyui_issue = True
+            arm64_comfyui_detail = "comfyui service present on gpu role but arm64 support not verified"
+    except (OSError, ValueError, KeyError) as error:
+        arm64_comfyui_detail = str(error)
+    record("arm64_comfyui_qualification_gate", not arm64_comfyui_issue, arm64_comfyui_detail)
+
+    # All required images/platforms and immutable digests check
+    try:
+        images_lock_path = artifact_root / "images.json"
+        if images_lock_path.is_file():
+            images = json.loads(images_lock_path.read_text(encoding="utf-8"))
+            missing_services = REQUIRED_IMAGES - set(images.keys())
+            record("all_required_images_present", not missing_services, ", ".join(sorted(missing_services)))
+            bad_platforms = []
+            for service, image in images.items():
+                platforms = image.get("platforms", [])
+                if service not in ARM64_EXEMPT_SERVICES and not REQUIRED_PLATFORMS.issubset(set(platforms)):
+                    bad_platforms.append(f"{service}: {platforms}")
+                digest = image.get("digest", "")
+                if not digest.startswith("sha256:") or len(digest) != 71:
+                    bad_platforms.append(f"{service}: invalid digest {digest}")
+            record("all_images_have_required_platforms_and_digests", not bad_platforms, "; ".join(bad_platforms))
+        else:
+            record("all_required_images_present", False, "images.json not found")
+            record("all_images_have_required_platforms_and_digests", False, "images.json not found")
+    except (OSError, ValueError) as error:
+        record("all_required_images_present", False, str(error))
+        record("all_images_have_required_platforms_and_digests", False, str(error))
+
+    # Signed manifest/update manifest checks
+    try:
+        manifest_path = artifact_root / "manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            record("manifest_signed", "signature" in manifest, "manifest missing signature")
+            record("manifest_has_version", "version" in manifest, "manifest missing version")
+            record("manifest_has_release_sequence", "release_sequence" in manifest, "manifest missing release_sequence")
+            record("manifest_has_compatibility", "compatibility" in manifest, "manifest missing compatibility")
+            record("manifest_has_roles", "roles" in manifest, "manifest missing roles")
+            record("manifest_has_sbom", "sbom" in manifest, "manifest missing sbom")
+            record("manifest_has_files", "files" in manifest, "manifest missing files")
+            record("manifest_has_images", "images" in manifest, "manifest missing images")
+        else:
+            record("manifest_signed", False, "manifest.json not found")
+    except (OSError, ValueError) as error:
+        record("manifest_signed", False, str(error))
+
+    # SBOM format check
+    try:
+        sbom_path = artifact_root / "sbom.cdx.json"
+        if sbom_path.is_file():
+            sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+            record("sbom_format_cyclonedx", sbom.get("bomFormat") == "CycloneDX", "SBOM is not CycloneDX format")
+            record("sbom_has_spec_version", "specVersion" in sbom, "SBOM missing specVersion")
+        else:
+            record("sbom_format_cyclonedx", False, "sbom.cdx.json not found")
+            record("sbom_has_spec_version", False, "sbom.cdx.json not found")
+    except (OSError, ValueError) as error:
+        record("sbom_format_cyclonedx", False, str(error))
+        record("sbom_has_spec_version", False, str(error))
+
     passed = all(item["passed"] for item in checks)
     return {"schema": 1, "passed": passed, "checks": checks}
 
@@ -106,8 +197,9 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path(__file__).parents[1])
     parser.add_argument("--docker", action="store_true", help="also run Docker Compose validation")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--artifact-root", type=Path, help="Directory containing the built runtime artifacts")
     args = parser.parse_args()
-    report = qualify(args.root.resolve(), args.docker)
+    report = qualify(args.root.resolve(), args.docker, args.artifact_root)
     encoded = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(encoded + "\n", encoding="utf-8")

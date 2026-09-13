@@ -412,6 +412,10 @@ export interface BackupInfo {
   [key: string]: unknown;
 }
 
+export interface BackupListResponse {
+  snapshots: BackupInfo[];
+}
+
 export interface UpdateReadiness {
   ready: boolean;
   active_jobs: string[];
@@ -693,6 +697,39 @@ export interface SetupCompleteResult {
   core_url?: string;
   core_certificate?: string;
   registration_token?: string;
+}
+
+// ── Shared auth / ack contracts ─────────────────────────────────
+export interface SessionResponse {
+  authenticated: boolean;
+  user?: string;
+  role?: 'admin' | 'viewer';
+}
+
+export interface OperationAck {
+  ok?: boolean;
+  message?: string;
+  operation_id?: string;
+  error?: string;
+}
+
+export interface LogQuery {
+  limit?: number;
+  level?: string;
+  job_id?: string;
+  node_name?: string;
+}
+
+// ── Domain action request contracts (typed, no loose maps) ───────
+export interface StoryboardActionRequest {
+  version: number;
+  actor?: string;
+  revision?: string;
+  scene_indexes?: number[];
+}
+
+export interface PublishRequest {
+  channels?: string[];
 }
 
 export interface WizardState {

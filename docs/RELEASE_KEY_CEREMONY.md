@@ -54,19 +54,41 @@ installer/root-keys/
 - [ ] Збережено old `root-metadata.json` для emergency rollback
 - [ ] Документовано `key_id` учасників церемонії
 
-## Compromised key recovery
+## Автоматизована ротація та recovery
 
-1. Видалити/відзначити `revoked: true` у новому `root-metadata.json`.
-2. Згенерувати новий ключ для пошкодженого `key_id`.
-3. Оновити `sha256` у `release_keys`.
-4. Провести церемонію ротації з новим ключем.
-5. Bootstrap distributors отримують новий `root-keys/` під час наступного
-   release.
+Команда генерації підтримує відтворюваний drill без доступу до production ceremony:
 
-## Rotation drill
+```bash
+python scripts/generate-root-metadata.py \
+  --keys-dir installer/root-keys \
+  --output installer/root-keys/root-metadata.json \
+  --key-ids root-1 root-2 \
+  --threshold 2 \
+  --version 1 \
+  --expiry-days 365 \
+  --channels stable beta
+```
 
-Щоквартально виконувати:
-1. Згенерувати новий `root-metadata.json` з новим `version`.
-2. Переконатися, що старий metadata відкидається (`version < trusted_version`).
-3. Переконатися, що новий metadata приймається.
-4. Відкотити зміни, якщо drill не пройшов.
+Для ротації створюється новий metadata-документ із більшим `version`; старий ключ
+позначається `revoked: true`, а новий ключ додається до `release_keys`.
+Приклад:
+
+```bash
+python scripts/generate-root-metadata.py \
+  --keys-dir installer/root-keys \
+  --output installer/root-keys/root-metadata-v2.json \
+  --key-ids root-2 root-3 \
+  --threshold 2 \
+  --version 2 \
+  --existing-metadata installer/root-keys/root-metadata-v1.json \
+  --revoked root-1 \
+  --expiry-days 365 \
+  --channels stable beta
+```
+
+`validate_root_metadata()` відхиляє downgrade, equivocation, прострочені metadata,
+несправжній threshold, tampered digest, неправильний channel і revoked key.
+`authorize_release_key()` повторно перевіряє key ID, channel, digest і revoke state.
+Recovery після компрометації: позначити старий key revoked, згенерувати replacement,
+підписати новий metadata потрібним threshold і перевірити, що старий ключ більше не
+авторизується. Старий metadata зберігається лише для аудиту та rollback drill.

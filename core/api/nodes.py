@@ -107,6 +107,15 @@ def node_detail(node_id: str):
     merged.setdefault("status", "OFFLINE")
     merged.setdefault("capabilities", [])
     merged.setdefault("hardware", {})
+    # Fleet contract: expose transient control/update fields inside a single
+    # `update_state` envelope, mirroring the `/api/workers` listing shape so the
+    # (detail, listing) digests never drift apart.
+    merged["update_state"] = {
+        "desired_state": merged.pop("desired_state", None),
+        "update_target_version": merged.pop("update_target_version", None),
+        "rollback_target_version": merged.pop("rollback_target_version", None),
+        "self_test_requested_at": merged.pop("self_test_requested_at", None),
+    }
     return _node_context(merged)
 
 
@@ -134,8 +143,12 @@ def control_node(node_id: str, command: NodeAction):
         if worker.get("desired_state") != "QUARANTINED":
             raise HTTPException(409, "Worker is not quarantined")
         worker.pop("desired_state", None)
-        worker["status"] = "SELF_TESTING"
-        worker["self_test_requested_at"] = timestamp
+        if (worker.get("self_test") or {}).get("status") == "PASSED":
+            worker["status"] = "READY"
+        else:
+            # Unknown readiness after quarantine: force a fresh self-test.
+            worker["status"] = "SELF_TESTING"
+            worker["self_test_requested_at"] = timestamp
     elif command.action == "self-test":
         if worker.get("status") == "BUSY":
             raise HTTPException(409, "Busy worker cannot start a self-test")
@@ -162,6 +175,11 @@ def control_node(node_id: str, command: NodeAction):
     elif command.action == "update":
         worker["desired_state"] = "UPDATING"
         worker["status"] = "UPDATING"
+    elif command.action == "revoke":
+        try:
+            return revoke_node(node_id)
+        except KeyError as error:
+            raise HTTPException(404, "Node is missing or revoked") from error
     else:
         raise HTTPException(400, f"Unsupported action: {command.action}")
     worker["state_reason"] = command.reason
@@ -175,8 +193,16 @@ def control_node(node_id: str, command: NodeAction):
 def disable_node(node_id: str):
     try:
         return revoke_node(node_id)
-    except KeyError as error:
-        raise HTTPException(404, "Node not found") from error
+    except KeyError:
+        # Fleet member known only to the runtime store (e.g. enrolled-then-offboarded
+        # before a registry record materialised): remove it from active fleet control.
+        worker = next((item for item in store.load_workers()
+                       if item.get("node_id") == node_id or item.get("node_name") == node_id), None)
+        if not worker:
+            raise HTTPException(404, "Node not found")
+        worker.update({"status": "REVOKED", "desired_state": "REVOKED", "revoked_at": utc_now()})
+        store.save_worker(worker)
+        return {key: value for key, value in worker.items() if key != "secret_hash"}
 
 
 

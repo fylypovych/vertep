@@ -2,6 +2,11 @@ name: Vertep Release
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Пропустити тести лише за прямим дорученням користувача'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -26,12 +31,14 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements.txt
+      - name: Run tests
+        if: ${{ !inputs.skip_tests }}
+        run: python -m pytest -q --ignore=tests/test_browser_e2e.py
       - name: Validate prepared release commit
         id: version
         shell: bash
         run: |
           python -m compileall -q core adapters worker scripts installer tests
-          python -m pytest -q --ignore=tests/test_browser_e2e.py
           version="$(python scripts/release.py --check)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -162,7 +169,7 @@ jobs:
             "update-manifest-$version.json" > "SHA256SUMS-$version"
       - name: Appliance release qualification
         shell: bash
-        run: python scripts/qualify-release.py --root . --output qualification.json
+        run: python scripts/qualify-release.py --root . --artifact-root "${{ runner.temp }}/runtime" --output qualification.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:

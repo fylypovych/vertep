@@ -42,6 +42,41 @@ def _voice_ready(worker: dict, requirements: dict | None) -> bool:
     return True
 
 
+def compute_load_score(worker: dict) -> float:
+    """Normalized 0..1 composite load score for a worker.
+
+    Combines GPU load (percent), CPU load (fraction) and an inflight penalty so
+    the dispatcher can rank equally-capable nodes and favour the least-loaded
+    one (locality/load-aware scheduling).  Unknown/absent metrics are treated
+    as zero so a healthy but metric-free node is scored more favourably than a
+    node that demonstrably reports load.
+    """
+    try:
+        gpu = min(1.0, max(0.0, float(worker.get("gpu_load") or 0) / 100.0))
+    except (TypeError, ValueError):
+        gpu = 0.0
+    try:
+        cpu = min(1.0, max(0.0, float(worker.get("cpu_load") or 0)))
+    except (TypeError, ValueError):
+        cpu = 0.0
+    busy = 1.0 if (worker.get("current_task") or worker.get("status") == "BUSY") else 0.0
+    return round(0.5 * gpu + 0.3 * cpu + 0.2 * busy, 4)
+
+
+def _satisfies_locality(worker: dict, job: Job) -> bool:
+    """Locality: a worker must expose every ``scheduler_tags`` the job requires.
+
+    Tag affinity routes a job that pins to specific nodes (e.g. a node hosting
+    a particular model/comfyui backend) to only those workers.  When a job
+    declares no required tags, any capable node is a locality candidate.
+    """
+    required = set(job.required_tags or [])
+    if not required:
+        return True
+    tags = set(worker.get("scheduler_tags") or [])
+    return required.issubset(tags)
+
+
 def available_worker(workers: list[dict], job: Job, task_type: str | None = None, min_vram_mb: int | None = None,
                      voice_requirements: dict | None = None) -> dict | None:
     now = datetime.now(timezone.utc)
@@ -78,16 +113,21 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
             continue
         if effective_task_type == "voice" and voice_requirements and not _voice_ready(worker, voice_requirements):
             continue
+        if not _satisfies_locality(worker, job):
+            continue
+        worker["load_score"] = compute_load_score(worker)
         candidates.append(worker)
     if not candidates:
         return None
-    # Prefer explicitly configured priority, then lower runtime load and more
-    # free VRAM. Node name makes equal scores deterministic and fair to debug.
+    # Prefer explicitly configured priority, then the lowest composite load
+    # score (load-aware), then the most free VRAM, then fair-share scheduling
+    # (fewest prior dispatches). Node name makes equal scores deterministic.
     return min(candidates, key=lambda worker: (
         -int(worker.get("scheduler_priority", 0)),
-        float(worker.get("gpu_load") or 0),
+        float(worker.get("load_score", 0.0)),
         -int(worker.get("free_vram_mb") if worker.get("free_vram_mb") is not None
              else worker.get("vram_mb", 0)),
+        int(worker.get("scheduler_dispatch_count", 0)),
         str(worker.get("node_name", "")),
     ))
 

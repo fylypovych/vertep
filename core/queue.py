@@ -64,9 +64,10 @@ return cjson.encode(task)
         self._local: list[tuple[int, int, dict]] = []
         self._inflight: dict[str, tuple[float, dict]] = {}
         self._sequence = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._cancellations: dict[str, list[dict]] = {}
         self._dead_letters: list[dict] = []
+        self._generation = 0
         self._redis = None
         try:
             import redis
@@ -79,6 +80,48 @@ return cjson.encode(task)
     @property
     def backend(self) -> str:
         return "redis" if self._redis else "local"
+
+    def _bump(self) -> None:
+        """Advance the queue generation on any structural mutation.
+
+        The generation is a monotonic refresh marker for the Queue UI / API:
+        consumers can cache ``/api/tasks/queue`` and re-poll only when the
+        generation changes.  Local mode uses an in-process counter; Redis mode
+        uses a shared INCR so the value is consistent across Core replicas.
+        """
+        if self._redis:
+            self._generation = int(self._redis.incr("vertep:queue:generation"))
+        else:
+            with self._lock:
+                self._generation += 1
+
+    def generation(self) -> int:
+        return self._generation
+
+    def has_task(self, task_id: str) -> bool:
+        """Deterministic membership test across ready+inflight.
+
+        Used to make retry/discard conflict-safe: a dead-letter task must never
+        be requeued (or discarded) twice, and an inflight task must not be
+        re-enqueued while a worker still holds its lease.
+        """
+        if self._redis:
+            if self._redis.hget("vertep:tasks:inflight", task_id) is not None:
+                return True
+            for raw in self._redis.zrange("vertep:tasks:ready", 0, -1):
+                if json.loads(raw).get("task_id") == task_id:
+                    return True
+            return False
+        with self._lock:
+            if task_id in self._inflight:
+                return True
+            return any(row[2].get("task_id") == task_id for row in self._local)
+
+    def inflight_has(self, task_id: str) -> bool:
+        if self._redis:
+            return self._redis.hget("vertep:tasks:inflight", task_id) is not None
+        with self._lock:
+            return task_id in self._inflight
 
     def enqueue(self, task: dict, *, new_attempt: bool = False) -> dict:
         item = dict(task)
@@ -95,6 +138,7 @@ return cjson.encode(task)
             with self._lock:
                 self._sequence += 1
                 heapq.heappush(self._local, (-int(item["priority"]), self._sequence, item))
+        self._bump()
         return item
 
     def depth(self) -> int:
@@ -111,6 +155,7 @@ return cjson.encode(task)
                                    now, now + lease)
             if not raw:
                 return None
+            self._bump()
             return json.loads(raw)
         with self._lock:
             if not self._local:
@@ -128,9 +173,11 @@ return cjson.encode(task)
             if item is None:
                 return None
             self._inflight[item["task_id"]] = (time.time() + lease, item)
+            self._bump()
             return item
 
     def ack(self, task_id: str) -> None:
+        self._bump()
         if self._redis:
             self._redis.hdel("vertep:tasks:inflight", task_id)
         else:
@@ -181,13 +228,18 @@ return cjson.encode(task)
             with self._lock:
                 self._local = [row for row in self._local if row[2].get("task_id") != task_id]
                 heapq.heapify(self._local)
+        self._bump()
 
     def release(self, task_id: str) -> dict | None:
         if self._redis:
             raw = self._redis.eval(self.RELEASE_LUA, 2, "vertep:tasks:ready", "vertep:tasks:inflight",
                                    task_id, time.time())
+            if raw:
+                self._bump()
             return json.loads(raw) if raw else None
         item = self._take_inflight(task_id)
+        if item:
+            self._bump()
         return self.enqueue(item) if item else None
 
     def requeue_expired(self, now: float | None = None) -> list[dict]:
@@ -195,12 +247,22 @@ return cjson.encode(task)
         expired: list[dict] = []
         if self._redis:
             rows = self._redis.eval(self.REQUEUE_LUA, 2, "vertep:tasks:ready", "vertep:tasks:inflight", current)
-            return [json.loads(row) for row in rows]
+            items = [json.loads(row) for row in rows]
+            if items:
+                self._bump()
+            # Deterministic ordering: ready queue is a priority-ordered zset, so
+            # the requeued tasks come back in score order.  We additionally sort
+            # by (priority desc, enqueued_at) for a stable, testable contract.
+            items.sort(key=lambda item: (-int(item.get("priority", 5)), float(item.get("enqueued_at", 0)), str(item.get("task_id", ""))))
+            return items
         with self._lock:
             task_ids = [task_id for task_id, (deadline, _) in self._inflight.items() if deadline <= current]
-            items = [self._inflight.pop(task_id)[1] for task_id in task_ids]
-        for item in items:
-            expired.append(self.enqueue(item))
+            records = [(task_id, self._inflight.pop(task_id)) for task_id in task_ids]
+        # Deterministic: oldest lease first, then higher priority, then stable id.
+        records.sort(key=lambda pair: (pair[1][0], -int(pair[1][1].get("priority", 5)), str(pair[0])))
+        for task_id, (_, item) in records:
+            enqueued = self.enqueue(item)
+            expired.append(enqueued)
         return expired
 
     def _take_inflight(self, task_id: str) -> dict | None:
@@ -222,6 +284,7 @@ return cjson.encode(task)
         else:
             with self._lock:
                 self._dead_letters.append(item)
+        self._bump()
         return item
 
     def dead_letters(self) -> list[dict]:
