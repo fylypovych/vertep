@@ -45,6 +45,20 @@ def sign_metadata(message: bytes, key_path: Path) -> str:
     return __import__("base64").b64encode(result.stdout).decode("ascii")
 
 
+def _public_sha256(private_key_path: Path) -> str:
+    """Derive the public key for a private key and return its SHA-256 digest.
+
+    Root metadata pins the digest of the PUBLIC release key (that is what
+    ``core.update_trust.authorize_release_key`` verifies), so the signing tool
+    must record the public-key digest, not the private-key bytes.
+    """
+    result = subprocess.run(
+        ["openssl", "pkey", "-in", str(private_key_path), "-pubout"],
+        capture_output=True, check=True,
+    )
+    return hashlib.sha256(result.stdout).hexdigest()
+
+
 def build_metadata(key_ids: list[str], keys_dir: Path, threshold: int,
                    expiry_days: int, channels: list[str], version: int = 1,
                    revoked: set[str] | None = None,
@@ -86,7 +100,7 @@ def build_metadata(key_ids: list[str], keys_dir: Path, threshold: int,
         if not isinstance(entry_channels, list) or not entry_channels:
             raise ValueError(f"Root key {key_id} has invalid channels")
         release_keys[key_id] = {
-            "sha256": hashlib.sha256(key_path.read_bytes()).hexdigest(),
+            "sha256": _public_sha256(key_path),
             "channels": entry_channels,
             "revoked": key_id in revoked_ids or previous.get("revoked") is True,
         }

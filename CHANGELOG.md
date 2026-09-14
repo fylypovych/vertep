@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.66
+- Доопрацьовано signing-flow root metadata у `scripts/generate-root-metadata.py`: `build_metadata` тепер підписує метадані **приватним** ключем, а в `release_keys[].sha256` записує дайджест **публічного** ключа (`_public_sha256` через `openssl pkey -pubout`). Це робить метадані, продуковані інструментом підпису, сумісними з `core/update_trust.validate_root_metadata`/`authorize_release_key`, які перевіряють саме публічні ключі (`docs/RELEASE_KEY_CEREMONY.md`). Раніше інструмент підписував публічним файлом і пінив дайджест приватних байтів.
+- Переписано `tests/test_key_lifecycle.py` на узгоджений ланцюг: приватний signing store (через `generate-root-metadata.generate_key`) + публічний verification keyring (для `core/update_trust`). Ці 4 тести раніше скипались на Windows (немає openssl) і падали на Linux CI; тепер вони відображають робочу модель підпису/ротації/ревоукції/authorize.
+- Разом із фіксом 0.0.1.65 (невалідний `Popen(..., check=True)`) це закриває реліз-блокуючий дефект інструмента генерації root metadata.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.65
 - Виправлено реліз-блокуючий баг у `scripts/generate-root-metadata.py::sign_metadata`: `subprocess.Popen(..., check=True)` — невалідний аргумент (Popen не приймає `check`), що спричиняв `TypeError` і падіння 4 тестів `tests/test_key_lifecycle.py` на Linux CI. Замінено на `subprocess.run(check=True, input=..., capture_output=True)` з тим самим конвеєром (openssl dgst → base64-сигнатура). Тести скипаються на Windows, тому локальний `pytest` попередньої версії не виявляв дефект.
 
