@@ -1,5 +1,9 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.69
+- Виправлено shallow copy leak у хелпері `resign()` тесту `test_key_lifecycle.py`: `dict(metadata)` замінено на `copy.deepcopy(metadata)`, що запобігає мутації оригінального `metadata` при зміні `release_keys` через повернений словник.
+- Виправлено flaky тест `test_job_list_status_exact_filter`: видалено ненадійний `cancel` (race condition з асинхронним pipeline), тест тепер фільтрує за статусом, який сервер фактично призначив job.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.68
 - Виправлено shallow copy leak у хелпері `resign()` тесту `test_key_lifecycle.py`: `dict(metadata)` замінено на `copy.deepcopy(metadata)`, що запобігає мутації оригінального `metadata` при зміні `release_keys` через повернений словник. Це усуває регресію, де `validate(metadata, ...)` падав з `RuntimeError: Root metadata signature threshold was not met` (canonical змінився, підписи залишились старими).
 
