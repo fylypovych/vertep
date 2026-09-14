@@ -73,6 +73,9 @@ def resign(module, metadata: dict, keys_dir: Path) -> dict:
     Signature verification runs before field normalization, so any tampering of a
     metadata field must be followed by a fresh, valid signature for the security
     checks to reach the intended field-level validation.
+
+    Uses deepcopy so that subsequent mutations of the returned dict (e.g.
+    tampering ``release_keys``) do not leak back into the caller's copy.
     """
     message = module.canonical_metadata(metadata)
     signatures = []
@@ -80,7 +83,7 @@ def resign(module, metadata: dict, keys_dir: Path) -> dict:
         key_path = keys_dir / f"{item['key_id']}.pem"
         signatures.append({"key_id": item["key_id"],
                            "signature": module.sign_metadata(message, key_path)})
-    resigned = dict(metadata)
+    resigned = copy.deepcopy(metadata)
     resigned["signatures"] = signatures
     return resigned
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.68
+- Виправлено shallow copy leak у хелпері `resign()` тесту `test_key_lifecycle.py`: `dict(metadata)` замінено на `copy.deepcopy(metadata)`, що запобігає мутації оригінального `metadata` при зміні `release_keys` через повернений словник. Це усуває регресію, де `validate(metadata, ...)` падав з `RuntimeError: Root metadata signature threshold was not met` (canonical змінився, підписи залишились старими).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.67
 - Фікс тесту `test_root_metadata_fail_closed_security_cases`: tampered metadata (revoked, wrong_channel) тепер перепідписується через новий `resign()` хелпер перед валідацією; підпис перевіряється раніше нормалізації полів, тому будь-яка зміна поля вимагає фрешного валідного підпису. 3/4 тестів key_lifecycle тепер прходять на Linux CI; останній окремий flaky тест `test_job_workspace_contracts.py::test_job_list_status_exact_filter` не пов'язаний зі змінами.
 
