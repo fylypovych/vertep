@@ -31,6 +31,9 @@ ARM64_EXEMPT_SERVICES = {"comfyui"}
 
 
 def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = None) -> dict:
+    # artifact_root must point to a built runtime bundle (release workflow);
+    # static repository checks never require release artifacts.
+    artifact_checks = artifact_root is not None
     artifact_root = artifact_root or root
     checks: list[dict] = []
 
@@ -133,60 +136,66 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
         arm64_comfyui_detail = str(error)
     record("arm64_comfyui_qualification_gate", not arm64_comfyui_issue, arm64_comfyui_detail)
 
-    # All required images/platforms and immutable digests check
-    try:
-        images_lock_path = artifact_root / "images.json"
-        if images_lock_path.is_file():
-            images = json.loads(images_lock_path.read_text(encoding="utf-8"))
-            missing_services = REQUIRED_IMAGES - set(images.keys())
-            record("all_required_images_present", not missing_services, ", ".join(sorted(missing_services)))
-            bad_platforms = []
-            for service, image in images.items():
-                platforms = image.get("platforms", [])
-                if service not in ARM64_EXEMPT_SERVICES and not REQUIRED_PLATFORMS.issubset(set(platforms)):
-                    bad_platforms.append(f"{service}: {platforms}")
-                digest = image.get("digest", "")
-                if not digest.startswith("sha256:") or len(digest) != 71:
-                    bad_platforms.append(f"{service}: invalid digest {digest}")
-            record("all_images_have_required_platforms_and_digests", not bad_platforms, "; ".join(bad_platforms))
-        else:
-            record("all_required_images_present", False, "images.json not found")
-            record("all_images_have_required_platforms_and_digests", False, "images.json not found")
-    except (OSError, ValueError) as error:
-        record("all_required_images_present", False, str(error))
-        record("all_images_have_required_platforms_and_digests", False, str(error))
+    # All required images/platforms and immutable digests check (runtime bundle only)
+    if artifact_checks:
+        try:
+            images_lock_path = artifact_root / "images.json"
+            if images_lock_path.is_file():
+                images = json.loads(images_lock_path.read_text(encoding="utf-8"))
+                missing_services = REQUIRED_IMAGES - set(images.keys())
+                record("all_required_images_present", not missing_services, ", ".join(sorted(missing_services)))
+                bad_platforms = []
+                for service, image in images.items():
+                    platforms = image.get("platforms", [])
+                    if service not in ARM64_EXEMPT_SERVICES and not REQUIRED_PLATFORMS.issubset(set(platforms)):
+                        bad_platforms.append(f"{service}: {platforms}")
+                    digest = image.get("digest", "")
+                    if not digest.startswith("sha256:") or len(digest) != 71:
+                        bad_platforms.append(f"{service}: invalid digest {digest}")
+                record("all_images_have_required_platforms_and_digests", not bad_platforms, "; ".join(bad_platforms))
+            else:
+                record("all_required_images_present", False, "images.json not found")
+                record("all_images_have_required_platforms_and_digests", False, "images.json not found")
+        except (OSError, ValueError) as error:
+            record("all_required_images_present", False, str(error))
+            record("all_images_have_required_platforms_and_digests", False, str(error))
 
-    # Signed manifest/update manifest checks
-    try:
-        manifest_path = artifact_root / "manifest.json"
-        if manifest_path.is_file():
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            record("manifest_signed", "signature" in manifest, "manifest missing signature")
-            record("manifest_has_version", "version" in manifest, "manifest missing version")
-            record("manifest_has_release_sequence", "release_sequence" in manifest, "manifest missing release_sequence")
-            record("manifest_has_compatibility", "compatibility" in manifest, "manifest missing compatibility")
-            record("manifest_has_roles", "roles" in manifest, "manifest missing roles")
-            record("manifest_has_sbom", "sbom" in manifest, "manifest missing sbom")
-            record("manifest_has_files", "files" in manifest, "manifest missing files")
-            record("manifest_has_images", "images" in manifest, "manifest missing images")
-        else:
-            record("manifest_signed", False, "manifest.json not found")
-    except (OSError, ValueError) as error:
-        record("manifest_signed", False, str(error))
+        # Signed manifest/update manifest checks
+        try:
+            manifest_path = artifact_root / "manifest.json"
+            if manifest_path.is_file():
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                record("manifest_signed", "signature" in manifest, "manifest missing signature")
+                record("manifest_has_version", "version" in manifest, "manifest missing version")
+                record("manifest_has_release_sequence", "release_sequence" in manifest, "manifest missing release_sequence")
+                record("manifest_has_compatibility", "compatibility" in manifest, "manifest missing compatibility")
+                record("manifest_has_roles", "roles" in manifest, "manifest missing roles")
+                record("manifest_has_sbom", "sbom" in manifest, "manifest missing sbom")
+                record("manifest_has_files", "files" in manifest, "manifest missing files")
+                record("manifest_has_images", "images" in manifest, "manifest missing images")
+            else:
+                record("manifest_signed", False, "manifest.json not found")
+        except (OSError, ValueError) as error:
+            record("manifest_signed", False, str(error))
 
-    # SBOM format check
-    try:
-        sbom_path = artifact_root / "sbom.cdx.json"
-        if sbom_path.is_file():
-            sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
-            record("sbom_format_cyclonedx", sbom.get("bomFormat") == "CycloneDX", "SBOM is not CycloneDX format")
-            record("sbom_has_spec_version", "specVersion" in sbom, "SBOM missing specVersion")
-        else:
-            record("sbom_format_cyclonedx", False, "sbom.cdx.json not found")
-            record("sbom_has_spec_version", False, "sbom.cdx.json not found")
-    except (OSError, ValueError) as error:
-        record("sbom_format_cyclonedx", False, str(error))
-        record("sbom_has_spec_version", False, str(error))
+        # SBOM format check
+        try:
+            sbom_path = artifact_root / "sbom.cdx.json"
+            if sbom_path.is_file():
+                sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+                record("sbom_format_cyclonedx", sbom.get("bomFormat") == "CycloneDX", "SBOM is not CycloneDX format")
+                record("sbom_has_spec_version", "specVersion" in sbom, "SBOM missing specVersion")
+            else:
+                record("sbom_format_cyclonedx", False, "sbom.cdx.json not found")
+                record("sbom_has_spec_version", False, "sbom.cdx.json not found")
+        except (OSError, ValueError) as error:
+            record("sbom_format_cyclonedx", False, str(error))
+            record("sbom_has_spec_version", False, str(error))
+
+    if artifact_checks:
+        record("release_artifact_gates", True, "checked")
+    else:
+        record("release_artifact_gates", True, "skipped (static repository check)")
 
     passed = all(item["passed"] for item in checks)
     return {"schema": 1, "passed": passed, "checks": checks}
