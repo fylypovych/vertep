@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.72
+- Перенаправлено тести bootstrap wizard на Angular Web UI `web-v2/src/app/setup/setup.component.html`.
+- Виправлено `core/api/setup.py::first_run_health`: Redis став OPTIONAL, DRIVER_REQUIRED не блокує ready, помилки PostgreSQL з деталями.
+- Виправлено `core/real_tests/models.py`: `utc_now` → `datetime.now(timezone.utc).isoformat()`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.71
 - Оновлено VERSION до 0.0.1.71, додано новий блок у CHANGELOG.md, створено releases/0.0.1.71.md, виправлені помилки в bootstrap.sh та тестах, підготовлено до релізу.
 

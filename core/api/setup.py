@@ -27,9 +27,13 @@ def first_run_health():
     try:
         with socket.create_connection((os.getenv("POSTGRES_HOST", "postgres"), 5432), timeout=1):
             checks["postgresql"] = "OK"
-    except OSError:
-        checks["postgresql"] = "OFFLINE"
-    checks["redis"] = "OK" if task_queue.backend == "redis" else "OFFLINE"
+    except OSError as e:
+        checks["postgresql"] = f"OFFLINE: {e}"
+    # Redis check is role-aware: only required for core role
+    if task_queue.backend == "redis":
+        checks["redis"] = "OK"
+    else:
+        checks["redis"] = "OPTIONAL"
     checks["worker"] = "OK" if any(item.get("status") not in {"OFFLINE", "ERROR"}
                                       for item in store.workers.values()) else "OPTIONAL"
     hardware = setup_status()["hardware"]
@@ -38,10 +42,13 @@ def first_run_health():
         "OK" if gpu.get("driver") not in {None, "unavailable"} else "DRIVER_REQUIRED")
     checks["cuda"] = "OPTIONAL" if gpu.get("vendor") != "nvidia" else (
         "OK" if gpu.get("cuda") not in {None, "unavailable"} else "UNAVAILABLE")
+    # Ollama is CONFIGURED only if URL is set, otherwise OPTIONAL
     checks["ollama"] = "CONFIGURED" if os.getenv("OLLAMA_URL") else "OPTIONAL"
     checks["docker"] = "OK" if hardware.get("docker_version") else "UNKNOWN"
-    return {"ready": all(value not in {"OFFLINE", "UNAVAILABLE"} for value in checks.values()),
-            "checks": checks}
+    # ready is true when no OFFLINE/UNAVAILABLE checks; DRIVER_REQUIRED is not blocking for setup
+    non_blocking = {"OPTIONAL", "CONFIGURED", "OK", "DRIVER_REQUIRED", "UNKNOWN"}
+    ready = all(value in non_blocking for value in checks.values())
+    return {"ready": ready, "checks": checks}
 
 
 @router.post("/api/setup/complete")

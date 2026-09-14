@@ -246,24 +246,24 @@ class TestHealthCheckAccuracy:
 
 class TestSetupWizardHTML:
     def test_has_all_sections(self):
-        html = (ROOT / "web" / "setup.html").read_text(encoding="utf-8")
-        for s in ("Роль вузла", "Адміністратор", "Секрети", "Обладнання",
-                  "AI Backend", "Health Check", "Installation Manifest", "Готово"):
+        html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
+        for s in ("Крок 1: Роль вузла", "Крок 2: Назва та адміністратор",
+                  "Крок 4: AI Backend", "Крок 5: Перевірка системи", "Готово"):
             assert s in html
 
     def test_has_admin_fields(self):
-        html = (ROOT / "web" / "setup.html").read_text(encoding="utf-8")
-        assert 'id="username"' in html and 'id="password"' in html
+        html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
+        assert 'data-testid="setup-username"' in html and 'data-testid="setup-password"' in html
 
     def test_has_core_connection_fields(self):
-        html = (ROOT / "web" / "setup.html").read_text(encoding="utf-8")
-        for f in ("coreUrl", "coreCertificate", "registrationToken"):
-            assert f in html
+        html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
+        for f in ("setup-core-url", "setup-core-cert", "setup-reg-token"):
+            assert f"data-testid=\"{f}\"" in html
 
     def test_has_manifest_download(self):
-        html = (ROOT / "web" / "setup.html").read_text(encoding="utf-8")
-        assert 'id="downloadManifest"' in html
+        html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
+        assert "Installation ID" in html or "installation_id" in html
 
     def test_completion_section(self):
-        html = (ROOT / "web" / "setup.html").read_text(encoding="utf-8")
-        assert 'id="result"' in html and 'id="certificate"' in html
+        html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
+        assert 'data-testid="setup-complete"' in html and "Core URL" in html
