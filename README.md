@@ -1,22 +1,22 @@
 # Vertep
 
-Завдання та стан розробки ведуться в [GitHub Issues](https://github.com/fylypovych/vertep/issues). Старі файли планів видалено після перенесення вимог; правила для агентів — у [AGENTS.md](AGENTS.md#29-робота-через-github-issues).
+Завдання та стан розробки ведуться в [GitHub Issues](https://github.com/fylypovych/vertep/issues). Старі файли планів видалено після перенесення вимог; правила для агентів — у [AGENTS.md](AGENTS.md#29-робота-через-github-issues). Повний виклад системи українською — у каталозі [docs/](docs/README.md).
 
-Vertep is a modular content-factory orchestrator for Ubuntu Server 24.04. CORE owns jobs and dispatches GPU work; WORKER runs replaceable ComfyUI workflows and returns artifacts; CORE assembles a valid MP4 with FFmpeg.
+Vertep — модульний оркестратор фабрики контенту для Ubuntu Server 24.04. CORE володіє jobs і диспетчеризує GPU-роботу; WORKER виконують змінні ComfyUI-workflow і повертають артефакти; CORE збирає валідний MP4 через FFmpeg.
 
 ## Production installation
 
-On a clean Ubuntu Server 24.04 host, run:
+На чистому хості Ubuntu Server 24.04 виконати:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash
 ```
 
-The command uses this same public `fylypovych/vertep` repository from start to finish. Bootstrap validates the host, installs Docker and the detected NVIDIA/AMD runtime, downloads the latest signed GitHub Release from this repository, verifies every runtime file, pulls digest-pinned images from this repository's public GHCR packages, generates credentials and TLS material, starts the selected services, and waits until they are healthy. No second repository or external release server is required.
+Команда від початку до кінця використовує цей самий публічний репозиторій `fylypovych/vertep`. Bootstrap перевіряє хост, встановлює Docker і виявлений NVIDIA/AMD runtime, завантажує останній підписаний GitHub Release цього репозиторію, перевіряє кожен runtime-файл, тягне digest-pinned образи з публічних GHCR-пакетів репозиторію, генерує credentials і TLS, стартує вибрані сервіси й чекає їх здоровими. Другий репозиторій чи зовнішній release-сервер не потрібні.
 
-If the first installation is interrupted or a container fails its healthcheck, run the same command again. Bootstrap resumes the existing appliance: it reuses PostgreSQL/Redis volumes, passwords, encrypted-store keys, TLS/Node CA, the selected role, domain and local settings, then replaces only release-managed files and signed image references. It refuses to invent replacement credentials when persistent data already exists but its key file is missing. A VM snapshot or Ubuntu reinstall is not part of the normal recovery procedure.
+Якщо перше встановлення перервано або контейнер не пройшов healthcheck — виконати ту саму команду ще раз. Bootstrap відновлює існуючий appliance: перевикористовує PostgreSQL/Redis volumes, паролі, ключі шифрованого сховища, TLS/Node CA, вибрану роль, домен і локальні налаштування, замінюючи лише release-керовані файли й підписані посилання на образи. Вигадувати замінні credentials, коли persistent-дані є, а key-файла немає, — відмовляється. VM-снапшот чи перевстановлення Ubuntu не є штатною процедурою відновлення.
 
-When installation finishes, open the printed `https://SERVER-IP:8443` address and complete the First Run Wizard. Further setup, backups, models, certificates, node enrollment and signed updates are managed through the Web UI without rerunning Bootstrap. Development and advanced source installations are documented under [Legacy/source installation](#legacysource-installation).
+Після завершення відкрити надрукований адрес `https://SERVER-IP:8443` і пройти First Run Wizard. Подальше налаштування, бекапи, моделі, сертифікати, enrollment вузлів і підписані оновлення керуються через Web UI без повторного Bootstrap. Розробницьке встановлення з сирців — у розділі [Legacy/source installation](#legacysource-installation) нижче.
 
 ## Demo
 
@@ -26,33 +26,33 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Open `http://localhost:8080` and sign in as `ADMIN_USER` (default `admin`). Demo mode still crosses the CORE/WORKER task protocol, but uses a deterministic image instead of a GPU model. The resulting `jobs/<job_id>/final/video.mp4` is a real MP4.
+Відкрити `http://localhost:8080` і увійти як `ADMIN_USER` (дефолт `admin`). Demo-режим так само проходить CORE/WORKER task-протокол, але замість GPU-моделі використовує детерміноване зображення. Результат `jobs/<job_id>/final/video.mp4` — справжній MP4.
 
-For a local CORE-only developer run, set `LOCAL_WORKER_FALLBACK=true`. This fallback exists for development and is disabled in the supplied Compose environment.
+Для локального CORE-only запуску розробника — `LOCAL_WORKER_FALLBACK=true`. Цей fallback існує для розробки і вимкнений у постаченому Compose-оточенні; production-приймання з ним недійсне.
 
 ## Legacy/source installation
 
-For development or advanced source deployments, run `sudo ./install.sh`, then choose `CORE`, `GPU WORKER`, or both. Production appliances should use the signed [Production installation](#production-installation) flow. The source installer:
+Для розробки або просунутих source-розгортань: `sudo ./install.sh`, далі вибрати `CORE`, `GPU WORKER` або обидва. Production-інсталяції мають використовувати підписаний [Production installation](#production-installation) потік. Source-інсталятор:
 
-- validates Ubuntu 24.04;
-- installs Docker, Compose, Git, Python, FFmpeg and firewall rules;
-- installs Ollama for CORE;
-- installs the recommended NVIDIA driver, NVIDIA Container Toolkit and ComfyUI for WORKER;
-- detects model, VRAM, temperature, load and CUDA availability;
-- installs the host-side Web update watcher on CORE without exposing the Docker socket;
-- writes `/etc/vertep/node.conf` and enables only the applicable systemd units.
+- перевіряє Ubuntu 24.04;
+- встановлює Docker, Compose, Git, Python, FFmpeg і firewall-правила;
+- встановлює Ollama для CORE;
+- встановлює рекомендований NVIDIA driver, NVIDIA Container Toolkit і ComfyUI для WORKER;
+- визначає модель, VRAM, температуру, навантаження і доступність CUDA;
+- встановлює хостовий Web update watcher на CORE без доступу до Docker-сокета;
+- пише `/etc/vertep/node.conf` і вмикає лише відповідні systemd-юніти.
 
-Driver installation can require a reboot and a second installer run. Put a GPU-compatible checkpoint in `/opt/ComfyUI/models/checkpoints` and set its filename as `COMFYUI_CHECKPOINT`. The included API-format workflow is usable with standard Stable Diffusion checkpoints and can be replaced per character. For Pascal cards the installer selects a pinned CUDA 12.1/PyTorch line instead of blindly installing the newest build.
+Встановлення драйвера може вимагати reboot і повторного запуску інсталятора. Покласти GPU-сумісний checkpoint у `/opt/ComfyUI/models/checkpoints` і вказати його ім'я як `COMFYUI_CHECKPOINT`. Включений workflow API-формату працює зі стандартними Stable Diffusion checkpoints і замінюється під персонажа. Для карт Pascal інсталятор вибирає pinned CUDA 12.1/PyTorch-лінійку замість сліпого встановлення найновішої збірки.
 
 ### NVIDIA GeForce GTX 1660 (6 GB)
 
-The Worker installer recognizes GTX 1660, GTX 1660 SUPER and GTX 1660 Ti as Turing (compute capability 7.5). The 6 GB profile uses pinned PyTorch 2.6.0 CUDA 12.4 wheels and starts ComfyUI with `--lowvram`. After installation it verifies `torch.cuda.is_available()` before enabling the service. ComfyUI listens only on `127.0.0.1:8188`; the standalone Worker reaches it through host networking.
+Worker-інсталятор розпізнає GTX 1660, GTX 1660 SUPER і GTX 1660 Ti як Turing (compute capability 7.5). Профіль 6 ГБ використовує pinned PyTorch 2.6.0 CUDA 12.4 wheels і стартує ComfyUI з `--lowvram`. Після встановлення перевіряє `torch.cuda.is_available()` перед увімкненням сервісу. ComfyUI слухає лише `127.0.0.1:8188`; окремий Worker дістається його через host networking.
 
-The safe default remains `SUPPORTED_TASKS=image`. Video generation on a 6 GB card is model-dependent and should only be enabled after a chosen workflow has been tested for VRAM use. CORE dispatches jobs according to the Worker's live free-VRAM report, so use a `min_vram_mb` below the actually available value rather than the nominal 6144 MB.
+Безпечним дефолтом лишається `SUPPORTED_TASKS=image`. Відеогенерація на 6 ГБ карті залежить від моделі і вмикається лише після тесту вибраного workflow на споживання VRAM. CORE диспетчеризує за живим звітом вільної VRAM Worker, тому `min_vram_mb` має бути нижчим за фактично доступне значення, а не номінальні 6144 МБ.
 
-Installer packages and services are declared in `installer/manifest.json`. Additional node roles can be added as manifest roles/profiles; optional idempotent setup hooks live in `installer/roles/`.
+Пакети й сервіси інсталятора описані в `installer/manifest.json`. Додаткові ролі вузлів додаються як manifest-ролі/профілі; опційні ідемпотентні setup-хуки — в `installer/roles/`.
 
-A standalone GPU node uses `docker-compose.worker.yml`; this file contains only the Worker and its log volume, so it cannot accidentally start CORE, Redis or PostgreSQL. During a WORKER-only installation, enter the token issued/configured on CORE when prompted (`VERTEP_NODE_TOKEN` for unattended installs). `CORE_ADDRESS` and `NODE_NAME` from `/etc/vertep/node.conf` override template values from `.env`.
+Окремий GPU-вузол використовує `docker-compose.worker.yml`; цей файл містить лише Worker і його log volume, тож випадково стартувати CORE, Redis чи PostgreSQL не може. Під час WORKER-only встановлення ввести токен, виданий/налаштований на CORE (`VERTEP_NODE_TOKEN` для unattended-встановлень). `CORE_ADDRESS` і `NODE_NAME` з `/etc/vertep/node.conf` перекривають шаблонні значення `.env`.
 
 ## Telegram
 
@@ -78,23 +78,23 @@ vertep recover
 vertep rollback
 ```
 
-The helpers are in `scripts/vertep`. `update` reads the installed node role and starts only applicable services. Signed releases are prepared under an immutable release directory and activated atomically. Jobs and event histories are persisted under the Job volume; Redis and PostgreSQL have persistent volumes and restart policies.
+Хелпери — у `scripts/vertep`. `update` читає встановлену роль вузла і стартує лише відповідні сервіси. Підписані релізи готуються в immutable release-директорії й активуються атомарно. Jobs та історії подій persist-яться у Job volume; Redis і PostgreSQL мають persistent volumes і restart policies.
 
-On CORE, update order is deliberately: drain workloads, create and verify backups, validate the signed release, verify the already-running database services, apply each unapplied migration/backfill, then activate and health-check the new application services. PostgreSQL and Redis are not recreated during a normal application update. If the database does not become ready or a migration fails, the new CORE is not activated.
+На CORE порядок оновлення свідомо такий: drain навантаження, створення і перевірка бекапів, валідація підписаного релізу, перевірка вже запущених database-сервісів, застосування кожної незастосованої міграції/backfill, потім активація і health-check нових application-сервісів. PostgreSQL і Redis під час звичайного application-оновлення не перестворюються. Якщо база не стала ready або міграція впала — новий CORE не активується.
 
-Cluster updates use a PostgreSQL-backed rolling coordinator with global fencing. Nodes are drained in deterministic order, canary deployment requires explicit promotion, and a failed health check requests rollback to each node's recorded previous version. Resumable data backfills keep durable checkpoints and can continue after interruption.
+Кластерні оновлення використовують PostgreSQL-backed rolling-координатор з global fencing. Вузли дрейняться в детермінованому порядку, canary-розгортання вимагає явного promotion, а провалений health check запитує rollback кожного вузла до записаної попередньої версії. Відновлювані data backfills тримають durable checkpoints і продовжуються після переривання.
 
-`vertep status` remains usable on a Worker while CORE is offline: local GPU information is still shown. When CORE is reachable, the Worker obtains the shared system status through its node-scoped token instead of requiring the administrator password.
+`vertep status` лишається придатним на Worker, поки CORE офлайн: локальна GPU-інформація все одно показується. Коли CORE досяжний, Worker отримує спільний системний статус через свій node-scoped токен замість пароля адміністратора.
 
 ### Signed updates in the Web UI
 
-On an installed CORE node, open **Система → Безпечне оновлення Vertep**. First select **Перевірити оновлення**; the **Встановити оновлення** button is enabled only when the signed update service reports a newer compatible release. Installation runs asynchronously, so the page may briefly lose its connection while services are activated and restarted. The persistent status shows the current and available versions, update phase, system state and the last update log.
+На встановленому CORE-вузлі відкрити **Система → Безпечне оновлення Vertep**. Спочатку вибрати **Перевірити оновлення**; кнопка **Встановити оновлення** вмикається лише коли підписаний update-сервіс повідомляє про новіший сумісний реліз. Встановлення йде асинхронно, тож сторінка може коротко втратити з'єднання під час активації й рестарту сервісів. Persistent-статус показує поточну й доступну версії, фазу оновлення, стан системи й останній update-лог.
 
-The Web API never receives a command, repository URL or branch. It can enqueue only fixed maintenance actions such as `check`, `update`, and `restart`; emergency recovery returns the system to normal mode only after CORE, PostgreSQL, and Redis health checks pass. A root-owned systemd path unit processes privileged requests on the host. The CORE container receives no Docker socket.
+Web API ніколи не отримує команду, URL репозиторію чи гілку. Він може ставити в чергу лише фіксовані maintenance-дії на кшталт `check`, `update` і `restart`; emergency recovery повертає систему в нормальний режим лише після проходження health checks CORE, PostgreSQL і Redis. Root-owned systemd path unit обробляє привілейовані запити на хості. CORE-контейнер Docker-сокета не отримує.
 
-Web updates are enabled by Bootstrap or the Ubuntu CORE installer (`WEB_UPDATE_ENABLED=true`) and restricted to administrators. Releases are fetched directly from the public GitHub Releases feed of `fylypovych/vertep`; each release includes a separately signed update manifest that binds its version, compatibility metadata and runtime-package SHA-256. The updater enters maintenance mode, drains active work, creates application, job, configuration, migration, and PostgreSQL backups, atomically switches the digest-pinned images, then applies the package. Failed health checks restore the previous release and environment; a durable update phase permits recovery after a power loss. The systemd timer checks for releases every six hours. Installed nodes need no GitHub credentials.
+Web-оновлення вмикаються Bootstrap або Ubuntu CORE-інсталятором (`WEB_UPDATE_ENABLED=true`) і обмежені адміністраторами. Релізи тягнуться напряму з публічної GitHub Releases-стрічки `fylypovych/vertep`; кожен реліз містить окремо підписаний update manifest, що зв'язує версію, metadata сумісності й SHA-256 runtime-пакета. Updater входить у maintenance mode, дрейнить активну роботу, створює application/job/configuration/migration бекапи й PostgreSQL-бекапи, атомарно перемикає digest-pinned образи, потім застосовує пакет. Провалені health checks відновлюють попередній реліз і оточення; durable update-фаза дозволяє відновлення після втрати живлення. Systemd timer перевіряє релізи кожні шість годин. Встановленим вузлам GitHub credentials не потрібні.
 
-After upgrading an older installation to a release that first contains the Web updater, run `sudo ./install.sh` once to install and enable `vertep-update.path`. If an update fails its health check, use `vertep rollback` from the server console; database backups and the last known Git revision are retained under the project directory.
+Після оновлення старої інсталяції до релізу, що вперше містить Web updater, один раз виконати `sudo ./install.sh` для встановлення й увімкнення `vertep-update.path`. Якщо оновлення провалило health check — `vertep rollback` з консолі сервера; бекапи бази й остання відома Git-ревізія зберігаються в директорії проєкту.
 
 ## API overview
 
@@ -108,14 +108,14 @@ After upgrading an older installation to a release that first contains the Web u
 - `POST /api/tasks/claim`, `POST /api/tasks/result`
 - `POST /api/workers/heartbeat`, `GET /api/workers`
 - `POST /api/telegram/webhook`, `POST /api/telegram/setup`
-- `GET /api/system/update`, `POST /api/system/update/check|run` (administrator only for POST)
+- `GET /api/system/update`, `POST /api/system/update/check|run` (POST лише адміністратор)
 - `GET|POST /api/system/backups`, `POST /api/system/backups/{snapshot_id}/restore`
 - `GET /api/system/models`, `POST /api/system/models/pull`, `DELETE /api/system/models/{name}`
 - `GET /api/system/certificates`, `POST /api/system/certificates/renew`
 - `GET /api/system/license`, `GET /api/system/installation-manifest`
 - `GET /api/status`, `GET /api/integrations`, `GET /api/health`
 
-Machine endpoints can be protected with `NODE_API_TOKEN`; the Web UI and administrative API use HTTP Basic authentication. Keep `.env` local—it is excluded from Git.
+Машинні ендпоїнти можуть захищатися `NODE_API_TOKEN`; Web UI і адміністративний API використовують HTTP Basic authentication. Тримати `.env` локально — він виключений з Git.
 
 ## Tests
 
@@ -124,66 +124,63 @@ python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Tests cover a local end-to-end MP4 and the actual distributed claim/result contract.
-They also cover the video-worker artifact contract: CORE accepts validated scene clips and FFmpeg concatenates them into the final MP4. The sample `workflows/video/demo.json` targets the ComfyUI Video Helper Suite (`VHS_VideoCombine`), so executing that workflow on real hardware requires that matching custom node; its local registry and transport contract require no running server.
+Тести покривають локальний end-to-end MP4 і справжній розподілений claim/result-контракт. Також покрито video-worker artifact-контракт: CORE приймає валідовані scene-кліпи, а FFmpeg конкатенує їх у фінальний MP4. Семпл `workflows/video/demo.json` цілиться в ComfyUI Video Helper Suite (`VHS_VideoCombine`), тож виконання цього workflow на реальному залізі вимагає відповідного custom node; його локальний registry і transport-контракт запущеного сервера не вимагають.
 
-GitHub Actions runs the complete suite, Python compilation, shell syntax checks and Compose configuration validation on every push and pull request.
+GitHub Actions ганяє повний suite, компіляцію Python, shell syntax checks і валідацію Compose-конфігурації на кожен push і pull request.
 
 ## Релізи та номери версій
 
-Кожен реліз оформлюється одним основним комітом. Його назва має формат `0.0.0.94`, а цей самий коміт вміщує код, оновлений `VERSION`, секцію в `CHANGELOG.md` та файл `releases/<version>.md`. Четверта складова номера змінюється від `0` до `99`: після `0.0.0.99` іде `0.0.1.0`.
+Канон — `AGENTS.md` §3; виклад — `docs/versioning.md`, контракт артефактів — `docs/release-contract.md`.
 
-Спочатку додайте змістовні українські пункти до секції `Unreleased`, потім виконайте:
+Кожен реліз оформлюється одним версійним комітом у `main`. Назва коміту — лише номер версії формату `A.B.C.D` (послідовно: `…0.0.1.99 → 0.0.2.0`); той самий коміт вміщує код, оновлений `VERSION`, секцію `CHANGELOG.md` (`## ПРАВИЛЬНА НАЗВА: <версія>`) і файл `releases/<версія>.md` (`# Vertep <версія>`).
 
-```bash
-python scripts/release.py
-```
+Два входи:
 
-Скрипт визначає наступний номер, перевіряє український опис, переносить пункти `Unreleased` до нової версії, формує нотатки, запускає перевірки, створює один готовий коміт та відправляє його у `main`. Після цього запустіть **Actions → Vertep Release → Run workflow**.
+- агент-команда `пуш` (повний цикл за `AGENTS.md` §3.6: версія → файли → перевірки → один commit → push у `main`, без tag/Release);
+- локально: змістовні українські пункти в секцію `Unreleased` файлу `CHANGELOG.md`, потім `python scripts/release.py` (визначає наступний номер, формує нотатки, запускає перевірки, створює один готовий коміт і відправляє в `main`).
 
-Workflow не змінює `main` і не створює другого коміту від бота. Він перевіряє готовий коміт, збирає образи й підписані артефакти, ставить тег саме на цей коміт та публікує GitHub Release. Наступний номер можна переглянути командою `python scripts/release.py --show-next`, а готовий коміт перевірити командою `python scripts/release.py --check`.
+Далі команда `реліз`: перевірка чистого дерева → запуск **Actions → Vertep Release → Run workflow**. Workflow `main` не змінює і другого коміту від бота не створює: перевіряє готовий коміт, збирає образи й підписані артефакти, ставить тег саме на цей коміт і публікує GitHub Release. Наступний номер — `python scripts/release.py --show-next`, аудит готового коміту — `python scripts/release.py --check`.
 
 ## Orchestration and artifacts
 
-Each Job has explicit SCRIPT, ASSETS, TTS, ASSEMBLY and PUBLISH stages. Script scenes are dispatched as independent tasks, so multiple workers may process one Job concurrently. CORE retries only the failed scene; exhausted tasks enter the dead-letter queue. Assembly starts after every scene reaches READY.
+Кожен Job має явні стадії SCRIPT, ASSETS, TTS, ASSEMBLY і PUBLISH. Сцени сценарію диспетчеризуються незалежними tasks, тож один Job можуть паралельно обробляти кілька воркерів. CORE повторює лише провалену сцену; вичерпані tasks ідуть у dead-letter queue. Assembly стартує, коли кожна сцена досягла READY.
 
-Set `scheduled_for` to an ISO-8601 timestamp in `POST /api/jobs` to defer processing. Every generated or uploaded file is recorded in `manifest.json` with its MIME type, byte size, SHA-256 digest, scene/task/worker provenance and workflow. Verified downloads reject missing or modified files.
+Щоб відкласти обробку, в `POST /api/jobs` встановити `scheduled_for` як ISO-8601 timestamp. Кожен згенерований чи завантажений файл записується в `manifest.json` з MIME-типом, розміром, SHA-256 digest, provenance сцена/task/worker/workflow. Перевірені завантаження відхиляють відсутні або модифіковані файли.
 
-`PATCH /api/jobs/{id}` accepts `expected_version`; a stale value returns HTTP 409. This prevents two browser sessions from silently overwriting each other's changes.
+`PATCH /api/jobs/{id}` приймає `expected_version`; stale-значення повертає HTTP 409. Це не дає двом браузерним сесіям мовчки перезаписувати зміни одна одної.
 
-The CORE also provides priority/leased tasks with watchdog recovery, structured rotating logs, Character and Brand APIs, multi-scene FFmpeg assembly, Telegram commands, per-worker tokens, administrative sessions and mock-safe publisher contracts. Live social-network upload methods still require platform-specific API credentials and implementations.
+CORE також надає priority/leased tasks з watchdog recovery, структуровані ротовані логи, Character і Brand APIs, багатосценовий FFmpeg assembly, Telegram-команди, per-worker токени, адміністративні сесії та mock-safe publisher-контракти. Живі завантаження в соцмережі й далі вимагають platform-specific API credentials та реалізацій.
 
-Use `sudo ./install.sh --dry-run` for a read-only preflight, `python scripts/generate-env.py` to create unique local secrets, and `python scripts/upgrade-config.py` after upgrades to add new configuration keys without overwriting existing values. Current release metadata is stored in `VERSION` and `CHANGELOG.md`.
+`sudo ./install.sh --dry-run` — read-only preflight, `python scripts/generate-env.py` — створення унікальних локальних секретів, `python scripts/upgrade-config.py` — додавання нових ключів конфігурації після оновлень без перезапису існуючих. Поточні release-metadata — у `VERSION` і `CHANGELOG.md`.
 
 ## Provider layer (replaceable engines)
 
-Vertep calls every external engine through formal interfaces in `adapters/providers/base.py` (`LLMProvider`, `ImageProvider`, `VideoProvider`, `TTSProvider`, `AssemblyProvider`, `ComputeProvider`, `PublisherProvider`, `VideoEngine`). Wrappers in `adapters/providers/__init__.py` expose a registry (`providers.*`) and keep defaults interchangeable without touching the Job Orchestrator. Optional engines are engaged only on explicit opt-in via `.env`, otherwise factories fall back to the native backend:
+Повний виклад — `docs/providers.md`. Коротко: Vertep викликає кожен зовнішній движок через формальні інтерфейси в `adapters/providers/base.py` (`LLMProvider`, `ImageProvider`, `VideoProvider`, `TTSProvider`, `AssemblyProvider`, `ComputeProvider`, `PublisherProvider`, `VideoEngine`). Обгортки в `adapters/providers/__init__.py` дають registry (`providers.*`) і тримають дефолти взаємозамінними без дотику до Job Orchestrator. Опційні движки вмикаються лише явним opt-in через `.env`, інакше фабрики відкочуються на нативний backend:
 
-- **LLM**: `ollama` (default) or OpenAI-compatible `openai` — `VERTEP_LLM_PROVIDER`.
-- **TTS**: `none`/`mock` (default), `piper` (MIT), `kokoro` (Apache-2.0) — `TTS_PROVIDER`.
-- **Compute / GPU image-video**: `vertep-worker` (default, attached ComfyUI) or `comfyui-distributed` — `VERTEP_COMPUTE_PROVIDER`, `COMFYUI_DISTRIBUTED_URL`/`_TOKEN`.
-- **Assembly**: native FFmpeg.
-- **VideoEngine** (final render): `native` (default), `money-printer`, `shortgpt` — `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`/`_TOKEN`, `SHORTGPT_URL`/`_TOKEN`.
-- **Publisher**: official adapters for Telegram and YouTube/TikTok/Facebook/Instagram/Threads.
+- **LLM**: `ollama` (дефолт) або OpenAI-сумісний `openai` — `VERTEP_LLM_PROVIDER`.
+- **TTS**: `none`/`mock` (дефолт), `piper` (MIT), `kokoro` (Apache-2.0) — `TTS_PROVIDER`.
+- **Compute / GPU image-video**: `vertep-worker` (дефолт, приєднаний ComfyUI) або `comfyui-distributed` — `VERTEP_COMPUTE_PROVIDER`, `COMFYUI_DISTRIBUTED_URL`/`_TOKEN`.
+- **Assembly**: нативний FFmpeg.
+- **VideoEngine** (фінальний рендер): `native` (дефолт), `money-printer`, `shortgpt` — `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`/`_TOKEN`, `SHORTGPT_URL`/`_TOKEN`.
+- **Publisher**: офіційні адаптери Telegram і YouTube/TikTok/Facebook/Instagram/Threads.
 
-The active backend matrix is exposed by `provider_matrix()` in `/api/status` and shown in the Web UI under **Settings → Engines (backends)**. Vertep keeps ownership of the Job lifecycle; external engines only render or publish.
+Активна backend-матриця — `provider_matrix()` в `/api/status` і Web UI **Settings → Engines (backends)**. Власником Job-циклу лишається Vertep; зовнішні движки лише рендерять або публікують.
 ## Appliance runtime details
 
-For NVIDIA hosts Bootstrap installs the recommended driver and NVIDIA Container Toolkit, registers the Docker runtime and verifies `nvidia-smi`. For AMD hosts it installs ROCm/HIP, verifies `/dev/kfd`, `/dev/dri` and `rocminfo`, and applies the signed AMD Compose overlay. GPU-specific overlays remain active during updates, rollback, watchdog restarts and startup recovery.
+На NVIDIA-хостах Bootstrap встановлює рекомендований driver і NVIDIA Container Toolkit, реєструє Docker runtime і перевіряє `nvidia-smi`. На AMD-хостах ставить ROCm/HIP, перевіряє `/dev/kfd`, `/dev/dri` і `rocminfo`, застосовує підписаний AMD Compose overlay. GPU-специфічні overlays лишаються активними під час оновлень, rollback, watchdog-рестартів і startup recovery.
 
-The production runtime has separate License Manager, Dispatcher, Scheduler and Certificate Manager services. Core waits for every selected service to become healthy. Proxy, Prometheus, Loki, Promtail and Grafana configuration is embedded into digest-pinned images rather than mounted from mutable runtime files.
+Production runtime має окремі License Manager, Dispatcher, Scheduler і Certificate Manager сервіси. Core чекає здоровими всі вибрані сервіси. Конфігурація Proxy, Prometheus, Loki, Promtail і Grafana вбудована в digest-pinned образи, а не змонтована з мутабельних runtime-файлів.
 
-The Deployment Wizard obtains its role list from `config/node_roles.json`; adding a role does not require changing token or enrollment logic. Core nodes can create 15-minute, one-use registration tokens from **Workers → Add Worker**. Non-Core nodes initiate the HTTPS enrollment request themselves and receive a node-bound JWT, per-node secret, certificate attestation, configuration, and capability set. Dispatch is capability-driven rather than role-driven, so installing a new engine only requires the node to advertise its new capability.
+Deployment Wizard бере список ролей з `config/node_roles.json`; додавання ролі не вимагає зміни token або enrollment-логіки. Core-вузли можуть створювати 15-хвилинні одноразові registration tokens з **Workers → Add Worker**. Non-Core вузли самі ініціюють HTTPS enrollment-запит і отримують node-bound JWT, per-node secret, certificate attestation, конфігурацію і capability set. Dispatch — capability-driven, а не role-driven, тож встановлення нового движка вимагає лише заяви нової capability вузлом.
 
-Release candidates must pass the reproducible appliance gates; CI uploads the resulting JSON evidence:
+Release candidates мають проходити відтворювані appliance gates; CI завантажує результуючий JSON-доказ:
 
 ```bash
 python scripts/qualify-release.py --root . --docker --output qualification.json
 ```
 
-Integration credentials are managed from **System → Protected integrations**. Values are write-only
-through the API and remain inside the authenticated encrypted secret envelope.
+Integration credentials керуються з **System → Protected integrations**. Значення write-only через API і лишаються всередині автентифікованого шифрованого secret-конверта.
 
-During First Run the selected AI backend is contacted before setup completes: Vertep validates the endpoint, HTTPS policy, credentials and model inventory, and can pull a missing local Ollama model. The final Installation Manifest records the selected role and modules, actual Docker image digests, container state and module health.
+Під час First Run вибраний AI backend контактується до завершення setup: Vertep валідує endpoint, HTTPS-політику, credentials та inventory моделей і може дотягти відсутню локальну Ollama-модель. Фінальний Installation Manifest фіксує вибрану роль і модулі, справжні Docker image digests, стан контейнерів і здоров'я модулів.
 
-Routine appliance lifecycle is available under **System → Zero-Shell lifecycle**: administrators can create or restore encrypted backups, install or remove Ollama models, and inspect or renew the TLS certificate without using an SSH session. The authenticated `/api/system/installation-manifest` endpoint returns the current installation inventory.
+Рутинний appliance lifecycle — у **System → Zero-Shell lifecycle**: адміністратори можуть створювати або відновлювати шифровані бекапи, встановлювати чи видаляти Ollama-моделі, переглядати або оновлювати TLS-сертифікат без SSH-сесії. Автентифікований ендпоїнт `/api/system/installation-manifest` повертає поточний inventory інсталяції.

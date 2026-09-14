@@ -1,5 +1,11 @@
 # Підписаний контракт runtime-релізу Vertep
 
+> Статус: чинний | Аудиторія: розробник | Канон: `AGENTS.md` §3.12–§3.17
+
+## Місце в релізі
+
+Повноцінний Release (див. `versioning.md`) обов'язково містить `vertep-runtime-<VERSION>.tar.gz` (docker-compose файли, `manifest.json`, `node_roles.json`, `deployment-plan.py`, `update-agent.py`, `vertep` CLI, SBOM, systemd units, monitoring-конфіг), manifest з SHA-256 і підписом, checksums, SBOM, Docker images з immutable digests. Git tag `<VERSION>` ставиться лише після green build/test і вказує на build-commit. `Source code (zip/tar.gz)` від GitHub runtime-пакетами не є. Підпис — секрет `RUNTIME_SIGNING_PRIVATE_KEY`.
+
 Контракт версії 2 є єдиним джерелом правди для Bootstrap Installer, Update Agent і перевірки релізу. Він криптографічно зв’язує номер та послідовність релізу з файлами, каталогом ролей, контейнерними образами, сумісністю API/бази даних і CycloneDX SBOM.
 
 ## Обов’язкові гарантії

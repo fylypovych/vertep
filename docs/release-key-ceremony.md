@@ -1,5 +1,7 @@
 # Release Key Ceremony
 
+> Статус: чинний | Аудиторія: оператор релізів | Канон: `AGENTS.md` §3.12–§3.14
+
 Цей документ описує процедуру генерації, ротації та відновлення
 offline-root metadata для Vertep Update Agent.
 

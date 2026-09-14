@@ -11,7 +11,7 @@ Allowed control-plane operations (FFmpeg assembly, config queries, status
 reporting) and explicit LOCAL_WORKER_FALLBACK paths are allowlisted below.
 Any new generation call in ``core/`` not in the allowlist fails the suite.
 
-See also: AGENTS.md (i.0.0.0.29), docs/architecture/core-generation-gate.md
+See also: AGENTS.md (i.0.0.0.29), docs/core-generation-gate.md
 """
 
 import re
@@ -136,8 +136,8 @@ class TestCoreGenerationGateDocumentation:
     """Verify architecture gate documentation exists and is current."""
 
     def test_gate_documentation_exists(self):
-        doc = Path(__file__).resolve().parent.parent / "docs" / "architecture" / "core-generation-gate.md"
-        assert doc.exists(), "Missing docs/architecture/core-generation-gate.md (i.0.0.0.29)"
+        doc = Path(__file__).resolve().parent.parent / "docs" / "core-generation-gate.md"
+        assert doc.exists(), "Missing docs/core-generation-gate.md (i.0.0.0.29)"
 
     def test_agents_md_mentions_generation_gate(self):
         agents = Path(__file__).resolve().parent.parent / "AGENTS.md"

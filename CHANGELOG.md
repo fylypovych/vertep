@@ -1,5 +1,14 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.70
+- Усунуто протиріччя в `AGENTS.md` (C1–C7): динамічне формулювання нумерації; таксономія Issues `i`/`ir` (`ri`/`rt` — історичні аліаси); Browser E2E gate для точного SHA у release workflow; GitHub-канон джерела оновлень і встановлення; межа control-plane/execution у CORE; `web-v2` як активна адмінпанель.
+- Перейменовано 7 Issues `ri`/`rt` → `ir` (#34, #35, #40, #47, #50, #54, #57).
+- Плоский каталог `docs/` (26 файлів, без підкаталогів): 18 нових повних викладів українською, перейменування в lowercase, підняття файлів з `architecture/`/`refactoring/` (каталоги видалено), шапки `Статус/Аудиторія/Канон`; `_issue36.md` видалено.
+- `README.md` повністю українською; реліз-секція вирівняна під `AGENTS.md` §3.
+- Відновлено 63 відсутні `releases/*.md` (58 з пунктів `CHANGELOG.md`, 5 реконструкцією з `git show`); виправлено заголовки `0.0.0.90`, `0.0.0.91`, `0.0.0.92` на `# Vertep <версія>`.
+- Оновлено шлях gate-документації в `tests/test_core_generation_gate.py` і посилання в `AGENTS.md` §4.1 після переїзду `docs/architecture/` у плоский `docs/`.
+- Включено присутні в робочому дереві локальні тести Telegram System Operations (`tests/test_telegram_system_operations.py`, +290 рядків: access denial, idempotency, failure paths, restart worker/node flows, cancel); повний suite зелений.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.69
 - Виправлено shallow copy leak у хелпері `resign()` тесту `test_key_lifecycle.py`: `dict(metadata)` замінено на `copy.deepcopy(metadata)`, що запобігає мутації оригінального `metadata` при зміні `release_keys` через повернений словник.
 - Виправлено flaky тест `test_job_list_status_exact_filter`: видалено ненадійний `cancel` (race condition з асинхронним pipeline), тест тепер фільтрує за статусом, який сервер фактично призначив job.

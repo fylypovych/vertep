@@ -1,5 +1,6 @@
 """Tests for Telegram system operations: Status, Update, Restart, Backup, Restore, Test."""
 import importlib
+import pytest
 from unittest.mock import Mock, patch
 
 
@@ -219,6 +220,295 @@ class TestTestOperation:
         keyboard = adapter.send_message.call_args[1]["reply_markup"]["inline_keyboard"]
         all_callbacks = [b["callback_data"] for row in keyboard for b in row]
         assert "sys_test_quick_confirm" in all_callbacks
+
+
+class TestAccessDenial:
+    """Non-admin callback for every system operation must be rejected."""
+
+    @pytest.mark.parametrize("action", [
+        "sys_status:menu", "sys_update:menu", "sys_restart:menu",
+        "sys_backup:menu", "sys_restore:menu", "sys_test:menu",
+    ])
+    def test_non_admin_callback_denied(self, monkeypatch, action):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: False)
+        cb = {"id": "cb-denied", "data": action,
+              "message": {"chat": {"id": "99"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "Доступ заборонено" in text
+
+
+class TestIdempotency:
+    """Duplicate callbacks must not create duplicate operations."""
+
+    def test_restart_idempotency(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress",
+                            lambda t: {"operation_id": "r" * 32, "type": "restart"})
+        cb = {"id": "cb-restart-id", "data": "sys_restart:menu",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "вже в процесі" in text or "процесі" in text
+
+    def test_backup_idempotency(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress",
+                            lambda t: {"operation_id": "b" * 32, "type": "backup"})
+        cb = {"id": "cb-backup-id", "data": "sys_backup_confirm",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "вже в процесі" in text or "процесі" in text
+
+    def test_restore_idempotency(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress",
+                            lambda t: {"operation_id": "e" * 32, "type": "restore"})
+        cb = {"id": "cb-restore-id", "data": "sys_restore_select:snap1",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "процесі" in text
+
+    def test_test_idempotency(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress",
+                            lambda t: {"operation_id": "t" * 32, "type": "test"})
+        cb = {"id": "cb-test-id", "data": "sys_test_quick_confirm",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "вже в процесі" in text or "процесі" in text
+
+    def test_duplicate_callback_dedup(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        module._telegram_system_callbacks.clear()
+        cb = {"id": "cb-dedup", "data": "sys_cancel",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        first_call = adapter.answer_callback.called
+        adapter.reset_mock()
+        module._handle_telegram_callback(cb)
+        second_call_text = adapter.answer_callback.call_args[0][1] if adapter.answer_callback.called else ""
+        assert first_call
+        assert "вже оброблено" in second_call_text
+        module._telegram_system_callbacks.clear()
+
+
+class TestFailurePaths:
+    def test_restart_core_backend_failure(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, 'create_operation', lambda *a, **kw: {'operation_id': 'f' * 32})
+        monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
+        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'_error': 'HTTP 500: Internal error'})
+        cb = {'id': 'cb-fr', 'data': 'sys_restart_core_confirm', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert chr(10060) in adapter.answer_callback.call_args[0][1]
+
+    def test_backup_backend_failure(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, 'create_operation', lambda *a, **kw: {'operation_id': 'f' * 32})
+        monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'advance_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
+        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'_error': 'Connection refused'})
+        cb = {'id': 'cb-fb', 'data': 'sys_backup_confirm', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert chr(10060) in adapter.answer_callback.call_args[0][1]
+
+    def test_restore_backend_failure(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, 'create_operation', lambda *a, **kw: {'operation_id': 'f' * 32})
+        monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'advance_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
+        monkeypatch.setattr(module, '_call_backup_api', lambda *a, **kw: {'_error': 'Timeout'})
+        cb = {'id': 'cb-fres', 'data': 'sys_restore_execute:snap1', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert chr(10060) in adapter.answer_callback.call_args[0][1]
+
+    def test_test_quick_backend_failure(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, 'create_operation', lambda *a, **kw: {'operation_id': 'f' * 32})
+        monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
+        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'_error': 'HTTP 503'})
+        cb = {'id': 'cb-ft', 'data': 'sys_test_quick_confirm', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert chr(10060) in adapter.answer_callback.call_args[0][1]
+
+
+class TestRestartWorkerFlow:
+    def test_restart_worker_shows_nodes(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, '_sync_internal_api', lambda *a, **kw: [{'node_id': 'gpu-01', 'role': 'gpu'}])
+        cb = {'id': 'cb-rw', 'data': 'sys_restart_worker', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.send_message.called
+        kb = adapter.send_message.call_args[1]['reply_markup']['inline_keyboard']
+        all_cb = [b['callback_data'] for row in kb for b in row]
+        assert any('sys_restart_worker_select' in c for c in all_cb)
+
+    def test_restart_worker_execute(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, 'create_operation', lambda *a, **kw: {'operation_id': 'w' * 32})
+        monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'complete_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
+        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'status': 'restart_requested'})
+        cb = {'id': 'cb-rwc', 'data': 'sys_restart_worker_confirm:gpu-01', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert chr(9989) in adapter.answer_callback.call_args[0][1]
+
+
+class TestTestFullFlow:
+    def test_test_full_confirmation(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        cb = {'id': 'cb-tf', 'data': 'sys_test_full', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.send_message.called
+        kb = adapter.send_message.call_args[1]['reply_markup']['inline_keyboard']
+        all_cb = [b['callback_data'] for row in kb for b in row]
+        assert 'sys_test_full_confirm' in all_cb
+
+    def test_test_full_execute(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, 'create_operation', lambda *a, **kw: {'operation_id': 't' * 32})
+        monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'complete_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
+        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'scope': 'full', 'result': 'OK'})
+        cb = {'id': 'cb-tfc', 'data': 'sys_test_full_confirm', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert chr(9989) in adapter.answer_callback.call_args[0][1]
+
+
+class TestTestNodeFlow:
+    def test_test_node_shows_nodes(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, '_sync_internal_api', lambda *a, **kw: [{'node_id': 'gpu-01', 'role': 'gpu'}])
+        cb = {'id': 'cb-tn', 'data': 'sys_test_node', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.send_message.called
+        kb = adapter.send_message.call_args[1]['reply_markup']['inline_keyboard']
+        all_cb = [b['callback_data'] for row in kb for b in row]
+        assert any('sys_test_node_select' in c for c in all_cb)
+
+    def test_test_node_execute(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, 'create_operation', lambda *a, **kw: {'operation_id': 'n' * 32})
+        monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'complete_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
+        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'status': 'ok'})
+        cb = {'id': 'cb-tnc', 'data': 'sys_test_node_confirm:gpu-01', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert chr(9989) in adapter.answer_callback.call_args[0][1]
+
+
+class TestRestoreNoBackups:
+    def test_restore_shows_no_backups(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
+        monkeypatch.setattr(module, '_call_backup_api', lambda *a, **kw: None)
+        cb = {'id': 'cb-rnb', 'data': 'sys_restore:menu', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert 'Backup Node' in text
+
+
+class TestCancelOperation:
+    def test_sys_cancel(self, monkeypatch):
+        module = importlib.import_module('core.app')
+        adapter = Mock()
+        monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+        monkeypatch.setattr(module, 'is_admin_chat', lambda chat_id: True)
+        cb = {'id': 'cb-cancel', 'data': 'sys_cancel', 'message': {'chat': {'id': '42'}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        assert 'скасовано' in adapter.answer_callback.call_args[0][1].lower()
 
 
 class TestCallbackRouting:
