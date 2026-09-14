@@ -235,6 +235,7 @@ PY
   curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/release-layout.py" -o "$INSTALL_ROOT/scripts/release-layout.py"
   curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/apply-deployment.py" -o "$INSTALL_ROOT/scripts/apply-deployment.py"
   curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/$sbom_file" -o "$INSTALL_ROOT/config/release-sbom.cdx.json"
+  [[ $(sha256sum "$INSTALL_ROOT/config/node_roles.json") == "$roles_sha" ]] || fail "role catalog is inconsistent with the signed runtime contract"
   printf '%s  %s\n' "$compose_sha" "$INSTALL_ROOT/docker-compose.yml" | sha256sum -c - >/dev/null
   printf '%s  %s\n' "$compose_amd_sha" "$INSTALL_ROOT/docker-compose.amd.yml" | sha256sum -c - >/dev/null
   printf '%s  %s\n' "$compose_nvidia_sha" "$INSTALL_ROOT/docker-compose.nvidia.yml" | sha256sum -c - >/dev/null
@@ -366,8 +367,8 @@ platform="linux/$arch"
 jq -e --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
   . as $manifest |
   $manifest.roles.catalog_sha256 == $manifest.files[$manifest.roles.catalog_file].sha256 and
-  ($manifest.roles.profiles | keys | sort) == ($catalog[0] | keys | sort) and
-  all($catalog[0] | keys[]; . as $role |
+  ($manifest.roles.profiles | keys | sort) == ($catalog[0] | with_entries(select(.key != "version" and .key != "catalog_sha256")) | keys | sort) and
+  all($catalog[0] | with_entries(select(.key != "version" and .key != "catalog_sha256")) | keys[]; . as $role |
     $manifest.roles.profiles[$role].services == $catalog[0][$role].services and
     $manifest.roles.profiles[$role].capabilities == $catalog[0][$role].capabilities and
     $manifest.roles.profiles[$role].modules == $catalog[0][$role].modules and

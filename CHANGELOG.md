@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.71
+- Оновлено VERSION до 0.0.1.71, додано новий блок у CHANGELOG.md, створено releases/0.0.1.71.md, виправлені помилки в bootstrap.sh та тестах, підготовлено до релізу.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.70
 - Усунуто протиріччя в `AGENTS.md` (C1–C7): динамічне формулювання нумерації; таксономія Issues `i`/`ir` (`ri`/`rt` — історичні аліаси); Browser E2E gate для точного SHA у release workflow; GitHub-канон джерела оновлень і встановлення; межа control-plane/execution у CORE; `web-v2` як активна адмінпанель.
 - Перейменовано 7 Issues `ri`/`rt` → `ir` (#34, #35, #40, #47, #50, #54, #57).
@@ -31,6 +34,24 @@
 - Issue #36 (i.0.0.0.33, #6): Web UI розкадровки тепер показує самі scene preview зображення inline через `<img>` (`data-testid="scene-preview-image"`), а не лише artifact ID і посилання; додано хелпер `previewImageUrl()` у `web-v2/src/app/jobs/job-detail.component.ts`.
 - Issue #36: розширено `tests/test_browser_e2e.py::test_storyboard_review_with_artifacts_and_approve` перевіркою рендерингу inline-зображень усіх сцен та правильного `src` (artifact download endpoint).
 - Виправлено регресію `tests/test_release_qualification.py::test_role_isolation_failure_is_reported`: харнесс став JSON-обізнаним (parse/mutate `config/node_roles.json`), оскільки каталог ролей було переформатовано в багаторядковий JSON у 0.0.1.60, і старий рядковий `.replace()` більше не збігався.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.63
+- Розширено `core/app.py` (+541/-39): додано endpoints для керування системними операціями (restart, update, health, recovery); покращено обробку станів системи та операцій.
+- Оновлено `core/system_state.py`: уніфіковано логіку визначення стану системи.
+- Додано `tests/test_telegram_system_operations.py` (+232 рядки): покриття для access denial, idempotency, failure paths, restart worker/node flows, cancel.
+- Додано `tests/test_api_client_contracts.py`: перевірка контрактів API clients.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.62
+- Перероблено `scripts/qualify-release.py` (117 змін): покращено логіку кваліфікації релізу, додано нові перевірки та покриття помилок.
+- Додано допоміжні тимчасові скрипти `_old_test_rqual.py` та `_repro_isolation.py` для діагностики.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.61
+- Розширено `core/operations.py` (+304 рядки): новий модуль операцій системи з endpoint'ами для керування restart/update/health/recovery.
+- Оновлено `core/app.py` (+317/-): інтеграція нових операційних endpoint'ів, покращена обробка станів.
+- Розширено `core/api/job_helpers.py` (+36): покращена логіка підготовки та диспетчеризації job.
+- Оновлено `core/api/storyboards.py` та `core/storyboard.py`: покращена робота зі storyboards.
+- Оновлено `core/image_storyboard.py`, `core/storyboard_telegram.py`, `services/backup_service.py`, `adapters/telegram.py`.
+- Додано тести: `tests/test_storyboard.py` (+59), `tests/test_role_services.py` (+77), `tests/test_admin_recovery_and_configs.py` (+14).
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.60
 - #25: додано окремі Web UI API clients для Queue, Publishing, Operations, Setup, Storyboard і Session; типізовані SessionResponse, OperationAck, LogQuery, StoryboardActionRequest, PublishRequest та BackupListResponse.
@@ -106,6 +127,7 @@
 - Додано claim/result-обробку `storyboard`-задачі та поле `storyboard_task_id` у `core/models.py`/`core/api/tasks.py`; виправлено порядок ініціалізації `state.py` (executor до store) та проброс executor у `core/pipeline.py`.
 - Розширено моделі: `voice_catalog` у `WorkerHeartbeat`/`TaskClaim`; `TaskResult.images`/`artifacts` типізовані як `dict[str, Any]`.
 - Додано новий integration-тест `tests/test_voice_pipeline.py` (передача конфігу в voice-задачу, контракт Worker, валідація CORE, відхилення підробки, вибір вузла за каталогом, повний voice e2e) та оновлено `tests/test_role_executor.py`, `tests/test_storyboard.py`, `tests/test_features.py`, `tests/test_api.py`, `tests/test_image_storyboard_e2e.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.52
 - `i.0.0.0.27` (Issue #29): Завершено user profile, account management та RBAC UX. Додано profile dropdown в header замість прямої logout-кнопки: окремі дії «Профіль», «Змінити пароль», «Вийти».
 - Додано Profile page у `web-v2/src/app/profile/`: логін, роль, перелік дозволених дій та форма зміни пароля (без shell).
@@ -245,6 +267,24 @@
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.30
 - Синхронізовано життєвий цикл сценарію та розкадровки: `SCRIPT_*` статуси узгоджено з `presentation.ts` та `job-detail` (approve/revision для сценарію).
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.29
+- Оновлено `core/pipeline.py` (+123/-): покращена логіка підготовки та виконання job pipeline.
+- Розширено `core/api/jobs.py` (+48): нові endpoints для керування job.
+- Оновлено `core/api/job_helpers.py` (+56/-): покращена логіка допоміжних операцій job.
+- Оновлено `core/models.py` (+51/-): розширення моделей даних.
+- Оновлено `core/storyboard.py`: покращена логіка storyboard.
+- Додано `tests/test_api.py` (+83), `tests/test_features.py` (+60): нові тести для API та функціоналу.
+- Додано `tests/job-actions.spec.ts` (+62): Playwright E2E тести для дій job.
+- Оновлено `web-v2/src/app/shared/confirm-dialog.component.ts`: покращений confirm dialog.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.28
+- Розширено `web-v2/src/app/jobs/jobs.component.ts` (+355/-): покращений компонент списку job з новою логікою відображення та взаємодії.
+- Оновлено `web-v2/src/app/jobs/job-detail.component.ts` (+154/-): покращений детальний перегляд job.
+- Додано `web-v2/src/app/core/presentation.ts` (+49): централізовані presentation-моделі для Web UI.
+- Оновлено `web-v2/src/app/dashboard/dashboard.component.ts` (+32/-): покращений dashboard.
+- Оновлено `web-v2/src/app/layout/sidebar.component.ts` (+7/-): покращена навігація.
+- Додано документацію: `docs/PROJECT_CONCEPT_COMPLETION_PLAN_UK.md` (+234), `docs/PROJECT_CONCEPT_COMPLETION_PLAN_UK_2.md` (+205), `docs/PROJECT_CONCEPT_COMPLETION_PLAN_UK_3.md` (+181), `docs/PROJECT_small_COMPLETION_PLAN_UK_2.md` (+563), `docs/PROJECT_small_COMPLETION_PLAN_UK_3.md` (+203).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.27
 - Додано модуль `presentation.ts`: централізовані мітки статусів (`statusLabel`), ролей (`roleLabel`), груп статусів (`inStatusGroup`), станів дій (`jobActionAllowed`).
 - Збагачено контекст вузлів у API: `/api/nodes` та `/api/nodes/{id}` повертають `modules`, `services`, `capability_backends`.
@@ -292,7 +332,6 @@
 - Додано Browser E2E тести для worker wizard, worker detail hardware/actions, settings roles deployment status.
 - Оновлено план завершення Web UI V2: V2C-401–V2C-404 позначено DONE.
 
-
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.22
 - Відновлено складання Web UI V2: компонент Logs тепер входить до Git і підключений до реального `GET /api/logs` із фільтрами та станами завантаження, помилки й порожнього результату.
 - Уточнено TypeScript-модель запису логу відповідно до фактичного backend contract.
@@ -321,7 +360,6 @@
 - Відновлено empty state списку завдань і відображення `providers` та статусу оновлення у Settings; вилучено тимчасові `[DIAG]` логи.
 - Уточнено Browser E2E locator кнопки редагування персонажа та додано перевірку відсутності JavaScript-помилок у Settings.
 
-
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.18
 - Додано діагностичні `console.log` у `ApiService`, `Dashboard` і `main.ts` для трасування даних між HTTP request і component state.
 - Оновлено `tests/test_browser_e2e.py` під фактичний Web UI V2: тести використовують Angular routes `/`, `/jobs`, `/workers`, `/characters`, `/settings` та `data-testid` селектори; видалено залежність від застарілих V1 елементів `#nav button[data-panel=...]`, `#health`, `#jobs`, `#characters` тощо.
@@ -345,8 +383,9 @@
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.15
 - Покращено команди `vertep start`, `vertep stop`, `vertep restart` у `scripts/vertep`: перевірка exit code Docker Compose, показ активних контейнерів перед зупинкою, health-check циклом до 60 с після запуску з прогресом, `docker compose ps` після старту і зупинки, `[ПОМИЛКА]`/`[УВАГА]` при збоях.
 - Виправлено `tests/test_update_security.py` і `tests/test_local_contracts.py`: виклики `read_text()` для `scripts/vertep` доповнено `encoding="utf-8"` щоб уникнути `UnicodeDecodeError` на Windows; оновлено assert під новий текст повідомлення запуску.
+- Розширено `Content-Security-Policy` у `core/app.py`: додано `img-src 'self' data:` щоб уникнути блокування inline-SVG favicon із `web/index.html` (CSP `default-src 'self'` інакше забороняє `data:` URI для зображень).
 
-
+## ПРАВИЛЬНА НАЗВА: 0.0.1.14
 - Розширено `Content-Security-Policy` у `core/app.py`: додано `img-src 'self' data:` щоб уникнути блокування inline-SVG favicon із `web/index.html` (CSP `default-src 'self'` інакше забороняє `data:` URI для зображень).
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.13

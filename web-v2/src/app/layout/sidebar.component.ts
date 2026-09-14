@@ -49,6 +49,7 @@ interface NavItem {
           <a [routerLink]="item.path"
              [queryParams]="item.queryParams"
              routerLinkActive="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
+             ariaCurrentWhenActive="page"
              [routerLinkActiveOptions]="{ exact: item.exact ?? false }"
              class="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
              [attr.aria-label]="collapsed ? item.label : null"

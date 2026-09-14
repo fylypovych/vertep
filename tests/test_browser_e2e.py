@@ -99,8 +99,8 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
             },
             "update": {"current_version": "0.0.1.19", "available_version": None, "state": "IDLE", "update_available": None},
         }))
-        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
-        page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
 
         page.goto(f"{BASE_URL}/")
         expect(page.locator("[data-testid='dashboard']")).to_be_visible()
@@ -200,7 +200,7 @@ def test_jobs_list_shows_empty_state_and_create_form():
         page = browser.new_page()
         _mock_session(page)
         _mock_status(page)
-        page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs")
         expect(page.locator("[data-testid='jobs-page']")).to_be_visible()
         expect(page.locator("[data-testid='jobs-empty']")).to_contain_text("Завдань не знайдено")
@@ -239,7 +239,7 @@ def test_job_detail_view_and_edit():
             route.fulfill(json=job)
 
         page.route(f"**/api/jobs/{job_id}", handle_job_detail)
-        page.route("**/api/jobs", lambda route: route.fulfill(json=[job]))
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[job]))
         page.goto(f"{BASE_URL}/jobs/{job_id}")
 
         expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
@@ -261,12 +261,18 @@ def test_jobs_delete_button_is_present():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         _mock_status(page)
 
         jobs = [{"job_id": "job-1", "topic": "Test", "status": "READY",
                  "created_at": "2026-09-07T12:00:00Z", "priority": 5, "character_id": "c1"}]
 
-        page.route("**/api/jobs", lambda route: route.fulfill(json=jobs))
+        page.route("**/api/jobs**", lambda route: route.fulfill(json={"items": jobs, "total": 1, "pages": 1}))
+        page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workflows**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/tasks/queue**", lambda route: route.fulfill(json={"ready": [], "inflight": []}))
+        page.route("**/api/tasks/dead-letter**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs")
         expect(page.locator("[data-testid='jobs-page']")).to_be_visible()
         expect(page.locator("button:has-text('Видалити')").first).to_be_visible()
@@ -287,8 +293,8 @@ def test_dashboard_job_status_counts():
             "providers": {},
             "update": {"current_version": "0.0.1.19", "state": "IDLE"},
         }))
-        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
-        page.route("**/api/jobs", lambda route: route.fulfill(json=[
+        page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[
             {"job_id": "1", "topic": "Job 1", "status": "READY", "created_at": "2026-09-07T10:00:00Z", "priority": 5, "character_id": "c1"},
             {"job_id": "2", "topic": "Job 2", "status": "FAILED", "created_at": "2026-09-07T10:00:00Z", "priority": 5, "character_id": "c1"},
             {"job_id": "3", "topic": "Job 3", "status": "RUNNING", "created_at": "2026-09-07T10:00:00Z", "priority": 5, "character_id": "c1"},
@@ -351,8 +357,8 @@ def test_settings_shows_resources_or_unavailable():
             "providers": {},
             "update": {"current_version": "0.0.1.19", "state": "IDLE"},
         }))
-        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
-        page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
 
         page.goto(f"{BASE_URL}/")
         expect(page.locator("[data-testid='resources']")).to_be_visible()
@@ -393,13 +399,13 @@ def test_dashboard_architecture_shows_core_and_workers():
             "orchestration": {"active_jobs": 0, "active_scenes": 0},
             "update": {"current_version": "0.0.1.19", "state": "IDLE"},
         }))
-        page.route("**/api/workers", lambda route: route.fulfill(json=[
+        page.route("**/api/workers*", lambda route: route.fulfill(json=[
             {"node_id": "w1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
              "capabilities": ["image_generation", "video_generation"]},
             {"node_id": "w2", "node_name": "Text-Node-1", "role": "text", "status": "ONLINE",
              "capabilities": ["llm"]},
         ]))
-        page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
 
         page.goto(f"{BASE_URL}/")
         expect(page.locator("[data-testid='architecture']")).to_be_visible()
@@ -463,6 +469,7 @@ def test_logs_page_filter_level():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[
             {"level": "ERROR", "message": "Only error", "timestamp": "2026-09-08T10:00:00Z"},
@@ -662,6 +669,7 @@ def test_workflows_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/workflows**", lambda route: route.fulfill(json=[
             {"kind": "image", "name": "demo.json"},
@@ -681,10 +689,13 @@ def test_brands_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/brands**", lambda route: route.fulfill(json=[
             {"id": "brand1", "name": "Test Brand", "enabled": True, "metadata": {}, "publishing": {}},
         ]))
+        page.route("**/api/brands/*/channels**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/brands")
         expect(page.locator("[data-testid='brands-page']")).to_be_visible()
         expect(page.locator("[data-testid='brands-page']")).to_contain_text("Test Brand")
@@ -700,7 +711,9 @@ def test_worker_wizard_opens_and_shows_token():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
+        _mock_session(page)
+        page.route("**/api/workers**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/nodes**", lambda route: route.fulfill(json=[]))
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.99", "system": {"state": "NORMAL"},
@@ -731,6 +744,7 @@ def test_worker_detail_shows_hardware_and_actions():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/nodes/n1**", lambda route: route.fulfill(json={
             "node_id": "n1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
@@ -770,8 +784,11 @@ def test_settings_roles_shows_deployment_status():
             "queued": False,
         }))
         # Catch-all for other settings API calls
-        for pattern in ["**/api/secrets**", "**/api/models/**", "**/api/system/update/**",
-                        "**/api/system/backups**", "**/api/settings/**", "**/api/security/**"]:
+        for pattern in ["**/api/settings/secrets**", "**/api/system/secrets**", "**/api/secrets**",
+                        "**/api/models/**", "**/api/system/update/**",
+                        "**/api/system/backups**", "**/api/system/settings/**", "**/api/security/**",
+                        "**/api/status**", "**/api/integrations**", "**/api/system/certificates**",
+                        "**/api/system/license**", "**/api/system/installation-manifest**"]:
             page.route(pattern, lambda route: route.fulfill(json={}))
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
@@ -819,7 +836,12 @@ def test_script_approval_happy_path():
                 route.fulfill(json=job)
 
         page.route("**/api/jobs/job-script-01/script/approve", lambda route: route.fulfill(json=approved_job))
-        page.route("**/api/jobs/job-script-01", handle_detail)
+        page.route("**/api/jobs/job-script-01**", handle_detail)
+        page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workflows**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/channels/types**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands/**/channels**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs/job-script-01")
 
         expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
@@ -855,7 +877,12 @@ def test_script_revision_happy_path():
 
         page.on("dialog", lambda dialog: dialog.accept("зробити сцени коротшими"))
         page.route("**/api/jobs/job-script-01/script/revision", handle_revision)
-        page.route("**/api/jobs/job-script-01", lambda route: route.fulfill(json=job))
+        page.route("**/api/jobs/job-script-01**", lambda route: route.fulfill(json=job))
+        page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workflows**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/channels/types**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands/**/channels**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs/job-script-01")
 
         page.locator("[data-testid='revision-script-button']").click()
@@ -1220,7 +1247,7 @@ def test_fleet_enrollment_issues_token_and_exposes_register_endpoint():
             })
 
         page.route("**/api/nodes/registration-tokens", handle_token)
-        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/workers")
         expect(page.locator("[data-testid='workers-page']")).to_be_visible()
 
@@ -1325,8 +1352,8 @@ def _mock_chrome_data(page):
     """i.0.0.0.28: generic list endpoints so header/sidebar chrome tests avoid page errors."""
     _mock_session(page)
     _mock_status(page)
-    page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
-    page.route("**/api/workers", lambda route: route.fulfill(json=[]))
+    page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
+    page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
     page.route("**/api/characters", lambda route: route.fulfill(json=[]))
     page.route("**/api/workflows", lambda route: route.fulfill(json=[]))
     page.route("**/api/brands", lambda route: route.fulfill(json=[]))
@@ -1415,8 +1442,8 @@ def test_loading_state_resolves_to_content_or_error():
         page = browser.new_page()
         _mock_session(page)
         _mock_status(page)
-        page.route("**/api/jobs", lambda route: route.fulfill(json=[]))
-        page.route("**/api/workers", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/")
 
         # Dashboard must reach a terminal state — loading must not hang forever.
