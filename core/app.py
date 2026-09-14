@@ -15,6 +15,7 @@ import zipfile
 import threading
 import re
 import uuid
+import subprocess
 from functools import wraps
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -203,6 +204,14 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 operation = "update"
             elif path.startswith("/api/system/recovery"):
                 operation = "recovery"
+            elif path.startswith("/api/system/restart"):
+                operation = "restart"
+            elif path.startswith("/api/system/test"):
+                operation = "test"
+            elif path.startswith("/api/system/backups") and request.method == "POST":
+                operation = "backup"
+            elif path.startswith("/api/system/backups/") and "/restore" in path and request.method == "POST":
+                operation = "restore"
             if operation and not operation_allowed(operation):
                 return Response(f"Operation {operation} is blocked by system state", 423)
         client = request.client.host if request.client else "unknown"
@@ -226,8 +235,12 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return self._secure(response)
         internal_key = os.getenv("INTERNAL_API_KEY", "")
         internal_update_routes = {"/api/status", "/api/system/update/check", "/api/system/update/run",
-                                  "/api/system/update/readiness", "/api/system/recovery/normal"}
-        if (request.url.path in internal_update_routes and internal_key
+                                  "/api/system/update/readiness", "/api/system/recovery/normal",
+                                  "/api/system/restart", "/api/system/test",
+                                  "/api/system/backups"}
+        internal_actions = request.url.path.startswith("/api/nodes/") and request.url.path.endswith("/actions")
+        if ((request.url.path in internal_update_routes or internal_actions)
+                and internal_key
                 and secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), internal_key)):
             response = await call_next(request)
             return self._secure(response)
@@ -630,71 +643,444 @@ def _call_backup_api(method: str, path: str, payload: dict | None = None,
 
 def _call_core_api(method: str, path: str, payload: dict | None = None,
                    timeout: float = 30.0) -> dict | None:
-    """Call the CORE API directly (synchronous)."""
-    return _sync_internal_api(method, "CORE_API_URL", path, payload, timeout=timeout)
+    """Call the CORE API directly (synchronous).
+
+    Passes the ``INTERNAL_API_KEY`` so that admin-only endpoints invoked by
+    Telegram handlers (restart, test, backups, node actions) authenticate
+    correctly without requiring user credentials.
+    """
+    return _sync_internal_api(method, "CORE_API_URL", path, payload, timeout=timeout,
+                              headers=_internal_auth_headers())
+
+
+def _internal_auth_headers() -> dict:
+    """Build headers carrying the internal API key for self-calls."""
+    key = os.getenv("INTERNAL_API_KEY", "")
+    return {"x-vertep-internal-key": key} if key else {}
+
+
+def _sync_internal_api(method: str, base_environment: str, path: str,
+                       payload: dict | None = None, timeout: float = 30.0,
+                       headers: dict | None = None) -> dict | None:
+    """Synchronous wrapper around an internal service API.
+
+    Returns the parsed JSON body, or ``None`` when the service is not
+    configured / unreachable.  Telegram handlers must never raise on a
+    missing backend — they degrade to an error message instead.
+    """
+    base = os.getenv(base_environment, "").rstrip("/")
+    if not base:
+        return None
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.request(method, f"{base}{path}", json=payload, headers=headers)
+            if response.status_code >= 400:
+                return {"_error": f"HTTP {response.status_code}: {response.text[:200]}"}
+            return response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
     callback_id = str(callback.get("id", ""))
-    if action == "sys_status":
+
+    if action in {"sys_status", "sys_status:menu"}:
         return TelegramAdapter().answer_callback(callback_id, _system_status_text())
-    if action in {"sys_update", "sys_update_confirm"}:
+
+    if action == "sys_update":
+        existing = is_operation_in_progress("update")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Оновлення вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        update_info = {}
+        try:
+            update_info = update_status() or {}
+        except Exception:
+            pass
+        current = update_info.get("current_version") or application_version()
+        available = update_info.get("available_version")
+        message = f"🔄 Поточна версія: {current}\n"
+        if available:
+            message += f"Доступна: {available}\n\nОновити Vertep?"
+        else:
+            message += "Доступних оновлень немає.\n\nПеревірети доступність оновлення?"
+        return _send_confirmation(chat_id, message, "sys_update_check", "sys_cancel")
+
+    if action == "sys_update_check":
+        try:
+            request_update("check")
+            op = create_operation("update", f"telegram:{chat_id}")
+            begin_operation(op["operation_id"], "Перевірка доступного оновлення")
+            return TelegramAdapter().answer_callback(
+                callback_id,
+                f"Перевірка оновлення запущена. ID операції: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Перевірка не запущена: {error}")
+
+    if action == "sys_update_confirm":
+        existing = is_operation_in_progress("update")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Оновлення вже в процесі (#{existing['operation_id'][:8]})."
+            )
         try:
             request_update("update")
             op = create_operation("update", f"telegram:{chat_id}")
             begin_operation(op["operation_id"], "Запит на оновлення прийнято")
+            audit_entry(op["operation_id"], "RUNNING", "Update started via Telegram", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"Оновлення заплановано. ID операції: {op['operation_id'][:8]}"
             )
         except Exception as error:
             return TelegramAdapter().answer_callback(callback_id, f"❌ Оновлення не запущено: {error}")
+
     if action == "sys_update_cancel":
         return TelegramAdapter().answer_callback(
-            callback_id, "Оновлення скасовується через Web UI: Налаштування → Оновлення."
+            callback_id, "Оновлення скасовано."
         )
+
     if action == "sys_restart":
-        return TelegramAdapter().answer_callback(
-            callback_id, "Перезапуск виконується через Web UI: Налаштування → Система → Перезапуск."
-        )
-    if action in {"sys_backup", "sys_backup_confirm"}:
-        try:
-            op = create_operation("backup", f"telegram:{chat_id}")
-            begin_operation(op["operation_id"], "Створення резервної копії")
-            advance_operation(op["operation_id"], "snapshot", 10, "Snapshot заплановано")
+        existing = is_operation_in_progress("restart")
+        if existing:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Резервна копія запланована. ID операції: {op['operation_id'][:8]}"
+                callback_id, f"Перезапуск вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        keyboard = {"inline_keyboard": [
+            [{"text": "🔁 Core", "callback_data": "sys_restart_core"},
+             {"text": "🔁 Worker", "callback_data": "sys_restart_worker"}],
+            [{"text": "❌ Скасувати", "callback_data": "sys_cancel"}],
+        ]}
+        return TelegramAdapter().send_message(
+            chat_id, "Оберіть що перезапустити:", reply_markup=keyboard
+        )
+
+    if action == "sys_restart_core":
+        return _send_confirmation(
+            chat_id, "🔄 Перезапустити CORE сервіси?\nВсі активні задачі будуть продовжені.",
+            "sys_restart_core_confirm", "sys_cancel"
+        )
+
+    if action == "sys_restart_core_confirm":
+        existing = is_operation_in_progress("restart")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Перезапуск вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        op = create_operation("restart", f"telegram:{chat_id}", target="core")
+        begin_operation(op["operation_id"], "Перезапуск CORE")
+        try:
+            result = _call_core_api("POST", "/api/system/restart", {"target": "core"}, timeout=15)
+            if result and "_error" in result:
+                fail_operation(op["operation_id"], result["_error"])
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Перезапуск CORE не вдався: {result['_error'][:200]}"
+                )
+            complete_operation(op["operation_id"], result)
+            return TelegramAdapter().answer_callback(
+                callback_id, f"✅ CORE перезапуск ініиційовано. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
-            return TelegramAdapter().answer_callback(callback_id, f"❌ Backup не запущено: {error}")
-    if action in {"sys_backup_cancel", "sys_restore_cancel"}:
+            fail_operation(op["operation_id"], str(error))
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Перезапуск CORE не вдався: {error}")
+
+    if action == "sys_restart_worker":
+        nodes = _sync_internal_api("GET", "CORE_API_URL", "/api/nodes") or []
+        if not nodes or not isinstance(nodes, list):
+            return TelegramAdapter().answer_callback(
+                callback_id, "Немає зареєстрованих вузлів."
+            )
+        return _send_nodes_list(chat_id, nodes, "sys_restart_worker_select")
+
+    if action == "sys_restart_worker_select":
+        node_id = payload
+        if not node_id or not re.fullmatch(r"[a-z0-9-]+", node_id):
+            return TelegramAdapter().answer_callback(callback_id, "Некоректний вузол.")
+        return _send_confirmation(
+            chat_id, f"🔄 Перезапустити Worker {node_id}?\nАктивні задачі будуть передані іншим вузлам.",
+            f"sys_restart_worker_confirm:{node_id}", "sys_cancel"
+        )
+
+    if action == "sys_restart_worker_confirm":
+        node_id = payload
+        if not node_id:
+            return TelegramAdapter().answer_callback(callback_id, "Некоректний вузол.")
+        existing = is_operation_in_progress("restart")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Перезапуск вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        op = create_operation("restart", f"telegram:{chat_id}", target=node_id)
+        begin_operation(op["operation_id"], f"Перезапуск вузла {node_id}")
+        try:
+            result = _call_core_api("POST", f"/api/nodes/{node_id}/actions",
+                                    {"action": "restart", "reason": f"telegram restart {op['operation_id'][:8]}"},
+                                    timeout=15)
+            if result and "_error" in result:
+                fail_operation(op["operation_id"], result["_error"])
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Перезапуск {node_id} не вдався: {result['_error'][:200]}"
+                )
+            complete_operation(op["operation_id"], result)
+            return TelegramAdapter().answer_callback(
+                callback_id, f"✅ Вузол {node_id} позначено на перезапуск. ID: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            fail_operation(op["operation_id"], str(error))
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Перезапуск {node_id} не вдався: {error}")
+
+    if action == "sys_backup":
+        return _send_confirmation(
+            chat_id, "💾 Створити резервну копію зараз?",
+            "sys_backup_confirm", "sys_cancel"
+        )
+
+    if action == "sys_backup_confirm":
+        existing = is_operation_in_progress("backup")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Резервна копія вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        op = create_operation("backup", f"telegram:{chat_id}")
+        begin_operation(op["operation_id"], "Створення резервної копії")
+        advance_operation(op["operation_id"], "snapshot", 10, "Snapshot заплановано")
+        audit_entry(op["operation_id"], "snapshot", "Backup started via Telegram", f"telegram:{chat_id}")
+        try:
+            result = _call_core_api("POST", "/api/system/backups", {}, timeout=120)
+            if result and "_error" in result:
+                fail_operation(op["operation_id"], result["_error"])
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Backup не вдався: {result['_error'][:200]}"
+                )
+            if result and result.get("snapshot_id"):
+                complete_operation(op["operation_id"], result)
+                return TelegramAdapter().answer_callback(
+                    callback_id,
+                    f"✅ Backup створено. Snapshot: {result['snapshot_id'][:18]} ID операції: {op['operation_id'][:8]}"
+                )
+            advance_operation(op["operation_id"], "snapshot", 20, "Snapshot створюється")
+            return TelegramAdapter().answer_callback(
+                callback_id, f"✅ Backup заплановано. ID операції: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            fail_operation(op["operation_id"], str(error))
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Backup не вдався: {error}")
+
+    if action == "sys_backup_cancel":
         return TelegramAdapter().answer_callback(callback_id, "Операцію скасовано.")
+
     if action == "sys_restore":
-        return TelegramAdapter().answer_callback(
-            callback_id, "Відновлення виконується через Web UI: Налаштування → Резервне копіювання → Відновлення."
-        )
-    if action in {"sys_restore_select", "sys_restore_confirm"}:
-        try:
-            op = create_operation("restore", f"telegram:{chat_id}")
-            begin_operation(op["operation_id"], "Відновлення")
+        backups = _call_backup_api("GET", "/snapshots", timeout=15)
+        if backups is None:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Відновлення заплановано. ID операції: {op['operation_id'][:8]}"
+                callback_id, "Backup Node недоступний. Спочатку налаштуйте Backup Node."
+            )
+        snapshots = (backups or {}).get("snapshots", []) if isinstance(backups, dict) else []
+        if not snapshots:
+            return TelegramAdapter().answer_callback(callback_id, "Немає доступних резервних копій.")
+        return _send_backups_list(chat_id, snapshots)
+
+    if action == "sys_restore_select":
+        snapshot_id = payload
+        if not snapshot_id or not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+            return TelegramAdapter().answer_callback(callback_id, "Некоректний ID snapshot.")
+        existing = is_operation_in_progress("restore")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Відновлення вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        backup_detail = _call_backup_api("GET", f"/snapshots/{snapshot_id}", timeout=15) or {}
+        snapshot = backup_detail if "snapshot_id" in backup_detail else {"snapshot_id": snapshot_id}
+        message = (f"⚠️ ПЕРШЕ підтвердження відновлення\n"
+                   f"Snapshot: {snapshot.get('snapshot_id', snapshot_id)}\n"
+                   f"Створено: {snapshot.get('created_at', '?')}\n"
+                   f"Розмір: {snapshot.get('size', '?')} байт\n\n"
+                   f"Це замінить поточні дані. Продовжити?")
+        return _send_confirmation(
+            chat_id, message, f"sys_restore_confirm:{snapshot_id}", "sys_cancel"
+        )
+
+    if action == "sys_restore_confirm":
+        snapshot_id = payload
+        if not snapshot_id or not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+            return TelegramAdapter().answer_callback(callback_id, "Некоректний ID snapshot.")
+        message = (f"⚠️ ДРУГЕ явне підтвердження\n"
+                   f"Ви впевнені, що хочете відновити snapshot {snapshot_id}? "
+                   f"Ця дія незворотна.")
+        return _send_confirmation(
+            chat_id, message, f"sys_restore_execute:{snapshot_id}", "sys_cancel"
+        )
+
+    if action == "sys_restore_execute":
+        snapshot_id = payload
+        if not snapshot_id or not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+            return TelegramAdapter().answer_callback(callback_id, "Некоректний ID snapshot.")
+        existing = is_operation_in_progress("restore")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Відновлення вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        op = create_operation("restore", f"telegram:{chat_id}", target=snapshot_id)
+        begin_operation(op["operation_id"], "Відновлення")
+        advance_operation(op["operation_id"], "decrypt", 10, f"Відновлення snapshot {snapshot_id[:18]}")
+        audit_entry(op["operation_id"], "restore", f"Restore started via Telegram for {snapshot_id}", f"telegram:{chat_id}")
+        try:
+            result = _call_backup_api("POST", f"/snapshots/{snapshot_id}/restore", {}, timeout=300)
+            if result and "_error" in result:
+                fail_operation(op["operation_id"], result["_error"])
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Відновлення не вдався: {result['_error'][:200]}"
+                )
+            if result and "status" in result:
+                status = result.get("status")
+                if status == "done":
+                    complete_operation(op["operation_id"], result)
+                    return TelegramAdapter().answer_callback(
+                        callback_id, f"✅ Відновлення завершено. ID операції: {op['operation_id'][:8]}"
+                    )
+                fail_operation(op["operation_id"], f"Restore ended with status: {status}")
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Відновлення завершилось з помилкою. ID: {op['operation_id'][:8]}"
+                )
+            advance_operation(op["operation_id"], "in_progress", 50, "Відновлення виконується")
+            return TelegramAdapter().answer_callback(
+                callback_id, f"✅ Відновлення запущено. ID операції: {op['operation_id'][:8]}"
             )
         except Exception as error:
-            return TelegramAdapter().answer_callback(callback_id, f"❌ Відновлення не запущено: {error}")
+            fail_operation(op["operation_id"], str(error))
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Відновлення не вдався: {error}")
+
+    if action == "sys_restore_cancel":
+        return TelegramAdapter().answer_callback(callback_id, "Операцю скасовано.")
+
     if action == "sys_test":
-        return TelegramAdapter().answer_callback(
-            callback_id, "Швидкий / повний тест вузла через Web UI: Налаштування → Тестування."
-        )
-    if action in {"sys_test_quick", "sys_test_full", "sys_test_node"}:
-        try:
-            op = create_operation("test", f"telegram:{chat_id}")
-            begin_operation(op["operation_id"], action)
+        existing = is_operation_in_progress("test")
+        if existing:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Тест заплановано. ID операції: {op['operation_id'][:8]}"
+                callback_id, f"Тест вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        keyboard = {"inline_keyboard": [
+            [{"text": "⚡ Швидкий", "callback_data": "sys_test_quick"},
+             {"text": "📋 Повний", "callback_data": "sys_test_full"}],
+            [{"text": "🖥 Тест вузла", "callback_data": "sys_test_node"}],
+            [{"text": "❌ Скасувати", "callback_data": "sys_cancel"}],
+        ]}
+        return TelegramAdapter().send_message(
+            chat_id, "Оберіть тип тесту:", reply_markup=keyboard
+        )
+
+    if action == "sys_test_quick":
+        return _send_confirmation(
+            chat_id, "⚡ Запустити швидкий тест (CORE API, PostgreSQL, Redis, Dispatcher, storage)?",
+            "sys_test_quick_confirm", "sys_cancel"
+        )
+
+    if action == "sys_test_full":
+        return _send_confirmation(
+            chat_id, "📋 Запустити повний тест (все включно з Worker Node)?",
+            "sys_test_full_confirm", "sys_cancel"
+        )
+
+    if action == "sys_test_quick_confirm":
+        existing = is_operation_in_progress("test")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Тест вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        op = create_operation("test", f"telegram:{chat_id}", target="quick")
+        begin_operation(op["operation_id"], "Швидкий тест")
+        try:
+            result = _call_core_api("POST", "/api/system/test", {"scope": "quick"}, timeout=30)
+            if result and "_error" in result:
+                fail_operation(op["operation_id"], result["_error"])
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Швидкий тест завершився помилкою: {result['_error'][:200]}"
+                )
+            checks = result or {} if isinstance(result, dict) else {}
+            status = checks.get("result", "UNKNOWN")
+            complete_operation(op["operation_id"], result)
+            return TelegramAdapter().answer_callback(
+                callback_id, f"✅ Швидкий тест: {status}. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
-            return TelegramAdapter().answer_callback(callback_id, f"❌ Тест не запущено: {error}")
+            fail_operation(op["operation_id"], str(error))
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Швидкий тест не вдався: {error}")
+
+    if action == "sys_test_full_confirm":
+        existing = is_operation_in_progress("test")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Тест вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        op = create_operation("test", f"telegram:{chat_id}", target="full")
+        begin_operation(op["operation_id"], "Повний тест")
+        try:
+            result = _call_core_api("POST", "/api/system/test", {"scope": "full"}, timeout=60)
+            if result and "_error" in result:
+                fail_operation(op["operation_id"], result["_error"])
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Повний тест завершився помилкою: {result['_error'][:200]}"
+                )
+            checks = result if isinstance(result, dict) else {}
+            status = checks.get("result", "UNKNOWN")
+            complete_operation(op["operation_id"], result)
+            return TelegramAdapter().answer_callback(
+                callback_id, f"✅ Повний тест: {status}. ID: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            fail_operation(op["operation_id"], str(error))
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Повний тест не вдався: {error}")
+
+    if action == "sys_test_node":
+        nodes = _sync_internal_api("GET", "CORE_API_URL", "/api/nodes") or []
+        if not nodes or not isinstance(nodes, list):
+            return TelegramAdapter().answer_callback(callback_id, "Немає зареєстрованих вузлів.")
+        return _send_nodes_list(chat_id, nodes, "sys_test_node_select")
+
+    if action == "sys_test_node_select":
+        node_id = payload
+        if not node_id or not re.fullmatch(r"[a-z0-9-]+", node_id):
+            return TelegramAdapter().answer_callback(callback_id, "Некоректний вузол.")
+        return _send_confirmation(
+            chat_id, f"🧪 Запустити self-test для вузла {node_id}?",
+            f"sys_test_node_confirm:{node_id}", "sys_cancel"
+        )
+
+    if action == "sys_test_node_confirm":
+        node_id = payload
+        if not node_id:
+            return TelegramAdapter().answer_callback(callback_id, "Некоректний вузол.")
+        existing = is_operation_in_progress("test")
+        if existing:
+            return TelegramAdapter().answer_callback(
+                callback_id, f"Тест вже в процесі (#{existing['operation_id'][:8]})."
+            )
+        op = create_operation("test", f"telegram:{chat_id}", target=node_id)
+        begin_operation(op["operation_id"], f"Self-test вузла {node_id}")
+        try:
+            result = _call_core_api("POST", f"/api/nodes/{node_id}/actions",
+                                    {"action": "self-test", "reason": f"telegram test {op['operation_id'][:8]}"},
+                                    timeout=60)
+            if result and "_error" in result:
+                fail_operation(op["operation_id"], result["_error"])
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Self-test {node_id} не вдався: {result['_error'][:200]}"
+                )
+            complete_operation(op["operation_id"], result)
+            return TelegramAdapter().answer_callback(
+                callback_id, f"✅ Self-test вузла {node_id} завершено. ID: {op['operation_id'][:8]}"
+            )
+        except Exception as error:
+            fail_operation(op["operation_id"], str(error))
+            return TelegramAdapter().answer_callback(callback_id, f"❌ Self-test {node_id} не вдався: {error}")
+
+    if action == "sys_cancel":
+        return TelegramAdapter().answer_callback(callback_id, "Операцію скасовано.")
+
     return TelegramAdapter().answer_callback(callback_id, "Невідома системна операція.")
+
+
 def _handle_telegram_callback(callback: dict) -> dict:
     data = str(callback.get("data", ""))
     action, _, payload = data.partition(":")
@@ -702,12 +1088,16 @@ def _handle_telegram_callback(callback: dict) -> dict:
     chat_id = str(callback.get("message", {}).get("chat", {}).get("id", "unknown"))
 
     # System operations (admin only)
-    if action in {"sys_status", "sys_update", "sys_update_confirm", "sys_update_cancel",
-                  "sys_restart", "sys_restart_confirm", "sys_restart_cancel",
-                  "sys_restart_select", "sys_backup", "sys_backup_confirm", "sys_backup_cancel",
-                  "sys_restore", "sys_restore_select", "sys_restore_confirm", "sys_restore_cancel",
-                  "sys_test", "sys_test_quick", "sys_test_full", "sys_test_node",
-                  "sys_test_node_select", "sys_cancel"}:
+    if action in {"sys_status", "sys_update", "sys_update_check", "sys_update_confirm",
+                  "sys_update_cancel",
+                  "sys_restart", "sys_restart_core", "sys_restart_core_confirm",
+                  "sys_restart_worker", "sys_restart_worker_select", "sys_restart_worker_confirm",
+                  "sys_backup", "sys_backup_confirm", "sys_backup_cancel",
+                  "sys_restore", "sys_restore_select", "sys_restore_confirm",
+                  "sys_restore_execute", "sys_restore_cancel",
+                  "sys_test", "sys_test_quick", "sys_test_quick_confirm",
+                  "sys_test_full", "sys_test_full_confirm", "sys_test_node",
+                  "sys_test_node_select", "sys_test_node_confirm", "sys_cancel"}:
         if not is_admin_chat(chat_id):
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
         if callback_id and callback_id in _telegram_system_callbacks:
@@ -1863,6 +2253,85 @@ async def system_certificates():
 @app.post("/api/system/certificates/renew")
 async def renew_system_certificate():
     return await _internal_api("POST", "CERTIFICATE_MANAGER_URL", "/certificate/renew")
+
+
+@app.get("/api/operations")
+async def list_operations_api(limit: int = 50):
+    return list_operations(limit)
+
+
+@app.get("/api/operations/{operation_id}")
+async def get_operation_api(operation_id: str):
+    operation = get_operation(operation_id)
+    if not operation:
+        raise HTTPException(404, "Operation not found")
+    return operation
+
+
+@app.post("/api/system/restart")
+async def system_restart(payload: dict | None = None):
+    """Restart CORE services or a specific worker node.
+
+    Telegram and Web UI both call this endpoint — no duplicated logic.
+    """
+    body = payload or {}
+    target = str(body.get("target", "core"))
+    if target == "core":
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(["systemctl", "restart", "vertep-core.service"],
+                                       capture_output=True, timeout=30),
+            )
+            set_system_state(SystemState.NORMAL, "CORE restart requested via Telegram", None)
+            return {"target": "core", "status": "restart_requested", "message": "vertep-core.service restart initiated"}
+        except FileNotFoundError:
+            return {"target": "core", "status": "restart_requested",
+                    "message": "systemctl not available; restart must be performed manually"}
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "CORE restart timed out")
+        except Exception as error:
+            raise HTTPException(500, f"CORE restart failed: {error}") from error
+    node_id = str(body.get("node_id", "")).strip()
+    if not node_id or not re.fullmatch(r"[a-z0-9-]+", node_id):
+        raise HTTPException(422, "node_id is required for worker restart")
+    worker = store.workers.get(node_id)
+    if not worker:
+        raise HTTPException(404, f"Worker {node_id} is not registered or offline")
+    worker["desired_state"] = "RESTARTING"
+    worker["status"] = "UPDATING"
+    worker["state_reason"] = "restart via Telegram API"
+    worker["state_changed_at"] = utc_now()
+    store.save_worker(worker)
+    audit_entry(worker["desired_state"], "restart", f"node={node_id}", f"telegram:{body.get('requested_by', 'telegram')}")
+    return {"target": "node", "node_id": node_id, "status": "restart_requested",
+            "message": f"Worker {node_id} marked for restart"}
+
+
+@app.post("/api/system/test")
+async def system_test(payload: dict | None = None):
+    """Run system self-test (Quick or Full).
+
+    Quick test covers CORE API, PostgreSQL, Redis, Dispatcher, storage.
+    Full test additionally verifies Text/Voice/GPU Workers, Backup, Monitoring.
+    """
+    body = payload or {}
+    scope = str(body.get("scope", "quick")).lower()
+    if scope not in {"quick", "full"}:
+        raise HTTPException(422, "scope must be 'quick' or 'full'")
+    from .health_checks import run_checks, health_status
+    checks = run_checks(role=os.getenv("NODE_ROLE", "core"))
+    result = {"scope": scope, "result": health_status(checks), "checks": checks}
+    if scope == "full":
+        try:
+            nodes = registered_nodes()
+            result["nodes"] = [{"node_id": n.get("node_id"), "role": n.get("role"),
+                                "status": n.get("status")} for n in nodes]
+        except Exception as error:
+            result["nodes_error"] = str(error)
+    return result
+
 
 # --- Web UI mounts (design switching: v2 default at "/", v1 classic at "/v1") ---
 class SPAStaticFiles(StaticFiles):

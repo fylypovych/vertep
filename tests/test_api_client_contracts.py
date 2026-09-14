@@ -70,6 +70,12 @@ def test_operations_client_endpoints_exist():
         ("POST", "/api/system/backups"),
         ("POST", "/api/system/backups/{snapshot_id}/restore"),
         ("POST", "/api/system/recovery/normal"),
+        ("GET", "/api/operations"),
+        ("GET", "/api/operations/{operation_id}"),
+        ("POST", "/api/system/restart"),
+        ("POST", "/api/system/test"),
+        ("GET", "/api/system/state"),
+        ("POST", "/api/system/state"),
     ])
 
 

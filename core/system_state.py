@@ -111,10 +111,12 @@ def new_job_status() -> str:
 
 
 STATE_OPERATION_POLICY = {
-    SystemState.NORMAL: {"read", "create_job", "mutate_job", "node_control", "configuration", "update"},
-    SystemState.MAINTENANCE: {"read", "create_job", "mutate_job", "node_control", "update"},
+    SystemState.NORMAL: {"read", "create_job", "mutate_job", "node_control", "configuration",
+                         "update", "restart", "test", "backup"},
+    SystemState.MAINTENANCE: {"read", "create_job", "mutate_job", "node_control", "configuration",
+                              "update", "restart", "test"},
     SystemState.UPDATING: {"read", "create_job"},
-    SystemState.RECOVERING: {"read", "create_job"},
+    SystemState.RECOVERING: {"read", "create_job", "restore"},
     SystemState.READ_ONLY: {"read"},
     SystemState.EMERGENCY: {"read", "recovery"},
 }
