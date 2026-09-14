@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.65
+- Виправлено реліз-блокуючий баг у `scripts/generate-root-metadata.py::sign_metadata`: `subprocess.Popen(..., check=True)` — невалідний аргумент (Popen не приймає `check`), що спричиняв `TypeError` і падіння 4 тестів `tests/test_key_lifecycle.py` на Linux CI. Замінено на `subprocess.run(check=True, input=..., capture_output=True)` з тим самим конвеєром (openssl dgst → base64-сигнатура). Тести скипаються на Windows, тому локальний `pytest` попередньої версії не виявляв дефект.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.64
 - Issue #36 (i.0.0.0.33, #6): Web UI розкадровки тепер показує самі scene preview зображення inline через `<img>` (`data-testid="scene-preview-image"`), а не лише artifact ID і посилання; додано хелпер `previewImageUrl()` у `web-v2/src/app/jobs/job-detail.component.ts`.
 - Issue #36: розширено `tests/test_browser_e2e.py::test_storyboard_review_with_artifacts_and_approve` перевіркою рендерингу inline-зображень усіх сцен та правильного `src` (artifact download endpoint).

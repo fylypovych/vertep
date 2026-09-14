@@ -35,12 +35,14 @@ def generate_key(key_id: str, directory: Path) -> Path:
 
 
 def sign_metadata(message: bytes, key_path: Path) -> str:
-    with subprocess.Popen(
+    # subprocess.Popen never accepts ``check``; use run() which supports
+    # check + stdin input + captured stdout. Fixes a release-blocking
+    # TypeError on Linux CI (the tests are skipped on Windows).
+    result = subprocess.run(
         ["openssl", "dgst", "-sha256", "-sign", str(key_path)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, check=True,
-    ) as process:
-        stdout, _ = process.communicate(message)
-    return __import__("base64").b64encode(stdout).decode("ascii")
+        input=message, capture_output=True, check=True,
+    )
+    return __import__("base64").b64encode(result.stdout).decode("ascii")
 
 
 def build_metadata(key_ids: list[str], keys_dir: Path, threshold: int,
