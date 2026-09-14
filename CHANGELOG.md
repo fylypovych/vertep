@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.67
+- Фікс тесту `test_root_metadata_fail_closed_security_cases`: tampered metadata (revoked, wrong_channel) тепер перепідписується через новий `resign()` хелпер перед валідацією; підпис перевіряється раніше нормалізації полів, тому будь-яка зміна поля вимагає фрешного валідного підпису. 3/4 тестів key_lifecycle тепер прходять на Linux CI; останній окремий flaky тест `test_job_workspace_contracts.py::test_job_list_status_exact_filter` не пов'язаний зі змінами.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.66
 - Доопрацьовано signing-flow root metadata у `scripts/generate-root-metadata.py`: `build_metadata` тепер підписує метадані **приватним** ключем, а в `release_keys[].sha256` записує дайджест **публічного** ключа (`_public_sha256` через `openssl pkey -pubout`). Це робить метадані, продуковані інструментом підпису, сумісними з `core/update_trust.validate_root_metadata`/`authorize_release_key`, які перевіряють саме публічні ключі (`docs/RELEASE_KEY_CEREMONY.md`). Раніше інструмент підписував публічним файлом і пінив дайджест приватних байтів.
 - Переписано `tests/test_key_lifecycle.py` на узгоджений ланцюг: приватний signing store (через `generate-root-metadata.generate_key`) + публічний verification keyring (для `core/update_trust`). Ці 4 тести раніше скипались на Windows (немає openssl) і падали на Linux CI; тепер вони відображають робочу модель підпису/ротації/ревоукції/authorize.

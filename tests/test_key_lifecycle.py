@@ -67,6 +67,24 @@ def validate(metadata: dict, public_root: Path, *, trusted_version: int = 0,
     )
 
 
+def resign(module, metadata: dict, keys_dir: Path) -> dict:
+    """Re-sign canonical messages for every declared key with the private keys.
+
+    Signature verification runs before field normalization, so any tampering of a
+    metadata field must be followed by a fresh, valid signature for the security
+    checks to reach the intended field-level validation.
+    """
+    message = module.canonical_metadata(metadata)
+    signatures = []
+    for item in metadata.get("signatures", []):
+        key_path = keys_dir / f"{item['key_id']}.pem"
+        signatures.append({"key_id": item["key_id"],
+                           "signature": module.sign_metadata(message, key_path)})
+    resigned = dict(metadata)
+    resigned["signatures"] = signatures
+    return resigned
+
+
 @requires_openssl
 def test_root_metadata_rotation_revokes_old_key_and_accepts_replacement(tmp_path):
     module = load_module()
@@ -130,8 +148,9 @@ def test_root_metadata_fail_closed_security_cases(tmp_path):
     with pytest.raises(RuntimeError, match="expired"):
         validate(expired, public_root)
 
-    revoked_string = copy.deepcopy(metadata)
+    revoked_string = resign(module, dict(metadata), keys_dir)
     revoked_string["release_keys"]["root-1"]["revoked"] = "true"
+    revoked_string = resign(module, revoked_string, keys_dir)
     with pytest.raises(ValueError, match="revocation state"):
         validate(revoked_string, public_root)
 
@@ -143,11 +162,13 @@ def test_root_metadata_fail_closed_security_cases(tmp_path):
             {"key_id": "root-1"}, tampered_digest, public_root, "stable"
         )
 
-    wrong_channel = copy.deepcopy(validated)
+    wrong_channel = resign(module, dict(metadata), keys_dir)
     wrong_channel["release_keys"]["root-1"]["channels"] = ["beta"]
+    wrong_channel = resign(module, wrong_channel, keys_dir)
+    wrong_validated = validate(wrong_channel, public_root)
     with pytest.raises(RuntimeError, match="channel"):
         authorize_release_key(
-            {"key_id": "root-1"}, wrong_channel, public_root, "stable"
+            {"key_id": "root-1"}, wrong_validated, public_root, "stable"
         )
 
     tampered_signature = copy.deepcopy(metadata)
