@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -19,9 +20,12 @@ def test_repository_passes_static_release_gates():
 
 def test_role_isolation_failure_is_reported(tmp_path):
     root = Path(__file__).parents[1]
-    catalog = (root / "config/node_roles.json").read_text().replace(
-        '"services": ["worker", "comfyui", "update-agent"]',
-        '"services": ["worker", "comfyui", "postgres", "update-agent"]')
+    # Issue #36-adjacent: node_roles.json is pretty-printed, so a text replace of a
+    # single-line services array no longer matches. Parse + mutate via JSON so the
+    # harness is robust to formatting and injects the forbidden service reliably.
+    catalog_data = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
+    catalog_data["gpu"]["services"].append("postgres")
+    catalog = json.dumps(catalog_data, ensure_ascii=False, indent=2)
     for name in ("bootstrap.sh", "deploy/docker-compose.yml", "deploy/proxy.conf",
                  "config/schemas/release-contract.schema.json", "scripts/runtime-contract.py",
                  "scripts/generate-sbom.py",

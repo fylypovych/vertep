@@ -938,6 +938,11 @@ def test_storyboard_review_with_artifacts_and_approve():
         expect(page.locator("[data-testid='job-storyboard']")).to_contain_text("кадр 1")
         preview_link = page.locator("[data-testid='job-storyboard'] a[href*='/artifacts/art-s1/download']")
         expect(preview_link).to_be_visible()
+        # Issue #36: the actual scene images are rendered inline (not only an id/link).
+        scene_image = page.locator("[data-testid='scene-preview-image']")
+        expect(scene_image).to_have_count(2)
+        expect(scene_image.first).to_have_attribute(
+            "src", "/api/jobs/job-sb-01/artifacts/art-s1/download")
 
         # Approve the storyboard via the general approve button (canReviewStoryboard).
         page.get_by_role("button", name="Схвалити", exact=True).click()

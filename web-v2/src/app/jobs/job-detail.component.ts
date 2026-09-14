@@ -346,6 +346,12 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                     <p>{{ scene.voiceover }}</p>
                     <p class="text-xs text-slate-500">{{ scene.prompt }}</p>
                     @if (scene.image_artifact_id) {
+                      <div class="mt-2">
+                        <img [src]="previewImageUrl(scene.image_artifact_id)"
+                             [alt]="'Превʼю сцени ' + scene.index"
+                             class="rounded border border-slate-200 bg-white max-h-44 w-auto object-contain"
+                             data-testid="scene-preview-image">
+                      </div>
                       <p class="text-xs text-emerald-600 mt-1">Превʼю: {{ scene.image_artifact_id }} (v{{ scene.image_version }})</p>
                       <a [href]="'/api/jobs/' + job()!.job_id + '/artifacts/' + scene.image_artifact_id + '/download'" class="text-xs text-emerald-600 hover:underline">Відкрити превʼю</a>
                     } @else {
@@ -945,6 +951,11 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   activeStoryboard() {
     const j = this.job();
     return j?.storyboards?.find(item => item.version === j.active_storyboard_version) || null;
+  }
+
+  previewImageUrl(artifactId: string): string {
+    const j = this.job();
+    return j ? `/api/jobs/${encodeURIComponent(j.job_id)}/artifacts/${encodeURIComponent(artifactId)}/download` : '';
   }
 
   approveImageStoryboard(): void {

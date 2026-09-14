@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.64
+- Issue #36 (i.0.0.0.33, #6): Web UI розкадровки тепер показує самі scene preview зображення inline через `<img>` (`data-testid="scene-preview-image"`), а не лише artifact ID і посилання; додано хелпер `previewImageUrl()` у `web-v2/src/app/jobs/job-detail.component.ts`.
+- Issue #36: розширено `tests/test_browser_e2e.py::test_storyboard_review_with_artifacts_and_approve` перевіркою рендерингу inline-зображень усіх сцен та правильного `src` (artifact download endpoint).
+- Виправлено регресію `tests/test_release_qualification.py::test_role_isolation_failure_is_reported`: харнесс став JSON-обізнаним (parse/mutate `config/node_roles.json`), оскільки каталог ролей було переформатовано в багаторядковий JSON у 0.0.1.60, і старий рядковий `.replace()` більше не збігався.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.60
 - #25: додано окремі Web UI API clients для Queue, Publishing, Operations, Setup, Storyboard і Session; типізовані SessionResponse, OperationAck, LogQuery, StoryboardActionRequest, PublishRequest та BackupListResponse.
 - #25: додано RemoteState/RemoteMutation для станів запитів і мутацій; Alerts та секцію Backup переведено на OperationsApiService, зі станами завантаження, помилок, повтору та блокуванням повторної мутації під час виконання.
