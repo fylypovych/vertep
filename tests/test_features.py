@@ -75,6 +75,12 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _enable_local_fallback(monkeypatch):
+    """Enable LOCAL_WORKER_FALLBACK for tests that rely on local script/publish generation."""
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
+
+
+@pytest.fixture(autouse=True)
 def _mock_storyboard_for_features(monkeypatch):
     monkeypatch.setattr(_StoryboardServiceOrig, "queue", _mock_storyboard_queue)
 

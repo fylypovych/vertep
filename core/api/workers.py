@@ -43,6 +43,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     data["capabilities"] = sorted(declared)
     data["tested_capabilities"] = (sorted(declared) if self_test.get("status") == "PASSED"
                                     and self_test.get("role") == data["role"] else [])
+    data["runtime_status"] = ("ONLINE" if self_test.get("status") == "PASSED"
+                              and self_test.get("role") == data["role"] else "PENDING_SELF_TEST")
     if (os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"
             and data["status"] == "READY" and not data["tested_capabilities"]):
         data["status"] = "ERROR"

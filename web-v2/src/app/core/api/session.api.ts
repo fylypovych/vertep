@@ -19,7 +19,11 @@ export class SessionApiService {
   }
 
   create(payload: { login: string; password: string }): Observable<SessionResponse> {
-    return this.http.post<SessionResponse>(`${this.base.url}/session`, payload, { headers: this.h() }).pipe(catchError(this.base.handleError));
+    // Backend очікує Basic Authorization (authorization header), а не JSON body.
+    const creds = btoa(unescape(encodeURIComponent(`${payload.login}:${payload.password}`)));
+    return this.http.post<SessionResponse>(`${this.base.url}/session`, null, {
+      headers: this.h().set('Authorization', `Basic ${creds}`),
+    }).pipe(catchError(this.base.handleError));
   }
 
   delete(): Observable<SessionResponse> {
@@ -28,7 +32,13 @@ export class SessionApiService {
 
   profile(): Observable<UserProfile> {
     return this.http.get<SessionResponse>(`${this.base.url}/session`, { headers: this.h() }).pipe(
-      map((s) => ({ user: s.user || '', role: s.role || 'viewer' })),
+      map((s): UserProfile => {
+        if (!s.authenticated) {
+          throw new Error('Не авторизовано');
+        }
+        return { user: s.user || '', role: s.role === 'viewer' ? 'viewer' : 'admin' };
+      }),
+      catchError(this.base.handleError),
     );
   }
 

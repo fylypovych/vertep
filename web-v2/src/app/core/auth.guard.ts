@@ -12,7 +12,8 @@ export class AuthGuard implements CanActivate {
   canActivate(): Observable<boolean | UrlTree> {
     return this.api.getSession().pipe(
       tap(() => { this.policy.refresh(); }),
-      map(() => true),
+      // Пропускаємо лише справжню авторизовану сесію; authenticated:false веде на login.
+      map((session) => (session.authenticated ? true : this.router.createUrlTree(['/login']))),
       catchError(() => of(this.router.createUrlTree(['/login'])))
     );
   }

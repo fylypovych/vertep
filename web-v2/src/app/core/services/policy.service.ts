@@ -41,7 +41,7 @@ const VIEWER_BLOCKED = new Set([
 export class PolicyService {
   private systemApi = inject(SystemApiService);
   readonly systemState = signal<SystemMode>('NORMAL');
-  readonly userRole = signal<UserRole>('admin');
+  readonly userRole = signal<UserRole>('viewer');
   readonly systemReason = signal<string | null>(null);
 
   readonly isNormal = computed(() => this.systemState() === 'NORMAL');

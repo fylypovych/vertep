@@ -1,5 +1,17 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.73
+- Додано immutable-версіювання відео: `VideoVersion` (sha256, approved, revision_note), версіоновані файли `final/video-v<N>.mp4`, backward-compat вказівник на `final/video.mp4`, збереження затвердження на версії та відновлення після рестарту за схваленим/очікуваним станом.
+- Додано структурований `VideoRevision`, прив'язаний до версії; `VIDEO_REVISION_REQUESTED` тепер допускає перехід у `VIDEO_GENERATION` або `ASSEMBLY`.
+- Telegram-колбекі затвердження відео прив'язані до версії (`job_id:version`), відхилення stale-approval, захист від подвійної регенерації (`video_regenerating`).
+- Додано `revision` для сценарію: ревізія передається в script-задачу та LLM-промпт; дефолт `LOCAL_WORKER_FALLBACK` змінено на `false`; нова обробка стану `SCRIPT_QUEUED`.
+- Додано `runtime_status` воркера (ONLINE/PENDING_SELF_TEST) та збереження `self_test_capabilities` при поданні self-test; dispatcher враховує лише підтверджені `tested_capabilities` без fallback до declared і не видає задачі вузлам із непройденим runtime self-test.
+- Publisher: розділено перманентні та транзиентні помилки (`NOT_CONFIGURED` повертає receipt без retry; network/timeout/rate-limit — retry), додано `publish_retry_count` та `published_channels`.
+- Додано Real Test Runner: пакет `core/real_tests/` (runner, scenarios, github, storage, models), API `/api/real-tests/*`, операцію `real_test` у стані `MAINTENANCE`, мапінг `rt_issue` у `SCENARIOS` та idempotентне звітування в GitHub Issues.
+- Додано release gate: `scripts/check-release-gate.py` та новий крок `release-gate` у `.github/workflows/release.yml`, що перевіряє успішність CI та Browser E2E для точного SHA (пермісія `actions: read`).
+- Web UI `web-v2`: session-запити через Basic Authorization, `AuthGuard` пропускає лише авторизовану сесію, єдине джерело ролі через `PolicyService`, рефакторинг sidebar за групами, a11y confirm-dialog (фокус/Escape/відновлення фокуса), поля `runtime_status` у моделі worker.
+- Реорганізовано `.gitignore`; додано agent skill `.github/agents/code-error-checker.agent.md`; додано тести `test_real_tests.py`, `test_video_regeneration_path.py`, `test_video_restart_recovery.py`, `test_video_revision_versioning.py`, `test_web_ui_contracts.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.72
 - Перенаправлено тести bootstrap wizard на Angular Web UI `web-v2/src/app/setup/setup.component.html`.
 - Виправлено `core/api/setup.py::first_run_health`: Redis став OPTIONAL, DRIVER_REQUIRED не блокує ready, помилки PostgreSQL з деталями.

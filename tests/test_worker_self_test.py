@@ -42,6 +42,39 @@ def test_attestation_expires_and_cannot_add_capabilities(monkeypatch):
     assert not current_tested_capabilities(worker, now)
 
 
+def test_unconfirmed_capabilities_are_not_dispatchable(monkeypatch):
+    """Missing tested_capabilities must not fall back to declared capabilities."""
+    monkeypatch.setenv("REQUIRE_WORKER_SELF_TEST", "true")
+    now = datetime.now(timezone.utc)
+    worker = {"role": "gpu", "capabilities": ["image_generation", "video_generation"],
+              "self_test": {"status": "PASSED", "role": "gpu", "checked_at": now.isoformat()}}
+    # No tested list present -> nothing is treated as tested/dispatchable.
+    assert current_tested_capabilities(worker, now) == set()
+    # Only the explicitly attested capability counts; declared-but-unattested
+    # entries are never auto-promoted to dispatchable.
+    worker["tested_capabilities"] = ["image_generation"]
+    assert current_tested_capabilities(worker, now) == {"image_generation"}
+    assert "video_generation" not in current_tested_capabilities(worker, now)
+
+
+def test_dispatch_respects_runtime_status(monkeypatch):
+    """The durable self-test runtime_status gates dispatch when present."""
+    monkeypatch.setenv("REQUIRE_WORKER_SELF_TEST", "true")
+    now = datetime.now(timezone.utc)
+    base = {"node_name": "gpu-01", "status": "FREE", "last_seen": now.isoformat(), "role": "gpu",
+            "vram_mb": 16000, "capabilities": ["image_generation"], "supported_workflows": ["*"],
+            "self_test": {"status": "PASSED", "role": "gpu", "checked_at": now.isoformat()},
+            "tested_capabilities": ["image_generation"]}
+    # A node whose durable self-test outcome is not ready is never selected.
+    offline = {**base, "runtime_status": "OFFLINE"}
+    assert available_worker([offline], job()) is None
+    pending = {**base, "runtime_status": "PENDING_SELF_TEST"}
+    assert available_worker([pending], job()) is None
+    # A runtime-ready node (or a record without the field) is selected.
+    online = {**base, "runtime_status": "ONLINE"}
+    assert available_worker([online], job())["node_name"] == "gpu-01"
+
+
 def test_worker_state_machine_rejects_privilege_transitions():
     assert worker_transition_allowed("READY", "BUSY")
     assert worker_transition_allowed("ONLINE", "READY")

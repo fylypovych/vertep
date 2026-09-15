@@ -89,7 +89,7 @@ def claim_task(payload: TaskClaim, request: Request):
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
         if task.get("task") == "script":
-            if job.status != JobStatus.SCRIPT_GENERATING or job.script_task_id != task.get("task_id"):
+            if job.status != JobStatus.SCRIPT_QUEUED or job.script_task_id != task.get("task_id"):
                 task_queue.ack(task["task_id"])
                 continue
             worker = _select_worker([worker_data], job, task_type="text", min_vram_mb=0) if job else None
@@ -106,6 +106,7 @@ def claim_task(payload: TaskClaim, request: Request):
             store.save_worker(store.workers[payload.node_name])
             store.event(job, f"{payload.node_name} SCRIPT CLAIMED {task['task_id']}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
+            store.update(job, JobStatus.SCRIPT_GENERATING, f"SCRIPT TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
             return {"task": task}
         if task.get("task") == "publish":
             channel = task.get("channel")
@@ -326,7 +327,7 @@ def task_result(result: TaskResult, request: Request):
             store.save_worker(worker)
         try:
             _handle_script_result(store, job, {"success": result.success, "task_id": result.task_id,
-                                               "error": result.error}, result.artifacts or [])
+                                               "error": result.error, "worker_name": result.node_name}, result.artifacts or [])
         except (ValueError, RuntimeError) as error:
             raise HTTPException(400, str(error)) from error
         from ..state import task_queue as _tq2

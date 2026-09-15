@@ -266,6 +266,7 @@ def approve_job(job_id: str):
 
 class ScriptAction(BaseModel):
     actor: str = Field(default="api", min_length=1, max_length=200)
+    expected_video_version: int | None = Field(default=None, ge=1)
 
 
 class ScriptRevision(ScriptAction):
@@ -316,7 +317,7 @@ def approve_video_endpoint(job_id: str, body: ScriptAction):
     if not job:
         raise HTTPException(404, "Job not found")
     try:
-        job = approve_video(store, job, body.actor)
+        job = approve_video(store, job, body.actor, expected_version=body.expected_video_version)
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     return job
@@ -335,15 +336,18 @@ def revise_video(job_id: str, body: ScriptRevision):
 
 
 @router.post("/api/jobs/{job_id}/video/regenerate")
-def regenerate_video_endpoint(job_id: str):
+def regenerate_video_endpoint(job_id: str, body: ScriptAction | None = None):
     job = store.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    actor = (body.actor if body else None) or "api"
     try:
-        job = regenerate_video(store, job)
+        job = request_video_revision(store, job, "regenerate", actor)
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
-    executor.submit(_prepare_and_dispatch, job)
+    # Submit real regeneration (shared path with Telegram)
+    from core.app import _finalize_video_regenerate
+    executor.submit(_finalize_video_regenerate, job)
     return job
 
 
@@ -363,6 +367,11 @@ def publish_job(job_id: str, channels: list[str] | None = None):
                                  and bool(job.output_path) and Path(job.output_path).is_file())
     if job.status in {JobStatus.VIDEO_PENDING_APPROVAL, JobStatus.VIDEO_REVISION_REQUESTED, JobStatus.VIDEO_APPROVED}:
         raise HTTPException(409, f"Job is awaiting video approval (status: {job.status.value})")
+    # Persisted approval of the active video version is a publish condition
+    if job.script is not None and job.active_video_version is not None:
+        active = next((v for v in job.video_versions if v.version == job.active_video_version), None)
+        if active is None or not active.approved:
+            raise HTTPException(409, "Job's active video version is not approved for publication")
     if job.status != JobStatus.READY and not retryable_publish_failure:
         raise HTTPException(409, "Job is not ready")
     targets = channels or ["youtube"]
@@ -409,8 +418,13 @@ def publish_job(job_id: str, channels: list[str] | None = None):
 @router.get("/jobs/{job_id}/final/video.mp4")
 def video(job_id: str):
     job = store.jobs.get(job_id)
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
     artifact = next((item for item in job.artifacts
-                     if item.kind == "video" and item.path == "final/video.mp4"), None) if job else None
+                      if item.kind == "video" and
+                      (item.path == "final/video.mp4" or
+                       item.path.startswith("final/video-v"))), None)
     if not artifact:
         raise HTTPException(404, "Video not ready")
     return download_artifact(job_id, artifact.artifact_id)

@@ -3,6 +3,10 @@ import os
 
 from .models import Job, JobStatus
 
+# Runtime readiness states that qualify a node for dispatch when emitted by its
+# durable self-test record (enrollment separated from runtime readiness).
+RUNTIME_READY_STATUSES = {"ONLINE", "READY", "FREE", "BUSY"}
+
 
 def current_tested_capabilities(worker: dict, now: datetime | None = None) -> set[str]:
     """Return only capabilities covered by a recent successful role self-test."""
@@ -21,8 +25,25 @@ def current_tested_capabilities(worker: dict, now: datetime | None = None) -> se
     if age > maximum_age or age < -maximum_clock_skew:
         return set()
     declared = set(worker.get("capabilities") or [])
-    attested = set(worker.get("tested_capabilities") or declared)
+    # Only explicitly attested capabilities count as tested.  Unconfirmed
+    # (missing ``tested_capabilities``) must NOT silently fall back to the
+    # declared set, otherwise declared-but-unverified capabilities become
+    # dispatch-eligible.
+    attested = set(worker.get("tested_capabilities") or [])
     return declared & attested
+
+
+def runtime_ready(worker: dict) -> bool:
+    """True when the durable self-test ``runtime_status`` does not disqualify a node.
+
+    When a worker record carries a persisted ``runtime_status`` (the outcome of
+    its role self-test), an explicitly-failed/pending node is never eligible for
+    dispatch even if a stale heartbeat claims capability readiness.  Records that
+    never carry the field are treated as runtime-ready so existing callers that
+    build worker dicts without registry data keep working.
+    """
+    runtime_status = worker.get("runtime_status")
+    return runtime_status is None or runtime_status in RUNTIME_READY_STATUSES
 
 
 def _voice_ready(worker: dict, requirements: dict | None) -> bool:
@@ -92,6 +113,8 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
         require_self_test = os.getenv("REQUIRE_WORKER_SELF_TEST", "false").lower() == "true"
         tested_capabilities = current_tested_capabilities(worker, now)
         if require_self_test and not tested_capabilities:
+            continue
+        if require_self_test and not runtime_ready(worker):
             continue
         available_vram = worker.get("free_vram_mb")
         if available_vram is None:

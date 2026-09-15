@@ -57,8 +57,13 @@ def _make_store():
     return store
 
 
+import time
+
 def _receipt_artifact(channel, status, error=None):
-    receipt = {"channel": channel, "status": status}
+    receipt = {"channel": channel, "status": status, "timestamp": time.time()}
+    if status == "PUBLISHED":
+        receipt["remote_id"] = f"remote-{channel}-123"
+        receipt["url"] = f"https://{channel}.com/video/123"
     if error:
         receipt["error"] = error
     data = json.dumps(receipt).encode("utf-8")
@@ -114,7 +119,7 @@ def test_publish_result_failure_after_max_retries_marks_failed():
     with patch("core.api.job_helpers._enqueue_publish_task") as mock_enq:
         for i in range(2):
             _handle_publish_result(store, job, {"success": False, "task_id": f"task-{i+1}", "error": "boom"}, [], "youtube")
-    assert job.publish_attempt == 2
+    assert job.publish_retry_count["youtube"] == 2
     assert len(mock_enq.call_args_list) == 1
     assert job.status == JobStatus.FAILED
 

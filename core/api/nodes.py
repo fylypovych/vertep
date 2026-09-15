@@ -237,6 +237,8 @@ async def submit_node_self_test(node_id: str, request: Request):
         raise HTTPException(422, str(error)) from error
     live = store.workers.get(node_id)
     if live:
+        live["runtime_status"] = record["runtime_status"]
+        live["self_test_capabilities"] = record["self_test_capabilities"]
         live["self_test"] = {"status": status, "capabilities": record["self_test_capabilities"]}
         live.setdefault("self_test_at", record["last_self_test_at"])
         store.save_worker(live)

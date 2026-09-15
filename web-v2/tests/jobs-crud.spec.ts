@@ -34,7 +34,7 @@ function mockApi(page: any, jobs: any[]) {
     const r = route.request();
     const p = new URL(r.url()).pathname;
     const m = r.method();
-    if (p.endsWith('/session')) return route.fulfill({ json: { username: 'admin', role: 'admin' } });
+    if (p.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', role: 'admin' } });
     if (p.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
     if (p === '/api/jobs' && m === 'GET') return route.fulfill({ json: paginated(mutable, r.url()) });
     if (p === '/api/jobs' && m === 'POST') {

@@ -66,7 +66,7 @@ JOB_STATE_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.TTS_READY: {JobStatus.VIDEO_GENERATION, JobStatus.ASSEMBLY, JobStatus.PAUSED, JobStatus.CANCELLED},
     JobStatus.VIDEO_READY: {JobStatus.READY, JobStatus.CANCELLED},
     JobStatus.VIDEO_PENDING_APPROVAL: {JobStatus.VIDEO_APPROVED, JobStatus.VIDEO_REVISION_REQUESTED, JobStatus.VIDEO_FAILED, JobStatus.CANCELLED},
-    JobStatus.VIDEO_REVISION_REQUESTED: {JobStatus.VIDEO_GENERATION, JobStatus.CANCELLED},
+    JobStatus.VIDEO_REVISION_REQUESTED: {JobStatus.VIDEO_GENERATION, JobStatus.ASSEMBLY, JobStatus.CANCELLED},
     JobStatus.VIDEO_APPROVED: {JobStatus.ASSEMBLY, JobStatus.VIDEO_READY, JobStatus.CANCELLED},
     JobStatus.VIDEO_FAILED: {JobStatus.VIDEO_GENERATION, JobStatus.CANCELLED},
     JobStatus.ASSEMBLY: {JobStatus.READY, JobStatus.FAILED, JobStatus.CANCELLED},
@@ -217,6 +217,26 @@ class ArtifactRecord(BaseModel):
     created_at: str
 
 
+class VideoVersion(BaseModel):
+    """Immutable record of a rendered video version."""
+    version: int
+    path: str
+    sha256: str
+    approved: bool = False
+    approved_by: str | None = None
+    approved_at: str | None = None
+    revision_note: str | None = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class VideoRevision(BaseModel):
+    """Structured video revision request bound to a specific version."""
+    version: int
+    text: str
+    actor: str
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class StoryboardScene(BaseModel):
     index: int = Field(ge=1)
     prompt: str = Field(min_length=1, max_length=4000)
@@ -339,6 +359,10 @@ class Job(BaseModel):
     script_revision_pending: bool = False
     video_revision_chat_id: str | None = None
     video_revision_pending: bool = False
+    video_versions: list[VideoVersion] = Field(default_factory=list)
+    active_video_version: int | None = None
+    video_revisions: list[VideoRevision] = Field(default_factory=list)
+    video_regenerating: bool = False
     image_storyboard_task_ids: dict[str, str] = Field(default_factory=dict)
     image_storyboard_task_versions: dict[str, dict[str, int]] = Field(default_factory=dict)
     image_storyboard_error: str | None = None
@@ -346,9 +370,12 @@ class Job(BaseModel):
     script_task_id: str | None = None
     script_attempt: int = 0
     script_error: str | None = None
+    revision: str | None = None
     publish_task_ids: dict[str, str] = Field(default_factory=dict)
     publish_attempt: int = 0
     publish_error: str | None = None
+    publish_retry_count: dict[str, int] = Field(default_factory=dict)
+    published_channels: set[str] = Field(default_factory=set)
 
 class WorkerHeartbeat(BaseModel):
     node_name: str

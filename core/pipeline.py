@@ -3,17 +3,33 @@ import os
 import shutil
 import threading
 from pathlib import Path
-from .models import Job, JobEvent, JobStatus, utc_now, job_transition_allowed
+from .models import Job, JobEvent, JobStatus, utc_now, job_transition_allowed, VideoVersion, VideoRevision
 from adapters.providers import providers
 from adapters.telegram import TelegramAdapter
 from .logging_config import configure_logging
 from .repository import StateRepository, build_repository
 from .orchestration import initialize_plan, recover_after_restart, transition_stage
 from .models import StageName, StageStatus
-from .artifacts import register_artifact
+from .artifacts import register_artifact, _digest
 from .script_schema import normalize_script
 
 logger = configure_logging("core")
+
+
+def _active_video_file(job: Job, job_root: Path) -> Path:
+    """Resolve the current active video file path, with backward compat fallback.
+
+    Prefers the versioned active output (``final/video-v<N>.mp4``); falls back to
+    the legacy ``final/video.mp4`` when no versioned record exists yet.
+    """
+    if job.active_video_version is not None:
+        vv = next((v for v in job.video_versions if v.version == job.active_video_version), None)
+        if vv and vv.path:
+            candidate = (job_root / job.job_id / vv.path).resolve()
+            if candidate.is_file():
+                return candidate
+    legacy = (job_root / job.job_id / "final" / "video.mp4")
+    return legacy
 
 def _progress(job: Job, text: str) -> None:
     if not job.source.startswith("telegram:"):
@@ -51,11 +67,20 @@ class JobStore:
                     job.event_log.append(JobEvent(message="PUBLISHING INTERRUPTED; RETURNED TO READY",
                                                   type="status", state="READY"))
                     self.repository.save_job(job)
-                elif original_status == JobStatus.VIDEO_READY and (self.root / job.job_id / "final" / "video.mp4").is_file():
-                    job.status = JobStatus.READY
-                    job.events.append(f"{utc_now()} VIDEO RECOVERED AS READY")
-                    job.event_log.append(JobEvent(message="VIDEO RECOVERED AS READY",
-                                                  type="status", state="READY"))
+                elif original_status == JobStatus.VIDEO_READY and _active_video_file(job, self.root).is_file():
+                    approved_version = next(
+                        (vv for vv in job.video_versions if vv.approved), None
+                    ) if job.video_versions else None
+                    if approved_version and job.active_video_version and approved_version.version == job.active_video_version:
+                        job.status = JobStatus.READY
+                        job.events.append(f"{utc_now()} VIDEO RECOVERED AS READY (version {approved_version.version} approved)")
+                        job.event_log.append(JobEvent(message=f"VIDEO RECOVERED AS READY (version {approved_version.version} approved)",
+                                                      type="status", state="READY"))
+                    else:
+                        job.status = JobStatus.VIDEO_PENDING_APPROVAL
+                        job.events.append(f"{utc_now()} VIDEO RECOVERED; REQUIRES APPROVAL")
+                        job.event_log.append(JobEvent(message="VIDEO RECOVERED; REQUIRES APPROVAL",
+                                                      type="status", state="VIDEO_PENDING_APPROVAL"))
                     self.repository.save_job(job)
                 elif original_status in {JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_READY,
                                           JobStatus.ASSET_GENERATION, JobStatus.ASSETS_READY,
@@ -181,7 +206,8 @@ def generate_script(store: JobStore, job: Job) -> Job:
             _progress(job, "SCRIPT_PENDING_APPROVAL")
         return job
     from .api.job_helpers import _enqueue_script_task
-    queued = _enqueue_script_task(store, job, system_prompt, character)
+    revision = getattr(job, 'revision', None)
+    queued = _enqueue_script_task(store, job, system_prompt, character, revision)
     if queued is not None:
         return job
     return job
@@ -201,6 +227,7 @@ def request_script_revision(store: JobStore, job: Job, revision: str, actor: str
         raise ValueError(f"Cannot request script revision in status {job.status.value}")
     job.approval_status = "revision_requested"
     job.version += 1
+    job.revision = revision
     store.transition(job, JobStatus.SCRIPT_REVISION_REQUESTED, f"SCRIPT REVISION REQUESTED by {actor}: {revision}")
     _progress(job, "SCRIPT_REVISION_REQUESTED")
     return job
@@ -257,6 +284,7 @@ def _send_video_approval_to_telegram(job: Job) -> None:
     """Send video approval request to Telegram admin chats."""
     chat_id = job.source.split(":", 2)[1]
     from .storyboard_telegram import send_video_for_approval, video_approval_keyboard
+    keyboard = video_approval_keyboard(job.job_id, job.active_video_version)
     try:
         send_video_for_approval(chat_id, job)
     except Exception:
@@ -265,7 +293,7 @@ def _send_video_approval_to_telegram(job: Job) -> None:
         TelegramAdapter().send_message(
             chat_id,
             f"🎥 Відео {job.job_id} зібрано. Затвердити для публікації?",
-            video_approval_keyboard(job.job_id),
+            keyboard,
         )
     except Exception:
         logger.warning("Telegram video approval notification failed",
@@ -276,7 +304,7 @@ def _send_video_approval_to_telegram(job: Job) -> None:
             TelegramAdapter().send_message(
                 admin_chat,
                 f"🎥 Відео {job.job_id} потребує затвердження.",
-                video_approval_keyboard(job.job_id),
+                keyboard,
             )
         except Exception:
             pass
@@ -309,21 +337,41 @@ def _send_script_approval_to_telegram(job: Job) -> None:
             pass
 
 
-def approve_video(store: JobStore, job: Job, actor: str = "api") -> Job:
-    """Approve assembled video and transition to READY."""
+def approve_video(store: JobStore, job: Job, actor: str = "api", *, expected_version: int | None = None) -> Job:
+    """Approve assembled video and transition to READY.
+
+    Approval is bound to the current ``active_video_version``.  An optional
+    ``expected_version`` allows callers (Telegram callbacks) to reject a stale
+    approval if the video has been regenerated since the preview was sent.
+    """
     if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
         raise ValueError(f"Cannot approve video in status {job.status.value}")
-    store.transition(job, JobStatus.VIDEO_APPROVED, f"VIDEO APPROVED by {actor}")
-    store.transition(job, JobStatus.VIDEO_READY, "VIDEO READY")
-    store.transition(job, JobStatus.READY, f"VIDEO APPROVED; JOB READY by {actor}")
+    active = job.active_video_version
+    if active is None:
+        raise ValueError("No active video version to approve")
+    if expected_version is not None and expected_version != active:
+        raise ValueError(f"Stale video approval: expected v{expected_version}, active is v{active}")
+    # Persist approval on the immutable version record
+    vv = next((v for v in job.video_versions if v.version == active), None)
+    if vv:
+        vv.approved = True
+        vv.approved_by = actor
+        vv.approved_at = utc_now()
+    store.transition(job, JobStatus.VIDEO_APPROVED, f"VIDEO APPROVED by {actor} (v{active})")
+    store.transition(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{active})")
+    store.transition(job, JobStatus.READY, f"VIDEO APPROVED; JOB READY by {actor} (v{active})")
     _progress(job, "VIDEO_APPROVED")
     return job
 
 
 def request_video_revision(store: JobStore, job: Job, revision: str, actor: str = "api") -> Job:
-    """Request video revision — re-run assembly."""
+    """Request video revision — store structured revision and transition."""
     if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
         raise ValueError(f"Cannot request video revision in status {job.status.value}")
+    job.video_revisions.append(VideoRevision(
+        version=job.active_video_version or 0,
+        text=revision, actor=actor,
+    ))
     store.transition(job, JobStatus.VIDEO_REVISION_REQUESTED,
                      f"VIDEO REVISION REQUESTED by {actor}: {revision}")
     return job
@@ -367,7 +415,6 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     transition_stage(job, StageName.ASSEMBLY, StageStatus.RUNNING)
     store.update(job, JobStatus.ASSEMBLY, "ASSEMBLY STARTED")
     _progress(job, "ASSEMBLY")
-    output = store.root / job.job_id / "final" / "video.mp4"
     scenes = (job.script or {}).get("scenes", [])
     durations = [float(scene.get("duration", 5)) for scene in scenes]
     audio_files = [path for path in (store.root / job.job_id / "audio").glob("*")
@@ -382,6 +429,12 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
         brand = {}
     watermark_value = brand.get("metadata", {}).get("watermark")
     watermark = Path(watermark_value) if watermark_value else None
+    # Determine versioned output path (immutable: never overwrite previous version)
+    job_dir = store.root / job.job_id
+    final_dir = job_dir / "final"
+    existing = [int(v.version) for v in job.video_versions if v.version is not None]
+    next_version = max(existing, default=0) + 1
+    output = final_dir / f"video-v{next_version}.mp4"
     engine = providers.video_engine()
     engine.render(
         output,
@@ -399,10 +452,34 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     if subtitles:
         register_artifact(job, store.root, subtitles, "subtitles", workflow="srt")
     register_artifact(job, store.root, output, "video", workflow="ffmpeg")
+    # Record immutable video version
+    rel_path = f"final/{output.name}"
+    # Issue #49: bind the structured revision request to the version it produced,
+    # so the render that follows a video revision documents (and does not silently
+    # drop) the revision text it was generated for.
+    revision_note = job.video_revisions[-1].text if job.video_revisions else None
+    vv = VideoVersion(
+        version=next_version, path=rel_path, sha256=_digest(output),
+        revision_note=revision_note,
+    )
+    job.video_versions.append(vv)
+    job.active_video_version = next_version
     job.output_path = str(output)
-    store.update(job, JobStatus.VIDEO_READY, "VIDEO READY")
+    # Backward-compat pointer so legacy consumers of final/video.mp4 keep working
+    legacy_latest = final_dir / "video.mp4"
+    try:
+        if legacy_latest.exists() or legacy_latest.is_symlink():
+            legacy_latest.unlink()
+        legacy_latest.symlink_to(output.name)
+    except OSError:
+        # Windows without developer mode: fallback to copying the file
+        try:
+            shutil.copy2(str(output), str(legacy_latest))
+        except OSError:
+            pass
+    store.update(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{next_version})")
     transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
-    store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, "VIDEO PENDING APPROVAL")
+    store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, f"VIDEO PENDING APPROVAL (v{next_version})")
     if job.source.startswith("telegram:"):
         _send_video_approval_to_telegram(job)
     else:

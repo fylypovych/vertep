@@ -51,11 +51,16 @@ def script_keyboard(job_id: str) -> dict:
     ]}
 
 
-def video_approval_keyboard(job_id: str) -> dict:
-    """Inline keyboard for video approval."""
+def video_approval_keyboard(job_id: str, version: int | None = None) -> dict:
+    """Inline keyboard for video approval, bound to the current version.
+
+    Embedding the version in the ``vid_ok`` callback lets the handler reject a
+    stale approval if the video was regenerated since the preview was sent.
+    """
+    ref = f"{job_id}:{version}" if version else job_id
     return {"inline_keyboard": [
         [
-            {"text": "✅ Схвалити відео", "callback_data": f"vid_ok:{job_id}"},
+            {"text": "✅ Схвалити відео", "callback_data": f"vid_ok:{ref}"},
             {"text": "🔄 Перегенерувати", "callback_data": f"vid_regen:{job_id}"},
         ],
         [

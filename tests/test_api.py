@@ -48,7 +48,18 @@ def _mock_storyboard_queue(self, job, revision=None):
 
 
 import pytest
-from core.storyboard import StoryboardService as _StoryboardService
+
+
+@pytest.fixture(autouse=True)
+def _enable_local_fallback(monkeypatch):
+    """Enable LOCAL_WORKER_FALLBACK for tests that rely on local script/publish generation."""
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
+
+
+@pytest.fixture(autouse=True)
+def _mock_storyboard_for_api(monkeypatch):
+    from core.storyboard import StoryboardService as _StoryboardServiceOrig
+    monkeypatch.setattr(_StoryboardServiceOrig, "queue", _mock_storyboard_queue)
 
 
 def _complete_script_task(client, job_id, node_name="text-worker"):
@@ -71,10 +82,6 @@ def _complete_script_task(client, job_id, node_name="text-worker"):
         "success": True, "artifacts": [artifact]})
     assert response.status_code == 200
     return artifact
-
-@pytest.fixture(autouse=True)
-def _mock_storyboard_for_api(monkeypatch):
-    monkeypatch.setattr(_StoryboardService, "queue", _mock_storyboard_queue)
 
 
 def _approve_script_and_storyboard(client, job_id):

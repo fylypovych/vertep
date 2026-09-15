@@ -15,7 +15,7 @@ test.describe('Brands CRUD', () => {
       const method = request.method();
 
       if (path.endsWith('/session')) {
-        return route.fulfill({ json: { username: 'admin', role: 'admin' } });
+        return route.fulfill({ json: { authenticated: true, user: 'admin', role: 'admin' } });
       }
       if (path.endsWith('/status')) {
         return route.fulfill({ json: { system: { state: 'NORMAL' } } });

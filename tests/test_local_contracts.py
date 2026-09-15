@@ -58,6 +58,7 @@ def test_mock_tts_creates_wav_manifest(tmp_path):
 def test_tts_stage_retries_until_success(monkeypatch, tmp_path):
     from core.pipeline import JobStore
 
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
     monkeypatch.setenv("TTS_PROVIDER", "test")
     monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
     monkeypatch.setattr(LLMAdapter, "generate_script", lambda self, topic, system_prompt="": {

@@ -1,11 +1,11 @@
-﻿import { Component, OnInit, OnDestroy, HostListener } from '@angular/core';
+﻿import { Component, OnInit, OnDestroy, HostListener, signal } from '@angular/core';
 import { Router, NavigationEnd, RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { filter, Subscription } from 'rxjs';
 import { SidebarService } from '../core/services/sidebar.service';
 import { ThemeService } from '../core/services/theme.service';
 import { VertepApiService } from '../core/api.service';
-import { PolicyService, UserRole, SystemMode } from '../core/services/policy.service';
+import { PolicyService, SystemMode } from '../core/services/policy.service';
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '':           { title: 'Дашборд',      subtitle: 'Огляд системи Vertep' },
@@ -36,8 +36,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
   systemState = 'Нормальний';
   systemOk = true;
   isDark = false;
-  userInitial = 'A';
-  userRole: UserRole = 'admin';
+  userInitialSig = signal('A');
   showProfileMenu = false;
   systemReason: string | null = null;
 
@@ -96,7 +95,8 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
   private updateTitle(url: string): void {
     const segment = url.replace(/^\//, '').split('?')[0].split('#')[0];
-    const info = PAGE_TITLES[segment] ?? PAGE_TITLES[''];
+    const firstSegment = segment.split('/')[0];
+    const info = PAGE_TITLES[firstSegment] ?? PAGE_TITLES[''];
     this.title    = info.title;
     this.subtitle = info.subtitle;
   }
@@ -122,12 +122,20 @@ export class HeaderComponent implements OnInit, OnDestroy {
   private loadUserProfile(): void {
     this.api.getUserProfile().subscribe({
       next: (p) => {
-        this.userInitial = (p.user?.charAt(0) || 'A').toUpperCase();
-        this.userRole = p.role;
+        this.userInitialSig.set((p.user?.charAt(0) || 'A').toUpperCase());
+        // Єдине джерело правди про роль — PolicyService (signal); header читає з нього.
         this.policy.userRole.set(p.role);
       },
-      error: () => { this.userInitial = 'A'; this.userRole = 'admin'; },
+      error: () => { this.userInitialSig.set('A'); },
     });
+  }
+
+  get roleLabel(): string {
+    return this.policy.userRole() === 'admin' ? 'Адмін' : 'Переглядач';
+  }
+
+  get roleFullLabel(): string {
+    return this.policy.userRole() === 'admin' ? 'Адміністратор' : 'Переглядач';
   }
 
   getSystemStateReason(): string | null {

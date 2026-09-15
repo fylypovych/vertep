@@ -70,8 +70,14 @@ def execute_script(task: dict) -> list[dict]:
 
     endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/generate"
     model = os.getenv("OLLAMA_SCRIPT_MODEL") or os.getenv("OLLAMA_MODEL", "llama3.2")
-    prompt = task.get("prompt") or build_script_prompt(task["topic"], task.get("system_prompt", ""), task.get("character"))
-    payload = {"model": model, "prompt": prompt, "stream": False, "format": "json"}
+
+    # Build prompt with revision if provided
+    base_prompt = task.get("prompt") or build_script_prompt(task["topic"], task.get("system_prompt", ""), task.get("character"))
+    revision = task.get("revision")
+    if revision:
+        base_prompt = f"{base_prompt}\n\nREVISION INSTRUCTION: {revision}\n\nApply the above revision instruction to the script. Return the complete revised script as JSON."
+
+    payload = {"model": model, "prompt": base_prompt, "stream": False, "format": "json"}
     timeout = int(task.get("timeout", os.getenv("OLLAMA_SCRIPT_TIMEOUT", "300")))
     response = httpx.post(endpoint, json=payload, timeout=timeout)
     response.raise_for_status()
@@ -275,6 +281,11 @@ def execute_publisher(task: dict) -> list[dict]:
     Runs the platform adapter directly (YoutubePublisher, TikTokPublisher, etc.)
     using ``PUBLISHER_MOCK`` for sandbox mode.  Returns a ``publication_receipt``
     artifact carrying platform, remote_id, url, timestamp, status/error.
+
+    Transient failures (network errors, rate limits) raise exceptions so the
+    worker marks the task as failed and CORE retries with backoff.
+    Permanent failures (NOT_CONFIGURED) return a receipt with status=NOT_CONFIGURED
+    and the worker marks success=True; CORE will not retry these.
     """
     import time as _time
 
@@ -295,13 +306,20 @@ def execute_publisher(task: dict) -> list[dict]:
     from publishers import LIVE_PUBLISHERS
     publisher = LIVE_PUBLISHERS.get(channel)
     if publisher is None or not publisher.configured():
+        receipt = {"channel": channel, "status": "NOT_CONFIGURED",
+                   "error": f"{publisher.credential_env if publisher else 'unknown'} is missing",
+                   "timestamp": _time.time()}
         return [_artifact("publication.json", "publication_receipt",
-                          json.dumps({"channel": channel, "status": "NOT_CONFIGURED",
-                                        "error": f"{publisher.credential_env if publisher else 'unknown'} is missing"},
-                                       sort_keys=True).encode("utf-8"))]
+                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
     try:
         result = publisher.publish(video_path, metadata)
     except Exception as error:
+        # Transient failures (network, rate limit) should raise so worker retries
+        # Permanent failures should be caught by publisher and returned in result
+        error_str = str(error).lower()
+        if any(keyword in error_str for keyword in ("timeout", "network", "connection", "rate limit", "429", "503", "504")):
+            raise  # Transient - let worker retry
+        # Other exceptions treated as permanent failure
         result = {"channel": channel, "status": "FAILED", "error": str(error)}
     result.setdefault("channel", channel)
     result.setdefault("timestamp", _time.time())

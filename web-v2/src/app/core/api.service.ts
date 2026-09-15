@@ -41,6 +41,7 @@ import {
   SetupHealth,
   SetupCompleteResult,
   UserProfile,
+  SessionResponse,
   ChangePasswordRequest,
   ChangePasswordResponse,
 } from './models';
@@ -249,7 +250,10 @@ export class VertepApiService {
   }
 
   createSession(payload: { login: string; password: string }): Observable<{ authenticated: boolean }> {
-    return this.http.post<{ authenticated: boolean }>(`${this.baseUrl}/session`, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+    // Backend очікує Basic Authorization (authorization header), а не JSON body.
+    return this.http.post<{ authenticated: boolean }>(`${this.baseUrl}/session`, null, {
+      headers: this.getHeaders().set('Authorization', `Basic ${this.basicAuth(payload.login, payload.password)}`),
+    }).pipe(catchError(this.handleError));
   }
 
   deleteSession(): Observable<{ authenticated: boolean }> {
@@ -261,8 +265,9 @@ export class VertepApiService {
   }
 
   getUserProfile(): Observable<UserProfile> {
-    return this.http.get<{ authenticated: boolean; user?: string; role?: string }>(`${this.baseUrl}/session`, { headers: this.getHeaders() }).pipe(
-      map(r => ({ user: r.user || '', role: (r.role as 'admin' | 'viewer') || 'viewer' }))
+    return this.http.get<SessionResponse>(`${this.baseUrl}/session`, { headers: this.getHeaders() }).pipe(
+      map(r => this.toProfile(r)),
+      catchError(this.handleError),
     );
   }
 
@@ -553,6 +558,19 @@ export class VertepApiService {
 
   completeSetup(token: string, payload: Record<string, unknown>): Observable<SetupCompleteResult> {
     return this.http.post<SetupCompleteResult>(`${this.baseUrl}/setup/complete`, payload, { headers: this.getHeaders().set('X-Vertep-Setup-Token', token) }).pipe(catchError(this.handleError));
+  }
+
+  private basicAuth(login: string, password: string): string {
+    return btoa(unescape(encodeURIComponent(`${login}:${password}`)));
+  }
+
+  private toProfile(session: SessionResponse): UserProfile {
+    // Неавторизований/некоректний профіль — помилка веде на login.
+    if (!session.authenticated) {
+      throw new Error('Не авторизовано');
+    }
+    // Справжній viewer залишається viewer; admin зберігає роль і бачить Settings.
+    return { user: session.user || '', role: session.role === 'viewer' ? 'viewer' : 'admin' };
   }
 
   private handleError(error: unknown) {

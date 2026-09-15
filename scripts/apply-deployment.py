@@ -125,7 +125,7 @@ def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.r
         if missing:
             raise RuntimeError("Missing services in inventory: " + ", ".join(sorted(missing)))
         ready = {item.get("Service") for item in rows
-                 if ((item.get("State") == "running" and (item.get("Health") or "healthy") == "healthy")
+                 if ((item.get("State") == "running" and item.get("Health") == "healthy")
                      or (item.get("Service") == "migrate" and item.get("State") == "exited" and item.get("ExitCode", 0) == 0))}
         failed = [item.get("Service") for item in rows
                   if item.get("Health") == "unhealthy"
@@ -138,6 +138,30 @@ def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.r
         if time.monotonic() >= deadline:
             raise RuntimeError("Selected services did not become healthy before timeout")
         time.sleep(5)
+
+
+def _restore_runtime(compose: list[str], previous_services: set[str], new_services: set[str],
+                     runner=subprocess.run) -> None:
+    """Restore the previously-working service/runtime set after a partial compose apply.
+
+    On a failed deployment the caller has already restored the ``.env`` and
+    ``deployment-plan.json`` configuration, but the containers may have been
+    partially started, stopped or replaced for the *new* service set.  This
+    helper brings the previous services back up and removes any service that was
+    only introduced by the failed apply, so the appliance returns to the last
+    known-good runtime instead of a half-applied one.  Rollback failures must
+    never mask the original deployment error.
+    """
+    superseded = sorted(new_services - previous_services)
+    try:
+        if previous_services:
+            runner([*compose, "up", "-d", *sorted(previous_services)],
+                   check=False, timeout=900)
+        if superseded:
+            runner([*compose, "stop", *superseded], check=False, timeout=600)
+            runner([*compose, "rm", "-f", *superseded], check=False, timeout=600)
+    except Exception:
+        pass
 
 
 def apply(root: Path, runner=subprocess.run) -> dict:
@@ -171,6 +195,23 @@ def apply(root: Path, runner=subprocess.run) -> dict:
     plan_path = root / "config/deployment-plan.json"
     previous_env = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     previous_plan = plan_path.read_text(encoding="utf-8") if plan_path.exists() else ""
+    previous_services = set()
+    if plan_path.exists():
+        try:
+            previous_services = set(json.loads(plan_path.read_text(encoding="utf-8")).get("services", []))
+        except (OSError, ValueError):
+            previous_services = set()
+    new_services = set(plan["services"])
+
+    def compose_command() -> list[str]:
+        command = ["docker", "compose", "--env-file", str(root / ".env"),
+                   "-f", str(root / "docker-compose.yml")]
+        gpu_vendor = environment_value(root / ".env", "GPU_VENDOR")
+        if gpu_vendor == "amd" and (root / "docker-compose.amd.yml").is_file():
+            command.extend(["-f", str(root / "docker-compose.amd.yml")])
+        elif gpu_vendor == "nvidia" and (root / "docker-compose.nvidia.yml").is_file():
+            command.extend(["-f", str(root / "docker-compose.nvidia.yml")])
+        return command
 
     def restore() -> None:
         if previous_env:
@@ -181,6 +222,9 @@ def apply(root: Path, runner=subprocess.run) -> dict:
             plan_path.write_text(previous_plan, encoding="utf-8")
         else:
             plan_path.unlink(missing_ok=True)
+        # A failed apply may have partially started/stopped the new service set;
+        # restore the previously-working runtime so the host is not left half-applied.
+        _restore_runtime(compose_command(), previous_services, new_services, runner)
 
     update_env(env_path, {
         "NODE_ROLE": role,
@@ -197,12 +241,7 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         "REGISTRATION_TOKEN": "",
     })
     atomic_json(plan_path, plan)
-    compose = ["docker", "compose", "--env-file", str(root / ".env"),
-               "-f", str(root / "docker-compose.yml")]
-    if environment_value(root / ".env", "GPU_VENDOR") == "amd" and (root / "docker-compose.amd.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.amd.yml")])
-    if environment_value(root / ".env", "GPU_VENDOR") == "nvidia" and (root / "docker-compose.nvidia.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
+    compose = compose_command()
     selected = set(plan["services"])
     all_services = BOOTSTRAP_SERVICES | {service for definition in roles.values()
                                         if isinstance(definition, dict)

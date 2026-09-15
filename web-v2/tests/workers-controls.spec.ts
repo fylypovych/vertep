@@ -9,7 +9,7 @@ function mockApi(page: any) {
   return page.route('**/api/**', async (route: any) => {
     const r = route.request();
     const p = new URL(r.url()).pathname;
-    if (p.endsWith('/session')) return route.fulfill({ json: { username: 'admin', role: 'admin' } });
+    if (p.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', role: 'admin' } });
     if (p.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' }, version: '0.0.1.30' } });
     if (p === '/api/workers' && r.method() === 'GET') return route.fulfill({ json: mockWorkers });
     if (p.endsWith('/settings/secrets')) return route.fulfill({ json: { secrets: {} } });
@@ -30,7 +30,7 @@ test.describe('Workers', () => {
   test('Деталі воркера', async ({ page }) => {
     await page.route('**/api/**', async (route: any) => {
       const p = new URL(route.request().url()).pathname;
-      if (p.endsWith('/session')) return route.fulfill({ json: { username: 'admin', role: 'admin' } });
+      if (p.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', role: 'admin' } });
       if (p.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
       if (p === '/api/nodes/node_1') return route.fulfill({ json: { ...mockWorkers[0], hardware: { cpu_count: 8, ram_total_mb: 16384, hostname: 'gpu-box' }, runtime: {}, self_test: null, update_state: {} } });
       if (p.endsWith('/system/roles')) return route.fulfill({ json: { active_roles: [], available_roles: [] } });

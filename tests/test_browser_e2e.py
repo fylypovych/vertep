@@ -65,6 +65,25 @@ def _mock_session(page, role="admin"):
     }))
 
 
+def _attach_error_collector(page):
+    """Shared pageerror + critical console-error collector for all critical tests.
+
+    Returns ``(page_errors, console_errors)`` lists.  Every critical browser
+    test should call this to avoid false-green results from swallowed errors.
+    """
+    page_errors = []
+    console_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    page.on("console", lambda msg: console_errors.append(msg.text()) if msg.type == "error" else None)
+    return page_errors, console_errors
+
+
+def _assert_no_js_errors(page_errors, console_errors):
+    """Assert both collected error lists are empty."""
+    assert page_errors == [], f"pageerror: {page_errors}"
+    assert console_errors == [], f"console.error: {console_errors}"
+
+
 def test_setup_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -139,6 +158,7 @@ def test_character_create_and_edit_use_localized_form():
         errors = []
         saved = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         character = {
             "id": "did_samogon", "name": "Дід Самогонщик", "language": "uk",
@@ -182,6 +202,7 @@ def test_worker_wizard_role_labels_are_ukrainian():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         _mock_status(page)
         page.goto(f"{BASE_URL}/workers")
         expect(page.locator("[data-testid='workers-page']")).to_be_visible()
@@ -218,6 +239,7 @@ def test_job_detail_view_and_edit():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
 
         job_id = "test-job-001"
@@ -283,6 +305,7 @@ def test_dashboard_job_status_counts():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.19",
@@ -347,6 +370,7 @@ def test_settings_shows_resources_or_unavailable():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.19",
@@ -387,6 +411,7 @@ def test_dashboard_architecture_shows_core_and_workers():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
             "version": "0.0.1.19",
@@ -421,6 +446,7 @@ def test_logs_page_loads_empty():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/logs")
@@ -436,6 +462,7 @@ def test_logs_page_shows_entries():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[
             {"level": "INFO", "message": "Core started", "timestamp": "2026-09-08T10:00:00Z", "node_name": "core"},
@@ -455,6 +482,7 @@ def test_logs_page_shows_api_error():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(status=500, json={"detail": "Internal error"}))
         page.goto(f"{BASE_URL}/logs")
@@ -496,6 +524,7 @@ def test_job_detail_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/jobs/j-001", lambda route: route.fulfill(json={
             "job_id": "j-001", "topic": "Test Job", "status": "READY",
@@ -528,6 +557,7 @@ def test_queue_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/tasks/queue**", lambda route: route.fulfill(json={
             "ready": [], "inflight": [],
@@ -547,6 +577,7 @@ def test_alerts_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/alerts**", lambda route: route.fulfill(json=[
             {"severity": "error", "type": "JOB_FAILED", "message": "Test failure", "job_id": "j-001"},
@@ -565,6 +596,7 @@ def test_health_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/health**", lambda route: route.fulfill(json={
             "status": "healthy", "service": "core", "jobs": 0,
@@ -591,6 +623,7 @@ def test_published_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/jobs**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/published")
@@ -609,6 +642,7 @@ def test_workers_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/workers**", lambda route: route.fulfill(json=[
             {"node_id": "n1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
@@ -628,6 +662,7 @@ def test_worker_detail_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/nodes/n1**", lambda route: route.fulfill(json={
             "node_id": "n1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
@@ -650,6 +685,7 @@ def test_characters_page_loads():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
         page.route("**/api/characters**", lambda route: route.fulfill(json=[
             {"id": "char1", "name": "Дід Самогон", "language": "uk", "enabled": True,
@@ -843,6 +879,7 @@ def test_script_approval_happy_path():
         page.route("**/api/channels/types**", lambda route: route.fulfill(json=[]))
         page.route("**/api/brands/**/channels**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs/job-script-01")
+        page.wait_for_load_state('networkidle')
 
         expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
         expect(page.locator("[data-testid='job-script']")).to_be_visible()
@@ -876,14 +913,19 @@ def test_script_revision_happy_path():
             route.fulfill(json=revised_job)
 
         page.on("dialog", lambda dialog: dialog.accept("зробити сцени коротшими"))
+        def handle_job_detail(route):
+            if route.request.method == "POST" and "/script/revision" in route.request.url:
+                return  # Let the specific handler handle it
+            route.fulfill(json=job)
+        page.route("**/api/jobs/job-script-01**", handle_job_detail)
         page.route("**/api/jobs/job-script-01/script/revision", handle_revision)
-        page.route("**/api/jobs/job-script-01**", lambda route: route.fulfill(json=job))
         page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
         page.route("**/api/brands**", lambda route: route.fulfill(json=[]))
         page.route("**/api/workflows**", lambda route: route.fulfill(json=[]))
         page.route("**/api/channels/types**", lambda route: route.fulfill(json=[]))
         page.route("**/api/brands/**/channels**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs/job-script-01")
+        page.wait_for_load_state('networkidle')
 
         page.locator("[data-testid='revision-script-button']").click()
         assert revised is not None, "script/revision call was not made"
@@ -948,6 +990,7 @@ def test_storyboard_review_with_artifacts_and_approve():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
 
         job = _storyboard_job()
@@ -985,6 +1028,7 @@ def test_storyboard_stale_version_conflict():
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        _mock_session(page)
         _mock_status(page)
 
         job = _storyboard_job()
@@ -1079,6 +1123,7 @@ def test_setup_wizard_configured_redirects_home():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        _mock_session(page)
         _mock_setup(page, configured=True)
         page.goto(f"{BASE_URL}/setup?token=ci")
         page.wait_for_timeout(500)
@@ -1395,6 +1440,7 @@ def test_localization_scan_no_raw_english_chrome():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_chrome_data(page)
         page.goto(f"{BASE_URL}/")
 
@@ -1407,6 +1453,7 @@ def test_localization_scan_no_raw_english_chrome():
         forbidden = ["Workers", "Timeline", "Task Type", "Queue View", "Status Bar"]
         found = [term for term in forbidden if term in nav_text or term in chrome_text]
         assert found == [], f"raw English UI labels found in chrome: {found}"
+        _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
 
@@ -1440,6 +1487,7 @@ def test_loading_state_resolves_to_content_or_error():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
@@ -1453,4 +1501,5 @@ def test_loading_state_resolves_to_content_or_error():
             "[data-testid='empty-state'], [data-testid='error-state'], [data-testid='workers-table-section'], [data-testid='stat-workers']"
         )
         expect(terminal_states.first).to_be_visible()
+        _assert_no_js_errors(page_errors, console_errors)
         browser.close()

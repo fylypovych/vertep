@@ -5,7 +5,7 @@ function mockApi(page: any, overrides: Record<string, any> = {}) {
     const r = route.request();
     const p = new URL(r.url()).pathname;
     const m = r.method();
-    if (p.endsWith('/session')) return route.fulfill({ json: { username: 'admin', role: 'admin' } });
+    if (p.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', role: 'admin' } });
     if (p.endsWith('/status')) return route.fulfill({ json: overrides.status || { system: { state: 'NORMAL' }, version: '0.0.1.30' } });
     if (p.endsWith('/settings/secrets') && m === 'GET') return route.fulfill({ json: { secrets: overrides.secrets || {} } });
     if (p.endsWith('/settings/secrets') && m === 'PUT') return route.fulfill({ json: { saved: true } });

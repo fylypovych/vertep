@@ -303,3 +303,52 @@ def test_apply_deployment_preserves_status_progress_result_on_failure(tmp_path):
     assert status["role"] == "gpu"
     assert "services" in status
     assert "additional_roles" in status
+def test_wait_for_healthy_rejects_missing_health_evidence(tmp_path):
+    """A running container with no health data must not count as healthy."""
+    root = fixture(tmp_path)
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = '{"Service": "worker", "State": "running", "Health": ""}\n'
+            return Result()
+        return None
+    # Missing Health evidence is neither ready nor failed -> only a timeout can
+    # resolve it, proving that absent evidence does not shortcut to success.
+    with pytest.raises(RuntimeError, match="timeout"):
+        mod.wait_for_healthy(["docker", "compose"], {"worker"}, runner=runner, timeout_seconds=0)
+
+
+def test_apply_rolls_back_previous_runtime_set_after_partial_compose(tmp_path):
+    """A failed apply re-starts the previous service set and removes superseded services."""
+    root = fixture(tmp_path)
+    mod = module()
+    roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
+    previous = mod.create_plan(roles, "text", "0.0.0.20")
+    (root / "config/deployment-plan.json").write_text(json.dumps(previous), encoding="utf-8")
+
+    recorded = []
+    def runner(command, **kwargs):
+        recorded.append(command)
+        if "ps" in command:
+            class Result:
+                stdout = ('{"Service": "comfyui", "State": "running", "Health": "healthy"}\n'
+                          '{"Service": "update-agent", "State": "running", "Health": "healthy"}\n'
+                          '{"Service": "worker", "State": "running", "Health": "unhealthy"}\n')
+            return Result()
+        return None
+
+    with pytest.raises(RuntimeError, match="health"):
+        mod.apply(root, runner=runner)
+
+    # Configuration restored back to the previous ("text") role.
+    assert "NODE_ROLE=gpu" not in (root / ".env").read_text(encoding="utf-8")
+    restored = json.loads((root / "config/deployment-plan.json").read_text(encoding="utf-8"))
+    assert restored["role"] == "text"
+
+    up_commands = [c for c in recorded if c[0] == "docker" and c[1] == "compose" and "up" in c]
+    # Rollback re-started the previous set, including a service not in the new gpu role.
+    assert any("ollama" in c and "comfyui" not in c for c in up_commands)
+    # The service introduced only by the failed gpu apply (comfyui) was torn down.
+    assert any("stop" in c and "comfyui" in c for c in recorded)
+    assert any("rm" in c and "-f" in c and "comfyui" in c for c in recorded)

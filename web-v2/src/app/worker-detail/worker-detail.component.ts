@@ -43,6 +43,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                 <div><dt class="text-slate-500">ID</dt><dd class="font-mono text-xs">{{ node()!.node_id }}</dd></div>
                 <div><dt class="text-slate-500">Роль</dt><dd>{{ roleName(node()!.role) }}</dd></div>
                 <div><dt class="text-slate-500">Статус</dt><dd>{{ nodeStatus(node()!.status) }}</dd></div>
+                <div><dt class="text-slate-500">Runtime статус</dt><dd>{{ node()!.runtime_status || '—' }}</dd></div>
                 <div><dt class="text-slate-500">Runtime версія</dt><dd>{{ node()!.runtime_version || node()!.version || '—' }}</dd></div>
                 <div><dt class="text-slate-500">GPU</dt><dd>{{ node()!.gpu_name || '—' }}</dd></div>
                 <div><dt class="text-slate-500">VRAM</dt><dd>{{ node()!.vram_mb ? (node()!.vram_mb + ' MB') : '—' }}@if (node()!.free_vram_mb) { ({{ node()!.free_vram_mb }} MB вільно) }</div>

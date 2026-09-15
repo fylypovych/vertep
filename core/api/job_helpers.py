@@ -179,29 +179,28 @@ def _enqueue_tts_task(job, scene) -> dict:
     return queued
 
 
-def _script_task_for(job, system_prompt: str, character: dict | None) -> dict:
+def _script_task_for(job, system_prompt: str, character: dict | None, revision: str | None = None) -> dict:
     return {"job_id": job.job_id, "task": "script", "priority": job.priority,
             "topic": job.topic, "task_id": None,
             "system_prompt": system_prompt, "character": character or {},
-            "task_type": "text"}
+            "task_type": "text", "revision": revision}
 
 
-def _enqueue_script_task(job_store, job, system_prompt: str = "", character: dict | None = None) -> dict | None:
+def _enqueue_script_task(job_store, job, system_prompt: str = "", character: dict | None = None, revision: str | None = None) -> dict | None:
     workers = list(job_store.workers.values())
     has_text_worker = any(
         "text" in (worker.get("supported_tasks") or []) or worker.get("role") == "text"
         for worker in workers
     )
-    if not has_text_worker and os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+    if not has_text_worker and os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
         _generate_script_local(job_store, job, system_prompt, character)
         return None
-    task = _script_task_for(job, system_prompt, character)
+    task = _script_task_for(job, system_prompt, character, revision)
     queued = task_queue.enqueue(task)
     job.script_task_id = queued["task_id"]
     job.active_task_id = queued["task_id"]
     job_store.repository.record_task(queued, "QUEUED")
     job_store.event(job, f"SCRIPT TASK {queued['task_id']} QUEUED")
-    job_store.update(job, JobStatus.SCRIPT_GENERATING, f"SCRIPT TASK {queued['task_id']} ASSIGNED")
     return queued
 
 
@@ -235,27 +234,12 @@ def _write_script_files(store, job) -> None:
 def _handle_script_result(store, job, result, artifacts) -> None:
     success = result.get("success", False)
     task_id = result.get("task_id")
+    worker_name = result.get("worker_name")
+
     if task_id and job.script_task_id == task_id:
         job.script_task_id = None
-    if success:
-        script_artifact = next((a for a in artifacts if a.get("kind") == "script"), None)
-        if script_artifact:
-            import base64
-            data = base64.b64decode(script_artifact["data_base64"])
-            data_dict = json.loads(data.decode("utf-8"))
-            job.script = normalize_script(data_dict, job.topic)
-        job.active_task_id = None
-        job.script_attempt = 0
-        job.script_error = None
-        _write_script_files(store, job)
-        store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT GENERATED; AWAITING APPROVAL")
-        if job.source.startswith("telegram:"):
-            from ..pipeline import _send_script_approval_to_telegram
-            try:
-                _send_script_approval_to_telegram(job)
-            except Exception as exc:
-                store.event(job, f"TELEGRAM SCRIPT APPROVAL NOTIFICATION FAILED: {exc}")
-    else:
+
+    if not success:
         error = result.get("error") or "UNKNOWN SCRIPT GENERATION ERROR"
         job.script_error = error
         store.event(job, f"SCRIPT TASK FAILED: {error}")
@@ -265,6 +249,45 @@ def _handle_script_result(store, job, result, artifacts) -> None:
             _enqueue_script_task(store, job, system_prompt, character)
         else:
             store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
+        return
+
+    script_artifact = next((a for a in artifacts if a.get("kind") == "script"), None)
+    if not script_artifact:
+        store.event(job, "SCRIPT TASK COMPLETED BUT NO SCRIPT ARTIFACT")
+        job.script_attempt = (job.script_attempt or 0) + 1
+        if job.script_attempt <= job.max_retries:
+            system_prompt, character = _load_character_prompt(job)
+            _enqueue_script_task(store, job, system_prompt, character)
+        else:
+            store.update(job, JobStatus.SCRIPT_FAILED, "SCRIPT FAILED: NO ARTIFACT AFTER RETRIES")
+        return
+
+    try:
+        import base64
+        data = base64.b64decode(script_artifact["data_base64"])
+        data_dict = json.loads(data.decode("utf-8"))
+        job.script = normalize_script(data_dict, job.topic)
+    except (KeyError, ValueError, UnicodeDecodeError) as exc:
+        store.event(job, f"SCRIPT ARTIFACT MALFORMED: {exc}")
+        job.script_attempt = (job.script_attempt or 0) + 1
+        if job.script_attempt <= job.max_retries:
+            system_prompt, character = _load_character_prompt(job)
+            _enqueue_script_task(store, job, system_prompt, character)
+        else:
+            store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED: MALFORMED ARTIFACT AFTER RETRIES")
+        return
+
+    job.active_task_id = None
+    job.script_attempt = 0
+    job.script_error = None
+    _write_script_files(store, job)
+    store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT GENERATED; AWAITING APPROVAL")
+    if job.source.startswith("telegram:"):
+        from ..pipeline import _send_script_approval_to_telegram
+        try:
+            _send_script_approval_to_telegram(job)
+        except Exception as exc:
+            store.event(job, f"TELEGRAM SCRIPT APPROVAL NOTIFICATION FAILED: {exc}")
 
 
 def _has_publisher_worker(job_store) -> bool:
@@ -286,7 +309,7 @@ def _publish_task_for(job, channel: str) -> dict:
 
 def _enqueue_publish_task(job_store, job, channel: str) -> dict | None:
     has_publisher = _has_publisher_worker(job_store)
-    if not has_publisher and os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+    if not has_publisher and os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
         _publish_local(job_store, job, channel)
         return None
     task = _publish_task_for(job, channel)
@@ -294,7 +317,6 @@ def _enqueue_publish_task(job_store, job, channel: str) -> dict | None:
     job.publish_task_ids[queued["task_id"]] = channel
     job_store.repository.record_task(queued, "QUEUED")
     job_store.event(job, f"PUBLISH TASK {queued['task_id']} QUEUED FOR {channel}")
-    job_store.update(job, JobStatus.PUBLISHING, f"PUBLISHING {channel}: TASK {queued['task_id']} ASSIGNED")
     return queued
 
 
@@ -312,6 +334,37 @@ def _publish_local(job_store, job, channel: str) -> dict:
     return result
 
 
+def _validate_publication_receipt(receipt: dict, expected_channel: str) -> tuple[bool, str | None]:
+    """Validate a publication receipt schema and channel match.
+
+    Returns (is_valid, error_message). Receipt must have:
+    - channel (matches expected)
+    - status (PUBLISHED, FAILED, NOT_CONFIGURED)
+    - remote_id (for PUBLISHED)
+    - url (for PUBLISHED)
+    - timestamp
+    - error (for FAILED/NOT_CONFIGURED)
+    """
+    if not isinstance(receipt, dict):
+        return False, "Receipt must be a dict"
+    if receipt.get("channel") != expected_channel:
+        return False, f"Receipt channel mismatch: expected {expected_channel}, got {receipt.get('channel')}"
+    status = receipt.get("status")
+    if status not in {"PUBLISHED", "FAILED", "NOT_CONFIGURED"}:
+        return False, f"Invalid receipt status: {status}"
+    if not isinstance(receipt.get("timestamp"), (int, float)):
+        return False, "Receipt must have numeric timestamp"
+    if status == "PUBLISHED":
+        if not receipt.get("remote_id"):
+            return False, "PUBLISHED receipt must have remote_id"
+        if not receipt.get("url"):
+            return False, "PUBLISHED receipt must have url"
+    elif status in {"FAILED", "NOT_CONFIGURED"}:
+        if not receipt.get("error"):
+            return False, f"{status} receipt must have error"
+    return True, None
+
+
 def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> None:
     success = result.get("success", False)
     task_id = result.get("task_id")
@@ -319,34 +372,100 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
         job.publish_task_ids.pop(task_id, None)
     if job.active_task_id == task_id:
         job.active_task_id = None
+
+    # Initialize per-channel retry tracking
+    if not hasattr(job, 'publish_retry_count'):
+        job.publish_retry_count = {}
+    if channel not in job.publish_retry_count:
+        job.publish_retry_count[channel] = 0
+
+    # Initialize published channels set for idempotency
+    if not hasattr(job, 'published_channels'):
+        job.published_channels = set()
+
     if success:
         receipt_artifact = next((a for a in artifacts if a.get("kind") == "publication_receipt"), None)
-        if receipt_artifact:
-            import base64 as _b64
+        if not receipt_artifact:
+            job_store.event(job, f"PUBLISH {channel}: NO RECEIPT ARTIFACT")
+            job.publish_error = "NO RECEIPT ARTIFACT"
+            job.publish_retry_count[channel] += 1
+            if job.publish_retry_count[channel] <= job.max_retries:
+                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel} (no receipt)")
+                _enqueue_publish_task(job_store, job, channel)
+            else:
+                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": "NO RECEIPT AFTER RETRIES"})
+                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: NO RECEIPT AFTER RETRIES")
+            return
+
+        import base64 as _b64
+        try:
             data = _b64.b64decode(receipt_artifact["data_base64"])
             receipt = json.loads(data.decode("utf-8"))
-            job.publication_results[channel] = receipt
-            if receipt.get("status") == "PUBLISHED":
-                job.published_to.append(channel)
-            elif receipt.get("status") == "NOT_CONFIGURED":
-                job.publish_error = receipt.get("error", "NOT_CONFIGURED")
-                job_store.event(job, f"PUBLISH {channel} NOT CONFIGURED; NO RETRY")
-                return
+        except (KeyError, ValueError, UnicodeDecodeError) as exc:
+            job_store.event(job, f"PUBLISH {channel}: MALFORMED RECEIPT: {exc}")
+            job.publish_error = f"MALFORMED RECEIPT: {exc}"
+            job.publish_retry_count[channel] += 1
+            if job.publish_retry_count[channel] <= job.max_retries:
+                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel} (malformed receipt)")
+                _enqueue_publish_task(job_store, job, channel)
             else:
-                job.publish_error = receipt.get("error", "UNKNOWN")
-        job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH TASK {task_id} COMPLETED FOR {channel}")
+                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": f"MALFORMED RECEIPT: {exc}"})
+                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: MALFORMED RECEIPT AFTER RETRIES")
+            return
+
+        # Validate receipt schema
+        valid, error = _validate_publication_receipt(receipt, channel)
+        if not valid:
+            job_store.event(job, f"PUBLISH {channel}: INVALID RECEIPT: {error}")
+            job.publish_error = f"INVALID RECEIPT: {error}"
+            job.publish_retry_count[channel] += 1
+            if job.publish_retry_count[channel] <= job.max_retries:
+                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel} (invalid receipt)")
+                _enqueue_publish_task(job_store, job, channel)
+            else:
+                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": f"INVALID RECEIPT: {error}"})
+                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: INVALID RECEIPT AFTER RETRIES")
+            return
+
+        receipt_status = receipt.get("status")
+
+        # Idempotency: skip if already published
+        if channel in job.published_channels and receipt_status == "PUBLISHED":
+            job_store.event(job, f"PUBLISH {channel}: ALREADY PUBLISHED (idempotent skip)")
+            return
+
+        job.publication_results[channel] = receipt
+
+        if receipt_status == "PUBLISHED":
+            job.published_channels.add(channel)
+            if channel not in job.published_to:
+                job.published_to.append(channel)
+            job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH TASK {task_id} COMPLETED FOR {channel}")
+        elif receipt_status == "NOT_CONFIGURED":
+            job.publish_error = receipt.get("error", "NOT_CONFIGURED")
+            job_store.event(job, f"PUBLISH {channel} NOT CONFIGURED; NO RETRY")
+            return
+        else:  # FAILED
+            job.publish_error = receipt.get("error", "UNKNOWN")
+            job.publish_retry_count[channel] += 1
+            if job.publish_retry_count[channel] <= job.max_retries:
+                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel}")
+                _enqueue_publish_task(job_store, job, channel)
+            else:
+                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": job.publish_error})
+                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED AFTER {job.publish_retry_count[channel]} ATTEMPTS")
     else:
         error = result.get("error") or "UNKNOWN PUBLISH ERROR"
         job.publish_error = error
         job_store.event(job, f"PUBLISH TASK FAILED for {channel}: {error}")
-        job.publish_attempt = (job.publish_attempt or 0) + 1
-        if job.publish_attempt <= job.max_retries:
-            job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_attempt}/{job.max_retries}: {channel}")
+        job.publish_retry_count[channel] += 1
+        if job.publish_retry_count[channel] <= job.max_retries:
+            job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel}")
             _enqueue_publish_task(job_store, job, channel)
         else:
             job.publish_error = error
             job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": error})
-            job_store.update(job, JobStatus.FAILED, f"PUBLISH FAILED AFTER {job.publish_attempt} ATTEMPTS")
+            job_store.update(job, JobStatus.FAILED, f"PUBLISH FAILED AFTER {job.publish_retry_count[channel]} ATTEMPTS")
 
 
 def _recover_stale_workers() -> None:
@@ -372,12 +491,12 @@ def _recover_stale_workers() -> None:
             store.event(job, f"{worker.get('node_name')} OFFLINE; TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
-        elif job and job.script_task_id == current_task and job.status == JobStatus.SCRIPT_GENERATING:
+        elif job and job.script_task_id == current_task and job.status in {JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING}:
             task_queue.release(current_task)
             job.script_task_id = None
             job.assigned_worker = None
-            from ..pipeline import prepare_job_safe
-            prepare_job_safe(store, job)
+            system_prompt, character = _load_character_prompt(job)
+            _enqueue_script_task(store, job, system_prompt, character)
             store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
@@ -385,7 +504,7 @@ def _recover_stale_workers() -> None:
             task_queue.release(current_task)
             channel = job.publish_task_ids.pop(current_task, None)
             job.assigned_worker = None
-            _enqueue_publish_task(job_store, job, channel)
+            _enqueue_publish_task(store, job, channel)
             store.event(job, f"PUBLISH TASK {current_task} REQUEUED FOR {channel}")
             worker["current_job"] = None
             worker["current_task"] = None

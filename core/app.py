@@ -89,6 +89,7 @@ from .api.nodes import (router as nodes_router,
     registration_token, register_node, nodes, control_node, disable_node, renew_node_credentials)
 from .api.observability import (router as observability_router,
     health, watchdog_report, health_history, security_check, logs, ingest_logs, metrics, prometheus_metrics, alerts, maintenance_cleanup)
+from .api.real_tests import router as real_tests_router
 from .security import (_authenticate_user, _hash_secret, _session_token, _valid_session,
                        _valid_worker_request, _valid_worker_token, _verify_hash, _worker_tokens)
 
@@ -304,6 +305,7 @@ app.include_router(workers_router)
 app.include_router(nodes_router)
 app.include_router(observability_router)
 app.include_router(storyboards_router)
+app.include_router(real_tests_router)
 
 @app.get("/setup", include_in_schema=False)
 def setup_page(request: Request):
@@ -1370,14 +1372,18 @@ def _handle_script_callback(callback: dict, chat_id: str, action: str, payload: 
 
 def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: str) -> dict:
     callback_id = str(callback.get("id", ""))
-    job_id = payload
+    # Payload may be "job_id" (legacy) or "job_id:version" (version-bound preview)
+    parts = payload.split(":", 1)
+    job_id = parts[0]
+    expected_version = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
     job = store.jobs.get(job_id)
     if not job:
         return TelegramAdapter().answer_callback(callback_id, "Job не знайдено")
-    from .pipeline import approve_video, request_video_revision, regenerate_video
+    from .pipeline import approve_video, request_video_revision
     try:
         if action == "vid_ok":
-            job = approve_video(store, job, f"telegram:{chat_id}")
+            job = approve_video(store, job, f"telegram:{chat_id}",
+                                expected_version=expected_version)
             text = f"✅ Відео {job_id} схвалено."
         elif action == "vid_edit":
             if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
@@ -1387,15 +1393,15 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
             store.event(job, "VIDEO AWAITS REVISION TEXT")
             text = "Надішліть одним повідомленням, що потрібно змінити у відео."
         elif action == "vid_regen":
+            if job.video_regenerating:
+                return TelegramAdapter().answer_callback(callback_id, "🔄 Відео вже генерується")
             if job.status == JobStatus.VIDEO_PENDING_APPROVAL:
                 job = request_video_revision(store, job, "regenerate", f"telegram:{chat_id}")
-                executor.submit(_finalize_video_regenerate, job)
-                text = "🔄 Перегенеровую відео…"
-            elif job.status == JobStatus.VIDEO_REVISION_REQUESTED:
-                executor.submit(_finalize_video_regenerate, job)
-                text = "🔄 Перегенеровую відео…"
-            else:
+            elif job.status != JobStatus.VIDEO_REVISION_REQUESTED:
                 text = f"Неможливо перегенерувати (status={job.status.value})"
+                return TelegramAdapter().answer_callback(callback_id, text)
+            executor.submit(_finalize_video_regenerate, job)
+            text = "🔄 Перегенеровую відео…"
         elif action == "vid_reject":
             store.update(job, JobStatus.CANCELLED, "VIDEO REJECTED via Telegram")
             text = f"❌ Відео {job_id} відхилено."
@@ -1407,23 +1413,38 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
 
 
 def _finalize_video_regenerate(job) -> None:
-    """Re-run assembly for video revision."""
+    """Re-run assembly for video revision using stored artifacts."""
     try:
         from .pipeline import finalize_job_safe
         job = store.jobs.get(job.job_id)
         if not job:
             return
+        # Issue #49: never resurrect a cancelled/paused job during (async) regeneration.
+        if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
+            logger.info("Video regeneration skipped: job is %s", job.status.value,
+                        extra={"job_id": job.job_id})
+            return
         from pathlib import Path
-        image_dir = store.root / job.job_id / "frames"
-        images = sorted(image_dir.glob("*.png")) if image_dir.exists() else []
+        # Use registered artifacts (images/video_scene clips) — not ad-hoc glob
+        from .artifacts import _digest
+        image_dir = store.root / job.job_id / "images"
+        images = sorted(image_dir.glob("*.*")) if image_dir.exists() else []
         if not images:
-            image_dir = store.root / job.job_id / "storyboard"
-            images = sorted(image_dir.glob("**/*.png"), key=lambda p: p.name)
+            storyboard_dir = store.root / job.job_id / "storyboard"
+            images = sorted(storyboard_dir.glob("**/*.png"), key=lambda p: p.name) if storyboard_dir.exists() else []
+        if not images:
+            frames_dir = store.root / job.job_id / "frames"
+            images = sorted(frames_dir.glob("*.png"), key=lambda p: p.name) if frames_dir.exists() else []
         if images:
-            job.status = JobStatus.ASSETS_READY
+            with store.lock:
+                job.status = JobStatus.ASSETS_READY
+                job.video_regenerating = True
+                store._save(job)
             finalize_job_safe(store, job, images)
         else:
-            store.update(job, JobStatus.FAILED, "NO IMAGES FOR RE-ASSEMBLY")
+            with store.lock:
+                job.video_regenerating = False
+                store.update(job, JobStatus.VIDEO_FAILED, "NO IMAGES FOR RE-ASSEMBLY")
             TelegramAdapter().send_message(
                 job.source.split(":", 2)[1],
                 f"❌ Не знайдено кадрів для перезбірки {job.job_id}.",
@@ -1431,6 +1452,8 @@ def _finalize_video_regenerate(job) -> None:
     except Exception as error:
         logger.error("Video regeneration failed: %s", error, extra={"job_id": job.job_id})
         try:
+            with store.lock:
+                job.video_regenerating = False
             chat_id = job.source.split(":", 2)[1]
             TelegramAdapter().send_message(chat_id, f"❌ Помилка перегенерування {job.job_id}: {error}")
         except Exception:

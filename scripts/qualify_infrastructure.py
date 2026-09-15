@@ -45,6 +45,7 @@ SCENARIOS = [
         "name": "Clean Ubuntu-compatible bootstrap та First Run",
         "automated": ["tests/test_bootstrap_wizard.py", "tests/test_first_run.py"],
         "rt": "rt::S01 clean bootstrap + First Run Wizard",
+        "rt_issue": 40,
         "description": "Automated/disposable qualification чистого Ubuntu-сумісного "
                        "bootstrap: roles, секрети, контейнери, health check.",
     },
@@ -53,6 +54,7 @@ SCENARIOS = [
         "name": "CORE + Worker enrollment, certificates, self-test, task/result, remote-control",
         "automated": ["tests/test_node_registry.py", "tests/test_fleet_controls.py", "tests/test_worker_self_test.py"],
         "rt": "rt::S02 фізичний multi-host enrollment + certificates",
+        "rt_issue": 42,
         "description": "Реєстрація вузлів, сертифікати, self-test, task/result "
                        "та remote-control сценарії між CORE та Worker.",
     },
@@ -61,6 +63,7 @@ SCENARIOS = [
         "name": "GPU/ComfyUI-compatible integration harness",
         "automated": ["tests/test_core_generation_gate.py", "tests/test_compute_distributed.py"],
         "rt": "rt::S03 фізична GPU + ComfyUI workflow",
+        "rt_issue": 34,
         "description": "Інтеграційний harness сумісний з GPU/ComfyUI без вимоги "
                        "фізичної GPU: генерація через mock/fallback, execution op.",
     },
@@ -69,6 +72,7 @@ SCENARIOS = [
         "name": "Backup → data mutation → restore → health verification",
         "automated": ["tests/test_role_services.py"],
         "rt": "rt::S04 реальний backup/restore стенд",
+        "rt_issue": 35,
         "description": "Резервна копія, мутація даних, відновлення та перевірка "
                        "здоров'я у контрольованому середовищі.",
     },
@@ -77,6 +81,7 @@ SCENARIOS = [
         "name": "Existing-install migration/persistence harness",
         "automated": ["tests/test_persistent_user_data.py", "tests/test_deployment_plan.py"],
         "rt": "rt::S05 міграція існуючої інсталяції",
+        "rt_issue": 35,
         "description": "characters/brands/workflows/jobs → update/recreate/"
                        "rollback/restore simulation без втрати даних.",
     },
@@ -85,6 +90,7 @@ SCENARIOS = [
         "name": "Safe Update fault-injection",
         "automated": ["tests/test_safe_update.py", "tests/test_rolling_update.py", "tests/test_updates.py"],
         "rt": "rt::S06 real update interruption/restart/rollback",
+        "rt_issue": 35,
         "description": "rolling/canary, interruption/restart, rollback/recovery "
                        "з інжекцією відмов під час оновлення.",
     },
@@ -93,6 +99,7 @@ SCENARIOS = [
         "name": "Release trust automated checks",
         "automated": ["tests/test_key_lifecycle.py", "tests/test_update_security.py", "tests/test_release_qualification.py"],
         "rt": "rt::S07 key ceremony + recovery",
+        "rt_issue": 33,
         "description": "signed artifacts, tamper/revoke/downgrade, key rotation "
                        "та recovery procedure.",
     },
@@ -101,6 +108,7 @@ SCENARIOS = [
         "name": "Publisher sandbox/fake integration з перевірюваним receipt",
         "automated": ["tests/test_publisher_live_adapters.py", "tests/test_publish_task_helpers.py"],
         "rt": "rt::S08 live platform publish receipt",
+        "rt_issue": 47,
         "description": "Sandbox/fake publisher із перевірюваним receipt публікації.",
     },
 ]
@@ -149,6 +157,22 @@ def collect_scenarios() -> list[dict]:
         entry["automated"] = [_resolve(path) for path in scenario.get("automated", [])]
         resolved.append(entry)
     return resolved
+
+
+def find_scenario_by_rt_id(rt_id: str) -> dict | None:
+    """Повертає сценарій за реальним test ідентифікатором (rt::S0X)."""
+    for scenario in SCENARIOS:
+        if scenario.get("rt", "").split()[0] == rt_id:
+            return dict(scenario)
+    return None
+
+
+def find_scenario_by_issue(rt_issue_number: int) -> dict | None:
+    """Повертає сценарій, прив'язаний до конкретного GitHub ir Issue."""
+    for scenario in SCENARIOS:
+        if scenario.get("rt_issue") == rt_issue_number:
+            return dict(scenario)
+    return None
 
 
 def resolve_selected(all_scenarios: list[dict], selected: list[str]) -> list[dict]:

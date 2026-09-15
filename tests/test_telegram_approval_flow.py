@@ -19,6 +19,8 @@ def _make_job(status_str="SCRIPT_PENDING_APPROVAL", source="telegram:42",
         storyboard_revision_chat_id=None, storyboard_revision_version=None,
         script_revision_chat_id=None, script_revision_pending=False,
         video_revision_chat_id=None, video_revision_pending=False,
+        video_versions=[], active_video_version=None,
+        video_revisions=[], video_regenerating=False,
         model_dump=lambda **kw: {"job_id": job_id},
     )
 
@@ -114,10 +116,13 @@ class TestScriptCallbackHandlers:
 
 class TestVideoCallbackHandlers:
     def test_vid_ok_approves(self, monkeypatch):
+        from core.models import VideoVersion
         module = importlib.import_module("core.app")
         adapter = Mock()
         monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
         job = _make_job("VIDEO_PENDING_APPROVAL")
+        job.active_video_version = 1
+        job.video_versions = [VideoVersion(version=1, path="final/video-v1.mp4", sha256="abc")]
         monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
         monkeypatch.setattr(module.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
         monkeypatch.setattr(module.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
@@ -125,6 +130,7 @@ class TestVideoCallbackHandlers:
         cb = {"id": "cb-1", "data": "vid_ok:2026-000001", "message": {"chat": {"id": "42"}}}
         module._handle_video_callback(cb, "42", "vid_ok", "2026-000001")
         assert job.status.value == "READY"
+        assert job.video_versions[0].approved is True
 
     def test_vid_reject_cancels(self, monkeypatch):
         module = importlib.import_module("core.app")
@@ -196,7 +202,10 @@ class TestPipelineVideoApproval:
     def test_approve_video_transitions_to_ready(self):
         from unittest.mock import patch
         from core.pipeline import approve_video
+        from core.models import VideoVersion
         job = _make_job("VIDEO_PENDING_APPROVAL")
+        job.active_video_version = 1
+        job.video_versions = [VideoVersion(version=1, path="final/video-v1.mp4", sha256="abc")]
         store = SimpleNamespace(
             transition=lambda j, s, e: setattr(j, "status", s) or j,
             event=lambda j, e: j,
@@ -204,6 +213,7 @@ class TestPipelineVideoApproval:
         with patch("core.pipeline._progress"):
             result = approve_video(store, job, "telegram:42")
         assert result.status.value == "READY"
+        assert job.video_versions[0].approved is True
 
     def test_approve_video_rejects_wrong_status(self):
         from core.pipeline import approve_video
@@ -211,6 +221,21 @@ class TestPipelineVideoApproval:
         store = SimpleNamespace()
         with pytest.raises(ValueError, match="Cannot approve video"):
             approve_video(store, job, "telegram:42")
+
+    def test_approve_video_rejects_stale_version(self):
+        from core.pipeline import approve_video
+        from core.models import VideoVersion
+        job = _make_job("VIDEO_PENDING_APPROVAL")
+        job.active_video_version = 2
+        job.video_versions = [
+            VideoVersion(version=1, path="final/video-v1.mp4", sha256="old"),
+            VideoVersion(version=2, path="final/video-v2.mp4", sha256="new"),
+        ]
+        store = SimpleNamespace(
+            transition=lambda j, s, e: setattr(j, "status", s) or j,
+        )
+        with pytest.raises(ValueError, match="Stale video approval"):
+            approve_video(store, job, "telegram:42", expected_version=1)
 
 
 class TestCallbackIdempotency:

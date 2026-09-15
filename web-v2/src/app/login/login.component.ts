@@ -52,7 +52,8 @@ export class LoginComponent implements OnInit {
 
   ngOnInit(): void {
     this.api.getSession().subscribe({
-      next: () => this.router.navigate(['/']),
+      // Переходимо в панель лише за справжньої авторизованої сесії.
+      next: (session) => { if (session.authenticated) this.router.navigate(['/']); },
       error: () => {},
     });
   }
