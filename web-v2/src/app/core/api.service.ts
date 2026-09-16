@@ -62,6 +62,10 @@ import {
   LicenseResponse,
   OperationAck,
   InstallationManifest,
+  WorkflowSaveResponse,
+  WorkflowDeleteResponse,
+  HealthHistoryResponse,
+  SecurityCheckResponse,
 } from './models';
 
 @Injectable()
@@ -243,12 +247,12 @@ export class VertepApiService {
     return this.http.get<WorkflowDocument>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  saveWorkflow(kind: string, name: string, payload: Record<string, unknown>): Observable<Record<string, unknown>> {
-    return this.http.put<Record<string, unknown>>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  saveWorkflow(kind: string, name: string, payload: Record<string, unknown>): Observable<WorkflowSaveResponse> {
+    return this.http.put<WorkflowSaveResponse>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  deleteWorkflow(kind: string, name: string): Observable<Record<string, unknown>> {
-    return this.http.delete<Record<string, unknown>>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  deleteWorkflow(kind: string, name: string): Observable<WorkflowDeleteResponse> {
+    return this.http.delete<WorkflowDeleteResponse>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getTelegramStatus(): Observable<TelegramStatus> {
@@ -317,16 +321,16 @@ export class VertepApiService {
     return this.http.get<HealthCheck>(`${this.baseUrl}/health`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getHealthHistory(limit = 100): Observable<{ history: Array<Record<string, unknown>> }> {
-    return this.http.get<{ history: Array<Record<string, unknown>> }>(`${this.baseUrl}/health/history?limit=${limit}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getHealthHistory(limit = 100): Observable<HealthHistoryResponse> {
+    return this.http.get<HealthHistoryResponse>(`${this.baseUrl}/health/history?limit=${limit}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getMetrics(): Observable<MetricsResponse> {
     return this.http.get<MetricsResponse>(`${this.baseUrl}/metrics`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getSecurityCheck(): Observable<{ ok: boolean; weak_or_missing: string[]; recommendation: string }> {
-    return this.http.get<{ ok: boolean; weak_or_missing: string[]; recommendation: string }>(`${this.baseUrl}/security/check`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getSecurityCheck(): Observable<SecurityCheckResponse> {
+    return this.http.get<SecurityCheckResponse>(`${this.baseUrl}/security/check`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getSecrets(): Observable<SecretStatus> {

@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.80
+- Domain clients migration (#25): вилучено `Record<string, unknown>` з `api.service.ts` для `saveWorkflow`, `deleteWorkflow`, `getHealthHistory`, `getSecurityCheck`; додано типізовані DTO `WorkflowSaveResponse`, `WorkflowDeleteResponse`, `HealthHistoryResponse`, `SecurityCheckResponse`; оновлено `ResourcesApiService` та `SetupApiService` на новий контракт.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.79
 - Rolling update (#53, #15): додано `_cleanup_cancelled_workers` — очищення residual update-команд (`desired_state`, `update_target_version` тощо) на worker-ах після cancel rollout; self-test binding перевіряє `checked_at > phase_started_at` для запобігання stale PASSED результатам.
 - Monitoring (#19): розширено Prometheus scrape inventory — `vertep-core`, `vertep-workers` (DNS SRV discovery), `node-exporter`, `loki`, `prometheus` self-scrape; додано алерти `VertepJobFailureSpike`, `VertepDeadLetterTasks`, `VertepQueueBacklog`, `VertepWorkerOffline`, `VertepWorkerPartialOutage`, `VertepNodeExporterDown`; тести `test_monitoring.py` (Prometheus scrape inventory + alert rules).

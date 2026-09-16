@@ -892,3 +892,47 @@ export interface NodeRevokeResponse {
   status: string;
   revoked_at?: string;
 }
+
+export interface BrandCreateDTO {
+  id: string;
+  name: string;
+  metadata?: Record<string, unknown>;
+  publishing?: Record<string, unknown>;
+}
+
+export interface BrandUpdateDTO {
+  name?: string;
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
+  publishing?: Record<string, unknown>;
+}
+
+export interface ChannelCreateDTO {
+  brand_id: string;
+  channel_type: string;
+  target: string;
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ChannelUpdateDTO {
+  target?: string;
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkflowSaveResponse {
+  saved: boolean;
+  kind: string;
+  name: string;
+}
+
+export interface WorkflowDeleteResponse {
+  deleted: boolean;
+  kind: string;
+  name: string;
+}
+
+export interface SetupConfigResponse {
+  config?: Record<string, unknown>;
+}

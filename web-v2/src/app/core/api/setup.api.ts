@@ -3,7 +3,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
-import { SetupStatus, SetupHealth, SetupCompleteResult } from '../models';
+import { SetupStatus, SetupHealth, SetupCompleteResult, SetupConfigResponse } from '../models';
 
 /**
  * Setup domain client: first-run wizard state/health/completion.
@@ -28,6 +28,10 @@ export class SetupApiService {
 
   complete(token: string, payload: SetupCompletePayload): Observable<SetupCompleteResult> {
     return this.http.post<SetupCompleteResult>(`${this.base.url}/setup/complete`, payload, { headers: this.tokenHeaders(token) }).pipe(catchError(this.base.handleError));
+  }
+
+  config(token: string): Observable<SetupConfigResponse> {
+    return this.http.get<SetupConfigResponse>(`${this.base.url}/setup/config`, { headers: this.tokenHeaders(token) }).pipe(catchError(this.base.handleError));
   }
 }
 
