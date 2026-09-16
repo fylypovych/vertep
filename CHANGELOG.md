@@ -1,5 +1,9 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.75
+- Виправлено CORE Generation Gate (Issue #31): `finalize_job` тепер використовує `providers.video_engine().render()` замість прямих викликів `AssemblyProvider`. VideoEngine обертає native FFmpeg assembly або диспатчить у зовнішні двигуни (MoneyPrinter/ShortGPT) за конфігурацією. Усуває прямі execution-виклики з CORE відповідно до архітектури control-plane.
+- Пройдені всі автоматизовані acceptance тести: video revision/versioning, regeneration path, restart recovery, fleet controls, queue semantics, key lifecycle, release qualification, update security, infrastructure qualification, core generation gate, API client contracts (788 passed, 54 skipped).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.74
 - Monitoring (#19): додано persistent `core/alert_store.py` — entity alert з stable id/source/job/node, lifecycle firing/acknowledged/resolved, acknowledge (actor/time), retention і dedup; `/api/alerts` переписано на цей store (recovery розвʼязує й зберігає історію, не стирає).
 - Monitoring (#19): додано readiness gate `/api/health/ready`, що повертає HTTP 503 при UNHEALTHY, щоб успішний `curl` health-проби не означав healthy; виправлено `/api/watchdog/report` — async handler з `await request.json()`, коректна серіалізація та persistence/history + HTTP contract tests.

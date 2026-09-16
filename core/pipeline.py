@@ -435,11 +435,14 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     existing = [int(v.version) for v in job.video_versions if v.version is not None]
     next_version = max(existing, default=0) + 1
     output = final_dir / f"video-v{next_version}.mp4"
-    engine = providers.video_engine()
-    engine.render(
+    # Use VideoEngine for rendering (per AGENTS.md §4.1/§28, Issue #31).
+    # VideoEngine wraps AssemblyProvider for native engine, or dispatches to
+    # remote engines (MoneyPrinter/ShortGPT) when configured.
+    video_engine = providers.video_engine()
+    video_engine.render(
         output,
-        images=image_list if job.task_type != "video" else None,
-        clips=image_list if job.task_type == "video" else None,
+        images=None if job.task_type == "video" else list(image_list),
+        clips=list(image_list) if job.task_type == "video" else None,
         durations=durations,
         audio=voice,
         music=music,
