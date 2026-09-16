@@ -575,36 +575,39 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
             </div>
           }
 
-          @if (job()!.events && job()!.events.length > 0) {
+          @if ((job()!.event_log?.length ?? 0) > 0) {
             <div data-testid="job-events" class="mt-6">
               <h4 class="text-sm font-medium text-slate-900 mb-3">Історія подій</h4>
               <div class="bg-slate-50 rounded-lg p-3 max-h-48 overflow-y-auto">
-                @for (event of structuredEvents(); track event.key) {
-                  <div class="text-xs text-slate-600 font-mono py-0.5">
-                    @if (event.timestamp) {
-                      <span class="text-slate-400">{{ event.timestamp | vertepDate }}</span>
-                    }
-                    @if (event.type && event.type !== 'info') {
-                      <span class="inline-block px-1 rounded text-[10px] uppercase tracking-wide bg-slate-200 text-slate-600 mr-1">{{ event.type }}</span>
-                    }
-                    @if (event.state) {
-                      <span class="inline-block px-1 rounded text-[10px] bg-emerald-100 text-emerald-700 mr-1">{{ event.state }}</span>
-                    }
-                    {{ event.message }}
-                    @if (event.node) {
-                      <a [routerLink]="['/workers', event.node]" class="text-blue-600 hover:underline">@ {{ event.node }}</a>
-                    }
-                    @if (event.task_id) {
-                      <span class="text-slate-400">· #{{ event.task_id }}</span>
-                    }
-                    @if (event.artifact_id) {
-                      <a [href]="'/api/jobs/' + job()!.job_id + '/artifacts/' + event.artifact_id + '/download'" class="text-emerald-600 hover:underline">· артефакт</a>
-                    }
-                    @if (event.error) {
-                      <span class="text-red-600">· {{ event.error }}</span>
-                    }
-                  </div>
-                }
+@for (event of structuredEvents(); track event.key) {
+                   <div class="text-xs text-slate-600 font-mono py-0.5">
+                     @if (event.timestamp) {
+                       <span class="text-slate-400">{{ event.timestamp | vertepDate }}</span>
+                     }
+                     @if (event.type && event.type !== 'info') {
+                       <span class="inline-block px-1 rounded text-[10px] uppercase tracking-wide bg-slate-200 text-slate-600 mr-1">{{ event.type }}</span>
+                     }
+                     @if (event.state) {
+                       <span class="inline-block px-1 rounded text-[10px] bg-emerald-100 text-emerald-700 mr-1">{{ event.state }}</span>
+                     }
+                     @if (event.attempt) {
+                       <span class="inline-block px-1 rounded text-[10px] bg-yellow-50 text-yellow-800 mr-1">Спроба #{{ event.attempt }}</span>
+                     }
+                     {{ event.message }}
+                     @if (event.node) {
+                       <a [routerLink]="['/workers', event.node]" class="text-blue-600 hover:underline">@ {{ event.node }}</a>
+                     }
+                     @if (event.task_id) {
+                       <span class="text-slate-400">· #{{ event.task_id }}</span>
+                     }
+                     @if (event.artifact_id) {
+                       <a [href]="'/api/jobs/' + job()!.job_id + '/artifacts/' + event.artifact_id + '/download'" class="text-emerald-600 hover:underline">· артефакт</a>
+                     }
+                     @if (event.error) {
+                       <span class="text-red-600">· {{ event.error }}</span>
+                     }
+                   </div>
+                 }
               </div>
             </div>
           }
@@ -1167,7 +1170,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     return labels[name] || name;
   }
 
-  structuredEvents(): Array<{ key: string; message: string; timestamp?: string; type?: string; state?: string; node?: string; task_id?: string; artifact_id?: string; error?: string }> {
+  structuredEvents(): Array<{ key: string; message: string; timestamp?: string; type?: string; state?: string; node?: string; task_id?: string; artifact_id?: string; error?: string; attempt?: number }> {
     const j = this.job();
     if (!j) return [];
     if (Array.isArray(j.event_log) && j.event_log.length) {
@@ -1177,26 +1180,15 @@ export class JobDetailComponent implements OnInit, OnDestroy {
         message: event.message,
         type: event.type,
         state: event.state,
+        attempt: event.attempt,
         node: event.node,
         task_id: event.task_id,
         artifact_id: event.artifact_id,
         error: event.error,
       }));
     }
-    return j.events.map((event, idx) => {
-      const timestampMatch = event.match(/^(\d{4}-\d{2}-\d{2}T[\d:]+Z?)\s+/);
-      if (timestampMatch) {
-        return {
-          key: `${idx}-${timestampMatch[1]}`,
-          timestamp: timestampMatch[1],
-          message: event.slice(timestampMatch[0].length),
-        };
-      }
-      return {
-        key: `${idx}-${event}`,
-        message: event,
-      };
-    });
+    // Legacy events fallback removed - show only structured events
+    return [];
   }
 
   verifyArtifact(artifactId: string): void {

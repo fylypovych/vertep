@@ -377,20 +377,25 @@ def main() -> None:
                     payload["current_task"] = None
                     future = None
                     active_task = None
-                if future is None and desired_state not in {"DRAINING", "QUARANTINED", "UPDATING", "ROLLBACK"}:
-                    task = client.post(f"{core}/api/tasks/claim", json={"node_name": payload["node_name"],
-                                                                         "gpu_name": payload["gpu_name"],
-                                                                         "vram_mb": payload["vram_mb"],
-                                                                         "free_vram_mb": payload.get("free_vram_mb"),
-                                                                         "supported_tasks": supported_tasks,
-                                                                         "supported_workflows": supported_workflows,
-                                                                         "capabilities": capabilities,
-                                                                     "voice_catalog": payload.get("voice_catalog") or {}}).json().get("task")
-                    if task:
-                        logger.info("Task claimed", extra={"job_id": task["job_id"], "node_name": payload["node_name"]})
-                        payload.update({"current_job": task["job_id"], "current_task": task["task_id"], "status": "BUSY"})
-                        active_task = task
-                        future = pool.submit(execute_task, adapter, task, payload["node_name"])
+                if future is None and desired_state not in {"DRAINING", "QUARANTINED", "UPDATING", "ROLLBACK", "DISABLED", "RESTARTING", "REVOKED"}:
+                    # Also check node status to prevent claims on DISABLED/RESTARTING/REVOKED
+                    if payload.get("status") in {"DISABLED", "RESTARTING", "REVOKED", "OFFLINE", "ERROR", "QUARANTINED"}:
+                        # Don't claim tasks in these states
+                        pass
+                    else:
+                        task = client.post(f"{core}/api/tasks/claim", json={"node_name": payload["node_name"],
+                                                                          "gpu_name": payload["gpu_name"],
+                                                                          "vram_mb": payload["vram_mb"],
+                                                                          "free_vram_mb": payload.get("free_vram_mb"),
+                                                                          "supported_tasks": supported_tasks,
+                                                                          "supported_workflows": supported_workflows,
+                                                                          "capabilities": capabilities,
+                                                                      "voice_catalog": payload.get("voice_catalog") or {}}).json().get("task")
+                        if task:
+                            logger.info("Task claimed", extra={"job_id": task["job_id"], "node_name": payload["node_name"]})
+                            payload.update({"current_job": task["job_id"], "current_task": task["task_id"], "status": "BUSY"})
+                            active_task = task
+                            future = pool.submit(execute_task, adapter, task, payload["node_name"])
                 if future is not None and active_task:
                     client.post(f"{core}/api/tasks/renew", json={"node_name": payload["node_name"],
                                                                   "task_id": active_task["task_id"]}).raise_for_status()
@@ -406,6 +411,12 @@ def main() -> None:
                 if desired_state == "ROLLBACK" and future is None:
                     request_local_update(rollback_target or "previous", action="rollback")
                     payload["status"] = "UPDATING"
+                if desired_state == "RESTARTING" and future is None:
+                    # Trigger local restart via systemd or process manager
+                    payload["status"] = "UPDATING"
+                    # The actual restart is handled by the host update agent via systemd
+                    # Worker just signals readiness for restart
+                    logger.info("Restart requested by CORE", extra={"node_name": payload["node_name"]})
                 if update_target and future is None:
                     request_local_update(update_target)
                     desired_state = "UPDATING"
