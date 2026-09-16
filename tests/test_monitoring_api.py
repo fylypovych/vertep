@@ -279,3 +279,153 @@ def test_ingest_logs_redacts_worker_text(monkeypatch, tmp_path):
     assert len(recorded) == 1
     assert "synthetic-audit-secret" not in recorded[0]
     assert "[REDACTED]" in recorded[0]
+
+
+# ── Ingest redaction persists to log file (Issue #53, #18) ─────────────
+
+def test_ingest_logs_redaction_persists_to_file(monkeypatch, tmp_path):
+    """Secrets ingested via /api/logs/ingest must not appear in read_logs output."""
+    log_root = tmp_path / "logs"
+    log_root.mkdir()
+    monkeypatch.setenv("LOG_ROOT", str(log_root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("NODE_API_TOKEN", raising=False)
+    client = TestClient(app, raise_server_exceptions=False)
+    from core.logging_config import configure_logging
+    import core.api.observability as obs
+    real_logger = configure_logging("worker-ingest-test")
+    monkeypatch.setattr(obs, "logger", real_logger)
+    secret_payload = "access_token=super-secret-12345"
+    resp = client.post("/api/logs/ingest", json={
+        "node_name": "text-1",
+        "entries": [{"level": "INFO", "message": f"task done {secret_payload}", "job_id": "j-1"}],
+    }, headers={"x-vertep-node-name": "text-1"})
+    assert resp.status_code == 200
+    for handler in real_logger.handlers:
+        handler.flush()
+    from core.logging_config import read_logs
+    records = read_logs(level="INFO", job_id="j-1")
+    assert len(records) >= 1
+    for record in records:
+        assert "super-secret-12345" not in record["message"]
+        assert "[REDACTED]" in record["message"]
+
+
+# ── Full alert lifecycle E2E via API (Issue #53, #19) ──────────────────
+
+def test_full_alert_lifecycle_e2e(monkeypatch, tmp_path):
+    """failure → list → acknowledge → recovery (reconcile) → resolved → persistence."""
+    client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
+    from core.alert_store import get_alert_store
+    alert_store = get_alert_store()
+
+    # 1) Fire a worker-offline alert.
+    alert = alert_store.record({
+        "severity": "error", "type": "WORKER_OFFLINE", "node_name": "gpu-1",
+        "message": "gpu-1 is unreachable",
+    })
+    assert alert["state"] == "firing"
+
+    # 2) Verify it appears in /api/alerts.
+    resp = client.get("/api/alerts", params={"state": "firing"})
+    assert resp.status_code == 200
+    assert any(a["id"] == alert["id"] and a["state"] == "firing" for a in resp.json())
+
+    # 3) Acknowledge via API.
+    resp = client.post(f"/api/alerts/{alert['id']}/acknowledge", json={"actor": "ops-lead"})
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "acknowledged"
+    assert resp.json()["acknowledged_by"] == "ops-lead"
+
+    # 4) Simulate recovery: worker returns online so reconcile resolves the alert.
+    monkeypatch.setattr("core.api.observability.workers", lambda *a, **k: [{
+        "node_name": "gpu-1", "role": "gpu", "status": "ONLINE", "capabilities": [],
+        "hardware": {}, "version": "1.0.0",
+    }])
+    # Trigger reconciliation via GET /api/alerts.
+    resp = client.get("/api/alerts")
+    assert resp.status_code == 200
+    resolved = [a for a in resp.json() if a["id"] == alert["id"]]
+    assert len(resolved) == 1
+    assert resolved[0]["state"] == "resolved"
+    assert resolved[0].get("resolved_reason") == "node is back online"
+
+    # 5) Persistence: re-init AlertStore from the same store path → history intact.
+    from core.alert_store import AlertStore, alerts_path
+    reloaded = AlertStore(path=alerts_path())
+    found = [a for a in reloaded.list() if a["id"] == alert["id"]]
+    assert len(found) == 1
+    assert found[0]["state"] == "resolved"
+    assert found[0]["acknowledged_by"] == "ops-lead"
+
+
+# ── Alert store restart persistence (Issue #53, #19) ──────────────────
+
+def test_alert_store_restart_persistence(tmp_path):
+    """Alert states (firing, acknowledged, resolved) survive process restart."""
+    from core.alert_store import AlertStore
+    path = tmp_path / "alerts.json"
+
+    store = AlertStore(path=path)
+    a1 = store.record({"type": "SYSTEM_STATE", "message": "EMERGENCY mode"})
+    assert a1["state"] == "firing"
+    a2 = store.record({"type": "UPDATE_FAILED", "message": "update crashed"})
+    store.acknowledge(a2["id"], "admin")
+    a3 = store.record({"type": "JOB_FAILED", "job_id": "j-10"})
+    store.resolve({"type": "JOB_FAILED", "job_id": "j-10"}, "job retried OK")
+    store.save()
+
+    # Simulate process restart (new AlertStore from the same file).
+    reloaded = AlertStore(path=path)
+    items = {a["id"]: a for a in reloaded.list()}
+    assert len(items) == 3
+
+    assert items[a1["id"]]["state"] == "firing"
+    assert items[a2["id"]]["state"] == "acknowledged"
+    assert items[a2["id"]]["acknowledged_by"] == "admin"
+    assert items[a3["id"]]["state"] == "resolved"
+    assert items[a3["id"]]["resolved_reason"] == "job retried OK"
+
+    # New alert after restart does not break state.
+    a4 = reloaded.record({"type": "WORKER_OFFLINE", "node_name": "text-2"})
+    assert a4["state"] == "firing"
+    assert len(reloaded.list()) == 4
+
+
+# ── /api/alerts contract: always structured JSON (Issue #53, #19) ──────
+
+def test_alerts_endpoint_empty_store_returns_list(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
+    resp = client.get("/api/alerts")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+    assert resp.json() == []
+
+
+def test_alerts_endpoint_always_returns_json_not_html(monkeypatch, tmp_path):
+    """Even unusual queries return a structured JSON list, not raw HTML/skeleton."""
+    client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
+    # Invalid int param -> FastAPI validation error, still JSON (not raw HTML).
+    for params in [{"state": "???ziM"}, {"limit": 1, "state": "firing"}]:
+        resp = client.get("/api/alerts", params=params)
+        assert resp.status_code == 200
+        assert "application/json" in resp.headers.get("content-type", "")
+        assert isinstance(resp.json(), list)
+    # Unknown query keys are ignored, response stays structured JSON.
+    resp = client.get("/api/alerts", params={"limit": "abc"})
+    assert "application/json" in resp.headers.get("content-type", "")
+
+
+# ── /metrics Prometheus text format (Issue #53, #19) ──────────────────
+
+def test_prometheus_metrics_returns_valid_text(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    text = resp.text
+    assert "vertep_jobs_total" in text
+    assert "vertep_queue_ready" in text
+    assert "vertep_workers_online" in text
+    for line in text.strip().splitlines():
+        parts = line.split(" ")
+        assert len(parts) == 2, f"bad Prometheus line: {line!r}"

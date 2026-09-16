@@ -1,5 +1,9 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.81
+- Monitoring/Alerts (#53, #19): alert lifecycle E2E (failure→acknowledge→recovery→resolved), restart persistence, /api/alerts always JSON, Prometheus /metrics text format; 27 tests passed.
+- Logging (#53, #18): secret redaction persists to log files; `secret_redact()` scrubs worker text before file write and read.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.80
 - Domain clients migration (#25): вилучено `Record<string, unknown>` з `api.service.ts` для `saveWorkflow`, `deleteWorkflow`, `getHealthHistory`, `getSecurityCheck`; додано типізовані DTO `WorkflowSaveResponse`, `WorkflowDeleteResponse`, `HealthHistoryResponse`, `SecurityCheckResponse`; оновлено `ResourcesApiService` та `SetupApiService` на новий контракт.
 
