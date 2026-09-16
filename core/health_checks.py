@@ -35,10 +35,10 @@ def check_docker() -> tuple[bool, str]:
         return False, str(error)[:200]
 
 
-def check_postgres(database_url: str | None = None) -> tuple[bool, str]:
+def check_postgres(database_url: str | None = None) -> tuple[bool | None, str]:
     url = database_url or os.getenv("DATABASE_URL", "")
     if not url:
-        return True, "skipped"
+        return None, "not-applicable: DATABASE_URL is not configured"
     try:
         import psycopg
         with psycopg.connect(url, connect_timeout=5) as connection:
@@ -49,10 +49,10 @@ def check_postgres(database_url: str | None = None) -> tuple[bool, str]:
         return False, str(error)[:200]
 
 
-def check_redis(redis_url: str | None = None) -> tuple[bool, str]:
+def check_redis(redis_url: str | None = None) -> tuple[bool | None, str]:
     url = redis_url or os.getenv("REDIS_URL", "")
     if not url:
-        return True, "skipped"
+        return None, "not-applicable: REDIS_URL is not configured"
     try:
         import redis
         client = redis.Redis.from_url(url, socket_timeout=5)
@@ -62,22 +62,24 @@ def check_redis(redis_url: str | None = None) -> tuple[bool, str]:
         return False, str(error)[:200]
 
 
-def check_core_api(core_url: str) -> tuple[bool, str]:
+def check_core_api(core_url: str) -> tuple[bool | None, str]:
     if not core_url:
-        return True, "skipped"
+        return None, "not-applicable: CORE_ADDRESS is not configured"
     return _http_get(core_url.rstrip("/") + "/api/health")
 
 
-def check_gpu() -> tuple[bool, str]:
+def check_gpu() -> tuple[bool | None, str]:
     try:
         if os.getenv("GPU_VENDOR") == "amd":
             output = subprocess.run(["rocminfo"], check=True, capture_output=True,
                                     text=True, timeout=20).stdout
-            return True, next((line.strip() for line in output.splitlines()
-                               if "Name:" in line), "AMD GPU")
+            name = next((line.strip() for line in output.splitlines() if "Name:" in line), "")
+            return (True, name) if name else (None, "not-applicable: no GPU detected")
         output = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                                 check=True, capture_output=True, text=True, timeout=10).stdout.strip()
-        return True, output.splitlines()[0] if output else "no gpu"
+        if not output:
+            return None, "not-applicable: no GPU detected"
+        return True, output.splitlines()[0]
     except Exception as error:
         return False, str(error)[:200]
 

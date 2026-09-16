@@ -75,12 +75,24 @@ def _session_token(user: str = "admin", role: str = "admin") -> str:
     return f"{payload}.{signature}"
 
 
+def _account_role(user: str, stored_role: str) -> str:
+    """The configured installation administrator always retains the admin role."""
+    configured = configured_user()
+    if configured and user == configured[0]:
+        return "admin"
+    if os.getenv("ADMIN_PASSWORD", "") and user == os.getenv("ADMIN_USER", "admin"):
+        return "admin"
+    return stored_role
+
+
 def _valid_session(token: str) -> tuple[str, str] | None:
     try:
         payload, signature = token.rsplit(".", 1)
         expiry, user, role = payload.split(":", 2)
         expected = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
-        return (user, role) if int(expiry) > time.time() and secrets.compare_digest(signature, expected) else None
+        if int(expiry) > time.time() and secrets.compare_digest(signature, expected):
+            return user, _account_role(user, role)
+        return None
     except (ValueError, TypeError):
         return None
 
@@ -97,11 +109,11 @@ def _load_all_users() -> dict:
 def _authenticate_user(user: str, password: str) -> str | None:
     configured = configured_user()
     if configured and secrets.compare_digest(user, configured[0]) and _verify_hash(password, configured[1]["password_hash"]):
-        return str(configured[1].get("role", "admin"))
+        return "admin"
     users = _load_all_users()
     record = users.get(user)
     if isinstance(record, dict) and _verify_hash(password, str(record.get("password_hash", ""))):
-        return str(record.get("role", "viewer"))
+        return _account_role(user, str(record.get("role", "viewer")))
     if secrets.compare_digest(user, os.getenv("ADMIN_USER", "admin")) and secrets.compare_digest(password, os.getenv("ADMIN_PASSWORD", "")):
         return "admin"
     return None

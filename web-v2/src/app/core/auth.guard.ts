@@ -10,11 +10,17 @@ export class AuthGuard implements CanActivate {
   constructor(private api: VertepApiService, private router: Router, private policy: PolicyService) {}
 
   canActivate(): Observable<boolean | UrlTree> {
-    return this.api.getSession().pipe(
-      tap(() => { this.policy.refresh(); }),
-      // Пропускаємо лише справжню авторизовану сесію; authenticated:false веде на login.
-      map((session) => (session.authenticated ? true : this.router.createUrlTree(['/login']))),
-      catchError(() => of(this.router.createUrlTree(['/login'])))
+    return this.api.getUserProfile().pipe(
+      // Меню отримує перевірену роль до створення layout, незалежно від запиту header.
+      tap((profile) => {
+        this.policy.userRole.set(profile.role);
+        this.policy.refresh();
+      }),
+      map(() => true),
+      catchError(() => {
+        this.policy.userRole.set('viewer');
+        return of(this.router.createUrlTree(['/login']));
+      })
     );
   }
 }

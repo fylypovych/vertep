@@ -1,5 +1,6 @@
 """Shared isolation rules for the in-process API test suite."""
 
+import json
 import os
 import shutil
 import tempfile
@@ -15,10 +16,24 @@ def pytest_configure(config):
     """Select writable, isolated host paths before test modules import core.app."""
     global _TEST_STATE_ROOT
     _TEST_STATE_ROOT = Path(tempfile.mkdtemp(prefix="vertep-tests-"))
+    config_root_dir = _TEST_STATE_ROOT / "config"
     os.environ["JOB_ROOT"] = str(_TEST_STATE_ROOT / "jobs")
+    os.environ["CONFIG_ROOT"] = str(config_root_dir)
+    os.environ["STORAGE_ROOT"] = str(_TEST_STATE_ROOT / "storage")
     os.environ["UPDATE_STATE_DIR"] = str(_TEST_STATE_ROOT / "update")
     os.environ["SYSTEM_STATE_BACKEND"] = "file"
     os.environ["RATE_LIMIT_PER_MINUTE"] = "10000"
+    # Mark the isolated installation as "configured but auth-open" so the
+    # First-Run 503 guard in AdminAuthMiddleware is bypassed for the whole
+    # suite, while every on-disk artifact stays hermetic (never /data/config).
+    # is_configured() (core/first_run.py) treats a present CONFIG_ROOT with a
+    # completed_at installation.json as configured.
+    config_root_dir.mkdir(parents=True, exist_ok=True)
+    (config_root_dir / "users.json").write_text("{}", encoding="utf-8")
+    (config_root_dir / "installation.json").write_text(
+        json.dumps({"completed_at": "2024-01-01T00:00:00Z"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def pytest_unconfigure(config):
@@ -64,6 +79,9 @@ def reset_in_process_api_state():
         from core.app import _telegram_pending_brands, _telegram_pending_character
         _telegram_pending_brands.clear()
         _telegram_pending_character.clear()
+        # Persistent monitor alerts must not leak between tests.
+        from core.alert_store import reset_alert_store
+        reset_alert_store()
 
     reset()
     yield

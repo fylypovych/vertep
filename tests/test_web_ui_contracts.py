@@ -1,6 +1,5 @@
 """Contract tests for Web UI V2 — verifies backend payload shapes
 used by the Angular frontend match expected TypeScript models."""
-import json
 import os
 
 from fastapi.testclient import TestClient

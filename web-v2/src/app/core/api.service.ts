@@ -261,7 +261,13 @@ export class VertepApiService {
   }
 
   getSession(): Observable<{ authenticated: boolean; user?: string; role?: string }> {
-    return this.http.get<{ authenticated: boolean; user?: string; role?: string }>(`${this.baseUrl}/session`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+    return this.http.get<SessionResponse>(`${this.baseUrl}/session`, { headers: this.getHeaders() }).pipe(
+      map(session => {
+        if (session?.authenticated === false) return { authenticated: false };
+        return { authenticated: true, ...this.toProfile(session) };
+      }),
+      catchError(this.handleError),
+    );
   }
 
   getUserProfile(): Observable<UserProfile> {
@@ -566,11 +572,12 @@ export class VertepApiService {
 
   private toProfile(session: SessionResponse): UserProfile {
     // Неавторизований/некоректний профіль — помилка веде на login.
-    if (!session.authenticated) {
+    if (session?.authenticated !== true || typeof session.user !== 'string' || !session.user.trim()
+        || (session.role !== 'admin' && session.role !== 'viewer')) {
       throw new Error('Не авторизовано');
     }
     // Справжній viewer залишається viewer; admin зберігає роль і бачить Settings.
-    return { user: session.user || '', role: session.role === 'viewer' ? 'viewer' : 'admin' };
+    return { user: session.user, role: session.role };
   }
 
   private handleError(error: unknown) {
@@ -583,4 +590,3 @@ export class VertepApiService {
     return throwError(() => err);
   }
 }
-

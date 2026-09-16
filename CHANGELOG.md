@@ -1,5 +1,15 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.74
+- Monitoring (#19): додано persistent `core/alert_store.py` — entity alert з stable id/source/job/node, lifecycle firing/acknowledged/resolved, acknowledge (actor/time), retention і dedup; `/api/alerts` переписано на цей store (recovery розвʼязує й зберігає історію, не стирає).
+- Monitoring (#19): додано readiness gate `/api/health/ready`, що повертає HTTP 503 при UNHEALTHY, щоб успішний `curl` health-проби не означав healthy; виправлено `/api/watchdog/report` — async handler з `await request.json()`, коректна серіалізація та persistence/history + HTTP contract tests.
+- Monitoring (#19): `read_logs` читає ротовані `*.jsonl.1..N`, фільтрує до tail (`level`/`job_id`/`node_name`/`before`) та підтримує сторінковий курсор `before`.
+- Monitoring/Health (#19): `check_postgres`/`check_redis`/`check_gpu`/`check_core_api` розрізняють `not-applicable` (None) і `required-but-unavailable` (False), щоб не мітити необовʼязкові компоненти як healthy/unhealthy.
+- Security (#18): додано `secret_redact()` — редокція secret-подібних значень (access_token/api_key/client_secret/refresh_token/bearer тощо) у `JsonFormatter` та `ingest_logs`; тести на synthetic secret.
+- Security (#18): розширено `/api/security/check` — крім довжини env values, показує стан sealed encrypted secret-store, статус TLS/сертифікатів і readiness integrations.
+- RBAC/admin fix: основний адміністратор інсталяції зберігає роль `admin` за застарілої `viewer` у записі/сесії (`core/security.py`); `web-v2` session/profile/guard узгоджено — некоректна роль веде на login, admin бачить Settings навіть при помилці повторного запиту профілю.
+- Тестова інфраструктура: `conftest.py` — hermetic `CONFIG_ROOT`/`STORAGE_ROOT` + `installation.json` для обходу First-Run 503 guard в усій suite; reset alert store між тестами; додано `tests/test_monitoring_api.py` та `tests/test_primary_admin_role.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.73
 - Додано immutable-версіювання відео: `VideoVersion` (sha256, approved, revision_note), версіоновані файли `final/video-v<N>.mp4`, backward-compat вказівник на `final/video.mp4`, збереження затвердження на версії та відновлення після рестарту за схваленим/очікуваним станом.
 - Додано структурований `VideoRevision`, прив'язаний до версії; `VIDEO_REVISION_REQUESTED` тепер допускає перехід у `VIDEO_GENERATION` або `ASSEMBLY`.

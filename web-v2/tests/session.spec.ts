@@ -70,18 +70,38 @@ test('admin: бачить Settings та header показує «Адмін»', a
     await page.waitForLoadState('networkidle').catch(() => {});
     const nav = page.locator('nav').first();
     await expect(nav.getByText('Налаштування')).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText('Адмін', { exact: false })).toBeVisible();
+    await expect(page.getByText('Адмін', { exact: true })).toBeVisible();
+    await nav.getByText('Налаштування', { exact: true }).click();
+    await expect(page.getByTestId('settings-page')).toBeVisible();
   });
 
-  test('authenticated без role: admin НЕ знижується до viewer (Settings видно)', async ({ page }) => {
-    // Регресія Issue #52: відсутня role не повинна перетворювати admin на viewer.
+  test('authenticated без role: некоректна сесія веде на login', async ({ page }) => {
     await mockPageApi(page);
     await mockStatus(page);
     await mockSession(page, { authenticated: true, user: 'ciadmin', role: null });
     await page.goto('/jobs');
     await page.waitForLoadState('networkidle').catch(() => {});
-    const nav = page.locator('nav').first();
-    await expect(nav.getByText('Налаштування')).toBeVisible({ timeout: 20000 });
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.locator('h2', { hasText: 'Вхід' })).toBeVisible();
+  });
+
+  test('admin: Settings доступні навіть при помилці повторного запиту профілю в header', async ({ page }) => {
+    await mockPageApi(page);
+    await mockStatus(page);
+    let requests = 0;
+    await page.route('**/api/session', route => {
+      requests++;
+      return requests === 2
+        ? route.fulfill({ status: 503, json: { detail: 'Temporary profile failure' } })
+        : route.fulfill({ json: { authenticated: true, user: 'ciadmin', role: 'admin' } });
+    });
+    await page.goto('/jobs');
+    await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
+    const settings = page.locator('nav').first().getByText('Налаштування', { exact: true });
+    await expect(settings).toBeVisible();
+    await expect(page.getByText('Адмін', { exact: true })).toBeVisible();
+    await settings.click();
+    await expect(page.getByTestId('settings-page')).toBeVisible();
   });
 
   test('viewer: не отримує admin прав — Settings приховано, header показує «Переглядач»', async ({ page }) => {
