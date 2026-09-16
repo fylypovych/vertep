@@ -31,10 +31,12 @@ import {
   UpdateStatus,
   SystemState,
   TelegramStatus,
+  TelegramBotInfo,
   Alert,
   LogEntry,
   SecretStatus,
   Workflow,
+  WorkflowDocument,
   DeadLetterTask,
   QueueState,
   SetupStatus,
@@ -44,6 +46,22 @@ import {
   SessionResponse,
   ChangePasswordRequest,
   ChangePasswordResponse,
+  MetricsResponse,
+  IntegrationStatusResponse,
+  BackupListResponseDTO,
+  BackupCreateResponse,
+  BackupRestoreResponse,
+  ModelsResponse,
+  ModelPullResponse,
+  ModelDeleteResponse,
+  CertificatesResponse,
+  CertificateRenewResponse,
+  NodeActionResponse,
+  NodeRevokeResponse,
+  SystemStateDTO,
+  LicenseResponse,
+  OperationAck,
+  InstallationManifest,
 } from './models';
 
 @Injectable()
@@ -201,12 +219,12 @@ export class VertepApiService {
     return this.http.get<Channel[]>(`${this.baseUrl}/brands/${encodeURIComponent(brandId)}/channels`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  workerAction(nodeId: string, action: NodeActionPayload): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/nodes/${encodeURIComponent(nodeId)}/actions`, action, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  workerAction(nodeId: string, action: NodeActionPayload): Observable<NodeActionResponse> {
+    return this.http.post<NodeActionResponse>(`${this.baseUrl}/nodes/${encodeURIComponent(nodeId)}/actions`, action, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  revokeNode(nodeId: string): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/nodes/${encodeURIComponent(nodeId)}/revoke`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  revokeNode(nodeId: string): Observable<NodeRevokeResponse> {
+    return this.http.post<NodeRevokeResponse>(`${this.baseUrl}/nodes/${encodeURIComponent(nodeId)}/revoke`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   renewNode(nodeId: string, csr: string): Observable<NodeRegisterResponse> {
@@ -221,8 +239,8 @@ export class VertepApiService {
     return this.http.get<Workflow[]>(`${this.baseUrl}/workflows`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getWorkflow(kind: string, name: string): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getWorkflow(kind: string, name: string): Observable<WorkflowDocument> {
+    return this.http.get<WorkflowDocument>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   saveWorkflow(kind: string, name: string, payload: Record<string, unknown>): Observable<Record<string, unknown>> {
@@ -237,8 +255,8 @@ export class VertepApiService {
     return this.http.get<TelegramStatus>(`${this.baseUrl}/telegram/status`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getTelegramBotInfo(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/telegram/bot-info`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getTelegramBotInfo(): Observable<TelegramBotInfo> {
+    return this.http.get<TelegramBotInfo>(`${this.baseUrl}/telegram/bot-info`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getSystemRoles(): Observable<SystemRolesResponse> {
@@ -303,8 +321,8 @@ export class VertepApiService {
     return this.http.get<{ history: Array<Record<string, unknown>> }>(`${this.baseUrl}/health/history?limit=${limit}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getMetrics(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/metrics`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getMetrics(): Observable<MetricsResponse> {
+    return this.http.get<MetricsResponse>(`${this.baseUrl}/metrics`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getSecurityCheck(): Observable<{ ok: boolean; weak_or_missing: string[]; recommendation: string }> {
@@ -323,28 +341,28 @@ export class VertepApiService {
     return this.http.delete<SecretStatus>(`${this.baseUrl}/settings/secrets/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getIntegrationStatus(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/integrations`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getIntegrationStatus(): Observable<IntegrationStatusResponse> {
+    return this.http.get<IntegrationStatusResponse>(`${this.baseUrl}/integrations`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getModels(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/models`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getModels(): Observable<ModelsResponse> {
+    return this.http.get<ModelsResponse>(`${this.baseUrl}/system/models`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  pullModel(name: string): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/models/pull`, { name }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  pullModel(name: string): Observable<ModelPullResponse> {
+    return this.http.post<ModelPullResponse>(`${this.baseUrl}/system/models/pull`, { name }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  deleteModel(name: string): Observable<Record<string, unknown>> {
-    return this.http.delete<Record<string, unknown>>(`${this.baseUrl}/system/models/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  deleteModel(name: string): Observable<ModelDeleteResponse> {
+    return this.http.delete<ModelDeleteResponse>(`${this.baseUrl}/system/models/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getCertificates(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/certificates`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getCertificates(): Observable<CertificatesResponse> {
+    return this.http.get<CertificatesResponse>(`${this.baseUrl}/system/certificates`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  renewCertificate(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/certificates/renew`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  renewCertificate(): Observable<CertificateRenewResponse> {
+    return this.http.post<CertificateRenewResponse>(`${this.baseUrl}/system/certificates/renew`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getUpdateStatus(): Observable<UpdateStatus> {
@@ -359,12 +377,12 @@ export class VertepApiService {
     return this.http.post<UpdateStatus>(`${this.baseUrl}/system/update/run`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getIntegrations(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/integrations`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getIntegrations(): Observable<IntegrationStatusResponse> {
+    return this.http.get<IntegrationStatusResponse>(`${this.baseUrl}/integrations`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  restartSystem(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/restart`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  restartSystem(): Observable<SystemStateDTO> {
+    return this.http.post<SystemStateDTO>(`${this.baseUrl}/system/update/restart`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getUpdateReadiness(): Observable<UpdateReadiness> {
@@ -375,48 +393,48 @@ export class VertepApiService {
     return this.http.get<RollingStatus>(`${this.baseUrl}/system/update/rolling`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  startRollingUpdate(payload: RollingUpdateRequest): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/rolling`, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  startRollingUpdate(payload: RollingUpdateRequest): Observable<RollingStatus> {
+    return this.http.post<RollingStatus>(`${this.baseUrl}/system/update/rolling`, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  cancelRolling(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/rolling/cancel`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  cancelRolling(): Observable<OperationAck> {
+    return this.http.post<OperationAck>(`${this.baseUrl}/system/update/rolling/cancel`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  promoteCanary(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/rolling/promote`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  promoteCanary(): Observable<OperationAck> {
+    return this.http.post<OperationAck>(`${this.baseUrl}/system/update/rolling/promote`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  rollbackCanary(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/update/rolling/rollback`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  rollbackCanary(): Observable<OperationAck> {
+    return this.http.post<OperationAck>(`${this.baseUrl}/system/update/rolling/rollback`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getBackups(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/backups`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getBackups(): Observable<BackupListResponseDTO> {
+    return this.http.get<BackupListResponseDTO>(`${this.baseUrl}/system/backups`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  createBackup(): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/backups`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  createBackup(): Observable<BackupCreateResponse> {
+    return this.http.post<BackupCreateResponse>(`${this.baseUrl}/system/backups`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  restoreBackup(snapshotId: string): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/system/backups/${encodeURIComponent(snapshotId)}/restore`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  restoreBackup(snapshotId: string): Observable<BackupRestoreResponse> {
+    return this.http.post<BackupRestoreResponse>(`${this.baseUrl}/system/backups/${encodeURIComponent(snapshotId)}/restore`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getRestoreProgress(snapshotId: string): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/backups/${encodeURIComponent(snapshotId)}/restore/progress`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getRestoreProgress(snapshotId: string): Observable<OperationAck> {
+    return this.http.get<OperationAck>(`${this.baseUrl}/system/backups/${encodeURIComponent(snapshotId)}/restore/progress`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getSystemState(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/state`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getSystemState(): Observable<SystemStateDTO> {
+    return this.http.get<SystemStateDTO>(`${this.baseUrl}/system/state`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getLicense(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/license`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getLicense(): Observable<LicenseResponse> {
+    return this.http.get<LicenseResponse>(`${this.baseUrl}/system/license`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  getInstallationManifest(): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(`${this.baseUrl}/system/installation-manifest`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  getInstallationManifest(): Observable<InstallationManifest> {
+    return this.http.get<InstallationManifest>(`${this.baseUrl}/system/installation-manifest`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getBrandChannels(brandId: string): Observable<Channel[]> {
@@ -528,8 +546,8 @@ export class VertepApiService {
     return this.http.get<DeadLetterTask[]>(`${this.baseUrl}/tasks/dead-letter`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  retryDeadLetterTask(taskId: string): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.baseUrl}/tasks/dead-letter/${encodeURIComponent(taskId)}/retry`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  retryDeadLetterTask(taskId: string): Observable<OperationAck> {
+    return this.http.post<OperationAck>(`${this.baseUrl}/tasks/dead-letter/${encodeURIComponent(taskId)}/retry`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   getQueueState(): Observable<QueueState> {

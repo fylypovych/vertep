@@ -2,7 +2,7 @@ import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { VertepApiService } from '../../core/api.service';
 import { ToastService } from '../../core/services/toast.service';
-import { SecurityCheck } from '../../core/models';
+import { SecurityCheck, CertificatesResponse } from '../../core/models';
 
 @Component({
   selector: 'app-settings-security',
@@ -53,7 +53,7 @@ import { SecurityCheck } from '../../core/models';
 export class SecuritySectionComponent implements OnInit {
   secCheck = signal<SecurityCheck | null>(null);
   loading = signal(false);
-  certificates = signal<Record<string, unknown> | null>(null);
+  certificates = signal<CertificatesResponse | null>(null);
   certLoading = signal(false);
   certError = signal<string | null>(null);
 

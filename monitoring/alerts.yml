@@ -8,6 +8,7 @@ groups:
           severity: critical
         annotations:
           summary: "Сховище журналів Vertep недоступне"
+
       - alert: VertepPrometheusRuleEvaluationFailures
         expr: increase(prometheus_rule_evaluation_failures_total[10m]) > 0
         for: 5m
@@ -15,3 +16,63 @@ groups:
           severity: warning
         annotations:
           summary: "Prometheus не може обчислити правила Vertep"
+
+  - name: vertep-jobs
+    rules:
+      - alert: VertepJobFailureSpike
+        expr: increase(vertep_jobs_status{status="FAILED"}[10m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Спалах помилок завдань Vertep: {{ $value }} невдалих за 10 хв"
+
+      - alert: VertepDeadLetterTasks
+        expr: vertep_queue_dead_letter > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Черга мертвих листів Vertep: {{ $value }} завдань не вдалося обробити після retry"
+
+      - alert: VertepQueueBacklog
+        expr: vertep_queue_ready > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Черга Vertep зростає: {{ $value }} завдань очікують диспетчеризації"
+
+  - name: vertep-workers
+    rules:
+      - alert: VertepWorkerOffline
+        expr: vertep_workers_online == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Усі Vertep worker-и офлайн"
+
+      - alert: VertepWorkerPartialOutage
+        expr: vertep_workers_online < 1 and (count(up{job="vertep-workers"} == 1) or vector(1)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Часткова недоступність worker-ів Vertep"
+
+      - alert: VertepCoreServiceDown
+        expr: up{job="vertep-core"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CORE Vertep недоступний"
+
+      - alert: VertepNodeExporterDown
+        expr: up{job="node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node exporter недоступний для {{ $labels.instance }}"

@@ -252,3 +252,68 @@ def test_update_service_can_replace_only_managed_unit_files():
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=@VERTEP_ROOT@ /etc/systemd/system" in unit
     assert "/usr/local" not in unit
+
+# ── recover_if_interrupted: unreadable status.json + evidence detection ────
+
+
+def _load_agent():
+    spec = importlib.util.spec_from_file_location(
+        "update_agent", Path(__file__).parents[1] / "scripts" / "update-agent.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_has_interrupt_evidence_returns_false_when_empty(tmp_path):
+    """No audit log, no requests directory -> no evidence."""
+    agent = _load_agent()
+    assert agent._has_interrupt_evidence(tmp_path) is False
+
+
+def test_has_interrupt_evidence_returns_true_for_audit_log(tmp_path):
+    """Non-empty audit.jsonl is durable evidence of a mid-flight update."""
+    agent = _load_agent()
+    (tmp_path / "audit.jsonl").write_text(
+        '{"operation_id":"a","phase":"CHECKING","event_hash":"x","previous_hash":"0000"}\n',
+        encoding="utf-8")
+    assert agent._has_interrupt_evidence(tmp_path) is True
+
+
+def test_has_interrupt_evidence_returns_true_for_pending_requests(tmp_path):
+    """A pending request file is durable evidence."""
+    agent = _load_agent()
+    requests_dir = tmp_path / "requests"
+    requests_dir.mkdir()
+    (requests_dir / "req-abc.json").write_text('{"action":"update"}', encoding="utf-8")
+    assert agent._has_interrupt_evidence(tmp_path) is True
+
+
+def test_has_interrupt_evidence_handles_unreadable_audit(tmp_path):
+    """Corrupted/unreadable audit.jsonl should not cause a crash."""
+    agent = _load_agent()
+    audit = tmp_path / "audit.jsonl"
+    audit.write_bytes(b"\xff\xfe\x00\x00\x80")  # noqa: use raw bytes, not encoding
+    assert agent._has_interrupt_evidence(tmp_path) is False
+
+
+def test_recover_if_interrupted_unreadable_status_with_evidence(tmp_path, monkeypatch):
+    """When status.json is unreadable but audit.jsonl has entries, recovery triggers."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    agent.append_audit(tmp_path, {"operation_id": "test", "phase": "UPDATING"})
+    (tmp_path / "status.json").write_bytes(b"{truncated")
+    with pytest.raises(Exception):
+        agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert status["phase"] == "RECOVERING"
+    assert "unreadable" in status["message"]
+
+
+def test_recover_if_interrupted_unreadable_status_no_evidence(tmp_path, monkeypatch):
+    """When status.json is unreadable AND there's no evidence, stay silent."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    (tmp_path / "status.json").write_bytes(b"not json")
+    agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
+    assert (tmp_path / "status.json").read_bytes() == b"not json"

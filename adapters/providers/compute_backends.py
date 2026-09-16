@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .base import ComputeProvider
 from ._http import check_response as _check
+from ..comfyui import _substitute_placeholders
 from publishers.transport import HttpTransport
 
 class ComfyUIDistributedProvider(ComputeProvider):
@@ -79,15 +80,15 @@ class ComfyUIDistributedProvider(ComputeProvider):
             raise ValueError("Workflow path escapes WORKFLOWS_ROOT")
         if not path.exists():
             raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
-        serialized = path.read_text(encoding="utf-8")
-        serialized = serialized.replace("{{TOPIC}}", topic.replace('"', '\\"'))
-        serialized = serialized.replace(
-            "{{CHECKPOINT}}", os.getenv("COMFYUI_CHECKPOINT", "model.safetensors")
-        )
-        serialized = serialized.replace("{{SEED}}", os.getenv("COMFYUI_SEED", "42"))
-        serialized = serialized.replace("{{WIDTH}}", os.getenv("COMFYUI_WIDTH", "768"))
-        serialized = serialized.replace("{{HEIGHT}}", os.getenv("COMFYUI_HEIGHT", "432"))
-        return json.loads(serialized)
+        # Substitute inside the parsed workflow structure so arbitrary ``topic``
+        # values (newlines/backslashes/quotes/Unicode) cannot corrupt JSON.
+        return _substitute_placeholders(json.loads(path.read_text(encoding="utf-8")), {
+            "TOPIC": topic,
+            "CHECKPOINT": os.getenv("COMFYUI_CHECKPOINT", "model.safetensors"),
+            "SEED": os.getenv("COMFYUI_SEED", "42"),
+            "WIDTH": os.getenv("COMFYUI_WIDTH", "768"),
+            "HEIGHT": os.getenv("COMFYUI_HEIGHT", "432"),
+        })
 
     def generate_output(
         self, workflow_path: str, topic: str, task_type: str = "image"

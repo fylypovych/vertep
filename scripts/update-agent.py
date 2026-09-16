@@ -153,16 +153,51 @@ def recover_if_interrupted(root: Path, state_dir: Path) -> None:
     try:
         state = json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        # status.json is truncated or unreadable.  Check for durable evidence
+        # of an interrupted install (audit log entries, pending request files)
+        # before giving up silently.
+        if _has_interrupt_evidence(state_dir):
+            state = {"state": "RUNNING", "phase": "RECOVERING",
+                     "message": "status.json unreadable; recovery triggered by audit/request evidence",
+                     "request_id": "", "log": [], "updated_at": now()}
+            transition(state_dir, state, "RECOVERING",
+                       "Interrupted update detected (unreadable status); restoring last good release")
+            _attempt_rollback(root, state_dir, state)
         return
     if (state.get("state") != "RUNNING"
             or state.get("phase") not in {"UPDATING", "RESTARTING", "VERIFYING", "RECOVERING"}):
         return
     transition(state_dir, state, "RECOVERING", "Interrupted update detected; restoring last good release")
+    _attempt_rollback(root, state_dir, state)
+
+
+def _has_interrupt_evidence(state_dir: Path) -> bool:
+    """Return True when durable evidence of a mid-flight update exists."""
+    audit_path = state_dir / "audit.jsonl"
+    if audit_path.exists():
+        try:
+            content = audit_path.read_text(encoding="utf-8").strip()
+            if content:
+                return True
+        except (OSError, ValueError):
+            pass
+    requests_dir = state_dir / "requests"
+    if requests_dir.is_dir():
+        try:
+            if any(requests_dir.glob("*.json")):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _attempt_rollback(root: Path, state_dir: Path, state: dict) -> None:
+    """Shared rollback logic for interrupted update recovery."""
     output = run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root)
     state["log"].extend(output.splitlines()[-100:])
     state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "message": "Rollback completed",
                   "updated_at": now()})
-    atomic_json(status_path, state)
+    atomic_json(state_dir / "status.json", state)
     from core.system_state import SystemState, set_system_state
     set_system_state(SystemState.NORMAL, "Previous release restored", state.get("request_id"), state_dir)
 

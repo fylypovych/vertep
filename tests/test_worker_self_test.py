@@ -113,3 +113,16 @@ def test_rollback_request_is_idempotent(monkeypatch, tmp_path):
     request = json.loads(next(request_root.glob("*.json")).read_text())
     assert request["action"] == "rollback"
     assert len(list(request_root.glob("*.json"))) == 1
+
+
+def test_claim_guard_excludes_disabled_restarting_revoked(monkeypatch):
+    """Workers with DISABLED/RESTARTING/REVOKED desired_state must not claim tasks."""
+    monkeypatch.setenv("REQUIRE_WORKER_SELF_TEST", "true")
+    now = datetime.now(timezone.utc)
+    attestation = {"status": "PASSED", "role": "gpu", "checked_at": now.isoformat()}
+    for state in ("DISABLED", "RESTARTING", "REVOKED"):
+        worker = {"node_name": f"gpu-{state}", "status": "OFFLINE", "last_seen": now.isoformat(),
+                  "role": "gpu", "vram_mb": 16000, "capabilities": ["image_generation"],
+                  "tested_capabilities": ["image_generation"], "supported_workflows": ["*"],
+                  "self_test": attestation, "desired_state": state}
+        assert available_worker([worker], job()) is None

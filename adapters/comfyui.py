@@ -4,6 +4,25 @@ import json
 from pathlib import Path
 import httpx
 
+def _substitute_placeholders(obj, mapping: dict[str, str]):
+    """Recursively replace ``{{TOKEN}}`` placeholders inside a workflow structure.
+
+    This operates on the parsed workflow (dict/list) rather than on its JSON
+    serialization, so any ``topic`` value (newlines, backslashes, quotes,
+    Unicode) is carried verbatim without risking a ``JSONDecodeError`` or an
+    unterminated string before the prompt is submitted.
+    """
+    if isinstance(obj, dict):
+        return {key: _substitute_placeholders(value, mapping) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_placeholders(item, mapping) for item in obj]
+    if isinstance(obj, str):
+        for token, replacement in mapping.items():
+            obj = obj.replace(f"{{{{{token}}}}}", replacement)
+        return obj
+    return obj
+
+
 class ComfyUIAdapter:
     def __init__(self) -> None:
         self.current_prompt_id: str | None = None
@@ -49,14 +68,17 @@ class ComfyUIAdapter:
         if not path.exists():
             raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
         workflow = json.loads(path.read_text(encoding="utf-8"))
-        # API workflows may use {{TOPIC}} in any string input.
-        serialized = json.dumps(workflow)
-        serialized = serialized.replace("{{TOPIC}}", topic.replace('"', '\\"'))
-        serialized = serialized.replace("{{CHECKPOINT}}", os.getenv("COMFYUI_CHECKPOINT", "model.safetensors"))
-        serialized = serialized.replace("{{SEED}}", os.getenv("COMFYUI_SEED", "42"))
-        serialized = serialized.replace("{{WIDTH}}", os.getenv("COMFYUI_WIDTH", "768"))
-        serialized = serialized.replace("{{HEIGHT}}", os.getenv("COMFYUI_HEIGHT", "432"))
-        workflow = json.loads(serialized)
+        # API workflows may use {{TOPIC}}/{{CHECKPOINT}}/{{SEED}}/{{WIDTH}}/{{HEIGHT}}
+        # in any string input. Substitute inside the workflow structure so that
+        # arbitrary ``topic`` values (newlines, backslashes, quotes, Unicode)
+        # cannot corrupt the serialized JSON.
+        workflow = _substitute_placeholders(workflow, {
+            "TOPIC": topic,
+            "CHECKPOINT": os.getenv("COMFYUI_CHECKPOINT", "model.safetensors"),
+            "SEED": os.getenv("COMFYUI_SEED", "42"),
+            "WIDTH": os.getenv("COMFYUI_WIDTH", "768"),
+            "HEIGHT": os.getenv("COMFYUI_HEIGHT", "432"),
+        })
         submitted = self.submit(workflow)
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
@@ -81,9 +103,25 @@ class ComfyUIAdapter:
         if os.getenv("DEMO_MODE", "true").lower() == "true":
             self.current_prompt_id = None
             return True
+        url = os.getenv("COMFYUI_URL", "http://localhost:8188")
+        # Try prompt-scoped removal first (queued prompts that have not started
+        # executing can be removed individually without interrupting other work).
+        if self.current_prompt_id:
+            try:
+                response = httpx.delete(
+                    f"{url}/queue",
+                    params={"prompt_id": self.current_prompt_id},
+                    timeout=10)
+                response.raise_for_status()
+                self.current_prompt_id = None
+                return True
+            except httpx.HTTPError:
+                pass  # prompt may already be executing; fall through to global interrupt
+        # Global interrupt as fallback for the currently-executing prompt.
         try:
-            response = httpx.post(f"{os.getenv('COMFYUI_URL', 'http://localhost:8188')}/interrupt", timeout=10)
+            response = httpx.post(f"{url}/interrupt", timeout=10)
             response.raise_for_status()
+            self.current_prompt_id = None
             return True
         except httpx.HTTPError:
             return False

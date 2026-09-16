@@ -130,6 +130,25 @@ def cancel_rollout() -> dict:
         return rollout
 
 
+def _cleanup_cancelled_workers(workers: dict[str, dict], rollout: dict) -> None:
+    """Clear residual update commands on workers whose rollout was cancelled."""
+    if rollout.get("state") != "CANCELLED":
+        return
+    cancelled_ids = {node["node_id"] for node in rollout.get("nodes", [])
+                     if node.get("phase") == "CANCELLED"}
+    for node_id in cancelled_ids:
+        worker = workers.get(node_id)
+        if worker is None:
+            continue
+        dirty = False
+        for field in ("desired_state", "update_target_version", "update_operation_id",
+                       "rollback_target_version"):
+            if worker.pop(field, None) is not None:
+                dirty = True
+        if dirty:
+            worker.pop("self_test_requested_at", None)
+
+
 def _begin_rollback(rollout: dict, workers: dict[str, dict], error: str) -> dict:
     rollout.update({"state": "ROLLING_BACK", "error": error})
     target = rollout["target_version"]
@@ -169,6 +188,9 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
     """Advance durable rollout state. Safe to call after any process restart."""
     with _lock, _coordination_lock():
         rollout = rollout_status()
+        # When a rollout was cancelled, clean up residual update commands on
+        # affected workers so they don't continue processing stale directives.
+        _cleanup_cancelled_workers(workers, rollout)
         if rollout.get("state") == "ROLLING_BACK":
             for node in rollout.get("nodes", []):
                 if node.get("phase") != "ROLLING_BACK":
@@ -228,7 +250,15 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
             if test.get("status") == "FAILED":
                 active.update({"phase": "FAILED", "error": test.get("error", "Self-test failed")})
                 return _begin_rollback(rollout, workers, active["error"])
-            if test.get("status") == "PASSED" and worker.get("version") == rollout["target_version"]:
+            # The self-test must be PASSED, the worker must be at the target
+            # version, AND the test result must be newer than the phase start
+            # to prevent a stale PASSED result from approving a different
+            # target version.  (Issue #53, #15 — self-test binding.)
+            phase_started = active.get("phase_started_at", "")
+            checked_at = str(test.get("checked_at", ""))
+            if (test.get("status") == "PASSED"
+                    and worker.get("version") == rollout["target_version"]
+                    and checked_at > phase_started):
                 active["phase"] = "READY"
                 worker.pop("desired_state", None)
                 worker.pop("update_target_version", None)

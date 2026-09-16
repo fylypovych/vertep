@@ -1,5 +1,14 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.79
+- Rolling update (#53, #15): додано `_cleanup_cancelled_workers` — очищення residual update-команд (`desired_state`, `update_target_version` тощо) на worker-ах після cancel rollout; self-test binding перевіряє `checked_at > phase_started_at` для запобігання stale PASSED результатам.
+- Monitoring (#19): розширено Prometheus scrape inventory — `vertep-core`, `vertep-workers` (DNS SRV discovery), `node-exporter`, `loki`, `prometheus` self-scrape; додано алерти `VertepJobFailureSpike`, `VertepDeadLetterTasks`, `VertepQueueBacklog`, `VertepWorkerOffline`, `VertepWorkerPartialOutage`, `VertepNodeExporterDown`; тести `test_monitoring.py` (Prometheus scrape inventory + alert rules).
+- Update security (#15): `_has_interrupt_evidence` виявляє durable evidence (audit.jsonl, pending requests) коли `status.json` нечитабельний, запускає recovery замість silent failure; 6 нових тестів `test_update_security.py`.
+- Worker self-test (#53, #12): `available_worker` виключає worker-ів з DISABLED/RESTARTING/REVOKED `desired_state` з претендентів на claim tasks.
+- ComfyUI Docker: додано ComfyUI-VideoHelperSuite (VHS) плагін до NVIDIA Docker image.
+- Domain clients migration (#25): типізовані DTO для workers/health, node/status, health/history, security/check, workflows, health metrics, security certificates у web-v2.
+- AGENTS.md: оновлено правила роботи з Issues (розділ 29) — пряме локальне виправлення без обов'язкового Issue, створення Issue лише за явною командою.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.78
 - Rolling update (#53, #15): виправлено one-node-at-a-time rollout та canary promotion; `reconcile_rollout` коректно переходить DRAINING → UPDATING → SELF_TESTING → READY; self-test binding перевіряє `checked_at > phase_started_at`; тести `test_rolling_update.py` проходять (10/10).
 

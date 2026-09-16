@@ -5,7 +5,7 @@ import { VertepApiService } from '../core/api.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
-import { HealthCheck, HealthHistoryEntry } from '../core/models';
+import { HealthCheck, HealthHistoryEntry, MetricsResponse } from '../core/models';
 import { roleLabel } from '../core/presentation';
 
 @Component({
@@ -148,7 +148,7 @@ export class HealthComponent implements OnInit, OnDestroy {
   service = signal<string>('—');
   jobsCount = signal(0);
   checks = signal<Array<{ key: string; value: [boolean, string] }>>([]);
-  metrics = signal<Record<string, unknown>>({});
+  metrics = signal<MetricsResponse>({ jobs_total: 0, queue_ready: 0, queue_inflight: 0, queue_dead_letter: 0, workers_online: 0, jobs_scheduled: 0, jobs_by_status: {}, scenes_by_status: {} });
   historyLoading = signal(false);
   history = signal<HealthHistoryEntry[]>([]);
   private pollTimer: Subscription | null = null;

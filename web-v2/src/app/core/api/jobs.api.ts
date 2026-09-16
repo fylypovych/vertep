@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
-import { Job, JobCreate, JobUpdate, JobEvent, JobPage, JobListQuery, ArtifactRecord, ArtifactVerifyResponse, DeadLetterTask, QueueState, ScheduledJob } from '../models';
+import { Job, JobCreate, JobUpdate, JobEvent, JobPage, JobListQuery, ArtifactRecord, ArtifactVerifyResponse, DeadLetterTask, QueueState, ScheduledJob, OperationAck } from '../models';
 
 @Injectable()
 export class JobsApiService {
@@ -82,8 +82,8 @@ export class JobsApiService {
   deadLetter(): Observable<DeadLetterTask[]> {
     return this.http.get<DeadLetterTask[]>(`${this.base.url}/tasks/dead-letter`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
-  retryDeadLetter(taskId: string): Observable<Record<string, unknown>> {
-    return this.http.post<Record<string, unknown>>(`${this.base.url}/tasks/dead-letter/${this.base.enc(taskId)}/retry`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  retryDeadLetter(taskId: string): Observable<OperationAck> {
+    return this.http.post<OperationAck>(`${this.base.url}/tasks/dead-letter/${this.base.enc(taskId)}/retry`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
   queueState(): Observable<QueueState> {
     return this.http.get<QueueState>(`${this.base.url}/tasks/queue`, { headers: this.h() }).pipe(catchError(this.base.handleError));
