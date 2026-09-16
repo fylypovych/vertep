@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.78
+- Rolling update (#53, #15): виправлено one-node-at-a-time rollout та canary promotion; `reconcile_rollout` коректно переходить DRAINING → UPDATING → SELF_TESTING → READY; self-test binding перевіряє `checked_at > phase_started_at`; тести `test_rolling_update.py` проходять (10/10).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.77
 - Domain clients migration (#25): додано типізовані DTO для `workers/health`, `node/status`, `health/history`, `security/check` — `WorkersHealthResponse`, `WorkerHealthItem`, `NodeSystemStatusResponse`, `HealthHistoryResponse`, `SecurityCheckResponse`; оновлено `WorkersApiService` та `SystemApiService` на новий контракт; видалено `Record<string, unknown>` для цих ендпоінтів.
 
