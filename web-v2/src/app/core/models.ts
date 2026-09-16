@@ -739,3 +739,156 @@ export interface WizardState {
   core_certificate?: string;
   registration_token?: string;
 }
+
+// ── Typed DTOs for remaining Record<string, unknown> endpoints ───
+export interface MetricsResponse {
+  jobs_total: number;
+  jobs_by_status: Record<string, number>;
+  queue_ready: number;
+  queue_inflight: number;
+  queue_dead_letter: number;
+  jobs_scheduled: number;
+  scenes_by_status: Record<string, number>;
+  workers_online: number;
+}
+
+export interface WorkerHealthItem {
+  node_id: string;
+  node_name: string;
+  checks: Record<string, unknown>;
+}
+
+export interface WorkersHealthResponse {
+  status: string;
+  workers: WorkerHealthItem[];
+}
+
+export interface NodeSystemStatusResponse {
+  node: string;
+  status: string;
+}
+
+export interface HealthHistoryEntry {
+  timestamp: string;
+  role: string;
+  status: string;
+  checks: Record<string, [boolean, string]>;
+}
+
+export interface HealthHistoryResponse {
+  history: HealthHistoryEntry[];
+}
+
+export interface SecurityCheckResponse {
+  ok: boolean;
+  weak_or_missing: string[];
+  recommendation: string;
+}
+
+export interface IntegrationInfo {
+  name: string;
+  status: string;
+  configured?: boolean;
+}
+
+export interface IntegrationStatusResponse {
+  ollama: { status: string; http_status?: number; error?: string };
+  comfyui: { status: string; http_status?: number; error?: string };
+  publisher?: Record<string, { configured: boolean }>;
+}
+
+export interface BackupSnapshotItem {
+  snapshot_id: string;
+  created_at?: string;
+  size_bytes?: number;
+  state?: string;
+  description?: string;
+}
+
+export interface BackupListResponseDTO {
+  backups: BackupSnapshotItem[];
+}
+
+export interface BackupCreateResponse {
+  job: string;
+  detail?: string;
+}
+
+export interface BackupRestoreResponse {
+  snapshot_id: string;
+  status: string;
+}
+
+export interface ModelInfoDTO {
+  name: string;
+  size?: number;
+  details?: Record<string, unknown>;
+}
+
+export interface ModelsResponse {
+  models: ModelInfoDTO[] | string;
+}
+
+export interface ModelPullResponse {
+  model: string;
+  detail?: string;
+}
+
+export interface ModelDeleteResponse {
+  model_name: string;
+  status: string;
+}
+
+export interface CertificateInfoDTO {
+  status: string;
+  present?: boolean;
+  expires_at?: string;
+  days_remaining?: number;
+}
+
+export interface CertificatesResponse {
+  certificates: Record<string, CertificateInfoDTO> | string;
+}
+
+export interface CertificateRenewResponse {
+  certificate: string;
+  detail?: string;
+}
+
+export interface SystemStateDTO {
+  state: string;
+  updated_at?: string;
+  reason?: string;
+  operation_id?: string;
+}
+
+export interface LicenseResponse {
+  license: string | Record<string, unknown>;
+}
+
+export interface RollingCancelResponse {
+  status: string;
+}
+
+export interface RollingPromoteResponse {
+  status: string;
+}
+
+export interface RollingRollbackResponse {
+  status: string;
+}
+
+export interface NodeActionResponse {
+  accepted?: boolean;
+  workers?: number;
+  desired_state?: string;
+  self_test_requested_at?: string | null;
+  update_target_version?: string | null;
+  rollback_target_version?: string | null;
+}
+
+export interface NodeRevokeResponse {
+  node_id: string;
+  status: string;
+  revoked_at?: string;
+}

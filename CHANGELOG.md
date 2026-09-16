@@ -1,5 +1,8 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.77
+- Domain clients migration (#25): додано типізовані DTO для `workers/health`, `node/status`, `health/history`, `security/check` — `WorkersHealthResponse`, `WorkerHealthItem`, `NodeSystemStatusResponse`, `HealthHistoryResponse`, `SecurityCheckResponse`; оновлено `WorkersApiService` та `SystemApiService` на новий контракт; видалено `Record<string, unknown>` для цих ендпоінтів.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.76
 - Job UI (#23): структурований timeline (`event_log` з `JobEvent`) показується незалежно від legacy `events` масиву; `structuredEvents()` передає `attempt`, `worker`, `task`, `artifact`, `error` контекст; legacy fallback вилучено.
 - Fleet/Queue (#25, #26, #28): worker restart/update пов'язані з реальним consumer у `worker/service.py` (обработка `RESTARTING` desired_state, перевірка статусу перед claim); dispatcher gating по `tested_capabilities` без fallback до `declared`; `DISABLED/RESTARTING/REVOKED` блокують нові claims.
