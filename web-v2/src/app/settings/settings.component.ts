@@ -1,5 +1,7 @@
-import { Component } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { NavigationEnd, Router } from '@angular/router';
+import { filter, Subscription } from 'rxjs';
 import { SystemInfoSectionComponent } from './sections/system-info.section';
 import { TelegramSectionComponent } from './sections/telegram.section';
 import { SecretsSectionComponent } from './sections/secrets.section';
@@ -29,23 +31,7 @@ import { IntegrationsSectionComponent } from './sections/integrations.section';
   ],
   template: `
     <div class="space-y-6" data-testid="settings-page">
-      <div class="flex flex-col lg:flex-row gap-6">
-        <nav class="lg:w-56 flex-shrink-0">
-          <div class="bg-white rounded-xl border border-slate-200 p-2 flex lg:flex-col gap-1 overflow-x-auto">
-            @for (tab of tabs; track tab.id) {
-              <button (click)="activeTab = tab.id"
-                class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg whitespace-nowrap transition-colors text-left w-full"
-                [class.bg-emerald-50]="activeTab === tab.id"
-                [class.text-emerald-700]="activeTab === tab.id"
-                [class.text-slate-600]="activeTab !== tab.id"
-                [class.hover:bg-slate-50]="activeTab !== tab.id">
-                <span [innerHTML]="tab.icon" class="w-4 h-4 flex-shrink-0"></span>
-                <span>{{ tab.label }}</span>
-              </button>
-            }
-          </div>
-        </nav>
-        <div class="flex-1 min-w-0">
+        <div class="min-w-0">
           @switch (activeTab) {
             @case ('system') { <app-settings-system-info /> }
             @case ('telegram') { <app-settings-telegram /> }
@@ -59,12 +45,28 @@ import { IntegrationsSectionComponent } from './sections/integrations.section';
             @case ('integrations') { <app-settings-integrations /> }
           }
         </div>
-      </div>
     </div>
   `,
 })
-export class SettingsComponent {
+export class SettingsComponent implements OnInit, OnDestroy {
   activeTab = 'system';
+  private routeSubscription?: Subscription;
+
+  constructor(private router: Router) {}
+
+  ngOnInit(): void {
+    this.selectTab(this.router.parseUrl(this.router.url).queryParams['tab']);
+    this.routeSubscription = this.router.events
+      .pipe(filter(event => event instanceof NavigationEnd))
+      .subscribe(() => this.selectTab(this.router.parseUrl(this.router.url).queryParams['tab']));
+  }
+
+  ngOnDestroy(): void { this.routeSubscription?.unsubscribe(); }
+
+  private selectTab(tab: string | null): void {
+    if (tab && this.tabs.some(item => item.id === tab)) this.activeTab = tab;
+  }
+
   readonly tabs = [
     { id: 'system', label: 'Система', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>' },
     { id: 'telegram', label: 'Telegram', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>' },

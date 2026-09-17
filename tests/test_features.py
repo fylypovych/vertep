@@ -36,6 +36,42 @@ def _complete_script_task(client, job_id, node_name="text-worker"):
     return artifact
 
 
+def _complete_storyboard_task(client, job_id, node_name="text-worker"):
+    """Simulate a Text Worker claiming, executing, and submitting a storyboard task."""
+    import base64 as _b64
+    task = None
+    for _ in range(100):
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        task = resp.json().get("task")
+        if task and task.get("task") == "storyboard" and task.get("job_id") == job_id:
+            break
+        time.sleep(0.01)
+    if not task:
+        return None
+    job_data = client.get(f"/api/jobs/{job_id}").json()
+    script = job_data.get("script") or {"title": job_data["topic"], "scenes": [
+        {"prompt": job_data["topic"], "voiceover": "", "duration": 5}]}
+    storyboard_data = {
+        "version": task.get("storyboard_version", 1),
+        "title": script.get("title", job_data["topic"]),
+        "description": script.get("description", ""),
+        "hashtags": script.get("hashtags", []),
+        "scenes": [{"index": i + 1, "prompt": s.get("prompt", ""), "video_prompt": s.get("prompt", ""),
+                     "voiceover": s.get("voiceover", ""), "duration": float(s.get("duration", 5)),
+                     "image_prompt": s.get("prompt", "")}
+                    for i, s in enumerate(script.get("scenes", []))],
+        "prompt_version": "1", "model": "test",
+        "image_version": task.get("image_version", 1),
+    }
+    artifact = {"kind": "storyboard", "filename": "storyboard.json",
+                "data_base64": _b64.b64encode(json.dumps(storyboard_data).encode()).decode()}
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]})
+    assert response.status_code == 200
+    return artifact
+
+
 def _mock_storyboard_queue(self, job, revision=None):
     target_store = getattr(self, "store", store)
     if not hasattr(job, "job_id"):
@@ -111,6 +147,8 @@ def approve_script(client, job_id):
     assert resp.status_code == 200
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if not local_fallback and job["status"] == "STORYBOARD_QUEUED":
+            _complete_storyboard_task(client, job_id)
         if job["status"] == "STORYBOARD_PENDING_APPROVAL":
             break
         time.sleep(0.025)
@@ -576,6 +614,8 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
     image.write_bytes(b"P6\n4 4\n255\n" + bytes((20, 40, 80)) * 16)
     clip = FFmpegAdapter().assemble(tmp_path / "worker-clip.mp4", images=[image], durations=[0.25])
     client = TestClient(app)
+    heartbeat(client, "text-worker", capabilities=[], supported_tasks=["script", "storyboard"],
+              supported_workflows=["*"])
     heartbeat(client, "video-worker", capabilities=[], supported_tasks=["video"],
               supported_workflows=["*"])
     response = client.post("/api/jobs", json={"topic": "Video worker contract", "task_type": "video",

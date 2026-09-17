@@ -140,6 +140,14 @@ def test_backup_covers_storage_and_restore(monkeypatch, tmp_path):
     import base64
     from fastapi.testclient import TestClient
     from services import backup_service
+    
+    def _restore(client, snapshot_id):
+        """Two-phase restore: request the confirmation token, then confirm the restore."""
+        first = client.post(f"/snapshots/{snapshot_id}/restore")
+        assert first.status_code == 200
+        token = first.json()["confirmation_token"]
+        return client.post(f"/snapshots/{snapshot_id}/restore/confirm", params={"token": token})
+    
     config = tmp_path / "config"
     storage = tmp_path / "storage"
     backups = tmp_path / "backups"
@@ -154,6 +162,10 @@ def test_backup_covers_storage_and_restore(monkeypatch, tmp_path):
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k"*32).decode())
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
+    # Mock CORE system state for standalone node (no CORE configured)
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
     client = TestClient(backup_service.app)
     resp = client.post("/snapshots", json={"job_id": "j1", "request": {}})
     assert resp.status_code == 200
@@ -163,8 +175,8 @@ def test_backup_covers_storage_and_restore(monkeypatch, tmp_path):
     shutil.rmtree(storage / "characters" / "c1")
     (storage / "workflows" / "image" / "demo.json").unlink()
     assert not (storage / "characters" / "c1").exists()
-    # Restore
-    resp = client.post(f"/snapshots/{snap_id}/restore")
+    # Restore (two-phase)
+    resp = _restore(client, snap_id)
     assert resp.status_code == 200
     assert (storage / "characters" / "c1" / "character.json").exists()
     assert (storage / "workflows" / "image" / "demo.json").exists()

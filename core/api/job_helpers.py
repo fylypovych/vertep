@@ -662,8 +662,15 @@ def _image_storyboard_gate(store, job) -> bool:
     asset generation even though the current preview images were never approved by the
     operator. Returns ``True`` when the pipeline must wait (missing preview images are
     (re)queued, with LOCAL_WORKER_FALLBACK first-pass generation kept functional).
+
+    Issue #60: Also block when storyboard is missing entirely or image_status is not
+    "approved" after a legitimate storyboard generation attempt.
     """
     if job.task_type == "video" or job.storyboards:
+        _PRE_STORYBOARD = {JobStatus.SCRIPT_APPROVED, JobStatus.STORYBOARD_QUEUED,
+                           JobStatus.STORYBOARD_GENERATING, JobStatus.STORYBOARD_FAILED}
+        if job.status in _PRE_STORYBOARD:
+            return False
         if not job.storyboards or not job.active_storyboard_version:
             store.event(job, "STORYBOARD GATE: No active storyboard; asset generation blocked")
             return True
@@ -691,17 +698,15 @@ def _image_storyboard_gate(store, job) -> bool:
 
 
 def _prepare_and_dispatch(job) -> None:
-    # Issue #36: never start video/image assets without an approved, current image
-    # storyboard — this closes the Resume/Retry bypass (status reset to NEW while the
-    # script is already ready does not authorize asset generation).
-    if _image_storyboard_gate(store, job):
-        return
     while True:
         if job.script and job.status == JobStatus.NEW:
             initialize_plan(job)
             assets_stage = job.stages[StageName.ASSETS.value]
             if assets_stage.status in {StageStatus.PENDING, StageStatus.FAILED, StageStatus.PAUSED}:
                 transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
+            # Issue #36/#60: gate asset generation until image storyboard approved
+            if _image_storyboard_gate(store, job):
+                return
             store.update(job, JobStatus.ASSET_GENERATION, "IMAGE TASK REDISPATCHED")
         elif job.status in {JobStatus.NEW, JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_FAILED}:
             prepare_job_safe(store, job)
@@ -739,10 +744,16 @@ def _prepare_and_dispatch(job) -> None:
                     store.event(job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
             # No explicit image approval yet — wait for user action (Issue #6 rule)
             return
+        # Issue #36/#60: gate asset generation until image storyboard approved
+        if _image_storyboard_gate(store, job):
+            return
         store.transition(job, JobStatus.ASSET_GENERATION, "ASSET GENERATION STARTED")
         _dispatch_assets(store, job)
         return
     if job.status == JobStatus.ASSET_GENERATION:
+        # Issue #36/#60: gate asset generation until image storyboard approved
+        if _image_storyboard_gate(store, job):
+            return
         _dispatch_assets(store, job)
     if job.status == JobStatus.TTS_GENERATING:
         _dispatch_tts(store, job)

@@ -125,7 +125,7 @@ def _sync_delete_to_database(operation_id: str) -> None:
 
 
 def create_operation(op_type: str, requested_by: str,
-                     target: str | None = None) -> dict[str, Any]:
+                     target: str | None = None, idempotency_key: str | None = None) -> dict[str, Any]:
     """Create and persist a new system operation.
 
     Returns the full operation dict including a generated ``operation_id``.
@@ -139,6 +139,7 @@ def create_operation(op_type: str, requested_by: str,
         "type": op_type,
         "requested_by": requested_by,
         "target": target,
+        "idempotency_key": idempotency_key,
         "created_at": now,
         "started_at": None,
         "finished_at": None,
@@ -154,6 +155,26 @@ def create_operation(op_type: str, requested_by: str,
         operations[operation["operation_id"]] = operation
         _write_all(operations)
         _sync_to_database(operation)
+def get_or_create_operation(op_type: str, requested_by: str,
+                            target: str | None = None, idempotency_key: str | None = None) -> tuple[dict[str, Any], bool]:
+    """Atomically check for an active operation and create one if none exists.
+
+    Returns (operation, created) where 'created' is True if a new operation was started.
+    """
+    with _lock:
+        # 1. Check for existing active operation (by type+target or idempotency_key)
+        operations = _read_all()
+        for op in operations.values():
+            if op["status"] in {s.value for s in _ACTIVE_STATUSES}:
+                if idempotency_key and op.get("idempotency_key") == idempotency_key:
+                    return op, False
+                if op["type"] == op_type and op.get("target") == target:
+                    return op, False
+
+        # 2. Create new
+        op = create_operation(op_type, requested_by, target, idempotency_key)
+        return op, True
+
     return operation
 
 
@@ -302,3 +323,33 @@ def audit_entry(operation_id: str, phase: str, message: str | None = None,
     except OSError:
         pass
     return entry
+
+def add_pending_notification(chat_id: str, message: str):
+    """Persist a notification to be sent after system restart."""
+    path = _state_dir() / "pending_notifications.json"
+    _state_dir().mkdir(parents=True, exist_ok=True)
+
+    notifications = {}
+    if path.exists():
+        try:
+            notifications = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+
+    notifications[secrets.token_hex(4)] = {"chat_id": chat_id, "message": message, "timestamp": _now()}
+    atomic_write_json(path, notifications)
+
+def pop_pending_notifications() -> list[dict[str, str]]:
+    """Retrieve and clear all pending notifications."""
+    path = _state_dir() / "pending_notifications.json"
+    if not path.exists():
+        return []
+
+    try:
+        notifications = json.loads(path.read_text(encoding="utf-8"))
+        _state_dir().mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, {}) # Clear immediately
+        return [v for k, v in notifications.items()]
+    except (OSError, ValueError):
+        return []
+

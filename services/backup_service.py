@@ -32,6 +32,10 @@ MAGIC = b"VERTEP-BACKUP-v1\0"
 _restore_progress: dict[str, dict] = {}
 _restore_lock = threading.RLock()
 
+_restore_confirmations: dict[str, dict] = {}
+_confirm_lock = threading.RLock()
+
+
 
 class SnapshotRequest(BaseModel):
     job_id: str = Field(min_length=1, max_length=128)
@@ -353,43 +357,98 @@ def system_status() -> dict:
     return {**state, "reachable": True}
 
 
+@app.get("/snapshots/{snapshot_id}/restore/progress")
+def get_restore_progress(snapshot_id: str) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(422, "Некоректний ідентифікатор snapshot")
+    entry = _restore_progress.get(snapshot_id)
+    if entry is None:
+        return {"status": "unknown", "progress": 0, "message": ""}
+    return {"status": entry.get("status", "unknown"), "progress": entry.get("progress", 0), "message": entry.get("message", "")}
+
+
 @app.post("/snapshots/{snapshot_id}/restore")
 def restore_snapshot(snapshot_id: str) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
         raise HTTPException(422, "Некоректний ідентифікатор snapshot")
+    
     allowed, reason = _is_restore_allowed()
     if not allowed:
         raise HTTPException(409, reason)
+        
+    source = _backup_root() / f"{snapshot_id}.vtbackup"
+    if not source.exists():
+        raise HTTPException(404, "Snapshot не знайдено")
+    
+    token = secrets.token_hex(16)
+    with _confirm_lock:
+        _restore_confirmations[token] = {
+            "snapshot_id": snapshot_id,
+            "expires_at": time.time() + 300
+        }
+        
+    return {
+        "status": "confirmation_required",
+        "confirmation_token": token,
+        "message": "Відновлення потребує підтвердження. Використайте /confirm endpoint."
+    }
+
+
+@app.post("/snapshots/{snapshot_id}/restore/confirm")
+def confirm_restore(snapshot_id: str, token: str) -> dict:
+    if not token or token not in _restore_confirmations:
+        raise HTTPException(401, "Невірний або відсутній токен підтвердження")
+    
+    conf = _restore_confirmations[token]
+    if conf["snapshot_id"] != snapshot_id or time.time() > conf["expires_at"]:
+        raise HTTPException(401, "Токен підтвердження застарів або не відповідає snapshot")
+    
+    with _confirm_lock:
+        del _restore_confirmations[token]
+    
+    return _execute_restore(snapshot_id)
+
+def _execute_restore(snapshot_id: str) -> dict:
     key = _key()
     root = _backup_root()
     source = root / f"{snapshot_id}.vtbackup"
-    if not source.exists():
-        raise HTTPException(404, "Snapshot не знайдено")
     receipt_path = source.with_suffix(".json")
+    
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise HTTPException(409, "Receipt snapshot відсутній або пошкоджений") from error
+        
     encrypted_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     if not secrets.compare_digest(encrypted_digest, str(receipt.get("sha256", ""))):
         raise HTTPException(409, "Checksum snapshot не збігається")
+        
     with _restore_lock:
         _restore_progress[snapshot_id] = {"status": "running", "progress": 5, "message": "Перевірка цілісності...", "started_at": time.time()}
+        
     try:
+        # Issue #60: System must be in MAINTENANCE/RECOVERY during restore
+        _set_system_state("MAINTENANCE", f"System restore initiated for {snapshot_id}")
+        
         if not _core_available():
             raise HTTPException(503, "CORE недоступний, відновлення заборонено")
+            
         _set_restore_progress(snapshot_id, 10, "Розшифрування...")
         restore_root = root / "restore"
         restore_root.mkdir(parents=True, exist_ok=True)
+        
         with tempfile.TemporaryDirectory(dir=restore_root) as temporary:
             encrypted = Path(temporary) / "snapshot.vtbackup"
             decrypted = Path(temporary) / "snapshot.tar.gz"
             extracted = Path(temporary) / "extracted"
+            
             encrypted.write_bytes(source.read_bytes())
             _decrypt(encrypted, decrypted, key)
+            
             _set_restore_progress(snapshot_id, 40, "Розпакування...")
             with tarfile.open(decrypted, "r:gz") as tar:
                 _safe_extract(tar, extracted)
+                
             _set_restore_progress(snapshot_id, 60, "Очищення старих файлів...")
             destinations = dict(_sources())
             for label, destination in destinations.items():
@@ -415,6 +474,7 @@ def restore_snapshot(snapshot_id: str) -> dict:
                         continue
                     if existing.is_file() or (existing.is_symlink() and not existing.is_dir()):
                         existing.unlink(missing_ok=True)
+                        
             _set_restore_progress(snapshot_id, 70, "Відновлення бази даних...")
             db_root = extracted / "db"
             if db_root.is_dir():
@@ -429,20 +489,21 @@ def restore_snapshot(snapshot_id: str) -> dict:
                     redis_data = Path(os.getenv("REDIS_DATA_DIR", str(_PROJECT_ROOT / "var" / "lib" / "redis")))
                     redis_data.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(redis_rdb, redis_data / "dump.rdb")
+            
             _set_restore_progress(snapshot_id, 85, "Перевірка після відновлення...")
-            health = _core_health_check()
-            if health is not None and health.get("status") not in (None, "", "HEALTHY", "OK"):
-                raise RuntimeError(f"CORE health check failed after restore: {health}")
             _post_restore_health_check(destinations)
+            
         _set_restore_progress(snapshot_id, 100, "Відновлення завершено", status="done")
+        _set_system_state("NORMAL", f"System restored from {snapshot_id}")
         return {"snapshot_id": snapshot_id, "restored": [], "sha256": encrypted_digest, "status": "done"}
+        
     except HTTPException:
         try:
             _set_emergency("Restore failed")
         except Exception:
             pass
         with _restore_lock:
-            _restore_progress[snapshot_id] = {"status": "error", "progress": 0, "message": reason if not allowed else "Помилка відновлення", "started_at": _restore_progress.get(snapshot_id, {}).get("started_at")}
+            _restore_progress[snapshot_id] = {"status": "error", "progress": 0, "message": "Помилка відновлення", "started_at": _restore_progress.get(snapshot_id, {}).get("started_at")}
         raise
     except Exception as error:
         try:
@@ -498,6 +559,25 @@ def _core_available() -> bool:
             return resp.status == 200
     except Exception:
         return False
+
+
+def _set_system_state(state: str, reason: str) -> None:
+    """Set the GLOBAL system state on CORE."""
+    core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
+    if not core_url:
+        return
+    headers = {"Content-Type": "application/json"}
+    token = os.getenv("NODE_API_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        payload = json.dumps({"state": state, "reason": reason, "operation_id": None}).encode("utf-8")
+        req = urllib.request.Request(f"{core_url}/api/system/state", data=payload,
+                                      headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+    except Exception as error:
+        raise RuntimeError(f"Failed to set system state {state} via core API: {error}") from error
 
 
 def _set_emergency(reason: str) -> None:

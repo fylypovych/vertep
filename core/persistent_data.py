@@ -80,6 +80,43 @@ def ensure_persistent_user_data(*, seed_overwrite: bool = False) -> dict:
                     pass
                 if src.is_dir():
                     seeded[label] = seeded.get(label, 0) + _copy_missing(src, dst, overwrite=seed_overwrite)
-        try: marker.write_text(json.dumps({"seeded":seeded,"migrated":migrated})+"\n", encoding="utf-8")
-        except OSError: pass
+    try: marker.write_text(json.dumps({"seeded":seeded,"migrated":migrated})+"\n", encoding="utf-8")
+    except OSError: pass
     return {"characters_root":str(c_root),"brands_root":str(b_root),"workflows_root":str(w_root),"seeded":seeded if not should_seed else {},"migrated":migrated,"seed_skipped": not should_seed}
+
+
+def ensure_persistent_user_data_legacy_migration() -> dict:
+    """Migrate legacy ephemeral roots from /app/{characters,brands,workflows}.
+
+    Issue #60: during bootstrapped container lifecycle, user data created at
+    /app/{characters,brands,workflows} during a previous version may not have been
+    migrated to the persistent storage location. This function copies those
+    legacy paths to the persistent roots without overwriting existing data.
+
+    Also copies ephemeral roots created at ./{characters,brands,workflows} (relative
+    to the project root) for development scenarios.
+
+    Returns dict with migration counts per label.
+    """
+    migrated: dict[str, int] = {}
+    MIGRATED = {}
+    results = {"migrated": MIGRATED}
+
+    for label in ("characters", "brands", "workflows"):
+        persistent_root = {
+            "characters": persistent_characters_root(),
+            "brands": persistent_brands_root(),
+            "workflows": workflows_persistent_root(),
+        }[label]
+
+        for legacy_path in [
+            Path(f"/app/{label}"),
+            Path(label),
+        ]:
+            if not legacy_path.exists() or legacy_path.is_symlink():
+                continue
+            count = _copy_missing(legacy_path, persistent_root, overwrite=False)
+            if count > 0:
+                MIGRATED[label] = MIGRATED.get(label, 0) + count
+
+    return results

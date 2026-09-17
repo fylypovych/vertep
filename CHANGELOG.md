@@ -1,5 +1,14 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.84
+- Image Storyboard Gate (Issue #60): розширено `_image_storyboard_gate` — блокування asset generation без approved storyboard, авто-queue з LOCAL_WORKER_FALLBACK
+- Audit для Backup (Issue #60): додано `audit_entry` при запуску backup через Telegram
+- Idempotency Keys: `create_operation` приймає `idempotency_key` для дедуплікації операцій
+- Legacy Migration (Issue #60): `ensure_persistent_user_data_legacy_migration` — міграція ефемерних даних з `/app/{characters,brands,workflows}` та `./{characters,brands,workflows}` в persistent storage
+- Backup Service: додано `_restore_confirmations` + `_confirm_lock` для tracking restore confirmations
+- Tests: `_complete_storyboard_task` helper, backup/restore tests, role services imports, telegram restore test fixes
+- Web UI Settings: sidebar queryParams `{ tab: 'system' }`, settings component OnDestroy/OnInit + Router для tab handling
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.83
 - Real Tests Runner (#62): A1-A4 — виправлено `NameError` (`status.value` → `result.status.value`), scenario-specific success policy, автоматичне додавання mandatory checks, `_redact_secrets()` для report/comment
 - Real Tests GitHub Reporter (#62): A5-A8 — `_git_commit()` пріоритетний SHA (GITHUB_SHA → VERSION → git), `can_close_issue` strict (all mandatory PASS, version/SHA match, one-time use), `_gh()` returncode check, `_gh_env()` strict secrets, `_already_reported` fix repo param

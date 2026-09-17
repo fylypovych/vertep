@@ -7,6 +7,13 @@ from fastapi.testclient import TestClient
 from services import (backup_service, certificate_service, dispatcher_service,
                       license_service, publisher_service, scheduler_service, tts_service)
 
+def _restore(client, snapshot_id):
+    """Two-phase restore: request the confirmation token, then confirm the restore."""
+    first = client.post(f"/snapshots/{snapshot_id}/restore")
+    assert first.status_code == 200
+    token = first.json()["confirmation_token"]
+    return client.post(f"/snapshots/{snapshot_id}/restore/confirm", params={"token": token})
+
 
 def test_tts_service_returns_valid_wav(monkeypatch):
     class Result:
@@ -44,6 +51,8 @@ def test_backup_service_creates_encrypted_snapshot_and_receipt(monkeypatch, tmp_
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
     client = TestClient(backup_service.app)
     assert client.get("/health").status_code == 200
     response = client.post("/snapshots", json={"job_id": "backup-job", "request": {}})
@@ -55,7 +64,7 @@ def test_backup_service_creates_encrypted_snapshot_and_receipt(monkeypatch, tmp_
     assert json.loads((backups / f"{receipt['snapshot_id']}.json").read_text())["sha256"] == receipt["sha256"]
     (config / "installation.json").write_text('{"id":"changed"}', encoding="utf-8")
     (storage / "artifact.bin").write_bytes(b"changed")
-    restored = client.post(f"/snapshots/{receipt['snapshot_id']}/restore")
+    restored = _restore(client, receipt['snapshot_id'])
     assert restored.status_code == 200
     assert (config / "installation.json").read_text(encoding="utf-8") == '{"id":"installation"}'
     assert (storage / "artifact.bin").read_bytes() == b"content that must not remain plaintext"
@@ -205,6 +214,8 @@ def test_backup_service_retention_removes_old_snapshots(monkeypatch, tmp_path):
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"r" * 32).decode("ascii"))
     monkeypatch.setenv("BACKUP_MAX_SNAPSHOTS", "2")
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
     client = TestClient(backup_service.app)
     for i in range(3):
         (config / "a.txt").write_text(f"v{i}", encoding="utf-8")
@@ -223,6 +234,8 @@ def test_backup_service_blocks_restore_in_emergency(monkeypatch, tmp_path):
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"e" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
     monkeypatch.setattr(backup_service, "_get_system_state", lambda: {"state": "EMERGENCY"})
     client = TestClient(backup_service.app)
     resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
@@ -242,6 +255,8 @@ def test_backup_service_restore_progress_endpoint(monkeypatch, tmp_path):
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"p" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
     monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
     client = TestClient(backup_service.app)
     resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
@@ -251,7 +266,7 @@ def test_backup_service_restore_progress_endpoint(monkeypatch, tmp_path):
     assert prog.status_code == 200
     assert prog.json()["status"] == "unknown"
     # After restore — done
-    client.post(f"/snapshots/{snap_id}/restore")
+    _restore(client, snap_id)
     prog2 = client.get(f"/snapshots/{snap_id}/restore/progress")
     assert prog2.status_code == 200
     assert prog2.json()["status"] == "done"
@@ -269,6 +284,8 @@ def test_backup_service_custom_sources(monkeypatch, tmp_path):
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_SOURCES", f"custom:{custom}")
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"c" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
     monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
     client = TestClient(backup_service.app)
     resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
@@ -277,7 +294,7 @@ def test_backup_service_custom_sources(monkeypatch, tmp_path):
     # Wipe and restore
     (custom / "secret.txt").write_text("changed", encoding="utf-8")
     snap_id = resp.json()["snapshot_id"]
-    client.post(f"/snapshots/{snap_id}/restore")
+    _restore(client, snap_id)
     assert (custom / "secret.txt").read_text(encoding="utf-8") == "custom-data"
 
 
@@ -293,6 +310,8 @@ def test_backup_service_checksum_verification_rejects_corrupted_snapshot(monkeyp
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
     monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
     client = TestClient(backup_service.app)
     resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
@@ -307,7 +326,7 @@ def test_backup_service_checksum_verification_rejects_corrupted_snapshot(monkeyp
     (config / "installation.json").write_text('{"id":"changed"}', encoding="utf-8")
     (storage / "artifact.bin").write_bytes(b"changed-content")
     # Restore must fail with checksum mismatch
-    restored = client.post(f"/snapshots/{snap_id}/restore")
+    restored = _restore(client, snap_id)
     assert restored.status_code == 409
     assert "Checksum" in restored.text or "checksum" in restored.text.lower()
     # Original data must NOT be restored (still changed)
@@ -325,6 +344,8 @@ def test_backup_service_failed_restore_sets_emergency(monkeypatch, tmp_path):
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"f" * 32).decode("ascii"))
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
     monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
     # Mock _core_available to return False, causing HTTPException 503 inside try block
     monkeypatch.setattr(backup_service, "_core_available", lambda: False)
@@ -338,7 +359,7 @@ def test_backup_service_failed_restore_sets_emergency(monkeypatch, tmp_path):
     resp = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
     assert resp.status_code == 200
     snap_id = resp.json()["snapshot_id"]
-    restored = client.post(f"/snapshots/{snap_id}/restore")
+    restored = _restore(client, snap_id)
     assert restored.status_code == 503
     assert emergency_called["called"] is True
     assert "Restore failed" in emergency_called["reason"]
@@ -398,7 +419,7 @@ def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path
     (storage / "workflows" / "image" / "wf1.json").unlink()
     (storage / "jobs" / "job-1" / "job.json").unlink()
     # Restore
-    restored = client.post(f"/snapshots/{snap_id}/restore")
+    restored = _restore(client, snap_id)
     assert restored.status_code == 200
     # Verify config restored
     assert (config / "installation.json").read_text(encoding="utf-8") == '{"id":"inst-1","secret":"cfg-secret"}'

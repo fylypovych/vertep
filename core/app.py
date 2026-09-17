@@ -849,6 +849,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         advance_operation(op["operation_id"], "snapshot", 10, "Snapshot заплановано")
         audit_entry(op["operation_id"], "snapshot", "Backup started via Telegram", f"telegram:{chat_id}")
         try:
+            # Use CORE API endpoint for backup (via _call_core_api with INTERNAL_API_KEY)
             result = _call_core_api("POST", "/api/system/backups", {}, timeout=120)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
@@ -873,7 +874,8 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         return TelegramAdapter().answer_callback(callback_id, "Операцію скасовано.")
 
     if action == "sys_restore":
-        backups = _call_backup_api("GET", "/snapshots", timeout=15)
+        # Use CORE API endpoint for listing backups (via _call_core_api with INTERNAL_API_KEY)
+        backups = _call_core_api("GET", "/api/system/backups", timeout=15)
         if backups is None:
             return TelegramAdapter().answer_callback(
                 callback_id, "Backup Node недоступний. Спочатку налаштуйте Backup Node."
@@ -892,7 +894,8 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             return TelegramAdapter().answer_callback(
                 callback_id, f"Відновлення вже в процесі (#{existing['operation_id'][:8]})."
             )
-        backup_detail = _call_backup_api("GET", f"/snapshots/{snapshot_id}", timeout=15) or {}
+        # Use CORE API endpoint for backup detail
+        backup_detail = _call_core_api("GET", f"/api/system/backups/{snapshot_id}", timeout=15) or {}
         snapshot = backup_detail if "snapshot_id" in backup_detail else {"snapshot_id": snapshot_id}
         message = (f"⚠️ ПЕРШЕ підтвердження відновлення\n"
                    f"Snapshot: {snapshot.get('snapshot_id', snapshot_id)}\n"
@@ -928,7 +931,9 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         advance_operation(op["operation_id"], "decrypt", 10, f"Відновлення snapshot {snapshot_id[:18]}")
         audit_entry(op["operation_id"], "restore", f"Restore started via Telegram for {snapshot_id}", f"telegram:{chat_id}")
         try:
-            result = _call_backup_api("POST", f"/snapshots/{snapshot_id}/restore", {}, timeout=300)
+            # Use CORE API endpoint for restore (via _call_core_api with INTERNAL_API_KEY)
+            # This goes through CORE which then calls Backup Service
+            result = _call_core_api("POST", f"/api/system/backups/{snapshot_id}/restore", {}, timeout=300)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
                 return TelegramAdapter().answer_callback(
@@ -2307,11 +2312,14 @@ async def system_restart(payload: dict | None = None):
     if target == "core":
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,
                 lambda: subprocess.run(["systemctl", "restart", "vertep-core.service"],
                                        capture_output=True, timeout=30),
             )
+            if result.returncode != 0:
+                stderr = result.stderr.decode(errors="replace").strip() if result.stderr else "no stderr"
+                raise HTTPException(500, f"systemctl restart failed (exit {result.returncode}): {stderr}")
             set_system_state(SystemState.NORMAL, "CORE restart requested via Telegram", None)
             return {"target": "core", "status": "restart_requested", "message": "vertep-core.service restart initiated"}
         except FileNotFoundError:
@@ -2319,6 +2327,8 @@ async def system_restart(payload: dict | None = None):
                     "message": "systemctl not available; restart must be performed manually"}
         except subprocess.TimeoutExpired:
             raise HTTPException(504, "CORE restart timed out")
+        except HTTPException:
+            raise
         except Exception as error:
             raise HTTPException(500, f"CORE restart failed: {error}") from error
     node_id = str(body.get("node_id", "")).strip()

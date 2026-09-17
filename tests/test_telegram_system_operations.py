@@ -150,7 +150,7 @@ class TestRestoreOperation:
         adapter = Mock()
         monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
         monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
-        monkeypatch.setattr(module, "_call_backup_api",
+        monkeypatch.setattr(module, "_call_core_api",
                             lambda *a, **kw: {"snapshots": [{"snapshot_id": "snap1", "created_at": "2026-01-01T00:00:00Z", "size": 100}]})
         cb = {"id": "cb-rest", "data": "sys_restore:menu", "message": {"chat": {"id": "42"}}}
         module._handle_telegram_callback(cb)
@@ -185,7 +185,7 @@ class TestRestoreOperation:
         monkeypatch.setattr(module, "complete_operation", lambda *a, **kw: None)
         monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
         monkeypatch.setattr(module, "audit_entry", lambda *a, **kw: None)
-        monkeypatch.setattr(module, "_call_backup_api",
+        monkeypatch.setattr(module, "_call_core_api",
                             lambda *a, **kw: {"status": "done"})
         cb = {"id": "cb-rest-exec", "data": "sys_restore_execute:snap1", "message": {"chat": {"id": "42"}}}
         module._handle_telegram_callback(cb)
@@ -364,7 +364,7 @@ class TestFailurePaths:
         monkeypatch.setattr(module, 'advance_operation', lambda *a, **kw: None)
         monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
         monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
-        monkeypatch.setattr(module, '_call_backup_api', lambda *a, **kw: {'_error': 'Timeout'})
+        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'_error': 'Timeout'})
         cb = {'id': 'cb-fres', 'data': 'sys_restore_execute:snap1', 'message': {'chat': {'id': '42'}}}
         module._handle_telegram_callback(cb)
         assert adapter.answer_callback.called
