@@ -17,6 +17,8 @@ from core.gpu_profiles import gpu_profile
 from core.logging_config import configure_logging
 from worker.role_executor import execute_role_task
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 logger = configure_logging("worker")
 pending_logs: list[dict] = []
 
@@ -37,7 +39,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
             for selected in additional & health_urls.keys():
                 httpx.get(health_urls[selected], timeout=15).raise_for_status()
             if "backup" in additional:
-                Path(os.getenv("BACKUP_ROOT", "/data/backups")).mkdir(parents=True, exist_ok=True)
+                Path(os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups"))).mkdir(parents=True, exist_ok=True)
         elif role == "gpu":
             if os.getenv("DEMO_MODE", "true").lower() != "true" and not metrics.get("gpu_available"):
                 raise RuntimeError("NVIDIA GPU/driver is unavailable")
@@ -79,7 +81,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
         elif role == "monitoring":
             httpx.get(os.getenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy"), timeout=15).raise_for_status()
         elif role == "backup":
-            root = Path(os.getenv("BACKUP_ROOT", "/data/backups"))
+            root = Path(os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups")))
             root.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(dir=root, delete=False) as output:
                 output.write(b"vertep-backup-self-test")

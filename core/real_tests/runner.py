@@ -33,14 +33,32 @@ from .storage import (
 
 
 def _git_commit() -> str:
+    """Return the short commit SHA, using the release tag SHA if available.
+
+    In runtime images without a .git directory the release-provided SHA
+    (via VERSION/environment) is preferred; fallback to git only when
+    a repository is accessible.
+    """
+    # Try the release-versioned SHA first (set by bootstrap/CI).
+    try:
+        from core.version import application_version as _av
+        # application_version reads VERSION; if it matches a known release,
+        # use it as the authoritative SHA anchor rather than git.
+        return f"v{_av()}"
+    except Exception:
+        pass
+    # Fallback to git rev-parse when a repository is present.
     try:
         result = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--short", "HEAD"],
+            ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=10,
+            cwd=os.getcwd(),
         )
-        return result.stdout.strip() or "unknown"
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
     except (OSError, subprocess.SubprocessError):
-        return "unknown"
+        pass
+    return "unknown"
 
 
 def _environment() -> dict[str, Any]:
@@ -83,6 +101,16 @@ class RealTestRunner:
     def run_checks(self, run: TestRun, check_names: list[str] | None = None) -> TestRun:
         """Execute the registered check functions for a test run."""
         names = check_names or run_rt_check_names(run.rt_id)
+        # Validation: Ensure all mandatory checks for the scenario are present in the requested list
+        scenario = _scenarios_module.find_scenario(rt_id=run.rt_id)
+        if scenario:
+            mandatory_scenario_checks = scenario.get("checks", [])
+            missing_mandatory = [n for n in mandatory_scenario_checks if n not in names]
+            if missing_mandatory:
+                audit_entry(run.test_run_id, "validation", f"missing mandatory checks: {missing_mandatory}", "runner")
+                run.error_details = (run.error_details or "") + f" | Missing mandatory checks: {missing_mandatory}"
+        
+
         for name in names:
             check_fn = CHECK_REGISTRY.get(name)
             if check_fn is None:

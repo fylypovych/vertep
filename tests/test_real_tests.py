@@ -172,6 +172,7 @@ class TestGitHubReporter:
             commit_sha="deadbeef", final_result="PASS",
         )
         run.github_report = {"reported_at": "2026-01-01T00:00:00Z"}
+        monkeypatch.setenv("GITHUB_REPOSITORY", "test-repo")
         monkeypatch.setattr(GitHubReporter, "can_close_issue", lambda self, r: True)
         monkeypatch.setattr(gh_mod, "_gh", lambda *a, **kw: "closed")
         result = reporter.close_issue(run)

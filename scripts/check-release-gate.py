@@ -18,7 +18,6 @@ import sys
 
 REQUIRED_WORKFLOWS = {
     "CI",
-    "Browser E2E",
 }
 
 

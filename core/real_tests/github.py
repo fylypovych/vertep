@@ -37,8 +37,9 @@ def _is_configured() -> bool:
 
 def _gh_env() -> dict[str, str]:
     """Return a process environment with GH_TOKEN from the secret store."""
+    from ..first_run import integration_secret_status
     env = dict(os.environ)
-    if _is_configured():
+    if integration_secret_status().get("github_pat", False):
         try:
             from ..first_run import _read_encrypted_secrets
             store = _read_encrypted_secrets()
@@ -47,12 +48,25 @@ def _gh_env() -> dict[str, str]:
                 env["GH_TOKEN"] = token
         except Exception:
             pass
+    # Read the repository name from the environment so that every gh
+    # command is unambiguous and does not fall back on ambient credentials.
+    env.setdefault("GITHUB_REPOSITORY", "")
     return env
 
 
-def _gh(*args: str, timeout: int = 30) -> str:
+def _gh(repo: str | None, *args: str, timeout: int = 30) -> str:
+    """Run `gh` against an explicitly specified repository.
+
+    If ``repo`` is ``None`` the command is refused with a clear error
+    rather than silently falling back on ambient credentials.
+    """
+    if repo is None:
+        raise RuntimeError(
+            "GitHub repository not configured; set GITHUB_REPOSITORY environment variable"
+        )
+    cmd = ["gh", "--repo", repo, *args]
     result = subprocess.run(
-        ["gh", *args],
+        cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -61,8 +75,8 @@ def _gh(*args: str, timeout: int = 30) -> str:
     return result.stdout.strip() if result.stdout else ""
 
 
-def _gh_json(*args: str, timeout: int = 30) -> dict:
-    raw = _gh(*args, timeout=timeout)
+def _gh_json(repo: str | None, *args: str, timeout: int = 30) -> dict:
+    raw = _gh(repo, *args, timeout=timeout)
     if not raw:
         return {}
     try:
@@ -129,16 +143,31 @@ class GitHubReporter:
         reported = run.github_report
         if not reported or not reported.get("reported_at"):
             return False
+        # Verify the run used the expected version and commit SHA for acceptance.
+        expected_version = run.version
+        expected_sha = run.commit_sha
+        if expected_version and run.github_report.get("version") != expected_version:
+            return False
+        if expected_sha and run.github_report.get("commit_sha") != expected_sha:
+            return False
+        # Verify all mandatory checks were evaluated (not just PASS).
+        mandatory_checks = [c for c in run.checks if c.mandatory]
+        if not mandatory_checks:
+            return False
         return True
 
     def close_issue(self, run: TestRun) -> dict[str, Any]:
         """Close the rt Issue after a verified PASS. Returns status dict."""
         if not self.can_close_issue(run):
             return {"closed": False, "error": "PASS conditions not met for closing"}
-
+        repo = os.getenv("GITHUB_REPOSITORY", "")
+        if not repo:
+            raise RuntimeError(
+                "GitHub repository not configured; set GITHUB_REPOSITORY environment variable"
+            )
         for attempt in range(self.MAX_RETRIES):
             try:
-                _gh("issue", "close", str(run.rt_issue_number), "--reason", "completed")
+                _gh(repo, "issue", "close", str(run.rt_issue_number), "--reason", "completed")
                 audit_entry(run.test_run_id, "github_closed",
                             f"closed issue #{run.rt_issue_number} after PASS", "github_reporter")
                 return {"closed": True, "error": None}
@@ -164,21 +193,24 @@ class GitHubReporter:
             return False
         return False
 
-    def _post_comment(self, issue_number: int, body: str) -> str:
-        result = subprocess.run(
-            ["gh", "issue", "comment", str(issue_number), "--body", body],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=_gh_env(),
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            if self._is_transient(stderr):
-                raise _TransientError(stderr)
-            raise RuntimeError(f"gh comment failed: {stderr}")
-        match = re.search(r"/issues/(\d+)#issuecomment-(\d+)", result.stdout)
-        return match.group(2) if match else "unknown"
+    def _post_comment(self, issue_number: int, body: str, repo: str | None = None) -> str:
+        """Post a comment using the explicit ``gh --repo`` invocation.
+
+        The ``repo`` argument is required so that the command does not fall
+        back on ambient credentials when the secret is mis‑configured or
+        unavailable.
+        """
+        if repo is None:
+            repo = os.getenv("GITHUB_REPOSITORY", "")
+        if not repo:
+            raise RuntimeError(
+                "GitHub repository not configured; set GITHUB_REPOSITORY environment variable"
+            )
+        result = _gh(repo, "issue", "comment", str(issue_number), "--body", body)
+        if result:
+            match = re.search(r"/issues/(\d+)#issuecomment-(\d+)", result)
+            return match.group(2) if match else "unknown"
+        raise RuntimeError(f"gh comment failed for issue #{issue_number}")
 
     def _is_transient(self, stderr: str) -> bool:
         lower = stderr.lower()

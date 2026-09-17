@@ -266,7 +266,7 @@ def test_job_detail_view_and_edit():
 
         expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
         expect(page.locator("text=Тестове завдання")).to_be_visible()
-        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("READY")
+        expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Готове")
         expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("07.09.2026")
 
         page.locator("[data-testid='edit-job-button']").click()
@@ -837,10 +837,12 @@ def _script_job(job_id="job-script-01", status="SCRIPT_PENDING_APPROVAL"):
     return {
         "job_id": job_id, "topic": "Сценарій до затвердження", "character_id": "did_samogon",
         "priority": 5, "status": status, "created_at": "2026-09-08T10:00:00Z",
+        "updated_at": "2026-09-08T10:05:00Z",
         "source": "web", "retries": 0, "approved": False, "approval_status": "pending",
-        "published_to": [], "task_type": "image", "min_vram_mb": 4096, "max_retries": 3,
+        "approved_channels": [], "published_to": [], "task_type": "image", "min_vram_mb": 4096, "max_retries": 3,
         "brand_id": "brand01", "aspect_ratio": "16:9", "output_preset": "youtube",
         "version": 1, "stages": {}, "scenes": [], "artifacts": [], "events": ["SCRIPT_PENDING_APPROVAL"],
+        "publication_results": {}, "active_task_ids": {}, "completed_task_ids": [],
         "script": {
             "title": "Новий ролик",
             "description": "Короткий опис ролика",
@@ -872,14 +874,17 @@ def test_script_approval_happy_path():
                 route.fulfill(json=job)
 
         page.route("**/api/jobs/job-script-01/script/approve", lambda route: route.fulfill(json=approved_job))
-        page.route("**/api/jobs/job-script-01**", handle_detail)
-        page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/brands**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/workflows**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/channels/types**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/brands/**/channels**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs/job-script-01", handle_detail)
+        page.route("**/api/jobs/job-script-01/**", handle_detail)
+        page.route("**/api/characters", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands/**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workflows", lambda route: route.fulfill(json=[]))
+        page.route("**/api/channels/types", lambda route: route.fulfill(json=[]))
+        page.route("**/api/channels/**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs/job-script-01")
         page.wait_for_load_state('networkidle')
+        page.wait_for_timeout(1000)
 
         expect(page.locator("[data-testid='job-detail-page']")).to_be_visible()
         expect(page.locator("[data-testid='job-script']")).to_be_visible()
@@ -917,15 +922,18 @@ def test_script_revision_happy_path():
             if route.request.method == "POST" and "/script/revision" in route.request.url:
                 return  # Let the specific handler handle it
             route.fulfill(json=job)
-        page.route("**/api/jobs/job-script-01**", handle_job_detail)
         page.route("**/api/jobs/job-script-01/script/revision", handle_revision)
-        page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/brands**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/workflows**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/channels/types**", lambda route: route.fulfill(json=[]))
-        page.route("**/api/brands/**/channels**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/jobs/job-script-01", handle_job_detail)
+        page.route("**/api/jobs/job-script-01/**", handle_job_detail)
+        page.route("**/api/characters", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands", lambda route: route.fulfill(json=[]))
+        page.route("**/api/brands/**", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workflows", lambda route: route.fulfill(json=[]))
+        page.route("**/api/channels/types", lambda route: route.fulfill(json=[]))
+        page.route("**/api/channels/**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/jobs/job-script-01")
         page.wait_for_load_state('networkidle')
+        page.wait_for_timeout(1000)
 
         page.locator("[data-testid='revision-script-button']").click()
         assert revised is not None, "script/revision call was not made"
@@ -949,9 +957,11 @@ def test_script_backend_error_shows_error_and_no_crash():
             route.fulfill(status=500, content_type="application/json",
                           body='{"detail": "Сценарій недоступний для затвердження"}')
 
-        page.route("**/api/jobs/job-script-01", lambda route: route.fulfill(json=job))
         page.route("**/api/jobs/job-script-01/script/approve", handle_approve)
+        page.route("**/api/jobs/job-script-01", lambda route: route.fulfill(json=job))
         page.goto(f"{BASE_URL}/jobs/job-script-01")
+        page.wait_for_load_state('networkidle')
+        page.wait_for_timeout(1000)
 
         page.locator("[data-testid='approve-script-button']").click()
         expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Сценарій недоступний для затвердження")

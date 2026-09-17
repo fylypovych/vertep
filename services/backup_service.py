@@ -23,6 +23,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 app = FastAPI(title="Vertep Backup", version="1")
 _lock = threading.RLock()
 MAGIC = b"VERTEP-BACKUP-v1\0"
@@ -37,7 +39,7 @@ class SnapshotRequest(BaseModel):
 
 
 def _backup_root() -> Path:
-    return Path(os.getenv("BACKUP_ROOT", "/data/backups"))
+    return Path(os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups")))
 
 
 def _sources() -> list[tuple[str, Path]]:
@@ -218,8 +220,8 @@ def _archive(destination: Path) -> None:
         if redis_cmd:
             try:
                 result = subprocess.run(redis_cmd, shell=True, timeout=60, capture_output=True)
-                if result.returncode == 0 and Path("/var/lib/redis/dump.rdb").exists():
-                    archive.add("/var/lib/redis/dump.rdb", arcname="db/redis.rdb", recursive=False)
+                if result.returncode == 0 and (_PROJECT_ROOT / "var" / "lib" / "redis" / "dump.rdb").exists():
+                    archive.add(str(_PROJECT_ROOT / "var" / "lib" / "redis" / "dump.rdb"), arcname="db/redis.rdb", recursive=False)
             except Exception:
                 pass
 
@@ -392,7 +394,7 @@ def restore_snapshot(snapshot_id: str) -> dict:
                         raise RuntimeError(f"pg_restore failed: {result.stderr.decode()}")
                 redis_rdb = db_root / "redis.rdb"
                 if redis_rdb.exists():
-                    redis_data = Path(os.getenv("REDIS_DATA_DIR", "/var/lib/redis"))
+                    redis_data = Path(os.getenv("REDIS_DATA_DIR", str(_PROJECT_ROOT / "var" / "lib" / "redis")))
                     redis_data.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(redis_rdb, redis_data / "dump.rdb")
             _set_restore_progress(snapshot_id, 85, "Перевірка після відновлення...")

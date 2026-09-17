@@ -363,7 +363,7 @@ def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path
     (storage / "jobs" / "job-1" / "job.json").write_text('{"job_id":"job-1","topic":"Test"}', encoding="utf-8")
     # DB dump files will be created by pg_dump/redis commands (mocked)
     pg_dump_path = Path("/tmp/vertep.dump")
-    redis_dump_path = Path("/var/lib/redis/dump.rdb")
+    redis_dump_path = tmp_path / "var" / "lib" / "redis" / "dump.rdb"
     monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))

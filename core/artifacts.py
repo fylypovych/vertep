@@ -56,6 +56,11 @@ def register_artifact(job: Job, job_root: Path, path: Path, kind: str, *,
         return record
 
 
+def get_job_artifacts(job: Job, job_root: Path) -> list[dict]:
+    """Return registered artifacts for the job."""
+    return [item.model_dump() for item in job.artifacts]
+
+
 def verify_artifacts(job: Job, job_root: Path) -> list[dict]:
     base = (job_root / job.job_id).resolve()
     results = []

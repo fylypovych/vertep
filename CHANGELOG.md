@@ -1,5 +1,12 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.82
+- GitHub Reporter (#53): явний `gh --repo` для всіх команд, перевірка version/SHA перед закриттям Issue, secret-based token config замість `_is_configured()`
+- Real Tests Runner: `_git_commit()` використовує SHA релізної версії, покращений fallback до git
+- Paths consistency (#53): `health_checks.py`, `backup_service.py`, `worker/service.py` — єдиний `_PROJECT_ROOT` для шляхів backup/redis замість хардкоду `/data/backups`, `/var/lib/redis`
+- Setup Wizard: додано `backend_options`/`backend_selected` до форми, валідація обраного бекенду перед `complete()`
+- Tests: `test_role_services.py` використовує `tmp_path` для Redis dump path
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.81
 - Monitoring/Alerts (#53, #19): alert lifecycle E2E (failure→acknowledge→recovery→resolved), restart persistence, /api/alerts always JSON, Prometheus /metrics text format; 27 tests passed.
 - Logging (#53, #18): secret redaction persists to log files; `secret_redact()` scrubs worker text before file write and read.

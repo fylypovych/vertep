@@ -8,6 +8,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 def _http_get(url: str, timeout: int = 5) -> tuple[bool, str]:
     try:
@@ -123,7 +125,7 @@ def check_publisher(url: str | None = None) -> tuple[bool, str]:
 
 
 def check_backup(root: str | None = None) -> tuple[bool, str]:
-    target = root or os.getenv("BACKUP_ROOT", "/data/backups")
+    target = root or os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups"))
     try:
         Path(target).mkdir(parents=True, exist_ok=True)
         return True, f"writable: {target}"
