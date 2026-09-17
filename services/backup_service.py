@@ -91,7 +91,7 @@ def _get_system_state() -> dict | None:
 def _is_restore_allowed() -> tuple[bool, str]:
     state = _get_system_state()
     if state is None:
-        # Issue #36/#16: an unreachable CORE state API must NOT be treated as implicit
+        # Issue #36/#16/#60: an unreachable CORE state API must NOT be treated as implicit
         # confirmation that a restore is safe. With no CORE configured this is a
         # standalone node (restore proceeds); with a configured CORE that is
         # unreachable the safe-restore confirmation cannot be proved, so we deny.
@@ -100,8 +100,15 @@ def _is_restore_allowed() -> tuple[bool, str]:
             return True, "standalone"
         return False, "CORE state API недоступний; безпечне відновлення не підтверджено"
     current = str(state.get("state", "NORMAL"))
-    if current == "EMERGENCY":
-        return False, "Відновлення заборонено в стані EMERGENCY"
+    # Issue #60: restore is only safe in MAINTENANCE or RECOVERY states.
+    # NORMAL and UPDATING indicate active system usage — restoring there risks
+    # data corruption and concurrent-write conflicts.
+    _ALLOWED_STATES = {"MAINTENANCE", "RECOVERY"}
+    if current not in _ALLOWED_STATES:
+        return False, (
+            f"Відновлення заборонено в стані {current}. "
+            f"Дозволено лише в станах: {', '.join(sorted(_ALLOWED_STATES))}"
+        )
     return True, current
 
 
@@ -203,27 +210,52 @@ def _archive(destination: Path) -> None:
         for label, root in _sources():
             if not root.exists():
                 continue
+            # Issue #60: preserve empty directories explicitly so they survive round-trip.
+            # tarfile.add(recursive=False) only adds the exact path; rglob("*") skips dirs
+            # that contain no files, so we add them as explicit TarInfo entries.
+            seen_dirs: set[str] = set()
             for path in sorted(root.rglob("*")):
-                if path.is_file() and not path.is_symlink():
-                    archive.add(path, arcname=(Path(label) / path.relative_to(root)).as_posix(),
-                                recursive=False)
+                arcname_base = (Path(label) / path.relative_to(root)).as_posix()
+                if path.is_dir() and not path.is_symlink():
+                    if arcname_base not in seen_dirs:
+                        info = tarfile.TarInfo(name=arcname_base)
+                        info.type = tarfile.DIRTYPE
+                        info.mode = 0o755
+                        archive.addfile(info)
+                        seen_dirs.add(arcname_base)
+                elif path.is_file() and not path.is_symlink():
+                    archive.add(path, arcname=arcname_base, recursive=False)
+        # Issue #60: pg_dump and redis-cli failures must be hard errors — a backup that
+        # claims to include database state but silently skipped the dump is misleading.
         pg_cmd = os.getenv("BACKUP_PG_DUMP_CMD", _pg_dump_default() or "").strip()
         if pg_cmd:
             try:
                 result = subprocess.run(pg_cmd, shell=True, timeout=120, capture_output=True)
-                if result.returncode == 0 and Path("/tmp/vertep.dump").exists():
-                    archive.add("/tmp/vertep.dump", arcname="db/postgres.dump", recursive=False)
-                    Path("/tmp/vertep.dump").unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(f"pg_dump failed to run: {exc}") from exc
+            if result.returncode != 0:
+                stderr = (result.stderr or b"").decode(errors="replace").strip()
+                raise RuntimeError(
+                    f"pg_dump exited {result.returncode}: {stderr or 'no stderr'}"
+                )
+            dump_path = Path("/tmp/vertep.dump")
+            if dump_path.exists():
+                archive.add(str(dump_path), arcname="db/postgres.dump", recursive=False)
+                dump_path.unlink(missing_ok=True)
         redis_cmd = os.getenv("BACKUP_REDIS_DUMP_CMD", _redis_dump_default() or "").strip()
         if redis_cmd:
             try:
                 result = subprocess.run(redis_cmd, shell=True, timeout=60, capture_output=True)
-                if result.returncode == 0 and (_PROJECT_ROOT / "var" / "lib" / "redis" / "dump.rdb").exists():
-                    archive.add(str(_PROJECT_ROOT / "var" / "lib" / "redis" / "dump.rdb"), arcname="db/redis.rdb", recursive=False)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(f"redis-cli BGSAVE failed to run: {exc}") from exc
+            if result.returncode != 0:
+                stderr = (result.stderr or b"").decode(errors="replace").strip()
+                raise RuntimeError(
+                    f"redis-cli BGSAVE exited {result.returncode}: {stderr or 'no stderr'}"
+                )
+            rdb_path = _PROJECT_ROOT / "var" / "lib" / "redis" / "dump.rdb"
+            if rdb_path.exists():
+                archive.add(str(rdb_path), arcname="db/redis.rdb", recursive=False)
 
 
 def _encrypt(source: Path, destination: Path, key: bytes) -> str:
@@ -432,42 +464,28 @@ def _set_restore_progress(snapshot_id: str, progress: int, message: str, status:
 
 
 def _post_restore_health_check(destinations: dict[str, Path]) -> None:
-    total_files = 0
+    """Issue #60: post-restore check must confirm CORE is HEALTHY, not just check directories.
+
+    If a CORE URL is configured and CORE does not report HEALTHY/OK, the restore is
+    considered failed and the caller is expected to call _set_emergency().
+    """
     for label, destination in destinations.items():
         if not destination.exists():
             raise RuntimeError(f"Post-restore check failed: {label} missing at {destination}")
         if not os.access(destination, os.W_OK):
             raise RuntimeError(f"Post-restore check failed: {label} not writable")
-        try:
-            total_files += sum(1 for p in destination.rglob("*") if p.is_file())
-        except Exception:
-            pass
-    if total_files == 0:
-        pass
-
-
-@app.get("/snapshots/{snapshot_id}/restore/progress")
-def restore_progress(snapshot_id: str) -> dict:
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
-        raise HTTPException(422, "Некоректний ідентифікатор snapshot")
-    with _restore_lock:
-        entry = _restore_progress.get(snapshot_id)
-    if entry is None:
-        root = _backup_root()
-        source = root / f"{snapshot_id}.vtbackup"
-        if source.exists():
-            return {"snapshot_id": snapshot_id, "status": "unknown", "progress": 0, "message": "Немає даних про прогрес"}
-        raise HTTPException(404, "Snapshot не знайдено")
-    return {"snapshot_id": snapshot_id, **entry}
-
-
-def _pg_dump_default() -> str | None:
-    return "pg_dump -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep} -d ${POSTGRES_DB:-vertep} -Fc -f /tmp/vertep.dump"
-
-
-def _redis_dump_default() -> str | None:
-    redis_url = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379/0")
-    return f"redis-cli -u {redis_url} BGSAVE"
+    core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
+    if core_url:
+        health = _core_health_check()
+        if health is None:
+            raise RuntimeError(
+                "Post-restore health check failed: CORE is unreachable after restore"
+            )
+        status = health.get("status", "")
+        if status not in ("HEALTHY", "OK"):
+            raise RuntimeError(
+                f"Post-restore health check failed: CORE reported status={status!r}"
+            )
 
 
 def _core_available() -> bool:

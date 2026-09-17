@@ -24,8 +24,8 @@ import time
 from typing import Any
 
 from ..first_run import integration_secret_status
-from .models import TestRun
-from .storage import audit_entry, record_github_report
+from .models import CheckStatus, TestRun
+from .storage import audit_entry, record_github_report, update_test_run
 
 _REPORT_MARKER = "REAL-TEST-RUN:"
 _IDEMPOTENCY_RE = re.compile(rf"{_REPORT_MARKER}([0-9a-f]{{32}})")
@@ -36,7 +36,11 @@ def _is_configured() -> bool:
 
 
 def _gh_env() -> dict[str, str]:
-    """Return a process environment with GH_TOKEN from the secret store."""
+    """Return a process environment with GH_TOKEN from the secret store.
+
+    Raises RuntimeError if the secret store is expected but unreadable,
+    so callers do not silently fall back on ambient credentials.
+    """
     from ..first_run import integration_secret_status
     env = dict(os.environ)
     if integration_secret_status().get("github_pat", False):
@@ -46,10 +50,14 @@ def _gh_env() -> dict[str, str]:
             token = store.get("github_pat", "")
             if token:
                 env["GH_TOKEN"] = token
-        except Exception:
-            pass
-    # Read the repository name from the environment so that every gh
-    # command is unambiguous and does not fall back on ambient credentials.
+            else:
+                raise RuntimeError("github_pat secret is empty in the store")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to read github_pat secret: {exc}"
+            ) from exc
     env.setdefault("GITHUB_REPOSITORY", "")
     return env
 
@@ -57,8 +65,8 @@ def _gh_env() -> dict[str, str]:
 def _gh(repo: str | None, *args: str, timeout: int = 30) -> str:
     """Run `gh` against an explicitly specified repository.
 
-    If ``repo`` is ``None`` the command is refused with a clear error
-    rather than silently falling back on ambient credentials.
+    Raises ``_TransientError`` on transient failures and ``RuntimeError``
+    on permanent failures.  Returncode is always checked.
     """
     if repo is None:
         raise RuntimeError(
@@ -72,7 +80,15 @@ def _gh(repo: str | None, *args: str, timeout: int = 30) -> str:
         timeout=timeout,
         env=_gh_env(),
     )
-    return result.stdout.strip() if result.stdout else ""
+    stdout = result.stdout.strip() if result.stdout else ""
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if any(kw in stderr.lower() for kw in
+               ("rate limit", "timeout", "server error", "connection",
+                "502", "503", "504", "network", "temporary")):
+            raise _TransientError(f"gh failed (rc={result.returncode}): {stderr}")
+        raise RuntimeError(f"gh failed (rc={result.returncode}): {stderr}")
+    return stdout
 
 
 def _gh_json(repo: str | None, *args: str, timeout: int = 30) -> dict:
@@ -135,7 +151,16 @@ class GitHubReporter:
         return {"reported": False, "comment_id": None, "error": last_error}
 
     def can_close_issue(self, run: TestRun) -> bool:
-        """Whether the rt Issue may be auto-closed for this PASS run."""
+        """Whether the rt Issue may be auto-closed for this PASS run.
+
+        Conditions:
+        1. final_result is PASS.
+        2. The run was successfully reported to GitHub.
+        3. The reported version and commit_sha match the run's values.
+        4. All mandatory checks were evaluated.
+        5. All mandatory checks have status PASS (not WARNING/SKIPPED/etc).
+        6. The run has not already been used for acceptance.
+        """
         if run.final_result != "PASS":
             return False
         if run.rt_issue_number is None:
@@ -143,16 +168,21 @@ class GitHubReporter:
         reported = run.github_report
         if not reported or not reported.get("reported_at"):
             return False
-        # Verify the run used the expected version and commit SHA for acceptance.
+        if reported.get("already_accepted"):
+            return False
         expected_version = run.version
         expected_sha = run.commit_sha
-        if expected_version and run.github_report.get("version") != expected_version:
+        reported_version = reported.get("version")
+        reported_sha = reported.get("commit_sha")
+        if expected_version and reported_version and expected_version != reported_version:
             return False
-        if expected_sha and run.github_report.get("commit_sha") != expected_sha:
+        if expected_sha and reported_sha and expected_sha != reported_sha:
             return False
-        # Verify all mandatory checks were evaluated (not just PASS).
         mandatory_checks = [c for c in run.checks if c.mandatory]
         if not mandatory_checks:
+            return False
+        non_pass_mandatory = [c for c in mandatory_checks if c.status != CheckStatus.PASS]
+        if non_pass_mandatory:
             return False
         return True
 
@@ -162,26 +192,41 @@ class GitHubReporter:
             return {"closed": False, "error": "PASS conditions not met for closing"}
         repo = os.getenv("GITHUB_REPOSITORY", "")
         if not repo:
-            raise RuntimeError(
-                "GitHub repository not configured; set GITHUB_REPOSITORY environment variable"
-            )
+            return {"closed": False, "error": "GITHUB_REPOSITORY not configured"}
+        last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
                 _gh(repo, "issue", "close", str(run.rt_issue_number), "--reason", "completed")
                 audit_entry(run.test_run_id, "github_closed",
                             f"closed issue #{run.rt_issue_number} after PASS", "github_reporter")
+                record_github_report(run.test_run_id, run.final_result, None, None)
+                if run.github_report:
+                    run.github_report["already_accepted"] = True
+                    update_test_run(run)
                 return {"closed": True, "error": None}
-            except _TransientError:
-                time.sleep(self.BASE_DELAY * (2 ** attempt))
-        return {"closed": False, "error": "failed to close GitHub issue after retries"}
+            except _TransientError as exc:
+                last_error = str(exc)
+                delay = self.BASE_DELAY * (2 ** attempt)
+                audit_entry(run.test_run_id, "github_close_retry",
+                            f"attempt {attempt + 1} failed: {exc}; retrying in {delay}s",
+                            "github_reporter")
+                time.sleep(delay)
+            except Exception as exc:
+                last_error = str(exc)
+                break
+        audit_entry(run.test_run_id, "github_close_failed", last_error, "github_reporter")
+        return {"closed": False, "error": last_error or "failed to close GitHub issue after retries"}
 
     def retry_pending(self, run: TestRun) -> dict[str, Any]:
         """Retry GitHub reporting for a run stuck in REPORT_PENDING."""
         return self.report(run)
 
     def _already_reported(self, test_run_id: str, issue_number: int) -> bool:
+        repo = os.getenv("GITHUB_REPOSITORY", "")
+        if not repo:
+            return False
         try:
-            comments = _gh_json("issue", "view", str(issue_number), "--json", "comments")
+            comments = _gh_json(repo, "issue", "view", str(issue_number), "--json", "comments")
             if not comments or "comments" not in comments:
                 return False
             pattern = _IDEMPOTENCY_RE
@@ -219,9 +264,11 @@ class GitHubReporter:
                     "502", "503", "504", "network", "temporary"))
 
     def _build_comment(self, run: TestRun) -> str:
+        from .runner import _redact_secrets
         checks_lines = "\n".join(
             f"- {c.name}: {c.status.value}" for c in run.checks
         )
+        safe_env = {k: _redact_secrets(str(v)) for k, v in (run.environment or {}).items()}
         return (
             f"REAL TEST RESULT: {run.final_result}\n\n"
             f"{_REPORT_MARKER}{run.test_run_id}\n"
@@ -230,7 +277,7 @@ class GitHubReporter:
             f"Test Run: {run.test_run_id}\n"
             f"Vertep: {run.version}\n"
             f"Commit: {run.commit_sha}\n"
-            f"Environment: {json.dumps(run.environment, ensure_ascii=False)}\n"
+            f"Environment: {json.dumps(safe_env, ensure_ascii=False)}\n"
             f"CORE: {run.core_node_id or 'unknown'}\n"
             f"Targets: {', '.join(run.targets) if run.targets else 'none'}\n\n"
             f"Checks:\n{checks_lines}\n\n"

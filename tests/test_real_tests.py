@@ -171,7 +171,11 @@ class TestGitHubReporter:
             rt_id="rt::S01", rt_issue_number=40, version="test-ver",
             commit_sha="deadbeef", final_result="PASS",
         )
-        run.github_report = {"reported_at": "2026-01-01T00:00:00Z"}
+        run.checks = [
+            CheckResult(name="docker", status=CheckStatus.PASS, detail="ok"),
+        ]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "test-ver", "commit_sha": "deadbeef"}
         monkeypatch.setenv("GITHUB_REPOSITORY", "test-repo")
         monkeypatch.setattr(GitHubReporter, "can_close_issue", lambda self, r: True)
         monkeypatch.setattr(gh_mod, "_gh", lambda *a, **kw: "closed")
@@ -322,8 +326,12 @@ class TestRunner:
             "core.real_tests.scenarios.check_core_api",
             lambda: (True, "core_api ok"),
         )
+        monkeypatch.setattr(
+            "core.real_tests.scenarios._check_health_core",
+            lambda: (True, "health ok"),
+        )
         run = runner.run_checks(run, check_names=["docker", "core_api"])
-        assert len(run.checks) == 2
+        assert len(run.checks) == 3
 
     def test_finalize_sets_result_pass(self, runner):
         run = runner.start("rt::S01", initiator="test")
@@ -362,6 +370,8 @@ class TestRunner:
 
     def test_run_full_lifecycle(self, runner, monkeypatch):
         monkeypatch.setitem(CHECK_REGISTRY, "docker", lambda: (True, "docker ok"))
+        monkeypatch.setitem(CHECK_REGISTRY, "core_api", lambda: (True, "core_api ok"))
+        monkeypatch.setitem(CHECK_REGISTRY, "health_core", lambda: (True, "health ok"))
         monkeypatch.setattr(gh_mod, "_is_configured", lambda: False)
         result = runner.run("rt::S01", initiator="test", check_names=["docker"])
         assert result.final_result == "PASS"

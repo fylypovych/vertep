@@ -1,5 +1,13 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.83
+- Real Tests Runner (#62): A1-A4 — виправлено `NameError` (`status.value` → `result.status.value`), scenario-specific success policy, автоматичне додавання mandatory checks, `_redact_secrets()` для report/comment
+- Real Tests GitHub Reporter (#62): A5-A8 — `_git_commit()` пріоритетний SHA (GITHUB_SHA → VERSION → git), `can_close_issue` strict (all mandatory PASS, version/SHA match, one-time use), `_gh()` returncode check, `_gh_env()` strict secrets, `_already_reported` fix repo param
+- Real Tests Idempotency (#62): A9 — `list_pending_reports()`, `recover_pending_reports()` для restart recovery
+- Real Tests API (#62): A11 — destructive confirmation gate (`confirm_destructive=true`) для POST /api/real-tests/run
+- Web UI Storyboard (#62): B1 — image_status маппінг через `statusLabel`, `canRegenerateImage()`/`canRevisionImage()` guards для mutation policy
+- Setup Wizard (#62): C1 — backend options з сервера замість хардкоду, `backend_selected` binding fix; C2 — retry logic (3 attempts) для `loadHealth` та `complete`, `healthError` signal з retry кнопкою
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.82
 - GitHub Reporter (#53): явний `gh --repo` для всіх команд, перевірка version/SHA перед закриттям Issue, secret-based token config замість `_is_configured()`
 - Real Tests Runner: `_git_commit()` використовує SHA релізної версії, покращений fallback до git

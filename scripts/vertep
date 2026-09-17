@@ -202,6 +202,7 @@ case "${1:-status}" in
         && backup_compose+=(-f "$ROOT/docker-compose.amd.yml")
       [[ "${GPU_VENDOR:-none}" == nvidia && -f "$ROOT/docker-compose.nvidia.yml" ]] \
         && backup_compose+=(-f "$ROOT/docker-compose.nvidia.yml")
+      "${backup_compose[@]}" exec -T core python3 -c "from core.persistent_data import ensure_persistent_user_data; ensure_persistent_user_data()" 2>/dev/null || true
       "${backup_compose[@]}" exec -T core tar -czf - /data/storage > "$backup/storage.tar.gz"
       "${backup_compose[@]}" exec -T core tar -czf - /data/config > "$backup/core-config.tar.gz"
       "${backup_compose[@]}" exec -T postgres pg_dump -U vertep vertep > "$backup/postgres.sql"

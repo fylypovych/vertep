@@ -38,7 +38,11 @@ def secret_settings():
 @router.put("/api/settings/secrets/{name}")
 def update_secret_setting(name: str, payload: IntegrationSecretUpdate):
     try:
-        return {"secrets": set_integration_secret(name, payload.value), "values_exposed": False}
+        result = {"secrets": set_integration_secret(name, payload.value), "values_exposed": False}
+        if name == "telegram_bot_token":
+            import core.app as core_app
+            core_app._restart_telegram_polling()
+        return result
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
@@ -46,7 +50,11 @@ def update_secret_setting(name: str, payload: IntegrationSecretUpdate):
 @router.delete("/api/settings/secrets/{name}")
 def delete_secret_setting(name: str):
     try:
-        return {"secrets": set_integration_secret(name, None), "values_exposed": False}
+        result = {"secrets": set_integration_secret(name, None), "values_exposed": False}
+        if name == "telegram_bot_token":
+            import core.app as core_app
+            core_app._restart_telegram_polling()
+        return result
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 

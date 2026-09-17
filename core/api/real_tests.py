@@ -67,6 +67,11 @@ def scenarios():
 @router.post("/api/real-tests/run")
 def run_test(payload: RunRequest, request: Request):
     _check_operation()
+    if not payload.confirm_destructive:
+        raise HTTPException(
+            status_code=403,
+            detail="Destructive confirmation required; set confirm_destructive=true",
+        )
     runner = _get_runner()
     try:
         run = runner.start(payload.rt_id, initiator="api")
@@ -75,8 +80,7 @@ def run_test(payload: RunRequest, request: Request):
     run = runner.run_checks(run, check_names=payload.check_names)
     run = runner.finalize(run)
     runner.report_to_github(run)
-    if run.final_result == "PASS" and payload.confirm_destructive:
-        runner.close_rt_issue(run)
+    runner.close_rt_issue(run)
     return {"test_run_id": run.test_run_id, "status": run.status.value,
             "result": run.final_result, "rt_id": run.rt_id}
 

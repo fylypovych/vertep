@@ -145,16 +145,16 @@ export class VertepApiService {
     return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/regenerate`, { version, actor: 'web-v2', revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  approveImageStoryboard(jobId: string, version: number): Observable<Job> {
-    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/approve`, { version, actor: 'web-v2' }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  approveImageStoryboard(jobId: string, version: number, imageVersion?: number): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/approve`, { version, image_version: imageVersion, actor: 'web-v2' }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  revisionImageStoryboard(jobId: string, version: number, opts: { scene_indexes?: number[]; revision?: string } = {}): Observable<Job> {
-    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/revision`, { version, actor: 'web-v2', scene_indexes: opts.scene_indexes, revision: opts.revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  revisionImageStoryboard(jobId: string, version: number, opts: { scene_indexes?: number[]; revision?: string; image_version?: number } = {}): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/revision`, { version, image_version: opts.image_version, actor: 'web-v2', scene_indexes: opts.scene_indexes, revision: opts.revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  regenerateImageStoryboard(jobId: string, version: number, revision?: string): Observable<Job> {
-    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/regenerate`, { version, actor: 'web-v2', revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  regenerateImageStoryboard(jobId: string, version: number, revision?: string, imageVersion?: number): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/images/regenerate`, { version, image_version: imageVersion, actor: 'web-v2', revision }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   updateJob(jobId: string, payload: JobUpdate): Observable<Job> {

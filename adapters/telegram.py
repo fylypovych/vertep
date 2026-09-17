@@ -23,7 +23,7 @@ def _integration_secret(name: str) -> str | None:
 
 class TelegramAdapter:
     def __init__(self) -> None:
-        self.token = os.getenv("TELEGRAM_BOT_TOKEN") or _integration_secret("telegram_bot_token") or ""
+        self.token = _integration_secret("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
         self.base_url = f"https://api.telegram.org/bot{self.token}"
 
     def configured(self) -> bool:

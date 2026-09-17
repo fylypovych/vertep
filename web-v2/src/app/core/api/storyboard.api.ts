@@ -42,15 +42,15 @@ export class StoryboardApiService {
     return this.action(jobId, '/storyboards/regenerate', { version, actor: 'web-v2', revision });
   }
 
-  approveImages(jobId: string, version: number): Observable<Job> {
-    return this.action(jobId, '/storyboards/images/approve', { version, actor: 'web-v2' });
+  approveImages(jobId: string, version: number, imageVersion?: number): Observable<Job> {
+    return this.action(jobId, '/storyboards/images/approve', { version, image_version: imageVersion, actor: 'web-v2' });
   }
 
-  revisionImages(jobId: string, version: number, opts: { scene_indexes?: number[]; revision?: string } = {}): Observable<Job> {
-    return this.action(jobId, '/storyboards/images/revision', { version, actor: 'web-v2', scene_indexes: opts.scene_indexes, revision: opts.revision });
+  revisionImages(jobId: string, version: number, opts: { scene_indexes?: number[]; revision?: string; image_version?: number } = {}): Observable<Job> {
+    return this.action(jobId, '/storyboards/images/revision', { version, image_version: opts.image_version, actor: 'web-v2', scene_indexes: opts.scene_indexes, revision: opts.revision });
   }
 
-  regenerateImages(jobId: string, version: number, revision?: string): Observable<Job> {
-    return this.action(jobId, '/storyboards/images/regenerate', { version, actor: 'web-v2', revision });
+  regenerateImages(jobId: string, version: number, revision?: string, imageVersion?: number): Observable<Job> {
+    return this.action(jobId, '/storyboards/images/regenerate', { version, image_version: imageVersion, actor: 'web-v2', revision });
   }
 }

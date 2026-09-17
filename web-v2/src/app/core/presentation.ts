@@ -28,6 +28,7 @@ const STATUS_LABELS: Record<string, string> = {
   ONLINE: 'У мережі', FREE: 'Готовий', BUSY: 'Зайнятий', DRAINING: 'Завершує роботу',
   UPDATING: 'Оновлюється', RECOVERING: 'Відновлюється', OFFLINE: 'Не в мережі',
   ERROR: 'Помилка', QUARANTINED: 'Ізольований', REVOKED: 'Відкликаний', SELF_TESTING: 'Самодіагностика',
+  pending: 'Очікує', generating: 'Генерується', ready: 'Готовий', approved: 'Затверджено', superseded: 'Застаріле',
 };
 
 const ROLE_LABELS: Record<string, string> = {

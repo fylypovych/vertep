@@ -663,26 +663,31 @@ def _image_storyboard_gate(store, job) -> bool:
     operator. Returns ``True`` when the pipeline must wait (missing preview images are
     (re)queued, with LOCAL_WORKER_FALLBACK first-pass generation kept functional).
     """
-    if not job.storyboards or not job.active_storyboard_version:
-        return False
-    sb = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
-    if sb is None or sb.image_status == "approved":
-        return False
-    from ..image_storyboard import queue_image_storyboard
-    if not all(s.image_artifact_id for s in sb.scenes):
-        queue_image_storyboard(store, job, sb.version)
-        if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
-            from ..image_storyboard import handle_image_result as _handle
-            import base64
-            demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
-            b64 = base64.b64encode(demo_ppm).decode()
-            for tid in list(job.image_storyboard_task_ids.keys()):
-                _handle(store, job, tid, True, image_base64=b64)
-                from ..state import task_queue as _tq
-                _tq.ack(tid)
-            store.event(job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
-    store.event(job, f"IMAGE STORYBOARD {sb.version} NOT APPROVED (status={sb.image_status}); waiting for approval")
-    return True
+    if job.task_type == "video" or job.storyboards:
+        if not job.storyboards or not job.active_storyboard_version:
+            store.event(job, "STORYBOARD GATE: No active storyboard; asset generation blocked")
+            return True
+        sb = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
+        if sb is None:
+            store.event(job, f"STORYBOARD GATE: Active storyboard {job.active_storyboard_version} not found; asset generation blocked")
+            return True
+        if sb.image_status != "approved":
+            from ..image_storyboard import queue_image_storyboard
+            if not all(s.image_artifact_id for s in sb.scenes):
+                queue_image_storyboard(store, job, sb.version)
+                if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+                    from ..image_storyboard import handle_image_result as _handle
+                    import base64
+                    demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
+                    b64 = base64.b64encode(demo_ppm).decode()
+                    for tid in list(job.image_storyboard_task_ids.keys()):
+                        _handle(store, job, tid, True, image_base64=b64)
+                        from ..state import task_queue as _tq
+                        _tq.ack(tid)
+                    store.event(job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
+            store.event(job, f"IMAGE STORYBOARD {sb.version} NOT APPROVED (status={sb.image_status}); waiting for approval")
+            return True
+    return False
 
 
 def _prepare_and_dispatch(job) -> None:

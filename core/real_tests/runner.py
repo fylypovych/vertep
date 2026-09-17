@@ -14,6 +14,7 @@ Lifecycle:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import threading
 from typing import Any, Callable
@@ -27,27 +28,39 @@ from .storage import (
     audit_entry,
     create_test_run,
     get_test_run,
+    list_pending_reports,
     record_github_report,
     update_test_run,
 )
 
 
 def _git_commit() -> str:
-    """Return the short commit SHA, using the release tag SHA if available.
+    """Return the commit SHA for deployment identity.
 
-    In runtime images without a .git directory the release-provided SHA
-    (via VERSION/environment) is preferred; fallback to git only when
-    a repository is accessible.
+    Priority: GITHUB_SHA env → VERSION file → git rev-parse.
+    Returns 'unknown' only as absolute last resort; callers should
+    not accept 'unknown' for version-bound acceptance.
     """
-    # Try the release-versioned SHA first (set by bootstrap/CI).
+    github_sha = os.getenv("GITHUB_SHA", "").strip()
+    if github_sha:
+        return github_sha[:12]
     try:
         from core.version import application_version as _av
-        # application_version reads VERSION; if it matches a known release,
-        # use it as the authoritative SHA anchor rather than git.
-        return f"v{_av()}"
+        version = _av()
+        if version:
+            return version
     except Exception:
         pass
-    # Fallback to git rev-parse when a repository is present.
+    try:
+        version_file = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "VERSION",
+        )
+        with open(version_file, encoding="utf-8") as f:
+            v = f.read().strip()
+            if v:
+                return v
+    except OSError:
+        pass
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -101,16 +114,14 @@ class RealTestRunner:
     def run_checks(self, run: TestRun, check_names: list[str] | None = None) -> TestRun:
         """Execute the registered check functions for a test run."""
         names = check_names or run_rt_check_names(run.rt_id)
-        # Validation: Ensure all mandatory checks for the scenario are present in the requested list
         scenario = _scenarios_module.find_scenario(rt_id=run.rt_id)
         if scenario:
-            mandatory_scenario_checks = scenario.get("checks", [])
+            mandatory_scenario_checks = set(scenario.get("checks", []))
             missing_mandatory = [n for n in mandatory_scenario_checks if n not in names]
             if missing_mandatory:
-                audit_entry(run.test_run_id, "validation", f"missing mandatory checks: {missing_mandatory}", "runner")
-                run.error_details = (run.error_details or "") + f" | Missing mandatory checks: {missing_mandatory}"
-        
-
+                audit_entry(run.test_run_id, "validation",
+                            f"missing mandatory checks auto-added: {missing_mandatory}", "runner")
+                names = list(set(names) | mandatory_scenario_checks)
         for name in names:
             check_fn = CHECK_REGISTRY.get(name)
             if check_fn is None:
@@ -121,20 +132,21 @@ class RealTestRunner:
                 status = CheckStatus.PASS if passed else CheckStatus.FAIL
                 result = CheckResult(name=name, status=status, detail=detail, mandatory=True)
             append_check(run.test_run_id, result)
-            audit_entry(run.test_run_id, "check", f"{name}: {status.value}", "runner")
+            audit_entry(run.test_run_id, "check", f"{name}: {result.status.value}", "runner")
             run.checks.append(result)
         return run
 
     def finalize(self, run: TestRun) -> TestRun:
-        """Determine final PASS/FAIL based on mandatory checks."""
+        """Determine final PASS/FAIL based on mandatory checks and scenario policy."""
+        scenario = _scenarios_module.find_scenario(rt_id=run.rt_id)
+        scenario_id = scenario.get("id", "") if scenario else ""
+        success_policy = _scenarios_module.get_scenario_success_policy(scenario_id) if scenario else {CheckStatus.PASS}
         mandatory = [c for c in run.checks if c.mandatory]
         if not mandatory:
             run.final_result = "FAIL"
             run.error_details = "No mandatory checks to evaluate"
         else:
-            failures = [c for c in mandatory if c.status not in {CheckStatus.PASS, CheckStatus.WARNING,
-                                                                  CheckStatus.SKIPPED,
-                                                                  CheckStatus.NOT_CONFIGURED}]
+            failures = [c for c in mandatory if c.status not in success_policy]
             run.final_result = "PASS" if not failures else "FAIL"
             if failures:
                 run.error_details = "; ".join(f"{c.name}: {c.detail}" for c in failures[:10])
@@ -152,7 +164,9 @@ class RealTestRunner:
             run.status = TestRunStatus.REPORTED
             run.github_report = {"reported_at": utc_now(),
                                  "comment_id": result["comment_id"],
-                                 "final_result": run.final_result}
+                                 "final_result": run.final_result,
+                                 "version": run.version,
+                                 "commit_sha": run.commit_sha}
         else:
             run.status = TestRunStatus.REPORT_PENDING
             run.github_report = {"error": result["error"],
@@ -206,6 +220,20 @@ class RealTestRunner:
                     f"reported={result['reported']}", "runner")
         return run
 
+    def recover_pending_reports(self) -> list[dict[str, Any]]:
+        """Retry all runs stuck in REPORT_PENDING after a restart."""
+        results = []
+        for run in list_pending_reports():
+            audit_entry(run.test_run_id, "recovery_start",
+                        "retrying pending report after restart", "system")
+            result = self.retry_report(run.test_run_id)
+            if result:
+                results.append({
+                    "test_run_id": result.test_run_id,
+                    "reported": result.status == TestRunStatus.REPORTED,
+                })
+        return results
+
     def get_report(self, test_run_id: str) -> dict | None:
         """Build a human-readable report dict for a test run."""
         run = get_test_run(test_run_id)
@@ -215,7 +243,8 @@ class RealTestRunner:
 
     def _format_report(self, run: TestRun) -> dict[str, Any]:
         checks = [
-            {"name": c.name, "status": c.status.value, "detail": c.detail,
+            {"name": c.name, "status": c.status.value,
+             "detail": _redact_secrets(c.detail),
              "mandatory": c.mandatory}
             for c in run.checks
         ]
@@ -227,20 +256,32 @@ class RealTestRunner:
             "commit": run.commit_sha,
             "result": run.final_result,
             "status": run.status.value,
-            "environment": run.environment,
+            "environment": {k: _redact_secrets(str(v)) for k, v in (run.environment or {}).items()},
             "hardware": run.hardware,
             "core_node_id": run.core_node_id,
             "targets": run.targets,
             "checks": checks,
             "started_at": run.started_at,
             "finished_at": run.finished_at,
-            "error_details": run.error_details,
+            "error_details": _redact_secrets(run.error_details or ""),
             "github_report": run.github_report,
             "audit": run.audit,
         }
 
 
 # --- Helpers ---------------------------------------------------------------
+
+_SECRET_PATTERN = re.compile(
+    r"(api[_-]?key|apikey|token|secret|password|passwd|pwd|private[_-]?key|"
+    r"aws_|ghp_|gho_|github_pat|bearer|authorization)\s*[=:]\s*["
+    r"'\"]?[A-Za-z0-9_\-\.]{8,}",
+    re.IGNORECASE,
+)
+
+
+def _redact_secrets(text: str) -> str:
+    return _SECRET_PATTERN.sub(r"\1 = ***REDACTED***", text)
+
 
 def _safe_execute_check(fn: Callable[[], Any], name: str) -> tuple[bool, str]:
     """Execute a check, returning (passed, detail). Never raises."""
@@ -249,9 +290,9 @@ def _safe_execute_check(fn: Callable[[], Any], name: str) -> tuple[bool, str]:
         if result is None:
             return False, "check returned no result"
         passed, detail = result
-        return bool(passed), str(detail)[:500]
+        return bool(passed), _redact_secrets(str(detail)[:500])
     except Exception as exc:
-        return False, f"check '{name}' raised: {exc}"
+        return False, _redact_secrets(f"check '{name}' raised: {exc}")
 
 
 def run_rt_check_names(rt_id: str) -> list[str]:

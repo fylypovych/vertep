@@ -841,7 +841,12 @@ def _script_job(job_id="job-script-01", status="SCRIPT_PENDING_APPROVAL"):
         "source": "web", "retries": 0, "approved": False, "approval_status": "pending",
         "approved_channels": [], "published_to": [], "task_type": "image", "min_vram_mb": 4096, "max_retries": 3,
         "brand_id": "brand01", "aspect_ratio": "16:9", "output_preset": "youtube",
-        "version": 1, "stages": {}, "scenes": [], "artifacts": [], "events": ["SCRIPT_PENDING_APPROVAL"],
+        "version": 1, "stages": {},
+        "scenes": [
+            {"prompt": "Перша сцена", "voiceover": "Озвучка 1", "duration": 5},
+            {"prompt": "Друга сцена", "voiceover": "Озвучка 2", "duration": 5},
+        ],
+        "artifacts": [], "events": ["SCRIPT_PENDING_APPROVAL"],
         "publication_results": {}, "active_task_ids": {}, "completed_task_ids": [],
         "script": {
             "title": "Новий ролик",

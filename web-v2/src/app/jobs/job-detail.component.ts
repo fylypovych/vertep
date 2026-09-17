@@ -337,7 +337,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
 
           @if (activeStoryboard(); as storyboard) {
             <div class="mt-6 bg-violet-50 border border-violet-200 rounded-lg p-4" data-testid="job-storyboard">
-              <h4 class="font-medium text-violet-900">Розкадровка, версія {{ storyboard.version }} · превʼю v{{ storyboard.image_version }} ({{ storyboard.image_status }})</h4>
+              <h4 class="font-medium text-violet-900">Розкадровка, версія {{ storyboard.version }} · превʼю v{{ storyboard.image_version }} ({{ jobStatusLabel(storyboard.image_status) }})</h4>
               <p class="text-sm text-violet-800">{{ storyboard.title }}</p>
               <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 @for (scene of storyboard.scenes; track scene.index) {
@@ -355,10 +355,12 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                       <p class="text-xs text-emerald-600 mt-1">Превʼю: {{ scene.image_artifact_id }} (v{{ scene.image_version }})</p>
                       <a [href]="'/api/jobs/' + job()!.job_id + '/artifacts/' + scene.image_artifact_id + '/download'" class="text-xs text-emerald-600 hover:underline">Відкрити превʼю</a>
                     } @else {
-                      <p class="text-xs text-amber-600 mt-1">Превʼю генерується... ({{ storyboard.image_status }})</p>
+                      <p class="text-xs text-amber-600 mt-1">Превʼю генерується... ({{ jobStatusLabel(storyboard.image_status) }})</p>
                     }
                     <div class="mt-2 flex gap-2">
-                      <button (click)="regenerateImageScene(scene.index)" class="text-xs px-2 py-1 border rounded">Перегенерувати сцену</button>
+                      @if (canRegenerateImage()) {
+                        <button (click)="regenerateImageScene(scene.index)" class="text-xs px-2 py-1 border rounded">Перегенерувати сцену</button>
+                      }
                     </div>
                   </div>
                 }
@@ -367,8 +369,12 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                 @if (storyboard.image_status === 'ready') {
                   <button (click)="approveImageStoryboard()" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Затвердити превʼю розкадровки</button>
                 }
-                <button (click)="regenerateImageStoryboardAll()" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати всі превʼю</button>
-                <button (click)="revisionImageStoryboard()" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до превʼю</button>
+                @if (canRegenerateImage()) {
+                  <button (click)="regenerateImageStoryboardAll()" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати всі превʼю</button>
+                }
+                @if (canRevisionImage()) {
+                  <button (click)="revisionImageStoryboard()" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до превʼю</button>
+                }
               </div>
             </div>
           }
@@ -956,6 +962,18 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     return j?.storyboards?.find(item => item.version === j.active_storyboard_version) || null;
   }
 
+  canRegenerateImage(): boolean {
+    const j = this.job();
+    const sb = this.activeStoryboard();
+    return !!j && !!sb && (j.status === 'STORYBOARD_READY' || j.status === 'STORYBOARD_FAILED' || j.status === 'VIDEO_REVISION_REQUESTED');
+  }
+
+  canRevisionImage(): boolean {
+    const j = this.job();
+    const sb = this.activeStoryboard();
+    return !!j && !!sb && (j.status === 'STORYBOARD_READY' || j.status === 'STORYBOARD_PENDING_APPROVAL');
+  }
+
   previewImageUrl(artifactId: string): string {
     const j = this.job();
     return j ? `/api/jobs/${encodeURIComponent(j.job_id)}/artifacts/${encodeURIComponent(artifactId)}/download` : '';
@@ -963,21 +981,21 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   approveImageStoryboard(): void {
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.approveImageStoryboard(j.job_id, sb.version));
+    this.runAction('approve', () => this.api.approveImageStoryboard(j.job_id, sb.version, sb.image_version));
   }
   regenerateImageScene(index: number): void {
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { scene_indexes: [index] }));
+    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { scene_indexes: [index], image_version: sb.image_version }));
   }
   regenerateImageStoryboardAll(): void {
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.regenerateImageStoryboard(j.job_id, sb.version));
+    this.runAction('approve', () => this.api.regenerateImageStoryboard(j.job_id, sb.version, undefined, sb.image_version));
   }
   revisionImageStoryboard(): void {
     const rev = window.prompt('Опишіть правки до превʼю (prompt для сцени):');
     if (rev === null) return;
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { revision: rev }));
+    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { revision: rev, image_version: sb.image_version }));
   }
 
   actionLabel(action: string): string {

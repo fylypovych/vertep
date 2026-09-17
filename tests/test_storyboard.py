@@ -279,6 +279,37 @@ def test_image_storyboard_gate_blocks_unapproved_video_assets(job_store, monkeyp
     assert _image_storyboard_gate(job_store, job) is False
 
 
+def test_image_storyboard_gate_blocks_missing_or_mismatched_storyboard(job_store, monkeypatch):
+    """Issue #60/#36 negative acceptance: video tasks must never start video asset
+    generation without an active storyboard or when active_storyboard_version is mismatched.
+    """
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    from core.api.job_helpers import _image_storyboard_gate, _prepare_and_dispatch
+
+    video_job = job_store.create("Відео тема", "hero", 5, task_type="video")
+    video_job.script = {"title": "Тема", "scenes": [{"prompt": "p", "duration": 1}]}
+    video_job.storyboards = []
+    video_job.active_storyboard_version = None
+
+    # Case 1: Missing storyboard completely blocks video asset generation
+    assert _image_storyboard_gate(job_store, video_job) is True
+
+    # Dispatch must not transition video_job to ASSET_GENERATION
+    _prepare_and_dispatch(video_job)
+    assert video_job.status == JobStatus.NEW
+
+    # Case 2: Mismatched active version (active=2, only v1 present)
+    sc = StoryboardScene(index=1, prompt="p", video_prompt="v", voiceover="", duration=1)
+    sb1 = StoryboardVersion(version=1, title="Тема", description="", hashtags=[],
+                            scenes=[sc], status="approved", image_status="approved", image_version=1)
+    video_job.storyboards = [sb1]
+    video_job.active_storyboard_version = 2
+    assert _image_storyboard_gate(job_store, video_job) is True
+
+    _prepare_and_dispatch(video_job)
+    assert video_job.status == JobStatus.NEW
+
+
 def test_storyboard_rest_contract_is_registered():
     from core.app import app
 

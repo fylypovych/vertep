@@ -724,6 +724,7 @@ export interface LogQuery {
 // ── Domain action request contracts (typed, no loose maps) ───────
 export interface StoryboardActionRequest {
   version: number;
+  image_version?: number;
   actor?: string;
   revision?: string;
   scene_indexes?: number[];

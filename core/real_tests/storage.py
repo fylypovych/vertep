@@ -223,3 +223,17 @@ def record_github_report(
             run_data["github_report"] = report
         runs[test_run_id] = run_data
         _write_registry(runs)
+
+
+def list_pending_reports() -> list[TestRun]:
+    """Return runs stuck in REPORT_PENDING that can be retried."""
+    with _lock:
+        runs = _read_registry()
+    pending = []
+    for data in runs.values():
+        if data.get("status") == "REPORT_PENDING":
+            try:
+                pending.append(_deserialize(data))
+            except Exception:
+                pass
+    return pending

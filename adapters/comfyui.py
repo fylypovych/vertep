@@ -61,12 +61,26 @@ class ComfyUIAdapter:
             width, height = 640, 360
             return (f"P6\n{width} {height}\n255\n".encode() + bytes((34, 54, 48)) * width * height,
                     "scene-001.ppm", "image")
-        path = Path(workflow_path).resolve()
         workflow_root = Path(os.getenv("WORKFLOWS_ROOT", "workflows")).resolve()
-        if workflow_root not in path.parents:
+        p = Path(workflow_path)
+        if p.is_absolute():
+            path = p.resolve()
+        else:
+            if p.parts and p.parts[0] == "workflows":
+                cand1 = (workflow_root / Path(*p.parts[1:])).resolve()
+                cand2 = (workflow_root.parent / p).resolve()
+                cand3 = (workflow_root / p).resolve()
+                path = cand1 if cand1.exists() else (cand2 if cand2.exists() else cand1)
+            else:
+                path = (workflow_root / p).resolve()
+        if path != workflow_root and workflow_root not in path.parents and not (workflow_root.name == "workflows" and workflow_root.parent in path.parents):
             raise ValueError("Workflow path escapes WORKFLOWS_ROOT")
         if not path.exists():
-            raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
+            fallback = (Path("workflows") / (Path(*p.parts[1:]) if p.parts and p.parts[0] == "workflows" else p)).resolve()
+            if fallback.exists() and (Path("workflows").resolve() in fallback.parents or fallback == Path("workflows").resolve()):
+                path = fallback
+            else:
+                raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
         workflow = json.loads(path.read_text(encoding="utf-8"))
         # API workflows may use {{TOPIC}}/{{CHECKPOINT}}/{{SEED}}/{{WIDTH}}/{{HEIGHT}}
         # in any string input. Substitute inside the workflow structure so that

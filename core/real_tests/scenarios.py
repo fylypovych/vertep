@@ -27,6 +27,7 @@ from ..health_checks import (
 )
 from ..node_registry import registered_nodes
 from ..version import application_version
+from .models import CheckStatus
 
 
 CheckFn = Callable[[], tuple[bool, str]]
@@ -112,6 +113,23 @@ def _scenario_checks(scenario_id: str) -> list[str]:
         "S08": ["docker", "core_api"],
     }
     return mapping.get(scenario_id, ["docker", "core_api"])
+
+
+_SCENARIO_SUCCESS_POLICY: dict[str, set] = {
+    "S01": {CheckStatus.PASS},
+    "S02": {CheckStatus.PASS},
+    "S03": {CheckStatus.PASS, CheckStatus.WARNING},
+    "S04": {CheckStatus.PASS},
+    "S05": {CheckStatus.PASS},
+    "S06": {CheckStatus.PASS, CheckStatus.WARNING},
+    "S07": {CheckStatus.PASS, CheckStatus.WARNING, CheckStatus.SKIPPED},
+    "S08": {CheckStatus.PASS, CheckStatus.WARNING, CheckStatus.SKIPPED,
+            CheckStatus.NOT_CONFIGURED},
+}
+
+
+def get_scenario_success_policy(scenario_id: str) -> set:
+    return _SCENARIO_SUCCESS_POLICY.get(scenario_id, {CheckStatus.PASS})
 
 
 def find_scenario(rt_id: str | None = None, rt_issue_number: int | None = None) -> dict | None:

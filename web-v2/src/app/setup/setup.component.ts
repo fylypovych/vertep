@@ -18,6 +18,7 @@ export class SetupComponent {
   status = signal<SetupStatus | null>(null);
   health = signal<SetupHealth | null>(null);
   healthLoading = signal(false);
+  healthError = signal<string | null>(null);
   completing = signal(false);
   completeResult = signal<SetupCompleteResult | null>(null);
   setupToken = "";
@@ -37,6 +38,7 @@ export class SetupComponent {
         this.roleEntries = Object.entries(s.roles).map(([id, r]) => ({ id, ...r }));
         if (this.roleEntries.length) this.form.role = this.roleEntries[0].id;
         if (s.selected_role) this.form.role = s.selected_role;
+        if (s.backends && s.backends.length) this.form.backend_options = s.backends;
         this.hardwareJson = JSON.stringify(s.hardware, null, 2);
         this.loading.set(false);
       },
@@ -50,16 +52,25 @@ export class SetupComponent {
   nextStep(): void { if (this.step() === 3) this.loadHealth(); this.step.update(s => s + 1); }
   prevStep(): void { this.step.update(s => Math.max(0, s - 1)); }
 
-  loadHealth(): void {
+  loadHealth(attempt = 1): void {
     this.healthLoading.set(true);
+    this.healthError.set(null);
     this.api.getSetupHealth(this.setupToken).subscribe({
       next: (h) => { this.health.set(h); this.healthLoading.set(false); },
-      error: () => this.healthLoading.set(false),
+      error: (err) => {
+        if (attempt < 3) {
+          setTimeout(() => this.loadHealth(attempt + 1), 1000 * attempt);
+        } else {
+          this.healthError.set(err.message || 'Помилка перевірки здоровʼя');
+          this.healthLoading.set(false);
+        }
+      },
     });
   }
 
-  complete(): void {
+  complete(attempt = 1): void {
     this.completing.set(true);
+    this.error.set(null);
     // Validate backend selection
     if (this.form.backend_selected && !this.form.backend_options.includes(this.form.backend_selected)) {
       this.error.set("Обраний бекенд не дозволений");
@@ -70,7 +81,14 @@ export class SetupComponent {
     if (this.form.role !== "core") { p["core_url"] = this.form.core_url; p["core_certificate"] = this.form.core_certificate || null; p["registration_token"] = this.form.registration_token; }
     this.api.completeSetup(this.setupToken, p).subscribe({
       next: (r) => { this.completeResult.set(r); this.completing.set(false); this.step.set(5); },
-      error: (err) => { this.error.set(err.message); this.completing.set(false); },
+      error: (err) => {
+        if (attempt < 3) {
+          setTimeout(() => this.complete(attempt + 1), 1000 * attempt);
+        } else {
+          this.error.set(err.message);
+          this.completing.set(false);
+        }
+      },
     });
   }
 

@@ -1742,7 +1742,7 @@ def telegram_setup(body: TelegramSetup):
 
 def _start_telegram_polling() -> None:
     global telegram_polling_service
-    token = os.getenv("TELEGRAM_BOT_TOKEN") or _integration_secret("telegram_bot_token") or ""
+    token = _integration_secret("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
     if not token:
         return
     if os.getenv("TELEGRAM_POLLING_ENABLED", "true").lower() != "true":
@@ -1753,6 +1753,11 @@ def _start_telegram_polling() -> None:
     )
     telegram_polling_service.start()
     logger.info("Telegram polling started")
+
+
+def _restart_telegram_polling() -> None:
+    _stop_telegram_polling()
+    _start_telegram_polling()
 
 
 def _stop_telegram_polling() -> None:
