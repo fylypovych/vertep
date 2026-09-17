@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.86
+- Виправлено перемикання розділів налаштувань через меню та історію браузера: активна вкладка використовує Angular signal.
+- Оновлено Browser E2E відповідно до навігації через query parameters; виправлено перехоплення та очікування запиту правок сценарію.
+- Ліміти запитів Browser E2E передаються безпосередньо процесу CORE у CI, щоб повний прогін не блокувався HTTP 429.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.85
 - Backup Service: `health()` більше не створює директорію автоматично — очікує примонтовану `BACKUP_ROOT` (production bind mount `./backups:/data/backups` у `deploy/docker-compose.yml`)
 - Backup Service: оновлено документацію `docs/backup-restore.md` про production storage contract

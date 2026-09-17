@@ -143,7 +143,7 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         expect(page.locator("[data-testid='create-character-button']")).to_contain_text("Новий персонаж")
 
         page.get_by_role("link", name="Налаштування", exact=True).click()
-        expect(page).to_have_url(f"{BASE_URL}/settings")
+        expect(page).to_have_url(f"{BASE_URL}/settings?tab=system")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
         expect(page.locator("[data-testid='backends-table']")).to_be_visible()
 
@@ -828,7 +828,12 @@ def test_settings_roles_shows_deployment_status():
             page.route(pattern, lambda route: route.fulfill(json={}))
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
-        page.locator("button", has_text="Ролі").first.click()
+        page.locator("a[href='/settings?tab=roles']").click()
+        expect(page).to_have_url(f"{BASE_URL}/settings?tab=roles")
+        expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
+        page.get_by_role("link", name="Налаштування", exact=True).click()
+        expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()
+        page.go_back()
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
         assert not errors, f"pageerror: {errors}"
         browser.close()
@@ -925,7 +930,8 @@ def test_script_revision_happy_path():
         page.on("dialog", lambda dialog: dialog.accept("зробити сцени коротшими"))
         def handle_job_detail(route):
             if route.request.method == "POST" and "/script/revision" in route.request.url:
-                return  # Let the specific handler handle it
+                route.fallback()
+                return
             route.fulfill(json=job)
         page.route("**/api/jobs/job-script-01/script/revision", handle_revision)
         page.route("**/api/jobs/job-script-01", handle_job_detail)
@@ -940,7 +946,8 @@ def test_script_revision_happy_path():
         page.wait_for_load_state('networkidle')
         page.wait_for_timeout(1000)
 
-        page.locator("[data-testid='revision-script-button']").click()
+        with page.expect_response("**/api/jobs/job-script-01/script/revision"):
+            page.locator("[data-testid='revision-script-button']").click()
         assert revised is not None, "script/revision call was not made"
         assert revised.get("revision") == "зробити сцени коротшими", revised
         expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Запитані правки")
@@ -1351,7 +1358,7 @@ def test_update_critical_mutations_install_and_canary():
 
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
-        page.locator("button", has_text="Оновлення").first.click()
+        page.locator("a[href='/settings?tab=update']").click()
         expect(page.locator("[data-testid='settings-update']")).to_be_visible()
 
         page.locator("[data-testid='update-install']").click()
@@ -1393,7 +1400,7 @@ def test_backup_critical_mutations_create_and_restore():
 
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
-        page.locator("button", has_text="Бекапи").first.click()
+        page.locator("a[href='/settings?tab=backup']").click()
         expect(page.locator("[data-testid='settings-backup']")).to_be_visible()
 
         page.locator("[data-testid='backup-create-button']").click()

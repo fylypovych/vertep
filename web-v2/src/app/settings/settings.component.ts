@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { NavigationEnd, Router } from '@angular/router';
 import { filter, Subscription } from 'rxjs';
@@ -32,7 +32,7 @@ import { IntegrationsSectionComponent } from './sections/integrations.section';
   template: `
     <div class="space-y-6" data-testid="settings-page">
         <div class="min-w-0">
-          @switch (activeTab) {
+          @switch (activeTab()) {
             @case ('system') { <app-settings-system-info /> }
             @case ('telegram') { <app-settings-telegram /> }
             @case ('secrets') { <app-settings-secrets /> }
@@ -49,7 +49,7 @@ import { IntegrationsSectionComponent } from './sections/integrations.section';
   `,
 })
 export class SettingsComponent implements OnInit, OnDestroy {
-  activeTab = 'system';
+  readonly activeTab = signal('system');
   private routeSubscription?: Subscription;
 
   constructor(private router: Router) {}
@@ -64,7 +64,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void { this.routeSubscription?.unsubscribe(); }
 
   private selectTab(tab: string | null): void {
-    if (tab && this.tabs.some(item => item.id === tab)) this.activeTab = tab;
+    this.activeTab.set(tab && this.tabs.some(item => item.id === tab) ? tab : 'system');
   }
 
   readonly tabs = [
