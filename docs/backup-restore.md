@@ -16,6 +16,29 @@
 
 ## Перевірка відновлення
 
+Production `backup-service` отримує `BACKUP_ROOT=/data/backups` через
+`deploy/docker-compose.yml`, який входить у runtime bundle для інсталяції та
+оновлення. Bind mount `./backups:/data/backups` зберігає snapshot і receipt у
+`/opt/vertep/backups` за стандартного installation root. Root filesystem залишається
+`read_only: true`; `/health` перевіряє фактичний запис тимчасового файла та повертає
+HTTP 503, якщо каталог неможливо створити або використати для запису.
+Ключ читається з `/run/secrets/backup_encryption_key`.
+
+Міграція наявних snapshot у host-каталозі не потрібна: штатне оновлення має
+застосувати новий Compose та пересоздати контейнер. Самого restart зі старою
+конфігурацією недостатньо. Копії з нестандартного старого `BACKUP_ROOT` потрібно
+окремо перенести зі збереженням receipt перед видаленням старого контейнера.
+
+Аудит writable paths: snapshot і тимчасові файли restore використовують
+`BACKUP_ROOT`; відновлення джерел пише в змонтовані `/data/config` і `/data/storage`.
+PostgreSQL dump використовує `/tmp/vertep.dump`, для якого вже налаштовано writable
+tmpfs `/tmp` (128 MiB). Більший dump потребує окремого перегляду цього ліміту.
+Виявлено окрему наявну проблему Redis restore: без `REDIS_DATA_DIR` він намагається
+писати в `/app/var/lib/redis`, а локальний Redis data volume у Backup Service
+не змонтовано. Це виправлення каталогу snapshot не вирішує підключення Redis data
+для backup/restore. Довільні `BACKUP_*_CMD` і `BACKUP_SOURCES` також мають
+використовувати доступні mounts.
+
 Штатний сценарій приймання: backup → контрольована зміна/видалення даних → restore → verified health (файли, записи БД, jobs/history/receipts, checksums). Успішний mock restore доказом не є.
 
 ## Зв'язки

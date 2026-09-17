@@ -285,9 +285,13 @@ def _encrypt(source: Path, destination: Path, key: bytes) -> str:
 def health() -> dict:
     _key()
     root = _backup_root()
-    root.mkdir(parents=True, exist_ok=True)
-    if not os.access(root, os.W_OK):
-        raise HTTPException(503, "Каталог резервних копій недоступний для запису")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=root) as probe:
+            probe.write(b"backup-health\n")
+            probe.flush()
+    except OSError as error:
+        raise HTTPException(503, "Каталог резервних копій недоступний для запису") from error
     return {"status": "HEALTHY", "encryption": "AES-256-GCM"}
 
 

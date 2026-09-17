@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.85
+- Backup Service: `health()` більше не створює директорію автоматично — очікує примонтовану `BACKUP_ROOT` (production bind mount `./backups:/data/backups` у `deploy/docker-compose.yml`)
+- Backup Service: оновлено документацію `docs/backup-restore.md` про production storage contract
+- Tests: додано `tests/test_backup_read_only.py` — перевірка production storage contract (BACKUP_ROOT, read_only, tmpfs, secrets)
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.84
 - Image Storyboard Gate (Issue #60): розширено `_image_storyboard_gate` — блокування asset generation без approved storyboard, авто-queue з LOCAL_WORKER_FALLBACK
 - Audit для Backup (Issue #60): додано `audit_entry` при запуску backup через Telegram

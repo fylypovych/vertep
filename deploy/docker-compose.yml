@@ -199,6 +199,7 @@ services:
     env_file: .env
     volumes: ["./config:/data/config", "./storage:/data/storage", "./backups:/data/backups"]
     environment:
+      BACKUP_ROOT: /data/backups
       BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
     secrets: [backup_encryption_key]
     healthcheck:
