@@ -27,7 +27,7 @@ from ..orchestration import (all_scenes_ready, finish_scene, initialize_plan,
 from ..pipeline import JobStore, finalize_job_safe, prepare_job_safe, queue_storyboard
 from ..script_prompt import build_script_prompt
 from ..script_schema import normalize_script
-from ..state import result_locks, store, task_queue, workflow_registry
+from ..state import executor, result_locks, store, task_queue, workflow_registry
 
 
 def _serialize_job_result(function):
@@ -246,8 +246,10 @@ def _handle_script_result(store, job, result, artifacts) -> None:
         job.script_attempt = (job.script_attempt or 0) + 1
         if job.script_attempt <= job.max_retries:
             system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character)
+            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
         else:
+            task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "script"},
+                                   error)
             store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
         return
 
@@ -257,9 +259,11 @@ def _handle_script_result(store, job, result, artifacts) -> None:
         job.script_attempt = (job.script_attempt or 0) + 1
         if job.script_attempt <= job.max_retries:
             system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character)
+            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
         else:
             store.update(job, JobStatus.SCRIPT_FAILED, "SCRIPT FAILED: NO ARTIFACT AFTER RETRIES")
+            task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "script"},
+                                   "NO SCRIPT ARTIFACT AFTER RETRIES")
         return
 
     try:
@@ -272,9 +276,11 @@ def _handle_script_result(store, job, result, artifacts) -> None:
         job.script_attempt = (job.script_attempt or 0) + 1
         if job.script_attempt <= job.max_retries:
             system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character)
+            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
         else:
             store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED: MALFORMED ARTIFACT AFTER RETRIES")
+            task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "script"},
+                                   f"MALFORMED ARTIFACT: {exc}")
         return
 
     job.active_task_id = None
@@ -496,7 +502,7 @@ def _recover_stale_workers() -> None:
             job.script_task_id = None
             job.assigned_worker = None
             system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character)
+            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
             store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
@@ -533,6 +539,24 @@ def _recover_stale_workers() -> None:
             from ..pipeline import queue_storyboard as _queue_storyboard
             _queue_storyboard(store, job)
             store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
+            worker["current_job"] = None
+            worker["current_task"] = None
+        elif job and current_task == job.active_task_id and job.status in {
+                JobStatus.ASSET_GENERATION, JobStatus.VIDEO_GENERATION, JobStatus.SCRIPT_QUEUED,
+                JobStatus.SCRIPT_GENERATING, JobStatus.TTS_GENERATING}:
+            # Fallback: worker loss while holding a lease whose scene/task
+            # mapping is already cleared (e.g. during a transition).  Release
+            # the lease and re-dispatch so the Job is never stranded, then reset
+            # the assignment so a healthy worker can re-claim.
+            task_queue.release(current_task)
+            job.assigned_worker = None
+            job.active_task_id = None
+            scene = _scene_for_task(job, current_task)
+            if scene:
+                scene.assigned_worker = None
+                interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
+            store.event(job, f"{worker.get('node_name')} OFFLINE; TASK {current_task} RELEASED")
+            executor.submit(_prepare_and_dispatch, job)
             worker["current_job"] = None
             worker["current_task"] = None
 
@@ -588,7 +612,7 @@ def _dispatch_assets(store, job) -> None:
         return
     queued_tasks = [(scene, _enqueue_job_task(job, scene))
                     for scene in pending_scenes(job) if not scene.task_id]
-    if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+    if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
         images = []
         for scene, queued_task in queued_tasks:
             task_id = queued_task["task_id"]
@@ -682,7 +706,7 @@ def _image_storyboard_gate(store, job) -> bool:
             from ..image_storyboard import queue_image_storyboard
             if not all(s.image_artifact_id for s in sb.scenes):
                 queue_image_storyboard(store, job, sb.version)
-                if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+                if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
                     from ..image_storyboard import handle_image_result as _handle
                     import base64
                     demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
@@ -732,7 +756,7 @@ def _prepare_and_dispatch(job) -> None:
             from ..image_storyboard import queue_image_storyboard
             if not all(s.image_artifact_id for s in sb.scenes):
                 queue_image_storyboard(store, job, sb.version)
-                if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+                if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
                     from ..image_storyboard import handle_image_result as _handle
                     import base64
                     demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4

@@ -1,5 +1,11 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.90
+- i.0.0.0.70: CORE isolation — вилучено LOCAL_WORKER_FALLBACK paths для Text/Storyboard/Publisher.
+- Замінено дефолти LOCAL_WORKER_FALLBACK: `"true"` → `"false"` в job_helpers.py (3 місця), jobs.py (publish endpoint), storyboard.py.
+- `_publish_to_channel()` у app.py тепер диспатчить публікацію через task queue замість прямого виклику `providers.publisher().publish()`.
+- Додано regression tests для static gate alias/indirect calls.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.89
 - i.0.0.0.67: Додано regression tests для всіх 6 sub-issues issue #67.
 - Tests: `test_character_create_does_not_default_did_samogon` — перевіряє автогенерацію System ID.

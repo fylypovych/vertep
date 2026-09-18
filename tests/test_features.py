@@ -390,6 +390,36 @@ def test_script_task_failure_retries_then_fails():
         assert job.status == JobStatus.SCRIPT_FAILED
 
 
+def test_script_retry_carries_revision_and_dead_letters():
+    """Issue #69 T3/T4: retry passes job.revision forward, and exhausting the
+    attempt budget dead-letters the script task instead of silently dropping it."""
+    from core.api.job_helpers import _handle_script_result
+    from core.models import Job, JobStatus
+    from core.state import task_queue
+    from unittest.mock import MagicMock, patch
+    task_queue._dead_letters.clear()
+    job = Job(job_id="job-rev", topic="rev", character_id="c", priority=5,
+              status=JobStatus.SCRIPT_GENERATING, created_at="2024-01-01T00:00:00Z",
+              script_task_id="task-1", script_attempt=0, max_retries=1,
+              revision="поправка: додати кадр", publish_task_ids={},
+              publication_results={}, published_to=[])
+    store = MagicMock()
+    store.update = lambda j, status=None, msg="": setattr(j, "status", status)
+    captured = {}
+    def _capture_enqueue(job_store, job, system_prompt="", character=None, revision=None):
+        captured["revision"] = revision
+        captured["task_id"] = "retry-task"
+        return {"task_id": "retry-task"}
+    with patch("core.api.job_helpers._enqueue_script_task", side_effect=_capture_enqueue), \
+         patch("core.api.job_helpers._load_character_prompt", return_value=("", None)):
+        _handle_script_result(store, job, {"success": False, "task_id": "task-1", "error": "timeout"}, [])
+        assert captured["revision"] == "поправка: додати кадр"
+        _handle_script_result(store, job, {"success": False, "task_id": "retry-task", "error": "timeout again"}, [])
+        assert job.status == JobStatus.SCRIPT_FAILED
+    dead = task_queue.dead_letters()
+    assert any(d.get("task_id") == "retry-task" and d.get("task") == "script" for d in dead)
+
+
 def test_script_task_cancellation_via_api(monkeypatch):
     """Cancelling a job in SCRIPT_GENERATING discards the script task via API."""
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
@@ -708,3 +738,83 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     audio_path = Path(store.root) / job_id / "audio" / audio_artifacts[0]["filename"]
     assert audio_path.exists()
     assert audio_path.read_bytes() == wav
+
+
+def test_recover_stale_workers_releases_orphaned_asset_task():
+    """Issue #69 T4: worker loss during ASSET_GENERATION where the scene-to-task
+    mapping is already cleared must still release the lease and re-dispatch via
+    the fallback path, instead of stranding the job."""
+    from core.api.job_helpers import _recover_stale_workers
+    from core.models import Job, JobStatus, utc_now
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock, patch
+    from core.state import task_queue
+    task_queue._inflight.clear()
+    task_queue._local.clear()
+    task_id = "orphan-asset"
+    task_queue.enqueue({"job_id": "job-orphan", "task": "image", "task_id": task_id,
+                        "priority": 5, "topic": "x"}, new_attempt=True)
+    job = Job(job_id="job-orphan", topic="x", character_id="c", priority=5,
+              status=JobStatus.ASSET_GENERATION, created_at=utc_now(),
+              active_task_id=task_id)
+    job.scenes = []
+    stale_iso = datetime.now(timezone.utc).timestamp() - 100
+    mock_store = MagicMock()
+    mock_store.jobs = {"job-orphan": job}
+    mock_store.workers = {
+        "dead-worker": {
+            "node_name": "dead-worker", "status": "BUSY",
+            "current_job": "job-orphan", "current_task": task_id,
+            "last_seen": datetime.fromtimestamp(stale_iso, tz=timezone.utc).isoformat(),
+        }
+    }
+    mock_store.repository.record_task = lambda task, status, node=None, error=None: None
+    mock_store.update = lambda j, status=None, event=None: None
+    mock_store.event = lambda j, msg, **kw: None
+    mock_store.transition = lambda j, status, msg: None
+    original_store = _recover_stale_workers.__globals__["store"]
+    original_dispatch = _recover_stale_workers.__globals__["_prepare_and_dispatch"]
+    original_executor = _recover_stale_workers.__globals__["executor"]
+    try:
+        _recover_stale_workers.__globals__["store"] = mock_store
+        _mock_exec = MagicMock()
+        _recover_stale_workers.__globals__["executor"] = _mock_exec
+        _recover_stale_workers()
+        assert not task_queue.inflight_has(task_id)
+        assert _mock_exec.submit.called
+    finally:
+        _recover_stale_workers.__globals__["store"] = original_store
+        _recover_stale_workers.__globals__["_prepare_and_dispatch"] = original_dispatch
+        _recover_stale_workers.__globals__["executor"] = original_executor
+
+
+def test_claim_task_skips_busy_or_draining_text_worker(monkeypatch):
+    """Issue #69 T6: a Text Worker that is busy (current_task set) or draining
+    must refuse a script-task claim so it is not over-subscribed."""
+    from core.state import store, task_queue
+    from core.app import app
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    # clean slate
+    store.workers.clear()
+    store.jobs.clear()
+    task_queue._local.clear()
+    task_queue._inflight.clear()
+    # enque a script task
+    job_id = "job-t6"
+    task_queue.enqueue({"job_id": job_id, "task": "script", "task_id": "scr-1",
+                        "priority": 5, "topic": "t6"}, new_attempt=True)
+    from core.models import Job, JobStatus, utc_now
+    store.jobs[job_id] = Job(job_id=job_id, topic="t6", character_id="c", priority=5,
+                             status=JobStatus.SCRIPT_QUEUED, created_at=utc_now(),
+                             script_task_id="scr-1")
+    # Case 1: busy worker -> no task
+    client.post("/api/workers/heartbeat", json={"node_name": "text-busy", "vram_mb": 0,
+                                        "capabilities": ["text_generation"], "current_task": "other-task"})
+    resp = client.post("/api/tasks/claim", json={"node_name": "text-busy", "capabilities": ["text_generation"]})
+    assert resp.json().get("task") is None
+    # Case 2: draining worker -> no task
+    client.post("/api/workers/heartbeat", json={"node_name": "text-draining", "vram_mb": 0,
+                                        "capabilities": ["text_generation"], "desired_state": "DRAINING"})
+    resp = client.post("/api/tasks/claim", json={"node_name": "text-draining", "capabilities": ["text_generation"]})
+    assert resp.json().get("task") is None

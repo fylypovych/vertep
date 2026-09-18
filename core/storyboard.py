@@ -65,11 +65,15 @@ class StoryboardService:
         task_id = job.storyboard_task_id
         while True:
             task = task_queue.claim()
+            # No task to claim or not the one we are waiting for
             if not task or task.get("task_id") != task_id:
                 break
+            # If the claimed task is not a storyboard task, release it
             if task.get("task") != "storyboard":
                 task_queue.release(task["task_id"])
                 break
+            # Successful claim – acknowledge and stop looping
+            task_queue.ack(task["task_id"])
             break
 
     def handle_result(self, job_id: str, task_id: str, success: bool, artifacts: list[dict] | None, error: str | None, node_name: str | None = None) -> Job | None:
@@ -109,7 +113,10 @@ class StoryboardService:
             job.storyboard_error = error
             self.store.event(job, f"STORYBOARD FAILED {current_attempt}/{attempts}: {error}")
             if current_attempt < attempts:
-                self.queue(job, job.storyboards[-1].revision_request if job.storyboards else None)
+                # T3: forward the current job.revision (user instructions) so
+                # each retry applies the same revision context instead of the
+                # original (possibly stale) revision_request.
+                self.queue(job, job.revision or (job.storyboards[-1].revision_request if job.storyboards else None))
                 return job
             self.store.update(job, JobStatus.STORYBOARD_FAILED,
                               f"STORYBOARD FAILED after {attempts} attempts: {error}")
@@ -156,7 +163,7 @@ class StoryboardService:
         try:
             from .image_storyboard import queue_image_storyboard
             queue_image_storyboard(self.store, job, storyboard.version)
-            if os.getenv("LOCAL_WORKER_FALLBACK", "true").lower() == "true":
+            if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
                 from .image_storyboard import handle_image_result as _handle
                 import base64
                 demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4

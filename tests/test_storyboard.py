@@ -160,6 +160,25 @@ def test_storyboard_retries_and_fails(job_store, monkeypatch):
     assert job.storyboard_error
 
 
+def test_storyboard_retry_carries_revision(job_store, monkeypatch):
+    """Issue #69 T3: storyboard retry forwards job.revision to the worker."""
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    job = job_store.create("Нова тема", "hero", 5)
+    job.revision = "додати кадр про кішку"
+    service = StoryboardService(job_store)
+    service.queue(job)
+    task_id = job.storyboard_task_id
+    captured = {}
+    original_queue = service.queue
+    def _spy(job, revision=None):
+        captured["revision"] = revision
+        return original_queue(job, revision=revision)
+    service.queue = _spy
+    service.handle_result(job.job_id, task_id, False, None, "bad json")
+    assert job.storyboard_attempt == 1
+    assert captured["revision"] == "додати кадр про кішку"
+
+
 def test_telegram_storyboard_rendering_and_versioned_callbacks(job_store):
     job = job_store.create("Нова тема", "hero", 5)
     service = StoryboardService(job_store)

@@ -42,6 +42,13 @@ def claim_task(payload: TaskClaim, request: Request):
     worker_data = dict(registered_worker)
     claim_metrics = payload.model_dump(exclude={"node_name", "capabilities"})
     worker_data.update(claim_metrics)
+    # T6: readiness/model routing — a Text Worker must be idle and not in a
+    # transitional/desired state before it can accept a new text task (script,
+    # storyboard, TTS).  A busy or draining/quarantined worker is skipped so the
+    # dispatcher never over-subscribes a node that cannot actually claim.
+    desired_state = worker_data.get("desired_state")
+    if desired_state in {"DRAINING", "QUARANTINED", "UPDATING"} or worker_data.get("current_task"):
+        return {"task": None, "worker_state": desired_state or worker_data.get("status", "BUSY")}
     held_tasks = []
     scan_limit = max(1, task_queue.depth())
     for _ in range(scan_limit):

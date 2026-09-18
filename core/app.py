@@ -1634,19 +1634,14 @@ def _handle_publish_all(callback: dict, chat_id: str, job_id: str) -> dict:
 def _publish_to_channel(job, channel) -> dict:
     if job.approval_status != "approved":
         return {"status": "REJECTED", "error": "Job не схвалено для публікації"}
-    publisher = providers.publisher()
-    if not publisher.configured(channel.channel_type):
-        return {"status": "NOT_CONFIGURED", "error": f"{channel.channel_type} не налаштовано"}
-    try:
-        result = publisher.publish(channel.channel_type, job.output_path or "", {"job_id": job.job_id, "topic": job.topic, "target": channel.target})
-        job.publication_results[channel.channel_id] = result
-        if result.get("status") == "PUBLISHED":
-            if channel.channel_id not in job.published_to:
-                job.published_to.append(channel.channel_id)
-        store.update(job, job.status, f"PUBLISHED to {channel.channel_type}:{channel.target}")
-        return result
-    except Exception as error:
-        return {"status": "FAILED", "error": str(error)}
+    from .api.job_helpers import _has_publisher_worker
+    if not _has_publisher_worker(store):
+        return {"status": "NOT_CONFIGURED", "error": "Publisher Worker не зареєстровано; публікація неможлива без Publisher Worker"}
+    from .api.job_helpers import _enqueue_publish_task
+    queued = _enqueue_publish_task(store, job, channel.channel_type)
+    if queued is None:
+        return {"status": "NOT_CONFIGURED", "error": f"Publisher для {channel.channel_type} не налаштовано"}
+    return {"status": "QUEUED", "task_id": queued["task_id"], "channel": channel.channel_type}
 
 
 def _send_approval_request(job) -> None:
