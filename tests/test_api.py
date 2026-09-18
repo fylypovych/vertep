@@ -14,6 +14,8 @@ from core.dispatcher import available_worker
 from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, WorkerState, utc_now
 from worker import role_executor
 
+_tc = TestClient(app)
+
 
 def _mock_storyboard_queue(self, job, revision=None):
     target_store = getattr(self, "store", store)
@@ -980,3 +982,49 @@ def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tm
         "workflow": "workflows/image/demo.json",
     })
     assert resp.status_code == 200
+
+
+def test_character_create_does_not_default_did_samogon(tmp_path):
+    """Regression #67 sub-issue 3: new character must not get did_samogon as default ID."""
+    char_root = tmp_path / "characters"
+    os.environ["CHARACTERS_ROOT"] = str(char_root)
+    try:
+        resp = _tc.post("/api/characters", json={"name": "Новий персонаж"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] != "did_samogon"
+        assert len(data["id"]) == 12
+        assert data["id"].islower()
+    finally:
+        os.environ.pop("CHARACTERS_ROOT", None)
+
+
+def test_backup_unconfigured_returns_503(monkeypatch):
+    """Regression #67 sub-issue 6: BACKUP_URL not set returns 503 with clear message."""
+    monkeypatch.delenv("BACKUP_URL", raising=False)
+    resp = _tc.post("/api/system/backups")
+    assert resp.status_code == 503
+    assert "BACKUP_URL" in resp.json()["detail"]
+
+
+def test_workflow_edit_without_force_rejected(monkeypatch, tmp_path):
+    """Regression #67 sub-issue 5: editing built-in workflow without force returns 400."""
+    from core.state import workflow_registry as global_registry
+    from core.workflows import WorkflowRegistry
+    wf_root = tmp_path / "workflows"
+    (wf_root / "image").mkdir(parents=True, exist_ok=True)
+    wf = {"1": {"class_type": "KSampler", "inputs": {"seed": 1}}}
+    (wf_root / "image" / "builtin.json").write_text(json.dumps(wf), encoding="utf-8")
+    new_registry = WorkflowRegistry(wf_root)
+    import core.state
+    core.state.workflow_registry = new_registry
+    try:
+        wf2 = {"1": {"class_type": "KSampler", "inputs": {"seed": 2}}}
+        resp = _tc.put("/api/workflows/image/builtin.json", json=wf2)
+        assert resp.status_code == 400
+        assert "already exists" in resp.json()["detail"]
+        resp_force = _tc.put("/api/workflows/image/builtin.json", json=wf2,
+                             params={"force": "true"})
+        assert resp_force.status_code == 200
+    finally:
+        core.state.workflow_registry = global_registry

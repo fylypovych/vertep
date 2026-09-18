@@ -1,5 +1,11 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.89
+- i.0.0.0.67: Додано regression tests для всіх 6 sub-issues issue #67.
+- Tests: `test_character_create_does_not_default_did_samogon` — перевіряє автогенерацію System ID.
+- Tests: `test_backup_unconfigured_returns_503` — перевіряє помилку при відсутності BACKUP_URL.
+- Tests: `test_workflow_edit_without_force_rejected` — перевіряє захист built-in workflows від перезапису без force.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.88
 - i.0.0.0.67: Виправлено створення Jobs, форму персонажа, редагування сценаріїв та Backup UI.
 - Telegram Job Creation (#67): покращено діагностику помилок — повідомлення тепер містить конкретну причину замість generic тексту.
