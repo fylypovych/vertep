@@ -1,5 +1,14 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.88
+- i.0.0.0.67: Виправлено створення Jobs, форму персонажа, редагування сценаріїв та Backup UI.
+- Telegram Job Creation (#67): покращено діагностику помилок — повідомлення тепер містить конкретну причину замість generic тексту.
+- Manual Job Creation (#67): workflow select тепер використовує повний шлях `workflows/<type>/<name>.json` замість окремого `name`, що усуває помилку "Invalid workflow: Workflow must use workflows/<task_type>/<name>.json".
+- Scenario Edit (#67): виправлено неспівпадіння `kind`/`type` між фронтендом та бекендом; додано `force=true` для перезапису built-in сценаріїв.
+- Character Create (#67): автогенерація System ID замість placeholder "did_samogon".
+- Backup Error Handling (#67): `_internal_api()` повертає зрозумілі помилки (503/502/504) замість generic HTTP 502 при недоступності backup-сервісу.
+- Tests: 3 regression тести для workflow path validation та незалежності Telegram/manual-create code paths.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.87
 - Real Test Runner (#66): заміна `gh` CLI на GitHub REST API (`urllib.request`), повний 40-символьний SHA deployment identity, 9 нових health check probes для S03-S08 (postgres_tcp, redis_tcp, ollama_probe, comfyui_probe, gpu, tts, publisher, backup, monitoring), розширений secret redaction (JSON key-value, credentials, access_key, client_secret, jwt_secret, encryption_key, internal_api_key), retry_report зберігає version/commit_sha.
 - Real Tests GitHub Reporter (#66): `_already_reported` пробрасує transient errors замість поглинання, module-level функції `_post_comment`/`_get_comments`/`_close_issue`/`_api_request` через `urllib.request`.

@@ -199,7 +199,7 @@ export class WorkflowsComponent implements OnInit {
     }
 
     if (this.editingWf) {
-      this.api.saveWorkflow(this.editingWf.kind, this.editingWf.name, content).subscribe({
+      this.api.saveWorkflow(this.editingWf.kind, this.editingWf.name, content, true).subscribe({
         next: () => {
           this.closeEditor();
           this.loadWorkflows();

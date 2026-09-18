@@ -240,15 +240,19 @@ export class VertepApiService {
   }
 
   getWorkflows(): Observable<Workflow[]> {
-    return this.http.get<Workflow[]>(`${this.baseUrl}/workflows`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+    return this.http.get<any[]>(`${this.baseUrl}/workflows`, { headers: this.getHeaders() }).pipe(
+      map((items) => items.map((item) => ({ kind: item.type, name: item.name }))),
+      catchError(this.handleError),
+    );
   }
 
   getWorkflow(kind: string, name: string): Observable<WorkflowDocument> {
     return this.http.get<WorkflowDocument>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  saveWorkflow(kind: string, name: string, payload: Record<string, unknown>): Observable<WorkflowSaveResponse> {
-    return this.http.put<WorkflowSaveResponse>(`${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  saveWorkflow(kind: string, name: string, payload: Record<string, unknown>, force = false): Observable<WorkflowSaveResponse> {
+    const url = `${this.baseUrl}/workflows/${encodeURIComponent(kind)}/${encodeURIComponent(name)}${force ? '?force=true' : ''}`;
+    return this.http.put<WorkflowSaveResponse>(url, payload, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   deleteWorkflow(kind: string, name: string): Observable<WorkflowDeleteResponse> {

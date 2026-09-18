@@ -1257,10 +1257,11 @@ def _handle_character_selection(callback: dict, chat_id: str, character_id: str)
     try:
         load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
         job = _create_job_from_telegram(pending, brand_id, character_id)
-    except Exception:
+    except Exception as error:
         logger.exception("Telegram Job creation failed", extra={"character_id": character_id})
-        adapter.send_message(chat_id, "❌ Не вдалося завершити створення завдання. Перевірте конфігурацію персонажа та сховище. Вибір збережено — можна повторити спробу.")
-        return {"status": "creation_failed"}
+        error_detail = str(error)[:200] if str(error) else "невідома помилка"
+        adapter.send_message(chat_id, f"❌ Не вдалося завершити створення завдання: {error_detail}\nПеревірте конфігурацію персонажа та сховище. Вибір збережено — можна повторити спробу.")
+        return {"status": "creation_failed", "error": error_detail}
     _telegram_pending_character.pop(chat_id, None)
     try:
         adapter.send_message(chat_id, f"✅ Завдання {job.job_id} збережено. Воно доступне в адмінці у списку «Завдання».")
@@ -2279,16 +2280,20 @@ async def _internal_api(method: str, base_environment: str, path: str,
                         payload: dict | None = None) -> dict:
     base = os.getenv(base_environment, "").rstrip("/")
     if not base:
-        raise HTTPException(503, f"{base_environment} is not configured")
+        raise HTTPException(503, f"Сервіс не налаштований: {base_environment} не встановлено")
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.request(method, f"{base}{path}", json=payload)
             response.raise_for_status()
             return response.json()
+    except httpx.ConnectError:
+        raise HTTPException(502, f"Сервіс {base_environment} недоступний на {base}. Перевірте, чи запущений backup-сервіс.")
+    except httpx.TimeoutException:
+        raise HTTPException(504, f"Таймаут з'єднання з {base_environment} ({base}). Сервіс не відповідає.")
     except httpx.HTTPStatusError as error:
-        raise HTTPException(502, error.response.text[:500]) from error
+        raise HTTPException(502, f"Помилка від {base_environment}: {error.response.text[:500]}") from error
     except (httpx.HTTPError, ValueError) as error:
-        raise HTTPException(503, f"Internal service is unavailable: {error}") from error
+        raise HTTPException(503, f"Недоступний внутрішній сервіс: {error}") from error
 
 
 @app.get("/api/system/backups")

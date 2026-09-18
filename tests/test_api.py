@@ -1,10 +1,12 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 
+import importlib
 import time
 import os
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from core.app import app, store
@@ -892,3 +894,89 @@ def test_storyboard_claim_is_exclusive_and_transitions_generating(monkeypatch):
     assert store.workers[loser].get("current_task") is None
     # The loser remains available for the next claim round.
     assert store.workers[loser]["status"] in (WorkerState.READY, WorkerState.ONLINE, "READY", "ONLINE")
+
+
+def test_job_create_workflow_uses_full_path(monkeypatch, tmp_path):
+    """Regression: workflow select must send full path (workflows/<type>/<name>.json)."""
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
+    monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "brands"))
+    (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
+    char_dir = tmp_path / "characters" / "test-char"
+    char_dir.mkdir(parents=True, exist_ok=True)
+    (char_dir / "character.json").write_text(json.dumps({
+        "id": "test-char", "name": "Test", "language": "uk",
+        "generation": {"workflow": "workflows/image/demo.json"},
+    }), encoding="utf-8")
+    workflows_root = tmp_path / "workflows"
+    (workflows_root / "image").mkdir(parents=True, exist_ok=True)
+    (workflows_root / "image" / "demo.json").write_text(json.dumps({"nodes": []}), encoding="utf-8")
+    monkeypatch.setenv("WORKFLOWS_ROOT", str(workflows_root))
+    client = TestClient(app)
+    resp = client.post("/api/jobs", json={
+        "topic": "test", "character_id": "test-char",
+        "workflow": "workflows/image/demo.json",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["workflow"] == "workflows/image/demo.json"
+
+
+def test_job_create_rejects_invalid_workflow_path(monkeypatch, tmp_path):
+    """Regression: invalid workflow path must be rejected with clear error."""
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
+    monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "brands"))
+    (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
+    char_dir = tmp_path / "characters" / "test-char"
+    char_dir.mkdir(parents=True, exist_ok=True)
+    (char_dir / "character.json").write_text(json.dumps({
+        "id": "test-char", "name": "Test", "language": "uk",
+        "generation": {"workflow": "invalid/path"},
+    }), encoding="utf-8")
+    workflows_root = tmp_path / "workflows"
+    (workflows_root / "image").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("WORKFLOWS_ROOT", str(workflows_root))
+    client = TestClient(app)
+    resp = client.post("/api/jobs", json={
+        "topic": "test", "character_id": "test-char",
+        "workflow": "invalid/path",
+    })
+    assert resp.status_code == 400
+    assert "Workflow must use" in resp.json()["detail"]
+
+
+def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tmp_path):
+    """Acceptance #3: Telegram and manual job creation use different code paths.
+
+    Telegram flow (character config workflow) does NOT validate the workflow
+    reference format; manual API flow DOES validate it via _validate_workflow_reference.
+    This test documents that the two failures are NOT caused by the same root cause.
+    """
+    module = importlib.import_module('core.app')
+    adapter = Mock()
+    monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
+    monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "brands"))
+    (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
+    char_dir = tmp_path / "characters" / "test-char"
+    char_dir.mkdir(parents=True, exist_ok=True)
+    (char_dir / "character.json").write_text(json.dumps({
+        "id": "test-char", "name": "Test", "language": "uk",
+        "generation": {"workflow": "workflows/image/demo.json"},
+    }), encoding="utf-8")
+    workflows_root = tmp_path / "workflows"
+    (workflows_root / "image").mkdir(parents=True, exist_ok=True)
+    (workflows_root / "image" / "demo.json").write_text(json.dumps({"nodes": []}), encoding="utf-8")
+    monkeypatch.setenv("WORKFLOWS_ROOT", str(workflows_root))
+    pending = {'audit-chat': {'pending': {'text': 'topic', 'source_id': 's1', 'message': {'chat': {'id': '42'}}}, 'brand_id': 'brand01'}}
+    monkeypatch.setattr(module, '_telegram_pending_character', pending)
+    monkeypatch.setattr(module, 'load_character', lambda *a, **kw: None)
+    job = SimpleNamespace(job_id='job-123', model_dump=lambda **kw: {'job_id': 'job-123'})
+    monkeypatch.setattr(module, '_create_job_from_telegram', Mock(return_value=job))
+    monkeypatch.setattr(module, '_queue_storyboard', Mock())
+    result = module._handle_character_selection({'id': 'cb'}, 'audit-chat', 'test-char')
+    assert result.get('job_id') == 'job-123'
+    client = TestClient(app)
+    resp = client.post("/api/jobs", json={
+        "topic": "test", "character_id": "test-char",
+        "workflow": "workflows/image/demo.json",
+    })
+    assert resp.status_code == 200

@@ -23,9 +23,10 @@ def test_character_selection_reports_saved_job_or_keeps_retry(monkeypatch, failu
     messages = [call.args[1] for call in adapter.send_message.call_args_list]
     assert adapter.answer_callback.call_count == 1
     if failure:
-        assert result == {'status': 'creation_failed'}
+        assert result['status'] == 'creation_failed'
+        assert 'error' in result
         assert 'audit-chat' in pending
-        assert any('Не вдалося' in message for message in messages)
+        assert any('Не вдалося завершити створення завдання:' in message for message in messages)
         queue.assert_not_called()
     else:
         assert result['job_id'] == 'job-audit'
