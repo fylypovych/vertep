@@ -159,9 +159,12 @@ class TelegramPollingService:
         return 0
 
     def _save_offset(self) -> None:
+        self._save_offset_data(self.offset)
+
+    def _save_offset_data(self, offset: int) -> None:
         self.offset_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "offset": self.offset,
+            "offset": offset,
             "last_update_id": self.last_update_id,
             "last_message_at": self.last_message_at,
         }
@@ -213,7 +216,7 @@ class TelegramPollingService:
                     continue
                 self._consecutive_failures = 0
                 self.last_error = None
-                in_memory_offset = self.offset
+                new_offset = self.offset
                 for update in updates:
                     with self._lock:
                         if not self._running:
@@ -221,10 +224,10 @@ class TelegramPollingService:
                     self.on_update(update)
                     update_id = update.get("update_id")
                     if update_id is not None:
-                        in_memory_offset = update_id + 1
+                        new_offset = update_id + 1
                         self.last_update_id = update_id
-                self.offset = in_memory_offset
-                self._save_offset()
+                self._save_offset_data(new_offset)
+                self.offset = new_offset
             except httpx.HTTPStatusError as error:
                 if error.response.status_code == 429:
                     retry_after = 5

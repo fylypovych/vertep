@@ -655,3 +655,102 @@ def test_verify_release_rejects_mismatched_tag_commit(tmp_path, monkeypatch):
         assert "вказує на" in str(error)
     else:
         raise AssertionError("Mismatched tag commit must fail verification")
+
+
+# ── C2: automated negative/positive checks for the release gate ────────
+
+def _load_gate_module():
+    path = Path("scripts/check-release-gate.py").resolve()
+    spec = importlib.util.spec_from_file_location("vertep_release_gate", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fake_runs(runs_by_name):
+    """Build a workflow_runs list where each entry has name/status/conclusion/head_sha."""
+    out = []
+    for name, payload in runs_by_name.items():
+        status, conclusion, head_sha = payload
+        out.append({"name": name, "status": status, "conclusion": conclusion,
+                    "head_sha": head_sha})
+    return out
+
+
+def test_gate_passes_only_when_both_workflows_succeed_on_same_sha(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    runs = _fake_runs({
+        "CI": ("completed", "success", sha),
+        "Browser E2E": ("completed", "success", sha),
+    })
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", lambda s, r: runs)
+    report = gate.check_gate(sha, "fylypovych/vertep")
+    assert report["passed"] is True
+    assert all(c["passed"] for c in report["checks"])
+
+
+def test_gate_rejects_missing_workflow(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    runs = _fake_runs({
+        "CI": ("completed", "success", sha),
+        # Browser E2E intentionally absent
+    })
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", lambda s, r: runs)
+    report = gate.check_gate(sha, "fylypovych/vertep")
+    assert report["passed"] is False
+    e2e = next(c for c in report["checks"] if c["workflow"] == "Browser E2E")
+    assert e2e["passed"] is False
+    assert "missing" in e2e["reason"]
+
+
+def test_gate_rejects_pending_or_in_progress(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    runs = _fake_runs({
+        "CI": ("in_progress", None, sha),
+        "Browser E2E": ("completed", "success", sha),
+    })
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", lambda s, r: runs)
+    report = gate.check_gate(sha, "fylypovych/vertep")
+    assert report["passed"] is False
+    ci = next(c for c in report["checks"] if c["workflow"] == "CI")
+    assert ci["passed"] is False
+    assert "in_progress" in ci["reason"]
+
+
+def test_gate_rejects_cancelled_skipped_or_failed(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    for conclusion in ("cancelled", "skipped", "failure", "neutral"):
+        runs = _fake_runs({
+            "CI": ("completed", conclusion, sha),
+            "Browser E2E": ("completed", "success", sha),
+        })
+        monkeypatch.setattr(gate, "_workflow_runs_for_sha", lambda s, r: runs)
+        report = gate.check_gate(sha, "fylypovych/vertep")
+        assert report["passed"] is False, f"conclusion={conclusion} must block the release"
+
+
+def test_gate_rejects_success_on_different_sha(monkeypatch):
+    """A green run for another SHA must NOT satisfy the gate for this SHA."""
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    other = "dead" * 10
+    runs = _fake_runs({
+        "CI": ("completed", "success", other),
+        "Browser E2E": ("completed", "success", other),
+    })
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", lambda s, r: runs)
+    report = gate.check_gate(sha, "fylypovych/vertep")
+    assert report["passed"] is False
+    for c in report["checks"]:
+        assert c["passed"] is False
+        assert "wrong SHA" in c["reason"]
+
+
+def test_gate_required_workflows_include_browser_e2e():
+    gate = _load_gate_module()
+    assert "Browser E2E" in gate.REQUIRED_WORKFLOWS
+    assert "CI" in gate.REQUIRED_WORKFLOWS

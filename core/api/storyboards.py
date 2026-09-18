@@ -11,6 +11,7 @@ router = APIRouter()
 
 class StoryboardAction(BaseModel):
     version: int = Field(ge=1)
+    image_version: int | None = None
     actor: str = Field(default="api", min_length=1, max_length=200)
 
 
@@ -54,7 +55,8 @@ def generate_storyboard(job_id: str, body: StoryboardRevision | None = None):
 
 @router.post("/api/jobs/{job_id}/storyboards/approve")
 def approve_storyboard(job_id: str, body: StoryboardAction):
-    job = _translate(lambda: _service().approve(job_id, body.version, body.actor))
+    job = _translate(lambda: _service().approve(job_id, body.version, body.actor,
+                                                expected_image_version=body.image_version))
     executor.submit(_prepare_and_dispatch, job)
     return job
 

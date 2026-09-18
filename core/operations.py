@@ -175,8 +175,6 @@ def get_or_create_operation(op_type: str, requested_by: str,
         op = create_operation(op_type, requested_by, target, idempotency_key)
         return op, True
 
-    return operation
-
 
 def get_operation(operation_id: str) -> dict[str, Any] | None:
     """Retrieve a single operation by ID."""

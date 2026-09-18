@@ -30,8 +30,8 @@ export class StoryboardApiService {
     return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/storyboards/generate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
 
-  approve(jobId: string, version: number): Observable<Job> {
-    return this.action(jobId, '/storyboards/approve', { version, actor: 'web-v2' });
+  approve(jobId: string, version: number, imageVersion?: number): Observable<Job> {
+    return this.action(jobId, '/storyboards/approve', { version, image_version: imageVersion, actor: 'web-v2' });
   }
 
   reject(jobId: string, version: number, revision?: string): Observable<Job> {

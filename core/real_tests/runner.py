@@ -35,21 +35,26 @@ from .storage import (
 
 
 def _git_commit() -> str:
-    """Return the commit SHA for deployment identity.
+    """Return the full commit SHA for deployment identity.
 
-    Priority: GITHUB_SHA env → VERSION file → git rev-parse.
+    Priority: GITHUB_SHA env → git rev-parse → VERSION file → 'unknown'.
+    The full SHA (40 hex chars) is always returned for GITHUB_SHA and
+    git rev-parse; VERSION file values are passed through as-is.
     Returns 'unknown' only as absolute last resort; callers should
     not accept 'unknown' for version-bound acceptance.
     """
     github_sha = os.getenv("GITHUB_SHA", "").strip()
     if github_sha:
-        return github_sha[:12]
+        return github_sha
     try:
-        from core.version import application_version as _av
-        version = _av()
-        if version:
-            return version
-    except Exception:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+            cwd=os.getcwd(),
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
         pass
     try:
         version_file = os.path.join(
@@ -60,16 +65,6 @@ def _git_commit() -> str:
             if v:
                 return v
     except OSError:
-        pass
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=10,
-            cwd=os.getcwd(),
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
         pass
     return "unknown"
 
@@ -210,11 +205,15 @@ class RealTestRunner:
             run.status = TestRunStatus.REPORTED
             run.github_report = {"reported_at": utc_now(),
                                  "comment_id": result["comment_id"],
-                                 "final_result": run.final_result}
+                                 "final_result": run.final_result,
+                                 "version": run.version,
+                                 "commit_sha": run.commit_sha}
         else:
             run.github_report = {**(run.github_report or {}),
                                  "error": result.get("error"),
-                                 "final_result": run.final_result}
+                                 "final_result": run.final_result,
+                                 "version": run.version,
+                                 "commit_sha": run.commit_sha}
         update_test_run(run)
         audit_entry(run.test_run_id, "retry_report",
                     f"reported={result['reported']}", "runner")
@@ -273,14 +272,26 @@ class RealTestRunner:
 
 _SECRET_PATTERN = re.compile(
     r"(api[_-]?key|apikey|token|secret|password|passwd|pwd|private[_-]?key|"
-    r"aws_|ghp_|gho_|github_pat|bearer|authorization)\s*[=:]\s*["
+    r"aws_|ghp_|gho_|github_pat|bearer|authorization|credentials?|"
+    r"access[_-]?key|client[_-]?secret|session[_-]?secret|jwt[_-]?secret|"
+    r"encryption[_-]?key|internal[_-]?api[_-]?key)\s*[=:]\s*["
     r"'\"]?[A-Za-z0-9_\-\.]{8,}",
+    re.IGNORECASE,
+)
+
+_JSON_SECRET_PATTERN = re.compile(
+    r'"(api[_-]?key|token|secret|password|private[_-]?key|'
+    r'credentials?|access[_-]?key|client[_-]?secret|jwt[_-]?secret|'
+    r'encryption[_-]?key|internal[_-]?api[_-]?key)"\s*:\s*'
+    r'"([A-Za-z0-9_\-\.]{8,})"',
     re.IGNORECASE,
 )
 
 
 def _redact_secrets(text: str) -> str:
-    return _SECRET_PATTERN.sub(r"\1 = ***REDACTED***", text)
+    text = _SECRET_PATTERN.sub(r"\1 = ***REDACTED***", text)
+    text = _JSON_SECRET_PATTERN.sub(r'"\1": "***REDACTED***"', text)
+    return text
 
 
 def _safe_execute_check(fn: Callable[[], Any], name: str) -> tuple[bool, str]:

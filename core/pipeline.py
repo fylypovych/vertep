@@ -235,6 +235,10 @@ def request_script_revision(store: JobStore, job: Job, revision: str, actor: str
 def regenerate_script(store: JobStore, job: Job, revision: str | None = None) -> Job:
     if job.status != JobStatus.SCRIPT_REVISION_REQUESTED:
         raise ValueError(f"Cannot regenerate script in status {job.status.value}")
+    # Issue #64 T3: carry the revision request forward.  Without this the
+    # regenerated script is produced without the feedback that triggered the
+    # revision, so the worker re-reads a stale prompt and the loop repeats.
+    job.revision = revision
     job.script = None
     job.scenes = []
     job.stages = {}

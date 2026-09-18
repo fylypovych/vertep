@@ -1,8 +1,8 @@
 """GitHub integration for Real Test reporting.
 
 Posts idempotent comments to the GitHub ``rt`` Issue that corresponds to
-a completed test run.  Uses the ``gh`` CLI (same pattern as
-``scripts/release.py``) — credentials are supplied via the encrypted
+a completed test run.  Uses the GitHub REST API via ``urllib`` — no
+external CLI dependencies.  Credentials are supplied via the encrypted
 integration secret ``github_pat``, never hardcoded.
 
 Resilience:
@@ -19,8 +19,9 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import time
+import urllib.error
+import urllib.request
 from typing import Any
 
 from ..first_run import integration_secret_status
@@ -35,70 +36,95 @@ def _is_configured() -> bool:
     return integration_secret_status().get("github_pat", False)
 
 
-def _gh_env() -> dict[str, str]:
-    """Return a process environment with GH_TOKEN from the secret store.
+def _get_token() -> str:
+    """Read the GitHub PAT from the encrypted secret store.
 
-    Raises RuntimeError if the secret store is expected but unreadable,
-    so callers do not silently fall back on ambient credentials.
+    Raises RuntimeError if unavailable — never falls back on ambient
+    credentials.
     """
-    from ..first_run import integration_secret_status
-    env = dict(os.environ)
-    if integration_secret_status().get("github_pat", False):
-        try:
-            from ..first_run import _read_encrypted_secrets
-            store = _read_encrypted_secrets()
-            token = store.get("github_pat", "")
-            if token:
-                env["GH_TOKEN"] = token
-            else:
-                raise RuntimeError("github_pat secret is empty in the store")
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to read github_pat secret: {exc}"
-            ) from exc
-    env.setdefault("GITHUB_REPOSITORY", "")
-    return env
+    if not integration_secret_status().get("github_pat", False):
+        raise RuntimeError("github_pat is not configured")
+    from ..first_run import _read_encrypted_secrets
+    store = _read_encrypted_secrets()
+    token = store.get("github_pat", "")
+    if not token:
+        raise RuntimeError("github_pat secret is empty in the store")
+    return token
 
 
-def _gh(repo: str | None, *args: str, timeout: int = 30) -> str:
-    """Run `gh` against an explicitly specified repository.
-
-    Raises ``_TransientError`` on transient failures and ``RuntimeError``
-    on permanent failures.  Returncode is always checked.
-    """
-    if repo is None:
+def _repo() -> str:
+    repo = os.getenv("GITHUB_REPOSITORY", "")
+    if not repo:
         raise RuntimeError(
             "GitHub repository not configured; set GITHUB_REPOSITORY environment variable"
         )
-    cmd = ["gh", "--repo", repo, *args]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=_gh_env(),
-    )
-    stdout = result.stdout.strip() if result.stdout else ""
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        if any(kw in stderr.lower() for kw in
-               ("rate limit", "timeout", "server error", "connection",
-                "502", "503", "504", "network", "temporary")):
-            raise _TransientError(f"gh failed (rc={result.returncode}): {stderr}")
-        raise RuntimeError(f"gh failed (rc={result.returncode}): {stderr}")
-    return stdout
+    return repo
 
 
-def _gh_json(repo: str | None, *args: str, timeout: int = 30) -> dict:
-    raw = _gh(repo, *args, timeout=timeout)
-    if not raw:
-        return {}
+def _api_request(
+    method: str,
+    url: str,
+    body: dict | None = None,
+    timeout: int = 30,
+) -> dict:
+    """Make an authenticated GitHub API request.
+
+    Returns parsed JSON dict.  Raises ``_TransientError`` on transient
+    failures and ``RuntimeError`` on permanent failures.
+    """
+    token = _get_token()
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
     try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return {}
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        stderr = ""
+        try:
+            stderr = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        code = exc.code or 0
+        if code == 403 and "rate limit" in stderr.lower():
+            raise _TransientError(f"GitHub API rate limit: {stderr}")
+        if code in (502, 503, 504):
+            raise _TransientError(f"GitHub API transient error {code}: {stderr}")
+        if code in (408, 429):
+            raise _TransientError(f"GitHub API throttled/unavailable {code}: {stderr}")
+        raise RuntimeError(f"GitHub API error {code}: {stderr}")
+    except urllib.error.URLError as exc:
+        raise _TransientError(f"GitHub API network error: {exc.reason}")
+    except TimeoutError:
+        raise _TransientError("GitHub API request timed out")
+
+
+def _post_comment(issue_number: int, body: str) -> str:
+    """Post a comment to a GitHub issue. Returns the comment ID."""
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
+    result = _api_request("POST", url, body={"body": body})
+    comment_id = str(result.get("id", "unknown"))
+    return comment_id
+
+
+def _get_comments(issue_number: int) -> list[dict]:
+    """Fetch all comments for a GitHub issue."""
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments?per_page=100"
+    return _api_request("GET", url)
+
+
+def _close_issue(issue_number: int) -> None:
+    """Close a GitHub issue with 'completed' reason."""
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
+    _api_request("PATCH", url, body={"state": "closed", "state_reason": "completed"})
 
 
 class GitHubReporter:
@@ -129,11 +155,12 @@ class GitHubReporter:
         last_error: str | None = None
         for attempt in range(self.MAX_RETRIES):
             try:
-                comment_id = self._post_comment(run.rt_issue_number, comment)
+                comment_id = _post_comment(run.rt_issue_number, comment)
                 audit_entry(run.test_run_id, "github_reported",
                             f"posted comment #{comment_id} to issue #{run.rt_issue_number}",
                             "github_reporter")
-                record_github_report(run.test_run_id, run.final_result, comment_id)
+                record_github_report(run.test_run_id, run.final_result, comment_id,
+                                     version=run.version, commit_sha=run.commit_sha)
                 return {"reported": True, "comment_id": comment_id, "error": None}
             except _TransientError as exc:
                 last_error = str(exc)
@@ -190,13 +217,10 @@ class GitHubReporter:
         """Close the rt Issue after a verified PASS. Returns status dict."""
         if not self.can_close_issue(run):
             return {"closed": False, "error": "PASS conditions not met for closing"}
-        repo = os.getenv("GITHUB_REPOSITORY", "")
-        if not repo:
-            return {"closed": False, "error": "GITHUB_REPOSITORY not configured"}
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
-                _gh(repo, "issue", "close", str(run.rt_issue_number), "--reason", "completed")
+                _close_issue(run.rt_issue_number)
                 audit_entry(run.test_run_id, "github_closed",
                             f"closed issue #{run.rt_issue_number} after PASS", "github_reporter")
                 record_github_report(run.test_run_id, run.final_result, None, None)
@@ -222,46 +246,23 @@ class GitHubReporter:
         return self.report(run)
 
     def _already_reported(self, test_run_id: str, issue_number: int) -> bool:
-        repo = os.getenv("GITHUB_REPOSITORY", "")
-        if not repo:
-            return False
+        """Check if this test_run_id was already reported to the issue.
+
+        Does NOT swallow lookup errors — returns False on transient
+        failures so the caller can retry rather than silently skipping.
+        """
         try:
-            comments = _gh_json(repo, "issue", "view", str(issue_number), "--json", "comments")
-            if not comments or "comments" not in comments:
-                return False
+            comments = _get_comments(issue_number)
             pattern = _IDEMPOTENCY_RE
-            for comment in comments["comments"]:
+            for comment in comments:
                 body = comment.get("body", "") or ""
                 if pattern.search(body) and test_run_id in body:
                     return True
+            return False
+        except _TransientError:
+            raise
         except Exception:
             return False
-        return False
-
-    def _post_comment(self, issue_number: int, body: str, repo: str | None = None) -> str:
-        """Post a comment using the explicit ``gh --repo`` invocation.
-
-        The ``repo`` argument is required so that the command does not fall
-        back on ambient credentials when the secret is mis‑configured or
-        unavailable.
-        """
-        if repo is None:
-            repo = os.getenv("GITHUB_REPOSITORY", "")
-        if not repo:
-            raise RuntimeError(
-                "GitHub repository not configured; set GITHUB_REPOSITORY environment variable"
-            )
-        result = _gh(repo, "issue", "comment", str(issue_number), "--body", body)
-        if result:
-            match = re.search(r"/issues/(\d+)#issuecomment-(\d+)", result)
-            return match.group(2) if match else "unknown"
-        raise RuntimeError(f"gh comment failed for issue #{issue_number}")
-
-    def _is_transient(self, stderr: str) -> bool:
-        lower = stderr.lower()
-        return any(marker in lower for marker in
-                   ("rate limit", "timeout", "server error", "connection",
-                    "502", "503", "504", "network", "temporary"))
 
     def _build_comment(self, run: TestRun) -> str:
         from .runner import _redact_secrets

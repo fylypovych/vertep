@@ -335,6 +335,21 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
             </div>
           }
 
+          @if (allStoryboardVersions().length > 0) {
+            <div class="mt-6">
+              <label class="text-xs text-slate-500 mb-1 block">Версія розкадровки</label>
+              <select (change)="selectStoryboardVersion($any($event.target).value ? +$any($event.target).value : null)"
+                      class="text-sm border border-slate-300 rounded px-2 py-1" data-testid="storyboard-version-select">
+                <option [value]="activeStoryboard()?.version ?? ''" selected>Активна (v{{ job()!.active_storyboard_version }})</option>
+                @for (sb of allStoryboardVersions(); track sb.version) {
+                  @if (sb.version !== job()!.active_storyboard_version) {
+                    <option [value]="sb.version">v{{ sb.version }} ({{ sb.image_status || 'created' }})</option>
+                  }
+                }
+              </select>
+            </div>
+          }
+
           @if (activeStoryboard(); as storyboard) {
             <div class="mt-6 bg-violet-50 border border-violet-200 rounded-lg p-4" data-testid="job-storyboard">
               <h4 class="font-medium text-violet-900">Розкадровка, версія {{ storyboard.version }} · превʼю v{{ storyboard.image_version }} ({{ jobStatusLabel(storyboard.image_status) }})</h4>
@@ -957,9 +972,25 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   canDelete(): boolean { return jobActionAllowed('delete', this.job()?.status); }
+  selectedStoryboardVersion = signal<number | null>(null);
+
   activeStoryboard() {
     const j = this.job();
-    return j?.storyboards?.find(item => item.version === j.active_storyboard_version) || null;
+    if (!j?.storyboards) return null;
+    const selected = this.selectedStoryboardVersion();
+    if (selected !== null) {
+      return j.storyboards.find(item => item.version === selected) || null;
+    }
+    return j.storyboards.find(item => item.version === j.active_storyboard_version) || null;
+  }
+
+  allStoryboardVersions() {
+    const j = this.job();
+    return j?.storyboards || [];
+  }
+
+  selectStoryboardVersion(version: number | null) {
+    this.selectedStoryboardVersion.set(version);
   }
 
   canRegenerateImage(): boolean {
@@ -1024,7 +1055,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       return;
     }
     this.runAction('approve', () => this.canReviewStoryboard()
-      ? this.api.approveStoryboard(j.job_id, j.active_storyboard_version!)
+      ? this.api.approveStoryboard(j.job_id, j.active_storyboard_version!, j.active_image_version)
       : this.api.approveJob(j.job_id));
   }
 

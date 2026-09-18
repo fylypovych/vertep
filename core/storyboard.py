@@ -72,11 +72,35 @@ class StoryboardService:
                 break
             break
 
-    def handle_result(self, job_id: str, task_id: str, success: bool, artifacts: list[dict] | None, error: str | None) -> Job:
+    def handle_result(self, job_id: str, task_id: str, success: bool, artifacts: list[dict] | None, error: str | None, node_name: str | None = None) -> Job | None:
+        """Process a storyboard task result.
+
+        Returns the updated ``Job`` when the result was accepted, or ``None``
+        when the result was rejected (wrong claim holder / stale version).
+        A rejected result must NOT be acked: the task stays in flight so the
+        legitimate claim holder can still submit.
+        """
         import base64
         job = self._job(job_id)
         if job.storyboard_task_id != task_id:
             return job
+
+        # Issue #64 T2: reject results that do not belong to the worker that
+        # actually claimed the task.  Without this a second worker can submit a
+        # result for a task it never won, or a stale worker can finish a task
+        # that was re-queued for a newer storyboard version.
+        if node_name is not None:
+            worker = self.store.workers.get(node_name)
+            if worker is None or worker.get("current_task") != task_id:
+                self.store.event(job, f"RESULT REJECTED for {task_id}: {node_name} does not hold the claim")
+                return None
+
+        # Reject results whose task targets a storyboard version that is no
+        # longer the active one (the job was re-queued / regenerated in the
+        # meantime).
+        if job.active_storyboard_version is not None and job.active_storyboard_version != (job.storyboards[-1].version if job.storyboards else None):
+            self.store.event(job, f"RESULT REJECTED for {task_id}: storyboard version changed")
+            return None
 
         if not success:
             attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
@@ -147,9 +171,14 @@ class StoryboardService:
 
         return job
 
-    def approve(self, job_id: str, version: int, actor: str) -> Job:
+    def approve(self, job_id: str, version: int, actor: str,
+                expected_image_version: int | None = None) -> Job:
         job = self._job(job_id)
         storyboard = self._active(job, version)
+        if expected_image_version is not None and expected_image_version != storyboard.image_version:
+            raise StoryboardConflict(
+                f"Image storyboard {version}:{storyboard.image_version} does not match reviewed version {expected_image_version}"
+            )
         if storyboard.image_status != "approved":
             raise StoryboardConflict(f"Image storyboard {version}:{storyboard.image_version} is {storyboard.image_status}; approve previews first")
         storyboard.status = "approved"

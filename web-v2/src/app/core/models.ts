@@ -165,6 +165,7 @@ export interface Job {
   scheduled_for?: string;
   storyboards?: StoryboardVersion[];
   active_storyboard_version?: number;
+  active_image_version?: number;
 }
 
 export interface JobEvent {
@@ -223,16 +224,59 @@ export interface StoryboardVersion {
   image_status: 'pending' | 'generating' | 'ready' | 'approved' | 'superseded';
 }
 
+export interface CharacterVoice {
+  provider?: string;
+  voice?: string;
+  language?: string;
+  model?: string;
+  engine?: string;
+  speed?: number;
+  [key: string]: unknown;
+}
+
+export interface CharacterVisual {
+  style?: string;
+  aspect_ratio?: string;
+  output_preset?: string;
+  [key: string]: unknown;
+}
+
+export interface CharacterGeneration {
+  workflow?: string;
+  min_vram_mb?: number;
+  max_retries?: number;
+  [key: string]: unknown;
+}
+
+export interface CharacterPublishing {
+  enabled?: boolean;
+  channels?: string;
+  [key: string]: unknown;
+}
+
+export interface CharacterForm {
+  id?: string;
+  name: string;
+  language: string;
+  enabled: boolean;
+  system_prompt: string;
+  voice: CharacterVoice;
+  visual: CharacterVisual;
+  generation: CharacterGeneration;
+  publishing: CharacterPublishing;
+  workflow?: string;
+}
+
 export interface Character {
   id?: string;
   name: string;
   language: string;
   enabled: boolean;
   system_prompt: string;
-  voice: Record<string, unknown>;
-  visual: Record<string, unknown>;
-  generation: Record<string, unknown>;
-  publishing: Record<string, unknown>;
+  voice: CharacterVoice;
+  visual: CharacterVisual;
+  generation: CharacterGeneration;
+  publishing: CharacterPublishing;
   workflow?: string;
 }
 

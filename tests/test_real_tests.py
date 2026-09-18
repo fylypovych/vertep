@@ -22,7 +22,7 @@ from core.real_tests.storage import (
     append_check, audit_entry, create_test_run, delete_test_run,
     get_test_run, list_test_runs, record_github_report, update_test_run,
 )
-from core.real_tests.github import GitHubReporter
+from core.real_tests.github import GitHubReporter, _TransientError
 import core.real_tests.github as gh_mod
 
 
@@ -137,7 +137,7 @@ class TestStorage:
 # ---------------------------------------------------------------------------
 
 class TestGitHubReporter:
-    def test_report_calls_gh(self, tmp_path, monkeypatch):
+    def test_report_calls_api(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
         run = TestRun(
             rt_id="rt::S01", rt_issue_number=40, version="test-ver",
@@ -145,12 +145,12 @@ class TestGitHubReporter:
         )
         monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
         monkeypatch.setattr(GitHubReporter, "_already_reported", lambda self, tid, num: False)
-        monkeypatch.setattr(GitHubReporter, "_post_comment", lambda self, num, body: "999")
+        monkeypatch.setattr(gh_mod, "_post_comment", lambda num, body: "999")
         result = reporter.report(run)
         assert result["reported"] is True
         assert result["comment_id"] == "999"
 
-    def test_report_with_gh_failure(self, tmp_path, monkeypatch):
+    def test_report_with_api_failure(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
         run = TestRun(
             rt_id="rt::S01", rt_issue_number=40, version="test-ver",
@@ -158,14 +158,14 @@ class TestGitHubReporter:
         )
         monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
         monkeypatch.setattr(GitHubReporter, "_already_reported", lambda self, tid, num: False)
-        monkeypatch.setattr(GitHubReporter, "_post_comment",
-                            lambda self, num, body: (_ for _ in ()).throw(
+        monkeypatch.setattr(gh_mod, "_post_comment",
+                            lambda num, body: (_ for _ in ()).throw(
                                 RuntimeError("gh: unauthorized")))
         result = reporter.report(run)
         assert result["reported"] is False
         assert result["error"] is not None
 
-    def test_close_issue_calls_gh(self, tmp_path, monkeypatch):
+    def test_close_issue_calls_api(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
         run = TestRun(
             rt_id="rt::S01", rt_issue_number=40, version="test-ver",
@@ -178,12 +178,11 @@ class TestGitHubReporter:
                              "version": "test-ver", "commit_sha": "deadbeef"}
         monkeypatch.setenv("GITHUB_REPOSITORY", "test-repo")
         monkeypatch.setattr(GitHubReporter, "can_close_issue", lambda self, r: True)
-        monkeypatch.setattr(gh_mod, "_gh", lambda *a, **kw: "closed")
+        monkeypatch.setattr(gh_mod, "_close_issue", lambda num: None)
         result = reporter.close_issue(run)
         assert result["closed"] is True
 
     def test_retry_pending_retries_on_transient_error(self, tmp_path, monkeypatch):
-        from core.real_tests.github import _TransientError
         reporter = GitHubReporter()
         run = TestRun(
             rt_id="rt::S01", rt_issue_number=10, version="test-ver",
@@ -194,24 +193,16 @@ class TestGitHubReporter:
         calls = []
         monkeypatch.setattr("core.real_tests.github.time.sleep", lambda d: None)
 
-        def mock_post(self, num, body):
+        def mock_post(num, body):
             calls.append((num, body))
             if len(calls) == 1:
                 raise _TransientError("timeout")
             return "999"
 
-        monkeypatch.setattr(GitHubReporter, "_post_comment", mock_post)
+        monkeypatch.setattr(gh_mod, "_post_comment", mock_post)
         result = reporter.report(run)
         assert result["reported"] is True
         assert len(calls) == 2
-
-    def test_is_transient_error(self):
-        reporter = GitHubReporter()
-        assert reporter._is_transient("API rate limit exceeded") is True
-        assert reporter._is_transient("Connection refused") is True
-        assert reporter._is_transient("Server error 503") is True
-        assert reporter._is_transient("fatal: not found") is False
-        assert reporter._is_transient("invalid issue number") is False
 
     def test_already_reported_idempotent(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
@@ -221,8 +212,8 @@ class TestGitHubReporter:
         )
         monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
         called = []
-        monkeypatch.setattr(GitHubReporter, "_post_comment",
-                            lambda self, num, body: called.append(num) or "123")
+        monkeypatch.setattr(gh_mod, "_post_comment",
+                            lambda num, body: called.append(num) or "123")
         monkeypatch.setattr(GitHubReporter, "_already_reported", lambda self, tid, num: True)
         result = reporter.report(run)
         assert result["reported"] is True
@@ -540,6 +531,99 @@ class TestGenerationGateCompliance:
         ]
         for pattern in forbidden:
             assert pattern not in src, f"Runner must not contain '{pattern}'"
+
+
+class TestSecretRedaction:
+    """Negative tests for secret redaction patterns."""
+
+    def test_redact_key_value_pairs(self):
+        from core.real_tests.runner import _redact_secrets
+        cases = [
+            ("api_key=sk-1234567890abcdef", "api_key = ***REDACTED***"),
+            ("token: ghp_abcdefghij1234567890", "token = ***REDACTED***"),
+            ("password = mysecretpassword123", "password = ***REDACTED***"),
+            ("AWS_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE", "AWS_ACCESS_KEY = ***REDACTED***"),
+            ("private_key:MIIEvgIBADANBg", "private_key = ***REDACTED***"),
+            ("credentials: userpass12345678", "credentials = ***REDACTED***"),
+        ]
+        for text, expected in cases:
+            result = _redact_secrets(text)
+            assert "***REDACTED***" in result, f"Failed to redact: {text}"
+            assert "sk-1234567890abcdef" not in result
+            assert "ghp_abcdefghij1234567890" not in result
+            assert "mysecretpassword123" not in result
+
+    def test_redact_json_values(self):
+        from core.real_tests.runner import _redact_secrets
+        text = '{"api_key": "sk-proj-1234567890abcdef", "token": "ghp_abcdefghij1234567890"}'
+        result = _redact_secrets(text)
+        assert "sk-proj-1234567890abcdef" not in result
+        assert "ghp_abcdefghij1234567890" not in result
+        assert "***REDACTED***" in result
+
+    def test_redact_extended_patterns(self):
+        from core.real_tests.runner import _redact_secrets
+        cases = [
+            "credentials: userpass12345678",
+            "access_key=AKIAIOSFODNN7EXAMPLE",
+            "client_secret=abcdefghijklmnopqrstuvwxyz123456",
+            "jwt_secret: mysupersecretjwtkey123456",
+            "encryption_key=abcdef1234567890abcdef",
+            "internal_api_key: iv1234567890abcdef",
+        ]
+        for text in cases:
+            result = _redact_secrets(text)
+            assert "***REDACTED***" in result, f"Failed to redact: {text}"
+
+    def test_redact_short_values_not_redacted(self):
+        from core.real_tests.runner import _redact_secrets
+        text = "token=short"
+        result = _redact_secrets(text)
+        assert "short" in result
+        assert "***REDACTED***" not in result
+
+    def test_redact_clean_text_unchanged(self):
+        from core.real_tests.runner import _redact_secrets
+        text = "All checks passed. Docker is running. PostgreSQL connected."
+        result = _redact_secrets(text)
+        assert result == text
+
+    def test_redact_mixed_content(self):
+        from core.real_tests.runner import _redact_secrets
+        text = (
+            "Check docker: OK\n"
+            "api_key=sk-1234567890abcdef12345678\n"
+            "Check postgres: OK\n"
+            "password=SuperSecretPassword123456"
+        )
+        result = _redact_secrets(text)
+        assert "docker: OK" in result
+        assert "postgres: OK" in result
+        assert "sk-1234567890abcdef12345678" not in result
+        assert "SuperSecretPassword123456" not in result
+
+    def test_redact_already_redacted(self):
+        from core.real_tests.runner import _redact_secrets
+        text = "token = ***REDACTED***"
+        result = _redact_secrets(text)
+        assert result.count("***REDACTED***") == 1
+
+    def test_secret_pattern_covers_all_key_names(self):
+        """Verify the regex covers all expected secret key names."""
+        import re
+        from core.real_tests.runner import _SECRET_PATTERN
+        # Key names that match the regex directly
+        direct_keys = [
+            "api_key", "apikey", "token", "secret", "password", "passwd", "pwd",
+            "private_key", "access_key", "client_secret", "session_secret",
+            "jwt_secret", "encryption_key", "internal_api_key", "credentials",
+        ]
+        for name in direct_keys:
+            text = f"{name}=a1b2c3d4e5f6g7h8"
+            assert _SECRET_PATTERN.search(text), f"Pattern should match key '{name}'"
+        # aws_ and ghp_ are prefix-based; they match when the VALUE starts with the prefix
+        assert _SECRET_PATTERN.search("token=ghp_abcdefghij1234567890")
+        assert _SECRET_PATTERN.search("token=AKIAIOSFODNN7EXAMPLE")
 
 
 if __name__ == "__main__":

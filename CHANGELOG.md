@@ -1,5 +1,20 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.87
+- Real Test Runner (#66): заміна `gh` CLI на GitHub REST API (`urllib.request`), повний 40-символьний SHA deployment identity, 9 нових health check probes для S03-S08 (postgres_tcp, redis_tcp, ollama_probe, comfyui_probe, gpu, tts, publisher, backup, monitoring), розширений secret redaction (JSON key-value, credentials, access_key, client_secret, jwt_secret, encryption_key, internal_api_key), retry_report зберігає version/commit_sha.
+- Real Tests GitHub Reporter (#66): `_already_reported` пробрасує transient errors замість поглинання, module-level функції `_post_comment`/`_get_comments`/`_close_issue`/`_api_request` через `urllib.request`.
+- Storyboard Approval (#66): version-bound approval — `approve()` приймає `expected_image_version` для захисту від stale approvals (як video approval).
+- Concurrent Revision Guards (#66): блокування `sb_edit`, `sb_img_edit`, `sc_edit`, `vid_edit` при наявності pending revision.
+- Telegram Admin Chat (#66): всі destructive callbacks (approve, reject, publish_*, sb_*, sc_*, vid_*, cancel) перевіряють `is_admin_chat(chat_id)`.
+- Publication Guard (#66): `_publish_to_channel` перевіряє `approval_status == "approved"` перед публікацією.
+- Video Regeneration (#66): `_finalize_video_regenerate` використовує `_collect_active_storyboard_images()` замість glob по всіх versions.
+- Polling Offset (#66): `_save_offset_data` зберігає offset на диск ДО оновлення in-memory offset.
+- Bootstrap (#66): Docker/Compose version verification після встановлення, `jq` додано до Dockerfile.
+- Web UI (#66): вибір історичних storyboard versions через dropdown, `active_image_version` в Job model, approve storyboard передає `image_version`.
+- Storyboard Task Lifecycle (#64): claim переходи QUEUED → GENERATING, rejected results НЕ звільняють worker, `regenerate_script` зберігає revision request.
+- Operations (#64): видалено unreachable `return operation` після early return.
+- Tests: 825 passed (0 failed), 5 generation gate passed, 8 тестів `TestSecretRedaction`, 5 тестів `TestBootstrapDockerCompose`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.86
 - Виправлено перемикання розділів налаштувань через меню та історію браузера: активна вкладка використовує Angular signal.
 - Оновлено Browser E2E відповідно до навігації через query parameters; виправлено перехоплення та очікування запиту правок сценарію.

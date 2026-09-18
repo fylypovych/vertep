@@ -267,3 +267,25 @@ class TestSetupWizardHTML:
     def test_completion_section(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
         assert 'data-testid="setup-complete"' in html and "Core URL" in html
+
+
+class TestBootstrapDockerCompose:
+    def test_docker_version_check(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "docker_version" in bs and "too old" in bs
+
+    def test_compose_version_check(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "compose_version" in bs and "too old" in bs
+
+    def test_docker_compose_post_install_verification(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "docker compose version" in bs
+
+    def test_docker_min_version(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "24.0" in bs
+
+    def test_compose_min_version(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "v2" in bs

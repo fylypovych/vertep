@@ -1,6 +1,6 @@
 FROM python:3.12-slim AS backend
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl openssl jq && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 ARG VERTEP_VERSION=dev
 RUN printf '%s\n' "$VERTEP_VERSION" > VERSION

@@ -203,6 +203,8 @@ def record_github_report(
     result: str | None,
     comment_id: str | None,
     error: str | None = None,
+    version: str | None = None,
+    commit_sha: str | None = None,
 ) -> None:
     now = utc_now()
     report: dict[str, Any] = {
@@ -211,6 +213,10 @@ def record_github_report(
         "comment_id": comment_id,
         "error": error,
     }
+    if version is not None:
+        report["version"] = version
+    if commit_sha is not None:
+        report["commit_sha"] = commit_sha
     with _lock:
         runs = _read_registry()
         run_data = runs.get(test_run_id)

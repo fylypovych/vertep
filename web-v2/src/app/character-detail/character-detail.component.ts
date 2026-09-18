@@ -6,7 +6,7 @@ import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { CanComponentDeactivate } from '../core/services/unsaved-guard.service';
-import { Character } from '../core/models';
+import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGeneration, CharacterPublishing } from '../core/models';
 
 @Component({
   selector: 'app-character-detail',
@@ -71,40 +71,87 @@ import { Character } from '../core/models';
               class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="text-sm font-medium text-slate-500">Голос (voice.json)</h3>
-              @if (voiceError()) { <span class="text-xs text-red-500">{{ voiceError() }}</span> }
+            <h3 class="text-sm font-medium text-slate-500 mb-3">Налаштування голосу</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Провайдер</label>
+                <select [(ngModel)]="voice.provider" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="none">Немає (тимчасово)</option>
+                  <option value="mock">Mock (тест)</option>
+                  <option value="piper">Piper (MIT)</option>
+                  <option value="kokoro">Kokoro (Apache-2.0)</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
+                <select [(ngModel)]="voice.language" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="uk">Українська</option>
+                  <option value="en">English</option>
+                  <option value="pl">Polski</option>
+                  <option value="de">Deutsch</option>
+                </select>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-1">Голос (voice ID)</label>
+                <input [(ngModel)]="voice.voice" placeholder="наприклад, uk_Kyiv (або залиште порожнім для дефолту)" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
             </div>
-            <textarea [(ngModel)]="voiceJson" rows="6" data-testid="character-voice"
-              class="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              (blur)="validateJson('voice')"></textarea>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="text-sm font-medium text-slate-500">Візуал (visual.json)</h3>
-              @if (visualError()) { <span class="text-xs text-red-500">{{ visualError() }}</span> }
+            <h3 class="text-sm font-medium text-slate-500 mb-3">Візуальний стиль</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Стиль</label>
+                <input [(ngModel)]="visual.style" placeholder="наприклад, warm documentary illustration" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Співвідношення сторін</label>
+                <select [(ngModel)]="visual.aspect_ratio" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="16:9">16:9 (YouTube, горизонтальне)</option>
+                  <option value="9:16">9:16 (Shorts/Reels/TikTok, вертикальне)</option>
+                  <option value="1:1">1:1 (квадратне)</option>
+                  <option value="4:3">4:3</option>
+                </select>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-1">Пресет виводу</label>
+                <select [(ngModel)]="visual.output_preset" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="youtube">YouTube (1080p/720p)</option>
+                  <option value="shorts">YouTube Shorts</option>
+                  <option value="tiktok">TikTok</option>
+                  <option value="reels">Instagram Reels</option>
+                </select>
+              </div>
             </div>
-            <textarea [(ngModel)]="visualJson" rows="6" data-testid="character-visual"
-              class="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              (blur)="validateJson('visual')"></textarea>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="text-sm font-medium text-slate-500">Генерація (generation.json)</h3>
-              @if (generationError()) { <span class="text-xs text-red-500">{{ generationError() }}</span> }
+            <h3 class="text-sm font-medium text-slate-500 mb-3">Налаштування генерації</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-1">Workflow (шлях до JSON)</label>
+                <input [(ngModel)]="generation.workflow" placeholder="workflows/image/demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-mono">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Мін. VRAM (МБ)</label>
+                <input type="number" [(ngModel)]="generation.min_vram_mb" min="0" step="512" placeholder="4096" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Макс. спроб</label>
+                <input type="number" [(ngModel)]="generation.max_retries" min="0" max="10" placeholder="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
             </div>
-            <textarea [(ngModel)]="generationJson" rows="6" data-testid="character-generation"
-              class="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              (blur)="validateJson('generation')"></textarea>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="text-sm font-medium text-slate-500">Публікація (publishing.json)</h3>
-              @if (publishingError()) { <span class="text-xs text-red-500">{{ publishingError() }}</span> }
+            <h3 class="text-sm font-medium text-slate-500 mb-3">Публікація</h3>
+            <div class="flex items-center gap-2 mb-3">
+              <input type="checkbox" [(ngModel)]="publishing.enabled" id="pub-enabled">
+              <label for="pub-enabled" class="text-sm text-slate-700">Увімкнути автопублікацію</label>
             </div>
-            <textarea [(ngModel)]="publishingJson" rows="6" data-testid="character-publishing"
-              class="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              (blur)="validateJson('publishing')"></textarea>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Канали (через кому)</label>
+              <input [(ngModel)]="publishing.channels" placeholder="youtube,tiktok,facebook,instagram,threads" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              <p class="text-xs text-slate-500 mt-1">Доступні: youtube, tiktok, facebook, instagram, threads</p>
+            </div>
           </div>
           <div class="flex items-center justify-between pt-2">
             <div class="flex gap-2">
@@ -140,11 +187,25 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   enabled = true;
   workflow = '';
   systemPrompt = '';
+  voice: CharacterVoice = { provider: 'none', voice: '' };
+  visual: CharacterVisual = { style: '', aspect_ratio: '16:9', output_preset: 'youtube' };
+  generation: CharacterGeneration = { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 };
+  publishing: CharacterPublishing = { enabled: false, channels: '' };
   voiceJson = '{}';
   visualJson = '{}';
   generationJson = '{}';
   publishingJson = '{}';
   private originalSnapshot = '';
+
+  private emptyForm(): CharacterForm {
+    return {
+      name: 'Новий персонаж', language: 'uk', enabled: true, system_prompt: '',
+      voice: { provider: 'none', voice: '' },
+      visual: { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
+      generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
+      publishing: { enabled: false, channels: '' },
+    };
+  }
 
   constructor(
     private route: ActivatedRoute,
@@ -167,6 +228,10 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
         this.formId = c.id ?? ''; this.name = c.name; this.language = c.language || 'uk';
         this.enabled = c.enabled !== false; this.workflow = c.workflow || '';
         this.systemPrompt = c.system_prompt || '';
+        this.voice = { provider: 'none', voice: '', ...(c.voice || {}) };
+        this.visual = { style: '', aspect_ratio: '16:9', output_preset: 'youtube', ...(c.visual || {}) };
+        this.generation = { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3, ...(c.generation || {}) };
+        this.publishing = { enabled: false, channels: '', ...(c.publishing || {}) };
         this.voiceJson = this.stringify(c.voice); this.visualJson = this.stringify(c.visual);
         this.generationJson = this.stringify(c.generation); this.publishingJson = this.stringify(c.publishing);
         this.originalSnapshot = this.snapshot(); this.loading.set(false);
@@ -181,8 +246,8 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
     const payload: Character = {
       name: this.name, language: this.language, enabled: this.enabled,
       workflow: this.workflow || undefined, system_prompt: this.systemPrompt,
-      voice: this.parseJson(this.voiceJson), visual: this.parseJson(this.visualJson),
-      generation: this.parseJson(this.generationJson), publishing: this.parseJson(this.publishingJson),
+      voice: this.voice, visual: this.visual,
+      generation: this.generation, publishing: this.publishing,
     };
     const req = this.isEdit
       ? this.api.updateCharacter(this.formId, payload)
@@ -190,6 +255,8 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
     req.subscribe({
       next: () => {
         this.saving.set(false);
+        this.voiceJson = this.stringify(this.voice); this.visualJson = this.stringify(this.visual);
+        this.generationJson = this.stringify(this.generation); this.publishingJson = this.stringify(this.publishing);
         this.toast.show(this.isEdit ? 'Персонаж збережено' : 'Персонаж створено', 'success');
         if (!this.isEdit) { this.router.navigate(['/characters', this.formId]); } else { this.originalSnapshot = this.snapshot(); }
       },

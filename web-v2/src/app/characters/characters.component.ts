@@ -5,7 +5,7 @@ import { RouterModule } from '@angular/router';
 import { VertepApiService } from '../core/api.service';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
-import { Character } from '../core/models';
+import { Character, CharacterForm } from '../core/models';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { EmptyStateComponent } from '../shared/empty-state.component';
@@ -106,27 +106,93 @@ import { EmptyStateComponent } from '../shared/empty-state.component';
 
           <!-- Voice config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Голос (JSON)</h4>
-            <textarea [(ngModel)]="voiceJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ voiceJson }}</textarea>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Налаштування голосу</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Провайдер</label>
+                <select [(ngModel)]="form.voice.provider" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="none">Немає (тимчасово)</option>
+                  <option value="mock">Mock (тест)</option>
+                  <option value="piper">Piper (MIT)</option>
+                  <option value="kokoro">Kokoro (Apache-2.0)</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
+                <select [(ngModel)]="form.voice.language" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="uk">Українська</option>
+                  <option value="en">English</option>
+                  <option value="pl">Polski</option>
+                  <option value="de">Deutsch</option>
+                </select>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-1">Голос (voice ID)</label>
+                <input [(ngModel)]="form.voice.voice" placeholder="наприклад, uk_Kyiv (або залиште порожнім для дефолту)" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+            </div>
           </div>
 
           <!-- Visual config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Візуал (JSON)</h4>
-            <textarea [(ngModel)]="visualJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ visualJson }}</textarea>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Візуальний стиль</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Стиль</label>
+                <input [(ngModel)]="form.visual.style" placeholder="наприклад, warm documentary illustration" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Співвідношення сторін</label>
+                <select [(ngModel)]="form.visual.aspect_ratio" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="16:9">16:9 (YouTube, горизонтальне)</option>
+                  <option value="9:16">9:16 (Shorts/Reels/TikTok, вертикальне)</option>
+                  <option value="1:1">1:1 (квадратне)</option>
+                  <option value="4:3">4:3</option>
+                </select>
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-1">Пресет виводу</label>
+                <select [(ngModel)]="form.visual.output_preset" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <option value="youtube">YouTube (1080p/720p)</option>
+                  <option value="shorts">YouTube Shorts</option>
+                  <option value="tiktok">TikTok</option>
+                  <option value="reels">Instagram Reels</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <!-- Generation config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Генерація (JSON)</h4>
-            <textarea [(ngModel)]="generationJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ generationJson }}</textarea>
-            <p class="text-xs text-slate-500 mt-1">Приклад: workflow, min_vram_mb, max_retries</p>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Налаштування генерації</h4>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 mb-1">Workflow (шлях до JSON)</label>
+                <input [(ngModel)]="form.generation.workflow" placeholder="workflows/image/demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-mono">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Мін. VRAM (МБ)</label>
+                <input type="number" [(ngModel)]="form.generation.min_vram_mb" min="0" step="512" placeholder="4096" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Макс. спроб</label>
+                <input type="number" [(ngModel)]="form.generation.max_retries" min="0" max="10" placeholder="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
+            </div>
           </div>
 
           <!-- Publishing config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Публікація (JSON)</h4>
-            <textarea [(ngModel)]="publishingJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-y" spellcheck="false">{{ publishingJson }}</textarea>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Публікація</h4>
+            <div class="flex items-center gap-2 mb-3">
+              <input type="checkbox" [(ngModel)]="form.publishing.enabled" id="pub-enabled">
+              <label for="pub-enabled" class="text-sm text-slate-700">Увімкнути автопублікацію</label>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Канали (через кому)</label>
+              <input [(ngModel)]="form.publishing.channels" placeholder="youtube,tiktok,facebook,instagram,threads" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              <p class="text-xs text-slate-500 mt-1">Доступні: youtube, tiktok, facebook, instagram, threads</p>
+            </div>
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-6">
@@ -143,8 +209,14 @@ export class CharactersComponent implements OnInit {
   error = signal<string | null>(null);
   showModal = signal(false);
   editingId: string | null = null;
-  form: Partial<Character> = {};
-  private originalForm: Partial<Character> | null = null;
+  form: CharacterForm = {
+    name: '', language: 'uk', enabled: true, system_prompt: '',
+    voice: { provider: 'none', voice: '' },
+    visual: { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
+    generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
+    publishing: { enabled: false, channels: '' },
+  };
+  private originalForm: CharacterForm | null = null;
   private originalVoiceJson = '';
   private originalVisualJson = '';
   private originalGenerationJson = '';
@@ -153,10 +225,6 @@ export class CharactersComponent implements OnInit {
   search = '';
   page = 1;
   pageSize = 10;
-  voiceJson = '';
-  visualJson = '';
-  generationJson = '';
-  publishingJson = '';
 
   constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
@@ -189,10 +257,10 @@ export class CharactersComponent implements OnInit {
       next: (characters) => {
         this.characters = characters.map(c => ({
           ...c,
-          voice: typeof c.voice === 'object' ? c.voice : {},
-          visual: typeof c.visual === 'object' ? c.visual : {},
-          generation: typeof c.generation === 'object' ? c.generation : {},
-          publishing: typeof c.publishing === 'object' ? c.publishing : {},
+          voice: typeof c.voice === 'object' && c.voice ? c.voice : { provider: 'none', voice: '' },
+          visual: typeof c.visual === 'object' && c.visual ? c.visual : { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
+          generation: typeof c.generation === 'object' && c.generation ? c.generation : { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
+          publishing: typeof c.publishing === 'object' && c.publishing ? c.publishing : { enabled: false, channels: '' },
         }));
         this.loading.set(false);
       },
@@ -200,20 +268,19 @@ export class CharactersComponent implements OnInit {
     });
   }
 
+  private emptyForm(): CharacterForm {
+    return {
+      name: 'Новий персонаж', language: 'uk', enabled: true, system_prompt: '',
+      voice: { provider: 'none', voice: '' },
+      visual: { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
+      generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
+      publishing: { enabled: false, channels: '' },
+    };
+  }
+
   openCreateModal(): void {
     this.editingId = null;
-    this.form = {
-      name: 'Новий персонаж',
-      language: 'uk',
-      enabled: true,
-      system_prompt: '',
-      workflow: undefined,
-      voice: { provider: 'none', voice: '' },
-      visual: { style: '', aspect_ratio: '16:9' },
-      generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
-      publishing: { enabled: false },
-    };
-    this.syncJsonFields();
+    this.form = this.emptyForm();
     this.showModal.set(true);
   }
 
@@ -223,50 +290,22 @@ export class CharactersComponent implements OnInit {
 
   editCharacter(character: Character): void {
     this.editingId = character.id ?? null;
-    this.form = { ...character };
-    this.originalForm = { ...character };
-    this.syncJsonFields();
-    this.originalVoiceJson = this.voiceJson;
-    this.originalVisualJson = this.visualJson;
-    this.originalGenerationJson = this.generationJson;
-    this.originalPublishingJson = this.publishingJson;
+    this.form = {
+      ...this.emptyForm(),
+      ...character,
+      voice: { provider: 'none', voice: '', ...(character.voice || {}) },
+      visual: { style: '', aspect_ratio: '16:9', output_preset: 'youtube', ...(character.visual || {}) },
+      generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3, ...(character.generation || {}) },
+      publishing: { enabled: false, channels: '', ...(character.publishing || {}) },
+    };
     this.showModal.set(true);
   }
 
   closeModal(): void {
-    if (this.editingId && this.hasUnsavedChanges()) {
-      if (!confirm('Є незбережені зміни. Закрити без збереження?')) return;
-    }
     this.showModal.set(false);
     this.editingId = null;
-    this.form = {};
+    this.form = this.emptyForm();
     this.saving.set(false);
-  }
-
-  private hasUnsavedChanges(): boolean {
-    if (!this.editingId || !this.originalForm) return false;
-    return this.form.system_prompt !== this.originalForm.system_prompt
-      || this.voiceJson !== this.originalVoiceJson
-      || this.visualJson !== this.originalVisualJson
-      || this.generationJson !== this.originalGenerationJson
-      || this.publishingJson !== this.originalPublishingJson;
-  }
-
-  private syncJsonFields(): void {
-    this.voiceJson = JSON.stringify(this.form.voice || {}, null, 2);
-    this.visualJson = JSON.stringify(this.form.visual || {}, null, 2);
-    this.generationJson = JSON.stringify(this.form.generation || {}, null, 2);
-    this.publishingJson = JSON.stringify(this.form.publishing || {}, null, 2);
-  }
-
-  private parseJsonOrEmpty(text: string): Record<string, unknown> {
-    if (!text.trim()) return {};
-    try {
-      const parsed = JSON.parse(text);
-      return typeof parsed === 'object' && parsed !== null ? parsed : {};
-    } catch {
-      return {};
-    }
   }
 
   saveCharacter(): void {
@@ -276,15 +315,16 @@ export class CharactersComponent implements OnInit {
     }
     this.saving.set(true);
     const payload: Character = {
+      id: this.form.id,
       name: this.form.name,
       language: this.form.language || 'uk',
       enabled: this.form.enabled !== false,
       workflow: this.form.workflow || undefined,
       system_prompt: this.form.system_prompt || '',
-      voice: this.parseJsonOrEmpty(this.voiceJson),
-      visual: this.parseJsonOrEmpty(this.visualJson),
-      generation: this.parseJsonOrEmpty(this.generationJson),
-      publishing: this.parseJsonOrEmpty(this.publishingJson),
+      voice: this.form.voice || { provider: 'none', voice: '' },
+      visual: this.form.visual || { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
+      generation: this.form.generation || { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
+      publishing: this.form.publishing || { enabled: false, channels: '' },
     };
 
     const request = this.editingId

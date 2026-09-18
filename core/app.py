@@ -57,6 +57,7 @@ from .first_run import (complete_setup, configured_user, is_configured, session_
 from .telegram_store import (get_admin_chat_ids, get_allowed_chat_ids, is_allowed_chat,
                              is_admin_chat, load_telegram_settings, save_telegram_settings)
 from .operations import (create_operation, get_operation, list_operations,
+                         get_or_create_operation,
                          begin_operation, advance_operation, complete_operation, fail_operation,
                          is_operation_in_progress, audit_entry, OperationStatus)
 from .update_manager import request_update, update_status
@@ -314,6 +315,62 @@ def setup_page(request: Request):
 
 
 
+def handle_expired_storyboard_lease(store, task: dict) -> bool:
+    """Issue #64 T4: requeue an expired storyboard lease within budget.
+
+    Returns ``True`` when the task was handled here (the caller must NOT
+    apply the generic ASSET_GENERATION path), ``False`` when the task does
+    not match the storyboard recovery rule.
+    """
+    job = store.jobs.get(task.get("job_id"))
+    if not job:
+        return False
+    if not (job.status == JobStatus.STORYBOARD_GENERATING and job.storyboard_task_id == task.get("task_id")):
+        return False
+    attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
+    current = getattr(job, "storyboard_attempt", 0) + 1
+    job.storyboard_attempt = current
+    job.assigned_worker = None
+    if current < attempts:
+        job.storyboard_task_id = None
+        job.active_task_id = None
+        store.update(job, JobStatus.STORYBOARD_QUEUED,
+                     f"STORYBOARD TASK {task['task_id']} LEASE EXPIRED; REQUEUED ({current}/{attempts})")
+        store.event(job, f"TASK {task['task_id']} LEASE EXPIRED; REQUEUED")
+        # Re-enqueue without triggering StoryboardService.queue's executor:
+        # that path runs _process_queue synchronously, which would immediately
+        # claim the very task we just requeued and strand it in flight.  The
+        # ready queue is the right home here; a live worker claims it through
+        # the normal /api/tasks/claim.
+        from .storyboard import build_storyboard_prompt
+        from .configuration import load_character, read_json
+        import os as _os
+        from pathlib import Path as _Path
+        character = load_character(_Path(_os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
+        brand = read_json(_Path(_os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
+        prompt = build_storyboard_prompt(job, character, brand, job.storyboards[-1].revision_request if job.storyboards else None)
+        version = (job.storyboards[-1].version + 1 if job.storyboards else 1)
+        image_version = job.storyboards[-1].image_version if job.storyboards else 1
+        new_task = task_queue.enqueue({
+            "job_id": job.job_id, "task": "storyboard", "priority": job.priority,
+            "topic": job.topic, "prompt": prompt, "storyboard_version": version,
+            "image_version": image_version,
+            "revision": job.storyboards[-1].revision_request if job.storyboards else None,
+            "timeout": int(_os.getenv("OLLAMA_STORYBOARD_TIMEOUT", "300")),
+        })
+        job.storyboard_task_id = new_task["task_id"]
+        job.active_task_id = new_task["task_id"]
+        store.repository.record_task(new_task, "QUEUED")
+        store.event(job, f"STORYBOARD TASK {new_task['task_id']} QUEUED for version {version}")
+    else:
+        job.storyboard_task_id = None
+        job.active_task_id = None
+        store.update(job, JobStatus.STORYBOARD_FAILED,
+                     f"STORYBOARD FAILED after {attempts} attempts: task lease expired repeatedly")
+        store.event(job, f"TASK {task['task_id']} LEASE EXPIRED; FAILED ({current}/{attempts})")
+    return True
+
+
 async def _watchdog() -> None:
     global last_maintenance
     while True:
@@ -331,8 +388,12 @@ async def _watchdog() -> None:
                 job.status = JobStatus.NEW
                 executor.submit(_prepare_and_dispatch, job)
         for task in task_queue.requeue_expired():
+            if handle_expired_storyboard_lease(store, task):
+                continue
             job = store.jobs.get(task.get("job_id"))
-            if job and job.status == JobStatus.ASSET_GENERATION:
+            if not job:
+                continue
+            if job.status == JobStatus.ASSET_GENERATION:
                 scene = _scene_for_task(job, task["task_id"])
                 if scene:
                     interrupt_scene(scene, "Task lease expired")
@@ -712,7 +773,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
     if action == "sys_update_check":
         try:
             request_update("check")
-            op = create_operation("update", f"telegram:{chat_id}")
+            op, created = get_or_create_operation("update", f"telegram:{chat_id}")
             begin_operation(op["operation_id"], "Перевірка доступного оновлення")
             return TelegramAdapter().answer_callback(
                 callback_id,
@@ -722,14 +783,13 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             return TelegramAdapter().answer_callback(callback_id, f"❌ Перевірка не запущена: {error}")
 
     if action == "sys_update_confirm":
-        existing = is_operation_in_progress("update")
-        if existing:
-            return TelegramAdapter().answer_callback(
-                callback_id, f"Оновлення вже в процесі (#{existing['operation_id'][:8]})."
-            )
         try:
             request_update("update")
-            op = create_operation("update", f"telegram:{chat_id}")
+            op, created = get_or_create_operation("update", f"telegram:{chat_id}")
+            if not created:
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"Оновлення вже в процесі (#{op['operation_id'][:8]})."
+                )
             begin_operation(op["operation_id"], "Запит на оновлення прийнято")
             audit_entry(op["operation_id"], "RUNNING", "Update started via Telegram", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
@@ -765,12 +825,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         )
 
     if action == "sys_restart_core_confirm":
-        existing = is_operation_in_progress("restart")
-        if existing:
+        op, created = get_or_create_operation("restart", f"telegram:{chat_id}", target="core")
+        if not created:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Перезапуск вже в процесі (#{existing['operation_id'][:8]})."
+                callback_id, f"Перезапуск вже в процесі (#{op['operation_id'][:8]})."
             )
-        op = create_operation("restart", f"telegram:{chat_id}", target="core")
         begin_operation(op["operation_id"], "Перезапуск CORE")
         try:
             result = _call_core_api("POST", "/api/system/restart", {"target": "core"}, timeout=15)
@@ -808,12 +867,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         node_id = payload
         if not node_id:
             return TelegramAdapter().answer_callback(callback_id, "Некоректний вузол.")
-        existing = is_operation_in_progress("restart")
-        if existing:
+        op, created = get_or_create_operation("restart", f"telegram:{chat_id}", target=node_id)
+        if not created:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Перезапуск вже в процесі (#{existing['operation_id'][:8]})."
+                callback_id, f"Перезапуск вже в процесі (#{op['operation_id'][:8]})."
             )
-        op = create_operation("restart", f"telegram:{chat_id}", target=node_id)
         begin_operation(op["operation_id"], f"Перезапуск вузла {node_id}")
         try:
             result = _call_core_api("POST", f"/api/nodes/{node_id}/actions",
@@ -839,12 +897,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         )
 
     if action == "sys_backup_confirm":
-        existing = is_operation_in_progress("backup")
-        if existing:
+        op, created = get_or_create_operation("backup", f"telegram:{chat_id}")
+        if not created:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Резервна копія вже в процесі (#{existing['operation_id'][:8]})."
+                callback_id, f"Резервна копія вже в процесі (#{op['operation_id'][:8]})."
             )
-        op = create_operation("backup", f"telegram:{chat_id}")
         begin_operation(op["operation_id"], "Створення резервної копії")
         advance_operation(op["operation_id"], "snapshot", 10, "Snapshot заплановано")
         audit_entry(op["operation_id"], "snapshot", "Backup started via Telegram", f"telegram:{chat_id}")
@@ -921,12 +978,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         snapshot_id = payload
         if not snapshot_id or not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
             return TelegramAdapter().answer_callback(callback_id, "Некоректний ID snapshot.")
-        existing = is_operation_in_progress("restore")
-        if existing:
+        op, created = get_or_create_operation("restore", f"telegram:{chat_id}", target=snapshot_id)
+        if not created:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Відновлення вже в процесі (#{existing['operation_id'][:8]})."
+                callback_id, f"Відновлення вже в процесі (#{op['operation_id'][:8]})."
             )
-        op = create_operation("restore", f"telegram:{chat_id}", target=snapshot_id)
         begin_operation(op["operation_id"], "Відновлення")
         advance_operation(op["operation_id"], "decrypt", 10, f"Відновлення snapshot {snapshot_id[:18]}")
         audit_entry(op["operation_id"], "restore", f"Restore started via Telegram for {snapshot_id}", f"telegram:{chat_id}")
@@ -990,12 +1046,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         )
 
     if action == "sys_test_quick_confirm":
-        existing = is_operation_in_progress("test")
-        if existing:
+        op, created = get_or_create_operation("test", f"telegram:{chat_id}", target="quick")
+        if not created:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Тест вже в процесі (#{existing['operation_id'][:8]})."
+                callback_id, f"Тест вже в процесі (#{op['operation_id'][:8]})."
             )
-        op = create_operation("test", f"telegram:{chat_id}", target="quick")
         begin_operation(op["operation_id"], "Швидкий тест")
         try:
             result = _call_core_api("POST", "/api/system/test", {"scope": "quick"}, timeout=30)
@@ -1015,12 +1070,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             return TelegramAdapter().answer_callback(callback_id, f"❌ Швидкий тест не вдався: {error}")
 
     if action == "sys_test_full_confirm":
-        existing = is_operation_in_progress("test")
-        if existing:
+        op, created = get_or_create_operation("test", f"telegram:{chat_id}", target="full")
+        if not created:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Тест вже в процесі (#{existing['operation_id'][:8]})."
+                callback_id, f"Тест вже в процесі (#{op['operation_id'][:8]})."
             )
-        op = create_operation("test", f"telegram:{chat_id}", target="full")
         begin_operation(op["operation_id"], "Повний тест")
         try:
             result = _call_core_api("POST", "/api/system/test", {"scope": "full"}, timeout=60)
@@ -1058,12 +1112,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         node_id = payload
         if not node_id:
             return TelegramAdapter().answer_callback(callback_id, "Некоректний вузол.")
-        existing = is_operation_in_progress("test")
-        if existing:
+        op, created = get_or_create_operation("test", f"telegram:{chat_id}", target=node_id)
+        if not created:
             return TelegramAdapter().answer_callback(
-                callback_id, f"Тест вже в процесі (#{existing['operation_id'][:8]})."
+                callback_id, f"Тест вже в процесі (#{op['operation_id'][:8]})."
             )
-        op = create_operation("test", f"telegram:{chat_id}", target=node_id)
         begin_operation(op["operation_id"], f"Self-test вузла {node_id}")
         try:
             result = _call_core_api("POST", f"/api/nodes/{node_id}/actions",
@@ -1118,25 +1171,33 @@ def _handle_telegram_callback(callback: dict) -> dict:
         return _handle_brand_selection(callback, chat_id, payload)
     elif action == "select_character":
         return _handle_character_selection(callback, chat_id, payload)
-    elif action == "approve":
-        return _handle_approve_job(callback, chat_id, payload)
-    elif action == "reject":
-        return _handle_reject_job(callback, chat_id, payload)
-    elif action == "publish_channel":
-        return _handle_publish_channel(callback, chat_id, payload)
-    elif action == "publish_all":
-        return _handle_publish_all(callback, chat_id, payload)
+    elif action in {"approve", "reject"}:
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
+        return _handle_approve_job(callback, chat_id, payload) if action == "approve" else _handle_reject_job(callback, chat_id, payload)
+    elif action in {"publish_channel", "publish_all"}:
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
+        return _handle_publish_channel(callback, chat_id, payload) if action == "publish_channel" else _handle_publish_all(callback, chat_id, payload)
     elif action in {"sb_ok", "sb_regen", "sb_edit", "sb_reject",
                     "sb_img_ok", "sb_img_regen", "sb_img_edit", "sb_img_scene"}:
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
         return _handle_storyboard_callback(callback, chat_id, action, payload)
     elif action in {"sc_ok", "sc_regen", "sc_edit", "sc_reject"}:
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
         return _handle_script_callback(callback, chat_id, action, payload)
     elif action in {"vid_ok", "vid_regen", "vid_edit", "vid_reject"}:
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
         return _handle_video_callback(callback, chat_id, action, payload)
 
     job_id = payload
     job = store.jobs.get(job_id)
     if job and action == "cancel":
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
         cancel_job(job_id)
     text = f"{job_id}: {job.status.value}" if job else "Job not found"
     return TelegramAdapter().answer_callback(callback_id, text)
@@ -1277,7 +1338,8 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
     service = StoryboardService(store)
     try:
         if action == "sb_ok":
-            job = service.approve(job_id, version, f"telegram:{chat_id}")
+            job = service.approve(job_id, version, f"telegram:{chat_id}",
+                                  expected_image_version=image_version)
             executor.submit(_prepare_and_dispatch, job)
             text = f"✅ Розкадровку {version} схвалено. Pipeline продовжено."
         elif action == "sb_reject":
@@ -1287,6 +1349,8 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
             job = store.jobs.get(job_id)
             if not job or job.active_storyboard_version != version:
                 raise StoryboardConflict("Версія розкадровки вже неактуальна")
+            if job.storyboard_revision_chat_id and job.storyboard_revision_version:
+                raise StoryboardConflict("Правки до розкадровки вже очікують на повідомлення")
             job.storyboard_revision_chat_id = chat_id
             job.storyboard_revision_version = version
             job.storyboard_image_revision_pending = False
@@ -1310,6 +1374,8 @@ def _handle_storyboard_callback(callback: dict, chat_id: str, action: str, paylo
             job = store.jobs.get(job_id)
             if not job or job.active_storyboard_version != version:
                 raise StoryboardConflict("Версія розкадровки вже неактуальна")
+            if job.storyboard_revision_chat_id and job.storyboard_image_revision_pending:
+                raise StoryboardConflict("Правки до превʼю вже очікують на повідомлення")
             job.storyboard_revision_chat_id = chat_id
             job.storyboard_revision_version = version
             job.storyboard_image_revision_pending = True
@@ -1347,6 +1413,8 @@ def _handle_script_callback(callback: dict, chat_id: str, action: str, payload: 
             if job.status not in {JobStatus.SCRIPT_PENDING_APPROVAL,
                                   JobStatus.SCRIPT_REVISION_REQUESTED}:
                 raise ValueError(f"Сценарій не очікує правок (status={job.status.value})")
+            if job.script_revision_pending and job.script_revision_chat_id:
+                raise ValueError("Правки до сценарію вже очікують на повідомлення")
             job.script_revision_chat_id = chat_id
             job.script_revision_pending = True
             store.event(job, f"SCRIPT AWAITS REVISION TEXT")
@@ -1393,6 +1461,8 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
         elif action == "vid_edit":
             if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
                 raise ValueError(f"Відео не очікує правок (status={job.status.value})")
+            if job.video_revision_pending and job.video_revision_chat_id:
+                raise ValueError("Правки до відео вже очікують на повідомлення")
             job.video_revision_chat_id = chat_id
             job.video_revision_pending = True
             store.event(job, "VIDEO AWAITS REVISION TEXT")
@@ -1418,28 +1488,18 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
 
 
 def _finalize_video_regenerate(job) -> None:
-    """Re-run assembly for video revision using stored artifacts."""
+    """Re-run assembly for video revision using active storyboard artifacts."""
     try:
         from .pipeline import finalize_job_safe
         job = store.jobs.get(job.job_id)
         if not job:
             return
-        # Issue #49: never resurrect a cancelled/paused job during (async) regeneration.
         if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
             logger.info("Video regeneration skipped: job is %s", job.status.value,
                         extra={"job_id": job.job_id})
             return
         from pathlib import Path
-        # Use registered artifacts (images/video_scene clips) — not ad-hoc glob
-        from .artifacts import _digest
-        image_dir = store.root / job.job_id / "images"
-        images = sorted(image_dir.glob("*.*")) if image_dir.exists() else []
-        if not images:
-            storyboard_dir = store.root / job.job_id / "storyboard"
-            images = sorted(storyboard_dir.glob("**/*.png"), key=lambda p: p.name) if storyboard_dir.exists() else []
-        if not images:
-            frames_dir = store.root / job.job_id / "frames"
-            images = sorted(frames_dir.glob("*.png"), key=lambda p: p.name) if frames_dir.exists() else []
+        images = _collect_active_storyboard_images(job)
         if images:
             with store.lock:
                 job.status = JobStatus.ASSETS_READY
@@ -1463,6 +1523,41 @@ def _finalize_video_regenerate(job) -> None:
             TelegramAdapter().send_message(chat_id, f"❌ Помилка перегенерування {job.job_id}: {error}")
         except Exception:
             pass
+
+
+def _collect_active_storyboard_images(job) -> list:
+    """Collect ordered images from the active storyboard version only.
+
+    Uses registered artifact paths when available; falls back to
+    the active storyboard's image directory without globbing across
+    all storyboard versions.
+    """
+    from pathlib import Path
+    from .artifacts import _digest
+    root = store.root / job.job_id
+    active_version = job.active_storyboard_version
+    storyboard = None
+    if active_version and job.storyboards:
+        storyboard = next((s for s in job.storyboards if s.version == active_version), None)
+    if storyboard and hasattr(storyboard, "scenes") and storyboard.scenes:
+        images = []
+        for scene in storyboard.scenes:
+            scene_id = getattr(scene, "scene_id", None)
+            if scene_id:
+                for ext in ("png", "jpg", "jpeg", "webp"):
+                    candidate = root / "images" / f"{scene_id}.{ext}"
+                    if candidate.exists():
+                        images.append(candidate)
+                        break
+        if images:
+            return sorted(images, key=lambda p: p.name)
+    image_dir = root / "images"
+    if image_dir.exists():
+        return sorted(image_dir.glob("*.*"), key=lambda p: p.name)
+    storyboard_dir = root / "storyboard"
+    if storyboard_dir.exists():
+        return sorted(storyboard_dir.glob("**/*.png"), key=lambda p: p.name)
+    return []
 
 
 def _handle_approve_job(callback: dict, chat_id: str, job_id: str) -> dict:
@@ -1536,6 +1631,8 @@ def _handle_publish_all(callback: dict, chat_id: str, job_id: str) -> dict:
 
 
 def _publish_to_channel(job, channel) -> dict:
+    if job.approval_status != "approved":
+        return {"status": "REJECTED", "error": "Job не схвалено для публікації"}
     publisher = providers.publisher()
     if not publisher.configured(channel.channel_type):
         return {"status": "NOT_CONFIGURED", "error": f"{channel.channel_type} не налаштовано"}

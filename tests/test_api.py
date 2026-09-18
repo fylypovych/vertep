@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from core.app import app, store
 from core.dispatcher import available_worker
-from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, utc_now
+from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, WorkerState, utc_now
 from worker import role_executor
 
 
@@ -552,3 +552,343 @@ def test_admin_and_node_auth(monkeypatch, tmp_path):
                        headers={"X-Vertep-Token": "node-secret"}).status_code == 200
     assert client.get("/api/node/status/secured-worker",
                       headers={"X-Vertep-Token": "node-secret"}).status_code == 200
+
+def _repo_task_record(store, task_id: str) -> dict | None:
+    """Read the latest repository record for a task from FileRepository.
+
+    record_task() appends to ``<root>/.tasks.jsonl``; the latest line is the
+    authoritative current state.  This is read-only and works for both the
+    FileRepository used by the test store and the MemoryRepository fallback.
+    """
+    repo = store.repository
+    path = getattr(repo, "root", None)
+    if path is not None:
+        file_path = path / ".tasks.jsonl"
+        if file_path.exists():
+            latest = None
+            for line in file_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                latest = json.loads(line)
+            if latest and latest.get("task", {}).get("task_id") == task_id:
+                return latest
+    # MemoryRepository keeps an in-memory dict.
+    tasks = getattr(repo, "tasks", None)
+    if isinstance(tasks, dict) and task_id in tasks:
+        return tasks[task_id]
+    return None
+
+
+def _storyboard_artifact(version: int, title: str = "Тестова історія"):
+    import base64
+    return {
+        "filename": "storyboard.json",
+        "kind": "storyboard",
+        "data_base64": base64.b64encode(json.dumps({
+            "version": version, "title": title, "description": "Опис",
+            "hashtags": ["#vertep"],
+            "scenes": [
+                {"index": 1, "prompt": "Українське місто", "video_prompt": "Повільна панорама",
+                 "voiceover": "Початок історії", "duration": 6},
+                {"index": 2, "prompt": "Герой у кадрі", "video_prompt": "Камера наближається",
+                 "voiceover": "Продовження", "duration": 7},
+            ],
+            "prompt_version": "1.0", "model": "fake-storyboard",
+            "status": "pending_approval", "revision_request": None,
+            "image_version": 1, "image_status": "pending",
+        }, ensure_ascii=False).encode("utf-8")).decode("ascii"),
+    }
+
+
+def test_storyboard_result_rejected_when_caller_does_not_hold_claim(monkeypatch):
+    from core.state import task_queue
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    client = TestClient(app)
+    for name in ("text-a", "text-b"):
+        client.post("/api/workers/heartbeat", json={
+            "node_name": name, "vram_mb": 0,
+            "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+        })
+    created = client.post("/api/jobs", json={"topic": "Stolen result", "min_vram_mb": 0}).json()
+    job_id = created["job_id"]
+    job = store.jobs[job_id]
+    job.min_vram_mb = 0
+    task = task_queue.enqueue({
+        "job_id": job_id, "task": "storyboard", "priority": job.priority,
+        "topic": job.topic, "prompt": "p", "storyboard_version": 1,
+        "image_version": 1, "revision": None, "timeout": 300,
+    })
+    store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    job.storyboard_task_id = task["task_id"]
+    job.active_task_id = task["task_id"]
+
+    # text-a claims the task.
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
+    assert job.status == JobStatus.STORYBOARD_GENERATING
+
+    # text-b (who never claimed) submits a result — must be rejected.
+    artifact = _storyboard_artifact(1)
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": "text-b",
+        "success": True, "artifacts": [artifact],
+    })
+    assert response.status_code == 200
+    # Job must not advance past GENERATING; the task stays un-acked so a
+    # legitimate retry can still happen.
+    assert store.jobs[job_id].status == JobStatus.STORYBOARD_GENERATING
+    assert store.workers["text-b"].get("current_task") is None
+    assert task_queue.inflight_has(task["task_id"])
+
+
+def test_storyboard_expired_lease_requeues_within_budget(monkeypatch):
+    """Issue #64 T4: when a Text Worker dies holding a storyboard claim, the
+    watchdog helper must requeue the expired lease and return the job to
+    STORYBOARD_QUEUED (within the retry budget), rather than leaving the job
+    stranded in STORYBOARD_GENERATING forever."""
+    from core.state import task_queue
+    from core.app import handle_expired_storyboard_lease
+    # This module autouse-mocks StoryboardService.queue to jump straight to
+    # PENDING_APPROVAL; the T4 recovery path calls the real queue, so undo
+    # the fixture monkeypatches for the duration of this test and re-apply
+    # only the env overrides we need.
+    monkeypatch.undo()
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    client = TestClient(app)
+    client.post("/api/workers/heartbeat", json={
+        "node_name": "text-a", "vram_mb": 0,
+        "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+    })
+    created = client.post("/api/jobs", json={"topic": "Crashed worker", "min_vram_mb": 0}).json()
+    job_id = created["job_id"]
+    job = store.jobs[job_id]
+    job.min_vram_mb = 0
+    task = task_queue.enqueue({
+        "job_id": job_id, "task": "storyboard", "priority": job.priority,
+        "topic": job.topic, "prompt": "p", "storyboard_version": 1,
+        "image_version": 1, "revision": None, "timeout": 300,
+    })
+    store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    job.storyboard_task_id = task["task_id"]
+    job.active_task_id = task["task_id"]
+
+    # text-a claims the task and then vanishes (its lease expires).
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
+    assert job.status == JobStatus.STORYBOARD_GENERATING
+    assert task_queue.inflight_has(task["task_id"])
+
+    # Simulate the watchdog: requeue every expired lease with a clock far in
+    # the future so the claim is considered expired.
+    expired = task_queue.requeue_expired(now=task_queue._inflight[task["task_id"]][0] + 1 if not task_queue._redis else 0.0)
+    assert any(t.get("task_id") == task["task_id"] for t in expired)
+
+    # Drive the watchdog's storyboard recovery path for the requeued task.
+    for t in expired:
+        handle_expired_storyboard_lease(store, t)
+
+    assert store.jobs[job_id].status == JobStatus.STORYBOARD_QUEUED
+    assert store.jobs[job_id].storyboard_task_id is not None
+    assert not task_queue.inflight_has(task["task_id"])
+
+
+def test_storyboard_expired_lease_exhausts_budget(monkeypatch):
+    """Issue #64 T4: after OLLAMA_STORYBOARD_MAX_RETRIES expired leases the
+    job must land in STORYBOARD_FAILED, not silently stay in GENERATING."""
+    from core.state import task_queue
+    from core.app import handle_expired_storyboard_lease
+    monkeypatch.undo()
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "2")
+    client = TestClient(app)
+    client.post("/api/workers/heartbeat", json={
+        "node_name": "text-a", "vram_mb": 0,
+        "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+    })
+    created = client.post("/api/jobs", json={"topic": "Unreliable worker", "min_vram_mb": 0}).json()
+    job_id = created["job_id"]
+    job = store.jobs[job_id]
+    job.min_vram_mb = 0
+    task = task_queue.enqueue({
+        "job_id": job_id, "task": "storyboard", "priority": job.priority,
+        "topic": job.topic, "prompt": "p", "storyboard_version": 1,
+        "image_version": 1, "revision": None, "timeout": 300,
+    })
+    store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    job.storyboard_task_id = task["task_id"]
+    job.active_task_id = task["task_id"]
+
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
+
+    # First expired lease -> requeue (attempt 1 < 2).
+    expired = task_queue.requeue_expired(now=task_queue._inflight[task["task_id"]][0] + 1 if not task_queue._redis else 0.0)
+    for t in expired:
+        handle_expired_storyboard_lease(store, t)
+    assert store.jobs[job_id].status == JobStatus.STORYBOARD_QUEUED
+
+    # Second expired lease on the new task -> exhausted (attempt 2 == 2).
+    # Re-claim the requeued task so it has an inflight lease to expire.
+    # The worker's last_seen ages during the test, so refresh it first.
+    client.post("/api/workers/heartbeat", json={
+        "node_name": "text-a", "vram_mb": 0,
+        "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+    })
+    new_task_id = store.jobs[job_id].storyboard_task_id
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    assert claimed["task"] and claimed["task"]["task_id"] == new_task_id, (
+        f"expected {new_task_id}, got {claimed}"
+    )
+    new_task_id = claimed["task"]["task_id"]
+    expired = task_queue.requeue_expired(now=task_queue._inflight[new_task_id][0] + 1 if not task_queue._redis else 0.0)
+    for t in expired:
+        handle_expired_storyboard_lease(store, t)
+    assert store.jobs[job_id].status == JobStatus.STORYBOARD_FAILED
+
+
+def _repo_task_record(store, task_id: str) -> dict | None:
+    """Read the latest repository record for a task from FileRepository.
+
+    record_task() appends to ``<root>/.tasks.jsonl``; the latest line is the
+    authoritative current state.  This is read-only and works for both the
+    FileRepository used by the test store and the MemoryRepository fallback.
+    """
+    repo = store.repository
+    path = getattr(repo, "root", None)
+    if path is not None:
+        file_path = path / ".tasks.jsonl"
+        if file_path.exists():
+            latest = None
+            for line in file_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                latest = json.loads(line)
+            if latest and latest.get("task", {}).get("task_id") == task_id:
+                return latest
+    # MemoryRepository keeps an in-memory dict.
+    tasks = getattr(repo, "tasks", None)
+    if isinstance(tasks, dict) and task_id in tasks:
+        return tasks[task_id]
+    return None
+
+
+def test_storyboard_task_lifecycle_audit_matches_repository_and_queue(monkeypatch):
+    """Issue #64 T5: every storyboard task state transition must be
+    observable in BOTH the Job repository record and the task queue, so the
+    two sources of truth can never drift apart."""
+    from core.state import task_queue
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    client = TestClient(app)
+    client.post("/api/workers/heartbeat", json={
+        "node_name": "text-a", "vram_mb": 0,
+        "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+    })
+    created = client.post("/api/jobs", json={"topic": "Lifecycle audit", "min_vram_mb": 0}).json()
+    job_id = created["job_id"]
+    job = store.jobs[job_id]
+    job.min_vram_mb = 0
+
+    # QUEUED: task is in the ready queue and the repository says QUEUED.
+    task = task_queue.enqueue({
+        "job_id": job_id, "task": "storyboard", "priority": job.priority,
+        "topic": job.topic, "prompt": "p", "storyboard_version": 1,
+        "image_version": 1, "revision": None, "timeout": 300,
+    })
+    store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    job.storyboard_task_id = task["task_id"]
+    job.active_task_id = task["task_id"]
+    store.repository.record_task(task, "QUEUED")
+    assert task_queue.depth() >= 1
+    assert not task_queue.inflight_has(task["task_id"])
+    repo_task = _repo_task_record(store, task["task_id"])
+    assert repo_task is not None and repo_task["status"] == "QUEUED", repo_task
+
+    # CLAIMED / GENERATING: task leaves the ready queue, enters inflight, the
+    # job transitions, and the repository records CLAIMED.
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
+    assert job.status == JobStatus.STORYBOARD_GENERATING
+    # The storyboard task must have left the ready queue (the job's auto-queued
+    # SCRIPT task may still be there, so check the storyboard task specifically).
+    probe = task_queue.claim()
+    assert not (probe and probe.get("task_id") == task["task_id"]), probe
+    if probe:
+        task_queue.release(probe["task_id"])
+    assert task_queue.inflight_has(task["task_id"])
+    repo_task = _repo_task_record(store, task["task_id"])
+    assert repo_task is not None and repo_task["status"] == "CLAIMED" and repo_task["node_name"] == "text-a", repo_task
+
+    # Submit a legitimate result from the claim holder -> COMPLETED, job
+    # advances to PENDING_APPROVAL, task leaves inflight.
+    artifact = _storyboard_artifact(1)
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": "text-a",
+        "success": True, "artifacts": [artifact],
+    })
+    assert response.status_code == 200
+    assert store.jobs[job_id].status == JobStatus.STORYBOARD_PENDING_APPROVAL
+    assert not task_queue.inflight_has(task["task_id"])
+    repo_task = _repo_task_record(store, task["task_id"])
+    assert repo_task is not None and repo_task["status"] == "COMPLETED" and repo_task["node_name"] == "text-a", repo_task
+
+
+def test_storyboard_claim_is_exclusive_and_transitions_generating(monkeypatch):
+    """Issue #64 T1: two concurrent claims must not both succeed, and the
+    first claim must move the job from STORYBOARD_QUEUED to STORYBOARD_GENERATING
+    so the repository record and the Job lifecycle agree.  The test bypasses
+    StoryboardService.queue (mocked in this module to jump straight to
+    PENDING_APPROVAL) and sets up the claim-level state directly: a job in
+    STORYBOARD_QUEUED with a matching enqueued task, and two registered text
+    workers racing for it."""
+    from core.state import task_queue
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    client = TestClient(app)
+    for name in ("text-a", "text-b"):
+        client.post("/api/workers/heartbeat", json={
+            "node_name": name, "vram_mb": 0,
+            "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+        })
+    created = client.post("/api/jobs", json={"topic": "Concurrent storyboard", "min_vram_mb": 0}).json()
+    job_id = created["job_id"]
+    job = store.jobs[job_id]
+    # The storyboard claim path uses job.min_vram_mb (no explicit override), so
+    # the 0-VRAM text worker must satisfy it.
+    job.min_vram_mb = 0
+    # Place the job directly in STORYBOARD_QUEUED with a real enqueued task.
+    task = task_queue.enqueue({
+        "job_id": job_id,
+        "task": "storyboard",
+        "priority": job.priority,
+        "topic": job.topic,
+        "prompt": "prompt",
+        "storyboard_version": 1,
+        "image_version": 1,
+        "revision": None,
+        "timeout": 300,
+    })
+    store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    job.storyboard_task_id = task["task_id"]
+    job.active_task_id = task["task_id"]
+    assert job.status == JobStatus.STORYBOARD_QUEUED
+
+    claimed = []
+    for name in ("text-a", "text-b"):
+        resp = client.post("/api/tasks/claim", json={"node_name": name, "vram_mb": 0})
+        claimed_task = resp.json().get("task")
+        if claimed_task and claimed_task.get("task") == "storyboard" and claimed_task.get("job_id") == job_id:
+            claimed.append((name, claimed_task["task_id"]))
+
+    # Exactly one worker must win the storyboard task.
+    assert len(claimed) == 1, f"expected exactly one claim, got {claimed}"
+    winner, task_id = claimed[0]
+    job = store.jobs[job_id]
+    # T1: claim must transition the job out of QUEUED into GENERATING.
+    assert job.status == JobStatus.STORYBOARD_GENERATING, job.status
+    assert store.workers[winner]["current_task"] == task_id
+    assert store.workers[winner]["status"] == "BUSY"
+    # The loser must not hold any task and must still be ONLINE.
+    loser = "text-b" if winner == "text-a" else "text-a"
+    assert store.workers[loser].get("current_task") is None
+    # The loser remains available for the next claim round.
+    assert store.workers[loser]["status"] in (WorkerState.READY, WorkerState.ONLINE, "READY", "ONLINE")

@@ -133,8 +133,8 @@ export class VertepApiService {
     );
   }
 
-  approveStoryboard(jobId: string, version: number): Observable<Job> {
-    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/approve`, { version, actor: 'web-v2' }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  approveStoryboard(jobId: string, version: number, imageVersion?: number): Observable<Job> {
+    return this.http.post<Job>(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}/storyboards/approve`, { version, image_version: imageVersion, actor: 'web-v2' }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   rejectStoryboard(jobId: string, version: number): Observable<Job> {

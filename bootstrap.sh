@@ -62,6 +62,17 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils python3-psycopg docker.io docker-compose-v2
 systemctl enable --now docker
+# Verify minimum Docker version (24.0+ for compose v2 support)
+docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "0.0.0")
+docker_major=$(echo "$docker_version" | cut -d. -f1)
+if [[ "$docker_major" -lt 24 ]]; then
+  fail "Docker $docker_version is too old; minimum required is 24.0"
+fi
+compose_version=$(docker compose version --short 2>/dev/null || echo "0.0.0")
+compose_major=$(echo "$compose_version" | cut -d. -f1)
+if [[ "$compose_major" -lt 2 ]]; then
+  fail "Docker Compose $compose_version is too old; minimum required is v2"
+fi
 if [[ $gpu_vendor == nvidia && $driver == unavailable ]]; then
   apt-get install -y -qq ubuntu-drivers-common
   ubuntu-drivers install || fail "NVIDIA driver installation failed"

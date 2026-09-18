@@ -85,6 +85,12 @@ def claim_task(payload: TaskClaim, request: Request):
             store.workers[payload.node_name]["current_job"] = job.job_id
             store.workers[payload.node_name]["current_task"] = task["task_id"]
             store.save_worker(store.workers[payload.node_name])
+            # Issue #64 T1: claim must transition QUEUED -> GENERATING so the
+            # repository record and the Job lifecycle agree.  Without this the
+            # job stays in STORYBOARD_QUEUED while the worker is actively
+            # generating, and a concurrent second claim sees a claimable task.
+            store.update(job, JobStatus.STORYBOARD_GENERATING,
+                         f"STORYBOARD TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
             store.event(job, f"{payload.node_name} STORYBOARD CLAIMED {task['task_id']}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
@@ -301,16 +307,20 @@ def task_result(result: TaskResult, request: Request):
         return job
     if job.storyboard_task_id == result.task_id:
         from ..storyboard import StoryboardService
+        try:
+            accepted = StoryboardService(store).handle_result(job.job_id, result.task_id, result.success, result.artifacts, result.error, result.node_name)
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(400, str(error)) from error
+        if accepted is None:
+            # Rejected result: the task stays in flight for the legitimate
+            # claim holder; do NOT ack, dead-letter or free the worker.
+            return job
         worker = store.workers.get(result.node_name)
         if worker:
             desired_status = worker.get("desired_state")
             next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
             worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
             store.save_worker(worker)
-        try:
-            StoryboardService(store).handle_result(job.job_id, result.task_id, result.success, result.artifacts, result.error)
-        except (ValueError, RuntimeError) as error:
-            raise HTTPException(400, str(error)) from error
         from ..state import task_queue as _tq2
         _tq2.ack(result.task_id)
         store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, "COMPLETED" if result.success else "FAILED", result.node_name, result.error)

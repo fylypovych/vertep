@@ -21,9 +21,15 @@ from ..health_checks import (
     check_comfyui,
     check_core_api,
     check_docker,
+    check_gpu,
     check_ollama,
     check_postgres,
     check_redis,
+    check_tts,
+    check_publisher,
+    check_backup,
+    check_monitoring,
+    check_tcp,
 )
 from ..node_registry import registered_nodes
 from ..version import application_version
@@ -67,13 +73,81 @@ def _check_health_core() -> tuple[bool, str]:
     return status == "HEALTHY", status
 
 
+def _check_postgres_tcp() -> tuple[bool, str]:
+    """Real TCP connectivity check for PostgreSQL (not just env presence)."""
+    url = os.getenv("DATABASE_URL", "")
+    if not url:
+        return None, "not-applicable: DATABASE_URL not configured"
+    import urllib.parse
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    return check_tcp(host, port)
+
+
+def _check_redis_tcp() -> tuple[bool, str]:
+    """Real TCP connectivity check for Redis."""
+    url = os.getenv("REDIS_URL", "")
+    if not url:
+        return None, "not-applicable: REDIS_URL not configured"
+    import urllib.parse
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    return check_tcp(host, port)
+
+
+def _check_ollama_probe() -> tuple[bool, str]:
+    """Real HTTP probe for Ollama availability."""
+    return check_ollama()
+
+
+def _check_comfyui_probe() -> tuple[bool, str]:
+    """Real HTTP probe for ComfyUI availability."""
+    return check_comfyui()
+
+
+def _check_gpu_probe() -> tuple[bool, str]:
+    """Real GPU detection probe."""
+    return check_gpu()
+
+
+def _check_tts_probe() -> tuple[bool, str]:
+    """Real HTTP probe for TTS service."""
+    return check_tts()
+
+
+def _check_publisher_probe() -> tuple[bool, str]:
+    """Real HTTP probe for Publisher service."""
+    return check_publisher()
+
+
+def _check_backup_writable() -> tuple[bool, str]:
+    """Verify backup directory is writable."""
+    return check_backup()
+
+
+def _check_monitoring_probe() -> tuple[bool, str]:
+    """Real HTTP probe for Prometheus monitoring."""
+    return check_monitoring()
+
+
 CHECK_REGISTRY: dict[str, CheckFn] = {
     "docker": check_docker,
     "postgres": check_postgres,
+    "postgres_tcp": _check_postgres_tcp,
     "redis": check_redis,
+    "redis_tcp": _check_redis_tcp,
     "core_api": check_core_api,
     "ollama": check_ollama,
+    "ollama_probe": _check_ollama_probe,
     "comfyui": check_comfyui,
+    "comfyui_probe": _check_comfyui_probe,
+    "gpu": _check_gpu_probe,
+    "tts": _check_tts_probe,
+    "publisher": _check_publisher_probe,
+    "backup": _check_backup_writable,
+    "monitoring": _check_monitoring_probe,
     "node_connectivity": _check_node_connectivity,
     "certificate_validation": _check_certificate_validation,
     "worker_enrollment": _check_worker_enrollment,
@@ -105,12 +179,12 @@ def _scenario_checks(scenario_id: str) -> list[str]:
         "S01": ["docker", "core_api", "health_core"],
         "S02": ["docker", "core_api", "node_connectivity",
                 "certificate_validation", "worker_enrollment"],
-        "S03": ["docker", "comfyui", "core_api"],
-        "S04": ["docker", "postgres", "redis", "core_api"],
-        "S05": ["docker", "core_api"],
-        "S06": ["docker", "core_api", "health_core"],
-        "S07": ["docker", "core_api"],
-        "S08": ["docker", "core_api"],
+        "S03": ["docker", "core_api", "comfyui_probe", "gpu"],
+        "S04": ["docker", "postgres_tcp", "redis_tcp", "core_api"],
+        "S05": ["docker", "core_api", "ollama_probe"],
+        "S06": ["docker", "core_api", "health_core", "monitoring"],
+        "S07": ["docker", "core_api", "tts", "publisher"],
+        "S08": ["docker", "core_api", "backup"],
     }
     return mapping.get(scenario_id, ["docker", "core_api"])
 
