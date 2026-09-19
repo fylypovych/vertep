@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from .models import (JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
+from .models import (Job, JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
                      WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
                      WorkerLogBatch, NodeAction, IntegrationSecretUpdate, TelegramSetup,
                      RollingUpdateRequest, utc_now, Channel, ChannelCreate, ChannelUpdate, CHANNEL_TYPES)
@@ -667,8 +667,11 @@ def _system_status_text() -> str:
     dispatcher_ok = "running"
     try:
         from .dispatcher import available_worker
-        # Quick check if dispatcher can find a worker
-        _ = available_worker("image_generation")
+        workers = list(store.workers.values())
+        if workers:
+            _ = available_worker(workers, Job(job_id="_health", topic="_health",
+                                               character_id="", priority=1,
+                                               status=JobStatus.NEW, created_at=utc_now()))
     except Exception:
         dispatcher_ok = "error"
 
@@ -2606,8 +2609,9 @@ async def system_test(payload: dict | None = None):
             recent_jobs = list(store.jobs.values())[-50:] if store.jobs else []
             task_stats = {"completed": 0, "failed": 0, "pending": 0}
             for job in recent_jobs:
-                for scene in job.get("plan", []):
-                    status = scene.get("status", "")
+                scenes = job.scenes if hasattr(job, "scenes") else []
+                for scene in scenes:
+                    status = scene.status.value if scene.status else ""
                     if status == "COMPLETED":
                         task_stats["completed"] += 1
                     elif status == "FAILED":
@@ -2617,6 +2621,36 @@ async def system_test(payload: dict | None = None):
             result["task_results"] = task_stats
         except Exception as error:
             result["task_results_error"] = str(error)
+
+        # Align final result with actual provider/certificate/storage/task failures:
+        # inventory zeros (0 providers/certs), errors, unwritable storage,
+        # and task result failures all downgrade the result to UNHEALTHY.
+        full_failures = []
+        if "provider_matrix_error" in result:
+            full_failures.append("provider_matrix")
+        elif isinstance(result.get("provider_matrix"), dict):
+            pm = result["provider_matrix"]
+            if isinstance(pm, dict) and len(pm) == 0:
+                full_failures.append("provider_matrix(empty)")
+        if "certificates_error" in result:
+            full_failures.append("certificates")
+        elif isinstance(result.get("certificates"), dict):
+            certs = result["certificates"]
+            if isinstance(certs, dict) and (certs.get("total", 0) == 0):
+                full_failures.append("certificates(zero)")
+        if "storage_error" in result:
+            full_failures.append("storage")
+        elif isinstance(result.get("storage"), dict) and not result["storage"].get("writable", False):
+            full_failures.append("storage(unwritable)")
+        if "task_results_error" in result:
+            full_failures.append("task_results")
+        elif isinstance(result.get("task_results"), dict):
+            ts = result["task_results"]
+            if isinstance(ts, dict) and ts.get("failed", 0) > 0:
+                full_failures.append(f"task_results({ts['failed']} failed)")
+        if full_failures:
+            result["result"] = "UNHEALTHY"
+            result["full_test_failures"] = full_failures
 
     return result
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.94
+- Issue #94: Виправлено system_test endpoint — переход на Job.scenes замість job.get('plan') для Pydantic Job (0.0.1.94)
+- Issue #94: Вирівнювання результату full self-test з фактичними провайдер/сертифікат/storage/task-failures (empty inventory та failed tasks → UNHEALTHY)
+- Issue #94: Додано приймачі тести для system_test endpoint (task_results з Pydantic сценами, UNHEALTHY при порожньому provider matrix, нульових сертифікатах, невеликих та провалених задачах)
+- Тести: 5 нових тестів у `tests/test_api.py` (system_test full scenarios)
+- core/app.py: Додано `Job` до імпортів; available_worker у system_status тепер передає коректних аргументів (workers list + dummy Job)
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.93
 - i.0.0.0.87 Task 1: Worker RESTARTING тепер викликає `request_local_update(action='restart')` замість лише status/log — restart consumer тригериться через update-agent, аналогічно UPDATE/ROLLBACK.
 - i.0.0.0.87 Task 2: Fault-injection тести — concurrent lease fencing, stale lock acquisition, audit hash chain tamper/truncation, corrupt/empty/missing-fields status.json recovery.

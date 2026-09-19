@@ -1024,7 +1024,204 @@ def test_workflow_edit_without_force_rejected(monkeypatch, tmp_path):
         assert resp.status_code == 400
         assert "already exists" in resp.json()["detail"]
         resp_force = _tc.put("/api/workflows/image/builtin.json", json=wf2,
-                             params={"force": "true"})
+                              params={"force": "true"})
         assert resp_force.status_code == 200
     finally:
         core.state.workflow_registry = global_registry
+
+
+def test_system_test_full_uses_job_scenes(monkeypatch):
+    """Issue #94.2: system_test must use Job.scenes (Pydantic) not job.get('plan')."""
+    import sys
+    from types import ModuleType as _Mod
+    from core.app import store
+    from core.models import Job, SceneRecord, StageStatus, utc_now
+    store.jobs.clear()
+    store.jobs["job-1"] = Job(
+        job_id="job-1", topic="test", character_id="char-1",
+        priority=1, status=JobStatus.READY,
+        scenes=[
+            SceneRecord(scene_id="s1", index=1, prompt="p1", status=StageStatus.READY),
+            SceneRecord(scene_id="s2", index=2, prompt="p2", status=StageStatus.FAILED),
+            SceneRecord(scene_id="s3", index=3, prompt="p3", status=StageStatus.PENDING),
+        ], created_at=utc_now())
+    monkeypatch.setenv("NODE_ROLE", "core")
+    import core.health_checks as _hc
+    monkeypatch.setattr(_hc, "run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr(_hc, "health_status", lambda c: "HEALTHY")
+    import adapters.providers as _prov
+    monkeypatch.setattr(_prov, "provider_matrix", lambda: {})
+    _cm = _Mod("core.certificates")
+    _cm.list_certificates = lambda: []
+    sys.modules["core.certificates"] = _cm
+    monkeypatch.setattr("core.app._call_core_api", lambda *a, **kw: {})
+    try:
+        resp = _tc.post("/api/system/test", json={"scope": "full"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "task_results" in data
+        tr = data["task_results"]
+        assert tr["failed"] == 1
+        assert tr["pending"] == 1
+    finally:
+        store.jobs.clear()
+        sys.modules.pop("core.certificates", None)
+
+
+def test_system_test_full_unhealthy_on_empty_provider_matrix(monkeypatch):
+    """Issue #94.3: full result UNHEALTHY when provider matrix is empty."""
+    import sys
+    from types import ModuleType as _Mod
+    from core.app import store
+    from core.models import Job, SceneRecord, StageStatus, utc_now
+    store.jobs.clear()
+    store.jobs["job-1"] = Job(
+        job_id="job-1", topic="test", character_id="char-1",
+        priority=1, status=JobStatus.READY,
+        scenes=[SceneRecord(scene_id="s1", index=1, prompt="p1", status=StageStatus.READY)],
+        created_at=utc_now())
+    monkeypatch.setenv("NODE_ROLE", "core")
+    import core.health_checks as _hc
+    monkeypatch.setattr(_hc, "run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr(_hc, "health_status", lambda c: "HEALTHY")
+    import adapters.providers as _prov
+    monkeypatch.setattr(_prov, "provider_matrix", lambda: {})
+    _cm = _Mod("core.certificates")
+    _cm.list_certificates = lambda: [{"cert_id": "c1", "expires_in_days": 999}]
+    sys.modules["core.certificates"] = _cm
+    import tempfile, os
+    tmpdir = tempfile.mkdtemp()
+    monkeypatch.setenv("STORAGE_ROOT", tmpdir)
+    os.chmod(tmpdir, 0o755)
+    import core.queue as _qq
+    monkeypatch.setattr(_qq, "TaskQueue", lambda: None)
+    try:
+        resp = _tc.post("/api/system/test", json={"scope": "full"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["result"] == "UNHEALTHY"
+        assert any("provider_matrix" in f for f in data.get("full_test_failures", []))
+    finally:
+        store.jobs.clear()
+        sys.modules.pop("core.certificates", None)
+        import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_system_test_full_unhealthy_on_zero_certificates(monkeypatch):
+    """Issue #94.3: full result UNHEALTHY when certificate count is zero."""
+    import sys
+    from types import ModuleType as _Mod
+    from core.app import store
+    from core.models import Job, SceneRecord, StageStatus, utc_now
+    store.jobs.clear()
+    store.jobs["job-1"] = Job(
+        job_id="job-1", topic="test", character_id="char-1",
+        priority=1, status=JobStatus.READY,
+        scenes=[SceneRecord(scene_id="s1", index=1, prompt="p1", status=StageStatus.READY)],
+        created_at=utc_now())
+    monkeypatch.setenv("NODE_ROLE", "core")
+    import core.health_checks as _hc
+    monkeypatch.setattr(_hc, "run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr(_hc, "health_status", lambda c: "HEALTHY")
+    import adapters.providers as _prov
+    monkeypatch.setattr(_prov, "provider_matrix", lambda: {"tts": {"available": True}})
+    _cm = _Mod("core.certificates")
+    _cm.list_certificates = lambda: []
+    sys.modules["core.certificates"] = _cm
+    import tempfile
+    tmpdir = tempfile.mkdtemp()
+    monkeypatch.setenv("STORAGE_ROOT", tmpdir)
+    os.chmod(tmpdir, 0o755)
+    import core.queue as _qq
+    monkeypatch.setattr(_qq, "TaskQueue", lambda: None)
+    try:
+        resp = _tc.post("/api/system/test", json={"scope": "full"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["result"] == "UNHEALTHY"
+        assert any("certificates" in f for f in data.get("full_test_failures", []))
+    finally:
+        store.jobs.clear()
+        sys.modules.pop("core.certificates", None)
+        import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_system_test_full_unhealthy_on_failed_tasks(monkeypatch):
+    """Issue #94.3: full result UNHEALTHY when task results contain failures."""
+    import sys
+    from types import ModuleType as _Mod
+    from core.app import store
+    from core.models import Job, SceneRecord, StageStatus, utc_now
+    store.jobs.clear()
+    store.jobs["job-1"] = Job(
+        job_id="job-1", topic="test", character_id="char-1",
+        priority=1, status=JobStatus.READY,
+        scenes=[
+            SceneRecord(scene_id="s1", index=1, prompt="p1", status=StageStatus.READY),
+            SceneRecord(scene_id="s2", index=2, prompt="p2", status=StageStatus.FAILED),
+        ], created_at=utc_now())
+    monkeypatch.setenv("NODE_ROLE", "core")
+    import core.health_checks as _hc
+    monkeypatch.setattr(_hc, "run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr(_hc, "health_status", lambda c: "HEALTHY")
+    import adapters.providers as _prov
+    monkeypatch.setattr(_prov, "provider_matrix", lambda: {"tts": {"available": True}})
+    _cm = _Mod("core.certificates")
+    _cm.list_certificates = lambda: [{"cert_id": "c1", "expires_in_days": 999}]
+    sys.modules["core.certificates"] = _cm
+    import tempfile
+    tmpdir = tempfile.mkdtemp()
+    monkeypatch.setenv("STORAGE_ROOT", tmpdir)
+    os.chmod(tmpdir, 0o755)
+    import core.queue as _qq
+    monkeypatch.setattr(_qq, "TaskQueue", lambda: None)
+    try:
+        resp = _tc.post("/api/system/test", json={"scope": "full"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["result"] == "UNHEALTHY"
+        assert any("task_results" in f for f in data.get("full_test_failures", []))
+        assert data["task_results"]["failed"] == 1
+    finally:
+        store.jobs.clear()
+        sys.modules.pop("core.certificates", None)
+        import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_system_test_full_healthy_when_all_ok(monkeypatch):
+    """Issue #94.3: full result HEALTHY when all inventory and task checks pass."""
+    import sys
+    from types import ModuleType as _Mod
+    from core.app import store
+    from core.models import Job, SceneRecord, StageStatus, utc_now
+    store.jobs.clear()
+    store.jobs["job-1"] = Job(
+        job_id="job-1", topic="test", character_id="char-1",
+        priority=1, status=JobStatus.READY,
+        scenes=[SceneRecord(scene_id="s1", index=1, prompt="p1", status=StageStatus.READY)],
+        created_at=utc_now())
+    monkeypatch.setenv("NODE_ROLE", "core")
+    import core.health_checks as _hc
+    monkeypatch.setattr(_hc, "run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr(_hc, "health_status", lambda c: "HEALTHY")
+    import adapters.providers as _prov
+    monkeypatch.setattr(_prov, "provider_matrix", lambda: {"tts": {"available": True}})
+    _cm = _Mod("core.certificates")
+    _cm.list_certificates = lambda: [{"cert_id": "c1", "expires_in_days": 999}]
+    sys.modules["core.certificates"] = _cm
+    import tempfile
+    tmpdir = tempfile.mkdtemp()
+    monkeypatch.setenv("STORAGE_ROOT", tmpdir)
+    os.chmod(tmpdir, 0o755)
+    import core.queue as _qq
+    monkeypatch.setattr(_qq, "TaskQueue", lambda: None)
+    try:
+        resp = _tc.post("/api/system/test", json={"scope": "full"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["result"] == "HEALTHY"
+        assert "full_test_failures" not in data
+    finally:
+        store.jobs.clear()
+        sys.modules.pop("core.certificates", None)
+        import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
