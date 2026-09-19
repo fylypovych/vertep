@@ -2,18 +2,20 @@ import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { IntegrationStatus } from '../../core/models';
+import { LoadingStateComponent } from '../../shared/loading-state.component';
+import { ErrorStateComponent } from '../../shared/error-state.component';
 
 @Component({
   selector: 'app-settings-integrations',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-integrations">
-      <h3 class="text-lg font-semibold text-slate-900 mb-4">Інтеграції</h3>
+      <h3 class="text-lg font-semibold text-slate-900 mb-4">???????</h3>
       @if (loading()) {
-        <div class="animate-pulse space-y-2"><div class="h-5 bg-slate-200 rounded w-full"></div></div>
+        <app-loading-state />
       } @else if (error()) {
-        <p class="text-red-600">{{ error() }}</p>
+        <app-error-state [message]="error()!" />
       } @else if (integrations()) {
         <div class="space-y-2">
           <div class="flex justify-between py-2 border-b border-slate-100">
@@ -30,20 +32,20 @@ import { IntegrationStatus } from '../../core/models';
           </div>
           @if (integrations()!.publisher) {
             <div class="pt-2 border-t border-slate-200 mt-2">
-              <p class="text-xs font-semibold text-slate-500 uppercase mb-1">Канали публікації</p>
+              <p class="text-xs font-semibold text-slate-500 uppercase mb-1">?????? ????????</p>
               <div class="space-y-1">
                 @for (channel of publisherChannels(); track channel) {
                   <div class="flex justify-between py-1">
                     <span class="text-sm">{{ channel.label }}</span>
                     <span class="text-xs font-medium" [class.text-emerald-600]="channel.configured" [class.text-red-600]="!channel.configured">
-                      {{ channel.configured ? 'Налаштовано' : 'Не налаштовано' }}
+                      {{ channel.configured ? '?????????' : '?? ?????????' }}
                     </span>
                   </div>
                 }
               </div>
             </div>
           }
-        </div>
+        }
       }
     </div>
   `,

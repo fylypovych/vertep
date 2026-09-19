@@ -2,56 +2,55 @@ import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { TelegramStatus, TelegramBotInfo } from '../../core/models';
+import { LoadingStateComponent } from '../../shared/loading-state.component';
+import { ErrorStateComponent } from '../../shared/error-state.component';
 
 @Component({
   selector: 'app-settings-telegram',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-telegram">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">Telegram</h3>
       @if (loading()) {
-        <div class="animate-pulse space-y-2">
-          <div class="h-5 bg-slate-200 rounded w-full"></div>
-          <div class="h-5 bg-slate-200 rounded w-1/2"></div>
-        </div>
+        <app-loading-state />
       } @else if (error()) {
-        <p class="text-red-600">{{ error() }}</p>
+        <app-error-state [message]="error()!" />
       } @else if (tgStatus()) {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-sm">
           <div class="flex justify-between py-2 border-b border-slate-100">
-            <span class="text-slate-500">Статус</span>
+            <span class="text-slate-500">�����</span>
             <span class="font-medium" [class.text-emerald-600]="tgStatus()!.configured" [class.text-slate-400]="!tgStatus()!.configured">
-              {{ tgStatus()!.configured ? 'Налаштовано' : 'Не налаштовано' }}
+              {{ tgStatus()!.configured ? '�����⮢���' : '�� �����⮢���' }}
             </span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Bot username</span>
-            <span class="font-medium">{{ tgStatus()!.bot_username || '—' }}</span>
+            <span class="font-medium">{{ tgStatus()!.bot_username || '-' }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
-            <span class="text-slate-500">Режим</span>
+            <span class="text-slate-500">�����</span>
             <span class="font-medium">{{ tgStatus()!.polling_enabled ? 'Polling' : 'Webhook' }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Webhook URL</span>
-            <span class="font-mono text-xs break-all">{{ tgStatus()!.webhook_url || '—' }}</span>
+            <span class="font-mono text-xs break-all">{{ tgStatus()!.webhook_url || '-' }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Allowed chat IDs</span>
-            <span class="font-mono text-xs break-all">{{ tgStatus()!.allowed_chat_ids || '—' }}</span>
+            <span class="font-mono text-xs break-all">{{ tgStatus()!.allowed_chat_ids || '-' }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Admin chat IDs</span>
-            <span class="font-mono text-xs break-all">{{ tgStatus()!.admin_chat_ids || '—' }}</span>
+            <span class="font-mono text-xs break-all>{{ tgStatus()!.admin_chat_ids || '-' }}</span>
           </div>
           @if (tgBotInfo()) {
             <div class="flex justify-between py-2 border-b border-slate-100">
               <span class="text-slate-500">Bot info</span>
-              <span class="font-mono text-xs">{{ tgBotInfo()!['first_name'] || '—' }}</span>
+              <span class="font-mono text-xs>{{ tgBotInfo()!['first_name'] || '-' }}</span>
             </div>
           }
-        </div>
+        }
       }
     </div>
   `,

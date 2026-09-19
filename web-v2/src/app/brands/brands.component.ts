@@ -7,11 +7,13 @@ import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Brand, Channel } from '../core/models';
 import { BrandChannelsComponent } from './brand-channels.component';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
 
 @Component({
   selector: 'app-brands',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, BrandChannelsComponent],
+  imports: [CommonModule, FormsModule, RouterModule, BrandChannelsComponent, LoadingStateComponent, ErrorStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="space-y-5" data-testid="brands-page">
@@ -24,15 +26,9 @@ import { BrandChannelsComponent } from './brand-channels.component';
       </div>
 
       @if (loading()) {
-        <div class="animate-pulse space-y-3">
-          <div class="h-5 bg-slate-200 rounded w-full"></div>
-          <div class="h-5 bg-slate-200 rounded w-3/4"></div>
-        </div>
+        <app-loading-state />
       } @else if (error()) {
-        <div class="bg-red-50 border border-red-200 rounded-xl p-4">
-          <p class="text-red-700">{{ error() }}</p>
-          <button (click)="loadBrands()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
-        </div>
+        <app-error-state [message]="error()!" (retry)="loadBrands()" />
       } @else if (brands().length === 0) {
         <div class="text-center text-slate-500 py-10" data-testid="brands-empty">Брендів не знайдено</div>
       } @else {
@@ -52,8 +48,8 @@ import { BrandChannelsComponent } from './brand-channels.component';
               <div class="text-sm text-slate-600 mb-3">{{ brand.enabled ? 'Активний' : 'Неактивний' }}</div>
               <app-brand-channels [brandId]="brand.id" [channels]="brandChannels[brand.id] || []" (channelAdded)="onChannelAdded($event)" (channelChanged)="loadChannels(brand.id)" />
             </div>
-          }
-        </div>
+</div>
+        }
       }
 
       <!-- Brand Editor Modal -->

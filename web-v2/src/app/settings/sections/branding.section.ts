@@ -3,15 +3,19 @@ import { CommonModule } from '@angular/common';
 import { ResourcesApiService } from '../../core/api/resources.api';
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
+import { LoadingStateComponent } from '../../shared/loading-state.component';
+import { ErrorStateComponent } from '../../shared/error-state.component';
 
 @Component({
   selector: 'app-settings-branding',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-branding">
-      <h3 class="text-lg font-semibold text-slate-900 mb-4">Логотип</h3>
-      @if (logoError()) { <p role="alert" class="text-sm text-red-600 mb-3">{{ logoError() }}</p> }
+      <h3 class="text-lg font-semibold text-slate-900 mb-4">����⨯</h3>
+      @if (logoError()) {
+        <app-error-state [message]="logoError()!" [showRetry]="false" />
+      }
       <div class="flex items-center gap-4">
         <div class="w-16 h-16 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden bg-slate-50">
           @if (logoUrl()) {
@@ -21,12 +25,16 @@ import { ConfirmService } from '../../core/services/confirm.service';
           }
         </div>
         <div class="flex gap-2">
-          <label class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer">
-            {{ uploading() ? 'Завантаження...' : 'Завантажити' }}
-            <input [disabled]="uploading()" type="file" accept="image/*" (change)="uploadFile($event)" class="hidden" data-testid="logo-upload">
-          </label>
+          @if (uploading()) {
+            <app-loading-state />
+          } @else {
+            <label class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer">
+              {{ uploading() ? '�����⠦����...' : '�����⠦��' }}
+              <input [disabled]="uploading()" type="file" accept="image/*" (change)="uploadFile($event)" class="hidden" data-testid="logo-upload">
+            </label>
+          }
           @if (logoUrl()) {
-            <button (click)="deleteLogo()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">Видалити</button>
+            <button (click)="deleteLogo()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">�������</button>
           }
         </div>
       </div>
@@ -56,19 +64,19 @@ export class BrandingSectionComponent implements OnInit {
     input.value = '';
     this.logoError.set(null);
     if (!file.type.startsWith('image/') || file.size > 2 * 1024 * 1024) {
-      this.logoError.set('Виберіть зображення до 2 МБ.'); return;
+      this.logoError.set('�����?�� ���ࠦ���� �� 2 ��.'); return;
     }
     this.uploading.set(true);
     this.resources.uploadLogo(file).subscribe({
-      next: () => { this.uploading.set(false); this.toast.show('Логотип завантажено', 'success'); this.loadLogo(); },
-      error: (err) => { this.uploading.set(false); this.logoError.set(err.message || 'Помилка'); },
+      next: () => { this.uploading.set(false); this.toast.show('����⨯ �����⠦���', 'success'); this.loadLogo(); },
+      error: (err) => { this.uploading.set(false); this.logoError.set(err.message || '�������'); },
     });
   }
 
   deleteLogo(): void {
-    this.confirm.confirm({ title: 'Видалити логотип', message: 'Видалити логотип?' }).subscribe((ok) => {
+    this.confirm.confirm({ title: '������� ����⨯', message: '������� ����⨯?' }).subscribe((ok) => {
       if (!ok) return;
-      this.resources.deleteLogo().subscribe({ next: () => { this.toast.show('Видалено', 'success'); this.logoUrl.set(null); }, error: (err) => this.toast.show(err.message, 'error') });
+      this.resources.deleteLogo().subscribe({ next: () => { this.toast.show('��������', 'success'); this.logoUrl.set(null); }, error: (err) => this.toast.show(err.message, 'error') });
     });
   }
 }

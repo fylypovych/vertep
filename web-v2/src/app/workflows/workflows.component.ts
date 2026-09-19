@@ -6,11 +6,13 @@ import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Workflow, Character } from '../core/models';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
 
 @Component({
   selector: 'app-workflows',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="space-y-5" data-testid="workflows-page">
@@ -23,16 +25,9 @@ import { Workflow, Character } from '../core/models';
       </div>
 
       @if (loading()) {
-        <div class="animate-pulse space-y-3">
-          <div class="h-5 bg-slate-200 rounded w-full"></div>
-          <div class="h-5 bg-slate-200 rounded w-3/4"></div>
-          <div class="h-5 bg-slate-200 rounded w-1/2"></div>
-        </div>
+        <app-loading-state />
       } @else if (error()) {
-        <div class="bg-red-50 border border-red-200 rounded-xl p-4">
-          <p class="text-red-700">{{ error() }}</p>
-          <button (click)="loadWorkflows()" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">Повторити</button>
-        </div>
+        <app-error-state [message]="error()!" (retry)="loadWorkflows()" />
       } @else if (workflows().length === 0) {
         <div class="text-center text-slate-500 py-10" data-testid="workflows-empty">Сценаріїв не знайдено</div>
       } @else {

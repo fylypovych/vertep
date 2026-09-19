@@ -3,18 +3,20 @@ import { CommonModule } from '@angular/common';
 import { SystemApiService } from '../../core/api/system.api';
 import { ToastService } from '../../core/services/toast.service';
 import { UpdateStatus, UpdateReadiness, RollingStatus } from '../../core/models';
+import { LoadingStateComponent } from '../../shared/loading-state.component';
+import { ErrorStateComponent } from '../../shared/error-state.component';
 
 @Component({
   selector: 'app-settings-update',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-update">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">Оновлення</h3>
       @if (loading()) {
-        <div class="animate-pulse space-y-2"><div class="h-5 bg-slate-200 rounded w-full"></div></div>
+        <app-loading-state />
       } @else if (error()) {
-        <p class="text-red-600">{{ error() }}</p>
+        <app-error-state [message]="error()!" (retry)="loadAll()" />
       } @else if (updateStatus()) {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-sm mb-4">
           <div class="flex justify-between py-2 border-b border-slate-100">

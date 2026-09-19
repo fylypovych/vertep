@@ -7,10 +7,11 @@ import { CommonModule } from '@angular/common';
   imports: [CommonModule],
   template: `
     <div class="flex items-center justify-center py-8" data-testid="loading-state">
-      <div class="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+      <div [class]="'w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin' + (size ? ' ' + size : '')"></div>
     </div>
   `,
 })
 export class LoadingStateComponent {
+  @Input() size: string = '';
   loading = signal(false);
 }

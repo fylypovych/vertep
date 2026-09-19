@@ -1,4 +1,4 @@
-﻿import { Component, DestroyRef, OnInit, ElementRef, inject, signal, effect, viewChild } from '@angular/core';
+import { Component, DestroyRef, OnInit, ElementRef, inject, signal, effect, viewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
 import { ConfirmService, ConfirmOptions } from '../core/services/confirm.service';
