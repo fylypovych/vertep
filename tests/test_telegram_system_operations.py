@@ -51,6 +51,22 @@ class TestStatusOperation:
         assert "Система:" in text or "Нормальний" in text or "NORMAL" in text or "IDLE" in text
 
 
+class TestCreateOperation:
+    def test_create_operation_returns_record(self, monkeypatch):
+        module = importlib.import_module("core.operations")
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monkeypatch.setenv("UPDATE_STATE_DIR", tmpdir)
+            op = module.create_operation("status", "test_user")
+            assert isinstance(op, dict)
+            assert "operation_id" in op
+            assert len(op["operation_id"]) == 32
+            assert op["type"] == "status"
+            assert op["requested_by"] == "test_user"
+            assert op["status"] == "QUEUED"
+
+
 class TestUpdateOperation:
     def test_update_menu_shows_confirmation(self, monkeypatch):
         module = importlib.import_module("core.app")
@@ -77,6 +93,49 @@ class TestUpdateOperation:
         module._handle_telegram_callback(cb)
         text = adapter.answer_callback.call_args[0][1]
         assert "вже в процесі" in text
+
+    def test_update_check_idempotency_blocks_duplicate(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setenv("WEB_UPDATE_ENABLED", "true")
+        # Mock get_or_create_operation to return existing operation (created=False)
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "chk12345", "type": "update"}, False))
+        cb = {"id": "cb-upd-chk", "data": "sys_update_check", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "вже в процесі" in text or "процесі" in text
+
+    def test_update_confirm_idempotency_blocks_duplicate(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setenv("WEB_UPDATE_ENABLED", "true")
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "cnf12345", "type": "update"}, False))
+        cb = {"id": "cb-upd-cnf", "data": "sys_update_confirm", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "вже в процесі" in text or "процесі" in text
+
+    def test_update_check_creates_operation_before_request(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        call_order = []
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
+        monkeypatch.setattr(module, "request_update", lambda a: call_order.append(("request_update", a)))
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: call_order.append(("get_or_create", a, kw)) or ({"operation_id": "x" * 32}, True))
+        monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: call_order.append(("begin", a)))
+        cb = {"id": "cb-order", "data": "sys_update_check", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        # get_or_create_operation must be called before request_update
+        ops = [c[0] for c in call_order]
+        assert ops.index("get_or_create") < ops.index("request_update")
 
 
 class TestRestartOperation:
@@ -114,13 +173,98 @@ class TestRestartOperation:
         monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
         monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "a" * 32}, True))
         monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "advance_operation", lambda *a, **kw: None)
         monkeypatch.setattr(module, "complete_operation", lambda *a, **kw: None)
         monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
-        monkeypatch.setattr(module, "_call_core_api", lambda *a, **kw: {"status": "restart_requested"})
+        # First call returns restart_requested, subsequent calls return healthy
+        call_count = {"count": 0}
+        def mock_call_api(method, path, payload=None, timeout=30):
+            call_count["count"] += 1
+            if path == "/api/system/restart":
+                return {"status": "restart_requested"}
+            if path == "/api/health":
+                return {"status": "healthy"} if call_count["count"] > 1 else {"status": "starting"}
+        monkeypatch.setattr(module, "_call_core_api", mock_call_api)
+        import time
+        monkeypatch.setattr(time, "sleep", lambda s: None)  # speed up test
         cb = {"id": "cb-rcore-run", "data": "sys_restart_core_confirm", "message": {"chat": {"id": "42"}}}
         module._handle_telegram_callback(cb)
         assert adapter.answer_callback.called
-        assert "ініиційовано" in adapter.answer_callback.call_args[0][1].lower() or "requested" in adapter.answer_callback.call_args[0][1].lower()
+        text = adapter.answer_callback.call_args[0][1]
+        assert "HEALTHY" in text or "healthy" in text.lower() or "успішно" in text.lower()
+
+    def test_restart_core_timeout_fails(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "t" * 32}, True))
+        monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "advance_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
+        def mock_call_api(method, path, payload=None, timeout=30):
+            if path == "/api/health":
+                return {"status": "starting"}
+            return {"status": "restart_requested"}
+        monkeypatch.setattr(module, "_call_core_api", mock_call_api)
+        import time
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        cb = {"id": "cb-rcore-timeout", "data": "sys_restart_core_confirm", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "не став" in text or "timeout" in text.lower() or "60s" in text
+
+    def test_restart_worker_execute_waits_ready(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "w" * 32}, True))
+        monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "advance_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "complete_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
+        call_count = {"count": 0}
+        def mock_call_api(method, path, payload=None, timeout=30):
+            call_count["count"] += 1
+            if path == "/api/nodes/gpu-01/actions":
+                return {"status": "restart_requested"}
+            if path == "/api/nodes/gpu-01":
+                return {"status": "READY"} if call_count["count"] > 1 else {"status": "UPDATING"}
+        monkeypatch.setattr(module, "_call_core_api", mock_call_api)
+        import time
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        cb = {"id": "cb-rwc", "data": "sys_restart_worker_confirm:gpu-01", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "READY" in text or "ready" in text.lower() or "успішно" in text.lower()
+
+    def test_restart_worker_timeout_fails(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "w" * 32}, True))
+        monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "advance_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
+        def mock_call_api(method, path, payload=None, timeout=30):
+            if path == "/api/nodes/gpu-01":
+                return {"status": "UPDATING"}
+            return {"status": "restart_requested"}
+        monkeypatch.setattr(module, "_call_core_api", mock_call_api)
+        import time
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        cb = {"id": "cb-rwc-timeout", "data": "sys_restart_worker_confirm:gpu-01", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        text = adapter.answer_callback.call_args[0][1]
+        assert "не став" in text or "timeout" in text.lower() or "60s" in text
 
 
 class TestBackupOperation:
@@ -410,10 +554,20 @@ class TestRestartWorkerFlow:
         monkeypatch.setattr(module, 'is_operation_in_progress', lambda t: None)
         monkeypatch.setattr(module, 'get_or_create_operation', lambda *a, **kw: ({'operation_id': 'w' * 32}, True))
         monkeypatch.setattr(module, 'begin_operation', lambda *a, **kw: None)
+        monkeypatch.setattr(module, 'advance_operation', lambda *a, **kw: None)
         monkeypatch.setattr(module, 'complete_operation', lambda *a, **kw: None)
         monkeypatch.setattr(module, 'fail_operation', lambda *a, **kw: None)
         monkeypatch.setattr(module, 'audit_entry', lambda *a, **kw: None)
-        monkeypatch.setattr(module, '_call_core_api', lambda *a, **kw: {'status': 'restart_requested'})
+        call_count = {"count": 0}
+        def mock_call_api(method, path, payload=None, timeout=30):
+            call_count["count"] += 1
+            if path == "/api/nodes/gpu-01/actions":
+                return {"status": "restart_requested"}
+            if path == "/api/nodes/gpu-01":
+                return {"status": "READY"} if call_count["count"] > 1 else {"status": "UPDATING"}
+        monkeypatch.setattr(module, '_call_core_api', mock_call_api)
+        import time
+        monkeypatch.setattr(time, 'sleep', lambda s: None)
         cb = {'id': 'cb-rwc', 'data': 'sys_restart_worker_confirm:gpu-01', 'message': {'chat': {'id': '42'}}}
         module._handle_telegram_callback(cb)
         assert adapter.answer_callback.called

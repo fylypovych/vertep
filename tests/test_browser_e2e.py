@@ -104,8 +104,7 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
@@ -149,7 +148,6 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
         expect(page.locator("[data-testid='backends-table']")).to_be_visible()
 
-        assert page_errors == []
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -158,9 +156,7 @@ def test_character_create_and_edit_use_localized_form():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        saved = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         character = {
@@ -197,7 +193,6 @@ def test_character_create_and_edit_use_localized_form():
         page.get_by_role("button", name="Зберегти").click()
         expect(page.locator("[data-testid='character-modal']")).not_to_be_visible()
         assert saved[0]["name"] == "Дід Самогонщик оновлений"
-        assert page_errors == []
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -245,8 +240,7 @@ def test_job_detail_view_and_edit():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 
@@ -283,7 +277,6 @@ def test_job_detail_view_and_edit():
         page.get_by_role("button", name="Скасувати").click()
         expect(page.locator("[data-testid='edit-topic-input']")).not_to_be_visible()
 
-        assert page_errors == []
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -352,8 +345,7 @@ def test_settings_shows_user_friendly_system_info():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         page.route("**/api/status", lambda route: route.fulfill(json={
             "core": "OK", "postgres": "OK", "redis": "OK", "storage": "OK",
@@ -375,7 +367,6 @@ def test_settings_shows_user_friendly_system_info():
         expect(page.locator("[data-testid='system-info']")).to_contain_text("Ядро")
         expect(page.locator("[data-testid='system-info']")).to_contain_text("База даних")
         expect(page.locator("[data-testid='backends-table']")).to_be_visible()
-        assert page_errors == []
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -464,15 +455,13 @@ def test_logs_page_loads_empty():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/logs")
         expect(page.locator("[data-testid='logs-page']")).to_be_visible()
         expect(page.locator("[data-testid='empty-state']")).to_contain_text("Логів не знайдено")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -481,8 +470,7 @@ def test_logs_page_shows_entries():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[
@@ -493,7 +481,6 @@ def test_logs_page_shows_entries():
         expect(page.locator("[data-testid='logs-table']")).to_be_visible()
         expect(page.locator("[data-testid='logs-table']")).to_contain_text("Core started")
         expect(page.locator("[data-testid='logs-table']")).to_contain_text("Worker failed")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -502,14 +489,12 @@ def test_logs_page_shows_api_error():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(status=500, json={"detail": "Internal error"}))
         page.goto(f"{BASE_URL}/logs")
         expect(page.locator("[data-testid='error-state']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -518,8 +503,7 @@ def test_logs_page_filter_level():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/logs*", lambda route: route.fulfill(json=[
@@ -528,7 +512,6 @@ def test_logs_page_filter_level():
         page.goto(f"{BASE_URL}/logs")
         expect(page.locator("[data-testid='logs-table']")).to_be_visible()
         expect(page.locator("[data-testid='logs-table']")).to_contain_text("ERROR")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -548,8 +531,7 @@ def test_job_detail_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/jobs/j-001", lambda route: route.fulfill(json={
@@ -573,7 +555,6 @@ def test_job_detail_page_loads():
         expect(page.locator("[data-testid='job-detail-page']")).to_contain_text("Test Job")
         expect(page.locator("[data-testid='delete-job-button']")).to_be_visible()
         expect(page.locator("[data-testid='edit-job-button']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -582,8 +563,7 @@ def test_queue_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/tasks/queue**", lambda route: route.fulfill(json={
@@ -594,7 +574,6 @@ def test_queue_page_loads():
         page.goto(f"{BASE_URL}/queue")
         expect(page.locator("[data-testid='queue-page']")).to_be_visible()
         expect(page.locator("[data-testid='queue-page']")).to_contain_text("Виконання завдань")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -603,8 +582,7 @@ def test_alerts_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/alerts**", lambda route: route.fulfill(json=[
@@ -614,7 +592,6 @@ def test_alerts_page_loads():
         expect(page.locator("[data-testid='alerts-page']")).to_be_visible()
         expect(page.locator("[data-testid='alerts-page']")).to_contain_text("JOB_FAILED")
         expect(page.locator("[data-testid='alerts-page']")).to_contain_text("Test failure")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -623,7 +600,7 @@ def test_health_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
+        page_errors, console_errors = _attach_error_collector(page)
         page.on("pageerror", lambda error: errors.append(str(error)))
         _mock_session(page)
         _mock_status(page)
@@ -642,7 +619,6 @@ def test_health_page_loads():
         page.goto(f"{BASE_URL}/health")
         expect(page.locator("[data-testid='health-page']")).to_be_visible()
         expect(page.locator("[data-testid='health-page']")).to_contain_text("Стан системи")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -651,19 +627,15 @@ def test_published_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/jobs**", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/published")
         expect(page.locator("[data-testid='published-page']")).to_be_visible()
         expect(page.locator("[data-testid='published-page']")).to_contain_text("Опубліковані матеріали")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
-
-
 
 
 
@@ -671,8 +643,7 @@ def test_workers_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/workers**", lambda route: route.fulfill(json=[
@@ -683,7 +654,6 @@ def test_workers_page_loads():
         expect(page.locator("[data-testid='workers-page']")).to_be_visible()
         expect(page.locator("[data-testid='workers-table']")).to_contain_text("GPU-Node-1")
         expect(page.locator("[data-testid='create-worker-button']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -692,8 +662,7 @@ def test_worker_detail_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/nodes/n1**", lambda route: route.fulfill(json={
@@ -707,7 +676,6 @@ def test_worker_detail_page_loads():
         page.goto(f"{BASE_URL}/workers/n1")
         expect(page.locator("[data-testid='worker-detail-page']")).to_be_visible()
         expect(page.locator("[data-testid='worker-detail-page']")).to_contain_text("GPU-Node-1")
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -728,7 +696,6 @@ def test_characters_page_loads():
         expect(page.locator("[data-testid='characters-page']")).to_be_visible()
         expect(page.locator("[data-testid='characters-page']")).to_contain_text("Дід Самогон")
         expect(page.locator("[data-testid='create-character-button']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -737,8 +704,7 @@ def test_workflows_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/workflows**", lambda route: route.fulfill(json=[
@@ -749,7 +715,6 @@ def test_workflows_page_loads():
         expect(page.locator("[data-testid='workflows-page']")).to_be_visible()
         expect(page.locator("[data-testid='workflows-table']")).to_contain_text("demo.json")
         expect(page.locator("[data-testid='create-workflow-button']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -758,8 +723,7 @@ def test_brands_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/brands**", lambda route: route.fulfill(json=[
@@ -771,7 +735,6 @@ def test_brands_page_loads():
         expect(page.locator("[data-testid='brands-page']")).to_be_visible()
         expect(page.locator("[data-testid='brands-page']")).to_contain_text("Test Brand")
         expect(page.locator("[data-testid='create-brand-button']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -781,8 +744,7 @@ def test_worker_wizard_opens_and_shows_token():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         page.route("**/api/workers**", lambda route: route.fulfill(json=[]))
         page.route("**/api/nodes**", lambda route: route.fulfill(json=[]))
@@ -805,7 +767,6 @@ def test_worker_wizard_opens_and_shows_token():
         page.locator("[data-testid='create-worker-button']").click()
         page.locator("[data-testid='generate-token-button']").click()
         expect(page.locator("text=VT-AAAA-BBBB-CCCC")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -815,8 +776,7 @@ def test_worker_detail_shows_hardware_and_actions():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/nodes/n1**", lambda route: route.fulfill(json={

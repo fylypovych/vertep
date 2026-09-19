@@ -361,6 +361,8 @@ def approve_video(store: JobStore, job: Job, actor: str = "api", *, expected_ver
         vv.approved = True
         vv.approved_by = actor
         vv.approved_at = utc_now()
+    job.approved = True
+    job.approval_status = "approved"
     store.transition(job, JobStatus.VIDEO_APPROVED, f"VIDEO APPROVED by {actor} (v{active})")
     store.transition(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{active})")
     store.transition(job, JobStatus.READY, f"VIDEO APPROVED; JOB READY by {actor} (v{active})")

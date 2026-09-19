@@ -155,6 +155,9 @@ def create_operation(op_type: str, requested_by: str,
         operations[operation["operation_id"]] = operation
         _write_all(operations)
         _sync_to_database(operation)
+    return operation
+
+
 def get_or_create_operation(op_type: str, requested_by: str,
                             target: str | None = None, idempotency_key: str | None = None) -> tuple[dict[str, Any], bool]:
     """Atomically check for an active operation and create one if none exists.

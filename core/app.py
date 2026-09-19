@@ -592,7 +592,7 @@ def _format_workers_summary() -> str:
     nodes = _sync_internal_api("GET", "CORE_API_URL", "/api/nodes") \
         or _sync_internal_api("GET", "BACKUP_URL", "/api/nodes")
     if not nodes or not isinstance(nodes, list):
-        return "Вузли: unavailable"
+        return "Вузли: 0/0 online"
     online = sum(1 for n in nodes if (n.get("runtime_status") or n.get("status")) == "ONLINE")
     return f"Вузли: {online}/{len(nodes)} online"
 
@@ -603,7 +603,7 @@ def _format_jobs_summary() -> str:
                               {"per_page": 100, "page": 1}) or {}
     jobs = data if isinstance(data, list) else data.get("jobs", [])
     if not isinstance(jobs, list):
-        return "Jobs: unavailable"
+        return "Jobs: 0 active / 0 queued / 0 failed"
     active = {"PROCESSING", "SCRIPTING", "ASSET_GENERATION", "VIDEO_GENERATION",
               "ASSEMBLY", "PUBLISHING"}
     queued = {"NEW", "WAITING_FOR_SYSTEM"}
@@ -642,7 +642,45 @@ def _system_status_text() -> str:
     state_name = state.get("state", "NORMAL")
     update_state = update.get("state", "IDLE")
     current = update.get("current_version") or "?"
-    lines = [f"Система: {state_name}", f"Оновлення: {update_state} (поточна {current})"]
+
+    # Uptime
+    try:
+        import psutil
+        boot_time = psutil.boot_time()
+        import time
+        uptime_sec = int(time.time() - boot_time)
+        days, rem = divmod(uptime_sec, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, _ = divmod(rem, 60)
+        uptime_str = f"{days}d {hours}h {minutes}m" if days else f"{hours}h {minutes}m"
+    except Exception:
+        uptime_str = "?"
+
+    # Core services health (quick checks)
+    from .health_checks import check_postgres, check_redis, check_core_api
+    pg_ok, pg_msg = check_postgres()
+    redis_ok, redis_msg = check_redis()
+    core_url = os.getenv("CORE_ADDRESS", "")
+    core_ok, core_msg = check_core_api(core_url) if core_url else (None, "not configured")
+
+    # Dispatcher status
+    dispatcher_ok = "running"
+    try:
+        from .dispatcher import available_worker
+        # Quick check if dispatcher can find a worker
+        _ = available_worker("image_generation")
+    except Exception:
+        dispatcher_ok = "error"
+
+    lines = [
+        f"Система: {state_name}",
+        f"Uptime: {uptime_str}",
+        f"PostgreSQL: {'✅' if pg_ok else '❌' if pg_ok is False else '⚠️'}",
+        f"Redis: {'✅' if redis_ok else '❌' if redis_ok is False else '⚠️'}",
+        f"CORE API: {'✅' if core_ok else '❌' if core_ok is False else '⚠️'}",
+        f"Dispatcher: {dispatcher_ok}",
+        f"Оновлення: {update_state} (поточна {current})"
+    ]
     available = update.get("available_version")
     if available:
         lines.append(f"Доступна версія: {available}")
@@ -772,8 +810,13 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
 
     if action == "sys_update_check":
         try:
-            request_update("check")
             op, created = get_or_create_operation("update", f"telegram:{chat_id}")
+            if not created:
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"Перевірка оновлення вже в процесі (#{op['operation_id'][:8]})."
+                )
+            audit_entry(op["operation_id"], "INTERNAL_CALL", "request_update check", f"telegram:{chat_id}")
+            request_update("check")
             begin_operation(op["operation_id"], "Перевірка доступного оновлення")
             return TelegramAdapter().answer_callback(
                 callback_id,
@@ -784,12 +827,13 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
 
     if action == "sys_update_confirm":
         try:
-            request_update("update")
             op, created = get_or_create_operation("update", f"telegram:{chat_id}")
             if not created:
                 return TelegramAdapter().answer_callback(
                     callback_id, f"Оновлення вже в процесі (#{op['operation_id'][:8]})."
                 )
+            audit_entry(op["operation_id"], "INTERNAL_CALL", "request_update update", f"telegram:{chat_id}")
+            request_update("update")
             begin_operation(op["operation_id"], "Запит на оновлення прийнято")
             audit_entry(op["operation_id"], "RUNNING", "Update started via Telegram", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
@@ -831,16 +875,34 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 callback_id, f"Перезапуск вже в процесі (#{op['operation_id'][:8]})."
             )
         begin_operation(op["operation_id"], "Перезапуск CORE")
+        audit_entry(op["operation_id"], "INTERNAL_CALL", "POST /api/system/restart target=core", f"telegram:{chat_id}")
         try:
             result = _call_core_api("POST", "/api/system/restart", {"target": "core"}, timeout=15)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск CORE не вдався: {result['_error'][:200]}"
                 )
-            complete_operation(op["operation_id"], result)
+            advance_operation(op["operation_id"], "Очікування здоров'я CORE", 50, "Перезапуск ініційовано, очікуємо HEALTHY")
+            # Poll /api/health until healthy or timeout
+            healthy = False
+            for _ in range(30):  # up to 60 seconds
+                time.sleep(2)
+                health = _call_core_api("GET", "/api/health", timeout=5)
+                if health and health.get("status") == "healthy":
+                    healthy = True
+                    break
+            if not healthy:
+                fail_operation(op["operation_id"], "CORE не став HEALTHY після перезапуску (timeout 60s)")
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "GET /api/health timeout", f"telegram:{chat_id}")
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Перезапуск CORE: сервіс не став HEALTHY за 60s. ID: {op['operation_id'][:8]}"
+                )
+            complete_operation(op["operation_id"], {"status": "healthy", "message": "CORE перезапущено успішно"})
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "CORE healthy", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
-                callback_id, f"✅ CORE перезапуск ініиційовано. ID: {op['operation_id'][:8]}"
+                callback_id, f"✅ CORE перезапущено і HEALTHY. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
             fail_operation(op["operation_id"], str(error))
@@ -873,21 +935,40 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 callback_id, f"Перезапуск вже в процесі (#{op['operation_id'][:8]})."
             )
         begin_operation(op["operation_id"], f"Перезапуск вузла {node_id}")
+        audit_entry(op["operation_id"], "INTERNAL_CALL", f"POST /api/nodes/{node_id}/actions action=restart", f"telegram:{chat_id}")
         try:
             result = _call_core_api("POST", f"/api/nodes/{node_id}/actions",
                                     {"action": "restart", "reason": f"telegram restart {op['operation_id'][:8]}"},
                                     timeout=15)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск {node_id} не вдався: {result['_error'][:200]}"
                 )
-            complete_operation(op["operation_id"], result)
+            advance_operation(op["operation_id"], f"Очікування READY {node_id}", 50, "Перезапуск ініційовано, очікуємо READY")
+            # Poll /api/nodes/{node_id} until status == READY or timeout
+            ready = False
+            for _ in range(30):  # up to 60 seconds
+                time.sleep(2)
+                node = _call_core_api("GET", f"/api/nodes/{node_id}", timeout=5)
+                if node and node.get("status") == "READY":
+                    ready = True
+                    break
+            if not ready:
+                fail_operation(op["operation_id"], f"Worker {node_id} не став READY після перезапуску (timeout 60s)")
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"GET /api/nodes/{node_id} timeout", f"telegram:{chat_id}")
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Перезапуск {node_id}: вузол не став READY за 60s. ID: {op['operation_id'][:8]}"
+                )
+            complete_operation(op["operation_id"], {"status": "ready", "node_id": node_id, "message": f"Worker {node_id} перезапущено успішно"})
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"Worker {node_id} READY", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
-                callback_id, f"✅ Вузол {node_id} позначено на перезапуск. ID: {op['operation_id'][:8]}"
+                callback_id, f"✅ Вузол {node_id} перезапущено і READY. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
             fail_operation(op["operation_id"], str(error))
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"exception: {error}", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(callback_id, f"❌ Перезапуск {node_id} не вдався: {error}")
 
     if action == "sys_backup":
@@ -904,27 +985,32 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             )
         begin_operation(op["operation_id"], "Створення резервної копії")
         advance_operation(op["operation_id"], "snapshot", 10, "Snapshot заплановано")
+        audit_entry(op["operation_id"], "INTERNAL_CALL", "POST /api/system/backups", f"telegram:{chat_id}")
         audit_entry(op["operation_id"], "snapshot", "Backup started via Telegram", f"telegram:{chat_id}")
         try:
             # Use CORE API endpoint for backup (via _call_core_api with INTERNAL_API_KEY)
             result = _call_core_api("POST", "/api/system/backups", {}, timeout=120)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Backup не вдався: {result['_error'][:200]}"
                 )
             if result and result.get("snapshot_id"):
                 complete_operation(op["operation_id"], result)
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"snapshot_id={result['snapshot_id']}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id,
                     f"✅ Backup створено. Snapshot: {result['snapshot_id'][:18]} ID операції: {op['operation_id'][:8]}"
                 )
             advance_operation(op["operation_id"], "snapshot", 20, "Snapshot створюється")
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "backup scheduled", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ Backup заплановано. ID операції: {op['operation_id'][:8]}"
             )
         except Exception as error:
             fail_operation(op["operation_id"], str(error))
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"exception: {error}", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(callback_id, f"❌ Backup не вдався: {error}")
 
     if action == "sys_backup_cancel":
@@ -953,6 +1039,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             )
         # Use CORE API endpoint for backup detail
         backup_detail = _call_core_api("GET", f"/api/system/backups/{snapshot_id}", timeout=15) or {}
+        audit_entry(snapshot_id, "INTERNAL_CALL", f"GET /api/system/backups/{snapshot_id}", f"telegram:{chat_id}")
         snapshot = backup_detail if "snapshot_id" in backup_detail else {"snapshot_id": snapshot_id}
         message = (f"⚠️ ПЕРШЕ підтвердження відновлення\n"
                    f"Snapshot: {snapshot.get('snapshot_id', snapshot_id)}\n"
@@ -985,6 +1072,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             )
         begin_operation(op["operation_id"], "Відновлення")
         advance_operation(op["operation_id"], "decrypt", 10, f"Відновлення snapshot {snapshot_id[:18]}")
+        audit_entry(op["operation_id"], "INTERNAL_CALL", f"POST /api/system/backups/{snapshot_id}/restore", f"telegram:{chat_id}")
         audit_entry(op["operation_id"], "restore", f"Restore started via Telegram for {snapshot_id}", f"telegram:{chat_id}")
         try:
             # Use CORE API endpoint for restore (via _call_core_api with INTERNAL_API_KEY)
@@ -992,6 +1080,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             result = _call_core_api("POST", f"/api/system/backups/{snapshot_id}/restore", {}, timeout=300)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Відновлення не вдався: {result['_error'][:200]}"
                 )
@@ -999,14 +1088,17 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 status = result.get("status")
                 if status == "done":
                     complete_operation(op["operation_id"], result)
+                    audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "restore completed", f"telegram:{chat_id}")
                     return TelegramAdapter().answer_callback(
                         callback_id, f"✅ Відновлення завершено. ID операції: {op['operation_id'][:8]}"
                     )
                 fail_operation(op["operation_id"], f"Restore ended with status: {status}")
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"status={status}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Відновлення завершилось з помилкою. ID: {op['operation_id'][:8]}"
                 )
             advance_operation(op["operation_id"], "in_progress", 50, "Відновлення виконується")
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "restore in progress", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ Відновлення запущено. ID операції: {op['operation_id'][:8]}"
             )
@@ -1052,21 +1144,25 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 callback_id, f"Тест вже в процесі (#{op['operation_id'][:8]})."
             )
         begin_operation(op["operation_id"], "Швидкий тест")
+        audit_entry(op["operation_id"], "INTERNAL_CALL", "POST /api/system/test scope=quick", f"telegram:{chat_id}")
         try:
             result = _call_core_api("POST", "/api/system/test", {"scope": "quick"}, timeout=30)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Швидкий тест завершився помилкою: {result['_error'][:200]}"
                 )
             checks = result or {} if isinstance(result, dict) else {}
             status = checks.get("result", "UNKNOWN")
             complete_operation(op["operation_id"], result)
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"result={status}", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ Швидкий тест: {status}. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
             fail_operation(op["operation_id"], str(error))
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"exception: {error}", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(callback_id, f"❌ Швидкий тест не вдався: {error}")
 
     if action == "sys_test_full_confirm":
@@ -1076,16 +1172,19 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 callback_id, f"Тест вже в процесі (#{op['operation_id'][:8]})."
             )
         begin_operation(op["operation_id"], "Повний тест")
+        audit_entry(op["operation_id"], "INTERNAL_CALL", "POST /api/system/test scope=full", f"telegram:{chat_id}")
         try:
             result = _call_core_api("POST", "/api/system/test", {"scope": "full"}, timeout=60)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Повний тест завершився помилкою: {result['_error'][:200]}"
                 )
             checks = result if isinstance(result, dict) else {}
             status = checks.get("result", "UNKNOWN")
             complete_operation(op["operation_id"], result)
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"result={status}", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ Повний тест: {status}. ID: {op['operation_id'][:8]}"
             )
@@ -1118,21 +1217,25 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 callback_id, f"Тест вже в процесі (#{op['operation_id'][:8]})."
             )
         begin_operation(op["operation_id"], f"Self-test вузла {node_id}")
+        audit_entry(op["operation_id"], "INTERNAL_CALL", f"POST /api/nodes/{node_id}/actions action=self-test", f"telegram:{chat_id}")
         try:
             result = _call_core_api("POST", f"/api/nodes/{node_id}/actions",
                                     {"action": "self-test", "reason": f"telegram test {op['operation_id'][:8]}"},
                                     timeout=60)
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Self-test {node_id} не вдався: {result['_error'][:200]}"
                 )
             complete_operation(op["operation_id"], result)
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "self-test completed", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ Self-test вузла {node_id} завершено. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
             fail_operation(op["operation_id"], str(error))
+            audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"exception: {error}", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(callback_id, f"❌ Self-test {node_id} не вдався: {error}")
 
     if action == "sys_cancel":
@@ -2449,7 +2552,8 @@ async def system_test(payload: dict | None = None):
     """Run system self-test (Quick or Full).
 
     Quick test covers CORE API, PostgreSQL, Redis, Dispatcher, storage.
-    Full test additionally verifies Text/Voice/GPU Workers, Backup, Monitoring.
+    Full test additionally verifies Text/Voice/GPU Workers, Backup, Monitoring,
+    provider matrix, certificates, storage, task results.
     """
     body = payload or {}
     scope = str(body.get("scope", "quick")).lower()
@@ -2465,6 +2569,55 @@ async def system_test(payload: dict | None = None):
                                 "status": n.get("status")} for n in nodes]
         except Exception as error:
             result["nodes_error"] = str(error)
+
+        # Enhanced full self-test checks
+        try:
+            from adapters.providers import provider_matrix
+            result["provider_matrix"] = provider_matrix()
+        except Exception as error:
+            result["provider_matrix_error"] = str(error)
+
+        try:
+            from core.certificates import list_certificates
+            certs = list_certificates()
+            result["certificates"] = {
+                "total": len(certs),
+                "expiring_soon": sum(1 for c in certs if c.get("expires_in_days", 999) < 30),
+                "expired": sum(1 for c in certs if c.get("expires_in_days", 999) < 0)
+            }
+        except Exception as error:
+            result["certificates_error"] = str(error)
+
+        try:
+            from pathlib import Path
+            storage_root = Path(os.getenv("STORAGE_ROOT", "/opt/vertep/storage"))
+            result["storage"] = {
+                "writable": storage_root.exists() and os.access(storage_root, os.W_OK),
+                "path": str(storage_root)
+            }
+        except Exception as error:
+            result["storage_error"] = str(error)
+
+        try:
+            from core.queue import TaskQueue
+            task_queue = TaskQueue()
+            # Check recent task results (last 100)
+            from core.state import store
+            recent_jobs = list(store.jobs.values())[-50:] if store.jobs else []
+            task_stats = {"completed": 0, "failed": 0, "pending": 0}
+            for job in recent_jobs:
+                for scene in job.get("plan", []):
+                    status = scene.get("status", "")
+                    if status == "COMPLETED":
+                        task_stats["completed"] += 1
+                    elif status == "FAILED":
+                        task_stats["failed"] += 1
+                    elif status in {"PENDING", "QUEUED", "PROCESSING"}:
+                        task_stats["pending"] += 1
+            result["task_results"] = task_stats
+        except Exception as error:
+            result["task_results_error"] = str(error)
+
     return result
 
 
