@@ -2,7 +2,7 @@ import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/cor
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Brand, Channel } from '../core/models';
@@ -104,7 +104,7 @@ export class BrandsComponent implements OnInit {
   editingBrand = signal<Brand | null>(null);
 
   constructor(
-    private api: VertepApiService,
+    private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
   ) {}
@@ -116,7 +116,7 @@ export class BrandsComponent implements OnInit {
   loadBrands(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getBrands().subscribe({
+    this.resources.brands().subscribe({
       next: (brands) => {
         this.brands.set(brands);
         brands.forEach(b => this.loadChannels(b.id));
@@ -127,7 +127,7 @@ export class BrandsComponent implements OnInit {
   }
 
   loadChannels(brandId: string): void {
-    this.api.getBrandChannels(brandId).subscribe({
+    this.resources.channels(brandId).subscribe({
       next: (channels) => { this.brandChannels[brandId] = channels; },
       error: () => { this.brandChannels[brandId] = []; },
     });
@@ -171,7 +171,7 @@ export class BrandsComponent implements OnInit {
     };
 
     if (this.editingBrand()) {
-      this.api.updateBrand(this.editorForm.id, payload).subscribe({
+      this.resources.updateBrand(this.editorForm.id, payload).subscribe({
         next: () => {
           this.closeEditor();
           this.loadBrands();
@@ -181,7 +181,7 @@ export class BrandsComponent implements OnInit {
         error: (err) => { this.saving.set(false); this.toast.show(err.message || 'Помилка збереження', 'error'); },
       });
     } else {
-      this.api.createBrand(payload).subscribe({
+      this.resources.createBrand(payload).subscribe({
         next: () => {
           this.closeEditor();
           this.loadBrands();
@@ -196,7 +196,7 @@ export class BrandsComponent implements OnInit {
   deleteBrand(brand: Brand): void {
     this.confirm.confirm({ title: 'Видалити бренд', message: `Ви впевнені, що хочете видалити бренд ${brand.name} (${brand.id})?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteBrand(brand.id).subscribe({
+      this.resources.deleteBrand(brand.id).subscribe({
         next: () => { this.loadBrands(); this.toast.show('Бренд видалено', 'success'); },
         error: (err) => this.toast.show(err.message || 'Помилка видалення', 'error'),
       });

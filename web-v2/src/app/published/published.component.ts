@@ -2,7 +2,7 @@ import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { JobsApiService } from '../core/api/jobs.api';
 import { ToastService } from '../core/services/toast.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { EmptyStateComponent } from '../shared/empty-state.component';
@@ -107,7 +107,7 @@ export class PublishedComponent implements OnInit {
     facebook: 'Facebook', threads: 'Threads', telegram: 'Telegram',
   };
 
-  constructor(private api: VertepApiService, private toast: ToastService) {}
+  constructor(private jobsApi: JobsApiService, private toast: ToastService) {}
 
   ngOnInit(): void {
     this.loadPublished();
@@ -116,7 +116,7 @@ export class PublishedComponent implements OnInit {
   loadPublished(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getJobs().subscribe({
+    this.jobsApi.list().subscribe({
       next: (jobs) => {
         const published = jobs.filter(j => j.status === 'PUBLISHED' || (j.published_to && j.published_to.length > 0));
         this.publishedJobsAll.set(published);
@@ -178,7 +178,7 @@ export class PublishedComponent implements OnInit {
   retryChannel(job: Job, channel: string): void {
     const key = job.job_id + '-' + channel;
     this.retrying.set(key);
-    this.api.publishJob(job.job_id, [channel]).subscribe({
+    this.jobsApi.publish(job.job_id, [channel]).subscribe({
       next: () => {
         this.toast.show(`Канал ${channel} повторно опубліковано`, 'success');
         this.retrying.set(null);

@@ -1,7 +1,9 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { SystemApiService } from '../core/api/system.api';
+import { WorkersApiService } from '../core/api/workers.api';
+import { JobsApiService } from '../core/api/jobs.api';
 import { Worker, Job } from '../core/models';
 import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics } from '../core/presentation';
 import { LoadingStateComponent } from '../shared/loading-state.component';
@@ -225,7 +227,7 @@ export class DashboardComponent implements OnInit {
   resourcesAvailable = false;
   workers: Worker[] = [];
 
-  constructor(private api: VertepApiService) {}
+  constructor(private systemApi: SystemApiService, private workersApi: WorkersApiService, private jobsApi: JobsApiService) {}
 
   ngOnInit(): void {
     this.loadData();
@@ -235,7 +237,7 @@ export class DashboardComponent implements OnInit {
     this.loading.set(true);
     this.error = null;
 
-    this.api.getStatus().subscribe({
+    this.systemApi.status().subscribe({
       next: (status) => {
         this.systemState = status.system?.state || 'NORMAL';
         this.systemReason = status.system?.reason || 'Штатний режим';
@@ -263,7 +265,7 @@ export class DashboardComponent implements OnInit {
       },
     });
 
-    this.api.getWorkers().subscribe({
+    this.workersApi.list().subscribe({
       next: (workers) => {
         this.workers = workers;
         this.onlineWorkers = workers.filter(w => ['READY', 'ONLINE', 'FREE'].includes(w.status)).length;
@@ -289,7 +291,7 @@ export class DashboardComponent implements OnInit {
       },
     });
 
-    this.api.getJobs().subscribe({
+    this.jobsApi.list().subscribe({
       next: (jobs) => {
         const stats = computeJobStatistics(jobs);
         this.activeJobs = stats.active;

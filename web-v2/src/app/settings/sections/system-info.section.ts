@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { VertepApiService } from '../../core/api.service';
+import { SystemApiService } from '../../core/api/system.api';
 import { SystemStatus } from '../../core/models';
 
 @Component({
@@ -111,11 +111,11 @@ export class SystemInfoSectionComponent implements OnInit {
     return Object.entries(providers as unknown as Record<string, Record<string, unknown>>);
   }
 
-  constructor(private api: VertepApiService) {}
+  constructor(private systemApi: SystemApiService) {}
 
   ngOnInit(): void {
     this.loading.set(true);
-    this.api.getStatus().subscribe({
+    this.systemApi.status().subscribe({
       next: (s) => { this.status.set(s); this.loading.set(false); },
       error: (err) => { this.error.set(err.message || 'Не вдалося завантажити статус'); this.loading.set(false); },
     });

@@ -2,15 +2,15 @@
 import { CanActivate, Router, UrlTree } from '@angular/router';
 import { Observable, of } from 'rxjs';
 import { catchError, map, tap } from 'rxjs/operators';
-import { VertepApiService } from './api.service';
+import { AuthApiService } from './api/auth.api';
 import { PolicyService } from './services/policy.service';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private api: VertepApiService, private router: Router, private policy: PolicyService) {}
+  constructor(private auth: AuthApiService, private router: Router, private policy: PolicyService) {}
 
   canActivate(): Observable<boolean | UrlTree> {
-    return this.api.getUserProfile().pipe(
+    return this.auth.getUserProfile().pipe(
       // Меню отримує перевірену роль до створення layout, незалежно від запиту header.
       tap((profile) => {
         this.policy.userRole.set(profile.role);

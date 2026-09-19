@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { VertepApiService } from '../../core/api.service';
+import { WorkersApiService } from '../../core/api/workers.api';
 import { ToastService } from '../../core/services/toast.service';
 import { SystemRole, SystemRolesResponse } from '../../core/models';
 
@@ -51,14 +51,14 @@ export class RolesSectionComponent implements OnInit {
   saveMessage = signal<string | null>(null);
   saveState = signal<string | null>(null);
 
-  constructor(private api: VertepApiService, private toast: ToastService) {}
+  constructor(private workersApi: WorkersApiService, private toast: ToastService) {}
 
   ngOnInit(): void { this.loadRoles(); }
 
   loadRoles(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getSystemRoles().subscribe({
+    this.workersApi.systemRoles().subscribe({
       next: (resp) => { this.rolesResponse = resp; this.allRoles = resp.available_roles || []; this.selectedRoles = resp.active_roles || []; this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
@@ -74,7 +74,7 @@ export class RolesSectionComponent implements OnInit {
   saveRoles(): void {
     this.saving.set(true);
     this.saveMessage.set(null);
-    this.api.updateSystemRoles(this.selectedRoles).subscribe({
+    this.workersApi.updateSystemRoles(this.selectedRoles).subscribe({
       next: () => { this.saving.set(false); this.toast.show('Ролі оновлено', 'success'); this.loadRoles(); },
       error: (err) => { this.saving.set(false); this.toast.show(err.message || 'Помилка', 'error'); },
     });

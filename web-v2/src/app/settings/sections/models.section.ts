@@ -1,7 +1,7 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { VertepApiService } from '../../core/api.service';
+import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { ModelInfo } from '../../core/models';
 
@@ -49,7 +49,7 @@ export class ModelsSectionComponent implements OnInit {
   modelName = '';
   pulling = signal(false);
 
-  constructor(private api: VertepApiService, private toast: ToastService) {}
+  constructor(private settings: SettingsApiService, private toast: ToastService) {}
 
   ngOnInit(): void {
     this.loadModels();
@@ -58,7 +58,7 @@ export class ModelsSectionComponent implements OnInit {
   loadModels(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getModels().subscribe({
+    this.settings.models().subscribe({
       next: (data) => { this.models.set((data['models'] as ModelInfo[]) || []); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
@@ -67,7 +67,7 @@ export class ModelsSectionComponent implements OnInit {
   pullModel(): void {
     if (!this.modelName || this.pulling()) return;
     this.pulling.set(true);
-    this.api.pullModel(this.modelName).subscribe({
+    this.settings.pullModel(this.modelName).subscribe({
       next: () => { this.pulling.set(false); this.loadModels(); },
       error: () => this.pulling.set(false),
     });
@@ -75,7 +75,7 @@ export class ModelsSectionComponent implements OnInit {
 
   deleteModel(name: string): void {
     if (!confirm(`Видалити модель ${name}?`)) return;
-    this.api.deleteModel(name).subscribe({
+    this.settings.deleteModel(name).subscribe({
       next: () => this.loadModels(),
       error: (err) => this.error.set(err.message),
     });

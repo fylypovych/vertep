@@ -2,7 +2,7 @@ import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/cor
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule, ActivatedRoute, Router } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { CanComponentDeactivate } from '../core/services/unsaved-guard.service';
@@ -210,7 +210,7 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    private api: VertepApiService,
+    private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
   ) {}
@@ -223,7 +223,7 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   loadCharacter(id: string): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getCharacter(id).subscribe({
+    this.resources.character(id).subscribe({
       next: (c) => {
         this.formId = c.id ?? ''; this.name = c.name; this.language = c.language || 'uk';
         this.enabled = c.enabled !== false; this.workflow = c.workflow || '';
@@ -250,8 +250,8 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
       generation: this.generation, publishing: this.publishing,
     };
     const req = this.isEdit
-      ? this.api.updateCharacter(this.formId, payload)
-      : this.api.createCharacter(payload);
+      ? this.resources.updateCharacter(this.formId, payload)
+      : this.resources.createCharacter(payload);
     req.subscribe({
       next: () => {
         this.saving.set(false);
@@ -267,7 +267,7 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   deleteCharacter(): void {
     this.confirm.confirm({ title: 'Видалити персонажа', message: `Видалити ${this.formId}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteCharacter(this.formId).subscribe({
+      this.resources.deleteCharacter(this.formId).subscribe({
         next: () => { this.toast.show('Персонаж видалено', 'success'); this.router.navigate(['/characters']); },
         error: (err) => this.toast.show(err.message || 'Помилка видалення', 'error'),
       });

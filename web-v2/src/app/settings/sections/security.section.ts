@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { VertepApiService } from '../../core/api.service';
+import { SecurityApiService } from '../../core/api/security.api';
 import { ToastService } from '../../core/services/toast.service';
 import { SecurityCheck, CertificatesResponse } from '../../core/models';
 
@@ -57,23 +57,23 @@ export class SecuritySectionComponent implements OnInit {
   certLoading = signal(false);
   certError = signal<string | null>(null);
 
-  constructor(private api: VertepApiService, private toast: ToastService) {}
+  constructor(private security: SecurityApiService, private toast: ToastService) {}
 
   ngOnInit(): void {
     this.loading.set(true);
-    this.api.getSecurityCheck().subscribe({
+    this.security.check().subscribe({
       next: (c) => { this.secCheck.set(c); this.loading.set(false); },
       error: () => this.loading.set(false),
     });
     this.certLoading.set(true);
-    this.api.getCertificates().subscribe({
+    this.security.certificates().subscribe({
       next: (c) => { this.certificates.set(c); this.certLoading.set(false); },
       error: (err) => { this.certError.set(err.message); this.certLoading.set(false); },
     });
   }
 
   renewCert(): void {
-    this.api.renewCertificate().subscribe({
+    this.security.renewCertificate().subscribe({
       next: () => { this.toast.show('Сертифікат оновлено', 'success'); this.ngOnInit(); },
       error: (err) => this.toast.show(err.message || 'Помилка оновлення', 'error'),
     });

@@ -5,7 +5,7 @@ import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
 import { Character, Brand, Channel, Workflow, BrandCreateDTO, BrandUpdateDTO, ChannelCreateDTO, ChannelUpdateDTO, WorkflowSaveResponse, WorkflowDeleteResponse } from '../models';
 
-@Injectable()
+@Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}

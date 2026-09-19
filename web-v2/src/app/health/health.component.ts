@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription, timer } from 'rxjs';
-import { VertepApiService } from '../core/api.service';
+import { SystemApiService } from '../core/api/system.api';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -153,7 +153,7 @@ export class HealthComponent implements OnInit, OnDestroy {
   history = signal<HealthHistoryEntry[]>([]);
   private pollTimer: Subscription | null = null;
 
-  constructor(private api: VertepApiService) {}
+  constructor(private systemApi: SystemApiService) {}
 
   ngOnInit(): void {
     this.loadHealth();
@@ -172,7 +172,7 @@ export class HealthComponent implements OnInit, OnDestroy {
   loadHealth(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getHealth().subscribe({
+    this.systemApi.health().subscribe({
       next: (health: HealthCheck) => {
         this.healthStatus.set(health.status);
         this.service.set(health.service || '—');
@@ -185,7 +185,7 @@ export class HealthComponent implements OnInit, OnDestroy {
         this.loading.set(false);
       },
     });
-    this.api.getMetrics().subscribe({
+    this.systemApi.metrics().subscribe({
       next: (metrics) => this.metrics.set(metrics),
       error: () => {},
     });
@@ -193,7 +193,7 @@ export class HealthComponent implements OnInit, OnDestroy {
 
   loadHistory(): void {
     this.historyLoading.set(true);
-    this.api.getHealthHistory().subscribe({
+    this.systemApi.healthHistory().subscribe({
       next: (data) => {
         this.history.set((data.history || []) as unknown as HealthHistoryEntry[]);
         this.historyLoading.set(false);

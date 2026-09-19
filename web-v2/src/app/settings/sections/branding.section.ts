@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { VertepApiService } from '../../core/api.service';
+import { ResourcesApiService } from '../../core/api/resources.api';
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 
@@ -38,12 +38,12 @@ export class BrandingSectionComponent implements OnInit {
   uploading = signal(false);
   logoError = signal<string | null>(null);
 
-  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
+  constructor(private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
   ngOnInit(): void { this.loadLogo(); }
 
   loadLogo(): void {
-    this.api.getLogo().subscribe({
+    this.resources.logo().subscribe({
       next: (blob) => { this.logoUrl.set(URL.createObjectURL(blob)); },
       error: () => this.logoUrl.set(null),
     });
@@ -59,7 +59,7 @@ export class BrandingSectionComponent implements OnInit {
       this.logoError.set('Виберіть зображення до 2 МБ.'); return;
     }
     this.uploading.set(true);
-    this.api.uploadLogo(file).subscribe({
+    this.resources.uploadLogo(file).subscribe({
       next: () => { this.uploading.set(false); this.toast.show('Логотип завантажено', 'success'); this.loadLogo(); },
       error: (err) => { this.uploading.set(false); this.logoError.set(err.message || 'Помилка'); },
     });
@@ -68,7 +68,7 @@ export class BrandingSectionComponent implements OnInit {
   deleteLogo(): void {
     this.confirm.confirm({ title: 'Видалити логотип', message: 'Видалити логотип?' }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteLogo().subscribe({ next: () => { this.toast.show('Видалено', 'success'); this.logoUrl.set(null); }, error: (err) => this.toast.show(err.message, 'error') });
+      this.resources.deleteLogo().subscribe({ next: () => { this.toast.show('Видалено', 'success'); this.logoUrl.set(null); }, error: (err) => this.toast.show(err.message, 'error') });
     });
   }
 }

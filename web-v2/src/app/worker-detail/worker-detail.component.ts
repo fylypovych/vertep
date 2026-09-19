@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import { ActivatedRoute, Router } from '@angular/router';
 import { timer, Subscription } from 'rxjs';
-import { VertepApiService } from '../core/api.service';
+import { WorkersApiService } from '../core/api/workers.api';
 import { ToastService } from '../core/services/toast.service';
 import { NodeDetail, NodeActionPayload, SelfTestResult, SystemRole, SystemRolesResponse } from '../core/models';
 import { roleLabel, workerStatusLabel } from '../core/presentation';
@@ -189,7 +189,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    private api: VertepApiService,
+    private workersApi: WorkersApiService,
     private toast: ToastService,
   ) {}
 
@@ -282,7 +282,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   loadNode(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getNode(this.route.snapshot.paramMap.get('id') || '').subscribe({
+    this.workersApi.getNode(this.route.snapshot.paramMap.get('id') || '').subscribe({
       next: (n) => {
         this.node.set(n);
         this.loading.set(false);
@@ -293,7 +293,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
   }
 
   loadRoles(): void {
-    this.api.getSystemRoles().subscribe({
+    this.workersApi.systemRoles().subscribe({
       next: (response: SystemRolesResponse) => {
         this.availableRoles.set(response.available_roles || []);
         this.selectedRoles.set(response.active_roles || []);
@@ -311,7 +311,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
 
   saveRoles(): void {
     this.rolesSaving.set(true);
-    this.api.updateSystemRoles(this.selectedRoles()).subscribe({
+    this.workersApi.updateSystemRoles(this.selectedRoles()).subscribe({
       next: () => {
         this.rolesSaving.set(false);
         this.toast.show('Зміни ролей передано системному виконавцю', 'success');
@@ -333,7 +333,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
       return;
     }
     this.actioning.set(true);
-    this.api.workerAction(this.route.snapshot.paramMap.get('id') || '', action).subscribe({
+    this.workersApi.action(this.route.snapshot.paramMap.get('id') || '', action).subscribe({
       next: () => {
         this.actioning.set(false);
         this.toast.show('Дія застосована', 'success');
@@ -348,7 +348,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
 
   revoke(): void {
     this.actioning.set(true);
-    this.api.revokeNode(this.route.snapshot.paramMap.get('id') || '').subscribe({
+    this.workersApi.revoke(this.route.snapshot.paramMap.get('id') || '').subscribe({
       next: () => {
         this.actioning.set(false);
         this.toast.show('Вузол відкликано', 'success');

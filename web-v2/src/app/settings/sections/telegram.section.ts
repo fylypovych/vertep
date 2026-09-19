@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { VertepApiService } from '../../core/api.service';
+import { SettingsApiService } from '../../core/api/settings.api';
 import { TelegramStatus, TelegramBotInfo } from '../../core/models';
 
 @Component({
@@ -62,15 +62,15 @@ export class TelegramSectionComponent implements OnInit {
   loading = signal(false);
   error = signal<string | null>(null);
 
-  constructor(private api: VertepApiService) {}
+  constructor(private settings: SettingsApiService) {}
 
   ngOnInit(): void {
     this.loading.set(true);
-    this.api.getTelegramStatus().subscribe({
+    this.settings.telegramStatus().subscribe({
       next: (status) => { this.tgStatus.set(status); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
-    this.api.getTelegramBotInfo().subscribe({
+    this.settings.telegramBotInfo().subscribe({
       next: (info) => this.tgBotInfo.set(info),
       error: () => {},
     });

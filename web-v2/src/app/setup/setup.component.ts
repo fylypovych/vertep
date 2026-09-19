@@ -2,7 +2,7 @@ import { Component, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { AuthApiService } from '../core/api/auth.api';
 import { SetupStatus, SetupHealth, SetupCompleteResult } from '../core/models';
 
 @Component({
@@ -26,12 +26,12 @@ export class SetupComponent {
   form = { role: "core", core_url: "", core_certificate: "", registration_token: "", installation_name: "", username: "", password: "", password_confirmation: "", backend: "ollama", backend_model: "", backend_api_key: "", backend_options: ["ollama", "openai", "anthropic"], backend_selected: "ollama" };
   roleEntries: { id: string; label: string; modules: string[]; capabilities: string[] }[] = [];
 
-  constructor(private api: VertepApiService, private router: Router) {}
+  constructor(private auth: AuthApiService, private router: Router) {}
 
   ngOnInit(): void {
     this.setupToken = new URLSearchParams(window.location.search).get("token") || "";
     if (!this.setupToken) { this.error.set("Vidsutniy setup token."); this.loading.set(false); return; }
-    this.api.getSetupStatus(this.setupToken).subscribe({
+    this.auth.getSetupStatus(this.setupToken).subscribe({
       next: (s) => {
         if (s.configured) { this.router.navigate(["/"]); return; }
         this.status.set(s);
@@ -55,7 +55,7 @@ export class SetupComponent {
   loadHealth(attempt = 1): void {
     this.healthLoading.set(true);
     this.healthError.set(null);
-    this.api.getSetupHealth(this.setupToken).subscribe({
+    this.auth.getSetupHealth(this.setupToken).subscribe({
       next: (h) => { this.health.set(h); this.healthLoading.set(false); },
       error: (err) => {
         if (attempt < 3) {
@@ -79,7 +79,7 @@ export class SetupComponent {
     }
     const p: Record<string, unknown> = { node_role: this.form.role, installation_name: this.form.installation_name, username: this.form.username, password: this.form.password, password_confirmation: this.form.password_confirmation, backend: this.form.backend_selected || "ollama", backend_model: this.form.backend_model || null, backend_api_key: this.form.backend_api_key || null };
     if (this.form.role !== "core") { p["core_url"] = this.form.core_url; p["core_certificate"] = this.form.core_certificate || null; p["registration_token"] = this.form.registration_token; }
-    this.api.completeSetup(this.setupToken, p).subscribe({
+    this.auth.completeSetup(this.setupToken, p).subscribe({
       next: (r) => { this.completeResult.set(r); this.completing.set(false); this.step.set(5); },
       error: (err) => {
         if (attempt < 3) {

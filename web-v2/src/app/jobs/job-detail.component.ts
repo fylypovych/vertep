@@ -2,7 +2,9 @@ import { Component, OnInit, signal, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { JobsApiService } from '../core/api/jobs.api';
+import { ResourcesApiService } from '../core/api/resources.api';
+import { WorkersApiService } from '../core/api/workers.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
@@ -669,7 +671,9 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    private api: VertepApiService,
+    private jobsApi: JobsApiService,
+    private resources: ResourcesApiService,
+    private workersApi: WorkersApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
   ) {}
@@ -699,7 +703,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     this.conflictLocalVersion.set(null);
     this.conflictActualVersion.set(null);
     this.subs.add(
-      this.api.getJob(jobId).subscribe({
+      this.jobsApi.get(jobId).subscribe({
         next: (job) => {
           this.job.set(job as Job);
           this.loadJobChannels(job as Job);
@@ -729,7 +733,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     this.conflict.set(false);
     this.conflictLocalVersion.set(null);
     this.conflictActualVersion.set(null);
-    this.api.getJob(jobId).subscribe({
+    this.jobsApi.get(jobId).subscribe({
       next: (fresh) => {
         this.job.set(fresh as Job);
         this.loadJobChannels(fresh as Job);
@@ -743,28 +747,28 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   loadCharacters(): void {
-    this.api.getCharacters().subscribe({
+    this.resources.characters().subscribe({
       next: (characters) => this.characters.set(characters),
       error: () => {},
     });
   }
 
   loadBrands(): void {
-    this.api.getBrands().subscribe({
+    this.resources.brands().subscribe({
       next: (brands) => this.brands.set(brands),
       error: () => {},
     });
   }
 
   loadWorkflows(): void {
-    this.api.getWorkflows().subscribe({
+    this.resources.workflows().subscribe({
       next: (workflows) => this.workflows.set(workflows),
       error: () => {},
     });
   }
 
   loadChannelTypes(): void {
-    this.api.getChannelTypes().subscribe({
+    this.resources.channelTypes().subscribe({
       next: (types) => this.channelTypes.set(types),
       error: () => this.channelTypes.set(['youtube', 'tiktok', 'instagram', 'facebook', 'threads']),
     });
@@ -772,7 +776,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   loadJobChannels(job: Job): void {
     if (job.brand_id) {
-      this.api.getChannels(job.brand_id).subscribe({
+      this.resources.channels(job.brand_id).subscribe({
         next: (channels) => this.jobChannels.set(channels),
         error: () => this.jobChannels.set([]),
       });
@@ -837,7 +841,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       }
     }
     this.subs.add(
-      this.api.updateJob(j.job_id, payload).subscribe({
+      this.jobsApi.update(j.job_id, payload).subscribe({
         next: (updated: Job) => {
           this.job.set(updated);
           this.editing.set(false);
@@ -868,7 +872,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     }).subscribe((ok) => {
       if (!ok) return;
       this.subs.add(
-        this.api.deleteJob(j.job_id).subscribe({
+        this.jobsApi.delete(j.job_id).subscribe({
           next: () => {
             this.toast.show('Завдання видалено', 'success');
             this.router.navigate(['/jobs']);
@@ -948,7 +952,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   approveVideo(): void {
     const j = this.job();
     if (!j) return;
-    this.runAction('video_approve', () => this.api.approveVideo(j.job_id));
+    this.runAction('video_approve', () => this.jobsApi.approveVideo(j.job_id));
   }
 
   requestVideoRevision(): void {
@@ -956,7 +960,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     if (!j) return;
     const revision = window.prompt('Опишіть потрібні зміни до відео:');
     if (revision === null) return;
-    this.runAction('video_revision', () => this.api.requestVideoRevision(j.job_id, revision.trim() || ''));
+    this.runAction('video_revision', () => this.jobsApi.requestVideoRevision(j.job_id, revision.trim() || ''));
   }
 
   regenerateVideo(): void {
@@ -967,7 +971,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       message: 'Збудувати відео повторно з поточними кадрами та налаштуваннями?',
     }).subscribe((ok) => {
       if (!ok) return;
-      this.runAction('video_regenerate', () => this.api.regenerateVideo(j.job_id));
+      this.runAction('video_regenerate', () => this.jobsApi.regenerateVideo(j.job_id));
     });
   }
 
@@ -1012,21 +1016,21 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   approveImageStoryboard(): void {
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.approveImageStoryboard(j.job_id, sb.version, sb.image_version));
+    this.runAction('approve', () => this.jobsApi.approveImageStoryboard(j.job_id, sb.version, sb.image_version));
   }
   regenerateImageScene(index: number): void {
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { scene_indexes: [index], image_version: sb.image_version }));
+    this.runAction('approve', () => this.jobsApi.revisionImageStoryboard(j.job_id, sb.version, { scene_indexes: [index], image_version: sb.image_version }));
   }
   regenerateImageStoryboardAll(): void {
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.regenerateImageStoryboard(j.job_id, sb.version, undefined, sb.image_version));
+    this.runAction('approve', () => this.jobsApi.regenerateImageStoryboard(j.job_id, sb.version, undefined, sb.image_version));
   }
   revisionImageStoryboard(): void {
     const rev = window.prompt('Опишіть правки до превʼю (prompt для сцени):');
     if (rev === null) return;
     const j = this.job(); const sb = this.activeStoryboard(); if (!j || !sb) return;
-    this.runAction('approve', () => this.api.revisionImageStoryboard(j.job_id, sb.version, { revision: rev, image_version: sb.image_version }));
+    this.runAction('approve', () => this.jobsApi.revisionImageStoryboard(j.job_id, sb.version, { revision: rev, image_version: sb.image_version }));
   }
 
   actionLabel(action: string): string {
@@ -1046,34 +1050,34 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     return labels[action] || action;
   }
 
-  pauseJob(): void { this.runAction('pause', () => this.api.pauseJob(this.job()!.job_id)); }
-  resumeJob(): void { this.runAction('resume', () => this.api.resumeJob(this.job()!.job_id)); }
+  pauseJob(): void { this.runAction('pause', () => this.jobsApi.pause(this.job()!.job_id)); }
+  resumeJob(): void { this.runAction('resume', () => this.jobsApi.resume(this.job()!.job_id)); }
   approveJob(): void {
     const j = this.job()!;
     if (this.canReviewScript()) {
-      this.runAction('approve', () => this.api.approveScript(j.job_id));
+      this.runAction('approve', () => this.jobsApi.approveScript(j.job_id));
       return;
     }
     this.runAction('approve', () => this.canReviewStoryboard()
-      ? this.api.approveStoryboard(j.job_id, j.active_storyboard_version!, j.active_image_version)
-      : this.api.approveJob(j.job_id));
+      ? this.jobsApi.approveStoryboard(j.job_id, j.active_storyboard_version!, j.active_image_version)
+      : this.jobsApi.approve(j.job_id));
   }
 
   requestScriptRevision(): void {
     const revision = window.prompt('Опишіть потрібні зміни до сценарію:');
-    if (revision?.trim()) this.runAction('revision', () => this.api.requestScriptRevision(this.job()!.job_id, revision.trim()));
+    if (revision?.trim()) this.runAction('revision', () => this.jobsApi.requestScriptRevision(this.job()!.job_id, revision.trim()));
   }
 
   regenerateScriptAction(): void {
     const revision = window.prompt('Залиште коментар для регенерації (необовʼязково):') || undefined;
-    this.runAction('regenerate', () => this.api.regenerateScript(this.job()!.job_id, revision));
+    this.runAction('regenerate', () => this.jobsApi.regenerateScript(this.job()!.job_id, revision));
   }
 
   rejectStoryboard(): void {
     const j = this.job();
     if (!j?.active_storyboard_version) return;
     this.confirm.confirm({ title: 'Відхилити розкадровку', message: 'Відхилити поточну версію розкадровки?' }).subscribe(ok => {
-      if (ok) this.runAction('reject', () => this.api.rejectStoryboard(j.job_id, j.active_storyboard_version!));
+      if (ok) this.runAction('reject', () => this.jobsApi.rejectStoryboard(j.job_id, j.active_storyboard_version!));
     });
   }
 
@@ -1081,13 +1085,13 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     const j = this.job();
     if (!j?.active_storyboard_version) return;
     const revision = window.prompt('Опишіть потрібні зміни до розкадровки:');
-    if (revision?.trim()) this.runAction('revision', () => this.api.regenerateStoryboard(j.job_id, j.active_storyboard_version!, revision.trim()));
+    if (revision?.trim()) this.runAction('revision', () => this.jobsApi.regenerateStoryboard(j.job_id, j.active_storyboard_version!, revision.trim()));
   }
 
   rejectApproval(): void {
     if (this.canReviewScript()) {
       this.confirm.confirm({ title: 'Відхилити сценарій', message: 'Скасувати завдання зі сценарієм?' }).subscribe(ok => {
-        if (ok) this.runAction('reject', () => this.api.cancelJob(this.job()!.job_id));
+        if (ok) this.runAction('reject', () => this.jobsApi.cancel(this.job()!.job_id));
       });
       return;
     }
@@ -1096,7 +1100,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       return;
     }
     this.confirm.confirm({ title: 'Відхилити завдання', message: 'Відхилити це завдання?' }).subscribe(ok => {
-      if (ok) this.runAction('reject', () => this.api.cancelJob(this.job()!.job_id));
+      if (ok) this.runAction('reject', () => this.jobsApi.cancel(this.job()!.job_id));
     });
   }
 
@@ -1110,14 +1114,14 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       return;
     }
     this.confirm.confirm({ title: 'Запросити правки', message: 'Повернути завдання на повторну генерацію?' }).subscribe(ok => {
-      if (ok) this.runAction('revision', () => this.api.regenerateJob(this.job()!.job_id));
+      if (ok) this.runAction('revision', () => this.jobsApi.regenerate(this.job()!.job_id));
     });
   }
 
   retryJob(): void {
     this.confirm.confirm({ title: 'Повторити завдання', message: 'Спробувати виконати завдання ще раз?' }).subscribe((ok) => {
       if (!ok) return;
-      this.runAction('retry', () => this.api.retryJob(this.job()!.job_id));
+      this.runAction('retry', () => this.jobsApi.retry(this.job()!.job_id));
     });
   }
 
@@ -1129,14 +1133,14 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     }).subscribe((ok) => {
       this.regenerateWarning.set(false);
       if (!ok) return;
-      this.runAction('regenerate', () => this.api.regenerateJob(this.job()!.job_id));
+      this.runAction('regenerate', () => this.jobsApi.regenerate(this.job()!.job_id));
     });
   }
 
   confirmCancel(): void {
     this.confirm.confirm({ title: 'Скасувати завдання', message: 'Ви впевнені, що хочете скасувати це завдання?' }).subscribe((ok) => {
       if (!ok) return;
-      this.runAction('cancel', () => this.api.cancelJob(this.job()!.job_id));
+      this.runAction('cancel', () => this.jobsApi.cancel(this.job()!.job_id));
     });
   }
 
@@ -1244,7 +1248,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     const j = this.job();
     if (!j) return;
     this.verifying.set(artifactId);
-    this.api.verifyArtifacts(j.job_id).subscribe({
+    this.jobsApi.verifyArtifacts(j.job_id).subscribe({
       next: (result) => {
         const updated = { ...j, artifacts: j.artifacts.map(a => {
           const v = result.results.find(r => r.artifact_id === a.artifact_id);
@@ -1267,7 +1271,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     if (!file) return;
     const j = this.job();
     if (!j) return;
-    this.api.uploadArtifact(j.job_id, folder, file.name, file).subscribe({
+    this.jobsApi.uploadArtifact(j.job_id, folder, file.name, file).subscribe({
       next: (artifact) => {
         const updated = { ...j, artifacts: [...j.artifacts, artifact]};
         this.job.set(updated as Job);
@@ -1280,7 +1284,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   exportJob(): void {
     const j = this.job();
     if (!j) return;
-    this.api.exportJob(j.job_id).subscribe({
+    this.jobsApi.exportJob(j.job_id).subscribe({
       next: (blob) => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1297,7 +1301,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
-    this.api.importProject(file).subscribe({
+    this.jobsApi.importProject(file).subscribe({
       next: () => {
         this.toast.show('Проект імпортовано', 'success');
         this.loadJob(this.route.snapshot.paramMap.get('id') || '');
@@ -1345,7 +1349,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     if (!j) return;
     this.actionLoading.set('publish');
     const channels = this.selectedChannels().length ? this.selectedChannels() : undefined;
-    this.api.publishJob(j.job_id, channels).subscribe({
+    this.jobsApi.publish(j.job_id, channels).subscribe({
       next: (updated) => {
         this.job.set(updated);
         this.actionLoading.set(null);
@@ -1364,7 +1368,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     const j = this.job();
     if (!j) return;
     this.actionLoading.set('retry-' + channel);
-    this.api.publishJob(j.job_id, [channel]).subscribe({
+    this.jobsApi.publish(j.job_id, [channel]).subscribe({
       next: (updated) => {
         this.job.set(updated);
         this.actionLoading.set(null);

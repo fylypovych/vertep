@@ -1,7 +1,7 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { VertepApiService } from '../../core/api.service';
+import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 
@@ -65,7 +65,7 @@ export class SecretsSectionComponent implements OnInit {
   ];
 
   constructor(
-    private api: VertepApiService,
+    private settings: SettingsApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
   ) {}
@@ -75,7 +75,7 @@ export class SecretsSectionComponent implements OnInit {
   loadSecrets(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getSecrets().subscribe({
+    this.settings.secrets().subscribe({
       next: (data) => { this.secrets.set(data.secrets); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
@@ -86,7 +86,7 @@ export class SecretsSectionComponent implements OnInit {
   saveSecret(name: string): void {
     if (!this.editValue) return;
     this.secretSaving.set(true);
-    this.api.updateSecret(name, this.editValue).subscribe({
+    this.settings.updateSecret(name, this.editValue).subscribe({
       next: () => { this.secretSaving.set(false); this.editingSecret.set(null); this.toast.show('Секрет збережено', 'success'); this.loadSecrets(); },
       error: (err) => { this.secretSaving.set(false); this.error.set(err.message); },
     });
@@ -95,14 +95,14 @@ export class SecretsSectionComponent implements OnInit {
   confirmDeleteSecret(name: string): void {
     this.confirm.confirm({ title: 'Видалити секрет', message: `Видалити ${name}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteSecret(name).subscribe({ next: () => { this.toast.show('Секрет видалено', 'success'); this.loadSecrets(); }, error: (err) => this.error.set(err.message) });
+      this.settings.deleteSecret(name).subscribe({ next: () => { this.toast.show('Секрет видалено', 'success'); this.loadSecrets(); }, error: (err) => this.error.set(err.message) });
     });
   }
 
   createSecret(): void {
     if (!this.newSecretName || !this.newSecretValue) return;
     this.secretSaving.set(true);
-    this.api.updateSecret(this.newSecretName, this.newSecretValue).subscribe({
+    this.settings.updateSecret(this.newSecretName, this.newSecretValue).subscribe({
       next: () => { this.toast.show('Секрет створено', 'success'); this.newSecretName = ''; this.newSecretValue = ''; this.secretSaving.set(false); this.loadSecrets(); },
       error: (err) => { this.secretSaving.set(false); this.error.set(err.message); },
     });

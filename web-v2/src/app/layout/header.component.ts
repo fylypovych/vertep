@@ -4,7 +4,8 @@ import { CommonModule } from '@angular/common';
 import { filter, Subscription } from 'rxjs';
 import { SidebarService } from '../core/services/sidebar.service';
 import { ThemeService } from '../core/services/theme.service';
-import { VertepApiService } from '../core/api.service';
+import { AuthApiService } from '../core/api/auth.api';
+import { SystemApiService } from '../core/api/system.api';
 import { PolicyService, SystemMode } from '../core/services/policy.service';
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
@@ -46,7 +47,8 @@ export class HeaderComponent implements OnInit, OnDestroy {
     private router: Router,
     private sidebarService: SidebarService,
     private themeService: ThemeService,
-    private api: VertepApiService,
+    private auth: AuthApiService,
+    private system: SystemApiService,
     private policy: PolicyService,
   ) {}
 
@@ -87,7 +89,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
   }
 
   logout(): void {
-    this.api.deleteSession().subscribe({
+    this.auth.deleteSession().subscribe({
       next:  () => this.router.navigate(['/login']),
       error: () => this.router.navigate(['/login']),
     });
@@ -102,7 +104,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
   }
 
   private loadSystemState(): void {
-    this.api.getStatus().subscribe({
+    this.system.status().subscribe({
       next: (s) => {
         const state = (s.system?.state?.toUpperCase() ?? 'NORMAL') as SystemMode;
         const labels: Record<string, string> = {
@@ -120,7 +122,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
   }
 
   private loadUserProfile(): void {
-    this.api.getUserProfile().subscribe({
+    this.auth.getUserProfile().subscribe({
       next: (p) => {
         this.userInitialSig.set((p.user?.charAt(0) || 'A').toUpperCase());
         // Єдине джерело правди про роль — PolicyService (signal); header читає з нього.

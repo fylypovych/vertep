@@ -2,7 +2,7 @@ import { Component, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import { finalize } from 'rxjs';
-import { VertepApiService } from '../core/api.service';
+import { LogsApiService } from '../core/api/logs.api';
 import { LogEntry } from '../core/models';
 import { EmptyStateComponent } from '../shared/empty-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -118,7 +118,7 @@ export class LogsComponent implements OnInit {
   nodeName = '';
   limit = 200;
 
-  constructor(private readonly api: VertepApiService) {}
+  constructor(private readonly logsApi: LogsApiService) {}
 
   ngOnInit(): void {
     this.loadLogs();
@@ -127,7 +127,7 @@ export class LogsComponent implements OnInit {
   loadLogs(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getLogs({
+    this.logsApi.logs({
       limit: this.limit,
       level: this.level || undefined,
       job_id: this.jobId.trim() || undefined,

@@ -1,7 +1,7 @@
 import { Component, OnInit, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { VertepApiService } from '../core/api.service';
+import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Channel } from '../core/models';
@@ -72,13 +72,13 @@ export class BrandChannelsComponent implements OnInit {
   channelTypes: string[] = [];
 
   constructor(
-    private api: VertepApiService,
+    private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
   ) {}
 
   ngOnInit(): void {
-    this.api.getChannelTypes().subscribe({ next: (types) => this.channelTypes = types });
+    this.resources.channelTypes().subscribe({ next: (types) => this.channelTypes = types });
   }
 
   createChannel(): void {
@@ -86,7 +86,7 @@ export class BrandChannelsComponent implements OnInit {
       this.toast.show('Тип і ціль є обов\'язковими', 'error');
       return;
     }
-    this.api.createChannel(this.brandId, {
+    this.resources.createChannel(this.brandId, {
       brand_id: this.brandId,
       channel_type: this.newChannel.channel_type,
       target: this.newChannel.target,
@@ -104,7 +104,7 @@ export class BrandChannelsComponent implements OnInit {
   }
 
   toggleChannel(ch: Channel): void {
-    this.api.updateChannel(ch.channel_id, { enabled: !ch.enabled }).subscribe({
+    this.resources.updateChannel(ch.channel_id, { enabled: !ch.enabled }).subscribe({
       next: () => { this.channelChanged.emit(); this.toast.show('Канал оновлено', 'success'); },
       error: (err) => this.toast.show(err.message || 'Помилка оновлення', 'error'),
     });
@@ -113,7 +113,7 @@ export class BrandChannelsComponent implements OnInit {
   deleteChannel(ch: Channel): void {
     this.confirm.confirm({ title: 'Видалити канал', message: `Видалити ${ch.channel_type}:${ch.target}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteChannel(ch.channel_id).subscribe({
+      this.resources.deleteChannel(ch.channel_id).subscribe({
         next: () => { this.channelChanged.emit(); this.toast.show('Канал видалено', 'success'); },
         error: (err) => this.toast.show(err.message || 'Помилка видалення', 'error'),
       });

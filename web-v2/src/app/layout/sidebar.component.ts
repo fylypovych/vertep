@@ -2,7 +2,7 @@
 import { RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { SidebarService } from '../core/services/sidebar.service';
-import { VertepApiService } from '../core/api.service';
+import { SystemApiService } from '../core/api/system.api';
 import { PolicyService } from '../core/services/policy.service';
 
 interface NavItem {
@@ -211,10 +211,10 @@ export class SidebarComponent implements OnInit {
 
   runtimeVersion: string | null = null;
 
-  constructor(private sidebarService: SidebarService, private api: VertepApiService, private policy: PolicyService) {}
+  constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService) {}
 
   ngOnInit(): void {
-    this.api.getStatus().subscribe({
+    this.systemApi.status().subscribe({
       next: (s) => { this.runtimeVersion = s.version || null; },
       error: () => { this.runtimeVersion = null; },
     });

@@ -2,14 +2,15 @@ import { Component, OnInit, signal, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { JobsApiService } from '../core/api/jobs.api';
+import { QueueApiService } from '../core/api/queue.api';
+import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Job, Character, Brand, Workflow, JobCreate, QueueState, DeadLetterTask } from '../core/models';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
-import { EmptyStateComponent } from '../shared/empty-state.component';
 import { inStatusGroup, statusLabel } from '../core/presentation';
 import { Subscription, timer } from 'rxjs';
 import { PolicyService } from '../core/services/policy.service';
@@ -17,7 +18,7 @@ import { PolicyService } from '../core/services/policy.service';
 @Component({
   selector: 'app-jobs',
   standalone: true,
-  imports: [CommonModule, FormsModule, VertepDatePipe, RouterModule, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
+  imports: [CommonModule, FormsModule, VertepDatePipe, RouterModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="jobs-page">
       <div class="flex items-center justify-between mb-4">
@@ -346,7 +347,7 @@ export class JobsComponent implements OnInit, OnDestroy {
   private queueSubs = new Subscription();
   private pollTimer: Subscription | null = null;
 
-  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router, private route: ActivatedRoute, private policy: PolicyService) {}
+  constructor(private jobsApi: JobsApiService, private queue: QueueApiService, private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router, private route: ActivatedRoute, private policy: PolicyService) {}
 
   get canCreateJob(): boolean { return this.policy.can('create_job').allowed; }
   get createJobReason(): string | null { return this.policy.disabledReason('create_job'); }
@@ -410,7 +411,7 @@ export class JobsComponent implements OnInit, OnDestroy {
   loadJobs(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.listJobsPage({ statusGroup: this.statusGroup || undefined, search: this.search || undefined, page: this.page, perPage: this.pageSize }).subscribe({
+    this.jobsApi.listPage({ statusGroup: this.statusGroup || undefined, search: this.search || undefined, page: this.page, perPage: this.pageSize }).subscribe({
       next: (result) => {
         if (Array.isArray(result)) {
           // Legacy plain-array response (any consumer that still serves it).
@@ -432,21 +433,21 @@ export class JobsComponent implements OnInit, OnDestroy {
   }
 
   loadCharacters(): void {
-    this.api.getCharacters().subscribe({
+    this.resources.characters().subscribe({
       next: (characters) => this.characters.set(characters),
       error: () => {},
     });
   }
 
   loadBrands(): void {
-    this.api.getBrands().subscribe({
+    this.resources.brands().subscribe({
       next: (brands) => this.brands.set(brands),
       error: () => {},
     });
   }
 
   loadWorkflows(): void {
-    this.api.getWorkflows().subscribe({
+    this.resources.workflows().subscribe({
       next: (workflows) => this.workflows.set(workflows),
       error: () => {},
     });
@@ -456,7 +457,7 @@ export class JobsComponent implements OnInit, OnDestroy {
     this.queueLoading.set(true);
     this.queueError.set(null);
     this.queueSubs.add(
-      this.api.getQueueState().subscribe({
+      this.queue.state().subscribe({
         next: (state: QueueState) => {
           this.readyTasks.set(state.ready || []);
           this.inflightTasks.set(state.inflight || []);
@@ -471,7 +472,7 @@ export class JobsComponent implements OnInit, OnDestroy {
       }),
     );
     this.queueSubs.add(
-      this.api.getDeadLetterTasks().subscribe({
+      this.queue.deadLetter().subscribe({
         next: (tasks) => {
           this.deadLetterTasks.set(tasks);
           this.deadLetterCount.set(tasks.length);
@@ -480,7 +481,7 @@ export class JobsComponent implements OnInit, OnDestroy {
       }),
     );
     this.queueSubs.add(
-      this.api.getJobs().subscribe({
+      this.jobsApi.list().subscribe({
         next: (jobs) => {
           const scheduled = jobs.filter(j => j.status === 'NEW' && j.scheduled_for);
           this.scheduledJobs.set(scheduled);
@@ -493,7 +494,7 @@ export class JobsComponent implements OnInit, OnDestroy {
   retryTask(taskId: string): void {
     this.retrying.set(taskId);
     this.queueSubs.add(
-      this.api.retryDeadLetterTask(taskId).subscribe({
+      this.queue.retryDeadLetter(taskId).subscribe({
         next: () => {
           this.toast.show('Задачу відправлено до черги', 'success');
           this.loadQueue();
@@ -543,7 +544,7 @@ export class JobsComponent implements OnInit, OnDestroy {
       workflow: this.newJob.workflow || undefined,
       scheduled_for: this.newJobScheduled && this.newJobDate ? this.newJobDate : undefined,
     };
-    this.api.createJob(payload).subscribe({
+    this.jobsApi.create(payload).subscribe({
       next: () => {
         this.showCreateModal = false;
         this.loadJobs();
@@ -564,7 +565,7 @@ export class JobsComponent implements OnInit, OnDestroy {
   deleteJob(id: string): void {
     this.confirm.confirm({ title: 'Видалити завдання', message: `Ви впевнені, що хочете видалити ${id}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteJob(id).subscribe({
+      this.jobsApi.delete(id).subscribe({
         next: () => {
           this.loadJobs();
           this.toast.show('Завдання видалено', 'success');

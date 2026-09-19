@@ -2,7 +2,7 @@ import { Component, OnInit, signal, computed, ChangeDetectionStrategy } from '@a
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Workflow, Character } from '../core/models';
@@ -111,7 +111,7 @@ export class WorkflowsComponent implements OnInit {
   editorForm: { kind: string; name: string; content: string } = { kind: 'image', name: '', content: '' };
 
   constructor(
-    private api: VertepApiService,
+    private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
   ) {}
@@ -138,11 +138,11 @@ export class WorkflowsComponent implements OnInit {
   loadWorkflows(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getWorkflows().subscribe({
+    this.resources.workflows().subscribe({
       next: (wfs) => { this.workflows.set(wfs); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
-    this.api.getCharacters().subscribe({
+    this.resources.characters().subscribe({
       next: (chars) => this.usage.set(chars),
       error: () => this.usage.set([]),
     });
@@ -157,7 +157,7 @@ export class WorkflowsComponent implements OnInit {
   editWorkflow(wf: Workflow): void {
     this.editingWf = wf;
     this.editorForm = { kind: wf.kind, name: wf.name, content: '' };
-    this.api.getWorkflow(wf.kind, wf.name).subscribe({
+    this.resources.workflow(wf.kind, wf.name).subscribe({
       next: (data) => {
         this.editorForm.content = JSON.stringify(data, null, 2);
         this.showEditor.set(true);
@@ -199,7 +199,7 @@ export class WorkflowsComponent implements OnInit {
     }
 
     if (this.editingWf) {
-      this.api.saveWorkflow(this.editingWf.kind, this.editingWf.name, content, true).subscribe({
+      this.resources.saveWorkflow(this.editingWf.kind, this.editingWf.name, content, true).subscribe({
         next: () => {
           this.closeEditor();
           this.loadWorkflows();
@@ -209,7 +209,7 @@ export class WorkflowsComponent implements OnInit {
         error: (err) => { this.saving.set(false); this.toast.show(err.message || 'Помилка збереження', 'error'); },
       });
     } else {
-      this.api.saveWorkflow(this.editorForm.kind, this.editorForm.name, content).subscribe({
+      this.resources.saveWorkflow(this.editorForm.kind, this.editorForm.name, content).subscribe({
         next: () => {
           this.closeEditor();
           this.loadWorkflows();
@@ -224,7 +224,7 @@ export class WorkflowsComponent implements OnInit {
   deleteWorkflow(wf: Workflow): void {
     this.confirm.confirm({ title: 'Видалити сценарій', message: `Ви впевнені, що хочете видалити ${wf.kind}/${wf.name}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteWorkflow(wf.kind, wf.name).subscribe({
+      this.resources.deleteWorkflow(wf.kind, wf.name).subscribe({
         next: () => { this.loadWorkflows(); this.toast.show('Сценарій видалено', 'success'); },
         error: (err) => {
           if (err.message?.includes('409')) {

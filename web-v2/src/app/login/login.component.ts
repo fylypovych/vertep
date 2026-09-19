@@ -2,7 +2,7 @@ import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { AuthApiService } from '../core/api/auth.api';
 
 @Component({
   selector: 'app-login',
@@ -43,7 +43,7 @@ export class LoginComponent implements OnInit {
   loading = false;
   error: string | null = null;
 
-  constructor(private fb: FormBuilder, private api: VertepApiService, private router: Router) {
+  constructor(private fb: FormBuilder, private auth: AuthApiService, private router: Router) {
     this.form = this.fb.group({
       login: ['', Validators.required],
       password: ['', Validators.required],
@@ -51,7 +51,7 @@ export class LoginComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    this.api.getSession().subscribe({
+    this.auth.getSession().subscribe({
       // Переходимо в панель лише за справжньої авторизованої сесії.
       next: (session) => { if (session.authenticated) this.router.navigate(['/']); },
       error: () => {},
@@ -62,7 +62,7 @@ export class LoginComponent implements OnInit {
     if (this.form.invalid) return;
     this.loading = true;
     this.error = null;
-    this.api.createSession(this.form.value).subscribe({
+    this.auth.createSession(this.form.value).subscribe({
       next: () => this.router.navigate(['/']),
       error: (err) => {
         this.error = err.message || 'Не вдалося увійти';

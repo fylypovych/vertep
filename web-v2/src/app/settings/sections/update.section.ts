@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { VertepApiService } from '../../core/api.service';
+import { SystemApiService } from '../../core/api/system.api';
 import { ToastService } from '../../core/services/toast.service';
 import { UpdateStatus, UpdateReadiness, RollingStatus } from '../../core/models';
 
@@ -72,32 +72,32 @@ export class UpdateSectionComponent implements OnInit {
   error = signal<string | null>(null);
   installing = signal(false);
 
-  constructor(private api: VertepApiService, private toast: ToastService) {}
+  constructor(private system: SystemApiService, private toast: ToastService) {}
 
   ngOnInit(): void { this.loadAll(); }
 
   loadAll(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getUpdateStatus().subscribe({
+    this.system.updateStatus().subscribe({
       next: (s) => { this.updateStatus.set(s); this.loading.set(false); this.loadReadiness(); this.loadRolling(); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
   }
 
-  loadReadiness(): void { this.api.getUpdateReadiness().subscribe({ next: (r) => this.readiness.set(r), error: () => {} }); }
-  loadRolling(): void { this.api.getRollingStatus().subscribe({ next: (s) => this.rollingStatus.set(s), error: () => {} }); }
+  loadReadiness(): void { this.system.readiness().subscribe({ next: (r) => this.readiness.set(r), error: () => {} }); }
+  loadRolling(): void { this.system.rollingStatus().subscribe({ next: (s) => this.rollingStatus.set(s), error: () => {} }); }
 
   installUpdate(): void {
     this.installing.set(true);
-    this.api.installUpdate().subscribe({
+    this.system.installUpdate().subscribe({
       next: () => { this.installing.set(false); this.loadAll(); },
       error: (err) => { this.error.set(err.message); this.installing.set(false); },
     });
   }
 
-  cancelRolling(): void { this.api.cancelRolling().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
-  promoteCanary(): void { this.api.promoteCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
-  rollbackCanary(): void { this.api.rollbackCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
-  recoverToNormal(): void { this.api.recoverToNormal().subscribe({ next: () => this.loadAll(), error: (err) => this.error.set(err.message) }); }
+  cancelRolling(): void { this.system.cancelRolling().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
+  promoteCanary(): void { this.system.promoteCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
+  rollbackCanary(): void { this.system.rollbackCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
+  recoverToNormal(): void { this.system.recoverToNormal().subscribe({ next: () => this.loadAll(), error: (err) => this.error.set(err.message) }); }
 }

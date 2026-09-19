@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import { Subscription, timer } from 'rxjs';
-import { VertepApiService } from '../core/api.service';
+import { WorkersApiService } from '../core/api/workers.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
@@ -11,12 +11,11 @@ import { roleLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
-import { EmptyStateComponent } from '../shared/empty-state.component';
 
 @Component({
   selector: 'app-workers',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
+  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-page">
       <div class="flex items-center justify-between mb-4">
@@ -205,7 +204,7 @@ export class WorkersComponent implements OnInit {
   private pollTimer: Subscription | null = null;
   private pollingInterval = 5000;
 
-  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
+  constructor(private workersApi: WorkersApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
   ngOnInit(): void {
     this.loadWorkers();
@@ -254,7 +253,7 @@ export class WorkersComponent implements OnInit {
   loadWorkers(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getWorkers().subscribe({
+    this.workersApi.list().subscribe({
       next: (workers) => { this.workers.set(workers); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
@@ -288,7 +287,7 @@ export class WorkersComponent implements OnInit {
   generateToken(): void {
     if (!this.wizard.role) return;
     this.creating = true;
-    this.api.createRegistrationToken(this.wizard.role).subscribe({
+    this.workersApi.generateToken(this.wizard.role).subscribe({
       next: (token) => {
         this.tokenResult.set(token);
         this.creating = false;
@@ -312,7 +311,7 @@ export class WorkersComponent implements OnInit {
     let attempts = 0;
     const interval = setInterval(() => {
       attempts++;
-      this.api.getNodes().subscribe({
+        this.workersApi.nodes().subscribe({
         next: (nodes) => {
           const found = nodes.find(n => !this.knownNodeIds.has(n.node_id) && n.role === token.role);
           if (found?.certificate_serial && found.status === 'SELF_TESTING') {
@@ -355,7 +354,7 @@ export class WorkersComponent implements OnInit {
   applyAction(): void {
     if (!this.selectedWorker || !this.workerAction) return;
     this.actioning = true;
-    this.api.workerAction(this.selectedWorker.node_id, { action: this.workerAction as NodeActionPayload['action'] }).subscribe({
+    this.workersApi.action(this.selectedWorker.node_id, { action: this.workerAction as NodeActionPayload['action'] }).subscribe({
       next: () => {
         this.showSettings = false;
         this.loadWorkers();
@@ -372,7 +371,7 @@ export class WorkersComponent implements OnInit {
   deleteWorker(worker: Worker): void {
     this.confirm.confirm({ title: 'Видалити вузол', message: `Ви впевнені, що хочете відкликати ${worker.node_name}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.revokeNode(worker.node_id).subscribe({
+      this.workersApi.revoke(worker.node_id).subscribe({
         next: () => {
           this.loadWorkers();
           this.toast.show('Вузол відкликано', 'success');

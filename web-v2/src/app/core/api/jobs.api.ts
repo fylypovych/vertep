@@ -88,4 +88,40 @@ export class JobsApiService {
   queueState(): Observable<QueueState> {
     return this.http.get<QueueState>(`${this.base.url}/tasks/queue`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
+  approveStoryboard(jobId: string, version: number, imageVersion?: number): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/storyboards/approve`, { version, image_version: imageVersion, actor: 'web-v2' }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  rejectStoryboard(jobId: string, version: number): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/storyboards/reject`, { version, actor: 'web-v2' }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  regenerateStoryboard(jobId: string, version: number, revision?: string): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/storyboards/regenerate`, { version, actor: 'web-v2', revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  approveImageStoryboard(jobId: string, version: number, imageVersion?: number): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/storyboards/images/approve`, { version, image_version: imageVersion, actor: 'web-v2' }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  revisionImageStoryboard(jobId: string, version: number, opts: { scene_indexes?: number[]; revision?: string; image_version?: number } = {}): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/storyboards/images/revision`, { version, image_version: opts.image_version, actor: 'web-v2', scene_indexes: opts.scene_indexes, revision: opts.revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  regenerateImageStoryboard(jobId: string, version: number, revision?: string, imageVersion?: number): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/storyboards/images/regenerate`, { version, image_version: imageVersion, actor: 'web-v2', revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  approveScript(jobId: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/script/approve`, { actor }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  requestScriptRevision(jobId: string, revision: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/script/revision`, { actor, revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  regenerateScript(jobId: string, revision?: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/script/regenerate`, { actor, revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  approveVideo(jobId: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/video/approve`, { actor }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  requestVideoRevision(jobId: string, revision: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/video/revision`, { actor, revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  regenerateVideo(jobId: string): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/video/regenerate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
 }

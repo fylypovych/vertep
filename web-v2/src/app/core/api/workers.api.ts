@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
-import { Worker, NodeDetail, RegistrationTokenResponse, NodeActionPayload, NodeRegisterResponse, NodeActionResponse, NodeRevokeResponse, WorkersHealthResponse, NodeSystemStatusResponse } from '../models';
+import { Worker, NodeDetail, RegistrationTokenResponse, NodeActionPayload, NodeRegisterResponse, NodeActionResponse, NodeRevokeResponse, WorkersHealthResponse, NodeSystemStatusResponse, SystemRolesResponse, RolesUpdateResponse } from '../models';
 
 @Injectable()
 export class WorkersApiService {
@@ -36,5 +36,14 @@ export class WorkersApiService {
   }
   renew(nodeId: string, csr: string): Observable<NodeRegisterResponse> {
     return this.http.post<NodeRegisterResponse>(`${this.base.url}/nodes/${this.base.enc(nodeId)}/renew`, { csr }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  nodes(): Observable<Worker[]> {
+    return this.http.get<Worker[]>(`${this.base.url}/nodes`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  systemRoles(): Observable<SystemRolesResponse> {
+    return this.http.get<SystemRolesResponse>(`${this.base.url}/system/roles`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+  updateSystemRoles(roles: string[]): Observable<RolesUpdateResponse> {
+    return this.http.post<RolesUpdateResponse>(`${this.base.url}/system/roles`, { roles }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
 }

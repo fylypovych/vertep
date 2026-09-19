@@ -1,6 +1,6 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { VertepApiService } from '../../core/api.service';
+import { SettingsApiService } from '../../core/api/settings.api';
 import { IntegrationStatus } from '../../core/models';
 
 @Component({
@@ -53,11 +53,11 @@ export class IntegrationsSectionComponent implements OnInit {
   loading = signal(false);
   error = signal<string | null>(null);
 
-  constructor(private api: VertepApiService) {}
+  constructor(private settings: SettingsApiService) {}
 
   ngOnInit(): void {
     this.loading.set(true);
-    this.api.getIntegrations().subscribe({
+    this.settings.integrations().subscribe({
       next: (data) => { this.integrations.set(data as unknown as IntegrationStatus); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });

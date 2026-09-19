@@ -1,5 +1,11 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.97
+- Issue #79: Міграція web-v2 з VertepApiService на domain clients — 8 нових сервісів (AuthApiService, LogsApiService, SettingsApiService, SecurityApiService, SystemApiService, WorkersApiService, JobsApiService, ResourcesApiService + QueueApiService).
+- Видалено `VertepApiService` (facade ~618 рядків), main bundle: 223 kB → 205 kB.
+- Мігровано 28 компонентів: login, profile, header, setup, auth.guard, admin.guard, logs, secrets, integrations, telegram, models, security, update, dashboard, health, sidebar, system-info, roles, workflows, branding, published, jobs, job-detail, workers, worker-detail, characters, character-detail, brands, brand-channels.
+- Додано Tab focus trap у ConfirmDialog.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.96
 - i.0.0.0.87 Task 2: Fault-injection coverage — disk-full/fsync, drain timeout, signed immutable downgrade rejection, missing root metadata, rollback invocation, rollback-on-failure tests.
 - i.0.0.0.97 Task 2: POSIX durability — _save_offset_data atomic write (temp+fsync+rename) tests; offset-before-processing idempotency test; restart-from-saved-offset test.

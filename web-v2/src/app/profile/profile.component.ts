@@ -2,7 +2,7 @@ import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { AuthApiService } from '../core/api/auth.api';
 import { ToastService } from '../core/services/toast.service';
 import { PolicyService } from '../core/services/policy.service';
 import { UserProfile, ChangePasswordRequest } from '../core/models';
@@ -86,7 +86,7 @@ export class ProfileComponent implements OnInit {
 
   constructor(
     private fb: FormBuilder,
-    private api: VertepApiService,
+    private auth: AuthApiService,
     private toast: ToastService,
     private policy: PolicyService,
     private router: Router
@@ -104,7 +104,7 @@ export class ProfileComponent implements OnInit {
   }
 
   private loadProfile(): void {
-    this.api.getUserProfile().subscribe({
+    this.auth.getUserProfile().subscribe({
       next: (p) => this.profile.set(p),
       error: () => this.toast.show('Не вдалося завантажити профіль', 'error'),
     });
@@ -123,7 +123,7 @@ export class ProfileComponent implements OnInit {
       old_password: this.passwordForm.value.old_password,
       new_password: this.passwordForm.value.new_password,
     };
-    this.api.changePassword(payload).subscribe({
+    this.auth.changePassword(payload).subscribe({
       next: () => {
         this.toast.show('Пароль успішно змінено', 'success');
         this.passwordForm.reset();

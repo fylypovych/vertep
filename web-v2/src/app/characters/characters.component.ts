@@ -2,18 +2,17 @@ import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
-import { VertepApiService } from '../core/api.service';
+import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { Character, CharacterForm } from '../core/models';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
-import { EmptyStateComponent } from '../shared/empty-state.component';
 
 @Component({
   selector: 'app-characters',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
+  imports: [CommonModule, FormsModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="characters-page">
       <div class="flex items-center justify-between mb-4">
@@ -226,7 +225,7 @@ export class CharactersComponent implements OnInit {
   page = 1;
   pageSize = 10;
 
-  constructor(private api: VertepApiService, private toast: ToastService, private confirm: ConfirmService) {}
+  constructor(private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService) {}
 
   ngOnInit(): void {
     this.loadCharacters();
@@ -253,7 +252,7 @@ export class CharactersComponent implements OnInit {
   loadCharacters(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.getCharacters().subscribe({
+    this.resources.characters().subscribe({
       next: (characters) => {
         this.characters = characters.map(c => ({
           ...c,
@@ -328,8 +327,8 @@ export class CharactersComponent implements OnInit {
     };
 
     const request = this.editingId
-      ? this.api.updateCharacter(this.editingId, payload)
-      : this.api.createCharacter(payload);
+      ? this.resources.updateCharacter(this.editingId, payload)
+      : this.resources.createCharacter(payload);
 
     request.subscribe({
       next: () => {
@@ -348,7 +347,7 @@ export class CharactersComponent implements OnInit {
   deleteCharacter(id: string): void {
     this.confirm.confirm({ title: 'Видалити персонажа', message: `Ви впевнені, що хочете видалити ${id}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.api.deleteCharacter(id).subscribe({
+      this.resources.deleteCharacter(id).subscribe({
         next: () => {
           this.loadCharacters();
           this.toast.show('Персонаж видалено', 'success');
