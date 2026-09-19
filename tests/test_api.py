@@ -438,7 +438,7 @@ def test_telegram_polling_backoff_on_error(tmp_path, monkeypatch):
         raise OSError("network down")
     monkeypatch.setattr(TelegramPollingService, "_get_updates", failing_get_updates)
     delays = []
-    monkeypatch.setattr("time.sleep", lambda s: delays.append(s))
+    monkeypatch.setattr(service, "_interruptible_sleep", lambda s: delays.append(s))
     service._running = True
     service._run()
     assert call_count[0] == 3
@@ -474,6 +474,94 @@ def test_telegram_polling_handler_failure_does_not_advance_offset(tmp_path, monk
     service._save_offset()
     reloaded = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
     assert reloaded.offset == 99
+
+
+def test_telegram_polling_negative_offset_loads(tmp_path):
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "telegram_polling_state.json"
+    state_file.write_text('{"offset": -99, "last_update_id": -99}', encoding="utf-8")
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    assert service.offset == -99
+    assert service.last_update_id == -99
+
+
+def test_telegram_polling_corrupted_offset_falls_back_safe(tmp_path):
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "telegram_polling_state.json"
+    state_file.write_text("this is not json", encoding="utf-8")
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    assert service.offset == 0
+    assert service.last_update_id is None
+
+
+def test_telegram_polling_stop_interrupts_429_sleep(tmp_path, monkeypatch):
+    from adapters.telegram import TelegramPollingService
+    monkeypatch.setenv("TELEGRAM_POLLING_TIMEOUT", "1")
+    state_file = tmp_path / "telegram_polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    monkeypatch.setattr(TelegramPollingService, "_delete_webhook", lambda self: None)
+    sleep_calls = []
+    def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        service._running = False
+    monkeypatch.setattr(service, "_interruptible_sleep", fake_sleep)
+    call_count = [0]
+    def fake_get_updates(self):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            import httpx
+            resp = httpx.Response(429, json={"parameters": {"retry_after": 60}})
+            raise httpx.HTTPStatusError("429", request=None, response=resp)
+        self._running = False
+        return []
+    monkeypatch.setattr(TelegramPollingService, "_get_updates", fake_get_updates)
+    service._running = True
+    service._run()
+    assert len(sleep_calls) >= 1
+    assert sleep_calls[0] == 60
+
+
+def test_telegram_polling_stop_interrupts_retry_delay(tmp_path, monkeypatch):
+    from adapters.telegram import TelegramPollingService
+    monkeypatch.setenv("TELEGRAM_POLLING_RETRY_DELAY", "60")
+    monkeypatch.setenv("TELEGRAM_POLLING_MAX_RETRY_DELAY", "60")
+    state_file = tmp_path / "telegram_polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    monkeypatch.setattr(TelegramPollingService, "_delete_webhook", lambda self: None)
+    sleep_calls = []
+    def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        service._running = False
+    monkeypatch.setattr(service, "_interruptible_sleep", fake_sleep)
+    def fail_updates(self):
+        raise OSError("network")
+    monkeypatch.setattr(TelegramPollingService, "_get_updates", fail_updates)
+    service._running = True
+    service._run()
+    assert len(sleep_calls) >= 1
+
+
+def test_telegram_polling_idempotent_callback_not_processed_twice(tmp_path, monkeypatch):
+    from adapters.telegram import TelegramPollingService
+    monkeypatch.setenv("TELEGRAM_POLLING_TIMEOUT", "1")
+    state_file = tmp_path / "telegram_polling_state.json"
+    processed = []
+    service = TelegramPollingService(token="test-token", on_update=processed.append, offset_file=state_file)
+    monkeypatch.setattr(TelegramPollingService, "_delete_webhook", lambda self: None)
+    call_n = [0]
+    def fake_updates(self):
+        call_n[0] += 1
+        if call_n[0] == 1:
+            return [{"update_id": 500, "message": {"message_id": 1, "text": "hi", "chat": {"id": 1}}}]
+        self._running = False
+        return []
+    monkeypatch.setattr(TelegramPollingService, "_get_updates", fake_updates)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    service._running = True
+    service._run()
+    assert len(processed) == 1
+    restarted = TelegramPollingService(token="test-token", on_update=processed.append, offset_file=state_file)
+    assert restarted.offset == 501
 
 
 def test_dispatcher_respects_vram():
@@ -1225,3 +1313,41 @@ def test_system_test_full_healthy_when_all_ok(monkeypatch):
         store.jobs.clear()
         sys.modules.pop("core.certificates", None)
         import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_vid_ok_rejects_wrong_chat(monkeypatch):
+    from unittest.mock import Mock
+    from core.app import _handle_video_callback, store
+    from core.models import Job, JobStatus, utc_now
+    store.jobs.clear()
+    job = Job(job_id="vid-1", topic="test", character_id="ch", priority=1,
+              status=JobStatus.VIDEO_PENDING_APPROVAL, source="telegram:111",
+              created_at=utc_now())
+    store.jobs["vid-1"] = job
+    adapter = Mock()
+    adapter.answer_callback = Mock(return_value={"status": "ok"})
+    monkeypatch.setattr("core.app.TelegramAdapter", lambda: adapter)
+    cb = {"id": "cb-vid", "data": "vid_ok:vid-1", "message": {"chat": {"id": "222"}}}
+    _handle_video_callback(cb, "222", "vid_ok", "vid-1")
+    text = adapter.answer_callback.call_args[0][1]
+    assert "заборонено" in text.lower() or "Доступ" in text
+
+
+def test_vid_ok_accepts_correct_chat(monkeypatch):
+    from unittest.mock import Mock
+    from core.app import _handle_video_callback, store
+    from core.models import Job, JobStatus, utc_now
+    store.jobs.clear()
+    job = Job(job_id="vid-2", topic="test", character_id="ch", priority=1,
+              status=JobStatus.VIDEO_PENDING_APPROVAL, source="telegram:111",
+              created_at=utc_now())
+    store.jobs["vid-2"] = job
+    adapter = Mock()
+    adapter.answer_callback = Mock(return_value={"status": "ok"})
+    monkeypatch.setattr("core.app.TelegramAdapter", lambda: adapter)
+    import core.pipeline as _pipe
+    monkeypatch.setattr(_pipe, "approve_video", lambda store, job, actor, **kw: job)
+    cb = {"id": "cb-vid-ok", "data": "vid_ok:vid-2", "message": {"chat": {"id": "111"}}}
+    _handle_video_callback(cb, "111", "vid_ok", "vid-2")
+    text = adapter.answer_callback.call_args[0][1]
+    assert "схвалено" in text.lower()

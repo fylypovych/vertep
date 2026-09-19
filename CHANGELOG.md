@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.95
+- i.0.0.0.97 Task 1: vid_ok actor verification — video approval/rejection перевіряє chat_id проти job.source; чужий chat отримує "Доступ заборонено".
+- i.0.0.0.97 Task 2: Polling durability — `_interruptible_sleep` для 429/retry delays переривається `stop()`; negative offset, corrupted file fallback, idempotent callback test coverage.
+- Тести: 7 нових тестів (polling negative offset, corrupted file, interruptible 429, interruptible retry, idempotent callback, vid_ok wrong chat, vid_ok correct chat).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.94
 - Issue #94: Виправлено system_test endpoint — переход на Job.scenes замість job.get('plan') для Pydantic Job (0.0.1.94)
 - Issue #94: Вирівнювання результату full self-test з фактичними провайдер/сертифікат/storage/task-failures (empty inventory та failed tasks → UNHEALTHY)

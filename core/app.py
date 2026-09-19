@@ -1559,6 +1559,9 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
     job = store.jobs.get(job_id)
     if not job:
         return TelegramAdapter().answer_callback(callback_id, "Job не знайдено")
+    if job.source and not job.source.endswith(":" + chat_id):
+        if action in {"vid_ok", "vid_reject"}:
+            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: chat не є власником job")
     from .pipeline import approve_video, request_video_revision
     try:
         if action == "vid_ok":

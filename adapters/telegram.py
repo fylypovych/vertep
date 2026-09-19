@@ -200,6 +200,15 @@ class TelegramPollingService:
         with self._lock:
             return self._running
 
+    def _interruptible_sleep(self, seconds: float) -> None:
+        """Sleep that wakes up promptly when stop() is called."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self._running:
+                    return
+            time.sleep(min(0.5, deadline - time.monotonic()))
+
     def _run(self) -> None:
         try:
             self._delete_webhook()
@@ -237,7 +246,7 @@ class TelegramPollingService:
                         pass
                     logger.warning("Telegram rate limited (429), sleeping %ds", retry_after)
                     self.last_error = f"429 rate limited, retry_after={retry_after}s"
-                    time.sleep(retry_after)
+                    self._interruptible_sleep(retry_after)
                     continue
                 self.last_error = str(error)
                 logger.error("Telegram polling HTTP error: %s", error)
@@ -256,7 +265,7 @@ class TelegramPollingService:
             )
             self._consecutive_failures = min(self._consecutive_failures + 1, 10)
             logger.warning("Telegram polling retrying in %ds (attempt %d)", delay, self._consecutive_failures)
-            time.sleep(delay)
+            self._interruptible_sleep(delay)
 
         logger.info("Telegram polling stopped")
 
