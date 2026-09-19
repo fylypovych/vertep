@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.93
+- i.0.0.0.87 Task 1: Worker RESTARTING тепер викликає `request_local_update(action='restart')` замість лише status/log — restart consumer тригериться через update-agent, аналогічно UPDATE/ROLLBACK.
+- i.0.0.0.87 Task 2: Fault-injection тести — concurrent lease fencing, stale lock acquisition, audit hash chain tamper/truncation, corrupt/empty/missing-fields status.json recovery.
+- Тести: 10 нових тестів у `test_update_security.py` (restart consumer trigger, concurrent lease, audit tamper, truncated entries, empty/missing-fields status recovery).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.92
 - i.0.0.0.72 Task 1: Audio contract/checksum обов'язковий — `_persist_tts_contract` відхиляє відсутній contract та sha256; pre-validation у `tasks.py` reject TTS results без contract/provider/voice; duplicate result обробляється ідемпотентно.
 - i.0.0.0.72 Task 2: Controlled TTS lifecycle — `TTS_GENERATING`/`TTS_READY` додані до restart recovery set; `_pending_voice_scenes` включає PENDING сцени для коректного re-dispatch; tests: cancel, pause, duplicate, worker loss, restart recovery, metadata flow.

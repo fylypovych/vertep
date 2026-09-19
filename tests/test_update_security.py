@@ -317,3 +317,111 @@ def test_recover_if_interrupted_unreadable_status_no_evidence(tmp_path, monkeypa
     (tmp_path / "status.json").write_bytes(b"not json")
     agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
     assert (tmp_path / "status.json").read_bytes() == b"not json"
+
+
+# ── Worker restart consumer trigger ────────────────────────────────────────
+
+
+def test_worker_restart_triggers_local_update(tmp_path, monkeypatch):
+    """When CORE sets desired_state=RESTARTING, Worker must call request_local_update(action='restart')."""
+    source = (Path(__file__).parents[1] / "worker" / "service.py").read_text(encoding="utf-8")
+    assert 'request_local_update(update_target or "current", action="restart")' in source
+
+
+def test_worker_restart_action_matches_update_agent_handler():
+    """update-agent.py must handle action='restart' with restart-runtime."""
+    agent_source = (Path(__file__).parents[1] / "scripts" / "update-agent.py").read_text(encoding="utf-8")
+    assert '"restart"' in agent_source
+    assert "restart-runtime" in agent_source
+    assert 'action == "restart"' in agent_source
+
+
+# ── Fault-injection: concurrent update requests ────────────────────────────
+
+
+def test_update_lease_prevents_concurrent_agents(tmp_path):
+    """Two UpdateLease contexts cannot overlap for the same state dir."""
+    with UpdateLease(tmp_path, "agent-1"):
+        with pytest.raises(RuntimeError, match="holds the update lease"):
+            with UpdateLease(tmp_path, "agent-2"):
+                pass
+    # After first releases, third can acquire
+    with UpdateLease(tmp_path, "agent-3"):
+        pass
+
+
+def test_update_lease_stale_lock_acquired_after_timeout(tmp_path):
+    """A stale lock with expired TTL can be forcefully acquired."""
+    import time as _time
+    lock_path = tmp_path / "update.lock"
+    stale_lock = {"operation_id": "stale-agent", "acquired_at": (_time.time() - 7200),
+                  "ttl_seconds": 3600, "fence_epoch": 0}
+    lock_path.write_text(json.dumps(stale_lock), encoding="utf-8")
+    with UpdateLease(tmp_path, "new-agent") as lease:
+        assert lease.operation_id == "new-agent"
+
+
+# ── Fault-injection: corrupt audit chain ───────────────────────────────────
+
+
+def test_audit_log_tamper_detected_on_append(tmp_path):
+    """Tampering with a prior audit entry breaks the hash chain."""
+    agent = _load_agent()
+    agent.append_audit(tmp_path, {"operation_id": "x", "phase": "CHECKING"})
+    agent.append_audit(tmp_path, {"operation_id": "x", "phase": "UPDATING"})
+    lines = (tmp_path / "audit.jsonl").read_text().strip().split("\n")
+    entries = [json.loads(line) for line in lines]
+    # Tamper with first entry's phase
+    entries[0]["phase"] = "TAMPERED"
+    (tmp_path / "audit.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="hash chain"):
+        agent.append_audit(tmp_path, {"operation_id": "x", "phase": "NORMAL"})
+
+
+def test_audit_log_detects_truncated_entries(tmp_path):
+    """Truncated or missing entries in audit log are detected."""
+    agent = _load_agent()
+    agent.append_audit(tmp_path, {"operation_id": "y", "phase": "CHECKING"})
+    # Write a truncated line
+    with open(tmp_path / "audit.jsonl", "a", encoding="utf-8") as f:
+        f.write('{"operation_id":"y","phase":"U')
+    with pytest.raises((RuntimeError, json.JSONDecodeError)):
+        agent.append_audit(tmp_path, {"operation_id": "y", "phase": "NORMAL"})
+
+
+# ── Fault-injection: status.json corruption ────────────────────────────────
+
+
+def test_recover_handles_empty_status_json(tmp_path, monkeypatch):
+    """Empty status.json should be handled gracefully during recovery."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    (tmp_path / "status.json").write_text("{}", encoding="utf-8")
+    agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert status.get("phase") in {"NORMAL", "RECOVERING", None}
+
+
+def test_recover_handles_status_with_missing_fields(tmp_path, monkeypatch):
+    """Status.json missing required fields should not crash recovery."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    (tmp_path / "status.json").write_text(
+        json.dumps({"state": "RUNNING"}), encoding="utf-8")
+    agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
+    # Should not raise; status may be updated or left as-is
+    assert (tmp_path / "status.json").exists()
+
+
+def test_recover_preserves_existing正常的_status(tmp_path, monkeypatch):
+    """A NORMAL status without evidence should not be overwritten."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    normal_status = {"state": "IDLE", "phase": "NORMAL", "progress": 100,
+                     "message": "All good", "updated_at": "2026-01-01T00:00:00Z"}
+    (tmp_path / "status.json").write_text(
+        json.dumps(normal_status), encoding="utf-8")
+    agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert status["phase"] == "NORMAL"

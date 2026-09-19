@@ -414,11 +414,8 @@ def main() -> None:
                     request_local_update(rollback_target or "previous", action="rollback")
                     payload["status"] = "UPDATING"
                 if desired_state == "RESTARTING" and future is None:
-                    # Trigger local restart via systemd or process manager
+                    request_local_update(update_target or "current", action="restart")
                     payload["status"] = "UPDATING"
-                    # The actual restart is handled by the host update agent via systemd
-                    # Worker just signals readiness for restart
-                    logger.info("Restart requested by CORE", extra={"node_name": payload["node_name"]})
                 if update_target and future is None:
                     request_local_update(update_target)
                     desired_state = "UPDATING"
