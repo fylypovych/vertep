@@ -84,6 +84,7 @@ class JobStore:
                     self.repository.save_job(job)
                 elif original_status in {JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_READY,
                                           JobStatus.ASSET_GENERATION, JobStatus.ASSETS_READY,
+                                          JobStatus.TTS_GENERATING, JobStatus.TTS_READY,
                                           JobStatus.VIDEO_GENERATION, JobStatus.VIDEO_READY,
                                           JobStatus.ASSEMBLY}:
                     recover_after_restart(job)

@@ -155,11 +155,12 @@ def _persist_tts_contract(store, job, scene, result, audio_path, data, contract)
     is rejected.
     """
     if not isinstance(contract, dict):
-        return []
+        raise ValueError("Audio contract is missing or not a dict")
     expected = contract.get("sha256")
-    if expected:
-        if not isinstance(expected, str) or expected != hashlib.sha256(data).hexdigest():
-            raise ValueError("Audio contract sha256 does not match artifact payload")
+    if not expected:
+        raise ValueError("Audio contract must declare sha256")
+    if not isinstance(expected, str) or expected != hashlib.sha256(data).hexdigest():
+        raise ValueError("Audio contract sha256 does not match artifact payload")
     if not contract.get("provider") or not contract.get("voice"):
         raise ValueError("Audio contract must declare provider and voice")
     contract_path = audio_path.with_suffix(".contract.json")
@@ -635,7 +636,8 @@ def _pending_voice_scenes(job) -> list[SceneRecord]:
     initialize_plan(job)
     tts_scene_ids = set(job.tts_active_task_ids.values())
     return [scene for scene in job.scenes
-            if scene.status == StageStatus.READY and scene.scene_id not in tts_scene_ids and scene.voiceover]
+            if scene.status in {StageStatus.READY, StageStatus.PENDING}
+            and scene.scene_id not in tts_scene_ids and scene.voiceover]
 
 
 def _character_voice_enabled(job) -> bool:

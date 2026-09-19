@@ -464,6 +464,8 @@ def task_result(result: TaskResult, request: Request):
                 temporary.unlink(missing_ok=True)
             raise HTTPException(500, "Could not persist audio artifacts") from error
         for audio_path, data, contract in prepared_images:
+            if not isinstance(contract, dict) or not contract.get("sha256") or not contract.get("provider") or not contract.get("voice"):
+                raise HTTPException(400, "Audio artifact is missing a valid contract (sha256, provider, voice)")
             saved_artifacts.append(register_artifact(job, store.root, audio_path, "audio",
                                                      scene_id=scene.scene_id, task_id=result.task_id,
                                                      node_name=result.node_name, workflow=job.workflow))
@@ -491,10 +493,6 @@ def task_result(result: TaskResult, request: Request):
                 return store.update(job, terminal, "VOICE TASK COMPLETED")
         return store.event(job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
     if result.task_id in job.completed_task_ids:
-        completed_scene = next((item for item in job.scenes if item.task_id == result.task_id), None)
-        owner = completed_scene.attempts[-1].node_name if completed_scene and completed_scene.attempts else None
-        if owner != result.node_name:
-            raise HTTPException(409, "Completed task belongs to another worker")
         return job
     scene = _scene_for_task(job, result.task_id)
     if not scene:

@@ -1,5 +1,10 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.92
+- i.0.0.0.72 Task 1: Audio contract/checksum обов'язковий — `_persist_tts_contract` відхиляє відсутній contract та sha256; pre-validation у `tasks.py` reject TTS results без contract/provider/voice; duplicate result обробляється ідемпотентно.
+- i.0.0.0.72 Task 2: Controlled TTS lifecycle — `TTS_GENERATING`/`TTS_READY` додані до restart recovery set; `_pending_voice_scenes` включає PENDING сцени для коректного re-dispatch; tests: cancel, pause, duplicate, worker loss, restart recovery, metadata flow.
+- Тести: 15 acceptance-тестів (`test_voice_acceptance.py`), оновлено generation gate allowlist та `test_features.py` для контракту.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.90
 - i.0.0.0.70: CORE isolation — вилучено LOCAL_WORKER_FALLBACK paths для Text/Storyboard/Publisher.
 - Замінено дефолти LOCAL_WORKER_FALLBACK: `"true"` → `"false"` в job_helpers.py (3 місця), jobs.py (publish endpoint), storyboard.py.

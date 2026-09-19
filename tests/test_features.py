@@ -727,9 +727,16 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     _w.setnchannels(1); _w.setsampwidth(2); _w.setframerate(44100)
     _w.writeframes(b"".join(_struct.pack("<h", int(12000 * _math.sin(2 * _math.pi * 440 * i / 44100))) for i in range(44100))); _w.close()
     wav = _buf.getvalue()
+    import hashlib as _hashlib
+    contract = {"format": "audio_contract/v1", "provider": "none", "voice": "default",
+                "language": "uk", "model": None, "engine": None, "mime_type": "audio/wav",
+                "size": len(wav), "sha256": _hashlib.sha256(wav).hexdigest(),
+                "text_sha256": _hashlib.sha256(b"TTS pipeline test").hexdigest(),
+                "duration": None, "scene_id": None, "character_id": None}
     tts_result = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": tts_task["task_id"],
                                  "node_name": "voice-worker", "success": True,
-                                 "artifacts": [{"filename": "speech.wav", "data_base64": base64.b64encode(wav).decode()}]})
+                                 "artifacts": [{"filename": "speech.wav", "data_base64": base64.b64encode(wav).decode(),
+                                                "contract": contract}]})
     assert tts_result.status_code == 200
     completed = wait_for(client, job_id)
     assert completed["status"] == "READY"
