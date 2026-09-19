@@ -10,7 +10,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-roles',
   standalone: true,
   imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
-  template: `
+  /* template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-roles">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">���? � ���������?</h3>
       @if (loading()) {
@@ -41,7 +41,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         </button>
       }
     </div>
-  `,
+  `, */
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-roles"><h3 class="text-lg font-semibold mb-4">Ролі вузла</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><pre *ngIf="rolesResponse" class="text-xs bg-slate-50 p-3 rounded overflow-auto">{{ rolesResponse | json }}</pre></div>`,
 })
 export class RolesSectionComponent implements OnInit {
   allRoles: SystemRole[] = [];

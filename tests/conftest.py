@@ -76,9 +76,11 @@ def reset_in_process_api_state():
                 task_queue._sequence = 0
                 task_queue._generation = 0
         # Очищення стану Telegram
-        from core.app import _telegram_pending_brands, _telegram_pending_character
+        from core.app import (_telegram_pending_brands, _telegram_pending_character,
+                              _telegram_system_callbacks)
         _telegram_pending_brands.clear()
         _telegram_pending_character.clear()
+        _telegram_system_callbacks.clear()
         # Persistent monitor alerts must not leak between tests.
         from core.alert_store import reset_alert_store
         reset_alert_store()

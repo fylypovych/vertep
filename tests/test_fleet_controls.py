@@ -112,6 +112,43 @@ def test_restart_action_updates_desired_state(client):
     d = client.get("/api/nodes/rst-01").json()
     assert d["status"] == "UPDATING"
     assert d["update_state"].get("desired_state") == "RESTARTING"
+    assert d["update_state"].get("restart_operation_id")
+
+
+def test_restart_ack_requires_new_runtime_instance(client, monkeypatch):
+    _add_worker("rst-ack", runtime_instance_id="old-instance")
+    monkeypatch.setattr("core.api.workers._valid_worker_request", lambda *args: True)
+    _control(client, "rst-ack", "restart")
+
+    same = client.post("/api/workers/heartbeat", json={
+        "node_name": "rst-ack", "runtime_instance_id": "old-instance",
+        "status": "READY", "role": "gpu", "capabilities": ["image_generation"],
+        "self_test": {"status": "PASSED", "role": "gpu"},
+    })
+    assert same.status_code == 200
+    assert same.json()["desired_state"] == "RESTARTING"
+
+    restarted = client.post("/api/workers/heartbeat", json={
+        "node_name": "rst-ack", "runtime_instance_id": "new-instance",
+        "status": "READY", "role": "gpu", "capabilities": ["image_generation"],
+        "self_test": {"status": "PASSED", "role": "gpu"},
+    })
+    assert restarted.status_code == 200
+    detail = client.get("/api/nodes/rst-ack").json()
+    assert detail["status"] == "READY"
+    assert detail["update_state"]["desired_state"] is None
+    assert detail["update_state"]["restart_ack"]["runtime_instance_id"] == "new-instance"
+
+
+def test_restarting_worker_cannot_claim_new_tasks(client, monkeypatch):
+    _add_worker("rst-admission", desired_state="RESTARTING")
+    monkeypatch.setattr("core.api.tasks._valid_worker_request", lambda *args: True)
+    response = client.post("/api/tasks/claim", json={
+        "node_name": "rst-admission", "gpu_name": "demo", "vram_mb": 8192,
+        "capabilities": ["image_generation"],
+    })
+    assert response.status_code == 200
+    assert response.json() == {"task": None, "worker_state": "RESTARTING"}
 
 def test_update_action_updates_desired_state(client):
     _add_worker("upd-01")

@@ -9,7 +9,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-system-info',
   standalone: true,
   imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
-  template: `
+  /* template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">���⥬�</h3>
       @if (loading()) {
@@ -56,7 +56,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
           </div>
           <div>
             <span class="text-xs text-slate-500">���������</span>
-            <p class="text-sm font-medium text-slate-900>{{ status()?.update?.['update_available'] ? '����㯭�' : '�����' }}</p>
+            <p class="text-sm font-medium text-slate-900">{{ status()?.update?.['update_available'] ? 'Доступне' : 'Немає' }}</p>
           </div>
         </div>
         @if (backendsList.length) {
@@ -83,7 +83,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         }
       }
     </div>
-  `,
+  `, */
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info"><h3 class="text-lg font-semibold mb-4">Система</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="status()" class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="system-info"><p>Стан: {{ systemStateLabel }}</p><p>Версія: {{ status()?.version || '-' }}</p><p>CORE: {{ status()?.core || '-' }}</p><p>PostgreSQL: {{ status()?.postgres || '-' }}</p><p>Redis: {{ status()?.redis || '-' }}</p><p data-testid="status-update-current-version">Поточна: {{ status()?.update?.['current_version'] || '-' }}</p><p data-testid="status-update-available-version">Доступна: {{ status()?.update?.['available_version'] || '-' }}</p></div><table *ngIf="backendsList.length" class="w-full mt-4" data-testid="backends-table"><tbody><tr *ngFor="let entry of backendsList"><td>{{ entry[0] }}</td><td>{{ entry[1]?.['configured'] ? 'Так' : 'Ні' }}</td><td>{{ entry[1]?.['backend'] || '-' }}</td></tr></tbody></table></div>`,
 })
 export class SystemInfoSectionComponent implements OnInit {
   status = signal<SystemStatus | null>(null);

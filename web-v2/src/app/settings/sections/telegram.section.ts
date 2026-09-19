@@ -9,7 +9,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-telegram',
   standalone: true,
   imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
-  template: `
+  /* template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-telegram">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">Telegram</h3>
       @if (loading()) {
@@ -42,18 +42,19 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Admin chat IDs</span>
-            <span class="font-mono text-xs break-all>{{ tgStatus()!.admin_chat_ids || '-' }}</span>
+            <span class="font-mono text-xs break-all">{{ tgStatus()!.admin_chat_ids || '-' }}</span>
           </div>
           @if (tgBotInfo()) {
             <div class="flex justify-between py-2 border-b border-slate-100">
               <span class="text-slate-500">Bot info</span>
-              <span class="font-mono text-xs>{{ tgBotInfo()!['first_name'] || '-' }}</span>
+              <span class="font-mono text-xs">{{ tgBotInfo()!['first_name'] || '-' }}</span>
             </div>
           }
         }
       }
     </div>
-  `,
+  `, */
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-telegram"><h3 class="text-lg font-semibold mb-4">Telegram</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="tgStatus()" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm"><p>Статус: {{ tgStatus()!.configured ? 'Налаштовано' : 'Не налаштовано' }}</p><p>Bot username: {{ tgStatus()!.bot_username || '-' }}</p><p>Режим: {{ tgStatus()!.polling_enabled ? 'Polling' : 'Webhook' }}</p><p>Allowed chat IDs: {{ tgStatus()!.allowed_chat_ids || '-' }}</p><p>Admin chat IDs: {{ tgStatus()!.admin_chat_ids || '-' }}</p></div></div>`,
 })
 export class TelegramSectionComponent implements OnInit {
   tgStatus = signal<TelegramStatus | null>(null);

@@ -82,6 +82,22 @@ class TestUpdateOperation:
         all_callbacks = [b["callback_data"] for row in keyboard for b in row]
         assert "sys_update_check" in all_callbacks
 
+    def test_update_menu_offers_apply_when_version_is_available(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
+        monkeypatch.setattr(module, "_reconcile_update_operations", lambda: None)
+        monkeypatch.setattr(module, "update_status", lambda: {
+            "current_version": "0.0.1.1", "available_version": "0.0.1.2"})
+        cb = {"id": "cb-upd-available", "data": "sys_update:menu",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        keyboard = adapter.send_message.call_args[1]["reply_markup"]["inline_keyboard"]
+        callbacks = [button["callback_data"] for row in keyboard for button in row]
+        assert "sys_update_confirm" in callbacks
+
     def test_update_idempotency_blocks_duplicate(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
@@ -137,6 +153,35 @@ class TestUpdateOperation:
         ops = [c[0] for c in call_order]
         assert ops.index("get_or_create") < ops.index("request_update")
 
+    def test_update_result_reconciles_and_queues_delivery(self, monkeypatch, tmp_path):
+        module = importlib.import_module("core.app")
+        operations = importlib.import_module("core.operations")
+        monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+        op = operations.create_operation("update", "telegram:42", target="check")
+        operations.begin_operation(op["operation_id"], "Перевірка")
+        operations.link_operation_request(op["operation_id"], {
+            "request_id": "a" * 32, "action": "check"})
+        monkeypatch.setattr(module, "update_status", lambda: {
+            "request_id": "a" * 32, "state": "SUCCEEDED",
+            "message": "Update check completed", "available_version": "0.0.2.0"})
+        module._reconcile_update_operations()
+        finished = operations.get_operation(op["operation_id"])
+        assert finished["status"] == "COMPLETED"
+        notifications = operations.pending_notifications()
+        assert notifications[0]["chat_id"] == "42"
+        assert op["operation_id"][:8] in notifications[0]["message"]
+
+    def test_pending_delivery_is_acknowledged_only_after_send(self, monkeypatch, tmp_path):
+        module = importlib.import_module("core.app")
+        operations = importlib.import_module("core.operations")
+        monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+        operations.add_pending_notification("42", "done")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        module._deliver_pending_telegram_notifications()
+        adapter.send_message.assert_called_once_with("42", "done")
+        assert operations.pending_notifications() == []
+
 
 class TestRestartOperation:
     def test_restart_menu_shows_core_worker(self, monkeypatch):
@@ -181,9 +226,10 @@ class TestRestartOperation:
         def mock_call_api(method, path, payload=None, timeout=30):
             call_count["count"] += 1
             if path == "/api/system/restart":
-                return {"status": "restart_requested"}
+                return {"status": "restart_requested", "previous_runtime_instance_id": "core-old"}
             if path == "/api/health":
-                return {"status": "healthy"} if call_count["count"] > 1 else {"status": "starting"}
+                return ({"status": "healthy", "runtime_instance_id": "core-new"}
+                        if call_count["count"] > 1 else {"status": "starting"})
         monkeypatch.setattr(module, "_call_core_api", mock_call_api)
         import time
         monkeypatch.setattr(time, "sleep", lambda s: None)  # speed up test
@@ -205,8 +251,8 @@ class TestRestartOperation:
         monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
         def mock_call_api(method, path, payload=None, timeout=30):
             if path == "/api/health":
-                return {"status": "starting"}
-            return {"status": "restart_requested"}
+                return {"status": "healthy", "runtime_instance_id": "core-old"}
+            return {"status": "restart_requested", "previous_runtime_instance_id": "core-old"}
         monkeypatch.setattr(module, "_call_core_api", mock_call_api)
         import time
         monkeypatch.setattr(time, "sleep", lambda s: None)
@@ -231,9 +277,11 @@ class TestRestartOperation:
         def mock_call_api(method, path, payload=None, timeout=30):
             call_count["count"] += 1
             if path == "/api/nodes/gpu-01/actions":
-                return {"status": "restart_requested"}
+                return {"status": "restart_requested", "restart_operation_id": "restart-1"}
             if path == "/api/nodes/gpu-01":
-                return {"status": "READY"} if call_count["count"] > 1 else {"status": "UPDATING"}
+                return ({"status": "READY", "update_state": {
+                    "restart_ack": {"operation_id": "restart-1"}}}
+                        if call_count["count"] > 1 else {"status": "UPDATING"})
         monkeypatch.setattr(module, "_call_core_api", mock_call_api)
         import time
         monkeypatch.setattr(time, "sleep", lambda s: None)
@@ -255,8 +303,9 @@ class TestRestartOperation:
         monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
         def mock_call_api(method, path, payload=None, timeout=30):
             if path == "/api/nodes/gpu-01":
-                return {"status": "UPDATING"}
-            return {"status": "restart_requested"}
+                return {"status": "READY", "update_state": {
+                    "restart_ack": {"operation_id": "different-request"}}}
+            return {"status": "restart_requested", "restart_operation_id": "restart-1"}
         monkeypatch.setattr(module, "_call_core_api", mock_call_api)
         import time
         monkeypatch.setattr(time, "sleep", lambda s: None)
@@ -451,6 +500,23 @@ class TestIdempotency:
         monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
         monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
         module._telegram_system_callbacks.clear()
+
+    def test_duplicate_callback_dedup_survives_process_state_reset(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        module._telegram_system_callbacks.clear()
+        cb = {"id": "cb-durable-dedup", "data": "sys_cancel",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        # Recreate the facade as a process restart would; the on-disk claim remains.
+        from core.telegram_callbacks import DurableCallbackSet
+        module._telegram_system_callbacks = DurableCallbackSet()
+        adapter.reset_mock()
+        module._handle_telegram_callback(cb)
+        assert "вже оброблено" in adapter.answer_callback.call_args[0][1]
+        module._telegram_system_callbacks.clear()
         cb = {"id": "cb-dedup", "data": "sys_cancel",
               "message": {"chat": {"id": "42"}}}
         module._handle_telegram_callback(cb)
@@ -562,9 +628,11 @@ class TestRestartWorkerFlow:
         def mock_call_api(method, path, payload=None, timeout=30):
             call_count["count"] += 1
             if path == "/api/nodes/gpu-01/actions":
-                return {"status": "restart_requested"}
+                return {"status": "restart_requested", "restart_operation_id": "restart-2"}
             if path == "/api/nodes/gpu-01":
-                return {"status": "READY"} if call_count["count"] > 1 else {"status": "UPDATING"}
+                return ({"status": "READY", "update_state": {
+                    "restart_ack": {"operation_id": "restart-2"}}}
+                        if call_count["count"] > 1 else {"status": "UPDATING"})
         monkeypatch.setattr(module, '_call_core_api', mock_call_api)
         import time
         monkeypatch.setattr(time, 'sleep', lambda s: None)

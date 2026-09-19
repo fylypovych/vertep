@@ -13,6 +13,7 @@ from ..first_run import config_root
 from ..alert_store import get_alert_store
 from ..system_state import get_system_state
 from ..update_manager import update_status
+from ..runtime_identity import CORE_RUNTIME_INSTANCE_ID
 from .job_helpers import _job_is_due
 from .workers import workers
 
@@ -22,7 +23,9 @@ router = APIRouter()
 @router.get("/api/health")
 def health() -> dict:
     checks = _run_health_checks("core")
-    return {"status": _health_status(checks), "service": "core", "jobs": len(store.jobs), "checks": checks}
+    return {"status": _health_status(checks), "service": "core",
+            "runtime_instance_id": CORE_RUNTIME_INSTANCE_ID,
+            "jobs": len(store.jobs), "checks": checks}
 
 
 @router.get("/api/health/ready")
@@ -35,7 +38,9 @@ def health_ready():
     """
     checks = _run_health_checks("core")
     status = _health_status(checks)
-    payload = {"status": status, "service": "core", "jobs": len(store.jobs), "checks": checks}
+    payload = {"status": status, "service": "core",
+               "runtime_instance_id": CORE_RUNTIME_INSTANCE_ID,
+               "jobs": len(store.jobs), "checks": checks}
     response = Response(json.dumps(payload, ensure_ascii=False), media_type="application/json")
     if status != "HEALTHY":
         response.status_code = 503

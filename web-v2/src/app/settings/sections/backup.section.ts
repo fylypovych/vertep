@@ -45,13 +45,13 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
               <div>
                 <span class="text-sm font-medium text-slate-900">{{ backup.snapshot_id }}</span>
                 <span class="text-xs text-slate-500 ml-2">{{ backup.created_at | vertepDate }}</span>
-}
+              </div>
               <button (click)="confirmRestore(backup.snapshot_id)" [disabled]="restore.pending()" data-testid="backup-restore-button" class="text-xs text-blue-600 disabled:opacity-50">
                 {{ restore.pending() ? '�?���������...' : '�?������' }}
-</button>
+              </button>
             </div>
-</div>
-</div>
+          }
+        </div>
       }
     </div>
   `,

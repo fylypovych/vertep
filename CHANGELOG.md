@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.99
+- Issue #106: виправлено Telegram-доступ до callback за `chat_id`, захист від застарілих video callback та crash-safe збереження polling offset із `fsync` директорії.
+- Issue #106: системні Telegram callback, кореляцію update request/result і фінальну доставку результатів зроблено стійкими до повторів та перезапуску CORE.
+- Issue #106: CORE і Worker restart тепер підтверджуються зміною runtime instance та корельованим acknowledgement замість самого стану HEALTHY/READY.
+- Issue #106: заборонено видачу нових задач вузлам у перехідних станах restart, update, rollback, disable, revoke і self-test.
+- Issue #106: Full Self-Test отримав реальну write/fsync/delete перевірку сховища, інвентаризацію сертифікатів і правильний облік станів задач та недоступних провайдерів.
+- Issue #106: відновлено Angular routes і шаблони Web UI, виправлено endpoint інтеграцій у proxy-середовищі та повернуто успішну production-збірку.
+- Перевірено повний Python regression, update/security/fleet/recovery сценарії, Web UI contracts та Angular production build.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.97
 - Issue #79: Міграція web-v2 з VertepApiService на domain clients — 8 нових сервісів (AuthApiService, LogsApiService, SettingsApiService, SecurityApiService, SystemApiService, WorkersApiService, JobsApiService, ResourcesApiService + QueueApiService).
 - Видалено `VertepApiService` (facade ~618 рядків), main bundle: 223 kB → 205 kB.

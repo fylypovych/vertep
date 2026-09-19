@@ -59,13 +59,18 @@ from .telegram_store import (get_admin_chat_ids, get_allowed_chat_ids, is_allowe
 from .operations import (create_operation, get_operation, list_operations,
                          get_or_create_operation,
                          begin_operation, advance_operation, complete_operation, fail_operation,
-                         is_operation_in_progress, audit_entry, OperationStatus)
+                         is_operation_in_progress, audit_entry, OperationStatus,
+                         link_operation_request, add_pending_notification,
+                         pending_notifications, acknowledge_notification)
+from .telegram_callbacks import (DurableCallbackSet, claim_callback,
+                                 complete_callback)
 from .update_manager import request_update, update_status
 from .pipeline import regenerate_script
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
                             verify_node_token, write_node_crl)
 from .version import application_version
+from .runtime_identity import CORE_RUNTIME_INSTANCE_ID
 from .deployment_plan import create_plan
 from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
                              rollout_status, rollback_ready_nodes, start_rollout)
@@ -144,7 +149,7 @@ from .state import (store, executor, task_queue, logger, workflow_registry,
                     _telegram_pending_brands, _telegram_pending_character)
 last_maintenance = 0.0
 telegram_polling_service: TelegramPollingService | None = None
-_telegram_system_callbacks: set[str] = set()
+_telegram_system_callbacks = DurableCallbackSet()
 _telegram_system_restore: dict[str, dict] = {}
 
 
@@ -633,6 +638,7 @@ def _format_last_backup() -> str:
 
 
 def _system_status_text() -> str:
+    _reconcile_update_operations()
     state = get_system_state()
     update = {}
     try:
@@ -696,6 +702,49 @@ def _system_status_text() -> str:
         for op in operations:
             lines.append(f"  • {_format_operation(op)}")
     return "\n".join(lines)
+
+
+def _reconcile_update_operations() -> None:
+    """Correlate durable update-agent results with Telegram operations."""
+    try:
+        status = update_status() or {}
+    except Exception:
+        return
+    request_id = status.get("request_id")
+    state = str(status.get("state", "")).upper()
+    if not request_id or state not in {"SUCCEEDED", "FAILED", "ROLLED_BACK"}:
+        return
+    for operation in list_operations(200):
+        if (operation.get("type") != "update"
+                or operation.get("external_request_id") != request_id
+                or operation.get("status") not in {"QUEUED", "RUNNING"}):
+            continue
+        if state == "SUCCEEDED":
+            complete_operation(operation["operation_id"], status)
+            marker = "✅"
+        else:
+            fail_operation(operation["operation_id"], status.get("message") or state)
+            marker = "❌"
+        requested_by = str(operation.get("requested_by") or "")
+        if requested_by.startswith("telegram:"):
+            chat_id = requested_by.split(":", 1)[1]
+            add_pending_notification(
+                chat_id,
+                f"{marker} Операція оновлення #{operation['operation_id'][:8]} завершена: "
+                f"{status.get('message') or state}",
+            )
+
+
+def _deliver_pending_telegram_notifications() -> None:
+    """Retry final operation delivery after CORE/process restarts."""
+    adapter = TelegramAdapter()
+    for notification in pending_notifications():
+        try:
+            adapter.send_message(notification["chat_id"], notification["message"])
+        except Exception as error:
+            logger.warning("Telegram operation notification delivery failed: %s", error)
+            continue
+        acknowledge_notification(notification["notification_id"])
 
 
 def _send_confirmation(chat_id: str, message: str, confirm_data: str,
@@ -792,6 +841,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         return TelegramAdapter().answer_callback(callback_id, _system_status_text())
 
     if action == "sys_update":
+        _reconcile_update_operations()
         existing = is_operation_in_progress("update")
         if existing:
             return TelegramAdapter().answer_callback(
@@ -807,19 +857,23 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         message = f"🔄 Поточна версія: {current}\n"
         if available:
             message += f"Доступна: {available}\n\nОновити Vertep?"
+            confirm_action = "sys_update_confirm"
         else:
             message += "Доступних оновлень немає.\n\nПеревірети доступність оновлення?"
-        return _send_confirmation(chat_id, message, "sys_update_check", "sys_cancel")
+            confirm_action = "sys_update_check"
+        return _send_confirmation(chat_id, message, confirm_action, "sys_cancel")
 
     if action == "sys_update_check":
         try:
-            op, created = get_or_create_operation("update", f"telegram:{chat_id}")
+            op, created = get_or_create_operation("update", f"telegram:{chat_id}", target="check")
             if not created:
                 return TelegramAdapter().answer_callback(
                     callback_id, f"Перевірка оновлення вже в процесі (#{op['operation_id'][:8]})."
                 )
             audit_entry(op["operation_id"], "INTERNAL_CALL", "request_update check", f"telegram:{chat_id}")
-            request_update("check")
+            request = request_update("check")
+            if request:
+                link_operation_request(op["operation_id"], request)
             begin_operation(op["operation_id"], "Перевірка доступного оновлення")
             return TelegramAdapter().answer_callback(
                 callback_id,
@@ -830,13 +884,15 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
 
     if action == "sys_update_confirm":
         try:
-            op, created = get_or_create_operation("update", f"telegram:{chat_id}")
+            op, created = get_or_create_operation("update", f"telegram:{chat_id}", target="apply")
             if not created:
                 return TelegramAdapter().answer_callback(
                     callback_id, f"Оновлення вже в процесі (#{op['operation_id'][:8]})."
                 )
             audit_entry(op["operation_id"], "INTERNAL_CALL", "request_update update", f"telegram:{chat_id}")
-            request_update("update")
+            request = request_update("update")
+            if request:
+                link_operation_request(op["operation_id"], request)
             begin_operation(op["operation_id"], "Запит на оновлення прийнято")
             audit_entry(op["operation_id"], "RUNNING", "Update started via Telegram", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
@@ -888,12 +944,19 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                     callback_id, f"❌ Перезапуск CORE не вдався: {result['_error'][:200]}"
                 )
             advance_operation(op["operation_id"], "Очікування здоров'я CORE", 50, "Перезапуск ініційовано, очікуємо HEALTHY")
-            # Poll /api/health until healthy or timeout
+            previous_instance_id = (result or {}).get("previous_runtime_instance_id")
+            if not previous_instance_id:
+                fail_operation(op["operation_id"], "CORE restart response did not include process identity")
+                return TelegramAdapter().answer_callback(
+                    callback_id, "❌ Перезапуск CORE не підтверджено: API не повернув ідентифікатор процесу."
+                )
+            # A healthy response from the old process is not restart evidence.
             healthy = False
             for _ in range(30):  # up to 60 seconds
                 time.sleep(2)
                 health = _call_core_api("GET", "/api/health", timeout=5)
-                if health and health.get("status") == "healthy":
+                if (health and health.get("status") == "healthy"
+                        and health.get("runtime_instance_id") != previous_instance_id):
                     healthy = True
                     break
             if not healthy:
@@ -949,13 +1012,22 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск {node_id} не вдався: {result['_error'][:200]}"
                 )
-            advance_operation(op["operation_id"], f"Очікування READY {node_id}", 50, "Перезапуск ініційовано, очікуємо READY")
-            # Poll /api/nodes/{node_id} until status == READY or timeout
+            restart_operation_id = (result or {}).get("restart_operation_id")
+            if not restart_operation_id:
+                fail_operation(op["operation_id"], f"Worker {node_id} restart response has no operation id")
+                return TelegramAdapter().answer_callback(
+                    callback_id, f"❌ Перезапуск {node_id} не підтверджено: відсутній ID операції."
+                )
+            advance_operation(op["operation_id"], f"Очікування підтвердження {node_id}", 50,
+                              "Перезапуск ініційовано, очікуємо новий процес")
+            # READY alone is insufficient: require the acknowledgement tied to this request.
             ready = False
             for _ in range(30):  # up to 60 seconds
                 time.sleep(2)
                 node = _call_core_api("GET", f"/api/nodes/{node_id}", timeout=5)
-                if node and node.get("status") == "READY":
+                restart_ack = ((node or {}).get("update_state") or {}).get("restart_ack") or {}
+                if (node and node.get("status") == "READY"
+                        and restart_ack.get("operation_id") == restart_operation_id):
                     ready = True
                     break
             if not ready:
@@ -964,7 +1036,9 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск {node_id}: вузол не став READY за 60s. ID: {op['operation_id'][:8]}"
                 )
-            complete_operation(op["operation_id"], {"status": "ready", "node_id": node_id, "message": f"Worker {node_id} перезапущено успішно"})
+            complete_operation(op["operation_id"], {"status": "ready", "node_id": node_id,
+                                                       "restart_operation_id": restart_operation_id,
+                                                       "message": f"Worker {node_id} перезапущено успішно"})
             audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"Worker {node_id} READY", f"telegram:{chat_id}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ Вузол {node_id} перезапущено і READY. ID: {op['operation_id'][:8]}"
@@ -1266,12 +1340,19 @@ def _handle_telegram_callback(callback: dict) -> dict:
                   "sys_test_node_select", "sys_test_node_confirm", "sys_cancel"}:
         if not is_admin_chat(chat_id):
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
-        if callback_id and callback_id in _telegram_system_callbacks:
+        _record, claimed = claim_callback(
+            callback_id, actor=f"telegram:{chat_id}", action=action,
+            target=payload or None,
+        )
+        if not claimed:
             return TelegramAdapter().answer_callback(callback_id, "Операцію вже оброблено.")
-        _telegram_system_callbacks.add(callback_id)
-        if len(_telegram_system_callbacks) > 10000:
-            _telegram_system_callbacks.clear()
-        return _handle_system_callback(callback, chat_id, action, payload)
+        try:
+            result = _handle_system_callback(callback, chat_id, action, payload)
+        except Exception:
+            complete_callback(callback_id, status="FAILED")
+            raise
+        complete_callback(callback_id)
+        return result
 
     if action == "select_brand":
         return _handle_brand_selection(callback, chat_id, payload)
@@ -1559,7 +1640,9 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
     job = store.jobs.get(job_id)
     if not job:
         return TelegramAdapter().answer_callback(callback_id, "Job не знайдено")
-    if job.source and not job.source.endswith(":" + chat_id):
+    source_parts = str(job.source or "").split(":")
+    source_chat_id = source_parts[1] if len(source_parts) >= 2 and source_parts[0] == "telegram" else None
+    if source_chat_id is not None and source_chat_id != chat_id:
         if action in {"vid_ok", "vid_reject"}:
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: chat не є власником job")
     from .pipeline import approve_video, request_video_revision
@@ -1588,6 +1671,11 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
             executor.submit(_finalize_video_regenerate, job)
             text = "🔄 Перегенеровую відео…"
         elif action == "vid_reject":
+            if expected_version is not None and expected_version != job.active_video_version:
+                raise ValueError(
+                    f"Stale video rejection: expected v{expected_version}, "
+                    f"active is v{job.active_video_version}"
+                )
             store.update(job, JobStatus.CANCELLED, "VIDEO REJECTED via Telegram")
             text = f"❌ Відео {job_id} відхилено."
         else:
@@ -1959,6 +2047,8 @@ def _start_telegram_polling() -> None:
         on_update=_process_telegram_update,
     )
     telegram_polling_service.start()
+    _reconcile_update_operations()
+    _deliver_pending_telegram_notifications()
     logger.info("Telegram polling started")
 
 
@@ -2516,6 +2606,7 @@ async def system_restart(payload: dict | None = None):
     body = payload or {}
     target = str(body.get("target", "core"))
     if target == "core":
+        previous_instance_id = CORE_RUNTIME_INSTANCE_ID
         try:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
@@ -2527,10 +2618,11 @@ async def system_restart(payload: dict | None = None):
                 stderr = result.stderr.decode(errors="replace").strip() if result.stderr else "no stderr"
                 raise HTTPException(500, f"systemctl restart failed (exit {result.returncode}): {stderr}")
             set_system_state(SystemState.NORMAL, "CORE restart requested via Telegram", None)
-            return {"target": "core", "status": "restart_requested", "message": "vertep-core.service restart initiated"}
-        except FileNotFoundError:
             return {"target": "core", "status": "restart_requested",
-                    "message": "systemctl not available; restart must be performed manually"}
+                    "previous_runtime_instance_id": previous_instance_id,
+                    "message": "vertep-core.service restart initiated"}
+        except FileNotFoundError:
+            raise HTTPException(503, "systemctl is unavailable; CORE restart was not initiated")
         except subprocess.TimeoutExpired:
             raise HTTPException(504, "CORE restart timed out")
         except HTTPException:
@@ -2545,11 +2637,14 @@ async def system_restart(payload: dict | None = None):
         raise HTTPException(404, f"Worker {node_id} is not registered or offline")
     worker["desired_state"] = "RESTARTING"
     worker["status"] = "UPDATING"
+    worker["restart_operation_id"] = uuid.uuid4().hex
+    worker["restart_previous_instance_id"] = worker.get("runtime_instance_id")
     worker["state_reason"] = "restart via Telegram API"
     worker["state_changed_at"] = utc_now()
     store.save_worker(worker)
     audit_entry(worker["desired_state"], "restart", f"node={node_id}", f"telegram:{body.get('requested_by', 'telegram')}")
     return {"target": "node", "node_id": node_id, "status": "restart_requested",
+            "restart_operation_id": worker["restart_operation_id"],
             "message": f"Worker {node_id} marked for restart"}
 
 
@@ -2597,8 +2692,16 @@ async def system_test(payload: dict | None = None):
         try:
             from pathlib import Path
             storage_root = Path(os.getenv("STORAGE_ROOT", "/opt/vertep/storage"))
+            storage_root.mkdir(parents=True, exist_ok=True)
+            probe = storage_root / f".self-test-{uuid.uuid4().hex}.tmp"
+            with probe.open("wb") as handle:
+                handle.write(b"vertep-storage-self-test")
+                handle.flush()
+                os.fsync(handle.fileno())
+            probe.unlink()
             result["storage"] = {
-                "writable": storage_root.exists() and os.access(storage_root, os.W_OK),
+                "writable": True,
+                "execution_probe": "write-fsync-delete",
                 "path": str(storage_root)
             }
         except Exception as error:
@@ -2615,11 +2718,12 @@ async def system_test(payload: dict | None = None):
                 scenes = job.scenes if hasattr(job, "scenes") else []
                 for scene in scenes:
                     status = scene.status.value if scene.status else ""
-                    if status == "COMPLETED":
+                    if status == StageStatus.READY.value:
                         task_stats["completed"] += 1
-                    elif status == "FAILED":
+                    elif status == StageStatus.FAILED.value:
                         task_stats["failed"] += 1
-                    elif status in {"PENDING", "QUEUED", "PROCESSING"}:
+                    elif status in {StageStatus.PENDING.value, StageStatus.RUNNING.value,
+                                    StageStatus.PAUSED.value}:
                         task_stats["pending"] += 1
             result["task_results"] = task_stats
         except Exception as error:
@@ -2635,12 +2739,20 @@ async def system_test(payload: dict | None = None):
             pm = result["provider_matrix"]
             if isinstance(pm, dict) and len(pm) == 0:
                 full_failures.append("provider_matrix(empty)")
+            else:
+                unavailable = [name for name, provider in pm.items()
+                               if isinstance(provider, dict)
+                               and provider.get("configured") is False]
+                if unavailable:
+                    full_failures.append("providers(unavailable: " + ", ".join(unavailable) + ")")
         if "certificates_error" in result:
             full_failures.append("certificates")
         elif isinstance(result.get("certificates"), dict):
             certs = result["certificates"]
             if isinstance(certs, dict) and (certs.get("total", 0) == 0):
                 full_failures.append("certificates(zero)")
+            elif isinstance(certs, dict) and certs.get("expired", 0) > 0:
+                full_failures.append(f"certificates({certs['expired']} expired)")
         if "storage_error" in result:
             full_failures.append("storage")
         elif isinstance(result.get("storage"), dict) and not result["storage"].get("writable", False):

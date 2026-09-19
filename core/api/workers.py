@@ -54,6 +54,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
         previous = store.workers.get(payload.node_name)
     desired = (previous or {}).get("desired_state")
     drain_operation_id = (previous or {}).get("drain_operation_id")
+    restart_operation_id = (previous or {}).get("restart_operation_id")
+    previous_instance_id = (previous or {}).get("runtime_instance_id")
     if desired == "DRAINING" and drain_operation_id and get_system_state()["state"] == "NORMAL":
         desired = None
         drain_operation_id = None
@@ -65,6 +67,23 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
         data["drain_operation_id"] = drain_operation_id
         if data["status"] != "BUSY" and not data.get("current_task"):
             data["status"] = "DRAINING"
+    elif desired == "RESTARTING":
+        current_instance_id = data.get("runtime_instance_id")
+        if (current_instance_id and previous_instance_id
+                and current_instance_id != previous_instance_id):
+            data["restart_ack"] = {
+                "operation_id": restart_operation_id,
+                "previous_instance_id": previous_instance_id,
+                "runtime_instance_id": current_instance_id,
+                "acknowledged_at": utc_now(),
+            }
+            data["status"] = "READY"
+        else:
+            data["desired_state"] = desired
+            data["restart_operation_id"] = restart_operation_id
+            data["status"] = "UPDATING"
+    elif desired in {"UPDATING", "ROLLBACK", "DISABLED", "REVOKED", "SELF_TESTING"}:
+        data["desired_state"] = desired
     if previous and previous.get("self_test_requested_at"):
         checked_at = str((data.get("self_test") or {}).get("checked_at", ""))
         if checked_at > previous["self_test_requested_at"]:
@@ -113,6 +132,8 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
             "update_target_version": item.pop("update_target_version", None),
             "rollback_target_version": item.pop("rollback_target_version", None),
             "self_test_requested_at": item.pop("self_test_requested_at", None),
+            "restart_operation_id": item.pop("restart_operation_id", None),
+            "restart_ack": item.pop("restart_ack", None),
         }
         result.append(item)
     seen = {item.get("node_id") or item.get("node_name") for item in result}

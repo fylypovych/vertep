@@ -47,7 +47,9 @@ def claim_task(payload: TaskClaim, request: Request):
     # storyboard, TTS).  A busy or draining/quarantined worker is skipped so the
     # dispatcher never over-subscribes a node that cannot actually claim.
     desired_state = worker_data.get("desired_state")
-    if desired_state in {"DRAINING", "QUARANTINED", "UPDATING"} or worker_data.get("current_task"):
+    if desired_state in {"DRAINING", "QUARANTINED", "UPDATING", "ROLLBACK",
+                         "DISABLED", "RESTARTING", "REVOKED", "SELF_TESTING"} \
+            or worker_data.get("current_task"):
         return {"task": None, "worker_state": desired_state or worker_data.get("status", "BUSY")}
     held_tasks = []
     scan_limit = max(1, task_queue.depth())

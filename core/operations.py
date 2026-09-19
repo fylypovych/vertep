@@ -282,6 +282,22 @@ def fail_operation(operation_id: str, error: str) -> dict[str, Any]:
     return operation
 
 
+def link_operation_request(operation_id: str, request: dict[str, Any]) -> dict[str, Any]:
+    """Persist the update-agent correlation before returning to Telegram."""
+    with _lock:
+        operations = _read_all()
+        operation = operations.get(operation_id)
+        if operation is None:
+            raise KeyError(f"Operation not found: {operation_id}")
+        operation["external_request_id"] = request.get("request_id")
+        operation["external_action"] = request.get("action")
+        operation["updated_at"] = _now()
+        operations[operation_id] = operation
+        _write_all(operations)
+    _sync_to_database(operation)
+    return operation
+
+
 def is_operation_in_progress(op_type: str, target: str | None = None) -> dict[str, Any] | None:
     """Return an active operation of the given type if one is already running.
 
@@ -325,7 +341,7 @@ def audit_entry(operation_id: str, phase: str, message: str | None = None,
         pass
     return entry
 
-def add_pending_notification(chat_id: str, message: str):
+def add_pending_notification(chat_id: str, message: str) -> str:
     """Persist a notification to be sent after system restart."""
     path = _state_dir() / "pending_notifications.json"
     _state_dir().mkdir(parents=True, exist_ok=True)
@@ -336,9 +352,39 @@ def add_pending_notification(chat_id: str, message: str):
             notifications = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
+    if not isinstance(notifications, dict):
+        notifications = {}
 
-    notifications[secrets.token_hex(4)] = {"chat_id": chat_id, "message": message, "timestamp": _now()}
+    notification_id = secrets.token_hex(8)
+    notifications[notification_id] = {"notification_id": notification_id,
+                                     "chat_id": chat_id, "message": message,
+                                     "timestamp": _now()}
     atomic_write_json(path, notifications)
+    return notification_id
+
+
+def pending_notifications() -> list[dict[str, str]]:
+    """Read delivery records without removing them."""
+    path = _state_dir() / "pending_notifications.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return list(value.values()) if isinstance(value, dict) else []
+
+
+def acknowledge_notification(notification_id: str) -> None:
+    """Remove one notification only after Telegram accepted it."""
+    path = _state_dir() / "pending_notifications.json"
+    with _lock:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(value, dict) or notification_id not in value:
+            return
+        del value[notification_id]
+        atomic_write_json(path, value)
 
 def pop_pending_notifications() -> list[dict[str, str]]:
     """Retrieve and clear all pending notifications."""
@@ -353,4 +399,3 @@ def pop_pending_notifications() -> list[dict[str, str]]:
         return [v for k, v in notifications.items()]
     except (OSError, ValueError):
         return []
-

@@ -1315,6 +1315,56 @@ def test_system_test_full_healthy_when_all_ok(monkeypatch):
         import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_system_test_full_counts_ready_and_running_stage_statuses(monkeypatch, tmp_path):
+    """READY is completed and RUNNING is pending in the actual StageStatus model."""
+    import sys
+    from types import ModuleType as _Mod
+    from core.app import store
+    from core.models import Job, SceneRecord, StageStatus, utc_now
+    store.jobs.clear()
+    store.jobs["job-stage-stats"] = Job(
+        job_id="job-stage-stats", topic="test", character_id="char-1", priority=1,
+        status=JobStatus.READY,
+        scenes=[
+            SceneRecord(scene_id="ready", index=1, prompt="p", status=StageStatus.READY),
+            SceneRecord(scene_id="running", index=2, prompt="p", status=StageStatus.RUNNING),
+        ], created_at=utc_now())
+    monkeypatch.setattr("core.health_checks.run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr("core.health_checks.health_status", lambda checks: "HEALTHY")
+    monkeypatch.setattr("adapters.providers.provider_matrix",
+                        lambda: {"tts": {"configured": True}})
+    certificates = _Mod("core.certificates")
+    certificates.list_certificates = lambda: [{"cert_id": "c1", "expires_in_days": 99}]
+    sys.modules["core.certificates"] = certificates
+    monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
+    try:
+        response = _tc.post("/api/system/test", json={"scope": "full"})
+        stats = response.json()["task_results"]
+        assert stats == {"completed": 1, "failed": 0, "pending": 1}
+    finally:
+        store.jobs.clear()
+        sys.modules.pop("core.certificates", None)
+
+
+def test_system_test_full_unhealthy_on_expired_certificate(monkeypatch, tmp_path):
+    import sys
+    from types import ModuleType as _Mod
+    monkeypatch.setattr("core.health_checks.run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr("core.health_checks.health_status", lambda checks: "HEALTHY")
+    monkeypatch.setattr("adapters.providers.provider_matrix",
+                        lambda: {"tts": {"configured": True}})
+    certificates = _Mod("core.certificates")
+    certificates.list_certificates = lambda: [{"cert_id": "expired", "expires_in_days": -1}]
+    sys.modules["core.certificates"] = certificates
+    monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
+    try:
+        response = _tc.post("/api/system/test", json={"scope": "full"})
+        assert response.json()["result"] == "UNHEALTHY"
+        assert "certificates(1 expired)" in response.json()["full_test_failures"]
+    finally:
+        sys.modules.pop("core.certificates", None)
+
+
 def test_vid_ok_rejects_wrong_chat(monkeypatch):
     from unittest.mock import Mock
     from core.app import _handle_video_callback, store
@@ -1351,6 +1401,26 @@ def test_vid_ok_accepts_correct_chat(monkeypatch):
     _handle_video_callback(cb, "111", "vid_ok", "vid-2")
     text = adapter.answer_callback.call_args[0][1]
     assert "схвалено" in text.lower()
+
+
+def test_vid_ok_accepts_source_with_message_id(monkeypatch):
+    """Telegram source stores chat and message IDs; ownership uses the chat segment."""
+    from unittest.mock import Mock
+    from core.app import _handle_video_callback, store
+    from core.models import Job, JobStatus, utc_now
+    store.jobs.clear()
+    job = Job(job_id="vid-3", topic="test", character_id="ch", priority=1,
+              status=JobStatus.VIDEO_PENDING_APPROVAL, source="telegram:111:987",
+              created_at=utc_now())
+    store.jobs["vid-3"] = job
+    adapter = Mock()
+    adapter.answer_callback = Mock(return_value={"status": "ok"})
+    monkeypatch.setattr("core.app.TelegramAdapter", lambda: adapter)
+    import core.pipeline as _pipe
+    monkeypatch.setattr(_pipe, "approve_video", lambda store, job, actor, **kw: job)
+    cb = {"id": "cb-vid-ok-message", "data": "vid_ok:vid-3", "message": {"chat": {"id": "111"}}}
+    _handle_video_callback(cb, "111", "vid_ok", "vid-3")
+    assert "схвалено" in adapter.answer_callback.call_args[0][1].lower()
 
 
 # ── Polling POSIX durability: atomic write + fsync ─────────────────────────
@@ -1396,6 +1466,37 @@ def test_polling_save_offset_fsync_before_rename(tmp_path, monkeypatch):
     assert state_file.exists()
     data = json.loads(state_file.read_text(encoding="utf-8"))
     assert data["offset"] == 10
+
+
+def test_polling_save_offset_fsyncs_parent_directory(tmp_path, monkeypatch):
+    """The directory entry created by replace is durable too."""
+    from adapters.telegram import TelegramPollingService
+    import os as _os
+    state_file = tmp_path / "polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None,
+                                     offset_file=state_file)
+    directory_fsyncs = []
+    original_fsync = _os.fsync
+
+    def tracking_fsync(fd):
+        if _os.path.isdir(f"/proc/self/fd/{fd}"):
+            directory_fsyncs.append(fd)
+        return original_fsync(fd)
+
+    monkeypatch.setattr(_os, "fsync", tracking_fsync)
+    service._save_offset_data(11)
+    assert directory_fsyncs
+
+
+@pytest.mark.parametrize("payload", [[], "valid-json", 7, None])
+def test_polling_load_offset_rejects_valid_non_object_json(tmp_path, payload):
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "polling_state.json"
+    state_file.write_text(json.dumps(payload), encoding="utf-8")
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None,
+                                     offset_file=state_file)
+    assert service.offset == 0
+    assert service.last_update_id is None
 
 
 # ── Polling idempotency: offset saved BEFORE next poll ────────────────────

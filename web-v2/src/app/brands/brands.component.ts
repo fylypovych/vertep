@@ -48,8 +48,8 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               <div class="text-sm text-slate-600 mb-3">{{ brand.enabled ? 'Активний' : 'Неактивний' }}</div>
               <app-brand-channels [brandId]="brand.id" [channels]="brandChannels[brand.id] || []" (channelAdded)="onChannelAdded($event)" (channelChanged)="loadChannels(brand.id)" />
             </div>
-</div>
-        }
+          }
+        </div>
       }
 
       <!-- Brand Editor Modal -->

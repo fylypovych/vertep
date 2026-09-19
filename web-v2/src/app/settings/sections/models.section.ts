@@ -11,7 +11,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-models',
   standalone: true,
   imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
-  template: `
+  /* template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-models">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">?????? (Ollama)</h3>
       @if (loading()) {
@@ -42,7 +42,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         }
       }
     </div>
-  `,
+  `, */
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-models"><h3 class="text-lg font-semibold mb-4">Моделі (Ollama)</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="!loading() && !error()"><div class="flex gap-2 mb-4"><input [(ngModel)]="modelName" class="flex-1 border rounded px-3 py-2" placeholder="Назва моделі"><button (click)="pullModel()" [disabled]="!modelName || pulling()" class="px-4 py-2 bg-emerald-600 text-white rounded">{{ pulling() ? 'Завантаження...' : 'Завантажити' }}</button></div><div *ngFor="let model of models()" class="flex justify-between py-2 border-b"><span>{{ model.name }}</span><button (click)="deleteModel(model.name)" class="text-red-600">Видалити</button></div></div></div>`,
 })
 export class ModelsSectionComponent implements OnInit {
   models = signal<ModelInfo[]>([]);

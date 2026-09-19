@@ -11,7 +11,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-secrets',
   standalone: true,
   imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
-  template: `
+  /* template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-secrets">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">�客�� ᥪ��?�</h3>
       @if (loading()) {
@@ -49,7 +49,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         }
       }
     </div>
-  `,
+  `, */
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-secrets"><h3 class="text-lg font-semibold mb-4">Секрети інтеграцій</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngFor="let name of secretNames" class="flex items-center justify-between py-2 border-b"><span class="font-mono text-sm">{{ name }}</span><span>{{ secrets()?.[name] ? 'Встановлено' : 'Не встановлено' }}</span><button (click)="startEdit(name)" class="text-blue-600">Редагувати</button></div></div>`,
 })
 export class SecretsSectionComponent implements OnInit {
   secrets = signal<Record<string, boolean> | null>(null);

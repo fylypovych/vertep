@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from ..models import NodeAction, utc_now
@@ -115,6 +116,8 @@ def node_detail(node_id: str):
         "update_target_version": merged.pop("update_target_version", None),
         "rollback_target_version": merged.pop("rollback_target_version", None),
         "self_test_requested_at": merged.pop("self_test_requested_at", None),
+        "restart_operation_id": merged.pop("restart_operation_id", None),
+        "restart_ack": merged.pop("restart_ack", None),
     }
     return _node_context(merged)
 
@@ -170,6 +173,8 @@ def control_node(node_id: str, command: NodeAction):
     elif command.action == "restart":
         worker["desired_state"] = "RESTARTING"
         worker["status"] = "UPDATING"
+        worker["restart_operation_id"] = uuid.uuid4().hex
+        worker["restart_previous_instance_id"] = worker.get("runtime_instance_id")
     elif command.action == "logs":
         pass
     elif command.action == "update":

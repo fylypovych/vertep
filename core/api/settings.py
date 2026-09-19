@@ -21,9 +21,12 @@ def integrations():
     result = {}
     for name, endpoint in endpoints.items():
         try:
-            response = httpx.get(endpoint, timeout=3)
+            # These are node-local probes; inherited host proxy settings can
+            # both misroute them and require optional SOCKS dependencies.
+            with httpx.Client(timeout=3, trust_env=False) as client:
+                response = client.get(endpoint)
             result[name] = {"status": "ONLINE", "http_status": response.status_code}
-        except httpx.HTTPError as error:
+        except (httpx.HTTPError, OSError, ValueError, ImportError) as error:
             result[name] = {"status": "OFFLINE", "error": str(error)}
     matrix = provider_matrix()
     result["publisher"] = matrix.get("publisher", {}).get("platforms", {})

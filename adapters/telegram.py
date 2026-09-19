@@ -151,6 +151,8 @@ class TelegramPollingService:
         try:
             if self.offset_file.exists():
                 data = json.loads(self.offset_file.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("Telegram polling state must be a JSON object")
                 self.last_update_id = data.get("last_update_id")
                 self.last_message_at = data.get("last_message_at")
                 return int(data.get("offset", 0))
@@ -178,6 +180,13 @@ class TelegramPollingService:
         finally:
             fh.close()
         temporary.replace(self.offset_file)
+        # ``fsync`` of the file alone does not make the directory entry created
+        # by replace durable across a power loss.  Persist the rename as well.
+        directory_fd = os.open(self.offset_file.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def start(self) -> None:
         with self._lock:

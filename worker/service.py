@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import platform
 import secrets
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -320,7 +321,8 @@ def main() -> None:
     metrics = gpu_info()
     require_gpu = os.getenv("WORKER_REQUIRE_GPU", "true").lower() == "true" and os.getenv("DEMO_MODE", "true").lower() != "true"
     capabilities = node_capabilities()
-    payload = {"node_name": os.getenv("NODE_NAME", "gpu-01"), **metrics, **host_metrics(),
+    payload = {"node_name": os.getenv("NODE_NAME", "gpu-01"),
+               "runtime_instance_id": uuid.uuid4().hex, **metrics, **host_metrics(),
                "status": worker_status(metrics, require_gpu),
                "supported_tasks": supported_tasks, "supported_workflows": supported_workflows,
                "role": configured_role(), "capabilities": capabilities,

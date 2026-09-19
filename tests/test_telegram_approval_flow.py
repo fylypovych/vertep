@@ -143,6 +143,19 @@ class TestVideoCallbackHandlers:
         module._handle_video_callback(cb, "42", "vid_reject", "2026-000001")
         assert job.status.value == "CANCELLED"
 
+    def test_vid_reject_stale_version_does_not_cancel_current_video(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        job = _make_job("VIDEO_PENDING_APPROVAL")
+        job.active_video_version = 2
+        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
+        cb = {"id": "cb-stale-reject", "data": "vid_reject:2026-000001:1",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_video_callback(cb, "42", "vid_reject", "2026-000001:1")
+        assert job.status.value == "VIDEO_PENDING_APPROVAL"
+        assert "stale" in adapter.answer_callback.call_args[0][1].lower()
+
     def test_vid_edit_sets_flag(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()

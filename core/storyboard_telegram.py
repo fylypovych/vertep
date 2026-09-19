@@ -65,7 +65,7 @@ def video_approval_keyboard(job_id: str, version: int | None = None) -> dict:
         ],
         [
             {"text": "✍️ Запросити правки", "callback_data": f"vid_edit:{job_id}"},
-            {"text": "❌ Відхилити", "callback_data": f"vid_reject:{job_id}"},
+            {"text": "❌ Відхилити", "callback_data": f"vid_reject:{ref}"},
         ],
     ]}
 

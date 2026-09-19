@@ -137,7 +137,7 @@ WORKER_STATE_TRANSITIONS: dict[WorkerState, set[WorkerState]] = {
     WorkerState.DRAINING: {WorkerState.DRAINING, WorkerState.READY, WorkerState.UPDATING,
                            WorkerState.ERROR},
     WorkerState.UPDATING: {WorkerState.UPDATING, WorkerState.RECOVERING,
-                           WorkerState.SELF_TESTING, WorkerState.ERROR},
+                           WorkerState.SELF_TESTING, WorkerState.READY, WorkerState.ERROR},
     WorkerState.RECOVERING: {WorkerState.RECOVERING, WorkerState.SELF_TESTING,
                              WorkerState.READY, WorkerState.ERROR},
     WorkerState.OFFLINE: {WorkerState.ENROLLING, WorkerState.SELF_TESTING,
@@ -379,6 +379,7 @@ class Job(BaseModel):
 
 class WorkerHeartbeat(BaseModel):
     node_name: str
+    runtime_instance_id: str | None = None
     gpu_name: str = "demo"
     gpu_count: int = 1
     vram_mb: int = 0
