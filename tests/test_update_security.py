@@ -425,3 +425,183 @@ def test_recover_preserves_existing正常的_status(tmp_path, monkeypatch):
     agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
     status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     assert status["phase"] == "NORMAL"
+
+
+# ── Fault-injection: disk-full / fsync ─────────────────────────────────────
+
+
+def test_atomic_json_raises_on_fsync_failure(tmp_path):
+    """atomic_json propagates OSError when fsync fails (disk full)."""
+    agent = _load_agent()
+    target = tmp_path / "status.json"
+    import os as _os
+    original_fsync = _os.fsync
+
+    def failing_fsync(fd):
+        raise OSError(28, "No space left on device")
+    _os.fsync = failing_fsync
+    try:
+        with pytest.raises(OSError, match="No space left on device"):
+            agent.atomic_json(target, {"test": "data"})
+    finally:
+        _os.fsync = original_fsync
+
+
+def test_append_audit_wraps_fsync_error(tmp_path):
+    """append_audit raises when fsync fails during audit write."""
+    agent = _load_agent()
+    import os as _os
+    original_fsync = _os.fsync
+    fsync_called = [False]
+
+    def failing_fsync(fd):
+        fsync_called[0] = True
+        raise OSError(28, "No space left on device")
+    _os.fsync = failing_fsync
+    try:
+        with pytest.raises(OSError):
+            agent.append_audit(tmp_path, {"operation_id": "disk-full", "phase": "CHECKING"})
+        assert fsync_called[0], "fsync should have been called before OSError"
+    finally:
+        _os.fsync = original_fsync
+
+
+# ── Fault-injection: drain / admission ─────────────────────────────────────
+
+
+def test_wait_for_drain_polls_readiness(tmp_path, monkeypatch):
+    """wait_for_drain polls /api/system/update/readiness until ready=True."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("UPDATE_DRAIN_TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("UPDATE_DRAIN_POLL_SECONDS", "0.01")
+    call_count = [0]
+
+    def fake_core_json(path):
+        call_count[0] += 1
+        if call_count[0] >= 3:
+            return {"ready": True, "workers_drained": 2}
+        return {"ready": False, "workers_drained": 0}
+    monkeypatch.setattr(agent, "core_json", fake_core_json)
+    state = {"state": "RUNNING", "phase": "CHECKING", "log": []}
+    agent.wait_for_drain(tmp_path, state)
+    assert call_count[0] >= 3
+    assert state["readiness"]["ready"] is True
+
+
+def test_wait_for_drain_timeout_raises(tmp_path, monkeypatch):
+    """wait_for_drain raises RuntimeError when drain times out."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("UPDATE_DRAIN_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("UPDATE_DRAIN_POLL_SECONDS", "0.01")
+    monkeypatch.setattr(agent, "core_json", lambda path: {"ready": False})
+    state = {"state": "RUNNING", "phase": "CHECKING", "log": []}
+    with pytest.raises(RuntimeError, match="Timed out"):
+        agent.wait_for_drain(tmp_path, state)
+
+
+# ── Fault-injection: signed immutable compatibility ────────────────────────
+
+
+def test_update_rejects_downgrade(tmp_path, monkeypatch):
+    """update-agent rejects a manifest with version lower than current."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    import core.update_protocol as _upd
+    import core.version as _ver
+    monkeypatch.setattr(_upd, "fetch_manifest", lambda channel: {
+        "version": "0.0.1.0", "channel": "stable", "sha256": "a" * 64,
+        "signature": "sig", "required": False})
+    monkeypatch.setattr(_upd, "validate_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(_upd, "validate_replay_state", lambda *a, **kw: None)
+    monkeypatch.setattr(_ver, "application_version", lambda: "0.0.2.0")
+    request = tmp_path / "requests" / "test.json"
+    request.parent.mkdir()
+    request.write_text(json.dumps({
+        "request_id": "a" * 32, "action": "update",
+        "target_version": "0.0.1.0"}), encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    result = agent.process_request(tmp_path, state_dir, request, skip_drain=True)
+    assert result is False
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert "downgrade" in status.get("message", "").lower()
+
+
+def test_update_rejects_missing_root_metadata(tmp_path, monkeypatch):
+    """update-agent rejects when REQUIRE_OFFLINE_ROOT=true but no root metadata."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("REQUIRE_OFFLINE_ROOT", "true")
+    monkeypatch.delenv("UPDATE_ROOT_METADATA", raising=False)
+    monkeypatch.delenv("UPDATE_ROOT_KEYS", raising=False)
+    import core.update_protocol as _upd
+    monkeypatch.setattr(_upd, "fetch_manifest", lambda channel: {
+        "version": "0.0.2.0", "channel": "stable", "sha256": "b" * 64,
+        "signature": "sig", "required": False})
+    monkeypatch.setattr(_upd, "validate_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(_upd, "validate_replay_state", lambda *a, **kw: None)
+    request = tmp_path / "requests" / "test.json"
+    request.parent.mkdir()
+    request.write_text(json.dumps({
+        "request_id": "b" * 32, "action": "update"}), encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    result = agent.process_request(tmp_path, state_dir, request, skip_drain=True)
+    assert result is False
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert "root" in status.get("message", "").lower()
+
+
+# ── Fault-injection: runtime / database recovery ───────────────────────────
+
+
+def test_rollback_invokes_vertep_script(tmp_path, monkeypatch):
+    """_attempt_rollback invokes vertep rollback script and sets ROLLED_BACK."""
+    agent = _load_agent()
+    commands_run = []
+    monkeypatch.setattr(agent, "run", lambda cmd, root, **kw: (
+        commands_run.append(cmd), "rollback output")[1])
+    monkeypatch.setattr(agent, "atomic_json", lambda *a, **kw: None)
+    import core.system_state as _ss
+    monkeypatch.setattr(_ss, "set_system_state", lambda *a, **kw: None)
+    state = {"state": "RUNNING", "phase": "UPDATING", "log": []}
+    agent._attempt_rollback(tmp_path, tmp_path, state)
+    assert any("rollback" in str(cmd) for cmd in commands_run)
+    assert state["state"] == "ROLLED_BACK"
+
+
+def test_process_request_triggers_rollback_on_failure(tmp_path, monkeypatch):
+    """When apply-update fails, process_request triggers rollback."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    import core.update_protocol as _upd
+    import core.version as _ver
+    monkeypatch.setattr(_upd, "fetch_manifest", lambda channel: {
+        "version": "0.0.2.0", "channel": "stable", "sha256": "c" * 64,
+        "signature": "sig", "required": False})
+    monkeypatch.setattr(_upd, "validate_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(_upd, "validate_replay_state", lambda *a, **kw: None)
+    monkeypatch.setattr(_ver, "application_version", lambda: "0.0.1.0")
+
+    call_count = [0]
+    def failing_run(cmd, root, **kw):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise RuntimeError("Health check failed")
+        return "rollback ok"
+    monkeypatch.setattr(agent, "run", failing_run)
+    monkeypatch.setattr(agent, "transition", lambda *a, **kw: None)
+    monkeypatch.setattr(agent, "merge_runtime_progress", lambda *a, **kw: None)
+
+    request = tmp_path / "requests" / "test.json"
+    request.parent.mkdir()
+    request.write_text(json.dumps({
+        "request_id": "c" * 32, "action": "update"}), encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    result = agent.process_request(tmp_path, state_dir, request, skip_drain=True)
+    assert result is False
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status.get("state") in {"FAILED", "ROLLED_BACK"}

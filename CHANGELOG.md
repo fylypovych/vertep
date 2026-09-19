@@ -1,5 +1,9 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.96
+- i.0.0.0.87 Task 2: Fault-injection coverage — disk-full/fsync, drain timeout, signed immutable downgrade rejection, missing root metadata, rollback invocation, rollback-on-failure tests.
+- i.0.0.0.97 Task 2: POSIX durability — _save_offset_data atomic write (temp+fsync+rename) tests; offset-before-processing idempotency test; restart-from-saved-offset test.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.95
 - i.0.0.0.97 Task 1: vid_ok actor verification — video approval/rejection перевіряє chat_id проти job.source; чужий chat отримує "Доступ заборонено".
 - i.0.0.0.97 Task 2: Polling durability — `_interruptible_sleep` для 429/retry delays переривається `stop()`; negative offset, corrupted file fallback, idempotent callback test coverage.

@@ -1351,3 +1351,89 @@ def test_vid_ok_accepts_correct_chat(monkeypatch):
     _handle_video_callback(cb, "111", "vid_ok", "vid-2")
     text = adapter.answer_callback.call_args[0][1]
     assert "схвалено" in text.lower()
+
+
+# ── Polling POSIX durability: atomic write + fsync ─────────────────────────
+
+
+def test_polling_save_offset_uses_atomic_write(tmp_path):
+    """_save_offset_data uses temp file + fsync + rename (POSIX atomic write)."""
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    service.offset = 42
+    service.last_update_id = 41
+    service.last_message_at = "2026-01-01T00:00:00Z"
+    service._save_offset_data(42)
+    assert state_file.exists()
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert data["offset"] == 42
+    assert data["last_update_id"] == 41
+    tmp_files = list(state_file.parent.glob(state_file.name + ".tmp"))
+    assert len(tmp_files) == 0, "Temp file should be cleaned up after atomic rename"
+
+
+def test_polling_save_offset_fsync_before_rename(tmp_path, monkeypatch):
+    """_save_offset_data calls fsync before rename to guarantee durability."""
+    from adapters.telegram import TelegramPollingService
+    import os as _os
+    state_file = tmp_path / "polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    service.offset = 10
+    service.last_update_id = 9
+    fsync_calls = []
+    original_fsync = _os.fsync
+
+    def tracking_fsync(fd):
+        fsync_calls.append(fd)
+        return original_fsync(fd)
+    _os.fsync = tracking_fsync
+    try:
+        service._save_offset_data(10)
+    finally:
+        _os.fsync = original_fsync
+    assert len(fsync_calls) >= 1, "fsync should be called at least once for durability"
+    assert state_file.exists()
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert data["offset"] == 10
+
+
+# ── Polling idempotency: offset saved BEFORE next poll ────────────────────
+
+
+def test_polling_offset_saved_before_next_poll(tmp_path):
+    """Offset is persisted before on_update runs, preventing duplicate processing on restart."""
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "polling_state.json"
+    processed = []
+    service = TelegramPollingService(
+        token="test-token",
+        on_update=lambda u: processed.append(u["update_id"]),
+        offset_file=state_file)
+
+    updates = [{"update_id": 1, "message": {"text": "/start"}},
+               {"update_id": 2, "message": {"text": "/help"}}]
+    service.offset = 0
+    for u in updates:
+        service.on_update(u)
+        service.last_update_id = u["update_id"]
+        service._save_offset_data(u["update_id"] + 1)
+        service.offset = u["update_id"] + 1
+    assert processed == [1, 2]
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert data["offset"] == 3
+    assert data["last_update_id"] == 2
+
+
+def test_polling_restart_replays_from_saved_offset(tmp_path):
+    """After restart, polling loads offset from file, skipping already-processed updates."""
+    from adapters.telegram import TelegramPollingService
+    state_file = tmp_path / "polling_state.json"
+    state_file.write_text(json.dumps({
+        "offset": 3,
+        "last_update_id": 2,
+        "last_message_at": "2026-01-01T00:00:00Z",
+    }), encoding="utf-8")
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    assert service.offset == 3
+    assert service.last_update_id == 2
