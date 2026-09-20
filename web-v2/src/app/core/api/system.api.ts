@@ -24,5 +24,5 @@ export class SystemApiService {
   cancelRolling = (): Observable<OperationAck> => this.http.post<OperationAck>(`${this.base.url}/system/update/rolling/cancel`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   promoteCanary = (): Observable<OperationAck> => this.http.post<OperationAck>(`${this.base.url}/system/update/rolling/promote`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   rollbackCanary = (): Observable<OperationAck> => this.http.post<OperationAck>(`${this.base.url}/system/update/rolling/rollback`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  recoverToNormal = (): Observable<SystemState> => this.http.post<SystemState>(`${this.base.url}/system/update/recover`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  recoverToNormal = (): Observable<SystemState> => this.http.post<SystemState>(`${this.base.url}/system/recovery/normal`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
 }

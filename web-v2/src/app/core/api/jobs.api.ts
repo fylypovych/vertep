@@ -5,7 +5,7 @@ import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
 import { Job, JobCreate, JobUpdate, JobEvent, JobPage, JobListQuery, ArtifactRecord, ArtifactVerifyResponse, DeadLetterTask, QueueState, ScheduledJob, OperationAck } from '../models';
 
-@Injectable()
+@Injectable({ providedIn: 'root' })
 export class JobsApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}

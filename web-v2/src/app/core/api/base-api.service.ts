@@ -21,7 +21,15 @@ export class BaseApiService {
   }
 
   handleError(error: unknown) {
-    const err = error as { detail?: string; message?: string } | undefined;
-    return throwError(() => new Error(err?.detail || err?.message || 'API error'));
+    const err = error as {
+      status?: number;
+      detail?: string;
+      message?: string;
+      error?: { detail?: string; message?: string } | string;
+    } | undefined;
+    const responseBody = typeof err?.error === 'object' ? err.error : undefined;
+    const message = responseBody?.detail || responseBody?.message || err?.detail || err?.message || 'API error';
+    const apiError = Object.assign(new Error(message), { status: err?.status });
+    return throwError(() => apiError);
   }
 }

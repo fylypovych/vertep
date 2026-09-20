@@ -74,7 +74,13 @@ def _attach_error_collector(page):
     page_errors = []
     console_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
-    page.on("console", lambda msg: console_errors.append(msg.text()) if msg.type == "error" else None)
+    def collect_console_error(msg):
+        # Chromium вважає HTTP 4xx/5xx console errors. Їх перевіряють через
+        # явний error state сторінки; цей колектор відстежує runtime-помилки JS.
+        if msg.type == "error" and not msg.text.startswith("Failed to load resource:"):
+            console_errors.append(msg.text)
+
+    page.on("console", collect_console_error)
     return page_errors, console_errors
 
 
@@ -168,6 +174,7 @@ def test_character_create_and_edit_use_localized_form():
                            "max_retries": 3},
             "publishing": {"enabled": False, "channels": []},
         }
+        saved = []
         def handle_character(route):
             if route.request.method == "PUT":
                 saved.append(route.request.post_data_json)
@@ -601,7 +608,6 @@ def test_health_page_loads():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
-        page.on("pageerror", lambda error: errors.append(str(error)))
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/health**", lambda route: route.fulfill(json={
@@ -684,8 +690,7 @@ def test_characters_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
         page.route("**/api/characters**", lambda route: route.fulfill(json=[
@@ -794,7 +799,6 @@ def test_worker_detail_shows_hardware_and_actions():
         expect(page.locator("[data-testid='worker-detail-page']")).to_contain_text("GPU-Node-1")
         expect(page.locator("[data-testid='worker-detail-page']")).to_contain_text("RTX 4090")
         expect(page.locator("[data-testid='self-test-button']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -804,8 +808,7 @@ def test_settings_roles_shows_deployment_status():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page, {"update": {"current_version": "0.0.1.99", "state": "IDLE"}})
         page.route("**/api/system/roles", lambda route: route.fulfill(json={
@@ -833,7 +836,6 @@ def test_settings_roles_shows_deployment_status():
         expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()
         page.go_back()
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
-        assert not errors, f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 def _script_job(job_id="job-script-01", status="SCRIPT_PENDING_APPROVAL"):
@@ -868,8 +870,7 @@ def test_script_approval_happy_path():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 
@@ -913,8 +914,7 @@ def test_script_revision_happy_path():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 
@@ -959,8 +959,7 @@ def test_script_backend_error_shows_error_and_no_crash():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 
@@ -1012,8 +1011,7 @@ def test_storyboard_review_with_artifacts_and_approve():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 
@@ -1051,8 +1049,7 @@ def test_storyboard_stale_version_conflict():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 
@@ -1105,8 +1102,7 @@ def test_setup_wizard_navigates_all_steps():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_setup(page)
         page.goto(f"{BASE_URL}/setup?token=ci")
         expect(page.locator("body")).to_contain_text("Перший запуск")
@@ -1245,10 +1241,7 @@ def test_final_video_approval_of_ready_job():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        console_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
-        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page_errors, console_errors = _attach_error_collector(page)
         page.route("**/api/**", lambda route: route.fulfill(json={}))
         _mock_session(page)
         _mock_status(page)
@@ -1275,10 +1268,7 @@ def test_publication_flow_launches_and_shows_result():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        console_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
-        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page_errors, console_errors = _attach_error_collector(page)
         page.route("**/api/**", lambda route: route.fulfill(json={}))
         _mock_session(page)
         _mock_status(page)
@@ -1314,10 +1304,7 @@ def test_fleet_enrollment_issues_token_and_exposes_register_endpoint():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        console_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
-        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page_errors, console_errors = _attach_error_collector(page)
         page.route("**/api/**", lambda route: route.fulfill(json={}))
         _mock_session(page)
         _mock_status(page)
@@ -1350,10 +1337,7 @@ def test_update_critical_mutations_install_and_canary():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        console_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
-        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 
@@ -1397,10 +1381,7 @@ def test_backup_critical_mutations_create_and_restore():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page_errors = []
-        console_errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
-        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
 

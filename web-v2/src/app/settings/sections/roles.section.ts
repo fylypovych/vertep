@@ -42,7 +42,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       }
     </div>
   `, */
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-roles"><h3 class="text-lg font-semibold mb-4">Ролі вузла</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><pre *ngIf="rolesResponse" class="text-xs bg-slate-50 p-3 rounded overflow-auto">{{ rolesResponse | json }}</pre></div>`,
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-roles"><h3 class="text-lg font-semibold mb-4">Ролі вузла</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="rolesResponse"><p class="mb-3 text-sm text-slate-600">Активні ролі: {{ selectedRoles.length ? selectedRoles.join(', ') : 'не налаштовано' }}</p><label *ngFor="let role of allRoles" class="mr-3 inline-flex items-center gap-1"><input type="checkbox" [checked]="selectedRoles.includes(role.id)" (change)="toggleRole(role.id, $event)">{{ role.label }}</label><button (click)="saveRoles()" [disabled]="saving()" class="mt-4 block px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg disabled:opacity-50" data-testid="roles-save-button">{{ saving() ? 'Збереження...' : 'Зберегти ролі' }}</button></div></div>`,
 })
 export class RolesSectionComponent implements OnInit {
   allRoles: SystemRole[] = [];
@@ -78,8 +78,8 @@ export class RolesSectionComponent implements OnInit {
     this.saving.set(true);
     this.saveMessage.set(null);
     this.workersApi.updateSystemRoles(this.selectedRoles).subscribe({
-      next: () => { this.saving.set(false); this.toast.show('���? ��������', 'success'); this.loadRoles(); },
-      error: (err) => { this.saving.set(false); this.toast.show(err.message || '�������', 'error'); },
+      next: () => { this.saving.set(false); this.toast.show('Ролі збережено', 'success'); this.loadRoles(); },
+      error: (err) => { this.saving.set(false); this.toast.show(err.message || 'Помилка', 'error'); },
     });
   }
 }

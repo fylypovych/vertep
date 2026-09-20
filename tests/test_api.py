@@ -661,8 +661,10 @@ def _repo_task_record(store, task_id: str) -> dict | None:
             for line in file_path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                latest = json.loads(line)
-            if latest and latest.get("task", {}).get("task_id") == task_id:
+                candidate = json.loads(line)
+                if candidate.get("task", {}).get("task_id") == task_id:
+                    latest = candidate
+            if latest:
                 return latest
     # MemoryRepository keeps an in-memory dict.
     tasks = getattr(repo, "tasks", None)
@@ -855,8 +857,10 @@ def _repo_task_record(store, task_id: str) -> dict | None:
             for line in file_path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                latest = json.loads(line)
-            if latest and latest.get("task", {}).get("task_id") == task_id:
+                candidate = json.loads(line)
+                if candidate.get("task", {}).get("task_id") == task_id:
+                    latest = candidate
+            if latest:
                 return latest
     # MemoryRepository keeps an in-memory dict.
     tasks = getattr(repo, "tasks", None)

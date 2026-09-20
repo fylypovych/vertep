@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## ПРАВИЛЬНА НАЗВА: 0.0.2.0
+- Виправлено нестабільний audit-тест життєвого циклу storyboard task: repository journal тепер перевіряється за конкретним `task_id`, незалежно від паралельних фонових записів.
+- Відновлено dependency injection для JobsApiService і WorkersApiService, через відсутність якого Angular-сторінки залишалися порожніми.
+- Виправлено browser e2e harness для актуального Playwright API та усунуто помилки з неініціалізованими колекторами тестів.
+- Вирівняно system info, керування ролями, recovery endpoint і відображення backend-помилок із контрактами Web UI та CORE API.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.99
 - Issue #106: виправлено Telegram-доступ до callback за `chat_id`, захист від застарілих video callback та crash-safe збереження polling offset із `fsync` директорії.

@@ -5,7 +5,7 @@ import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
 import { Worker, NodeDetail, RegistrationTokenResponse, NodeActionPayload, NodeRegisterResponse, NodeActionResponse, NodeRevokeResponse, WorkersHealthResponse, NodeSystemStatusResponse, SystemRolesResponse, RolesUpdateResponse } from '../models';
 
-@Injectable()
+@Injectable({ providedIn: 'root' })
 export class WorkersApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}
