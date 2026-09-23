@@ -329,14 +329,22 @@ def delete_operation(operation_id: str) -> bool:
 def audit_entry(operation_id: str, phase: str, message: str | None = None,
                 actor: str | None = None) -> dict[str, Any]:
     """Append an audit line for an operation phase transition."""
+    operation = get_operation(operation_id)
     entry = {"operation_id": operation_id, "phase": phase,
              "timestamp": _now(), "message": message or "",
-             "actor": actor}
+             "actor": actor,
+             "operation_type": (operation or {}).get("type"),
+             "target": (operation or {}).get("target"),
+             "status": (operation or {}).get("status"),
+             "result": (operation or {}).get("result"),
+             "error": (operation or {}).get("error")}
     audit_path = _state_dir() / (operation_id + ".audit.jsonl")
     try:
         _state_dir().mkdir(parents=True, exist_ok=True)
         with audit_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
     except OSError:
         pass
     return entry

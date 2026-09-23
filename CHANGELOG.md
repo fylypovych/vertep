@@ -1,5 +1,13 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.1
+- Issue #106: додано наскрізну кореляцію restart-операцій між CORE heartbeat, Worker і restart acknowledgement та перевірку ідентифікаторів запитів.
+- Issue #106: update-agent отримав явний rollback, безпечну повторну спробу після помилки й захист від дублювання успішно прийнятих команд.
+- Issue #106: посилено довговічний audit-журнал операцій і додано disposable subprocess/HTTP тести для restart, rollback та внутрішньої авторизації.
+- Оновлено Update Center: відображення фази, прогресу й recovery state, локалізовані та адаптивні елементи керування, permission-denied сценарій.
+- Виправлено локалізацію й пошкоджені шаблони розділів налаштувань, відновлено керування секретами та замінено native confirm у моделях спільним ConfirmService.
+- Додано browser/static regression-перевірки для локалізації, адаптивності, update progress, recovery та заборонених UI-патернів.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.0
 - Виправлено нестабільний audit-тест життєвого циклу storyboard task: repository journal тепер перевіряється за конкретним `task_id`, незалежно від паралельних фонових записів.
 - Відновлено dependency injection для JobsApiService і WorkersApiService, через відсутність якого Angular-сторінки залишалися порожніми.

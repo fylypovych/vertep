@@ -221,6 +221,19 @@ def test_web_ui_is_utf8_and_has_orchestration_sections():
     assert "вЂ" not in html
 
 
+def test_web_v2_settings_sources_are_utf8_localized_and_use_shared_confirmation():
+    settings_root = Path("web-v2/src/app/settings")
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(settings_root.rglob("*.ts"))
+    )
+    assert "�" not in source
+    assert not re.search(r"\?{3,}", source)
+    assert "Busy воркерів" not in source
+    assert "Promote canary" not in source
+    assert "Rollback canary" not in source
+    assert "if (!confirm(" not in source
+
+
 def test_web_ui_has_remaining_job_and_registry_controls():
     html = open("web/index.html", encoding="utf-8").read()
     assert "Retry publish" in html

@@ -12,14 +12,14 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-branding">
-      <h3 class="text-lg font-semibold text-slate-900 mb-4">����⨯</h3>
+      <h3 class="text-lg font-semibold text-slate-900 mb-4">Брендинг</h3>
       @if (logoError()) {
         <app-error-state [message]="logoError()!" [showRetry]="false" />
       }
       <div class="flex items-center gap-4">
         <div class="w-16 h-16 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden bg-slate-50">
           @if (logoUrl()) {
-            <img [src]="logoUrl()" alt="Logo" class="max-w-full max-h-full object-contain">
+            <img [src]="logoUrl()" alt="Логотип" class="max-w-full max-h-full object-contain">
           } @else {
             <span class="text-2xl text-slate-300">V</span>
           }
@@ -29,12 +29,12 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
             <app-loading-state />
           } @else {
             <label class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer">
-              {{ uploading() ? '�����⠦����...' : '�����⠦��' }}
+              {{ uploading() ? 'Завантаження...' : 'Завантажити' }}
               <input [disabled]="uploading()" type="file" accept="image/*" (change)="uploadFile($event)" class="hidden" data-testid="logo-upload">
             </label>
           }
           @if (logoUrl()) {
-            <button (click)="deleteLogo()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">�������</button>
+            <button (click)="deleteLogo()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">Видалити</button>
           }
         </div>
       </div>
@@ -64,19 +64,19 @@ export class BrandingSectionComponent implements OnInit {
     input.value = '';
     this.logoError.set(null);
     if (!file.type.startsWith('image/') || file.size > 2 * 1024 * 1024) {
-      this.logoError.set('�����?�� ���ࠦ���� �� 2 ��.'); return;
+      this.logoError.set('Оберіть зображення розміром до 2 МБ.'); return;
     }
     this.uploading.set(true);
     this.resources.uploadLogo(file).subscribe({
-      next: () => { this.uploading.set(false); this.toast.show('����⨯ �����⠦���', 'success'); this.loadLogo(); },
-      error: (err) => { this.uploading.set(false); this.logoError.set(err.message || '�������'); },
+      next: () => { this.uploading.set(false); this.toast.show('Логотип завантажено', 'success'); this.loadLogo(); },
+      error: (err) => { this.uploading.set(false); this.logoError.set(err.message || 'Помилка завантаження'); },
     });
   }
 
   deleteLogo(): void {
-    this.confirm.confirm({ title: '������� ����⨯', message: '������� ����⨯?' }).subscribe((ok) => {
+    this.confirm.confirm({ title: 'Видалити логотип', message: 'Видалити логотип?' }).subscribe((ok) => {
       if (!ok) return;
-      this.resources.deleteLogo().subscribe({ next: () => { this.toast.show('��������', 'success'); this.logoUrl.set(null); }, error: (err) => this.toast.show(err.message, 'error') });
+      this.resources.deleteLogo().subscribe({ next: () => { this.toast.show('Логотип видалено', 'success'); this.logoUrl.set(null); }, error: (err) => this.toast.show(err.message, 'error') });
     });
   }
 }

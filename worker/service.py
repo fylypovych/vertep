@@ -6,6 +6,7 @@ import json
 import shutil
 import tempfile
 import platform
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -277,17 +278,22 @@ def host_metrics() -> dict:
             "cpu_load": cpu_load, "runtime_version": platform.python_version()}
 
 
-def request_local_update(target_version: str, action: str = "update") -> None:
+def request_local_update(target_version: str, action: str = "update",
+                         request_id: str | None = None) -> None:
     request_root = os.getenv("UPDATE_REQUEST_DIR", "")
     if not request_root:
         raise RuntimeError("UPDATE_REQUEST_DIR is required for coordinated rolling updates")
     root = Path(request_root)
     root.mkdir(parents=True, exist_ok=True)
     marker = root.parent / "worker-update-target"
+    if request_id and not re.fullmatch(r"[0-9a-f]{32}", request_id):
+        raise ValueError("request_id must be 32 lowercase hexadecimal characters")
     marker_value = target_version if action == "update" else f"{action}:{target_version}"
+    if request_id:
+        marker_value = f"{marker_value}:{request_id}"
     if marker.exists() and marker.read_text(encoding="utf-8").strip() == marker_value:
         return
-    request_id = secrets.token_hex(16)
+    request_id = request_id or secrets.token_hex(16)
     temporary = root / f".{request_id}.tmp"
     temporary.write_text(json.dumps({"request_id": request_id, "action": action,
                                      "target_version": target_version}), encoding="utf-8")
@@ -412,11 +418,13 @@ def main() -> None:
                 desired_state = control.get("desired_state")
                 update_target = control.get("update_target_version")
                 rollback_target = control.get("rollback_target_version")
+                restart_operation_id = control.get("restart_operation_id")
                 if desired_state == "ROLLBACK" and future is None:
                     request_local_update(rollback_target or "previous", action="rollback")
                     payload["status"] = "UPDATING"
                 if desired_state == "RESTARTING" and future is None:
-                    request_local_update(update_target or "current", action="restart")
+                    request_local_update(update_target or "current", action="restart",
+                                         request_id=restart_operation_id)
                     payload["status"] = "UPDATING"
                 if update_target and future is None:
                     request_local_update(update_target)

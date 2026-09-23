@@ -1343,7 +1343,9 @@ def test_update_critical_mutations_install_and_canary():
 
         update_status = {
             "current_version": "0.0.1.53", "available_version": "0.0.2.0",
-            "state": "IDLE", "update_available": True,
+            "state": "IDLE", "phase": "NORMAL", "progress": 0,
+            "message": "Очікування", "log": [], "enabled": True, "pending": 0,
+            "update_available": True,
         }
         post_calls = []
 
@@ -1363,10 +1365,14 @@ def test_update_critical_mutations_install_and_canary():
         page.locator("a[href='/settings?tab=update']").click()
         expect(page.locator("[data-testid='settings-update']")).to_be_visible()
 
-        page.locator("[data-testid='update-install']").click()
-        page.locator("[data-testid='update-promote-canary']").click()
-        page.locator("[data-testid='update-rollback-canary']").click()
-        page.locator("[data-testid='update-recover-normal']").click()
+        with page.expect_response("**/api/system/update/run"):
+            page.locator("[data-testid='update-install']").click()
+        with page.expect_response("**/api/system/update/rolling/promote"):
+            page.locator("[data-testid='update-promote-canary']").click()
+        with page.expect_response("**/api/system/update/rolling/rollback"):
+            page.locator("[data-testid='update-rollback-canary']").click()
+        with page.expect_response("**/api/system/recovery/normal"):
+            page.locator("[data-testid='update-recover-normal']").click()
 
         assert "install" in post_calls, post_calls
         assert "promote" in post_calls, post_calls
@@ -1374,6 +1380,66 @@ def test_update_critical_mutations_install_and_canary():
         assert "recover" in post_calls, post_calls
         assert page_errors == [], f"pageerror: {page_errors}"
         assert console_errors == [], f"console.error: {console_errors}"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_update_center_renders_progress_recovery_and_localized_controls():
+    """#106: Update Center exposes backend progress/recovery without broken UI text."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_status(page)
+        page.route("**/api/system/update", lambda route: route.fulfill(json={
+            "current_version": "0.0.2.0", "available_version": "0.0.2.1",
+            "state": "FAILED", "phase": "RECOVERING", "progress": 42,
+            "message": "Перевірка стану після помилки", "log": [],
+            "enabled": True, "pending": 0, "update_available": True,
+        }))
+        page.route("**/api/system/update/readiness", lambda route: route.fulfill(json={
+            "ready": False, "inflight": 2, "busy_workers": ["gpu-1"],
+            "active_jobs": [], "queue_paused": True, "drain_operation_id": "op-1",
+            "acknowledged_workers": [], "unacknowledged_workers": ["gpu-1"],
+        }))
+        page.route("**/api/system/update/rolling", lambda route: route.fulfill(json={
+            "state": "PAUSED", "current_batch": 1, "total_batches": 3,
+        }))
+
+        page.goto(f"{BASE_URL}/settings?tab=update")
+        expect(page.locator("[data-testid='settings-update']")).to_be_visible()
+        expect(page.locator("[data-testid='update-progress']")).to_contain_text("42%")
+        expect(page.locator("[data-testid='update-progress']")).to_contain_text(
+            "Перевірка стану після помилки")
+        expect(page.locator("[data-testid='update-recovery-state']")).to_be_visible()
+        text = page.locator("[data-testid='settings-update']").inner_text()
+        assert "�" not in text
+        assert "Busy" not in text and "Promote canary" not in text and "Rollback canary" not in text
+        overflow = page.evaluate(
+            "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        assert overflow <= 0, f"horizontal overflow in Update Center: {overflow}px"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_viewer_cannot_see_or_open_admin_settings():
+    """#106: role/permission UI hides Settings and its route from viewers."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page, role="viewer")
+        _mock_status(page)
+        page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
+        page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
+
+        page.goto(f"{BASE_URL}/")
+        expect(page.locator("[data-testid='dashboard']")).to_be_visible()
+        expect(page.get_by_role("link", name="Налаштування", exact=True)).to_have_count(0)
+        page.goto(f"{BASE_URL}/settings")
+        expect(page.locator("[data-testid='settings-page']")).to_have_count(0)
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 def test_backup_critical_mutations_create_and_restore():

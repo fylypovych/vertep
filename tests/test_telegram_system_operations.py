@@ -1,5 +1,11 @@
 """Tests for Telegram system operations: Status, Update, Restart, Backup, Restore, Test."""
+import asyncio
 import importlib
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import pytest
 from unittest.mock import Mock, patch
 
@@ -65,6 +71,64 @@ class TestCreateOperation:
             assert op["type"] == "status"
             assert op["requested_by"] == "test_user"
             assert op["status"] == "QUEUED"
+
+    def test_audit_entry_is_durable_and_contains_operation_context(self, monkeypatch, tmp_path):
+        module = importlib.import_module("core.operations")
+        monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+        op = module.create_operation("restart", "telegram:42", target="worker-1")
+        module.begin_operation(op["operation_id"], "restart requested")
+        entry = module.audit_entry(op["operation_id"], "HOST_REQUEST", "restart-runtime")
+
+        persisted = json.loads(
+            (tmp_path / f"{op['operation_id']}.audit.jsonl").read_text(encoding="utf-8")
+        )
+        assert persisted == entry
+        assert entry["operation_type"] == "restart"
+        assert entry["target"] == "worker-1"
+        assert entry["status"] == "RUNNING"
+
+
+class TestInternalCoreCall:
+    def test_authenticated_internal_call_reaches_disposable_service(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        received = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                received["key"] = self.headers.get("x-vertep-internal-key")
+                received["body"] = json.loads(self.rfile.read(
+                    int(self.headers.get("content-length", "0"))))
+                if received["key"] != "acceptance-key":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                body = json.dumps({"status": "accepted"}).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for variable in ("ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy",
+                             "HTTPS_PROXY", "https_proxy"):
+                monkeypatch.delenv(variable, raising=False)
+            monkeypatch.setenv("CORE_API_URL", f"http://127.0.0.1:{server.server_port}")
+            monkeypatch.setenv("INTERNAL_API_KEY", "acceptance-key")
+            result = module._call_core_api("POST", "/api/system/test", {"scope": "quick"})
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
+
+        assert result == {"status": "accepted"}
+        assert received == {"key": "acceptance-key", "body": {"scope": "quick"}}
 
 
 class TestUpdateOperation:
@@ -184,6 +248,27 @@ class TestUpdateOperation:
 
 
 class TestRestartOperation:
+    def test_core_restart_executes_disposable_host_command(self, monkeypatch, tmp_path):
+        module = importlib.import_module("core.app")
+        binary_dir = tmp_path / "bin"
+        binary_dir.mkdir()
+        effect = tmp_path / "systemctl-effect"
+        systemctl = binary_dir / "systemctl"
+        systemctl.write_text(
+            "#!/bin/bash\nprintf '%s' \"$*\" > \"$VERTEP_TEST_EFFECT\"\n",
+            encoding="utf-8",
+        )
+        systemctl.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("VERTEP_TEST_EFFECT", str(effect))
+        monkeypatch.setattr(module, "set_system_state", lambda *args, **kwargs: None)
+
+        result = asyncio.run(module.system_restart({"target": "core"}))
+
+        assert result["status"] == "restart_requested"
+        assert result["previous_runtime_instance_id"] == module.CORE_RUNTIME_INSTANCE_ID
+        assert effect.read_text(encoding="utf-8") == "restart vertep-core.service"
+
     def test_restart_menu_shows_core_worker(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()

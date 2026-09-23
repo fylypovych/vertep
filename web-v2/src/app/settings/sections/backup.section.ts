@@ -21,8 +21,8 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-backup">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-slate-900">������</h3>
-        <button (click)="createBackup()" [disabled]="creating.pending()" data-testid="backup-create-button" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">{{ creating.pending() ? '�⢮۷��...' : '�⢮��' }}</button>
+        <h3 class="text-lg font-semibold text-slate-900">Резервні копії</h3>
+        <button (click)="createBackup()" [disabled]="creating.pending()" data-testid="backup-create-button" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">{{ creating.pending() ? 'Створення...' : 'Створити' }}</button>
       </div>
       @if (creating.error()) {
         <app-error-state [message]="creating.error()!" [showRetry]="false" />
@@ -37,7 +37,7 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
       } @else if (list.failed()) {
         <app-error-state [message]="list.error()!" [showRetry]="true" (retry)="loadBackups()" />
       } @else if (list.data().length === 0) {
-        <p class="text-sm text-slate-500">�����?� �� ��������</p>
+        <p class="text-sm text-slate-500">Резервних копій немає</p>
       } @else {
         <div class="space-y-2">
           @for (backup of list.data(); track backup.snapshot_id) {
@@ -47,7 +47,7 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
                 <span class="text-xs text-slate-500 ml-2">{{ backup.created_at | vertepDate }}</span>
               </div>
               <button (click)="confirmRestore(backup.snapshot_id)" [disabled]="restore.pending()" data-testid="backup-restore-button" class="text-xs text-blue-600 disabled:opacity-50">
-                {{ restore.pending() ? '�?���������...' : '�?������' }}
+                {{ restore.pending() ? 'Відновлення...' : 'Відновити' }}
               </button>
             </div>
           }
@@ -65,22 +65,22 @@ export class BackupSectionComponent implements OnInit {
   ngOnInit(): void { this.loadBackups(); }
 
   loadBackups(): void {
-    this.list.run(() => this.ops.backups().pipe(mapToSnapshots()), '�� ������� �����⠦�� ������');
+    this.list.run(() => this.ops.backups().pipe(mapToSnapshots()), 'Не вдалося завантажити резервні копії');
   }
 
   createBackup(): void {
     this.creating
-      .then(() => { this.toast.show('����� �⢮۷�', 'success'); this.loadBackups(); })
-      .run(() => this.ops.createBackup(), { fallbackMessage: '�� ������� �⢮�� �����' });
+      .then(() => { this.toast.show('Резервну копію створено', 'success'); this.loadBackups(); })
+      .run(() => this.ops.createBackup(), { fallbackMessage: 'Не вдалося створити резервну копію' });
   }
 
   confirmRestore(snapshotId: string): void {
-    this.confirm.confirm({ title: '�?������ �����', message: `�?������ ${snapshotId}?` }).subscribe((ok) => {
+    this.confirm.confirm({ title: 'Відновити резервну копію', message: `Відновити ${snapshotId}?` }).subscribe((ok) => {
       if (!ok) return;
       this.restore
-        .then(() => { this.toast.show('�?��������� �����襭�', 'success'); this.loadBackups(); })
+        .then(() => { this.toast.show('Відновлення завершено', 'success'); this.loadBackups(); })
         .run(() => this.ops.restoreBackup(snapshotId), {
-          fallbackMessage: '�� ������� �?������ �����',
+          fallbackMessage: 'Не вдалося відновити резервну копію',
           onProgress: (p) => { this.restore.progress.set(p); },
         });
     });

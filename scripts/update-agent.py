@@ -213,10 +213,15 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
 
     request = json.loads(request_path.read_text(encoding="utf-8"))
     request_id, action = str(request.get("request_id", "")), request.get("action")
-    if not re.fullmatch(r"[0-9a-f]{32}", request_id) or action not in {"check", "update", "restart"}:
+    if not re.fullmatch(r"[0-9a-f]{32}", request_id) or action not in {
+            "check", "update", "restart", "rollback"}:
         raise RuntimeError("Invalid update request")
-    initial_phase = "RESTARTING" if action == "restart" else "CHECKING"
-    initial_message = "Restarting Vertep services" if action == "restart" else "Checking signed release manifest"
+    initial_phase = ({"restart": "RESTARTING", "rollback": "RECOVERING"}.get(
+        action, "CHECKING"))
+    initial_message = ({
+        "restart": "Restarting Vertep services",
+        "rollback": "Restoring the previous Vertep release",
+    }.get(action, "Checking signed release manifest"))
     state = {"state": "RUNNING", "phase": initial_phase, "action": action,
              "request_id": request_id, "message": initial_message, "progress": 5,
              "updated_at": now(), "log": []}
@@ -233,6 +238,14 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                 state["log"].extend(output.splitlines()[-100:])
                 state.update({"state": "SUCCEEDED", "phase": "NORMAL", "progress": 100,
                               "message": "Server restart completed", "updated_at": now()})
+                set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
+                return True
+            if action == "rollback":
+                transition(state_dir, state, "RECOVERING", "Restoring the previous release", 40)
+                output = run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root)
+                state["log"].extend(output.splitlines()[-100:])
+                state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
+                              "message": "Previous release restored", "updated_at": now()})
                 set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
                 return True
             manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
@@ -331,6 +344,16 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             state["log"] = state.get("log", [])[-500:]
             atomic_json(state_dir / "status.json", state)
             request_path.unlink(missing_ok=True)
+            if state.get("state") == "FAILED":
+                marker = state_dir / "worker-update-target"
+                try:
+                    marker_value = marker.read_text(encoding="utf-8").strip()
+                    target = request.get("target_version") or "current"
+                    expected = target if action == "update" else f"{action}:{target}"
+                    if marker_value in {expected, f"{expected}:{request_id}"}:
+                        marker.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def main() -> None:

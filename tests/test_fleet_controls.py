@@ -118,7 +118,8 @@ def test_restart_action_updates_desired_state(client):
 def test_restart_ack_requires_new_runtime_instance(client, monkeypatch):
     _add_worker("rst-ack", runtime_instance_id="old-instance")
     monkeypatch.setattr("core.api.workers._valid_worker_request", lambda *args: True)
-    _control(client, "rst-ack", "restart")
+    restart = _control(client, "rst-ack", "restart")
+    operation_id = restart.json()["restart_operation_id"]
 
     same = client.post("/api/workers/heartbeat", json={
         "node_name": "rst-ack", "runtime_instance_id": "old-instance",
@@ -127,6 +128,7 @@ def test_restart_ack_requires_new_runtime_instance(client, monkeypatch):
     })
     assert same.status_code == 200
     assert same.json()["desired_state"] == "RESTARTING"
+    assert same.json()["restart_operation_id"] == operation_id
 
     restarted = client.post("/api/workers/heartbeat", json={
         "node_name": "rst-ack", "runtime_instance_id": "new-instance",
@@ -137,6 +139,7 @@ def test_restart_ack_requires_new_runtime_instance(client, monkeypatch):
     detail = client.get("/api/nodes/rst-ack").json()
     assert detail["status"] == "READY"
     assert detail["update_state"]["desired_state"] is None
+    assert detail["update_state"]["restart_ack"]["operation_id"] == operation_id
     assert detail["update_state"]["restart_ack"]["runtime_instance_id"] == "new-instance"
 
 

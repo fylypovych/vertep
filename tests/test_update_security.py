@@ -325,7 +325,8 @@ def test_recover_if_interrupted_unreadable_status_no_evidence(tmp_path, monkeypa
 def test_worker_restart_triggers_local_update(tmp_path, monkeypatch):
     """When CORE sets desired_state=RESTARTING, Worker must call request_local_update(action='restart')."""
     source = (Path(__file__).parents[1] / "worker" / "service.py").read_text(encoding="utf-8")
-    assert 'request_local_update(update_target or "current", action="restart")' in source
+    assert 'request_local_update(update_target or "current", action="restart",' in source
+    assert "request_id=restart_operation_id" in source
 
 
 def test_worker_restart_action_matches_update_agent_handler():
@@ -334,6 +335,7 @@ def test_worker_restart_action_matches_update_agent_handler():
     assert '"restart"' in agent_source
     assert "restart-runtime" in agent_source
     assert 'action == "restart"' in agent_source
+    assert 'action == "rollback"' in agent_source
 
 
 # ── Fault-injection: concurrent update requests ────────────────────────────

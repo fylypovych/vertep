@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from core.app import _hash_secret, app
 from core.update_manager import request_update, update_status
+from worker.service import request_local_update
 
 
 def load_update_agent():
@@ -76,6 +77,71 @@ def test_update_agent_restart_uses_privileged_runtime_command(monkeypatch, tmp_p
     assert result["state"] == "SUCCEEDED"
     assert result["progress"] == 100
     assert not request_path.exists()
+
+
+def test_worker_restart_host_consumer_effect_and_retry(monkeypatch, tmp_path):
+    """A correlated Worker restart reaches the host consumer and can retry after failure."""
+    agent = load_update_agent()
+    root, state = tmp_path / "repo", tmp_path / "state"
+    scripts = root / "scripts"
+    requests = state / "requests"
+    scripts.mkdir(parents=True)
+    requests.mkdir(parents=True)
+    runtime_effect = tmp_path / "runtime-restarted"
+    fail_once = tmp_path / "fail-once"
+    fail_once.write_text("1", encoding="utf-8")
+    (scripts / "vertep").write_text(
+        "#!/bin/bash\n"
+        "if [[ $1 == restart-runtime && -f $VERTEP_TEST_FAIL_ONCE ]]; then\n"
+        "  rm -f $VERTEP_TEST_FAIL_ONCE\n"
+        "  exit 7\n"
+        "fi\n"
+        "printf '%s' \"$1\" > \"$VERTEP_TEST_EFFECT\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("UPDATE_REQUEST_DIR", str(requests))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state))
+    monkeypatch.setenv("VERTEP_TEST_EFFECT", str(runtime_effect))
+    monkeypatch.setenv("VERTEP_TEST_FAIL_ONCE", str(fail_once))
+    operation_id = "d" * 32
+
+    request_local_update("current", action="restart", request_id=operation_id)
+    request_path = requests / f"{operation_id}.json"
+    assert agent.process_request(root, state, request_path) is False
+    assert not (state / "worker-update-target").exists()
+
+    request_local_update("current", action="restart", request_id=operation_id)
+    assert agent.process_request(root, state, request_path) is True
+    assert runtime_effect.read_text(encoding="utf-8") == "restart-runtime"
+    status = json.loads((state / "status.json").read_text(encoding="utf-8"))
+    assert status["request_id"] == operation_id
+    assert status["state"] == "SUCCEEDED"
+    assert (state / "worker-update-target").read_text(encoding="utf-8") == (
+        f"restart:current:{operation_id}"
+    )
+
+
+def test_worker_rollback_reaches_host_consumer(monkeypatch, tmp_path):
+    agent = load_update_agent()
+    root, state = tmp_path / "repo", tmp_path / "state"
+    scripts = root / "scripts"
+    requests = state / "requests"
+    scripts.mkdir(parents=True)
+    requests.mkdir(parents=True)
+    runtime_effect = tmp_path / "runtime-action"
+    (scripts / "vertep").write_text(
+        "#!/bin/bash\nprintf '%s' \"$1\" > \"$VERTEP_TEST_EFFECT\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("UPDATE_REQUEST_DIR", str(requests))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state))
+    monkeypatch.setenv("VERTEP_TEST_EFFECT", str(runtime_effect))
+
+    request_local_update("previous", action="rollback", request_id="e" * 32)
+    assert agent.process_request(root, state, requests / f"{'e' * 32}.json") is True
+    assert runtime_effect.read_text(encoding="utf-8") == "rollback"
+    status = json.loads((state / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "ROLLED_BACK"
 
 
 def test_web_update_is_disabled_by_default(monkeypatch, tmp_path):

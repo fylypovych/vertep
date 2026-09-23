@@ -102,7 +102,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             "desired_state": data.get("desired_state"),
             "self_test_requested_at": data.get("self_test_requested_at"),
             "update_target_version": data.get("update_target_version"),
-            "rollback_target_version": data.get("rollback_target_version")}
+            "rollback_target_version": data.get("rollback_target_version"),
+            "restart_operation_id": restart_operation_id}
 
 
 @router.get("/api/workers")
