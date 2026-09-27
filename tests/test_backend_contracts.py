@@ -600,7 +600,16 @@ class TestSessionIdentityContract:
         self._auth(monkeypatch, tmp_path, "reader", "viewer")
         # Issue #75 S1: без публічної оболонки сторінка /login не рендериться і
         # guard-redirect не має куди вести. Дані лишаються за автентифікацією.
-        for path in ("/", "/login", "/v1/"):
+        # На CI збірки web-v2/dist ще немає, тому 200 вимагається лише коли
+        # скомпільований Angular UI присутній у checkout; головне — оболонка не
+        # закрита автентифікацією.
+        shell = client.get("/login")
+        assert shell.status_code != 401, "/login is behind authentication"
+        built_ui = any(Path(candidate).is_dir() for candidate in (
+            "web-v2/dist/vertep-admin-v2", "web-v2/dist/vertep-admin-v2/browser"))
+        if built_ui:
+            assert shell.status_code == 200
+        for path in ("/", "/v1/"):
             assert client.get(path).status_code == 200, f"{path} is not publicly reachable"
         for path in ("/api/session", "/api/jobs", "/api/characters"):
             assert client.get(path).status_code == 401, f"{path} is publicly readable"

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.7
+- Виправлено CI-перевірку публічної SPA-оболонки: `test_login_shell_is_public_while_api_stays_protected` вимагав `200` для `/login` навіть без скомпільованого `web-v2/dist`, де Angular-маршрут ще не існує; тепер обов'язковою є відсутність auth-захисту (`401`), а `200` перевіряється лише за наявності збірки UI.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.6
 - Issue #75 S1: додано єдиний валідатор session identity `web-v2/src/app/core/session-identity.ts` (`resolveSessionIdentity`/`requireSessionIdentity`); валідна identity — лише `authenticated: true`, непорожній login і відома роль `admin|viewer`.
 - Issue #75 S1: `SessionApiService.profile` більше не підвищує невідомі або відсутні ролі до `admin`; обидва clients, `AuthGuard`, `AdminGuard`, login і header використовують спільний валідатор.
