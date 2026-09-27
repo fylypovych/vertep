@@ -63,7 +63,8 @@ def check_core_api(core_url: str) -> dict:
 
 
 def check_update_agent() -> dict:
-    state_dir = Path(os.getenv("UPDATE_STATE_DIR", "/var/lib/vertep/update"))
+    from core.first_run import default_update_state_dir
+    state_dir = default_update_state_dir()
     status_file = state_dir / "status.json"
     if not status_file.exists():
         return {"update_agent": False}

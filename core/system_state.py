@@ -44,7 +44,8 @@ def _database_state() -> dict | None:
 
 
 def _path(state_dir: Path | None = None) -> Path:
-    return (state_dir or Path(os.getenv("UPDATE_STATE_DIR", "/var/lib/vertep/update"))) / "system-state.json"
+    from .first_run import default_update_state_dir
+    return (state_dir or default_update_state_dir()) / "system-state.json"
 
 
 def get_system_state() -> dict:

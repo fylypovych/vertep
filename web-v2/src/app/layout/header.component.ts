@@ -126,8 +126,10 @@ export class HeaderComponent implements OnInit, OnDestroy {
       next: (p) => {
         this.userInitialSig.set((p.user?.charAt(0) || 'A').toUpperCase());
         // Єдине джерело правди про роль — PolicyService (signal); header читає з нього.
+        // Issue #75 S1: роль приймається лише з валідованої identity.
         this.policy.userRole.set(p.role);
       },
+      // Помилка профілю не змінює вже підтверджену guard роль, але й не підвищує її.
       error: () => { this.userInitialSig.set('A'); },
     });
   }

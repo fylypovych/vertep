@@ -26,8 +26,45 @@ INTEGRATION_SECRET_NAMES = frozenset({
 })
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def default_config_root() -> Path:
+    """Config root: env override, else the appliance path, else a project-local
+    directory. Without the Windows branch ``/data/config`` resolves to the drive
+    root (``C:\\data`` or ``D:\\data``), so a local run would write outside the
+    project."""
+    override = os.getenv("CONFIG_ROOT")
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        return _project_root() / ".local" / "config"
+    return Path("/data/config")
+
+
+def default_storage_root() -> Path:
+    """Storage root with the same precedence as :func:`default_config_root`."""
+    override = os.getenv("STORAGE_ROOT")
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        return _project_root() / ".local" / "storage"
+    return Path("/data/storage")
+
+
+def default_update_state_dir() -> Path:
+    """Durable update-state directory with the same precedence as the roots above."""
+    override = os.getenv("UPDATE_STATE_DIR")
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        return _project_root() / ".local" / "config" / "update"
+    return Path("/data/config/update")
+
+
 def config_root() -> Path:
-    return Path(os.getenv("CONFIG_ROOT", "/data/config"))
+    return default_config_root()
 
 
 def _read(name: str, default: dict | None = None) -> dict:
@@ -258,7 +295,7 @@ def _runtime_inventory() -> dict:
                                                    for item in containers if item.get("service")}),
             "docker_version": hardware.get("docker_version"),
             "certificate_fingerprints": fingerprints,
-            "storage_root": str(Path(os.getenv("STORAGE_ROOT", "/data/storage"))),
+            "storage_root": str(default_storage_root()),
             "update_channel": os.getenv("UPDATE_CHANNEL", "stable")}
 
 
@@ -315,7 +352,7 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
              "administrator": {"username": username, "password_hash": password_hash(password), "role": "admin"}}
     _write("installation.json", value)
     if web_domain and web_domain.strip():
-        env_path = Path(os.getenv("CONFIG_ROOT", "/data/config")) / ".env"
+        env_path = config_root() / ".env"
         row = f"WEB_DOMAIN={web_domain.strip()}\n"
         if env_path.exists():
             text = env_path.read_text(encoding="utf-8")

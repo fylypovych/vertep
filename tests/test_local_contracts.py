@@ -374,3 +374,27 @@ def test_node_drain_preserves_runtime_control(monkeypatch):
     assert result["desired_state"] == "DRAINING"
     assert result["status"] == "DRAINING"
     assert result["state_changed_at"]
+
+
+def test_frontend_session_identity_has_a_single_validator_without_role_fallback():
+    """Issue #75 S1: обидва clients мають ділити один валідатор identity.
+
+    `SessionApiService.profile` раніше перетворював будь-яку відповідь із role,
+    відмінною від viewer, на admin. Оскільки цей client не підключений до
+    компонентів, дефект не ловив жоден UI-тест — контракт перевіряється
+    статично, разом із забороною будь-якого role-fallback у clients.
+    """
+    root = Path("web-v2/src/app")
+    validator = (root / "core" / "session-identity.ts").read_text(encoding="utf-8")
+    assert "SESSION_ROLES" in validator
+    assert "resolveSessionIdentity" in validator
+    assert "requireSessionIdentity" in validator
+
+    for client in ("core/api/session.api.ts", "core/api/auth.api.ts"):
+        source = (root / client).read_text(encoding="utf-8")
+        assert "session-identity" in source, f"{client} does not use the shared identity validator"
+        # Жодного «все, що не viewer, — це admin».
+        assert not re.search(r"role\s*===\s*['\"]viewer['\"]\s*\?\s*['\"]viewer['\"]\s*:\s*['\"]admin['\"]",
+                             source), f"{client} still promotes a non-viewer role to admin"
+        assert not re.search(r"role\s*:\s*['\"]admin['\"]\s*(\)|,|\})", source), \
+            f"{client} hardcodes an admin role instead of reading the validated one"

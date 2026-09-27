@@ -11,7 +11,8 @@ app = FastAPI(title="Vertep Update Agent Status", version="1")
 
 
 def _state() -> dict:
-    path = Path(os.getenv("UPDATE_STATE_DIR", "/data/config/update")) / "status.json"
+    from core.first_run import default_update_state_dir
+    path = default_update_state_dir() / "status.json"
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}

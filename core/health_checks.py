@@ -167,7 +167,8 @@ def run_checks(role: str | None = None) -> dict:
     core_url = os.getenv("CORE_ADDRESS", "")
     if core_url:
         checks["core_api"] = check_core_api(core_url)
-    history_path = Path(os.getenv("UPDATE_STATE_DIR", "/data/config/update")) / "health-history.jsonl"
+    from .first_run import default_update_state_dir
+    history_path = default_update_state_dir() / "health-history.jsonl"
     try:
         history_path.parent.mkdir(parents=True, exist_ok=True)
         with history_path.open("a", encoding="utf-8") as f:

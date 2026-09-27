@@ -47,7 +47,8 @@ def _now() -> str:
 
 
 def _state_dir() -> Path:
-    return Path(os.getenv("UPDATE_STATE_DIR", "/var/lib/vertep/update"))
+    from .first_run import default_update_state_dir
+    return default_update_state_dir()
 
 
 def _path() -> Path:

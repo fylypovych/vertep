@@ -21,8 +21,8 @@ def utc_now() -> str:
 
 
 def alerts_path() -> Path:
-    root = Path(os.getenv("CONFIG_ROOT", "/data/config"))
-    return Path(os.getenv("ALERTS_FILE", str(root / "alerts.json")))
+    from .first_run import default_config_root
+    return Path(os.getenv("ALERTS_FILE", str(default_config_root() / "alerts.json")))
 
 
 def alert_key(alert: dict) -> str:

@@ -195,8 +195,20 @@ def _remote_copy(destination: Path) -> bool:
     return True
 
 
+def _pg_dump_path() -> str:
+    """Target of the PostgreSQL dump. The appliance writes to /tmp; on Windows
+    that path resolves to the drive root, so the dump stays in the project."""
+    override = os.getenv("BACKUP_PG_DUMP_PATH", "").strip()
+    if override:
+        return override
+    if os.name == "nt":
+        return str(_PROJECT_ROOT / "var" / "tmp" / "vertep.dump")
+    return "/tmp/vertep.dump"
+
+
 def _pg_dump_default() -> str | None:
-    return "pg_dump -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep} -d ${POSTGRES_DB:-vertep} -Fc -f /tmp/vertep.dump"
+    return ("pg_dump -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep}"
+            " -d ${POSTGRES_DB:-vertep} -Fc -f " + _pg_dump_path())
 
 
 def _redis_dump_default() -> str | None:
@@ -242,7 +254,7 @@ def _archive(destination: Path) -> None:
                 raise RuntimeError(
                     f"pg_dump exited {result.returncode}: {stderr or 'no stderr'}"
                 )
-            dump_path = Path("/tmp/vertep.dump")
+            dump_path = Path(_pg_dump_path())
             if dump_path.exists():
                 archive.add(str(dump_path), arcname="db/postgres.dump", recursive=False)
                 dump_path.unlink(missing_ok=True)

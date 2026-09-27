@@ -11,7 +11,9 @@ export class AuthGuard implements CanActivate {
 
   canActivate(): Observable<boolean | UrlTree> {
     return this.auth.getUserProfile().pipe(
-      // Меню отримує перевірену роль до створення layout, незалежно від запиту header.
+      // Issue #75 S1: getUserProfile rejects a missing/unknown role, so reaching
+      // this point means the server confirmed a complete identity. Меню отримує
+      // перевірену роль до створення layout, незалежно від запиту header.
       tap((profile) => {
         this.policy.userRole.set(profile.role);
         this.policy.refresh();

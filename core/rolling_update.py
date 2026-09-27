@@ -17,7 +17,8 @@ def _now() -> str:
 
 
 def _path() -> Path:
-    return Path(os.getenv("UPDATE_STATE_DIR", "/data/config/update")) / "rollout.json"
+    from .first_run import default_update_state_dir
+    return default_update_state_dir() / "rollout.json"
 
 
 def _database_url() -> str | None:

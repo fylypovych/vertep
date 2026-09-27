@@ -7,6 +7,9 @@ config/secret-store.passphrase
 .vertep-last-good
 
 .env
+# Local runtime state (Windows dev fallback for the appliance /data roots)
+/.local/
+/var/
 /.claude
 /.codeatlas
 /.codex

@@ -1,3 +1,7 @@
+import type { PasswordPolicy, SessionEnvelope } from './session-identity';
+
+export type { PasswordPolicy, SessionEnvelope, SessionIdentity, SessionRole } from './session-identity';
+
 export interface Worker {
   node_id: string;
   node_name: string;
@@ -664,7 +668,16 @@ export interface SelfTestResult {
 
 export interface UserProfile {
   user: string;
+  login: string;
   role: 'admin' | 'viewer';
+  display_name: string | null;
+  email: string | null;
+  password_policy: PasswordPolicy;
+}
+
+export interface UpdateProfileRequest {
+  display_name?: string;
+  email?: string;
 }
 
 export interface ChangePasswordRequest {
@@ -675,6 +688,7 @@ export interface ChangePasswordRequest {
 export interface ChangePasswordResponse {
   ok: boolean;
   message: string;
+  password_policy?: PasswordPolicy;
 }
 
 export interface WorkflowDocument {
@@ -745,11 +759,7 @@ export interface SetupCompleteResult {
 }
 
 // ── Shared auth / ack contracts ─────────────────────────────────
-export interface SessionResponse {
-  authenticated: boolean;
-  user?: string;
-  role?: 'admin' | 'viewer';
-}
+export type SessionResponse = SessionEnvelope;
 
 export interface OperationAck {
   ok?: boolean;

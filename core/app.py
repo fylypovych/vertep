@@ -52,8 +52,7 @@ from .system_state import (SystemState, dispatch_allowed, get_system_state,
 from .health_checks import run_checks as _run_health_checks, health_status as _health_status
 from .first_run import (complete_setup, configured_user, is_configured, session_secret,
                         setup_status, config_root, integration_secret_status,
-                        set_integration_secret, installation, load_all_users,
-                        save_user, user_store)
+                        set_integration_secret, installation)
 from .telegram_store import (get_admin_chat_ids, get_allowed_chat_ids, is_allowed_chat,
                              is_admin_chat, load_telegram_settings, save_telegram_settings)
 from .operations import (create_operation, get_operation, list_operations,
@@ -97,7 +96,10 @@ from .api.observability import (router as observability_router,
     health, watchdog_report, health_history, security_check, logs, ingest_logs, metrics, prometheus_metrics, alerts, maintenance_cleanup)
 from .api.real_tests import router as real_tests_router
 from .security import (_authenticate_user, _hash_secret, _session_token, _valid_session,
-                       _valid_worker_request, _valid_worker_token, _verify_hash, _worker_tokens)
+                       _valid_worker_request, _valid_worker_token, _worker_tokens,
+                       account_password_matches, account_profile, password_policy,
+                       password_policy_violations, profile_field_violations, save_account_profile,
+                       session_response, set_account_password)
 
 
 @asynccontextmanager
@@ -254,6 +256,13 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         public = ("/api/health", "/api/telegram/webhook")
         if ((not configured_user() and not password and not os.getenv("USERS_JSON", "").strip(" {}"))
                 or request.url.path.startswith(public) or request.url.path == "/api/nodes/register"):
+            response = await call_next(request)
+            return self._secure(response)
+        if request.method in {"GET", "HEAD"} and not request.url.path.startswith("/api/"):
+            # Issue #75 S1: the Web UI is a static bundle. An unauthenticated
+            # visitor must be able to load /login, otherwise the guard redirect
+            # has nothing to render. No Vertep data is served outside /api,
+            # which stays behind the authentication checks below.
             response = await call_next(request)
             return self._secure(response)
         expected_user = os.getenv("ADMIN_USER", "admin")
@@ -415,15 +424,24 @@ async def _watchdog() -> None:
 
 
 
+def _json_error(detail: str, status: int, **extra) -> Response:
+    body = {"detail": detail, **extra}
+    return Response(content=json.dumps(body, ensure_ascii=False), status_code=status,
+                    media_type="application/json")
+
+
 @app.post("/api/session")
 def create_session(response: Response, request: Request):
     header = request.headers.get("authorization", "")
     try:
         _, encoded = header.split(" ", 1)
-        user, supplied = basic64.b64decode(encoded).decode().split(":", 1)
+        user, supplied = basic64.b64decode(encoded).decode("utf-8").split(":", 1)
     except (ValueError, UnicodeError, binascii.Error):
         user, supplied = "admin", os.getenv("ADMIN_PASSWORD", "")
-    role = _authenticate_user(user, supplied) or "admin"
+    # Issue #75 S1: an unverified credential never mints an admin session.
+    role = _authenticate_user(user, supplied)
+    if role is None:
+        return _json_error("Invalid credentials", 401)
     token = _session_token(user, role)
     csrf = hmac.new(os.getenv("ADMIN_PASSWORD", "").encode(), token.encode(), hashlib.sha256).hexdigest()
     response.set_cookie("vertep_session", token, httponly=True, samesite="strict",
@@ -431,7 +449,7 @@ def create_session(response: Response, request: Request):
                         max_age=int(os.getenv("SESSION_TTL", "28800")))
     response.set_cookie("vertep_csrf", csrf, httponly=False, samesite="strict",
                         secure=os.getenv("COOKIE_SECURE", "false").lower() == "true")
-    return {"authenticated": True, "user": user, "role": role}
+    return session_response((user, role))
 
 @app.delete("/api/session")
 def logout(response: Response):
@@ -441,43 +459,56 @@ def logout(response: Response):
 
 @app.get("/api/session")
 def session_info(request: Request):
+    # Issue #75 S1: the canonical identity is decided once, on the server.
+    return session_response(_valid_session(request.cookies.get("vertep_session", "")))
+
+
+def _session_identity(request: Request) -> Response | tuple[str, str]:
+    """Return the validated identity or a ready-to-return 401 response."""
     identity = _valid_session(request.cookies.get("vertep_session", ""))
-    return {"authenticated": bool(identity), "user": identity[0] if identity else None,
-            "role": identity[1] if identity else None}
+    profile = account_profile(*identity) if identity else None
+    return profile or _json_error("Unauthorized", 401)
+
+
+@app.put("/api/session/profile")
+def update_profile(request: Request, payload: dict):
+    """Issue #75 S3: self-service name/email fields for the own account."""
+    identity = _session_identity(request)
+    if isinstance(identity, Response):
+        return identity
+    updates = {field: payload.get(field) for field in ("display_name", "email")
+               if field in payload}
+    if not updates:
+        return _json_error("Немає полів для оновлення", 400)
+    violations = profile_field_violations(updates)
+    if violations:
+        return _json_error("Недійсні поля профілю", 422, fields=violations)
+    if not save_account_profile(identity["user"], updates):
+        return _json_error("User not found", 404)
+    return account_profile(identity["user"], identity["role"])
+
 
 @app.put("/api/session/password")
 def change_password(request: Request, payload: dict):
-    identity = _valid_session(request.cookies.get("vertep_session", ""))
-    if not identity:
-        return Response(content=json.dumps({"detail": "Unauthorized"}), status_code=401, media_type="application/json")
-    user, role = identity
+    identity = _session_identity(request)
+    if isinstance(identity, Response):
+        return identity
+    user = identity["user"]
     old_password = payload.get("old_password", "")
     new_password = payload.get("new_password", "")
     if not old_password or not new_password:
-        return Response(content=json.dumps({"detail": "Old and new passwords required"}), status_code=400, media_type="application/json")
-    if len(new_password) < 12:
-        return Response(content=json.dumps({"detail": "Password must be at least 12 characters"}), status_code=400, media_type="application/json")
-    if old_password == new_password:
-        return Response(content=json.dumps({"detail": "New password must be different from old"}), status_code=400, media_type="application/json")
-    configured = configured_user()
-    if configured and configured[0] == user:
-        if not _verify_hash(old_password, configured[1]["password_hash"]):
-            return Response(content=json.dumps({"detail": "Current password is incorrect"}), status_code=400, media_type="application/json")
-        admin_data = dict(configured[1])
-        admin_data["password_hash"] = password_hash(new_password)
-        inst = installation()
-        inst["administrator"] = admin_data
-        _write("installation.json", inst)
-    else:
-        record = load_all_users().get(user)
-        if not isinstance(record, dict):
-            return Response(content=json.dumps({"detail": "User not found"}), status_code=404, media_type="application/json")
-        if not isinstance(record.get("password_hash"), str) or not _verify_hash(old_password, record["password_hash"]):
-            return Response(content=json.dumps({"detail": "Current password is incorrect"}), status_code=400, media_type="application/json")
-        updated = dict(record)
-        updated["password_hash"] = password_hash(new_password)
-        save_user(user, updated)
-    return {"ok": True, "message": "Password changed successfully"}
+        return _json_error("Old and new passwords required", 400)
+    violations = password_policy_violations(new_password, old_password)
+    if violations:
+        return _json_error(violations[0], 400)
+    if not account_password_matches(user, old_password):
+        # Issue #75 S3: a wrong current password stays a recoverable error —
+        # no lockout, no partial write, the current session keeps working.
+        return _json_error("Current password is incorrect", 400)
+    if not set_account_password(user, new_password):
+        return _json_error("User not found", 404)
+    return {"ok": True, "message": "Password changed successfully",
+            "password_policy": password_policy()}
 
 @app.get("/api/events")
 async def event_stream():
@@ -2690,8 +2721,8 @@ async def system_test(payload: dict | None = None):
             result["certificates_error"] = str(error)
 
         try:
-            from pathlib import Path
-            storage_root = Path(os.getenv("STORAGE_ROOT", "/opt/vertep/storage"))
+            from .first_run import default_storage_root
+            storage_root = default_storage_root()
             storage_root.mkdir(parents=True, exist_ok=True)
             probe = storage_root / f".self-test-{uuid.uuid4().hex}.tmp"
             with probe.open("wb") as handle:

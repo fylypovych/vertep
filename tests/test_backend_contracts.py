@@ -496,7 +496,8 @@ class TestRBACAuthorization:
                           cookies=cookies, headers=headers)
         # Not role-blocked (403): security validation runs.
         assert resp.status_code == 400
-        assert "12 characters" in resp.json()["detail"]
+        # Issue #75 S3: the policy is reported by the server in the UI language.
+        assert "12" in resp.json()["detail"]
 
     def test_viewer_change_password_wrong_old_rejected(self, monkeypatch):
         cookies, headers = self._auth(monkeypatch, "reader", "viewer")
@@ -527,3 +528,250 @@ class TestRBACAuthorization:
         monkeypatch.delenv("CONFIG_ROOT", raising=False)
         resp = client.get("/api/jobs")
         assert resp.status_code == 401
+
+
+class TestSessionIdentityContract:
+    """Issue #75 S1: one validated identity decided by the server."""
+
+    def _auth(self, monkeypatch, tmp_path, user, role, password="identity-contract-password"):
+        monkeypatch.setenv("ADMIN_PASSWORD", password)
+        monkeypatch.setenv("ADMIN_USER", "primary-admin")
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+        (tmp_path / "installation.json").write_text(
+            json.dumps({"installation_id": "test", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            encoding="utf-8")
+        import hashlib
+        import hmac
+        from core.security import _session_token
+        token = _session_token(user, role)
+        csrf = hmac.new(password.encode(), token.encode(), hashlib.sha256).hexdigest()
+        return ({"vertep_session": token, "vertep_csrf": csrf},
+                {"x-csrf-token": csrf})
+
+    def test_invalid_credentials_never_open_a_session(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ADMIN_PASSWORD", "identity-contract-password")
+        monkeypatch.setenv("ADMIN_USER", "primary-admin")
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+        (tmp_path / "installation.json").write_text(
+            json.dumps({"installation_id": "test", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            encoding="utf-8")
+        monkeypatch.setenv("USERS_JSON", "{}")
+        import base64
+        credentials = base64.b64encode(b"primary-admin:wrong-password").decode()
+        resp = client.post("/api/session", headers={"Authorization": f"Basic {credentials}"})
+        assert resp.status_code == 401
+        assert "vertep_session" not in resp.cookies
+
+    def test_utf8_basic_credentials_open_a_session(self, monkeypatch, tmp_path):
+        # Issue #75 S1: Basic credentials are decoded as UTF-8 on both sides, so
+        # a Cyrillic login/password must authenticate exactly as configured.
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+        (tmp_path / "installation.json").write_text(
+            json.dumps({"installation_id": "test", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            encoding="utf-8")
+        monkeypatch.setenv("USERS_JSON", "{}")
+        login, password = "адміністратор", "пароль-ідентичності"
+        monkeypatch.setenv("ADMIN_USER", login)
+        monkeypatch.setenv("ADMIN_PASSWORD", password)
+        import base64
+        credentials = base64.b64encode(f"{login}:{password}".encode("utf-8")).decode("ascii")
+        # Окремий клієнт: успішний вхід не залишає session-cookie у спільній jar.
+        # Без контекст-менеджера, щоб не запускати app lifespan у сусідніх тестах.
+        utf8_client = TestClient(app)
+        try:
+            resp = utf8_client.post("/api/session", headers={"Authorization": f"Basic {credentials}"})
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["authenticated"] is True
+            assert body["user"] == login
+            assert body["role"] == "admin"
+            assert utf8_client.get("/api/session").json()["user"] == login
+        finally:
+            utf8_client.cookies.clear()
+
+
+    def test_configured_installation_rejects_anonymous_session_read(self, monkeypatch, tmp_path):
+        cookies, _ = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        assert cookies
+        # Middleware не пропускає анонімний запит, коли встановлено пароль.
+        assert client.get("/api/session").status_code == 401
+
+    def test_login_shell_is_public_while_api_stays_protected(self, monkeypatch, tmp_path):
+        self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        # Issue #75 S1: без публічної оболонки сторінка /login не рендериться і
+        # guard-redirect не має куди вести. Дані лишаються за автентифікацією.
+        for path in ("/", "/login", "/v1/"):
+            assert client.get(path).status_code == 200, f"{path} is not publicly reachable"
+        for path in ("/api/session", "/api/jobs", "/api/characters"):
+            assert client.get(path).status_code == 401, f"{path} is publicly readable"
+
+    def test_unconfigured_installation_reports_explicitly_unauthenticated(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+        monkeypatch.delenv("USERS_JSON", raising=False)
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+        (tmp_path / "installation.json").write_text(
+            json.dumps({"installation_id": "test", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            encoding="utf-8")
+        resp = client.get("/api/session")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["authenticated"] is False
+        assert body["user"] is None
+        assert body["role"] is None
+        assert body["password_policy"]["min_length"] >= 12
+
+    def test_session_reports_only_a_known_role(self, monkeypatch, tmp_path):
+        from core.security import SESSION_ROLES
+        cookies, _ = self._auth(monkeypatch, tmp_path, "reader", "superuser")
+        body = client.get("/api/session", cookies=cookies).json()
+        assert body["role"] in SESSION_ROLES
+        # Невідома роль не підвищується до admin — найменш привілейована.
+        assert body["role"] == "viewer"
+
+    def test_session_exposes_canonical_profile_fields(self, monkeypatch, tmp_path):
+        from core.security import _hash_secret
+        monkeypatch.setenv("USERS_JSON", json.dumps({
+            "reader": {"password_hash": _hash_secret("reader-secret"),
+                       "role": "viewer", "display_name": " Reader ", "email": " reader@example.com "}}))
+        cookies, _ = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        body = client.get("/api/session", cookies=cookies).json()
+        assert body["authenticated"] is True
+        assert body["user"] == "reader"
+        assert body["login"] == "reader"
+        assert body["display_name"] == "Reader"
+        assert body["email"] == "reader@example.com"
+        assert body["password_policy"] == {"min_length": 12, "require_different_from_current": True}
+
+    def test_viewer_sees_the_same_contract_as_admin(self, monkeypatch, tmp_path):
+        for user, role in (("reader", "viewer"), ("root-admin", "admin")):
+            cookies, _ = self._auth(monkeypatch, tmp_path, user, role)
+            body = client.get("/api/session", cookies=cookies).json()
+            assert set(body) == {"authenticated", "user", "login", "role",
+                                 "display_name", "email", "password_policy"}
+
+
+class TestSelfServiceAccount:
+    """Issue #75 S3: name/email profile fields and password policy/recovery."""
+
+    def _auth(self, monkeypatch, tmp_path, user, role, password="account-contract-password"):
+        monkeypatch.setenv("ADMIN_PASSWORD", password)
+        monkeypatch.setenv("ADMIN_USER", "primary-admin")
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+        (tmp_path / "installation.json").write_text(
+            json.dumps({"installation_id": "test", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            encoding="utf-8")
+        import hashlib
+        import hmac
+        from core.security import _hash_secret, _session_token
+        monkeypatch.setenv("USERS_JSON", json.dumps({
+            user: {"password_hash": _hash_secret(password), "role": role}}))
+        token = _session_token(user, role)
+        csrf = hmac.new(password.encode(), token.encode(), hashlib.sha256).hexdigest()
+        return ({"vertep_session": token, "vertep_csrf": csrf},
+                {"x-csrf-token": csrf})
+
+    def test_viewer_can_update_own_profile_fields(self, monkeypatch, tmp_path):
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        resp = client.put("/api/session/profile",
+                          json={"display_name": "Переглядач Один", "email": "reader@example.com"},
+                          cookies=cookies, headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["display_name"] == "Переглядач Один"
+        assert resp.json()["email"] == "reader@example.com"
+        assert resp.json()["role"] == "viewer"
+        # Значення зберігаються і повертаються наступним запитом сесії.
+        body = client.get("/api/session", cookies=cookies).json()
+        assert body["display_name"] == "Переглядач Один"
+        assert body["email"] == "reader@example.com"
+
+    def test_profile_rejects_invalid_fields(self, monkeypatch, tmp_path):
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        resp = client.put("/api/session/profile",
+                          json={"display_name": "x" * 81, "email": "not-an-email"},
+                          cookies=cookies, headers=headers)
+        assert resp.status_code == 422
+        assert set(resp.json()["fields"]) == {"display_name", "email"}
+
+    def test_profile_requires_a_session(self, monkeypatch, tmp_path):
+        self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        resp = client.put("/api/session/profile", json={"display_name": "X"})
+        assert resp.status_code == 401
+
+    def test_password_change_is_persisted_and_old_password_stops_working(self, monkeypatch, tmp_path):
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        resp = client.put("/api/session/password",
+                          json={"old_password": "account-contract-password",
+                                "new_password": "new-reader-password-12"},
+                          cookies=cookies, headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        # Новий пароль приймається сервером, старий більше ні.
+        from core.security import _authenticate_user
+        assert _authenticate_user("reader", "new-reader-password-12") == "viewer"
+        assert _authenticate_user("reader", "account-contract-password") is None
+
+    def test_wrong_current_password_is_recoverable(self, monkeypatch, tmp_path):
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        resp = client.put("/api/session/password",
+                          json={"old_password": "not-the-password",
+                                "new_password": "another-password-12"},
+                          cookies=cookies, headers=headers)
+        assert resp.status_code == 400
+        assert "incorrect" in resp.json()["detail"]
+        # Сесія лишається чинною, пароль не змінено: повторна спроба можлива.
+        assert client.get("/api/session", cookies=cookies).json()["authenticated"] is True
+        retry = client.put("/api/session/password",
+                           json={"old_password": "account-contract-password",
+                                 "new_password": "recovered-password-12"},
+                           cookies=cookies, headers=headers)
+        assert retry.status_code == 200
+
+    def test_policy_is_enforced_and_reported(self, monkeypatch, tmp_path):
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        same = client.put("/api/session/password",
+                          json={"old_password": "account-contract-password",
+                                "new_password": "account-contract-password"},
+                          cookies=cookies, headers=headers)
+        assert same.status_code == 400
+        policy = client.get("/api/session", cookies=cookies).json()["password_policy"]
+        assert policy["min_length"] == 12
+        short = client.put("/api/session/password",
+                           json={"old_password": "account-contract-password",
+                                 "new_password": "x" * (policy["min_length"] - 1)},
+                           cookies=cookies, headers=headers)
+        assert short.status_code == 400
+        assert str(policy["min_length"]) in short.json()["detail"]
+
+
+class TestLocalDataRoots:
+    """Runtime roots must stay inside the project on a developer machine.
+
+    The appliance paths are Linux absolute paths; on Windows they resolve to the
+    drive root (``C:\\data``, ``D:\\tmp``), so the defaults fall back to the
+    project instead. Production keeps the appliance paths via the environment.
+    """
+
+    PROJECT = Path(__file__).resolve().parent.parent
+
+    def _defaults(self, monkeypatch):
+        from core.first_run import default_config_root, default_storage_root, default_update_state_dir
+        from core.persistent_data import _data_storage
+        for name in ("CONFIG_ROOT", "STORAGE_ROOT", "UPDATE_STATE_DIR", "JOB_ROOT"):
+            monkeypatch.delenv(name, raising=False)
+        return [default_config_root(), default_storage_root(),
+                default_update_state_dir(), _data_storage()]
+
+    def test_unset_roots_resolve_inside_project(self, monkeypatch):
+        for path in self._defaults(monkeypatch):
+            assert path.is_absolute()
+            if os.name == "nt":
+                assert str(path.resolve()).lower().startswith(str(self.PROJECT).lower()), path
+
+    def test_environment_overrides_win(self, monkeypatch, tmp_path):
+        from core.first_run import default_config_root, default_storage_root, default_update_state_dir
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path / "cfg"))
+        monkeypatch.setenv("STORAGE_ROOT", str(tmp_path / "sto"))
+        monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "upd"))
+        assert default_config_root() == tmp_path / "cfg"
+        assert default_storage_root() == tmp_path / "sto"
+        assert default_update_state_dir() == tmp_path / "upd"

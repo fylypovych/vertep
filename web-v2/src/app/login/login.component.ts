@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterModule } from '@angular/router';
@@ -29,9 +29,9 @@ import { AuthApiService } from '../core/api/auth.api';
             <input type="password" formControlName="password" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             <p class="text-xs text-red-600 mt-1" *ngIf="form.controls['password'].touched && form.controls['password'].invalid">Обов'язкове поле</p>
           </div>
-          <div class="text-sm text-red-600" *ngIf="error">{{ error }}</div>
-          <button type="submit" [disabled]="loading || form.invalid" class="w-full bg-emerald-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
-            {{ loading ? 'Завантаження...' : 'Увійти' }}
+          <div class="text-sm text-red-600" *ngIf="error()" data-testid="login-error">{{ error() }}</div>
+          <button type="submit" [disabled]="loading() || form.invalid" class="w-full bg-emerald-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+            {{ loading() ? 'Завантаження...' : 'Увійти' }}
           </button>
         </form>
       </div>
@@ -40,8 +40,10 @@ import { AuthApiService } from '../core/api/auth.api';
 })
 export class LoginComponent implements OnInit {
   form: FormGroup;
-  loading = false;
-  error: string | null = null;
+  // Issue #75 S1: zoneless-режим оновлює view лише через signals — стан
+  // помилки входу має бути видимим після відповіді сервера.
+  loading = signal(false);
+  error = signal<string | null>(null);
 
   constructor(private fb: FormBuilder, private auth: AuthApiService, private router: Router) {
     this.form = this.fb.group({
@@ -60,13 +62,21 @@ export class LoginComponent implements OnInit {
 
   submit(): void {
     if (this.form.invalid) return;
-    this.loading = true;
-    this.error = null;
+    this.loading.set(true);
+    this.error.set(null);
     this.auth.createSession(this.form.value).subscribe({
-      next: () => this.router.navigate(['/']),
+      // Issue #75 S1: a 200 without a valid identity is not a signed-in session.
+      next: (session) => {
+        if (session.authenticated) {
+          this.router.navigate(['/']);
+          return;
+        }
+        this.error.set('Не вдалося підтвердити сесію');
+        this.loading.set(false);
+      },
       error: (err) => {
-        this.error = err.message || 'Не вдалося увійти';
-        this.loading = false;
+        this.error.set(err.message || 'Не вдалося увійти');
+        this.loading.set(false);
       },
     });
   }

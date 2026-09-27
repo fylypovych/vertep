@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Browser E2E smoke tests for Vertep Web UI V2."""
+import json
 import os
 import socket
 import sys
@@ -1591,3 +1592,223 @@ def test_loading_state_resolves_to_content_or_error():
         expect(terminal_states.first).to_be_visible()
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
+
+
+# ── Issue #75 S6: session/account acceptance against a real local backend ──
+# Ці тести не мокують /api/session, /api/session/profile, /api/session/password
+# чи /api/status: вони доводять реальну серверну identity, RBAC і system-state
+# поведінку на запущеному CORE, а не frontend-контракт.
+# Облікові записи E2E задаються через USERS_JSON (окремі від ADMIN_USER енва,
+# щоб ротація пароля не залишала другий дійсний шлях входу).
+ADMIN_USER = os.getenv("VERTEP_E2E_ADMIN_USER", "e2e-admin")
+ADMIN_PASSWORD = os.getenv("VERTEP_E2E_ADMIN_PASSWORD", "e2e-admin-password-12")
+VIEWER_USER = os.getenv("VERTEP_E2E_VIEWER_USER", "e2e-viewer")
+VIEWER_PASSWORD = os.getenv("VERTEP_E2E_VIEWER_PASSWORD", "e2e-viewer-password-12")
+ROTATED_ADMIN_PASSWORD = os.getenv("VERTEP_E2E_ROTATED_PASSWORD", "e2e-admin-rotated-12")
+# tests/conftest.py перенаправляє UPDATE_STATE_DIR у герметичний тимчасовий каталог,
+# тому стан керованої системи задається окремим шляхом до каталогу, який читає
+# запущений CORE. Без нього system-state перевірка не виконується (skip, не pass).
+E2E_STATE_DIR = os.getenv("VERTEP_E2E_STATE_DIR")
+
+
+def _state_path():
+    return Path(E2E_STATE_DIR) / "system-state.json"
+
+
+def _write_system_state(state: str, reason: str = ""):
+    """Drive the durable system state store the running CORE reads."""
+    path = _state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"state": state, "updated_at": "2026-01-01T00:00:00+00:00",
+                    "reason": reason, "operation_id": None}),
+        encoding="utf-8",
+    )
+
+
+def _csrf_headers(context) -> dict:
+    """CSRF header the UI sends for its own mutations."""
+    for cookie in context.cookies():
+        if cookie["name"] == "vertep_csrf":
+            return {"X-CSRF-Token": cookie["value"]}
+    raise AssertionError("vertep_csrf cookie is missing for the signed-in session")
+
+
+def _ui_login(page, user: str, password: str):
+    page.goto(f"{BASE_URL}/login")
+    expect(page.get_by_role("heading", name="Вхід")).to_be_visible(timeout=20000)
+    page.locator("input[type='text']").fill(user)
+    page.locator("input[type='password']").fill(password)
+    page.get_by_role("button", name="Увійти").click()
+    page.wait_for_url(lambda url: "/login" not in url, timeout=20000)
+
+
+def _ui_logout(page):
+    page.locator("button[aria-label='Меню користувача']").click()
+    page.get_by_role("button", name="Вийти").click()
+    page.wait_for_url(f"{BASE_URL}/login", timeout=20000)
+
+
+def test_real_backend_admin_profile_password_logout_roundtrip():
+    """Issue #75 S1/S3/S6: identity, поля облікового запису, пароль і logout."""
+    display_name = "Browser E2E Admin"
+    email = "browser-e2e-admin@example.com"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+            expect(page.get_by_text("Адмін", exact=True)).to_be_visible(timeout=20000)
+            expect(page.locator("nav").first.get_by_text("Налаштування", exact=True)).to_be_visible()
+
+            # Профіль показує серверну identity, а не локальні припущення.
+            page.goto(f"{BASE_URL}/profile")
+            expect(page.get_by_test_id("profile-page")).to_be_visible(timeout=20000)
+            expect(page.get_by_test_id("profile-login")).to_have_text(ADMIN_USER)
+            expect(page.get_by_test_id("profile-role")).to_have_text("Адміністратор")
+            expect(page.get_by_test_id("password-policy-hint")).to_contain_text("12")
+
+            # Поля імені/email зберігаються на сервері й лишаються після reload.
+            page.get_by_test_id("display-name-input").fill(display_name)
+            page.get_by_test_id("email-input").fill(email)
+            page.get_by_test_id("account-save").click()
+            page.wait_for_timeout(500)
+            page.reload()
+            expect(page.get_by_test_id("display-name-input")).to_have_value(display_name)
+            expect(page.get_by_test_id("email-input")).to_have_value(email)
+            session_body = page.request.get(f"{BASE_URL}/api/session").json()
+            assert session_body["role"] == "admin"
+            assert session_body["display_name"] == display_name
+            assert session_body["email"] == email
+
+            # Невірний поточний пароль — відновлювана помилка, сесія лишається чинною.
+            page.get_by_test_id("old-password-input").fill("definitely-not-the-password")
+            page.get_by_test_id("new-password-input").fill(ROTATED_ADMIN_PASSWORD)
+            page.get_by_test_id("confirm-password-input").fill(ROTATED_ADMIN_PASSWORD)
+            page.get_by_test_id("password-save").click()
+            expect(page.get_by_test_id("password-error")).to_be_visible(timeout=20000)
+            assert page.request.get(f"{BASE_URL}/api/session").json()["authenticated"] is True
+
+            # Успішна зміна: новий пароль приймає сервер, старий — ні.
+            page.get_by_test_id("old-password-input").fill(ADMIN_PASSWORD)
+            page.get_by_test_id("new-password-input").fill(ROTATED_ADMIN_PASSWORD)
+            page.get_by_test_id("confirm-password-input").fill(ROTATED_ADMIN_PASSWORD)
+            page.get_by_test_id("password-save").click()
+            page.wait_for_timeout(800)
+
+            _ui_logout(page)
+            expect(page.get_by_role("heading", name="Вхід")).to_be_visible()
+            page.locator("input[type='text']").fill(ADMIN_USER)
+            page.locator("input[type='password']").fill(ADMIN_PASSWORD)
+            page.get_by_role("button", name="Увійти").click()
+            expect(page.get_by_test_id("login-error")).to_be_visible(timeout=20000)
+
+            _ui_login(page, ADMIN_USER, ROTATED_ADMIN_PASSWORD)
+            expect(page.get_by_text("Адмін", exact=True)).to_be_visible(timeout=20000)
+        finally:
+            # Середовище повертається до початкового пароля, тест не залишає
+            # змінених облікових даних для наступних прогонів.
+            _restore_admin_password(browser)
+            browser.close()
+
+
+def _restore_admin_password(browser):
+    """Rotate the administrator password back to the configured value."""
+    import base64
+    context = browser.new_context()
+    page = context.new_page()
+    try:
+        page.goto(f"{BASE_URL}/login")
+        page.locator("input[type='text']").fill(ADMIN_USER)
+        page.locator("input[type='password']").fill(ROTATED_ADMIN_PASSWORD)
+        page.get_by_role("button", name="Увійти").click()
+        page.wait_for_url(lambda url: "/login" not in url, timeout=20000)
+        page.goto(f"{BASE_URL}/profile")
+        expect(page.get_by_test_id("password-form")).to_be_visible(timeout=20000)
+        page.get_by_test_id("old-password-input").fill(ROTATED_ADMIN_PASSWORD)
+        page.get_by_test_id("new-password-input").fill(ADMIN_PASSWORD)
+        page.get_by_test_id("confirm-password-input").fill(ADMIN_PASSWORD)
+        page.get_by_test_id("password-save").click()
+        page.wait_for_timeout(500)
+    finally:
+        context.close()
+
+
+def test_real_backend_viewer_has_no_admin_access():
+    """Issue #75 S1/S6: справжній viewer не отримує admin UI та admin API."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, VIEWER_USER, VIEWER_PASSWORD)
+            expect(page.get_by_text("Переглядач", exact=False).first).to_be_visible(timeout=20000)
+            expect(page.locator("nav").first.get_by_text("Налаштування", exact=True)).to_have_count(0)
+
+            body = page.request.get(f"{BASE_URL}/api/session").json()
+            assert body["authenticated"] is True
+            assert body["user"] == VIEWER_USER
+            assert body["role"] == "viewer"
+
+            # Прямі API-негативні перевірки: UI не є доказом серверного RBAC.
+            create = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": "viewer probe"})
+            assert create.status == 403, f"viewer job create returned {create.status}"
+            settings = page.request.post(f"{BASE_URL}/api/settings/logo")
+            assert settings.status == 403, f"viewer settings mutation returned {settings.status}"
+
+            # Власний профіль і власний пароль viewer недоступні адміністратору,
+            # але доступні самому власнику акаунта.
+            page.goto(f"{BASE_URL}/profile")
+            expect(page.get_by_test_id("profile-page")).to_be_visible(timeout=20000)
+            expect(page.get_by_test_id("profile-role")).to_have_text("Переглядач")
+            page.get_by_test_id("display-name-input").fill("Browser E2E Viewer")
+            page.get_by_test_id("email-input").fill("browser-e2e-viewer@example.com")
+            page.get_by_test_id("account-save").click()
+            page.wait_for_timeout(500)
+            page.reload()
+            expect(page.get_by_test_id("display-name-input")).to_have_value("Browser E2E Viewer")
+
+            _ui_logout(page)
+            expect(page.get_by_role("heading", name="Вхід")).to_be_visible()
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            browser.close()
+
+
+def test_real_backend_system_state_blocks_mutations():
+    """Issue #75 S6: реальний system-state блокує мутації в UI та API."""
+    if not E2E_STATE_DIR:
+        pytest.skip("VERTEP_E2E_STATE_DIR is not set: the running CORE state store "
+                    "cannot be addressed from the isolated test process")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+            headers = _csrf_headers(page.context)
+            # Порожня тема не створює завдання: у NORMAL запит доходить до
+            # валідації (422), у READ_ONLY його блокує system-state (423).
+            _write_system_state("READ_ONLY", "Browser E2E read-only")
+            try:
+                page.goto(f"{BASE_URL}/jobs")
+                expect(page.get_by_test_id("jobs-page")).to_be_visible(timeout=20000)
+                blocked = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": ""}, headers=headers)
+                assert blocked.status == 423, f"READ_ONLY job create returned {blocked.status}"
+                assert "blocked by system state" in blocked.text()
+                create_button = page.get_by_test_id("create-job-button")
+                expect(create_button).to_be_disabled(timeout=20000)
+                assert "READ_ONLY" in (create_button.get_attribute("title") or "")
+            finally:
+                _write_system_state("NORMAL", "Browser E2E restored")
+            page.wait_for_timeout(500)
+            page.reload()
+            expect(page.get_by_test_id("jobs-page")).to_be_visible(timeout=20000)
+            expect(page.get_by_test_id("create-job-button")).to_be_enabled(timeout=20000)
+            allowed = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": ""}, headers=headers)
+            assert allowed.status != 423, f"NORMAL job create was blocked: {allowed.status}"
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            _write_system_state("NORMAL", "Browser E2E teardown")
+            browser.close()

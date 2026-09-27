@@ -16,7 +16,8 @@ def utc_now() -> str:
 
 
 def state_root() -> Path:
-    return Path(os.getenv("UPDATE_STATE_DIR", "/var/lib/vertep/update"))
+    from .first_run import default_update_state_dir
+    return default_update_state_dir()
 
 
 def _read_json(path: Path, default: dict) -> dict:

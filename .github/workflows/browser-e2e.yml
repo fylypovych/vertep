@@ -38,11 +38,28 @@ jobs:
         run: |
           cp .env.example .env
           printf '\nNODE_NAME=ci-worker\nCORE_ADDRESS=http://127.0.0.1:8080\nPOSTGRES_PASSWORD=ci-only\n' >> .env
+      - name: Prepare browser E2E accounts
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+          from core.first_run import password_hash
+          print("VERTEP_E2E_ADMIN_USER=e2e-admin")
+          print("VERTEP_E2E_ADMIN_PASSWORD=e2e-admin-password-12")
+          print("VERTEP_E2E_VIEWER_USER=e2e-viewer")
+          print("VERTEP_E2E_VIEWER_PASSWORD=e2e-viewer-password-12")
+          print("USERS_JSON=" + json.dumps({
+              "e2e-admin": {"password_hash": password_hash("e2e-admin-password-12"), "role": "admin"},
+              "e2e-viewer": {"password_hash": password_hash("e2e-viewer-password-12"), "role": "viewer"},
+          }))
+          PY
+          echo "UPDATE_STATE_DIR=$RUNNER_TEMP/vertep-update" >> "$GITHUB_ENV"
+          echo "VERTEP_E2E_STATE_DIR=$RUNNER_TEMP/vertep-update" >> "$GITHUB_ENV"
       - name: Start CORE for smoke tests
         env:
           RATE_LIMIT_PER_MINUTE: "100000"
           SETUP_RATE_LIMIT_PER_10_MINUTES: "100000"
         run: |
+          mkdir -p "$UPDATE_STATE_DIR"
           python -m uvicorn core.app:app --host 127.0.0.1 --port 8080 &
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1; then

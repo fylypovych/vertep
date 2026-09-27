@@ -9,7 +9,7 @@ from ..logging_config import read_logs, secret_redact
 from ..maintenance import cleanup_jobs, cleanup_temporary_files
 from ..security import _valid_worker_request
 from ..state import store, task_queue, logger
-from ..first_run import config_root
+from ..first_run import config_root, default_update_state_dir
 from ..alert_store import get_alert_store
 from ..system_state import get_system_state
 from ..update_manager import update_status
@@ -59,7 +59,7 @@ async def watchdog_report(request: Request):
     if not isinstance(payload, dict):
         payload = {}
     report = {"received_at": utc_now(), "payload": payload}
-    report_path = Path(os.getenv("UPDATE_STATE_DIR", "/data/config/update")) / "watchdog-reports.jsonl"
+    report_path = default_update_state_dir() / "watchdog-reports.jsonl"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(report, ensure_ascii=False) + "\n")
@@ -69,7 +69,7 @@ async def watchdog_report(request: Request):
 
 @router.get("/api/health/history")
 def health_history(limit: int = 100):
-    history_path = Path(os.getenv("UPDATE_STATE_DIR", "/data/config/update")) / "health-history.jsonl"
+    history_path = default_update_state_dir() / "health-history.jsonl"
     if not history_path.exists():
         return {"history": []}
     try:

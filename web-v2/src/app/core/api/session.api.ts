@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
+import { basicCredentials, requireSessionIdentity, resolvePasswordPolicy } from '../session-identity';
 import { SessionResponse, UserProfile, ChangePasswordRequest, ChangePasswordResponse } from '../models';
 
 /**
@@ -20,7 +21,7 @@ export class SessionApiService {
 
   create(payload: { login: string; password: string }): Observable<SessionResponse> {
     // Backend очікує Basic Authorization (authorization header), а не JSON body.
-    const creds = btoa(unescape(encodeURIComponent(`${payload.login}:${payload.password}`)));
+    const creds = basicCredentials(payload.login, payload.password);
     return this.http.post<SessionResponse>(`${this.base.url}/session`, null, {
       headers: this.h().set('Authorization', `Basic ${creds}`),
     }).pipe(catchError(this.base.handleError));
@@ -32,12 +33,12 @@ export class SessionApiService {
 
   profile(): Observable<UserProfile> {
     return this.http.get<SessionResponse>(`${this.base.url}/session`, { headers: this.h() }).pipe(
-      map((s): UserProfile => {
-        if (!s.authenticated) {
-          throw new Error('Не авторизовано');
-        }
-        return { user: s.user || '', role: s.role === 'viewer' ? 'viewer' : 'admin' };
-      }),
+      // Issue #75 S1: the same identity contract as the AuthApiService facade.
+      // A missing or unknown role is rejected instead of becoming `admin`.
+      map((session) => ({
+        ...requireSessionIdentity(session),
+        password_policy: resolvePasswordPolicy(session.password_policy),
+      })),
       catchError(this.base.handleError),
     );
   }

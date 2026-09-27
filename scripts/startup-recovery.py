@@ -26,7 +26,8 @@ def get_root() -> Path:
 
 
 def get_update_state_dir() -> Path:
-    return Path(os.getenv("UPDATE_STATE_DIR", "/data/config/update"))
+    from core.first_run import default_update_state_dir
+    return default_update_state_dir()
 
 
 def recover_interrupted_update(root: Path, state_dir: Path) -> None:

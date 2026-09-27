@@ -4,7 +4,9 @@ import json, os, shutil
 from pathlib import Path
 
 def _data_storage() -> Path:
-    return Path(os.getenv("JOB_ROOT", "/data/storage/jobs")).resolve().parent
+    from .first_run import default_storage_root
+    override = os.getenv("JOB_ROOT")
+    return Path(override).resolve().parent if override else default_storage_root().resolve()
 
 def persistent_characters_root() -> Path:
     return Path(os.getenv("CHARACTERS_ROOT", str(_data_storage() / "characters")))
