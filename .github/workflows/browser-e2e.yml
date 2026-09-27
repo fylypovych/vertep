@@ -87,18 +87,21 @@ jobs:
         run: |
           set -euo pipefail
           basic() { printf '%s' "$1:$2" | base64 -w0; }
-          for pair in "e2e-admin:e2e-admin-password-12" "e2e-viewer:e2e-viewer-password-12"; do
+          admin_auth=$(basic "$VERTEP_E2E_ADMIN_USER" "$VERTEP_E2E_ADMIN_PASSWORD")
+          viewer_auth=$(basic "$VERTEP_E2E_VIEWER_USER" "$VERTEP_E2E_VIEWER_PASSWORD")
+          for auth in "$admin_auth" "$viewer_auth"; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/session \
-              -H "Authorization: Basic $(basic "${pair%%:*}" "${pair##*:}")")
+              -H "Authorization: Basic $auth")
             if [ "$code" != "200" ]; then
-              echo "E2E account ${pair%%:*} cannot sign in: HTTP $code" >&2
+              echo "E2E account cannot sign in: HTTP $code" >&2
               cat "$RUNNER_TEMP/vertep-core.log" >&2
               exit 1
             fi
           done
           printf '{"state": "READ_ONLY", "updated_at": "2026-01-01T00:00:00+00:00", "reason": "e2e preflight", "operation_id": null}' \
             > "$VERTEP_E2E_STATE_DIR/system-state.json"
-          state=$(curl -fsS http://127.0.0.1:8080/api/status | python -c 'import json,sys; print(json.load(sys.stdin)["system"]["state"])')
+          state=$(curl -fsS http://127.0.0.1:8080/api/status -H "Authorization: Basic $admin_auth" \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["system"]["state"])')
           printf '{"state": "NORMAL", "updated_at": "2026-01-01T00:00:00+00:00", "reason": "", "operation_id": null}' \
             > "$VERTEP_E2E_STATE_DIR/system-state.json"
           if [ "$state" != "READ_ONLY" ]; then
