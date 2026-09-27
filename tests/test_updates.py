@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import os
 import tarfile
 from pathlib import Path
 
@@ -79,6 +80,8 @@ def test_update_agent_restart_uses_privileged_runtime_command(monkeypatch, tmp_p
     assert not request_path.exists()
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="host consumer is an executable shell script; Windows cannot run it")
 def test_worker_restart_host_consumer_effect_and_retry(monkeypatch, tmp_path):
     """A correlated Worker restart reaches the host consumer and can retry after failure."""
     agent = load_update_agent()
@@ -121,6 +124,8 @@ def test_worker_restart_host_consumer_effect_and_retry(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="host consumer is an executable shell script; Windows cannot run it")
 def test_worker_rollback_reaches_host_consumer(monkeypatch, tmp_path):
     agent = load_update_agent()
     root, state = tmp_path / "repo", tmp_path / "state"

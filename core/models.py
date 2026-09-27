@@ -376,6 +376,8 @@ class Job(BaseModel):
     publish_error: str | None = None
     publish_retry_count: dict[str, int] = Field(default_factory=dict)
     published_channels: set[str] = Field(default_factory=set)
+    publish_delivery_contract: dict[str, object] = Field(default_factory=dict)
+    publish_intent: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 class WorkerHeartbeat(BaseModel):
     node_name: str

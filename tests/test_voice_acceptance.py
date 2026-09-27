@@ -22,12 +22,14 @@ from fastapi.testclient import TestClient
 
 from adapters.ffmpeg import FFmpegAdapter
 from core.app import app, store
-from core.api.job_helpers import _persist_tts_contract, _tts_task_for
+from core.api.job_helpers import _persist_tts_contract, _tts_task_for, _validate_tts_contract
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from core.script_agent import ScriptAgent
 from core.storyboard import StoryboardService
 
 from worker import role_executor
+
+from core.state import task_queue
 
 
 def _make_wav(duration=0.5, rate=22050):
@@ -340,10 +342,15 @@ class TestContractMandatory:
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(b"wav-data")
         result = SimpleNamespace(task_id="t1", node_name="vw")
-        contract = {"provider": "mock", "voice": "uk"}
+        # A contract without the required format is rejected first; a contract
+        # that declares the format but omits sha256 is rejected next.
+        with pytest.raises(ValueError, match="format"):
+            _persist_tts_contract(store, job, scene, result,
+                                  audio_path, b"wav-data", {"provider": "mock", "voice": "uk"})
         with pytest.raises(ValueError, match="sha256"):
             _persist_tts_contract(store, job, scene, result,
-                                  audio_path, b"wav-data", contract)
+                                  audio_path, b"wav-data",
+                                  {"format": "audio_contract/v1", "provider": "mock", "voice": "uk"})
 
     def test_worker_contract_v1_fields(self, monkeypatch):
         audio = b"RIFF\x04\x00\x00\x00WAVE"
@@ -514,3 +521,113 @@ class TestTTSTaskMetadataFlow:
             assert "disabled" in str(e)
         else:
             raise AssertionError("disabled provider accepted")
+
+
+# ---------------------------------------------------------------------------
+# Task 1b: contract/parameter validation must happen BEFORE any side effect
+# (file write, artifact registration, Worker release, ack).  A rejected
+# result must leave no accepted artifact and must not change Worker ownership.
+# ---------------------------------------------------------------------------
+
+class TestContractBeforeSideEffects:
+
+    def _claim_tts(self, client, job_id):
+        return _claim_tts(client, job_id)
+
+    def test_reject_contract_mismatch_before_file_write(self, monkeypatch, tmp_path):
+        client = TestClient(app)
+        job_id = _new_voice_job(client, monkeypatch, tmp_path)
+        _approve_script(client, job_id)
+        _submit_image(client, job_id)
+        tts_task = self._claim_tts(client, job_id)
+        wav = _make_wav()
+        # The task requires provider "mock" + voice "uk"; the contract lies.
+        contract = {"format": "audio_contract/v1", "provider": "other",
+                    "voice": "en", "language": "uk", "model": "uk_male",
+                    "sha256": hashlib.sha256(wav).hexdigest(),
+                    "text_sha256": hashlib.sha256(b"t").hexdigest(),
+                    "engine": "espeak-ng", "mime_type": "audio/wav",
+                    "size": len(wav), "speed": 160,
+                    "scene_id": None, "character_id": None}
+        resp = client.post("/api/tasks/result", json={
+            "job_id": job_id, "task_id": tts_task["task_id"],
+            "node_name": "voice-worker", "success": True,
+            "artifacts": [{"filename": "voice.wav", "kind": "audio",
+                           "data_base64": base64.b64encode(wav).decode(),
+                           "contract": contract}]})
+        assert resp.status_code == 400
+        # No audio file must have been written for this scene.
+        scene_id = tts_task.get("scene_id")
+        audio_dir = store.root / job_id / "audio"
+        assert not audio_dir.exists() or not any(audio_dir.iterdir())
+        # No artifact must have been registered for the audio or the contract.
+        assert not any(a.kind == "audio" and a.task_id == tts_task["task_id"]
+                       for a in store.jobs[job_id].artifacts)
+        assert not any(a.kind == "audio_contract" and a.task_id == tts_task["task_id"]
+                       for a in store.jobs[job_id].artifacts)
+        # The Worker must be released back to READY and the task must still be
+        # inflight (not acked) so the job can retry or fail loudly.
+        worker = store.workers.get("voice-worker")
+        assert worker["status"] == "READY"
+        assert worker["current_job"] is None
+        assert worker["current_task"] is None
+        assert task_queue.inflight_has(tts_task["task_id"])
+
+    def test_reject_missing_field_before_file_write(self, monkeypatch, tmp_path):
+        client = TestClient(app)
+        job_id = _new_voice_job(client, monkeypatch, tmp_path)
+        _approve_script(client, job_id)
+        _submit_image(client, job_id)
+        tts_task = self._claim_tts(client, job_id)
+        wav = _make_wav()
+        # Contract declares provider/voice but is missing the required "model".
+        contract = {"format": "audio_contract/v1", "provider": "mock",
+                    "voice": "uk", "language": "uk",
+                    "sha256": hashlib.sha256(wav).hexdigest(),
+                    "text_sha256": hashlib.sha256(b"t").hexdigest(),
+                    "engine": "espeak-ng", "mime_type": "audio/wav",
+                    "size": len(wav), "speed": 160,
+                    "scene_id": None, "character_id": None}
+        resp = client.post("/api/tasks/result", json={
+            "job_id": job_id, "task_id": tts_task["task_id"],
+            "node_name": "voice-worker", "success": True,
+            "artifacts": [{"filename": "voice.wav", "kind": "audio",
+                           "data_base64": base64.b64encode(wav).decode(),
+                           "contract": contract}]})
+        assert resp.status_code == 400
+        assert "model" in resp.json()["detail"].lower()
+        assert not any(a.kind == "audio" and a.task_id == tts_task["task_id"]
+                       for a in store.jobs[job_id].artifacts)
+        assert task_queue.inflight_has(tts_task["task_id"])
+
+    def test_validate_tts_contract_cross_checks_task_fields(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path))
+        _write_character(tmp_path, "vc")
+        job = store.create(topic="cross", character_id="vc", priority=1)
+        job.script = {"title": "c", "scenes": [{"prompt": "p", "voiceover": "v", "duration": 1}]}
+        from core.orchestration import initialize_plan
+        initialize_plan(job)
+        scene = job.scenes[0]
+        task = _tts_task_for(job, scene)
+        wav = _make_wav()
+        good = {"format": "audio_contract/v1", "provider": task["provider"],
+                "voice": task["voice"], "language": task["language"],
+                "model": task["model"], "speed": task["speed"],
+                "sha256": hashlib.sha256(wav).hexdigest(),
+                "text_sha256": hashlib.sha256(b"v").hexdigest(),
+                "engine": "espeak-ng", "mime_type": "audio/wav",
+                "size": len(wav), "scene_id": scene.scene_id,
+                "character_id": job.character_id}
+        _validate_tts_contract(task, wav, good)  # must not raise
+        bad = dict(good, speed=999)
+        with pytest.raises(ValueError, match="speed"):
+            _validate_tts_contract(task, wav, bad)
+        bad = dict(good, provider="other")
+        with pytest.raises(ValueError, match="provider"):
+            _validate_tts_contract(task, wav, bad)
+        bad = dict(good, voice="en")
+        with pytest.raises(ValueError, match="voice"):
+            _validate_tts_contract(task, wav, bad)
+        bad = dict(good, sha256=hashlib.sha256(b"wrong").hexdigest())
+        with pytest.raises(ValueError, match="sha256"):
+            _validate_tts_contract(task, wav, bad)

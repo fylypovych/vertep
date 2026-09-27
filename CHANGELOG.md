@@ -1,5 +1,17 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.5
+- Issue #72: введено обов'язковий audio contract `audio_contract/v1`; валідація винесена в `_validate_tts_contract` і виконується до запису файлу, реєстрації артефакту, звільнення Worker та ack.
+- Issue #72: contract звіряється з вимогами task (`provider`/`voice` обов'язкові, `model`/`language`/`speed` — лише коли task їх фіксує); Voice Worker передає `speed` у contract.
+- Issue #73: додано `_publish_delivery_contract` — незмінний контракт доставки (version, path, sha256, size, mime) та durable `publish_intent` на Job; retry після втраченого ack публікує той самий артефакт.
+- Issue #73: `_match_publish_receipt` корелює receipt з intent; невідповідна версія або sha256 відхиляються як FAILED, уже опублікований канал пропускається ідемпотентно.
+- Issue #73: owner/lease перевірка publish-результату в `core/api/tasks.py` повертає 409 при розбіжності, не звільнюючи Worker і не підтверджуючи task.
+- Issue #73: retry публікації переведено на обмежену експоненційну затримку (`PUBLISH_RETRY_BACKOFF_BASE`, `PUBLISH_RETRY_BACKOFF_CAP`); лічильник збільшується лише коли retry реально заплановано, intent очищається після PUBLISHED і NOT_CONFIGURED.
+- Кросплатформна сумісність: `_save_offset_data` більше не падає на платформах без каталогових дескрипторів — додано `_fsync_directory`, durability гарантується на POSIX і не блокує збереження offset на Windows.
+- Тести: 9 нових для publisher intent/receipt/backoff, `TestContractBeforeSideEffects` для voice, тест кросплатформної поведінки offset; POSIX-only тести отримали `skipif` і лишаються активними на CI.
+- Виправлено номер рядка в allowlist `tests/test_core_generation_gate.py` для виклику `ScriptAgent` у `core/api/job_helpers.py`.
+- Перевірка: `python -m compileall -q core adapters worker scripts installer tests`, `python -m pytest -q` (920 passed, 71 skipped), `git diff --check`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.4
 - Синхронізовано AGENTS.md із затвердженим Issue #107: новий функціонал ініціює виключно власник; лабораторія не створює продуктові ідеї або var.
 - Уточнено автоматичне закриття підтверджених ir та безпечне перенесення невиконаного залишку в наступні ir без розширення scope.

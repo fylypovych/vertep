@@ -21,6 +21,32 @@ def _integration_secret(name: str) -> str | None:
         return None
 
 
+def _fsync_directory(path) -> bool:
+    """Flush directory metadata so a rename inside it survives power loss.
+
+    ``fsync`` of the renamed file does not make the new directory entry
+    durable.  Directory handles are a POSIX feature: on Windows ``os.open``
+    on a directory fails with ``PermissionError`` and the platform exposes no
+    equivalent for flushing directory metadata, so the guarantee is simply not
+    available there.  Report the outcome instead of raising, otherwise offset
+    persistence would break on every save on non-POSIX platforms.
+
+    Returns ``True`` when the directory was flushed.
+    """
+    try:
+        directory_fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        # No directory handle support (Windows) or the directory vanished.
+        return False
+    try:
+        os.fsync(directory_fd)
+    except OSError:
+        return False
+    finally:
+        os.close(directory_fd)
+    return True
+
+
 class TelegramAdapter:
     def __init__(self) -> None:
         self.token = _integration_secret("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
@@ -182,11 +208,7 @@ class TelegramPollingService:
         temporary.replace(self.offset_file)
         # ``fsync`` of the file alone does not make the directory entry created
         # by replace durable across a power loss.  Persist the rename as well.
-        directory_fd = os.open(self.offset_file.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_directory(self.offset_file.parent)
 
     def start(self) -> None:
         with self._lock:

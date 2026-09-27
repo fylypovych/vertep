@@ -732,7 +732,8 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
                 "language": "uk", "model": None, "engine": None, "mime_type": "audio/wav",
                 "size": len(wav), "sha256": _hashlib.sha256(wav).hexdigest(),
                 "text_sha256": _hashlib.sha256(b"TTS pipeline test").hexdigest(),
-                "duration": None, "scene_id": None, "character_id": None}
+                "duration": None, "speed": 150,
+                "scene_id": None, "character_id": None}
     tts_result = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": tts_task["task_id"],
                                  "node_name": "voice-worker", "success": True,
                                  "artifacts": [{"filename": "speech.wav", "data_base64": base64.b64encode(wav).decode(),

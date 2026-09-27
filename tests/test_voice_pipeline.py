@@ -154,18 +154,22 @@ def test_core_rejects_tampered_audio_contract(monkeypatch, tmp_path):
     _write_character(tmp_path, character_id)
     job, scene = _new_job_with_voiceover(character_id)
     audio = b"RIFF\x0c\x00\x00\x00WAVE\x00\x00\x00\x00"
-    contract = {"provider": "mock", "voice": "uk",
-                "sha256": hashlib.sha256(b"different").hexdigest()}
     result = SimpleNamespace(task_id="task-1", node_name="voice-worker")
     audio_path = store.root / job.job_id / "audio" / "voice-scene-001.wav"
     audio_path.parent.mkdir(parents=True, exist_ok=True)
     audio_path.write_bytes(audio)
-    try:
-        _persist_tts_contract(store, job, scene, result, audio_path, audio, contract)
-    except ValueError as error:
-        assert "sha256" in str(error)
-    else:
-        raise AssertionError("tampered audio contract was accepted")
+    # A contract that omits the required format is rejected first.
+    with pytest.raises(ValueError, match="format"):
+        _persist_tts_contract(store, job, scene, result, audio_path, audio,
+                              {"provider": "mock", "voice": "uk",
+                               "sha256": hashlib.sha256(b"different").hexdigest()})
+    # A contract that declares the format but carries a wrong sha256 is rejected
+    # for the digest mismatch.
+    with pytest.raises(ValueError, match="sha256"):
+        _persist_tts_contract(store, job, scene, result, audio_path, audio,
+                              {"format": "audio_contract/v1", "provider": "mock",
+                               "voice": "uk",
+                               "sha256": hashlib.sha256(b"different").hexdigest()})
 def _voice_worker(name: str, catalog: dict) -> dict:
     return {
         "node_name": name,

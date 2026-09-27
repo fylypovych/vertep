@@ -248,6 +248,8 @@ class TestUpdateOperation:
 
 
 class TestRestartOperation:
+    @pytest.mark.skipif(os.name != "posix",
+                        reason="stub systemctl is a shell script resolved through a POSIX PATH")
     def test_core_restart_executes_disposable_host_command(self, monkeypatch, tmp_path):
         module = importlib.import_module("core.app")
         binary_dir = tmp_path / "bin"

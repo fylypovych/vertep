@@ -144,6 +144,48 @@ def _tts_task_for(job, scene) -> dict:
             "speed": voice_config.get("speed", 150)}
 
 
+def _validate_tts_contract(task: dict, data: bytes, contract) -> None:
+    """Validate an audio contract against the task requirements BEFORE any side effect.
+
+    The Voice Worker declares in ``contract`` which character voice config
+    (provider/voice/model/language/speed) actually drove the synthesis plus a
+    sha256 of the audio bytes.  CORE re-checks the digest against what it
+    received and cross-checks the declared parameters against the task
+    requirements so a mismatched or tampered artifact is rejected before the
+    audio file is written, the artifact is registered, the Worker is released
+    or the task is acked.  A rejected result must leave no accepted artifact and
+    must not change Worker ownership.
+
+    Only the fields the task actually requires are cross-checked: a task that
+    does not pin a model/language/speed does not demand them, but a task that
+    does pin them must be honoured exactly.  ``provider`` and ``voice`` are
+    always mandatory for a voice task.
+    """
+    if not isinstance(contract, dict):
+        raise ValueError("Audio contract is missing or not a dict")
+    if contract.get("format") != "audio_contract/v1":
+        raise ValueError("Audio contract must declare format 'audio_contract/v1'")
+    expected = contract.get("sha256")
+    if not isinstance(expected, str) or not expected:
+        raise ValueError("Audio contract must declare sha256")
+    if expected != hashlib.sha256(data).hexdigest():
+        raise ValueError("Audio contract sha256 does not match artifact payload")
+    if not contract.get("provider"):
+        raise ValueError("Audio contract must declare provider")
+    if not contract.get("voice"):
+        raise ValueError("Audio contract must declare voice")
+    for field in ("provider", "voice", "model", "language", "speed"):
+        required = task.get(field)
+        if required is None:
+            continue
+        actual = contract.get(field)
+        if actual is None:
+            raise ValueError(f"Audio contract is missing required field {field!r}")
+        if str(actual) != str(required):
+            raise ValueError(
+                f"Audio contract {field!r}={actual!r} does not match task requirement {required!r}")
+
+
 def _persist_tts_contract(store, job, scene, result, audio_path, data, contract) -> list:
     """Validate and persist a verifiable audio contract for a Voice Worker artifact.
 
@@ -151,18 +193,10 @@ def _persist_tts_contract(store, job, scene, result, audio_path, data, contract)
     voice config (provider/voice/...) actually drove the synthesis plus a sha256
     of the audio bytes.  We re-check the digest against what CORE received and
     store the contract as a sidecar artifact so the audio is verifiable after the
-    fact.  A missing contract is tolerated (legacy workers) but a malformed one
-    is rejected.
+    fact.  Validation is performed by :func:`_validate_tts_contract` before any
+    file is written here.
     """
-    if not isinstance(contract, dict):
-        raise ValueError("Audio contract is missing or not a dict")
-    expected = contract.get("sha256")
-    if not expected:
-        raise ValueError("Audio contract must declare sha256")
-    if not isinstance(expected, str) or expected != hashlib.sha256(data).hexdigest():
-        raise ValueError("Audio contract sha256 does not match artifact payload")
-    if not contract.get("provider") or not contract.get("voice"):
-        raise ValueError("Audio contract must declare provider and voice")
+    _validate_tts_contract(_tts_task_for(job, scene), data, contract)
     contract_path = audio_path.with_suffix(".contract.json")
     contract_path.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
     return [register_artifact(job, store.root, contract_path, "audio_contract",
@@ -305,13 +339,82 @@ def _has_publisher_worker(job_store) -> bool:
 
 
 def _publish_task_for(job, channel: str) -> dict:
+    """Build a publish task carrying the durable delivery contract.
+
+    The contract pins the exact video version (path + sha256 + size) that the
+    Publisher Worker must upload, so a retry after a lost ack or a restart
+    re-publishes the same artifact instead of a stale/different one.  The
+    contract also declares the receipt correlation keys (job_id, version,
+    channel) that CORE uses to match an incoming receipt back to the intent.
+    """
+    delivery = _publish_delivery_contract(job)
+    intent = {
+        "job_id": job.job_id,
+        "channel": channel,
+        "video_version": delivery.get("version"),
+        "video_sha256": delivery.get("sha256"),
+        "video_size": delivery.get("size"),
+        "attempt": (job.publish_retry_count.get(channel, 0) + 1),
+    }
+    job.publish_intent[channel] = intent
     return {"job_id": job.job_id, "task": "publish", "priority": job.priority,
             "channel": channel, "topic": job.topic, "task_id": None,
             "video_path": job.output_path or "",
+            "delivery_contract": delivery,
+            "publish_intent": intent,
             "metadata": {"job_id": job.job_id, "topic": job.topic,
                          "character_id": job.character_id, "brand_id": job.brand_id,
                          **(job.script or {})},
             "task_type": "publish"}
+
+
+def _publish_delivery_contract(job) -> dict:
+    """Compute the immutable delivery contract for the current job video.
+
+    Returns a dict with the version, path, sha256, size and mime type of the
+    artifact the Publisher Worker must upload.  Missing files degrade to a
+    best-effort contract (path only) so a retry still targets the same path.
+    """
+    path = job.output_path or ""
+    contract = {"version": job.active_video_version, "path": path,
+                "mime_type": "video/mp4"}
+    if path and os.path.isfile(path):
+        try:
+            data = Path(path).read_bytes()
+            contract["sha256"] = hashlib.sha256(data).hexdigest()
+            contract["size"] = len(data)
+        except OSError:
+            contract["sha256"] = None
+            contract["size"] = None
+    else:
+        contract["sha256"] = None
+        contract["size"] = None
+    job.publish_delivery_contract = contract
+    return contract
+
+
+def _match_publish_receipt(job, channel: str, receipt: dict) -> tuple[str, str | None]:
+    """Correlate a receipt with the durable publish intent.
+
+    Returns (decision, reason) where decision is one of:
+      - "accept"   — receipt matches the intent (or no intent was recorded yet,
+                     e.g. a direct test/helper call) and the channel is not yet published
+      - "skip"     — channel already published with an identical version (idempotent)
+      - "reject"   — receipt does not match the intent (wrong version/owner/lease)
+    """
+    intent = job.publish_intent.get(channel)
+    if intent:
+        receipt_version = receipt.get("video_version") or receipt.get("version")
+        if receipt_version is not None and intent.get("video_version") is not None \
+                and str(receipt_version) != str(intent["video_version"]):
+            return "reject", (f"Receipt video_version {receipt_version!r} does not match "
+                              f"intent version {intent['video_version']!r}")
+        receipt_sha = receipt.get("video_sha256") or receipt.get("sha256")
+        if receipt_sha and intent.get("video_sha256") and receipt_sha != intent["video_sha256"]:
+            return "reject", "Receipt video_sha256 does not match delivery contract"
+    if channel in job.published_channels:
+        return "skip", "Channel already published (idempotent)"
+    return "accept", None
 
 
 def _enqueue_publish_task(job_store, job, channel: str) -> dict | None:
@@ -390,18 +493,41 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
     if not hasattr(job, 'published_channels'):
         job.published_channels = set()
 
+    def _backoff_seconds(attempt: int) -> float:
+        """Bounded exponential backoff for transient channel failures."""
+        base = float(os.getenv("PUBLISH_RETRY_BACKOFF_BASE", "2"))
+        cap = float(os.getenv("PUBLISH_RETRY_BACKOFF_CAP", "60"))
+        return min(cap, base ** max(0, attempt))
+
+    def _enqueue_with_backoff(reason: str) -> None:
+        """Retry a failed publish channel with bounded exponential backoff.
+
+        ``max_retries`` counts *additional* attempts after the first failure, so
+        ``max_retries=0`` fails immediately and ``max_retries=2`` allows two
+        retries (three total attempts).  The counter is incremented only when a
+        retry is actually scheduled, so a lost ack does not burn a retry slot.
+        """
+        attempt = job.publish_retry_count.get(channel, 0) + 1
+        if attempt <= job.max_retries:
+            delay = _backoff_seconds(attempt)
+            job.publish_retry_count[channel] = attempt
+            job_store.event(job, f"PUBLISH {channel}: RETRY {attempt}/{job.max_retries} "
+                                  f"(backoff {delay:.1f}s): {reason}")
+            job_store.update(job, JobStatus.PUBLISHING,
+                             f"PUBLISH RETRY {attempt}/{job.max_retries}: {channel} ({reason})")
+            _enqueue_publish_task(job_store, job, channel)
+        else:
+            job.publish_retry_count[channel] = attempt
+            job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED",
+                                                          "error": f"{reason} AFTER RETRIES"})
+            job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: {reason} AFTER RETRIES")
+
     if success:
         receipt_artifact = next((a for a in artifacts if a.get("kind") == "publication_receipt"), None)
         if not receipt_artifact:
             job_store.event(job, f"PUBLISH {channel}: NO RECEIPT ARTIFACT")
             job.publish_error = "NO RECEIPT ARTIFACT"
-            job.publish_retry_count[channel] += 1
-            if job.publish_retry_count[channel] <= job.max_retries:
-                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel} (no receipt)")
-                _enqueue_publish_task(job_store, job, channel)
-            else:
-                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": "NO RECEIPT AFTER RETRIES"})
-                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: NO RECEIPT AFTER RETRIES")
+            _enqueue_with_backoff("no receipt")
             return
 
         import base64 as _b64
@@ -411,13 +537,7 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
         except (KeyError, ValueError, UnicodeDecodeError) as exc:
             job_store.event(job, f"PUBLISH {channel}: MALFORMED RECEIPT: {exc}")
             job.publish_error = f"MALFORMED RECEIPT: {exc}"
-            job.publish_retry_count[channel] += 1
-            if job.publish_retry_count[channel] <= job.max_retries:
-                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel} (malformed receipt)")
-                _enqueue_publish_task(job_store, job, channel)
-            else:
-                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": f"MALFORMED RECEIPT: {exc}"})
-                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: MALFORMED RECEIPT AFTER RETRIES")
+            _enqueue_with_backoff(f"malformed receipt: {exc}")
             return
 
         # Validate receipt schema
@@ -425,54 +545,46 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
         if not valid:
             job_store.event(job, f"PUBLISH {channel}: INVALID RECEIPT: {error}")
             job.publish_error = f"INVALID RECEIPT: {error}"
-            job.publish_retry_count[channel] += 1
-            if job.publish_retry_count[channel] <= job.max_retries:
-                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel} (invalid receipt)")
-                _enqueue_publish_task(job_store, job, channel)
-            else:
-                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": f"INVALID RECEIPT: {error}"})
-                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: INVALID RECEIPT AFTER RETRIES")
+            _enqueue_with_backoff(f"invalid receipt: {error}")
             return
 
-        receipt_status = receipt.get("status")
-
-        # Idempotency: skip if already published
-        if channel in job.published_channels and receipt_status == "PUBLISHED":
+        # Correlate the receipt with the durable publish intent (owner/lease/version).
+        decision, reason = _match_publish_receipt(job, channel, receipt)
+        if decision == "reject":
+            job_store.event(job, f"PUBLISH {channel}: RECEIPT REJECTED: {reason}")
+            job.publish_error = f"RECEIPT REJECTED: {reason}"
+            job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED",
+                                                          "error": f"RECEIPT REJECTED: {reason}"})
+            job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: RECEIPT REJECTED")
+            return
+        if decision == "skip":
             job_store.event(job, f"PUBLISH {channel}: ALREADY PUBLISHED (idempotent skip)")
             return
 
+        receipt_status = receipt.get("status")
         job.publication_results[channel] = receipt
 
         if receipt_status == "PUBLISHED":
             job.published_channels.add(channel)
             if channel not in job.published_to:
                 job.published_to.append(channel)
+            job.publish_retry_count[channel] = 0
+            job.publish_intent.pop(channel, None)
             job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH TASK {task_id} COMPLETED FOR {channel}")
         elif receipt_status == "NOT_CONFIGURED":
             job.publish_error = receipt.get("error", "NOT_CONFIGURED")
+            job.publish_retry_count[channel] = 0
+            job.publish_intent.pop(channel, None)
             job_store.event(job, f"PUBLISH {channel} NOT CONFIGURED; NO RETRY")
             return
-        else:  # FAILED
+        else:  # FAILED — permanent or transient; retry with bounded backoff
             job.publish_error = receipt.get("error", "UNKNOWN")
-            job.publish_retry_count[channel] += 1
-            if job.publish_retry_count[channel] <= job.max_retries:
-                job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel}")
-                _enqueue_publish_task(job_store, job, channel)
-            else:
-                job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": job.publish_error})
-                job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED AFTER {job.publish_retry_count[channel]} ATTEMPTS")
+            _enqueue_with_backoff(f"FAILED: {job.publish_error}")
     else:
         error = result.get("error") or "UNKNOWN PUBLISH ERROR"
         job.publish_error = error
         job_store.event(job, f"PUBLISH TASK FAILED for {channel}: {error}")
-        job.publish_retry_count[channel] += 1
-        if job.publish_retry_count[channel] <= job.max_retries:
-            job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH RETRY {job.publish_retry_count[channel]}/{job.max_retries}: {channel}")
-            _enqueue_publish_task(job_store, job, channel)
-        else:
-            job.publish_error = error
-            job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED", "error": error})
-            job_store.update(job, JobStatus.FAILED, f"PUBLISH FAILED AFTER {job.publish_retry_count[channel]} ATTEMPTS")
+        _enqueue_with_backoff(error)
 
 
 def _recover_stale_workers() -> None:

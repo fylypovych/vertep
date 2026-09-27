@@ -267,6 +267,7 @@ def execute_voice(task: dict) -> list[dict]:
         "sha256": hashlib.sha256(data).hexdigest(),
         "text_sha256": hashlib.sha256(task["topic"].encode("utf-8")).hexdigest(),
         "duration": duration,
+        "speed": config["speed"],
         "scene_id": config["scene_id"],
         "character_id": config["character_id"],
     }
@@ -292,6 +293,8 @@ def execute_publisher(task: dict) -> list[dict]:
     channel = task["channel"]
     video_path = task.get("video_path", "")
     metadata = task.get("metadata", {})
+    delivery_contract = task.get("delivery_contract") or {}
+    publish_intent = task.get("publish_intent") or {}
     if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
         receipt = {
             "channel": channel, "status": "PUBLISHED",
@@ -299,6 +302,8 @@ def execute_publisher(task: dict) -> list[dict]:
             "remote_id": f"mock-{uuid.uuid4().hex[:12]}",
             "url": f"https://example.invalid/{channel}/mock-{uuid.uuid4().hex[:8]}",
             "timestamp": _time.time(),
+            "video_version": publish_intent.get("video_version"),
+            "video_sha256": publish_intent.get("video_sha256"),
             "upload": {"mode": "mock", "bytes": os.path.getsize(video_path) if video_path and os.path.isfile(video_path) else 0},
         }
         return [_artifact("publication.json", "publication_receipt",
@@ -323,6 +328,12 @@ def execute_publisher(task: dict) -> list[dict]:
         result = {"channel": channel, "status": "FAILED", "error": str(error)}
     result.setdefault("channel", channel)
     result.setdefault("timestamp", _time.time())
+    # Correlate the receipt back to the durable delivery contract so CORE can
+    # match it to the publish intent (owner/lease/version) on the next attempt.
+    if publish_intent.get("video_version") is not None:
+        result.setdefault("video_version", publish_intent["video_version"])
+    if publish_intent.get("video_sha256"):
+        result.setdefault("video_sha256", publish_intent["video_sha256"])
     return [_artifact("publication.json", "publication_receipt",
                       json.dumps(result, sort_keys=True).encode("utf-8"))]
 

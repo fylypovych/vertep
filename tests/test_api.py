@@ -1472,6 +1472,8 @@ def test_polling_save_offset_fsync_before_rename(tmp_path, monkeypatch):
     assert data["offset"] == 10
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="directory fsync is a POSIX guarantee; Windows has no equivalent")
 def test_polling_save_offset_fsyncs_parent_directory(tmp_path, monkeypatch):
     """The directory entry created by replace is durable too."""
     from adapters.telegram import TelegramPollingService
@@ -1490,6 +1492,36 @@ def test_polling_save_offset_fsyncs_parent_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(_os, "fsync", tracking_fsync)
     service._save_offset_data(11)
     assert directory_fsyncs
+
+
+def test_polling_save_offset_survives_platform_without_directory_handles(tmp_path, monkeypatch):
+    """Offset persistence must not break where directories cannot be opened.
+
+    Windows rejects ``os.open`` on a directory, so ``_save_offset_data`` used
+    to raise ``PermissionError`` on every save.  The rename is still atomic and
+    the data still lands; only the extra parent-directory flush is skipped.
+    """
+    from adapters.telegram import TelegramPollingService, _fsync_directory
+    state_file = tmp_path / "polling_state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None,
+                                     offset_file=state_file)
+    service.offset = 11
+    service.last_update_id = 10
+
+    real_open = os.open
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+
+    def open_without_directories(path, flags, *args, **kwargs):
+        if os.path.isdir(path):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_without_directories)
+    service._save_offset_data(11)
+
+    assert _fsync_directory(state_file.parent) is False
+    assert state_file.exists()
+    assert json.loads(state_file.read_text(encoding="utf-8"))["offset"] == 11
 
 
 @pytest.mark.parametrize("payload", [[], "valid-json", 7, None])
