@@ -59,9 +59,11 @@ jobs:
           echo "JOB_ROOT=$RUNNER_TEMP/vertep-storage/jobs" >> "$GITHUB_ENV"
           echo "UPDATE_STATE_DIR=$RUNNER_TEMP/vertep-update" >> "$GITHUB_ENV"
           echo "VERTEP_E2E_STATE_DIR=$RUNNER_TEMP/vertep-update" >> "$GITHUB_ENV"
-          mkdir -p "$CONFIG_ROOT" "$STORAGE_ROOT" "$UPDATE_STATE_DIR"
-          printf '{}' > "$CONFIG_ROOT/users.json"
-          printf '{"completed_at": "2024-01-01T00:00:00Z"}' > "$CONFIG_ROOT/installation.json"
+          # Значення з GITHUB_ENV доступні лише в наступних кроках, тому тут
+          # каталоги створюються за $RUNNER_TEMP напряму.
+          mkdir -p "$RUNNER_TEMP/vertep-config" "$RUNNER_TEMP/vertep-storage" "$RUNNER_TEMP/vertep-update"
+          printf '{}' > "$RUNNER_TEMP/vertep-config/users.json"
+          printf '{"completed_at": "2024-01-01T00:00:00Z"}' > "$RUNNER_TEMP/vertep-config/installation.json"
       - name: Start CORE for smoke tests
         env:
           RATE_LIMIT_PER_MINUTE: "100000"

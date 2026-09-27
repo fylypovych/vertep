@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.9
+- Browser E2E CI: каталоги створюються за `$RUNNER_TEMP` у тому ж кроці, бо змінні з `GITHUB_ENV` доступні лише в наступних кроках workflow.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.8
 - Browser E2E CI: CORE запускається з `nohup` і логом у файл, щоб процес не гинув разом із pipe кроку після першого запиту.
 - Browser E2E CI: `CONFIG_ROOT`, `STORAGE_ROOT`, `JOB_ROOT` перенесено в `$RUNNER_TEMP` з готовими `installation.json` та `users.json` — runner не має прав на `/data`, тому запис профілю, пароля й system-state падав.
