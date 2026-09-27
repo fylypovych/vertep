@@ -52,15 +52,25 @@ jobs:
               "e2e-viewer": {"password_hash": password_hash("e2e-viewer-password-12"), "role": "viewer"},
           }))
           PY
+          # Runner не має прав на /data, тому всі виконувані каталоги живуть у
+          # $RUNNER_TEMP: інакше запис профілю, пароля та system-state падає.
+          echo "CONFIG_ROOT=$RUNNER_TEMP/vertep-config" >> "$GITHUB_ENV"
+          echo "STORAGE_ROOT=$RUNNER_TEMP/vertep-storage" >> "$GITHUB_ENV"
+          echo "JOB_ROOT=$RUNNER_TEMP/vertep-storage/jobs" >> "$GITHUB_ENV"
           echo "UPDATE_STATE_DIR=$RUNNER_TEMP/vertep-update" >> "$GITHUB_ENV"
           echo "VERTEP_E2E_STATE_DIR=$RUNNER_TEMP/vertep-update" >> "$GITHUB_ENV"
+          mkdir -p "$CONFIG_ROOT" "$STORAGE_ROOT" "$UPDATE_STATE_DIR"
+          printf '{}' > "$CONFIG_ROOT/users.json"
+          printf '{"completed_at": "2024-01-01T00:00:00Z"}' > "$CONFIG_ROOT/installation.json"
       - name: Start CORE for smoke tests
         env:
           RATE_LIMIT_PER_MINUTE: "100000"
           SETUP_RATE_LIMIT_PER_10_MINUTES: "100000"
         run: |
-          mkdir -p "$UPDATE_STATE_DIR"
-          python -m uvicorn core.app:app --host 127.0.0.1 --port 8080 &
+          # Лог у файл, а не в pipe кроку: інакше процес гине разом із кроком
+          # на першому ж записі після його завершення.
+          nohup python -m uvicorn core.app:app --host 127.0.0.1 --port 8080 \
+            > "$RUNNER_TEMP/vertep-core.log" 2>&1 &
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1; then
               echo "CORE is up"
@@ -69,6 +79,31 @@ jobs:
             sleep 1
           done
           echo "CORE did not start in time" >&2
+          cat "$RUNNER_TEMP/vertep-core.log" >&2
           exit 1
+      - name: Verify CORE E2E preconditions
+        run: |
+          set -euo pipefail
+          basic() { printf '%s' "$1:$2" | base64 -w0; }
+          for pair in "e2e-admin:e2e-admin-password-12" "e2e-viewer:e2e-viewer-password-12"; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/session \
+              -H "Authorization: Basic $(basic "${pair%%:*}" "${pair##*:}")")
+            if [ "$code" != "200" ]; then
+              echo "E2E account ${pair%%:*} cannot sign in: HTTP $code" >&2
+              cat "$RUNNER_TEMP/vertep-core.log" >&2
+              exit 1
+            fi
+          done
+          printf '{"state": "READ_ONLY", "updated_at": "2026-01-01T00:00:00+00:00", "reason": "e2e preflight", "operation_id": null}' \
+            > "$VERTEP_E2E_STATE_DIR/system-state.json"
+          state=$(curl -fsS http://127.0.0.1:8080/api/status | python -c 'import json,sys; print(json.load(sys.stdin)["system"]["state"])')
+          printf '{"state": "NORMAL", "updated_at": "2026-01-01T00:00:00+00:00", "reason": "", "operation_id": null}' \
+            > "$VERTEP_E2E_STATE_DIR/system-state.json"
+          if [ "$state" != "READ_ONLY" ]; then
+            echo "CORE does not observe $VERTEP_E2E_STATE_DIR (system state is $state)" >&2
+            cat "$RUNNER_TEMP/vertep-core.log" >&2
+            exit 1
+          fi
+          echo "E2E preconditions verified"
       - name: Run browser E2E smoke tests
         run: python -m pytest tests/test_browser_e2e.py -q

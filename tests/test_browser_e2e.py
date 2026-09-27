@@ -10,6 +10,7 @@ import pytest
 
 try:
     from playwright.sync_api import sync_playwright, expect
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
 except ImportError:
     from unittest import SkipTest
     raise SkipTest("Playwright is not installed. Install with: pip install playwright")
@@ -1640,7 +1641,18 @@ def _ui_login(page, user: str, password: str):
     page.locator("input[type='text']").fill(user)
     page.locator("input[type='password']").fill(password)
     page.get_by_role("button", name="Увійти").click()
-    page.wait_for_url(lambda url: "/login" not in url, timeout=20000)
+    try:
+        page.wait_for_url(lambda url: "/login" not in url, timeout=20000)
+    except PlaywrightTimeout as error:
+        # Непрозорий таймаут діагностується через причину відмови сервера,
+        # інакше незрозуміло, чи це credentials, CSRF чи недоступний CORE.
+        session = page.request.get(f"{BASE_URL}/api/session")
+        error_text = page.get_by_test_id("login-error")
+        detail = error_text.inner_text() if error_text.count() else "(без тексту помилки)"
+        raise AssertionError(
+            f"UI login for {user!r} did not leave /login: "
+            f"/api/session -> {session.status}, login error: {detail}"
+        ) from error
 
 
 def _ui_logout(page):
@@ -1797,6 +1809,9 @@ def test_real_backend_system_state_blocks_mutations():
                 blocked = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": ""}, headers=headers)
                 assert blocked.status == 423, f"READ_ONLY job create returned {blocked.status}"
                 assert "blocked by system state" in blocked.text()
+                # UI читає системний стан під час ініціалізації застосунку,
+                # тому перезавантаження робить перевірку детермінованою.
+                page.reload()
                 create_button = page.get_by_test_id("create-job-button")
                 expect(create_button).to_be_disabled(timeout=20000)
                 assert "READ_ONLY" in (create_button.get_attribute("title") or "")
