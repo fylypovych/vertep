@@ -188,6 +188,27 @@ class DefaultPublisherProvider(PublisherProvider):
 
         return list(PUBLISHERS.keys())
 
+    def ready(self, channel: str) -> bool:
+        from adapters.publisher import PUBLISHERS
+        pub = PUBLISHERS.get(channel)
+        if pub is None:
+            return False
+        return pub.ready()
+
+    def missing_scopes(self, channel: str) -> list[str]:
+        from adapters.publisher import PUBLISHERS
+        pub = PUBLISHERS.get(channel)
+        if pub is None:
+            return []
+        return pub.missing_scopes()
+
+    def reconnect(self, channel: str) -> bool:
+        from adapters.publisher import PUBLISHERS
+        pub = PUBLISHERS.get(channel)
+        if pub is None:
+            return False
+        return pub.reconnect()
+
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -438,12 +459,18 @@ def provider_matrix() -> dict[str, dict]:
     }
 
     # Publisher — official platform adapters behind PublisherProvider.
+    from adapters.publisher import PUBLISHERS
     publisher = DefaultPublisherProvider()
     publisher_options: dict[str, dict] = {}
     for channel in publisher.available_channels():
-        publisher_options[channel] = {
-            "configured": publisher.configured(channel)
+        pub = PUBLISHERS.get(channel)
+        entry: dict[str, object] = {
+            "configured": publisher.configured(channel),
+            "ready": pub.ready() if pub else False,
+            "required_scopes": getattr(pub, "required_scopes", []),
+            "missing_scopes": pub.missing_scopes() if pub else [],
         }
+        publisher_options[channel] = entry
     matrix["publisher"] = {
         "backend": "vertep-official",
         "options": list(publisher_options),

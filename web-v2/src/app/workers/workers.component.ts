@@ -97,7 +97,6 @@ import { ErrorStateComponent } from '../shared/error-state.component';
         @if (!tokenResult()) {
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Роль</label>
               <select [(ngModel)]="wizard.role" data-testid="worker-role-select" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
                 <option value="gpu">GPU-вузол</option>
                 <option value="text">Текстовий вузол</option>

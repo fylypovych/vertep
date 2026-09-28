@@ -9,6 +9,7 @@ on 401 responses and retries the upload once.
 from __future__ import annotations
 
 import os
+from publishers.oauth import YouTubeTokenProvider
 import time
 
 from publishers.base import Publisher, check_response
@@ -92,9 +93,10 @@ class _TokenProvider:
 class YoutubePublisher(Publisher):
     channel = "youtube"
     credential_env = "YOUTUBE_ACCESS_TOKEN"
+    required_scopes = ["https://www.googleapis.com/auth/youtube.upload"]
 
-    def _token_provider(self) -> _TokenProvider:
-        return _TokenProvider(self.transport)
+    def _token_provider(self) -> YouTubeTokenProvider:
+        return YouTubeTokenProvider(self.transport)
 
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         tp = self._token_provider()

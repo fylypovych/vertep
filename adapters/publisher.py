@@ -20,6 +20,12 @@ from publishers import (
 class TelegramChannelPublisher(Publisher):
     channel, credential_env = "telegram", "TELEGRAM_BOT_TOKEN"
 
+    def ready(self) -> bool:
+        return self.configured()
+
+    def reconnect(self) -> bool:
+        return self.configured()
+
     def publish(self, video_path: str, metadata: dict) -> dict:
         from adapters.telegram import TelegramAdapter
 

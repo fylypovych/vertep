@@ -15,6 +15,7 @@ from publishers import (
     TikTokPublisher,
     YoutubePublisher,
 )
+from publishers.oauth import YouTubeTokenProvider
 from adapters.publisher import PUBLISHERS
 
 
@@ -306,3 +307,344 @@ def test_youtube_no_refresh_token_returns_401_error(monkeypatch, tmp_path):
     result = publisher.publish(_mp4(tmp_path), {"topic": "x"})
     assert result["status"] == "FAILED"
     assert "401" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Credential readiness, scopes, and revocation
+# ---------------------------------------------------------------------------
+
+
+def test_publisher_not_ready_without_credentials(monkeypatch):
+    """A publisher with no credentials is not ready."""
+    monkeypatch.delenv("YOUTUBE_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("TIKTOK_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("FACEBOOK_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("THREADS_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    for cls in (YoutubePublisher, TikTokPublisher, FacebookPublisher,
+                InstagramPublisher, ThreadsPublisher):
+        pub = cls(transport=FakeTransport([]))
+        assert pub.configured() is False
+        assert pub.ready() is False
+
+
+def test_publisher_ready_with_token(monkeypatch):
+    """A publisher with a token env var is ready."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "test-token")
+    pub = YoutubePublisher(transport=FakeTransport([]))
+    assert pub.configured() is True
+    assert pub.ready() is True
+
+
+def test_publisher_mock_is_ready_and_configured(monkeypatch):
+    """In PUBLISHER_MOCK mode all publishers are ready."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    monkeypatch.delenv("YOUTUBE_ACCESS_TOKEN", raising=False)
+    pub = YoutubePublisher(transport=FakeTransport([]))
+    assert pub.configured() is True
+    assert pub.ready() is True
+
+
+def test_required_scopes_defined_for_all_platforms():
+    """Every platform publisher declares required OAuth scopes."""
+    for cls in (YoutubePublisher, TikTokPublisher, FacebookPublisher,
+                InstagramPublisher, ThreadsPublisher):
+        assert len(cls.required_scopes) > 0, f"{cls.channel} missing required_scopes"
+
+
+def test_missing_scopes_empty_when_no_token(monkeypatch):
+    """When no token is present, missing_scopes returns required_scopes."""
+    monkeypatch.delenv("YOUTUBE_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    pub = YoutubePublisher(transport=FakeTransport([]))
+    missing = pub.missing_scopes()
+    assert set(missing) == set(YoutubePublisher.required_scopes)
+
+
+def test_revoke_clears_cached_token(monkeypatch):
+    """revoke() clears the locally cached token."""
+    tp = YouTubeTokenProvider(transport=FakeTransport([]))
+    tp._cached_token = "some-token"
+    tp._token_expires_at = 9999999999
+    assert tp.revoke() is False  # no revoke_url configured on base test context
+    assert tp._cached_token is None
+
+
+def test_youtube_revoke_calls_endpoint(monkeypatch):
+    """YouTube revoke hits the Google revocation endpoint."""
+    monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN", "refresh-xyz")
+    monkeypatch.setenv("YOUTUBE_CLIENT_ID", "cid")
+    monkeypatch.setenv("YOUTUBE_CLIENT_SECRET", "csec")
+    fake = FakeTransport([httpx.Response(200, json={"success": True})])
+    tp = YouTubeTokenProvider(transport=fake)
+    tp._cached_token = "access-xyz"
+    tp._token_expires_at = 9999999999
+    assert tp.revoke() is True
+    method, url, kwargs = fake.requests[0]
+    assert url == "https://oauth2.googleapis.com/revoke"
+    assert kwargs["data"]["token"] == "refresh-xyz"
+    assert kwargs["data"]["token_type_hint"] == "refresh_token"
+
+
+def test_youtube_reconnect_clears_and_refetches(monkeypatch):
+    """reconnect() clears the cached token and re-fetches from env."""
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "new-token-from-env")
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    tp = YouTubeTokenProvider(transport=FakeTransport([]))
+    tp._cached_token = "old-token"
+    tp._token_expires_at = 9999999999
+    assert tp.reconnect() == "new-token-from-env"
+    assert tp._cached_token == "new-token-from-env"
+
+
+def test_publisher_reconnect_returns_true_when_token_available(monkeypatch):
+    """Publisher.reconnect() delegates to token provider."""
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "fresh-token")
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    pub = YoutubePublisher(transport=FakeTransport([]))
+    assert pub.reconnect() is True
+
+
+def test_publisher_reconnect_returns_false_without_credentials(monkeypatch):
+    """Publisher.reconnect() returns False when no credentials are available."""
+    monkeypatch.delenv("YOUTUBE_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    pub = YoutubePublisher(transport=FakeTransport([]))
+    assert pub.reconnect() is False
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: approved video to worker execute_publisher to receipt for all 5 platforms
+# ---------------------------------------------------------------------------
+
+
+def test_end_to_end_publish_receives_receipt_for_all_platforms(monkeypatch, tmp_path):
+    """A full publish round-trip: approved video to PublisherWorker.execute_publisher to receipt.
+
+    Each platform is given appropriate credentials and a FakeTransport that
+    simulates the real API response flow. The test asserts that each platform
+    produces a PUBLISHED receipt with the expected platform fields, proving the
+    end-to-end contract for all five live adapters.
+    """
+    import base64
+    import json
+    from worker.role_executor import execute_publisher
+
+    video = _mp4(tmp_path, size=1024)
+    delivery_contract = {
+        "job_id": "job-e2e", "video_version": "v1", "video_sha256": "abc123",
+        "channel": "youtube",
+    }
+    publish_intent = {"video_version": "v1", "video_sha256": "abc123"}
+
+    platforms = {
+        "youtube": (
+            YoutubePublisher(transport=FakeTransport([
+                httpx.Response(200, json={},
+                               headers={"Location": "https://upload.example/init"}),
+                httpx.Response(200, json={"id": "yt-vid-001"}),
+            ])),
+            {"YOUTUBE_ACCESS_TOKEN": "yt-token"},
+        ),
+        "tiktok": (
+            TikTokPublisher(transport=FakeTransport([
+                httpx.Response(200, json={"data": {
+                    "upload_url": "https://upload.tiktok.example/seg",
+                    "publish_id": "tk-pub-002",
+                }}),
+                httpx.Response(200, json={"status_code": 0}),
+                httpx.Response(200, json={"data": {"status": "SEND_TO_USER_FEED"}}),
+            ])),
+            {"TIKTOK_ACCESS_TOKEN": "tk-token"},
+        ),
+        "facebook": (
+            FacebookPublisher(transport=FakeTransport([
+                httpx.Response(200, json={"id": "fb-vid-003"}),
+            ])),
+            {"FACEBOOK_ACCESS_TOKEN": "fb-token", "FACEBOOK_PAGE_ID": "page-123"},
+        ),
+        "instagram": (
+            InstagramPublisher(transport=FakeTransport([
+                httpx.Response(200, json={"id": "ig-container-004"}),
+                httpx.Response(200, json={"id": "ig-media-004"}),
+            ])),
+            {"INSTAGRAM_ACCESS_TOKEN": "ig-token"},
+        ),
+        "threads": (
+            ThreadsPublisher(transport=FakeTransport([
+                httpx.Response(200, json={"id": "th-media-005"}),
+                httpx.Response(200, json={"id": "th-005"}),
+            ])),
+            {"THREADS_ACCESS_TOKEN": "th-token"},
+        ),
+    }
+
+    patched = {name: pub for name, (pub, _) in platforms.items()}
+    monkeypatch.setattr("publishers.LIVE_PUBLISHERS", patched)
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    for name, (_, env_vars) in platforms.items():
+        for key, val in env_vars.items():
+            monkeypatch.setenv(key, val)
+
+    metadata = {
+        "topic": "E2E test", "title": "Test video",
+        "instagram_user_id": "ig-9", "threads_user_id": "th-3",
+        "video_url": "https://cdn.example/v.mp4",
+    }
+
+    for channel, (publisher, _) in platforms.items():
+        task = {
+            "job_id": "job-e2e",
+            "task_id": f"task-{channel}",
+            "channel": channel,
+            "video_path": video,
+            "metadata": metadata,
+            "delivery_contract": delivery_contract,
+            "publish_intent": publish_intent,
+            "node_name": "publisher-1",
+        }
+        artifacts = execute_publisher(task)
+        assert len(artifacts) == 1
+        assert artifacts[0]["kind"] == "publication_receipt"
+        receipt = json.loads(base64.b64decode(artifacts[0]["data_base64"]).decode("utf-8"))
+        assert receipt["channel"] == channel
+        assert receipt["status"] == "PUBLISHED", f"{channel}: {receipt.get('error')}"
+        assert "video_version" in receipt
+        assert "video_sha256" in receipt
+        assert "timestamp" in receipt
+
+
+def test_end_to_end_partial_failure_one_platform_fails(monkeypatch, tmp_path):
+    """End-to-end: 4 platforms succeed, 1 (instagram) returns FAILED.
+
+    Proves partial failure is handled: each platform is dispatched independently,
+    a FAILED receipt for one platform does not stop the others.
+    """
+    import base64
+    import json
+    from worker.role_executor import execute_publisher
+
+    video = _mp4(tmp_path, size=512)
+    publish_intent = {"video_version": "v1", "video_sha256": "abc123"}
+
+    # Instagram returns FAILED (e.g. API error), others succeed
+    instagram_pub = InstagramPublisher(transport=FakeTransport([
+        httpx.Response(500, json={"error": "server error"}),
+    ]))
+
+    platforms = {
+        "youtube": (
+            YoutubePublisher(transport=FakeTransport([
+                httpx.Response(200, json={},
+                               headers={"Location": "https://upload.example/init"}),
+                httpx.Response(200, json={"id": "yt-pf-001"}),
+            ])),
+            {"YOUTUBE_ACCESS_TOKEN": "yt-token"},
+        ),
+        "tiktok": (
+            TikTokPublisher(transport=FakeTransport([
+                httpx.Response(200, json={"data": {
+                    "upload_url": "https://upload.tiktok.example/seg",
+                    "publish_id": "tk-pf-002",
+                }}),
+                httpx.Response(200, json={"status_code": 0}),
+                httpx.Response(200, json={"data": {"status": "SEND_TO_USER_FEED"}}),
+            ])),
+            {"TIKTOK_ACCESS_TOKEN": "tk-token"},
+        ),
+        "facebook": (
+            FacebookPublisher(transport=FakeTransport([
+                httpx.Response(200, json={"id": "fb-pf-003"}),
+            ])),
+            {"FACEBOOK_ACCESS_TOKEN": "fb-token", "FACEBOOK_PAGE_ID": "page-x"},
+        ),
+        "instagram": (instagram_pub, {"INSTAGRAM_ACCESS_TOKEN": "ig-token"}),
+        "threads": (
+            ThreadsPublisher(transport=FakeTransport([
+                httpx.Response(200, json={"id": "th-media-pf"}),
+                httpx.Response(200, json={"id": "th-pf-005"}),
+            ])),
+            {"THREADS_ACCESS_TOKEN": "th-token"},
+        ),
+    }
+
+    patched = {name: pub for name, (pub, _) in platforms.items()}
+    monkeypatch.setattr("publishers.LIVE_PUBLISHERS", patched)
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    for _, env_vars in platforms.values():
+        for key, val in env_vars.items():
+            monkeypatch.setenv(key, val)
+
+    metadata = {
+        "topic": "Partial test", "instagram_user_id": "ig-9",
+        "threads_user_id": "th-3", "video_url": "https://cdn.example/v.mp4",
+    }
+
+    results = {}
+    for channel, (publisher, _) in platforms.items():
+        task = {
+            "job_id": "job-pf",
+            "task_id": f"task-{channel}",
+            "channel": channel,
+            "video_path": video,
+            "metadata": metadata,
+            "delivery_contract": {},
+            "publish_intent": publish_intent,
+            "node_name": "publisher-1",
+        }
+        artifacts = execute_publisher(task)
+        receipt = json.loads(
+            base64.b64decode(artifacts[0]["data_base64"]).decode("utf-8")
+        )
+        results[channel] = receipt
+
+    assert results["youtube"]["status"] == "PUBLISHED"
+    assert results["tiktok"]["status"] == "PUBLISHED"
+    assert results["facebook"]["status"] == "PUBLISHED"
+    assert results["threads"]["status"] == "PUBLISHED"
+    assert results["instagram"]["status"] == "FAILED"
+    assert "super-secret-token" not in results["instagram"].get("error", "")
+    """Errors surfacing from execute_publisher must not leak credential values."""
+    import json
+    import base64
+    from worker.role_executor import execute_publisher
+
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "super-secret-token-123")
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+
+    class LeakingPublisher:
+        channel = "youtube"
+        credential_env = "YOUTUBE_ACCESS_TOKEN"
+
+        def configured(self) -> bool:
+            return True
+
+        def publish(self, video_path, metadata):
+            return {
+                "channel": "youtube",
+                "status": "FAILED",
+                "error": "Bearer super-secret-token-123 rejected",
+            }
+
+    monkeypatch.setattr(
+        "publishers.LIVE_PUBLISHERS", {"youtube": LeakingPublisher()}
+    )
+
+    task = {
+        "job_id": "job-redact",
+        "task_id": "task-redact",
+        "channel": "youtube",
+        "video_path": _mp4(tmp_path),
+        "metadata": {"topic": "x"},
+        "delivery_contract": {},
+        "publish_intent": {},
+        "node_name": "publisher-1",
+    }
+    artifacts = execute_publisher(task)
+    receipt = json.loads(
+        base64.b64decode(artifacts[0]["data_base64"]).decode("utf-8")
+    )
+    assert receipt["status"] == "FAILED"
+    assert "super-secret-token-123" not in receipt["error"]

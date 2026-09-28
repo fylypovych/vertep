@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 from publishers.base import Publisher, check_response
+from publishers.oauth import FacebookTokenProvider
 
 _GRAPH = "https://graph.facebook.com/v21.0"
 
@@ -17,9 +18,10 @@ _GRAPH = "https://graph.facebook.com/v21.0"
 class FacebookPublisher(Publisher):
     channel = "facebook"
     credential_env = "FACEBOOK_ACCESS_TOKEN"
+    required_scopes = ["pages_manage_posts", "pages_manage_engagement"]
 
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
-        token = os.environ[self.credential_env]
+        token = FacebookTokenProvider().access_token()
         page_id = (
             os.getenv("FACEBOOK_PAGE_ID")
             or metadata.get("page_id")

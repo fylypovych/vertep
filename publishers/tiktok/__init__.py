@@ -11,6 +11,8 @@ upload URL and publish id, the raw bytes are PUT to that URL, then
 from __future__ import annotations
 
 import os
+from publishers.oauth import TikTokTokenProvider
+# duplicate import removed
 
 from publishers.base import Publisher, check_response
 
@@ -21,9 +23,10 @@ _STATUS = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
 class TikTokPublisher(Publisher):
     channel = "tiktok"
     credential_env = "TIKTOK_ACCESS_TOKEN"
+    required_scopes = ["video.list", "video.publish", "video.upload"]
 
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
-        token = os.environ[self.credential_env]
+        token = TikTokTokenProvider().access_token()
         if not os.path.isfile(video_path):
             raise ValueError("TikTok upload requires an existing local video file")
         size = os.path.getsize(video_path)

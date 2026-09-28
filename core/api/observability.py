@@ -180,6 +180,18 @@ def _integration_summary() -> list[dict]:
         items.append({"name": "publisher", "status": "mock"})
     if os.getenv("VERTEP_LLM_PROVIDER") == "openai":
         items.append({"name": "llm", "status": "external"})
+    # Per-platform publisher credential readiness
+    try:
+        from adapters.publisher import PUBLISHERS
+        from core.logging_config import secret_redact
+        for channel, pub in PUBLISHERS.items():
+            items.append({
+                "name": f"publisher:{channel}",
+                "status": "ready" if pub.ready() else ("configured" if pub.configured() else "not_configured"),
+                "missing_scopes": pub.missing_scopes(),
+            })
+    except Exception:
+        pass
     return items
 
 

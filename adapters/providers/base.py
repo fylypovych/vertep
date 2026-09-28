@@ -133,6 +133,18 @@ class PublisherProvider(ABC):
     def available_channels(self) -> list[str]:
         ...
 
+    def ready(self, channel: str) -> bool:
+        """Return True when the channel credentials are present and usable."""
+        ...
+
+    def missing_scopes(self, channel: str) -> list[str]:
+        """Return OAuth scopes missing for the channel."""
+        ...
+
+    def reconnect(self, channel: str) -> bool:
+        """Trigger re-authentication for the given channel."""
+        ...
+
 
 class VideoEngine(ABC):
     """High-level video assembly driver (not to be confused with ``VideoProvider``).

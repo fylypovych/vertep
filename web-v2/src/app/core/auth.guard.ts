@@ -19,7 +19,12 @@ export class AuthGuard implements CanActivate {
         this.policy.refresh();
       }),
       map(() => true),
-      catchError(() => {
+      catchError((err) => {
+        // Якщо backend повертає, що система вже налаштована, не треба редиректити на login
+        if (err && err.error && err.error.configured) {
+          // Система вже налаштована – перейти на головну сторінку
+          return of(this.router.createUrlTree(['/']));
+        }
         this.policy.userRole.set('viewer');
         return of(this.router.createUrlTree(['/login']));
       })

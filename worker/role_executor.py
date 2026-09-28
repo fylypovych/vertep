@@ -325,7 +325,11 @@ def execute_publisher(task: dict) -> list[dict]:
         if any(keyword in error_str for keyword in ("timeout", "network", "connection", "rate limit", "429", "503", "504")):
             raise  # Transient - let worker retry
         # Other exceptions treated as permanent failure
-        result = {"channel": channel, "status": "FAILED", "error": str(error)}
+        from core.logging_config import secret_redact
+        result = {"channel": channel, "status": "FAILED", "error": secret_redact(str(error))}
+    if isinstance(result, dict) and "error" in result:
+        from core.logging_config import secret_redact
+        result["error"] = secret_redact(result["error"])
     result.setdefault("channel", channel)
     result.setdefault("timestamp", _time.time())
     # Correlate the receipt back to the durable delivery contract so CORE can

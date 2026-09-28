@@ -58,6 +58,7 @@ class Publisher:
 
     channel = "unknown"
     credential_env = ""
+    required_scopes: list[str] = []
 
     def __init__(self, transport=None) -> None:
         self.transport = transport or HttpTransport()
@@ -65,6 +66,54 @@ class Publisher:
     def configured(self) -> bool:
         mock = os.getenv("PUBLISHER_MOCK", "false").lower() == "true"
         return mock or bool(os.getenv(self.credential_env, ""))
+
+    def ready(self) -> bool:
+        """Return True when credentials are present and (if OAuth) a token is available."""
+        if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
+            return True
+        if not self.configured():
+            return False
+        token_provider = self._token_provider() if hasattr(self, "_token_provider") else None
+        if token_provider is None:
+            return True
+        try:
+            return bool(token_provider.access_token())
+        except Exception:
+            return False
+
+    def token_scopes(self) -> list[str]:
+        """Return scopes granted by the current token, or [] if unavailable."""
+        provider = self._token_provider() if hasattr(self, "_token_provider") else None
+        if provider is None:
+            return []
+        scopes = getattr(provider, "token_scopes", None)
+        if callable(scopes):
+            try:
+                return list(scopes() or [])
+            except Exception:
+                return []
+        return []
+
+    def missing_scopes(self) -> list[str]:
+        """Return the subset of ``required_scopes`` not granted by the current token."""
+        if not self.required_scopes:
+            return []
+        granted = set(self.token_scopes())
+        return [s for s in self.required_scopes if s not in granted]
+
+    def reconnect(self) -> bool:
+        """Trigger re-authentication: invalidate cached token and re-fetch.
+
+        Returns ``True`` if a valid token is available after reconnection.
+        """
+        token_provider = self._token_provider() if hasattr(self, "_token_provider") else None
+        if token_provider is None:
+            return self.configured()
+        try:
+            token = token_provider.reconnect() if hasattr(token_provider, "reconnect") else None
+            return bool(token)
+        except Exception:
+            return False
 
     def publish(self, video_path: str, metadata: dict) -> dict:
         if not self.configured():
@@ -78,7 +127,8 @@ class Publisher:
         try:
             return self._publish_live(video_path, metadata)
         except Exception as error:  # noqa: BLE001 — surface to caller as FAILED
-            return {"channel": self.channel, "status": "FAILED", "error": str(error)}
+            from core.logging_config import secret_redact
+            return {"channel": self.channel, "status": "FAILED", "error": secret_redact(str(error))}
 
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         raise NotImplementedError(

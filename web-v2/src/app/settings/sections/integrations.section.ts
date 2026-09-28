@@ -9,7 +9,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-integrations',
   standalone: true,
   imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-integrations"><h3 class="text-lg font-semibold mb-4">Інтеграції</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="!loading() && !error()" class="space-y-2"><div class="flex justify-between"><span>Ollama</span><span>{{ integrations()?.ollama?.status || 'OFFLINE' }}</span></div><div class="flex justify-between"><span>ComfyUI</span><span>{{ integrations()?.comfyui?.status || 'OFFLINE' }}</span></div><div *ngFor="let channel of publisherChannels()" class="flex justify-between"><span>{{ channel.label }}</span><span>{{ channel.configured ? 'Налаштовано' : 'Не налаштовано' }}</span></div></div></div>`,
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-integrations"><h3 class="text-lg font-semibold mb-4">Інтеграції</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="!loading() && !error()" class="space-y-2"><div class="flex justify-between"><span>Ollama</span><span>{{ integrations()?.ollama?.status || 'OFFLINE' }}</span></div><div class="flex justify-between"><span>ComfyUI</span><span>{{ integrations()?.comfyui?.status || 'OFFLINE' }}</span></div><div *ngFor="let ch of publisherChannels()" class="flex justify-between"><span>{{ ch.label }}</span><span>{{ publisherStatus(ch.val) }}</span></div></div></div>`,
 })
 export class IntegrationsSectionComponent implements OnInit {
   integrations = signal<IntegrationStatus | null>(null);
@@ -26,7 +26,14 @@ export class IntegrationsSectionComponent implements OnInit {
     });
   }
 
-  publisherChannels(): { label: string; configured: boolean }[] {
+  publisherStatus(val: { configured: boolean; ready?: boolean; missing_scopes?: string[] }): string {
+    if (!val) return 'Не налаштовано';
+    if (val.ready === false) return 'Не готово';
+    if (val.missing_scopes && val.missing_scopes.length > 0) return 'Готово (scope)';
+    return 'Готово';
+  }
+
+  publisherChannels(): { label: string; val: { configured: boolean; ready?: boolean; missing_scopes?: string[] } }[] {
     const pub = this.integrations()?.publisher;
     if (!pub) { return []; }
     const labels: Record<string, string> = {
@@ -35,7 +42,7 @@ export class IntegrationsSectionComponent implements OnInit {
     };
     return Object.entries(pub).map(([key, val]) => ({
       label: labels[key] || key,
-      configured: val?.configured ?? false,
+      val: val ?? { configured: false, ready: false },
     }));
   }
 }

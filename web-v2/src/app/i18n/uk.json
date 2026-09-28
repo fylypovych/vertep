@@ -1,0 +1,9 @@
+{
+  "worker_role_core": "Основний вузол",
+  "worker_role_gpu": "GPU‑вузол",
+  "worker_role_text": "Текстовий вузол",
+  "worker_role_voice": "Голосовий вузол",
+  "worker_role_publisher": "Вузол публікації",
+  "worker_role_backup": "Вузол резервного копіювання",
+  "worker_role_monitoring": "Вузол моніторингу"
+}

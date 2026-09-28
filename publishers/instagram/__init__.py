@@ -9,6 +9,7 @@ then publishing it.
 from __future__ import annotations
 
 import os
+from publishers.oauth import InstagramTokenProvider
 
 from publishers.base import Publisher, check_response
 
@@ -18,9 +19,10 @@ _GRAPH = "https://graph.facebook.com/v21.0"
 class InstagramPublisher(Publisher):
     channel = "instagram"
     credential_env = "INSTAGRAM_ACCESS_TOKEN"
+    required_scopes = ["instagram_content_publish", "instagram_basic", "pages_show_list"]
 
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
-        token = os.environ[self.credential_env]
+        token = InstagramTokenProvider().access_token()
         user_id = (
             os.getenv("INSTAGRAM_USER_ID") or metadata.get("instagram_user_id")
         )
