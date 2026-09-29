@@ -13,6 +13,14 @@ VERSION_DIR = "versions"
 SUPPORTED_PLACEHOLDERS = {"TOPIC", "CHECKPOINT", "SEED", "WIDTH", "HEIGHT"}
 
 
+class WorkflowInUseError(ValueError):
+    def __init__(self, message: str, usage: dict):
+        super().__init__(message)
+        self.message = message
+        self.usage = usage
+
+
+
 def validate_workflow(workflow: dict) -> Dict[str, Any]:
     errors = []
     warnings = []
@@ -202,9 +210,10 @@ class WorkflowRegistry:
             references = ", ".join(
                 f"персонаж {item['character_id']}" for item in dependent_characters
             ) or ", ".join(f"завдання {item['job_id']}" for item in dependent_jobs) or "інші ресурси"
-            raise ValueError(
-                "Робочий процес використовується у: " + references
-                + " (referenced by other resources); використовуйте force=true to delete anyway."
+            raise WorkflowInUseError(
+                message="Робочий процес використовується у: " + references
+                + " (referenced by other resources); використовуйте force=true to delete anyway.",
+                usage=dependencies
             )
 
         path = self.root / kind / name

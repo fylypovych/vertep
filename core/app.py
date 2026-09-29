@@ -221,6 +221,8 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 operation = "backup"
             elif path.startswith("/api/system/backups/") and "/restore" in path and request.method == "POST":
                 operation = "restore"
+            elif path.startswith("/api/system/models/pull") and request.method == "POST":
+                operation = "model_pull"
             if operation and not operation_allowed(operation):
                 return Response(f"Operation {operation} is blocked by system state", 423)
         client = request.client.host if request.client else "unknown"
@@ -281,7 +283,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return Response("Insufficient role", 403)
         if request.method in {"PUT", "DELETE"} and request.url.path.startswith(("/api/characters", "/api/brands", "/api/workflows")) and role != "admin":
             return Response("Administrator role required", 403)
-        if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles", "/api/system/recovery", "/api/system/restart", "/api/system/test")) and role != "admin":
+        if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles", "/api/system/recovery", "/api/system/restart", "/api/system/test", "/api/system/models")) and role != "admin":
             return Response("Administrator role required", 403)
         if request.method != "GET" and request.url.path.startswith("/api/system/backups") and role != "admin":
             return Response("Administrator role required", 403)
@@ -468,6 +470,23 @@ def _session_identity(request: Request) -> Response | tuple[str, str]:
     identity = _valid_session(request.cookies.get("vertep_session", ""))
     profile = account_profile(*identity) if identity else None
     return profile or _json_error("Unauthorized", 401)
+
+
+def _actor_from_request(request: Request) -> tuple[str, str]:
+    """Return (actor, role) for the authenticated request, or ('unknown', '')."""
+    identity = _valid_session(request.cookies.get("vertep_session", ""))
+    if identity:
+        return identity
+    header = request.headers.get("authorization", "")
+    try:
+        scheme, encoded = header.split(" ", 1)
+        user, supplied = basic64.b64decode(encoded).decode().split(":", 1)
+        role = _authenticate_user(user, supplied) if scheme.lower() == "basic" else None
+        if role:
+            return user, role
+    except (ValueError, UnicodeError, binascii.Error):
+        pass
+    return "unknown", ""
 
 
 @app.put("/api/session/profile")
@@ -2591,11 +2610,28 @@ async def system_models():
 
 @app.post("/api/system/models/pull")
 async def pull_system_model(request: Request):
+    """Start an async model pull and return the durable operation record.
+
+    The actual Ollama pull runs on a background thread; poll
+    ``GET /api/operations/{operation_id}`` for progress.  Idempotent: a second
+    request for the same model returns the existing operation.
+    """
     payload = await request.json()
     name = str(payload.get("name", ""))
     if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", name):
         raise HTTPException(422, "Invalid model name")
-    return await _internal_api("POST", "OLLAMA_URL", "/api/pull", {"name": name, "stream": False})
+    from .pull_executor import start_pull
+    actor, _role = _actor_from_request(request)
+    return start_pull(name, requested_by=actor)
+
+
+@app.post("/api/system/models/pull/{operation_id}/cancel")
+async def cancel_pull_model(operation_id: str):
+    from .pull_executor import cancel_pull
+    operation = cancel_pull(operation_id, reason="cancelled via API")
+    if operation is None:
+        raise HTTPException(404, "Operation not found or already terminal")
+    return operation
 
 
 @app.delete("/api/system/models/{name:path}")

@@ -61,7 +61,19 @@ def _mock_status(page, overrides=None):
 
 
 def _mock_session(page, role="admin"):
-    """Register /api/session so Auth/Admin guards pass deterministically in CI."""
+    """Імітувати сесію та спільні GET-запити сторінок.
+
+    Окремі сценарії реєструють свої routes пізніше й перевизначають ці дані.
+    Мутації та невідомі endpoints не підміняються успішною відповіддю.
+    """
+    _mock_status(page)
+    for endpoint in ("jobs", "workers", "characters", "brands", "workflows", "channels/types"):
+        page.route(f"**/api/{endpoint}", lambda route: (
+            route.fulfill(json=[]) if route.request.method == "GET" else route.fallback()
+        ))
+    page.route("**/api/brands/*/channels", lambda route: (
+        route.fulfill(json=[]) if route.request.method == "GET" else route.fallback()
+    ))
     page.route("**/api/session", lambda route: route.fulfill(json={
         "authenticated": True, "user": "ci", "role": role,
     }))
@@ -151,7 +163,7 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         expect(page.locator("[data-testid='characters-page']")).to_be_visible()
         expect(page.locator("[data-testid='create-character-button']")).to_contain_text("Новий персонаж")
 
-        page.get_by_role("link", name="Налаштування", exact=True).click()
+        page.locator("nav a[href='/settings?tab=system']").click()
         expect(page).to_have_url(f"{BASE_URL}/settings?tab=system")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
         expect(page.locator("[data-testid='backends-table']")).to_be_visible()
@@ -834,7 +846,7 @@ def test_settings_roles_shows_deployment_status():
         page.locator("a[href='/settings?tab=roles']").click()
         expect(page).to_have_url(f"{BASE_URL}/settings?tab=roles")
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
-        page.get_by_role("link", name="Налаштування", exact=True).click()
+        page.locator("nav a[href='/settings?tab=system']").click()
         expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()
         page.go_back()
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()

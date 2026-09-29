@@ -157,6 +157,7 @@ def _restore_runtime(compose: list[str], previous_services: set[str], new_servic
         if previous_services:
             runner([*compose, "up", "-d", *sorted(previous_services)],
                    check=False, timeout=900)
+            wait_for_healthy(compose, previous_services, runner, timeout_seconds=120)
         if superseded:
             runner([*compose, "stop", *superseded], check=False, timeout=600)
             runner([*compose, "rm", "-f", *superseded], check=False, timeout=600)

@@ -1,8 +1,9 @@
 import { Injectable } from '@angular/core';
-import { HttpEvent, HttpHandler, HttpInterceptor, HttpRequest } from '@angular/common/http';
+import { HttpEvent, HttpHandler, HttpInterceptor, HttpRequest, HttpResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
+import { resolveSessionIdentity } from '../session-identity';
 
 @Injectable()
 export class AuthInterceptor implements HttpInterceptor {
@@ -22,6 +23,15 @@ export class AuthInterceptor implements HttpInterceptor {
     const cloned = req.clone({ headers });
     return next.handle(cloned).pipe(
       tap({
+        next: (event) => {
+          // HTTP 200 із нечинною сесією також означає втрату авторизації.
+          if (event instanceof HttpResponse && req.method === 'GET'
+              && req.url.split('?')[0] === '/api/session'
+              && !resolveSessionIdentity(event.body)
+              && !/^\/(login|setup)(?:[/?#]|$)/.test(this.router.url)) {
+            void this.router.navigate(['/login']);
+          }
+        },
         error: (err) => {
           if (err.status === 401) {
             this.router.navigate(['/login']);

@@ -19,7 +19,7 @@ export const routes: Routes = [
   {
     path: '',
     component: LayoutComponent,
-    canActivate: [AuthGuard],
+    canActivateChild: [AuthGuard],
     children: [
       { path: '', loadComponent: () => import('./dashboard/dashboard.component').then(m => m.DashboardComponent), title: 'Дашборд', data: { metadata: { title: 'Дашборд', icon: 'dashboard-icon' } } },
       { path: 'jobs', loadComponent: () => import('./jobs/jobs.component').then(m => m.JobsComponent), title: 'Завдання', data: { metadata: { title: 'Завдання', icon: 'jobs-icon' } } },

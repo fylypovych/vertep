@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from ..configuration import read_json
 from .. import state
-from ..workflows import WORKFLOW_TYPES, SAFE_NAME
+from ..workflows import WORKFLOW_TYPES, SAFE_NAME, WorkflowInUseError
 
 
 def workflow_registry():
@@ -40,6 +40,15 @@ def put_workflow(kind: str, name: str, workflow: dict, force: bool = Query(False
 def delete_workflow(kind: str, name: str, force: bool = Query(False)):
     try:
         return workflow_registry().delete(kind, name, force=force)
+    except WorkflowInUseError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": error.message,
+                "error_code": "WORKFLOW_IN_USE",
+                "usage": error.usage,
+            }
+        ) from error
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     except FileNotFoundError as error:

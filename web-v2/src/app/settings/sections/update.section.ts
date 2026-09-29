@@ -60,10 +60,16 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         @if (readiness()) {
           <div class="mb-4 p-3 rounded-lg" [class.bg-emerald-50]="readiness()!.ready" [class.bg-amber-50]="!readiness()!.ready">
             <p class="text-sm font-medium" [class.text-emerald-700]="readiness()!.ready" [class.text-amber-700]="!readiness()!.ready">
-              {{ readiness()!.ready ? 'Готове до оновлення' : 'Не готове' }}
+              {{ readiness()!.ready ? 'Підготовку до встановлення завершено' : 'Підготовку до встановлення не завершено' }}
             </p>
             @if (!readiness()!.ready) {
-              <p class="text-xs text-slate-600 mt-1">Активних задач: {{ readiness()!.inflight }}, зайнятих вузлів: {{ readiness()!.busy_workers.length }}</p>
+              @if (!readiness()!.queue_paused) {
+                <p class="text-xs text-slate-600 mt-1">Видачу задач ще не призупинено. Підготовка виконується під час запуску оновлення.</p>
+              }
+              <p class="text-xs text-slate-600 mt-1">Активних job: {{ readiness()!.active_jobs.length }}, задач у виконанні: {{ readiness()!.inflight }}, зайнятих вузлів: {{ readiness()!.busy_workers.length }}</p>
+              @if (readiness()!.unacknowledged_workers.length) {
+                <p class="text-xs text-slate-600 mt-1">Не підтвердили завершення роботи: {{ readiness()!.unacknowledged_workers.join(', ') }}</p>
+              }
             }
           </div>
         }

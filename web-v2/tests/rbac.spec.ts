@@ -39,7 +39,7 @@ test.describe('RBAC — Issue #29', () => {
     await page.waitForLoadState('networkidle').catch(() => {});
     await expect(page.getByTestId('jobs-page')).toBeVisible({ timeout: 20000 });
     const nav = page.locator('nav').first();
-    await expect(nav.getByText('Налаштування')).toBeVisible();
+    await expect(nav.locator('a[href="/settings?tab=system"]')).toBeVisible();
     const createButton = page.getByTestId('create-job-button');
     await expect(createButton).toBeVisible();
     expect(await createButton.isDisabled()).toBe(false);
@@ -52,7 +52,7 @@ test.describe('RBAC — Issue #29', () => {
     await page.waitForLoadState('networkidle').catch(() => {});
     await expect(page.getByTestId('jobs-page')).toBeVisible({ timeout: 20000 });
     const nav = page.locator('nav').first();
-    await expect(nav.getByText('Налаштування')).toHaveCount(0, { timeout: 20000 });
+    await expect(nav.locator('a[href="/settings?tab=system"]')).toHaveCount(0, { timeout: 20000 });
     // Admin mutation заблокована через policy: кнопка неактивна, причина пояснена.
     const createButton = page.getByTestId('create-job-button');
     await expect(createButton).toBeVisible();

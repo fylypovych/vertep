@@ -26,7 +26,7 @@ test.describe('Settings — Secrets', () => {
     await page.getByText('Секрети').click();
     await expect(page.getByTestId('settings-secrets')).toBeVisible();
     await expect(page.getByText('telegram_bot_token')).toBeVisible();
-    await expect(page.getByText('Встановлено').first()).toBeVisible();
+    await expect(page.getByText('Збережено', { exact: true }).first()).toBeVisible();
   });
 
   test('Редагування секрету', async ({ page }) => {

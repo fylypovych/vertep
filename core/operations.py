@@ -31,11 +31,13 @@ class OperationStatus(str, Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
     ROLLING_BACK = "ROLLING_BACK"
     RECOVERING = "RECOVERING"
 
 
-_OPERATION_TYPES = frozenset({"status", "update", "restart", "backup", "restore", "test"})
+_OPERATION_TYPES = frozenset({"status", "update", "restart", "backup", "restore",
+                              "test", "model_pull", "model_delete"})
 _ACTIVE_STATUSES = {OperationStatus.QUEUED, OperationStatus.RUNNING,
                     OperationStatus.ROLLING_BACK, OperationStatus.RECOVERING}
 
@@ -325,6 +327,32 @@ def delete_operation(operation_id: str) -> bool:
         _write_all(operations)
     _sync_delete_to_database(operation_id)
     return True
+
+
+def cancel_operation(operation_id: str, reason: str | None = None) -> dict[str, Any] | None:
+    """Mark a queued/running operation as CANCELLED.
+
+    Returns the updated operation, or None if it does not exist or is already
+    in a terminal state.  The caller (executor) is responsible for stopping the
+    underlying work; this only records the cancellation durably.
+    """
+    with _lock:
+        operations = _read_all()
+        operation = operations.get(operation_id)
+        if operation is None:
+            return None
+        if operation["status"] in {OperationStatus.COMPLETED.value,
+                                    OperationStatus.FAILED.value,
+                                    OperationStatus.CANCELLED.value}:
+            return operation
+        operation["status"] = OperationStatus.CANCELLED.value
+        operation["finished_at"] = _now()
+        operation["error"] = (reason or "cancelled by user")[:2000]
+        operations[operation_id] = operation
+        _write_all(operations)
+    _sync_to_database(operation)
+    audit_entry(operation_id, "cancel", reason or "cancelled by user")
+    return operation
 
 
 def audit_entry(operation_id: str, phase: str, message: str | None = None,

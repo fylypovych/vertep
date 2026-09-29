@@ -392,6 +392,60 @@ export interface JobUpdate {
 export interface Workflow {
   kind: string;
   name: string;
+  type?: string;
+  path?: string;
+  valid?: boolean;
+  errors?: string[];
+  warnings?: string[];
+  schema?: {
+    node_count: number;
+    node_types: string[];
+    has_placeholders: string[];
+    estimated_vram_mb?: number;
+  };
+}
+
+export interface WorkflowValidation {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  schema: {
+    node_count: number;
+    node_types: string[];
+    has_placeholders: string[];
+    estimated_vram_mb?: number;
+  };
+}
+
+export interface WorkflowVersion {
+  version: number;
+  archived_at?: string;
+  deleted?: boolean;
+  size_bytes?: number;
+}
+
+export interface WorkflowUsage {
+  workflow: string;
+  jobs: Array<{ job_id: string; topic: string; status: string }>;
+  characters: Array<{ character_id: string; field: string }>;
+  total_jobs: number;
+  total_characters: number;
+}
+
+export interface WorkflowDocument {
+  workflow: Record<string, unknown>;
+  validation: WorkflowValidation;
+  meta?: Record<string, unknown>;
+}
+
+export interface WorkflowFormSchema {
+  kind: string;
+  name: string;
+  schema: {
+    placeholders: string[];
+    node_types: string[];
+    editable_inputs: Array<{ node_id: string; class_type: string; input_name: string; current_value: unknown }>;
+  };
 }
 
 export interface Alert {

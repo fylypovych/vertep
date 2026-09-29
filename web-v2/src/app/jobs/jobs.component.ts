@@ -355,17 +355,17 @@ export class JobsComponent implements OnInit, OnDestroy {
   get deleteJobReason(): string | null { return this.policy.disabledReason('delete_job'); }
 
   ngOnInit(): void {
-    const tab = this.route.snapshot.queryParamMap.get('tab');
-    const isQueuePath = this.route.snapshot.url.some(s => s.path === 'queue');
-    this.view.set((tab === 'queue' || isQueuePath) ? 'queue' : 'list');
-    this.statusGroup = this.route.snapshot.queryParamMap.get('group') || '';
+    this.queueSubs.add(this.route.queryParamMap.subscribe(params => {
+      const isQueuePath = this.route.snapshot.url.some(s => s.path === 'queue');
+      this.view.set(params.get('tab') === 'queue' || isQueuePath ? 'queue' : 'list');
+      this.statusGroup = params.get('group') || '';
+      if (this.view() === 'queue') this.startQueuePolling();
+      else this.stopQueuePolling();
+    }));
     this.loadJobs();
     this.loadCharacters();
     this.loadBrands();
     this.loadWorkflows();
-    if (this.view() === 'queue') {
-      this.startQueuePolling();
-    }
   }
 
   ngOnDestroy(): void {
@@ -376,13 +376,9 @@ export class JobsComponent implements OnInit, OnDestroy {
   }
 
   setView(v: 'list' | 'queue'): void {
-    this.view.set(v);
-    if (v === 'queue') {
-      this.loadQueue();
-      this.startQueuePolling();
-    } else {
-      this.stopQueuePolling();
-    }
+    void this.router.navigate([v === 'queue' ? '/queue' : '/jobs'], {
+      queryParams: { ...this.route.snapshot.queryParams, tab: null },
+    });
   }
 
   startQueuePolling(): void {

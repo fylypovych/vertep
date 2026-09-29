@@ -13,7 +13,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-secrets">
-      <h3 class="text-lg font-semibold mb-4">Секрети інтеграцій</h3>
+      <h3 class="text-lg font-semibold mb-4">Ключі та паролі підключень</h3>
+      <p class="text-sm text-slate-600 mb-4">Тут зберігаються токени, API keys і паролі. «Збережено» означає наявність значення, а не перевірку його дійсності чи готовність підключення. Доступність сервісів показано в розділі «Стан підключень».</p>
       <app-loading-state *ngIf="loading()" />
       <app-error-state *ngIf="error()" [message]="error()!" />
       <div *ngIf="!loading() && !error()">
@@ -31,7 +32,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
             <ng-template #secretActions>
               <span class="text-sm" [class.text-emerald-700]="secrets()?.[name]"
                     [class.text-slate-500]="!secrets()?.[name]">
-                {{ secrets()?.[name] ? 'Встановлено' : 'Не встановлено' }}
+                {{ secrets()?.[name] ? 'Збережено' : 'Не збережено' }}
               </span>
               <button (click)="startEdit(name)" class="text-sm text-blue-700">Редагувати</button>
               <button *ngIf="secrets()?.[name]" (click)="confirmDeleteSecret(name)"

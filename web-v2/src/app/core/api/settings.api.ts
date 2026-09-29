@@ -33,12 +33,25 @@ export interface ModelsResponse {
 }
 
 export interface ModelPullResponse {
+  operation_id: string;
   status: string;
-  digest?: string;
+  progress: number;
+  current_phase: string;
+  error: string | null;
+  result: any;
 }
 
 export interface ModelDeleteResponse {
   status: string;
+}
+
+export interface OperationState {
+  operation_id: string;
+  status: string;
+  progress: number;
+  current_phase: string;
+  error: string | null;
+  result: any;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -93,6 +106,14 @@ export class SettingsApiService {
 
   pullModel(name: string): Observable<ModelPullResponse> {
     return this.http.post<ModelPullResponse>(`${this.baseUrl}/system/models/pull`, { name }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  cancelPull(operationId: string): Observable<OperationState> {
+    return this.http.post<OperationState>(`${this.baseUrl}/system/models/pull/${encodeURIComponent(operationId)}/cancel`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  operation(operationId: string): Observable<OperationState> {
+    return this.http.get<OperationState>(`${this.baseUrl}/operations/${encodeURIComponent(operationId)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   deleteModel(name: string): Observable<ModelDeleteResponse> {

@@ -302,6 +302,35 @@ def test_workflow_list_shape():
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
+def test_workflow_delete_conflict_structured_409(tmp_path, monkeypatch):
+    from core import state
+    from core.api import job_helpers
+    monkeypatch.setattr(state.workflow_registry, "root", tmp_path / "workflows")
+    monkeypatch.setattr(job_helpers, "workflow_registry", state.workflow_registry)
+    client = _client()
+    # Save a test workflow
+    saved = client.put("/api/workflows/image/conflict-test.json", json={"node1": {"class_type": "TestNode", "inputs": {}}})
+    assert saved.status_code == 200, saved.text
+    # Enqueue a job using this workflow
+    created = client.post("/api/jobs", json={"topic": "Workflow test", "workflow": "workflows/image/conflict-test.json"})
+    assert created.status_code == 200, created.text
+
+    # Try deleting without force -> must return 409 with structured usage
+    resp = client.delete("/api/workflows/image/conflict-test.json")
+    assert resp.status_code == 409
+    data = resp.json()
+    assert "detail" in data
+    detail = data["detail"]
+    assert detail["error_code"] == "WORKFLOW_IN_USE"
+    assert "usage" in detail
+    assert "jobs" in detail["usage"]
+    assert len(detail["usage"]["jobs"]) > 0
+
+    # Delete with force=true -> must succeed
+    resp_force = client.delete("/api/workflows/image/conflict-test.json?force=true")
+    assert resp_force.status_code == 200
+    assert resp_force.json()["deleted"] == "workflows/image/conflict-test.json"
+
 def test_job_delete_returns_deleted_id():
     client = _client()
     jid = client.post("/api/jobs", json={"topic": "Delete contract"}).json()["job_id"]

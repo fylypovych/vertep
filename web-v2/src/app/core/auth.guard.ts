@@ -1,12 +1,12 @@
 import { Injectable } from '@angular/core';
-import { CanActivate, Router, UrlTree } from '@angular/router';
+import { CanActivate, CanActivateChild, Router, UrlTree } from '@angular/router';
 import { Observable, of } from 'rxjs';
 import { catchError, map, tap } from 'rxjs/operators';
 import { AuthApiService } from './api/auth.api';
 import { PolicyService } from './services/policy.service';
 
 @Injectable()
-export class AuthGuard implements CanActivate {
+export class AuthGuard implements CanActivate, CanActivateChild {
   constructor(private auth: AuthApiService, private router: Router, private policy: PolicyService) {}
 
   canActivate(): Observable<boolean | UrlTree> {
@@ -19,15 +19,11 @@ export class AuthGuard implements CanActivate {
         this.policy.refresh();
       }),
       map(() => true),
-      catchError((err) => {
-        // Якщо backend повертає, що система вже налаштована, не треба редиректити на login
-        if (err && err.error && err.error.configured) {
-          // Система вже налаштована – перейти на головну сторінку
-          return of(this.router.createUrlTree(['/']));
-        }
-        this.policy.userRole.set('viewer');
-        return of(this.router.createUrlTree(['/login']));
-      })
+      catchError(() => of(this.router.createUrlTree(['/login'])))
     );
+  }
+
+  canActivateChild(): Observable<boolean | UrlTree> {
+    return this.canActivate();
   }
 }

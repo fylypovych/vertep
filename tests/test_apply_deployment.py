@@ -332,9 +332,12 @@ def test_apply_rolls_back_previous_runtime_set_after_partial_compose(tmp_path):
         recorded.append(command)
         if "ps" in command:
             class Result:
-                stdout = ('{"Service": "comfyui", "State": "running", "Health": "healthy"}\n'
+                # If checking rollback services (ollama, update-agent, worker) return healthy
+                stdout = ('{"Service": "ollama", "State": "running", "Health": "healthy"}\n'
+                          '{"Service": "comfyui", "State": "running", "Health": "healthy"}\n'
                           '{"Service": "update-agent", "State": "running", "Health": "healthy"}\n'
-                          '{"Service": "worker", "State": "running", "Health": "unhealthy"}\n')
+                          + json.dumps({"Service": "worker", "State": "running",
+                                        "Health": "healthy" if any("up" in c and "ollama" in c for c in recorded) else "unhealthy"}) + '\n')
             return Result()
         return None
 

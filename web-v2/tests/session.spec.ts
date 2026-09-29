@@ -69,9 +69,9 @@ test('admin: бачить Settings та header показує «Адмін»', a
     await page.goto('/jobs');
     await page.waitForLoadState('networkidle').catch(() => {});
     const nav = page.locator('nav').first();
-    await expect(nav.getByText('Налаштування')).toBeVisible({ timeout: 20000 });
+    await expect(nav.locator('a[href="/settings?tab=system"]')).toBeVisible({ timeout: 20000 });
     await expect(page.getByText('Адмін', { exact: true })).toBeVisible();
-    await nav.getByText('Налаштування', { exact: true }).click();
+    await nav.locator('a[href="/settings?tab=system"]').click();
     await expect(page.getByTestId('settings-page')).toBeVisible();
   });
 
@@ -97,7 +97,7 @@ test('admin: бачить Settings та header показує «Адмін»', a
     });
     await page.goto('/jobs');
     await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
-    const settings = page.locator('nav').first().getByText('Налаштування', { exact: true });
+    const settings = page.locator('nav').first().locator('a[href="/settings?tab=system"]');
     await expect(settings).toBeVisible();
     await expect(page.getByText('Адмін', { exact: true })).toBeVisible();
     await settings.click();
@@ -111,7 +111,7 @@ test('admin: бачить Settings та header показує «Адмін»', a
     const nav = page.locator('nav').first();
     await page.goto('/jobs');
     await page.waitForLoadState('networkidle').catch(() => {});
-    await expect(nav.getByText('Налаштування')).toHaveCount(0, { timeout: 20000 });
+    await expect(nav.locator('a[href="/settings?tab=system"]')).toHaveCount(0, { timeout: 20000 });
     await expect(page.getByText('Переглядач', { exact: false }).first()).toBeVisible();
   });
 
@@ -324,4 +324,33 @@ test.describe('Account fields and password policy — Issue #75 S3', () => {
     await expect(page.getByTestId('password-save')).toBeDisabled();
     expect(api.passwordCalls()).toBe(0);
   });
+});
+
+
+test('втрата сесії при переході між розділами веде на login', async ({ page }) => {
+  await mockPageApi(page);
+  await mockStatus(page);
+  let active = true;
+  await page.route('**/api/session', route => route.fulfill({ json: active
+    ? { authenticated: true, user: 'admin', role: 'admin' }
+    : { authenticated: false, user: null, role: null } }));
+  await page.goto('/jobs');
+  await expect(page.locator('app-header')).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  active = false;
+  await page.locator('nav a[href="/alerts"]').click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.locator('app-header')).toHaveCount(0);
+});
+
+test('втрата сесії між guard і header веде на login', async ({ page }) => {
+  await mockPageApi(page);
+  await mockStatus(page);
+  let requests = 0;
+  await page.route('**/api/session', route => route.fulfill({ json: ++requests === 1
+    ? { authenticated: true, user: 'admin', role: 'admin' }
+    : { authenticated: false, user: null, role: null } }));
+  await page.goto('/jobs');
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.locator('app-header')).toHaveCount(0);
 });
