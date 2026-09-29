@@ -6,10 +6,28 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ..first_run import config_root, integration_secret_status, set_integration_secret
+from ..logging_config import secret_redact
 from ..models import IntegrationSecretUpdate
+from ..provider_switch import ProviderSwitchError, switch_provider
 from adapters.providers import provider_matrix
 
 router = APIRouter()
+
+
+@router.get("/api/settings/providers")
+def provider_backends():
+    """Active backend matrix (Settings → Движки обробки)."""
+    return {"matrix": provider_matrix()}
+
+
+@router.post("/api/settings/providers/{slot}")
+def switch_provider_backend(slot: str, payload: dict):
+    """Switch one provider slot with persist → apply → verify → rollback."""
+    actor = str(payload.get("actor") or "").strip()[:120] or f"web:settings:{slot}"
+    try:
+        return switch_provider(slot, str(payload.get("backend") or ""), actor=actor)
+    except ProviderSwitchError as error:
+        raise HTTPException(error.status_code, error.message) from error
 
 
 @router.get("/api/integrations")
@@ -27,7 +45,9 @@ def integrations():
                 response = client.get(endpoint)
             result[name] = {"status": "ONLINE", "http_status": response.status_code}
         except (httpx.HTTPError, OSError, ValueError, ImportError) as error:
-            result[name] = {"status": "OFFLINE", "error": str(error)}
+            # Issue #84: transport errors can embed credentials (proxy URLs with
+            # auth, tokens in query strings), so the API must not echo them raw.
+            result[name] = {"status": "OFFLINE", "error": secret_redact(str(error))}
     matrix = provider_matrix()
     result["publisher"] = matrix.get("publisher", {}).get("platforms", {})
     return result

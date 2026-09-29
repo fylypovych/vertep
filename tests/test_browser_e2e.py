@@ -392,6 +392,104 @@ def test_settings_shows_user_friendly_system_info():
         browser.close()
 
 
+def test_settings_security_shows_effective_checks_and_remediation():
+    """Issue #84: the security section must render the effective
+    secret-store/certificate/integration state, not only an OK flag."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        page.route("**/api/status", lambda route: route.fulfill(json={
+            "core": "OK", "version": "0.0.1.19",
+            "system": {"state": "NORMAL"},
+            "queue": {"depth": 0, "inflight": 0, "dead_letter": 0},
+            "orchestration": {"active_jobs": 0, "active_scenes": 0},
+            "providers": {},
+            "update": {"current_version": "0.0.1.19", "state": "IDLE"},
+        }))
+        page.route("**/api/security/check", lambda route: route.fulfill(json={
+            "ok": False,
+            "weak_or_missing": ["ADMIN_PASSWORD"],
+            "recommendation": "The sealed secret-store data key cannot be opened with the configured passphrase",
+            "checks": {
+                "secrets_store": {
+                    "status": "unusable", "sealed": True,
+                    "detail": "sealed but not openable: secret-store key failed authentication",
+                    "unsealable": False, "passphrase_configured": True, "sealing_required": True,
+                },
+                "certificates": {
+                    "server_certificate": {"present": True, "status": "expiring",
+                                           "sha256": "a" * 64, "expires_at": "2026-10-01T00:00:00+00:00",
+                                           "days_remaining": 2, "subject": "CN=vertep"},
+                    "server_key": {"present": True, "status": "ok", "sha256": "b" * 64},
+                    "node_ca": {"present": False, "status": "missing"},
+                },
+                "integrations": [{"name": "publisher:telegram", "status": "not_configured"}],
+            },
+        }))
+        page.route("**/api/security/certificates*", lambda route: route.fulfill(json={"certificates": []}))
+
+        page.goto(f"{BASE_URL}/settings?tab=security")
+        section = page.locator("[data-testid='settings-security']")
+        expect(section).to_be_visible()
+        expect(page.locator("[data-testid='security-check-state']")).to_have_text("Потребує уваги")
+        expect(page.locator("[data-testid='security-check-weak']")).to_contain_text("ADMIN_PASSWORD")
+        expect(page.locator("[data-testid='security-check-recommendation']")).to_contain_text("cannot be opened")
+        expect(page.locator("[data-testid='security-check-secret-store']")).to_contain_text("не працює")
+        expect(page.locator("[data-testid='security-cert-server_certificate']")).to_contain_text("спливає")
+        expect(page.locator("[data-testid='security-cert-node_ca']")).to_contain_text("відсутній")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_settings_security_renders_ok_state():
+    """Issue #84: a healthy installation must render the localized 'ok' state and
+    still show the effective detail rows."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        page.route("**/api/status", lambda route: route.fulfill(json={
+            "core": "OK", "version": "0.0.1.19",
+            "system": {"state": "NORMAL"},
+            "queue": {"depth": 0, "inflight": 0, "dead_letter": 0},
+            "orchestration": {"active_jobs": 0, "active_scenes": 0},
+            "providers": {},
+            "update": {"current_version": "0.0.1.19", "state": "IDLE"},
+        }))
+        page.route("**/api/security/check", lambda route: route.fulfill(json={
+            "ok": True,
+            "weak_or_missing": [],
+            "recommendation": "Environment credentials and certificates are within policy",
+            "checks": {
+                "secrets_store": {
+                    "status": "ok", "sealed": True,
+                    "detail": "sealed (data key wrapped with passphrase-derived KEK)",
+                    "unsealable": True, "passphrase_configured": True, "sealing_required": True,
+                },
+                "certificates": {
+                    "server_certificate": {"present": True, "status": "ok", "sha256": "c" * 64},
+                    "server_key": {"present": True, "status": "ok", "sha256": "d" * 64},
+                    "node_ca": {"present": True, "status": "ok", "sha256": "e" * 64},
+                },
+                "integrations": [],
+            },
+        }))
+        page.route("**/api/security/certificates*", lambda route: route.fulfill(json={"certificates": []}))
+
+        page.goto(f"{BASE_URL}/settings?tab=security")
+        section = page.locator("[data-testid='settings-security']")
+        expect(section).to_be_visible()
+        expect(page.locator("[data-testid='security-check-state']")).to_have_text("OK")
+        expect(page.locator("[data-testid='security-check-secret-store']")).to_contain_text("у нормі")
+        expect(page.locator("[data-testid='security-cert-server_certificate']")).to_contain_text("у нормі")
+        expect(section).to_contain_text("Немає активних інтеграцій")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
 def test_settings_shows_resources_or_unavailable():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -1451,7 +1549,7 @@ def test_viewer_cannot_see_or_open_admin_settings():
 
         page.goto(f"{BASE_URL}/")
         expect(page.locator("[data-testid='dashboard']")).to_be_visible()
-        expect(page.get_by_role("link", name="Налаштування", exact=True)).to_have_count(0)
+        expect(page.get_by_role("link", name="Система", exact=True)).to_have_count(0)
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_have_count(0)
         _assert_no_js_errors(page_errors, console_errors)
@@ -1684,7 +1782,7 @@ def test_real_backend_admin_profile_password_logout_roundtrip():
         try:
             _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
             expect(page.get_by_text("Адмін", exact=True)).to_be_visible(timeout=20000)
-            expect(page.locator("nav").first.get_by_text("Налаштування", exact=True)).to_be_visible()
+            expect(page.get_by_text("Адміністрування", exact=True)).to_be_visible()
 
             # Профіль показує серверну identity, а не локальні припущення.
             page.goto(f"{BASE_URL}/profile")
@@ -1768,7 +1866,7 @@ def test_real_backend_viewer_has_no_admin_access():
         try:
             _ui_login(page, VIEWER_USER, VIEWER_PASSWORD)
             expect(page.get_by_text("Переглядач", exact=False).first).to_be_visible(timeout=20000)
-            expect(page.locator("nav").first.get_by_text("Налаштування", exact=True)).to_have_count(0)
+            expect(page.locator("nav").first.get_by_text("Адміністрування", exact=True)).to_have_count(0)
 
             body = page.request.get(f"{BASE_URL}/api/session").json()
             assert body["authenticated"] is True

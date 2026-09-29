@@ -60,6 +60,57 @@ def test_health_and_snapshot_use_mounted_storage(monkeypatch, tmp_path, backup_s
         assert client.get("/snapshots").json()["snapshots"] == [receipt]
 
 
+def test_sealed_secret_store_survives_snapshot_and_restore(monkeypatch, tmp_path, backup_storage):
+    """Issue #84: a snapshot must carry the sealed data key and the encrypted
+    store together, so a restore on disposable storage yields a store that is
+    still openable with the same passphrase and not with a wrong one."""
+    import core.first_run as first_run
+    from services import backup_service
+
+    config = tmp_path / "config"
+    config.mkdir()
+    monkeypatch.setenv("BACKUP_SOURCES", f"config:{config}")
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
+    monkeypatch.delenv("BACKUP_REMOTE_CMD", raising=False)
+
+    monkeypatch.setenv("CONFIG_ROOT", str(config))
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
+    first_run.set_integration_secret("telegram_bot_token", "backup-me")
+    assert (config / "secret-store.key").is_file()
+    assert (config / "secrets.enc.json").is_file()
+
+    with TestClient(backup_service.app) as client:
+        receipt = client.post("/snapshots", json={"job_id": "persistent"}).json()
+
+    archive_bytes = (backup_storage / receipt["file"]).read_bytes()
+    assert b"backup-me" not in archive_bytes
+    assert b"a-very-strong-passphrase" not in archive_bytes
+
+    # Restore on disposable storage (an empty destination root).
+    restored = tmp_path / "restored-config"
+    restored.mkdir()
+    monkeypatch.setattr(backup_service, "_core_available", lambda: True)
+    monkeypatch.setattr(backup_service, "_set_system_state", lambda *a, **k: None)
+    monkeypatch.setattr(backup_service, "_set_restore_progress", lambda *a, **k: None)
+    monkeypatch.setenv("BACKUP_SOURCES", f"config:{restored}")
+    with TestClient(backup_service.app) as client:
+        challenge = client.post(f"/snapshots/{receipt['snapshot_id']}/restore").json()
+        assert challenge["status"] == "confirmation_required"
+        response = client.post(f"/snapshots/{receipt['snapshot_id']}/restore/confirm",
+                               params={"token": challenge["confirmation_token"]})
+        assert response.status_code == 200, response.text
+
+    assert (restored / "secret-store.key").is_file()
+    assert (restored / "secrets.enc.json").is_file()
+    monkeypatch.setenv("CONFIG_ROOT", str(restored))
+    assert first_run.ensure_secret_store()["telegram_bot_token"] == "backup-me"
+
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "another-strong-passphrase")
+    with pytest.raises(ValueError, match="authentication"):
+        first_run.ensure_secret_store()
+
+
 @pytest.mark.parametrize("failure", ["mkdir", "open", "write"])
 @pytest.mark.parametrize("code", [errno.EROFS, errno.EACCES, errno.ENOSPC])
 def test_health_returns_503_for_unwritable_storage(monkeypatch, backup_storage, failure, code):

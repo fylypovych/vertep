@@ -225,7 +225,7 @@ def _wait_for(client, job_id, statuses=("READY", "FAILED")):
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "VIDEO_PENDING_APPROVAL":
             client.post(f"/api/jobs/{job_id}/video/approve",
-                        json={"actor": "test"})
+                        json={"actor": "test", "expected_video_version": job["active_video_version"]})
             continue
         if job["status"] in statuses:
             return job

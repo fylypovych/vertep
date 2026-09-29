@@ -146,7 +146,8 @@ def test_health_and_job_flow():
             break
         time.sleep(0.025)
     assert job["status"] == "VIDEO_PENDING_APPROVAL"
-    client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
+    client.post(f"/api/jobs/{job_id}/video/approve",
+                json={"actor": "test", "expected_video_version": job["active_video_version"]})
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "READY":
@@ -188,7 +189,8 @@ def test_regenerate_preserves_inputs_and_replaces_generated_artifacts(monkeypatc
     for _ in range(200):
         before = client.get(f"/api/jobs/{job_id}").json()
         if before["status"] == "VIDEO_PENDING_APPROVAL":
-            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
+            client.post(f"/api/jobs/{job_id}/video/approve",
+                        json={"actor": "test", "expected_video_version": before["active_video_version"]})
         if before["status"] in {"READY", "FAILED"}:
             break
         time.sleep(0.025)
@@ -212,7 +214,8 @@ def test_job_export_import_and_optimistic_lock(monkeypatch):
     for _ in range(200):
         current = client.get(f"/api/jobs/{job_id}").json()
         if current["status"] == "VIDEO_PENDING_APPROVAL":
-            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
+            client.post(f"/api/jobs/{job_id}/video/approve",
+                        json={"actor": "test", "expected_video_version": current["active_video_version"]})
         if current["status"] in {"READY", "FAILED"}:
             break
         time.sleep(0.025)
@@ -622,7 +625,8 @@ def test_distributed_worker_result(monkeypatch):
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "VIDEO_PENDING_APPROVAL":
-            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "test"})
+            client.post(f"/api/jobs/{job_id}/video/approve",
+                        json={"actor": "test", "expected_video_version": job["active_video_version"]})
         if job["status"] in {"READY", "FAILED"}:
             break
         time.sleep(0.025)

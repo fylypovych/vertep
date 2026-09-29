@@ -1,5 +1,6 @@
 """Tests for Telegram approval flow: script, storyboard, and video approval."""
 import importlib
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -220,6 +221,7 @@ class TestPipelineVideoApproval:
         job.active_video_version = 1
         job.video_versions = [VideoVersion(version=1, path="final/video-v1.mp4", sha256="abc")]
         store = SimpleNamespace(
+            lock=threading.RLock(),
             transition=lambda j, s, e: setattr(j, "status", s) or j,
             event=lambda j, e: j,
         )
@@ -231,7 +233,7 @@ class TestPipelineVideoApproval:
     def test_approve_video_rejects_wrong_status(self):
         from core.pipeline import approve_video
         job = _make_job("SCRIPT_PENDING_APPROVAL")
-        store = SimpleNamespace()
+        store = SimpleNamespace(lock=threading.RLock())
         with pytest.raises(ValueError, match="Cannot approve video"):
             approve_video(store, job, "telegram:42")
 
@@ -245,6 +247,7 @@ class TestPipelineVideoApproval:
             VideoVersion(version=2, path="final/video-v2.mp4", sha256="new"),
         ]
         store = SimpleNamespace(
+            lock=threading.RLock(),
             transition=lambda j, s, e: setattr(j, "status", s) or j,
         )
         with pytest.raises(ValueError, match="Stale video approval"):

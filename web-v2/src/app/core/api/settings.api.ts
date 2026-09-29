@@ -30,6 +30,21 @@ export interface TelegramBotInfo {
 
 export interface ModelsResponse {
   models: Array<{ name: string; size: number; modified_at: string; digest: string }>;
+  nodes?: ModelNodeInfo[];
+}
+
+export interface ModelNodeInfo {
+  node_name: string;
+  role?: string;
+  status?: string;
+  desired_state?: string | null;
+  models?: string[];
+  model_count?: number;
+  catalog_at?: string | null;
+  catalog_age_seconds?: number | null;
+  stale: boolean;
+  ready: boolean;
+  pending_command: boolean;
 }
 
 export interface ModelPullResponse {
@@ -45,11 +60,32 @@ export interface ModelDeleteResponse {
   status: string;
 }
 
+export interface ProviderMatrixEntry {
+  backend: string;
+  options?: string[];
+  env?: string;
+  configured?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ProviderMatrixResponse {
+  matrix: Record<string, ProviderMatrixEntry>;
+}
+
+export interface ProviderSwitchResponse {
+  slot: string;
+  backend: string;
+  changed: boolean;
+  env?: string;
+  matrix: Record<string, ProviderMatrixEntry>;
+}
+
 export interface OperationState {
   operation_id: string;
   status: string;
   progress: number;
   current_phase: string;
+  message?: string | null;
   error: string | null;
   result: any;
 }
@@ -104,8 +140,14 @@ export class SettingsApiService {
     return this.http.get<ModelsResponse>(`${this.baseUrl}/system/models`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  pullModel(name: string): Observable<ModelPullResponse> {
-    return this.http.post<ModelPullResponse>(`${this.baseUrl}/system/models/pull`, { name }, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  modelNodes(): Observable<{ nodes: ModelNodeInfo[] }> {
+    return this.http.get<{ nodes: ModelNodeInfo[] }>(`${this.baseUrl}/system/models/nodes`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  pullModel(name: string, node?: string): Observable<ModelPullResponse> {
+    const body: Record<string, string> = { name };
+    if (node) body['node'] = node;
+    return this.http.post<ModelPullResponse>(`${this.baseUrl}/system/models/pull`, body, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   cancelPull(operationId: string): Observable<OperationState> {
@@ -116,7 +158,30 @@ export class SettingsApiService {
     return this.http.get<OperationState>(`${this.baseUrl}/operations/${encodeURIComponent(operationId)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  deleteModel(name: string): Observable<ModelDeleteResponse> {
-    return this.http.delete<ModelDeleteResponse>(`${this.baseUrl}/system/models/${encodeURIComponent(name)}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  deleteModel(name: string, node?: string): Observable<ModelDeleteResponse> {
+    const params: Record<string, string> = node ? { node } : {};
+    return this.http.delete<ModelDeleteResponse>(`${this.baseUrl}/system/models/${encodeURIComponent(name)}`, { params, headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  voices(): Observable<{ voices: string[] }> {
+    return this.http.get<{ voices: string[] }>(`${this.baseUrl}/models/voices`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  previewVoice(payload: { text: string; voice?: string; speed?: number }): Observable<Blob> {
+    return this.http.post(`${this.baseUrl}/models/voices/preview`, payload, {
+      headers: this.getHeaders(), responseType: 'blob',
+    }).pipe(catchError(this.handleError));
+  }
+
+  providers(): Observable<ProviderMatrixResponse> {
+    return this.http.get<ProviderMatrixResponse>(`${this.baseUrl}/settings/providers`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  switchProvider(slot: string, backend: string, actor?: string): Observable<ProviderSwitchResponse> {
+    return this.http.post<ProviderSwitchResponse>(
+      `${this.baseUrl}/settings/providers/${encodeURIComponent(slot)}`,
+      { backend, ...(actor ? { actor } : {}) },
+      { headers: this.getHeaders() },
+    ).pipe(catchError(this.handleError));
   }
 }

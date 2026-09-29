@@ -11,8 +11,9 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..first_run import config_root
 from ..health_checks import health_status as _health_status
-from ..models import WorkerHeartbeat, worker_transition_allowed, utc_now
+from ..models import ModelProgressReport, WorkerHeartbeat, worker_transition_allowed, utc_now
 from ..node_registry import node_roles, registered_nodes
+from ..pull_executor import ingest_model_progress, pending_model_command
 from ..rolling_update import reconcile_rollout
 from ..security import _valid_worker_request
 from ..state import store
@@ -20,6 +21,11 @@ from ..system_state import get_system_state
 from .job_helpers import _recover_stale_workers
 
 router = APIRouter()
+
+# Fields CORE owns on a worker record; they are not part of the heartbeat
+# payload and must survive every heartbeat overwrite.
+_MODEL_LIFECYCLE_FIELDS = ("model_command", "model_command_ack",
+                           "model_catalog", "model_catalog_at")
 
 
 @router.post("/api/workers/heartbeat")
@@ -92,6 +98,18 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             data["self_test_requested_at"] = previous["self_test_requested_at"]
     if previous and not worker_transition_allowed(previous.get("status", "OFFLINE"), data["status"]):
         raise HTTPException(409, f"Illegal worker state transition: {previous.get('status')} -> {data['status']}")
+    for field in _MODEL_LIFECYCLE_FIELDS:
+        if previous and previous.get(field) is not None:
+            data[field] = previous[field]
+    reported_catalog = payload.model_catalog or {}
+    if isinstance(reported_catalog.get("models"), list):
+        data["model_catalog"] = [str(name) for name in reported_catalog["models"]]
+        data["model_catalog_at"] = utc_now()
+    if data.get("desired_state") in {"DISABLED", "REVOKED"}:
+        # Cache lifecycle: a disabled or revoked node keeps no model cache.
+        for field in ("model_catalog", "model_catalog_at", "model_command"):
+            data.pop(field, None)
+        data.pop("model_command_ack", None)
     data["last_seen"] = utc_now()
     store.workers[payload.node_name] = data
     store.save_worker(data)
@@ -103,7 +121,26 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             "self_test_requested_at": data.get("self_test_requested_at"),
             "update_target_version": data.get("update_target_version"),
             "rollback_target_version": data.get("rollback_target_version"),
-            "restart_operation_id": restart_operation_id}
+            "restart_operation_id": restart_operation_id,
+            "model_command": pending_model_command(payload.node_name)}
+
+
+@router.post("/api/workers/model-progress")
+def worker_model_progress(payload: ModelProgressReport, request: Request):
+    """Worker-authenticated progress/cancel channel for node-local model work."""
+    if not _valid_worker_request(payload.node_name, request):
+        raise HTTPException(401, "Token is not valid for this worker")
+    result = ingest_model_progress(payload.node_name, {
+        "operation_id": payload.operation_id,
+        "status": payload.status,
+        "phase": payload.phase,
+        "progress": payload.progress,
+        "error": payload.error,
+    })
+    if result is None:
+        raise HTTPException(404, "Unknown model operation")
+    return {"accepted": True, "cancel_requested": result["cancel_requested"],
+            "operation": result["operation"]}
 
 
 @router.get("/api/workers")
@@ -128,6 +165,11 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
         item["credential_generation"] = record.get("credential_generation")
         item["registered_at"] = record.get("registered_at")
         item["revoked_at"] = record.get("revoked_at")
+        # Durable self-test outcome is a registry contract, not a heartbeat
+        # detail: a node that last reported PENDING_SELF_TEST / OFFLINE must
+        # still carry that status in the listing even after its live record
+        # goes offline, so dispatch never treats a stale record as ready.
+        item.setdefault("runtime_status", record.get("runtime_status"))
         item["update_state"] = {
             "desired_state": item.pop("desired_state", None),
             "update_target_version": item.pop("update_target_version", None),

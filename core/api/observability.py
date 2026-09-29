@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -90,13 +91,22 @@ def security_check():
     remediation = [f"Set a strong, unique random value for {name}" for name in weak]
     if seals.get("sealed") is False:
         remediation.append("Re-seal the encrypted secret-store data key with SECRET_STORE_PASSPHRASE")
+    if seals.get("status") == "unusable":
+        remediation.append(
+            "The sealed secret-store data key cannot be opened with the configured "
+            f"passphrase ({seals.get('detail')}); restore the matching SECRET_STORE_PASSPHRASE")
     for label, info in certificates.items():
         if info.get("status") in ("expiring", "expired"):
             remediation.append(f"{label} is {info['status']} (expires {info.get('expires_at')}); renew it")
         elif info.get("status") == "missing":
-            remediation.append(f"{label} certificate is missing; provision it")
+            remediation.append(f"{label} is missing; provision it")
+        elif info.get("status") == "unreadable":
+            remediation.append(f"{label} is present but unreadable; restore or replace it")
 
-    certs_ok = all(info.get("status") in ("ok", "missing") for info in certificates.values())
+    # Fail-closed: a missing or unreadable certificate is never reported as ok.
+    # Previously a missing cert was folded into the "ok" bucket alongside a
+    # healthy one, so a deployment without TLS could still pass the gate.
+    certs_ok = all(info.get("status") == "ok" for info in certificates.values())
     ok = (not weak) and seals.get("status") == "ok" and certs_ok
     return {
         "ok": ok,
@@ -122,36 +132,31 @@ def _env_weak_values() -> dict[str, str]:
 
 
 def _secret_store_status() -> dict:
-    key_path = config_root() / ".secret-store.key"
-    sealed: bool | None = None
-    detail = "missing (created on first use)"
-    if key_path.exists():
-        try:
-            head = key_path.read_text(encoding="ascii").lstrip()
-        except OSError:
-            head = ""
-        if head.startswith("{"):
-            sealed, detail = True, "sealed (data key wrapped with passphrase-derived KEK)"
-        else:
-            sealed, detail = False, "plaintext data key (not sealed by passphrase)"
+    from ..first_run import inspect_data_key
+    state = inspect_data_key()
+    sealed = state.get("sealed")
     passphrase_configured = bool(os.getenv("SECRET_STORE_PASSPHRASE") or os.getenv("SECRET_STORE_PASSPHRASE_FILE"))
     sealing_required = os.getenv("REQUIRE_SECRET_KEY_SEALING", "false").lower() == "true"
-    if sealed is False and passphrase_configured:
-        status = "warning"
-    elif sealed is False and sealing_required:
+    if sealed is True and state.get("unsealable") is False:
+        # Fail-closed: a sealed key the Core cannot open breaks every secret.
+        status = "unusable"
+    elif sealed is False and (passphrase_configured or sealing_required):
         status = "warning"
     else:
         status = "ok"
-    return {"status": status, "sealed": sealed, "detail": detail,
+    return {"status": status, "sealed": sealed, "detail": state.get("detail"),
+            "unsealable": state.get("unsealable"),
             "passphrase_configured": passphrase_configured, "sealing_required": sealing_required}
 
 
 def _certificate_statuses() -> dict:
     from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     certificates: dict = {}
     for label, env_name, default in (("server_certificate", "CORE_CERTIFICATE_PATH", "/data/tls/vertep.crt"),
+                                     ("server_key", "CORE_KEY_PATH", "/data/tls/vertep.key"),
                                      ("node_ca", "NODE_CA_CERT_PATH", "/data/tls/node-ca.crt")):
         path = Path(os.getenv(env_name, default))
         info = {"present": path.exists()}
@@ -160,14 +165,25 @@ def _certificate_statuses() -> dict:
             certificates[label] = info
             continue
         try:
-            cert = x509.load_pem_x509_certificate(path.read_bytes())
-            not_after = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
-            days = (not_after - now).days
-            info.update({
-                "status": "ok" if days > 7 else ("expiring" if days > 0 else "expired"),
-                "expires_at": not_after.isoformat(),
-                "days_remaining": days,
-            })
+            raw = path.read_bytes()
+            info["sha256"] = hashlib.sha256(raw).hexdigest()
+            info["size_bytes"] = len(raw)
+            if label.endswith("_key"):
+                info["status"] = "ok"
+                try:
+                    serialization.load_pem_private_key(raw, password=None)
+                except Exception:
+                    info["status"] = "unreadable"
+            else:
+                cert = x509.load_pem_x509_certificate(raw)
+                not_after = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
+                days = (not_after - now).days
+                info.update({
+                    "status": "ok" if days > 7 else ("expiring" if days > 0 else "expired"),
+                    "expires_at": not_after.isoformat(),
+                    "days_remaining": days,
+                    "subject": cert.subject.rfc4514_string(),
+                })
         except Exception:
             info["status"] = "unreadable"
         certificates[label] = info
@@ -183,7 +199,6 @@ def _integration_summary() -> list[dict]:
     # Per-platform publisher credential readiness
     try:
         from adapters.publisher import PUBLISHERS
-        from core.logging_config import secret_redact
         for channel, pub in PUBLISHERS.items():
             items.append({
                 "name": f"publisher:{channel}",

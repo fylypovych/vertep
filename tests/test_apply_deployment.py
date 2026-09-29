@@ -303,6 +303,65 @@ def test_apply_deployment_preserves_status_progress_result_on_failure(tmp_path):
     assert status["role"] == "gpu"
     assert "services" in status
     assert "additional_roles" in status
+def test_restore_runtime_reports_unverified_health_when_wait_fails(tmp_path):
+    """M6: a rollback whose restarted set never becomes healthy must not claim success."""
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = '{"Service": "ollama", "State": "running", "Health": "unhealthy"}\n'
+            return Result()
+        return None
+    result = mod._restore_runtime(["docker", "compose"], {"ollama"}, {"comfyui"}, runner=runner)
+    assert result["restored"] is False
+    assert result["health_verified"] is False
+    assert result["restarted"] == ["ollama"]
+    assert result["removed"] == ["comfyui"]
+    assert result["errors"]
+
+
+def test_restore_runtime_reports_verified_health_on_success(tmp_path):
+    """M6: a rollback that re-verifies the previous set healthy is explicitly attested."""
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = '{"Service": "ollama", "State": "running", "Health": "healthy"}\n'
+            return Result()
+        return None
+    result = mod._restore_runtime(["docker", "compose"], {"ollama"}, {"comfyui"}, runner=runner)
+    assert result["restored"] is True
+    assert result["health_verified"] is True
+    assert result["restarted"] == ["ollama"]
+    assert result["removed"] == ["comfyui"]
+    assert not result["errors"]
+
+
+def test_failed_apply_records_explicit_rollback_attestation(tmp_path):
+    """M6: deployment-status.json records whether the rollback health was verified."""
+    root = fixture(tmp_path)
+    mod = module()
+    roles = json.loads((root / "config/node_roles.json").read_text())
+    previous = mod.create_plan(roles, "text", "0.0.0.20")
+    (root / "config/deployment-plan.json").write_text(json.dumps(previous), encoding="utf-8")
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = '{"Service": "worker", "State": "running", "Health": "unhealthy"}\n'
+            return Result()
+        return None
+
+    with pytest.raises(RuntimeError):
+        mod.apply(root, runner=runner)
+
+    status = json.loads((root / "config/deployment-status.json").read_text(encoding="utf-8"))
+    assert "rollback" in status
+    assert status["rollback"]["health_verified"] is False
+    assert status["rollback"]["restarted"] == sorted(previous["services"])
+    assert status["rollback"]["removed"] == sorted(
+        set(mod.create_plan(roles, "gpu", "0.0.0.20")["services"]) - set(previous["services"]))
+
+
 def test_wait_for_healthy_rejects_missing_health_evidence(tmp_path):
     """A running container with no health data must not count as healthy."""
     root = fixture(tmp_path)

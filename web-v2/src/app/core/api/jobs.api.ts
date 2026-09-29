@@ -115,8 +115,10 @@ export class JobsApiService {
   regenerateScript(jobId: string, revision?: string, actor = 'web-v2'): Observable<Job> {
     return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/script/regenerate`, { actor, revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
-  approveVideo(jobId: string, actor = 'web-v2'): Observable<Job> {
-    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/video/approve`, { actor }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  approveVideo(jobId: string, expectedVideoVersion: number, expectedSha256?: string, actor = 'web-v2'): Observable<Job> {
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/video/approve`,
+      { actor, expected_video_version: expectedVideoVersion, expected_sha256: expectedSha256 ?? null },
+      { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
   requestVideoRevision(jobId: string, revision: string, actor = 'web-v2'): Observable<Job> {
     return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/video/revision`, { actor, revision }, { headers: this.h() }).pipe(catchError(this.base.handleError));

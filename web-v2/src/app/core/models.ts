@@ -133,6 +133,24 @@ export interface ArtifactRecord {
   workflow?: string;
 }
 
+export interface VideoVersionRecord {
+  version: number;
+  path: string;
+  sha256: string;
+  approved: boolean;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  revision_note?: string | null;
+  created_at?: string;
+}
+
+export interface VideoRevisionRecord {
+  version: number;
+  text: string;
+  actor: string;
+  created_at?: string;
+}
+
 export interface Job {
   job_id: string;
   topic: string;
@@ -170,6 +188,10 @@ export interface Job {
   storyboards?: StoryboardVersion[];
   active_storyboard_version?: number;
   active_image_version?: number;
+  video_versions?: VideoVersionRecord[];
+  active_video_version?: number;
+  video_revisions?: VideoRevisionRecord[];
+  video_revision_upstream?: string | null;
 }
 
 export interface JobEvent {
@@ -772,10 +794,39 @@ export interface CertificateStatus {
   fingerprint: string;
 }
 
+export interface SecuritySecretStore {
+  status: string;
+  sealed: boolean | null;
+  detail: string;
+  unsealable?: boolean | null;
+  passphrase_configured: boolean;
+  sealing_required: boolean;
+}
+
+export interface SecurityCertificateStatus {
+  present: boolean;
+  status: string;
+  sha256?: string;
+  size_bytes?: number;
+  expires_at?: string;
+  days_remaining?: number;
+  subject?: string;
+}
+
+export interface SecurityIntegrationStatus {
+  name: string;
+  status: string;
+}
+
 export interface SecurityCheck {
   ok: boolean;
   weak_or_missing: string[];
   recommendation: string;
+  checks?: {
+    secrets_store: SecuritySecretStore;
+    certificates: Record<string, SecurityCertificateStatus>;
+    integrations: SecurityIntegrationStatus[];
+  };
 }
 
 export interface BackupSnapshot {

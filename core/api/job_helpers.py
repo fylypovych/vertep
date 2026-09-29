@@ -650,7 +650,7 @@ def _recover_stale_workers() -> None:
             job.storyboard_task_id = None
             job.assigned_worker = None
             from ..pipeline import queue_storyboard as _queue_storyboard
-            _queue_storyboard(store, job)
+            _queue_storyboard(store, job, revision=job.video_revision_upstream)
             store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
@@ -861,7 +861,9 @@ def _prepare_and_dispatch(job) -> None:
         _progress(job, job.status.value)
         return
     if job.status == JobStatus.SCRIPT_APPROVED:
-        queue_storyboard(store, job)
+        # Issue #81 R1: a free-text video revision routed through script
+        # regeneration is applied again to the storyboard that follows.
+        queue_storyboard(store, job, revision=job.video_revision_upstream)
         return
     if job.status == JobStatus.STORYBOARD_APPROVED:
         sb = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)

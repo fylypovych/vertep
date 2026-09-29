@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import secrets
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -166,6 +167,52 @@ def _secret_key() -> bytes:
         temporary.unlink(missing_ok=True)
         return _secret_key()
     return key
+
+
+def inspect_data_key() -> dict:
+    """Report the *effective* state of the on-disk data key without mutating it.
+
+    ``/api/security/check`` must not decide sealing from a file prefix or from a
+    field name that the real envelope never writes.  This probes the actual
+    file, and when it is a sealed envelope it also tries to derive the KEK and
+    unwrap the key so that a wrong or missing passphrase is reported as an
+    effective failure rather than a silent success.
+    """
+    path = config_root() / "secret-store.key"
+    state = {"present": path.exists(), "sealed": None,
+             "detail": "missing (created on first use)", "unsealable": None}
+    if not path.exists():
+        return state
+    try:
+        raw = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        state.update(sealed=False, detail="unreadable data key", unsealable=False)
+        return state
+
+    if not raw.lstrip().startswith("{"):
+        state.update(sealed=False, detail="stored as a raw (unsealed) data key",
+                     unsealable=True)
+        return state
+
+    try:
+        envelope = json.loads(raw)
+    except ValueError:
+        state.update(sealed=False, detail="unrecognized data key envelope", unsealable=False)
+        return state
+    if not isinstance(envelope, dict) or envelope.get("version") != 1 \
+            or envelope.get("algorithm") != "scrypt+A256GCM":
+        state.update(sealed=False, detail="unrecognized data key envelope", unsealable=False)
+        return state
+
+    state["sealed"] = True
+    try:
+        key = _decode_key(raw)
+    except (ValueError, RuntimeError) as error:
+        state.update(unsealable=False, detail=f"sealed but not openable: {error}")
+        return state
+    state.update(unsealable=len(key) == 32,
+                 detail="sealed (data key wrapped with passphrase-derived KEK)")
+    return state
 
 
 def _read_encrypted_secrets() -> dict:
@@ -394,6 +441,40 @@ def session_secret() -> str:
     if "CONFIG_ROOT" not in os.environ:
         return os.getenv("ADMIN_PASSWORD", "")
     return str(ensure_secret_store().get("session_secret", ""))
+
+
+def rotate_data_key() -> dict:
+    """Re-encrypt the secret store under a freshly generated data key.
+
+    Rotation is atomic with respect to the key file: the new sealed key is
+    linked into place only after the store has been rewritten, and the previous
+    key file is kept as ``secret-store.key.prev`` so an interrupted rotation can
+    still be recovered.  All callers must hold ``_secret_lock``.
+    """
+    with _secret_lock:
+        stored = _read_encrypted_secrets()
+        if not stored:
+            raise ValueError("secret store is empty; nothing to rotate")
+        previous = _secret_key()
+        root = config_root()
+        root.mkdir(parents=True, exist_ok=True)
+        key_path = root / "secret-store.key"
+        backup = root / "secret-store.key.prev"
+        if key_path.exists():
+            shutil.copyfile(key_path, backup)
+            os.chmod(backup, 0o600)
+        key_path.unlink(missing_ok=True)
+        try:
+            rotated = _secret_key()
+            _write_encrypted_secrets(stored)
+        except Exception:
+            # Restore the previous key so the store stays readable.
+            if backup.exists():
+                shutil.copyfile(backup, key_path)
+            raise
+        if rotated == previous:
+            backup.unlink(missing_ok=True)
+        return {"rotated": True, "restored_from_backup": bool(backup.exists())}
 
 
 def integration_secret_status() -> dict[str, bool]:

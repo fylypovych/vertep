@@ -90,7 +90,8 @@ def test_image_storyboard_e2e(monkeypatch):
     for _ in range(80):
         j=client.get(f"/api/jobs/{job_id}").json()
         if j["status"]=="VIDEO_PENDING_APPROVAL":
-            client.post(f"/api/jobs/{job_id}/video/approve", json={"actor":"test"})
+            client.post(f"/api/jobs/{job_id}/video/approve",
+                        json={"actor":"test","expected_video_version":j["active_video_version"]})
         if j["status"]=="READY": break
         # dispatch may need worker claim
         t=client.post("/api/tasks/claim", json={"node_name":"gpu-worker","vram_mb":8192}).json().get("task")

@@ -952,7 +952,12 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   approveVideo(): void {
     const j = this.job();
     if (!j) return;
-    this.runAction('video_approve', () => this.jobsApi.approveVideo(j.job_id));
+    // Issue #81 R3: approval names the reviewed version and its hash so a
+    // stale tab cannot approve a newer, unreviewed video.
+    const active = j.active_video_version;
+    if (!active) return;
+    const reviewed = (j.video_versions ?? []).find(v => v.version === active);
+    this.runAction('video_approve', () => this.jobsApi.approveVideo(j.job_id, active, reviewed?.sha256));
   }
 
   requestVideoRevision(): void {
@@ -960,7 +965,9 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     if (!j) return;
     const revision = window.prompt('Опишіть потрібні зміни до відео:');
     if (revision === null) return;
-    this.runAction('video_revision', () => this.jobsApi.requestVideoRevision(j.job_id, revision.trim() || ''));
+    const text = revision.trim();
+    if (!text) return;
+    this.runAction('video_revision', () => this.jobsApi.requestVideoRevision(j.job_id, text));
   }
 
   regenerateVideo(): void {

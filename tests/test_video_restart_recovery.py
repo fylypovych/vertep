@@ -145,7 +145,9 @@ class TestRestartRecovery:
             mp.video_engine.return_value.render.side_effect = (
                 lambda out, **kw: _write_file(out))
             job = finalize_job(store, job, image)  # v1, unapproved
-        job = request_video_revision(store, job, "Make it brighter", "test")
+        # "regenerate" keeps the pure re-render loop (Issue #81 R1 reserves the
+        # free-text revision for the upstream script/storyboard path).
+        job = request_video_revision(store, job, "regenerate", "test")
         assert job.status == JobStatus.VIDEO_REVISION_REQUESTED
         with patch("core.pipeline.providers") as mp:
             mp.video_engine.return_value.render.side_effect = (

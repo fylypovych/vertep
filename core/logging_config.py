@@ -7,19 +7,41 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 _SECRET_KEY_VALUE = re.compile(
-    r"(?i)\b(access_token|api[_-]?key|client[_-]?secret|refresh[_-]?token|auth[_-]?token|"
-    r"session[_-]?id|password|passwd|secret|token|authorization|proxy[_-]?password)\b"
-    r"\s*[:=]\s*\"?[A-Za-z0-9._\-+/=]{4,}\"?",
+    r"(?i)((?:\"|\')?"
+    r"(?:access_token|api[_-]?key|client[_-]?secret|refresh[_-]?token|auth[_-]?token|"
+    r"session[_-]?id|password|passwd|secret|token|authorization|proxy[_-]?password)"
+    r"(?:\"|\')?\s*[:=]\s*)"
+    # A quoted value is consumed whole; an unquoted value may itself contain
+    # separators such as the colon in a Telegram bot token (``123456:AAH...``).
+    r"(?!(?:bearer\b|bearer\s+))"
+    r"(?:\"[^\"]*\"|'[^']*'|[A-Za-z0-9._\-+/=:]{4,})",
 )
 _BEARER_TOKEN = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+/=]{4,}")
+# Credentials embedded in a URL userinfo part (``https://user:pass@host``) are a
+# real leak vector: proxy/registry/Ollama endpoints are routinely built from env
+# values and end up in transport error text.
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)([^/@\s:]+):([^/@\s]+)@")
+# ``key=secret`` inside a query string, where the key is preceded by ``?&``.
+_QUERY_CREDENTIAL = re.compile(
+    r"(?i)((?:\?|&)(?:access_token|api[_-]?key|token|auth|key|password|secret)=)([^&#\s]+)")
 
 
 def secret_redact(text: str) -> str:
-    """Replace known secret-shaped values with a placeholder before logging."""
+    """Replace known secret-shaped values with a placeholder before logging.
+
+    Handles plain ``key=value``, JSON ``"key": "value"``, ``bearer <token>``,
+    URL userinfo credentials (``https://user:pass@host``) and query-string
+    credentials (``?token=...``) forms, including quoted keys, so a serialized
+    payload such as ``{"token": "abc123"}`` is redacted in addition to plain
+    ``token=abc123``.  Only the value is masked; the key and surrounding
+    punctuation are preserved.
+    """
     if not text:
         return text
-    text = _SECRET_KEY_VALUE.sub(lambda m: m.group(1).rstrip() + "=[REDACTED]", text)
     text = _BEARER_TOKEN.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = _URL_USERINFO.sub(lambda m: m.group(1) + m.group(2) + ":[REDACTED]@", text)
+    text = _QUERY_CREDENTIAL.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = _SECRET_KEY_VALUE.sub(lambda m: m.group(1) + "[REDACTED]", text)
     return text
 
 

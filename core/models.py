@@ -49,7 +49,10 @@ JOB_STATE_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.SCRIPT_QUEUED: {JobStatus.SCRIPT_GENERATING, JobStatus.CANCELLED},
     JobStatus.SCRIPT_GENERATING: {JobStatus.SCRIPT_PENDING_APPROVAL, JobStatus.SCRIPT_FAILED, JobStatus.CANCELLED},
     JobStatus.SCRIPT_PENDING_APPROVAL: {JobStatus.SCRIPT_APPROVED, JobStatus.SCRIPT_REVISION_REQUESTED, JobStatus.SCRIPT_FAILED, JobStatus.CANCELLED},
-    JobStatus.SCRIPT_REVISION_REQUESTED: {JobStatus.SCRIPT_GENERATING, JobStatus.CANCELLED},
+    # Issue #81 R1: a video revision routed upstream re-enters the script loop,
+    # so SCRIPT_REVISION_REQUESTED must be able to reach SCRIPT_QUEUED again.
+    JobStatus.SCRIPT_REVISION_REQUESTED: {JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_QUEUED,
+                                          JobStatus.CANCELLED},
     JobStatus.SCRIPT_APPROVED: {JobStatus.STORYBOARD_QUEUED, JobStatus.CANCELLED},
     JobStatus.SCRIPT_FAILED: {JobStatus.SCRIPT_QUEUED, JobStatus.CANCELLED},
     JobStatus.STORYBOARD_QUEUED: {JobStatus.STORYBOARD_GENERATING, JobStatus.CANCELLED},
@@ -65,7 +68,12 @@ JOB_STATE_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.TTS_GENERATING: {JobStatus.TTS_READY, JobStatus.FAILED, JobStatus.PAUSED, JobStatus.CANCELLED},
     JobStatus.TTS_READY: {JobStatus.VIDEO_GENERATION, JobStatus.ASSEMBLY, JobStatus.PAUSED, JobStatus.CANCELLED},
     JobStatus.VIDEO_READY: {JobStatus.READY, JobStatus.CANCELLED},
-    JobStatus.VIDEO_PENDING_APPROVAL: {JobStatus.VIDEO_APPROVED, JobStatus.VIDEO_REVISION_REQUESTED, JobStatus.VIDEO_FAILED, JobStatus.CANCELLED},
+    # Issue #81 R1: a free-text video revision is applied upstream (script
+    # regeneration -> storyboard regeneration), so it may leave the video
+    # approval stage for the script revision stage.
+    JobStatus.VIDEO_PENDING_APPROVAL: {JobStatus.VIDEO_APPROVED, JobStatus.VIDEO_REVISION_REQUESTED,
+                                       JobStatus.SCRIPT_REVISION_REQUESTED, JobStatus.VIDEO_FAILED,
+                                       JobStatus.CANCELLED},
     JobStatus.VIDEO_REVISION_REQUESTED: {JobStatus.VIDEO_GENERATION, JobStatus.ASSEMBLY, JobStatus.CANCELLED},
     JobStatus.VIDEO_APPROVED: {JobStatus.ASSEMBLY, JobStatus.VIDEO_READY, JobStatus.CANCELLED},
     JobStatus.VIDEO_FAILED: {JobStatus.VIDEO_GENERATION, JobStatus.CANCELLED},
@@ -363,6 +371,11 @@ class Job(BaseModel):
     active_video_version: int | None = None
     video_revisions: list[VideoRevision] = Field(default_factory=list)
     video_regenerating: bool = False
+    # Issue #81 R1: free-text video revision currently applied upstream.  Set
+    # when the revision is routed to script regeneration, forwarded to the
+    # storyboard regeneration that follows script approval, and retired when
+    # the resulting video version is rendered.
+    video_revision_upstream: str | None = None
     image_storyboard_task_ids: dict[str, str] = Field(default_factory=dict)
     image_storyboard_task_versions: dict[str, dict[str, int]] = Field(default_factory=dict)
     image_storyboard_error: str | None = None
@@ -409,6 +422,16 @@ class WorkerHeartbeat(BaseModel):
     runtime_version: str | None = None
     self_test: dict[str, Any] = Field(default_factory=dict)
     voice_catalog: dict[str, Any] = Field(default_factory=dict)
+    model_catalog: dict[str, Any] = Field(default_factory=dict)
+
+class ModelProgressReport(BaseModel):
+    """Progress/cancel channel for a node-local model pull or delete."""
+    node_name: str
+    operation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    status: str = Field(default="RUNNING", pattern="^(RUNNING|COMPLETED|FAILED|CANCELLED)$")
+    phase: str = Field(default="pull", max_length=120)
+    progress: int = Field(default=0, ge=0, le=100)
+    error: str | None = Field(default=None, max_length=2000)
 
 class TaskClaim(BaseModel):
     node_name: str

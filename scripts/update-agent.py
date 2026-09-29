@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from core.logging_config import secret_redact  # noqa: E402
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -60,6 +62,9 @@ def append_audit(state_dir: Path, event: dict) -> None:
     except (OSError, ValueError, KeyError) as error:
         raise RuntimeError("Update audit log is unreadable") from error
     record = {**event, "timestamp": now(), "previous_hash": previous_hash}
+    for field in ("message", "detail", "error"):
+        if isinstance(record.get(field), str):
+            record[field] = secret_redact(record[field])
     canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     record["event_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
     audit_path.parent.mkdir(parents=True, exist_ok=True)

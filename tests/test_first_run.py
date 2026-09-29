@@ -1,10 +1,11 @@
 import json
 import os
+import threading
 
 import pytest
 
 from core.first_run import (complete_setup, configured_user, ensure_secret_store,
-                            integration_secret_status, is_configured,
+                            integration_secret_status, is_configured, rotate_data_key,
                             set_integration_secret, setup_status)
 
 
@@ -92,3 +93,111 @@ def test_data_key_is_sealed_and_wrong_passphrase_fails(monkeypatch, tmp_path):
     passphrase.write_text("wrong passphrase value")
     with pytest.raises(ValueError, match="authentication"):
         ensure_secret_store()
+
+
+def test_raw_key_is_transparently_resealed(monkeypatch, tmp_path):
+    """A store created without a passphrase keeps its data when a passphrase
+    appears later: the raw key is re-sealed in place, not regenerated."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    for name in ("SECRET_STORE_PASSPHRASE", "SECRET_STORE_PASSPHRASE_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    set_integration_secret("telegram_bot_token", "keep-me")
+    key_path = tmp_path / "secret-store.key"
+    raw = key_path.read_text(encoding="utf-8")
+    assert not raw.lstrip().startswith("{")
+
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
+    status = integration_secret_status()
+    assert status["telegram_bot_token"] is True
+    envelope = json.loads(key_path.read_text(encoding="utf-8"))
+    assert envelope["algorithm"] == "scrypt+A256GCM"
+    assert "a-very-strong-passphrase" not in key_path.read_text(encoding="utf-8")
+    assert "keep-me" not in key_path.read_text(encoding="utf-8")
+    # Re-sealing must not change the data key, so the ciphertext still decrypts.
+    assert set_integration_secret("telegram_bot_token", "still-here")["telegram_bot_token"] is True
+
+
+def test_rotation_rewrites_store_under_new_data_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
+    set_integration_secret("telegram_bot_token", "rotate-me")
+    before = (tmp_path / "secret-store.key").read_text(encoding="utf-8")
+
+    result = rotate_data_key()
+    after = (tmp_path / "secret-store.key").read_text(encoding="utf-8")
+    assert result["rotated"] is True
+    assert after != before
+    assert integration_secret_status()["telegram_bot_token"] is True
+    assert (tmp_path / "secret-store.key.prev").exists()
+
+
+def test_rotation_survives_restart_and_rejects_wrong_passphrase(monkeypatch, tmp_path):
+    """Rotation must not weaken the effective sealing gate: after rotation a
+    wrong passphrase still fails closed."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
+    set_integration_secret("telegram_bot_token", "rotate-me")
+    rotate_data_key()
+    # Simulate a CORE restart: nothing is cached, everything is re-read.
+    assert ensure_secret_store()["telegram_bot_token"] == "rotate-me"
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "another-strong-passphrase")
+    with pytest.raises(ValueError, match="authentication"):
+        ensure_secret_store()
+
+
+def test_rotation_is_serialized_with_concurrent_writers(monkeypatch, tmp_path):
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
+    set_integration_secret("telegram_bot_token", "concurrent")
+    errors: list[Exception] = []
+
+    def writer(value: str) -> None:
+        try:
+            set_integration_secret("smtp_password", value)
+        except Exception as error:  # pragma: no cover - only on a real regression
+            errors.append(error)
+
+    threads = [threading.Thread(target=writer, args=(f"value-{index}",)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    rotate_data_key()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert integration_secret_status()["smtp_password"] is True
+    assert integration_secret_status()["telegram_bot_token"] is True
+
+
+def test_interrupted_rotation_recovers_from_previous_key(monkeypatch, tmp_path):
+    """If the store rewrite fails mid-rotation the previous key file is put
+    back, so the sealed store is never left undecryptable."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
+    set_integration_secret("telegram_bot_token", "keep-me")
+    original = (tmp_path / "secret-store.key").read_text(encoding="utf-8")
+
+    def boom(_value: dict) -> None:
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("core.first_run._write_encrypted_secrets", boom)
+        with pytest.raises(OSError):
+            rotate_data_key()
+
+    assert (tmp_path / "secret-store.key").read_text(encoding="utf-8") == original
+    assert ensure_secret_store()["telegram_bot_token"] == "keep-me"
+
+
+def test_data_key_is_not_replaced_when_another_process_wins(monkeypatch, tmp_path):
+    """Concurrent first use must converge on one key instead of orphaning the
+    store under a key nobody kept."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
+    ensure_secret_store()
+    first = (tmp_path / "secret-store.key").read_text(encoding="utf-8")
+    assert (tmp_path / "secrets.enc.json").exists()
+
+    # A second process writing the store must keep using the same data key.
+    set_integration_secret("smtp_password", "second-process")
+    assert (tmp_path / "secret-store.key").read_text(encoding="utf-8") == first
+    assert ensure_secret_store()["smtp_password"] == "second-process"

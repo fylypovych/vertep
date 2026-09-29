@@ -1,5 +1,23 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.13
+- Issue #77: екран моделей перероблено в розділ «Налаштування → Моделі» з показом локального каталогу Ollama, per-node розміщенням, готовністю вузлів, віком каталогу та керуванням pull/delete; додано попередження про застарілий каталог і pending-команду.
+- Issue #78: додано `core/provider_switch.py` — збереження вибору backend у overrides із застосуванням при старті CORE, `GET /api/settings/providers` і `POST /api/settings/providers/{slot}` з контрактом persist → apply → verify → rollback; перемикання обмежено перевіркою switchable/configured.
+- Issue #78: розширено `core/pull_executor.py` — durable operation для pull/delete, доставка команди на вузол через heartbeat, worker-authenticated прогрес і скасування, ping-контракт, `PlacementError`, відновлення orphaned-операцій після рестарту CORE та інвалідація model-кэшу на disabled/revoked вузлі.
+- Issue #78: `POST /api/models/text/pull` тепер повертає запис operation, а не синхронний результат; додано `POST /api/models/voices/preview` з явними негативними шляхами (409 disabled/не налаштовано, 422 невалідний запит або невідомий голос, 502 недоступний runtime або порожнє аудіо).
+- Issue #80: додано outbound-only renew/revoke вузла з перевіркою SAN, обмеженим строком дії та потрапленням старого serial у CRL; `core/api/workers.py` тепер віддає registry `runtime_status` для записів, що пішли offline, щоб dispatch не вважав застарілий запис готовим.
+- Issue #80: `scripts/apply-deployment.py` додано rollback attestation та перевірку здорового стану попередніх сервісів; retry enrollment на transient 429/502/503/504 і транспортні помилки; `renew_node` тепер повертає `certificate_serial` і `certificate_expires_at`, щоб renew/revoke round-trip був підтверджуваним.
+- Issue #81: розширено переходи станів Job — `SCRIPT_REVISION_REQUESTED` може повернутися у `SCRIPT_QUEUED`, а `VIDEO_PENDING_APPROVAL` може перейти у `SCRIPT_REVISION_REQUESTED`, щоб вільний текст правки застосовувався до генерації.
+- Issue #81: перезбірка відео бере лише зареєстровані артефакти сцен через `_collect_reassembly_inputs` — упорядковано за індексом сцени, з дедуплікацією до найновішого артефакту та перевіркою SHA256; жодного globbing `images/`, `storyboard/`, `frames/`, бо там історичні версії, а лексикографічний порядок імен неправильний.
+- Issue #81: усі відео-дії (`vid_ok`, `vid_reject`, `vid_edit`, `vid_regen`) прив'язані до чату, якому належить Job, а помилки перезбірки повідомляються власнику Job у Telegram.
+- Issue #84: `secret_redact` тепер маскує URL userinfo (`https://user:pass@host`), query-string credentials (`?token=...`) та значення з `:` (Telegram-токени `123456:AAH...`); JSON із quoted keys, bearer, вкладені payload, traceback і Runner report redacted.
+- Issue #84: audit-поверхні redacted — `core/operations.py` (operation audit) і `scripts/update-agent.py` (hash-chained update audit, ланцюг hash збережено); error-поверхні API redacted у `/api/integrations` та помилці Runner.
+- Issue #84: `core/first_run.py::inspect_data_key` визначає effective-стан data key (був дефект: читав неіснуючий `.secret-store.key` і шукав поле `wrapped_data_key`, якого конверт не пише); додано `rotate_data_key` з атомарним backup і відкатом при збої; raw-ключ прозоро перезапечатується при появі passphrase.
+- Issue #84: `/api/security/check` fail-closed — відсутній або непрочитний сертифікат і запечатаний ключ, який CORE не може відкрити, більше не потрапляють у `ok`; додано статуси `unreadable`/`unusable` і тексти remediation.
+- Issue #84: `verify_node_certificate` відхиляє прострочений сертифікат навіть із дійсним serial, а непарсибельний або відсутній expiry вважається простроченим.
+- Issue #84: секція «Безпека» в Angular показує effective store/certificates/integrations із локалізованими статусами та рядками SHA-256 і датами, замість лише прапорця OK.
+- Issue #84: додано regression-перевірки no-secrets (audit, error, URL, Telegram, publisher), sealed-key lifecycle (rotation, restart, concurrency, crash, backup/restore на disposable storage) та disposable PKI (SAN, обмежений строк дії, expiry rejection, renew/revoke/CRL).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.12
 - Issue #77: додано редактор Workflow Form+JSON, звіт валідації, перегляд і відновлення історії версій та структуровану відповідь 409 із залежностями під час видалення.
 - Issue #78: додано фонове завантаження моделей Ollama з обліком operation, прогресом і запитом скасування в API та Angular UI; обмежено керування моделями роллю адміністратора й станом системи.

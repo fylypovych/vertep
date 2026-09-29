@@ -76,7 +76,10 @@ def run_test(payload: RunRequest, request: Request):
     try:
         run = runner.start(payload.rt_id, initiator="api")
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Issue #84: a Runner error may embed provider credentials, so the API
+        # response must not echo the raw exception text.
+        from ..logging_config import secret_redact
+        raise HTTPException(status_code=404, detail=secret_redact(str(exc))) from exc
     run = runner.run_checks(run, check_names=payload.check_names)
     run = runner.finalize(run)
     runner.report_to_github(run)

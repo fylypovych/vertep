@@ -311,13 +311,27 @@ def regenerate_script_endpoint(job_id: str, body: ScriptRevision):
     return job
 
 
+class VideoApproveAction(BaseModel):
+    """Issue #81 R3: Web approval must name the reviewed video version.
+
+    ``expected_video_version`` is mandatory so a stale browser tab can never
+    approve a version the reviewer did not see; ``expected_sha256`` additionally
+    binds the approval to the exact reviewed artifact.
+    """
+    actor: str = Field(default="api", min_length=1, max_length=200)
+    expected_video_version: int = Field(ge=1)
+    expected_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+
+
 @router.post("/api/jobs/{job_id}/video/approve")
-def approve_video_endpoint(job_id: str, body: ScriptAction):
+def approve_video_endpoint(job_id: str, body: VideoApproveAction):
     job = store.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
     try:
-        job = approve_video(store, job, body.actor, expected_version=body.expected_video_version)
+        job = approve_video(store, job, body.actor,
+                            expected_version=body.expected_video_version,
+                            expected_sha256=body.expected_sha256)
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     return job

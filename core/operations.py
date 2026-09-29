@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .atomic_write import atomic_write_json
+from .logging_config import secret_redact as _redact
 
 
 class OperationStatus(str, Enum):
@@ -236,7 +237,12 @@ def begin_operation(operation_id: str, phase: str) -> dict[str, Any]:
 
 def advance_operation(operation_id: str, phase: str, progress: int,
                       message: str | None = None) -> dict[str, Any]:
-    """Update the phase/progress of a running operation."""
+    """Update the phase/progress of a running operation.
+
+    ``message`` is informational progress text; it is stored in its own field so
+    that routine progress never masquerades as an error in the Web UI or
+    Telegram.  Failures are reported through :func:`fail_operation`.
+    """
     with _lock:
         operations = _read_all()
         operation = operations.get(operation_id)
@@ -245,7 +251,22 @@ def advance_operation(operation_id: str, phase: str, progress: int,
         operation["current_phase"] = phase
         operation["progress"] = max(0, min(100, progress))
         if message:
-            operation["error"] = message if progress < 100 else operation.get("error")
+            operation["message"] = str(message)[:2000]
+        operations[operation_id] = operation
+        _write_all(operations)
+    _sync_to_database(operation)
+    return operation
+
+
+def set_operation_fields(operation_id: str, **fields: Any) -> dict[str, Any]:
+    """Persist arbitrary metadata on an operation (e.g. target node placement)."""
+    with _lock:
+        operations = _read_all()
+        operation = operations.get(operation_id)
+        if operation is None:
+            raise KeyError(f"Operation not found: {operation_id}")
+        operation.update(fields)
+        operation["updated_at"] = _now()
         operations[operation_id] = operation
         _write_all(operations)
     _sync_to_database(operation)
@@ -359,14 +380,16 @@ def audit_entry(operation_id: str, phase: str, message: str | None = None,
                 actor: str | None = None) -> dict[str, Any]:
     """Append an audit line for an operation phase transition."""
     operation = get_operation(operation_id)
+    # Audit lines are an operator-visible surface, so secret-shaped text in
+    # messages and error payloads must be masked before it is persisted.
     entry = {"operation_id": operation_id, "phase": phase,
-             "timestamp": _now(), "message": message or "",
+             "timestamp": _now(), "message": _redact(message or ""),
              "actor": actor,
              "operation_type": (operation or {}).get("type"),
              "target": (operation or {}).get("target"),
              "status": (operation or {}).get("status"),
              "result": (operation or {}).get("result"),
-             "error": (operation or {}).get("error")}
+             "error": _redact((operation or {}).get("error"))}
     audit_path = _state_dir() / (operation_id + ".audit.jsonl")
     try:
         _state_dir().mkdir(parents=True, exist_ok=True)

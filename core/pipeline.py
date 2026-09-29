@@ -46,7 +46,10 @@ class JobStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs: dict[str, Job] = {}
         self.workers: dict[str, dict] = {}
-        self.lock = threading.Lock()
+        # Re-entrant: the status gate of approve/revision request must hold the
+        # same lock that store.update() takes, otherwise two concurrent callers
+        # can both pass the gate (Issue #81 R3 concurrency evidence).
+        self.lock = threading.RLock()
         self.sequence = 0
         self.repository = repository or build_repository(root)
         self.executor = executor
@@ -342,46 +345,90 @@ def _send_script_approval_to_telegram(job: Job) -> None:
             pass
 
 
-def approve_video(store: JobStore, job: Job, actor: str = "api", *, expected_version: int | None = None) -> Job:
+def approve_video(store: JobStore, job: Job, actor: str = "api", *, expected_version: int | None = None,
+                  expected_sha256: str | None = None) -> Job:
     """Approve assembled video and transition to READY.
 
     Approval is bound to the current ``active_video_version``.  An optional
     ``expected_version`` allows callers (Telegram callbacks) to reject a stale
     approval if the video has been regenerated since the preview was sent.
+    ``expected_sha256`` binds the approval to the exact artifact the reviewer
+    saw: it must match the immutable version record and the file on disk.
+
+    The gate and the state mutation run under the store lock, so concurrent
+    approvals of the same Job admit exactly one winner (Issue #81 R3).
     """
-    if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
-        raise ValueError(f"Cannot approve video in status {job.status.value}")
-    active = job.active_video_version
-    if active is None:
-        raise ValueError("No active video version to approve")
-    if expected_version is not None and expected_version != active:
-        raise ValueError(f"Stale video approval: expected v{expected_version}, active is v{active}")
-    # Persist approval on the immutable version record
-    vv = next((v for v in job.video_versions if v.version == active), None)
-    if vv:
-        vv.approved = True
-        vv.approved_by = actor
-        vv.approved_at = utc_now()
-    job.approved = True
-    job.approval_status = "approved"
-    store.transition(job, JobStatus.VIDEO_APPROVED, f"VIDEO APPROVED by {actor} (v{active})")
-    store.transition(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{active})")
-    store.transition(job, JobStatus.READY, f"VIDEO APPROVED; JOB READY by {actor} (v{active})")
+    with store.lock:
+        if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
+            raise ValueError(f"Cannot approve video in status {job.status.value}")
+        active = job.active_video_version
+        if active is None:
+            raise ValueError("No active video version to approve")
+        if expected_version is not None and expected_version != active:
+            raise ValueError(f"Stale video approval: expected v{expected_version}, active is v{active}")
+        # Persist approval on the immutable version record
+        vv = next((v for v in job.video_versions if v.version == active), None)
+        if expected_sha256 is not None:
+            if vv is None or vv.sha256 != expected_sha256:
+                raise ValueError(
+                    f"Stale video approval: reviewed hash does not match active v{active}")
+            reviewed = store.root / job.job_id / vv.path
+            if not reviewed.is_file():
+                raise ValueError(f"Reviewed video artifact for v{active} is missing")
+            if _digest(reviewed) != expected_sha256:
+                raise ValueError(
+                    f"Video artifact integrity mismatch for v{active}")
+        if vv:
+            vv.approved = True
+            vv.approved_by = actor
+            vv.approved_at = utc_now()
+        job.approved = True
+        job.approval_status = "approved"
+        store.transition(job, JobStatus.VIDEO_APPROVED, f"VIDEO APPROVED by {actor} (v{active})")
+        store.transition(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{active})")
+        store.transition(job, JobStatus.READY, f"VIDEO APPROVED; JOB READY by {actor} (v{active})")
     _progress(job, "VIDEO_APPROVED")
     return job
 
 
 def request_video_revision(store: JobStore, job: Job, revision: str, actor: str = "api") -> Job:
-    """Request video revision — store structured revision and transition."""
-    if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
-        raise ValueError(f"Cannot request video revision in status {job.status.value}")
-    job.video_revisions.append(VideoRevision(
-        version=job.active_video_version or 0,
-        text=revision, actor=actor,
-    ))
-    store.transition(job, JobStatus.VIDEO_REVISION_REQUESTED,
-                     f"VIDEO REVISION REQUESTED by {actor}: {revision}")
-    return job
+    """Request video revision — store structured revision and apply it.
+
+    Two supported outcomes (Issue #81 R1):
+
+    * ``regenerate`` — pure re-render of the current inputs, the Job enters
+      ``VIDEO_REVISION_REQUESTED`` and the caller dispatches regeneration.
+    * free text — the revision has no render parameter to change, so it is
+      applied to generation: the Job is routed through script regeneration and
+      the same text is carried forward to the storyboard regeneration that
+      follows script approval (``video_revision_upstream``).
+
+    Empty/whitespace text is unsupported and rejected explicitly instead of
+    being recorded as a revision that would never change the video.
+
+    The gate and the state mutation run under the store lock, so concurrent
+    requests admit exactly one routed revision (Issue #81 R3).
+    """
+    text = (revision or "").strip()
+    if not text:
+        raise ValueError("Video revision text is required")
+    with store.lock:
+        if job.status != JobStatus.VIDEO_PENDING_APPROVAL:
+            raise ValueError(f"Cannot request video revision in status {job.status.value}")
+        job.video_revisions.append(VideoRevision(
+            version=job.active_video_version or 0,
+            text=text, actor=actor,
+        ))
+        if text == "regenerate":
+            store.transition(job, JobStatus.VIDEO_REVISION_REQUESTED,
+                             f"VIDEO REVISION REQUESTED by {actor}: regenerate")
+            return job
+        # Issue #81 R1: apply the revision to generation, not only to revision_note.
+        job.video_revision_upstream = text
+        job.approval_status = "revision_requested"
+        store.transition(job, JobStatus.SCRIPT_REVISION_REQUESTED,
+                         f"VIDEO REVISION ROUTED TO SCRIPT by {actor}: {text}")
+    return regenerate_script(store, job, revision=text)
 
 
 def regenerate_video(store: JobStore, job: Job) -> Job:
@@ -475,6 +522,10 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     job.video_versions.append(vv)
     job.active_video_version = next_version
     job.output_path = str(output)
+    # Issue #81 R1: the upstream text (script + storyboard regeneration) has
+    # been consumed by this render, so it must not leak into later storyboard
+    # regenerations of the job.
+    job.video_revision_upstream = None
     # Backward-compat pointer so legacy consumers of final/video.mp4 keep working
     legacy_latest = final_dir / "video.mp4"
     try:

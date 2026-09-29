@@ -141,7 +141,7 @@ def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.r
 
 
 def _restore_runtime(compose: list[str], previous_services: set[str], new_services: set[str],
-                     runner=subprocess.run) -> None:
+                     runner=subprocess.run) -> dict:
     """Restore the previously-working service/runtime set after a partial compose apply.
 
     On a failed deployment the caller has already restored the ``.env`` and
@@ -151,18 +151,28 @@ def _restore_runtime(compose: list[str], previous_services: set[str], new_servic
     only introduced by the failed apply, so the appliance returns to the last
     known-good runtime instead of a half-applied one.  Rollback failures must
     never mask the original deployment error.
+
+    The returned record always describes what was attempted and whether the
+    restarted runtime set was explicitly re-verified healthy.  It never raises:
+    the caller decides how to surface rollback problems alongside the original
+    deployment failure.
     """
     superseded = sorted(new_services - previous_services)
+    result = {"restored": False, "health_verified": False,
+              "restarted": sorted(previous_services), "removed": superseded, "errors": []}
     try:
         if previous_services:
             runner([*compose, "up", "-d", *sorted(previous_services)],
                    check=False, timeout=900)
             wait_for_healthy(compose, previous_services, runner, timeout_seconds=120)
+            result["health_verified"] = True
         if superseded:
             runner([*compose, "stop", *superseded], check=False, timeout=600)
             runner([*compose, "rm", "-f", *superseded], check=False, timeout=600)
-    except Exception:
-        pass
+        result["restored"] = True
+    except Exception as error:
+        result["errors"].append(str(error))
+    return result
 
 
 def apply(root: Path, runner=subprocess.run) -> dict:
@@ -214,7 +224,7 @@ def apply(root: Path, runner=subprocess.run) -> dict:
             command.extend(["-f", str(root / "docker-compose.nvidia.yml")])
         return command
 
-    def restore() -> None:
+    def restore() -> dict:
         if previous_env:
             env_path.write_text(previous_env, encoding="utf-8")
         else:
@@ -225,7 +235,7 @@ def apply(root: Path, runner=subprocess.run) -> dict:
             plan_path.unlink(missing_ok=True)
         # A failed apply may have partially started/stopped the new service set;
         # restore the previously-working runtime so the host is not left half-applied.
-        _restore_runtime(compose_command(), previous_services, new_services, runner)
+        return _restore_runtime(compose_command(), previous_services, new_services, runner)
 
     update_env(env_path, {
         "NODE_ROLE": role,
@@ -290,9 +300,10 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         request_path.unlink()
         return status
     except Exception as error:
-        restore()
+        rollback_result = restore()
         status.update({"state": "FAILED", "error": str(error),
                        "updated_at": datetime.now(timezone.utc).isoformat()})
+        status["rollback"] = rollback_result
         atomic_json(root / "config/deployment-status.json", status)
         raise
 

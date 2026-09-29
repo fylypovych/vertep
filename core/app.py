@@ -133,6 +133,17 @@ async def lifespan(_app):
             pass
     if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
         write_node_crl()
+    # Issue #78: a provider backend chosen in the Web UI must survive restarts.
+    try:
+        from .provider_switch import apply_provider_overrides, reset_provider_registry
+        if apply_provider_overrides():
+            reset_provider_registry()
+    except Exception as override_error:  # noqa: BLE001 - never block startup
+        try:
+            from .state import logger as _ov_log
+            _ov_log.warning("Provider override apply failed: %s", override_error)
+        except Exception:
+            pass
     for recovered_job in list(store.jobs.values()):
         if (recovered_job.status in {JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM}
                 and dispatch_allowed() and _job_is_due(recovered_job)):
@@ -141,6 +152,15 @@ async def lifespan(_app):
             executor.submit(_prepare_and_dispatch, recovered_job)
     watchdog_task = asyncio.create_task(_watchdog())
     _start_telegram_polling()
+    # Issue #78: model pulls live on background threads/worker commands and do
+    # not survive a CORE restart — fail the orphaned ones so a retry is possible.
+    try:
+        from .pull_executor import reconcile_model_pull_operations
+        recovered = reconcile_model_pull_operations()
+        if recovered:
+            logger.warning("Reconciled %d orphaned model operation(s) after restart", recovered)
+    except Exception as reconcile_error:  # noqa: BLE001 - never block startup
+        logger.warning("Model operation reconcile failed: %s", reconcile_error)
     yield
     watchdog_task.cancel()
     _stop_telegram_polling()
@@ -1692,8 +1712,10 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
         return TelegramAdapter().answer_callback(callback_id, "Job не знайдено")
     source_parts = str(job.source or "").split(":")
     source_chat_id = source_parts[1] if len(source_parts) >= 2 and source_parts[0] == "telegram" else None
+    # Issue #81 R3: every video action (approval, rejection, revision text,
+    # regeneration) is bound to the chat that owns the Job.
     if source_chat_id is not None and source_chat_id != chat_id:
-        if action in {"vid_ok", "vid_reject"}:
+        if action in {"vid_ok", "vid_reject", "vid_edit", "vid_regen"}:
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: chat не є власником job")
     from .pipeline import approve_video, request_video_revision
     try:
@@ -1736,7 +1758,7 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
 
 
 def _finalize_video_regenerate(job) -> None:
-    """Re-run assembly for video revision using active storyboard artifacts."""
+    """Re-run assembly for video revision using registered scene artifacts."""
     try:
         from .pipeline import finalize_job_safe
         job = store.jobs.get(job.job_id)
@@ -1746,8 +1768,7 @@ def _finalize_video_regenerate(job) -> None:
             logger.info("Video regeneration skipped: job is %s", job.status.value,
                         extra={"job_id": job.job_id})
             return
-        from pathlib import Path
-        images = _collect_active_storyboard_images(job)
+        images = _collect_reassembly_inputs(job)
         if images:
             with store.lock:
                 job.status = JobStatus.ASSETS_READY
@@ -1755,57 +1776,72 @@ def _finalize_video_regenerate(job) -> None:
                 store._save(job)
             finalize_job_safe(store, job, images)
         else:
-            with store.lock:
-                job.video_regenerating = False
-                store.update(job, JobStatus.VIDEO_FAILED, "NO IMAGES FOR RE-ASSEMBLY")
-            TelegramAdapter().send_message(
-                job.source.split(":", 2)[1],
-                f"❌ Не знайдено кадрів для перезбірки {job.job_id}.",
-            )
+            # store.update acquires the store lock itself (non-reentrant).
+            job.video_regenerating = False
+            store.update(job, JobStatus.VIDEO_FAILED,
+                         "NO REGISTERED SCENE ARTIFACTS FOR RE-ASSEMBLY")
+            _notify_video_regeneration(job, f"❌ Не знайдено зареєстрованих кадрів для перезбірки {job.job_id}.")
     except Exception as error:
         logger.error("Video regeneration failed: %s", error, extra={"job_id": job.job_id})
         try:
             with store.lock:
                 job.video_regenerating = False
-            chat_id = job.source.split(":", 2)[1]
-            TelegramAdapter().send_message(chat_id, f"❌ Помилка перегенерування {job.job_id}: {error}")
+            _notify_video_regeneration(job, f"❌ Помилка перегенерування {job.job_id}: {error}")
         except Exception:
             pass
 
 
-def _collect_active_storyboard_images(job) -> list:
-    """Collect ordered images from the active storyboard version only.
+def _notify_video_regeneration(job, prefix: str) -> None:
+    """Notify the owning Telegram chat; Web jobs are reported via job events."""
+    source = str(getattr(job, "source", "") or "")
+    if not source.startswith("telegram:"):
+        return
+    try:
+        TelegramAdapter().send_message(source.split(":", 2)[1], f"{prefix}{job.job_id}.")
+    except Exception:
+        pass
 
-    Uses registered artifact paths when available; falls back to
-    the active storyboard's image directory without globbing across
-    all storyboard versions.
+
+def _collect_reassembly_inputs(job) -> list:
+    """Ordered render inputs for a video re-assembly (Issue #81 R2).
+
+    Registered scene artifacts are the only source: ordered by scene index,
+    deduplicated to the newest artifact per scene and integrity-checked with
+    SHA256.  The collection is extension-agnostic, so non-PNG frames and
+    ``video_scene`` clips for ``task_type == "video"`` are covered.
+
+    No globbing of ``images/``, ``storyboard/`` or ``frames/`` is performed:
+    those directories hold historical versions, and lexicographic filename
+    order is wrong (``sb-1-10`` sorts before ``sb-1-2``).
     """
-    from pathlib import Path
     from .artifacts import _digest
     root = store.root / job.job_id
-    active_version = job.active_storyboard_version
-    storyboard = None
-    if active_version and job.storyboards:
-        storyboard = next((s for s in job.storyboards if s.version == active_version), None)
-    if storyboard and hasattr(storyboard, "scenes") and storyboard.scenes:
-        images = []
-        for scene in storyboard.scenes:
-            scene_id = getattr(scene, "scene_id", None)
-            if scene_id:
-                for ext in ("png", "jpg", "jpeg", "webp"):
-                    candidate = root / "images" / f"{scene_id}.{ext}"
-                    if candidate.exists():
-                        images.append(candidate)
-                        break
-        if images:
-            return sorted(images, key=lambda p: p.name)
-    image_dir = root / "images"
-    if image_dir.exists():
-        return sorted(image_dir.glob("*.*"), key=lambda p: p.name)
-    storyboard_dir = root / "storyboard"
-    if storyboard_dir.exists():
-        return sorted(storyboard_dir.glob("**/*.png"), key=lambda p: p.name)
-    return []
+    accepted = {"video_scene"} if job.task_type == "video" else {"image"}
+    by_id = {artifact.artifact_id: artifact for artifact in job.artifacts}
+    inputs: dict[int, object] = {}
+    rejected: list[str] = []
+    for scene in sorted(job.scenes, key=lambda value: value.index):
+        candidates = []
+        for artifact_id in scene.artifact_ids:
+            artifact = by_id.get(artifact_id)
+            if artifact is None or artifact.kind not in accepted:
+                continue
+            path = root / artifact.path
+            if not path.is_file():
+                rejected.append(f"{artifact.artifact_id} (missing)")
+                continue
+            if artifact.sha256 and _digest(path) != artifact.sha256:
+                rejected.append(f"{artifact.filename} (integrity)")
+                continue
+            candidates.append(path)
+        if candidates:
+            # finish_scene appends new artifacts, so the last one is current.
+            inputs[scene.index] = candidates[-1]
+        elif scene.artifact_ids:
+            rejected.append(f"{scene.scene_id} (no valid artifact)")
+    if rejected:
+        store.event(job, f"RE-ASSEMBLY ARTIFACTS REJECTED: {', '.join(rejected)}")
+    return [inputs[index] for index in sorted(inputs)]
 
 
 def _handle_approve_job(callback: dict, chat_id: str, job_id: str) -> dict:
@@ -1989,8 +2025,13 @@ def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: d
         video_rev_job.video_revision_pending = False
         from .pipeline import request_video_revision
         try:
-            request_video_revision(store, video_rev_job, text, f"telegram:{chat_id}")
-            executor.submit(_finalize_video_regenerate, video_rev_job)
+            revised = request_video_revision(store, video_rev_job, text, f"telegram:{chat_id}")
+            if getattr(revised, "video_revision_upstream", None):
+                # Issue #81 R1: free text is applied to generation — the script
+                # task is already queued by the pipeline.
+                return TelegramAdapter().send_message(
+                    chat_id, "✍️ Правки до відео прийнято. Оновлюю сценарій і розкадровку…")
+            executor.submit(_finalize_video_regenerate, revised)
             return TelegramAdapter().send_message(chat_id, "✍️ Правки до відео прийнято. Перезбираю…")
         except Exception as error:
             return TelegramAdapter().send_message(chat_id, f"❌ Помилка: {error}")
@@ -2605,24 +2646,46 @@ async def restore_system_backup(snapshot_id: str):
 
 @app.get("/api/system/models")
 async def system_models():
-    return await _internal_api("GET", "OLLAMA_URL", "/api/tags")
+    """Local Ollama model list plus the per-node placement/readiness view."""
+    try:
+        local = await _internal_api("GET", "OLLAMA_URL", "/api/tags")
+    except Exception:  # noqa: BLE001 - placement stays usable without local Ollama
+        local = None
+    if not isinstance(local, dict):
+        local = {}
+    local.setdefault("models", [])
+    from .pull_executor import model_placement
+    local["nodes"] = model_placement()
+    return local
+
+
+@app.get("/api/system/models/nodes")
+async def system_model_nodes():
+    """Per-node model catalog placement, readiness and cache freshness."""
+    from .pull_executor import model_placement
+    return {"nodes": model_placement()}
 
 
 @app.post("/api/system/models/pull")
 async def pull_system_model(request: Request):
     """Start an async model pull and return the durable operation record.
 
-    The actual Ollama pull runs on a background thread; poll
+    The actual Ollama pull runs either locally (background thread) or on a
+    placed Text node (heartbeat command channel); poll
     ``GET /api/operations/{operation_id}`` for progress.  Idempotent: a second
-    request for the same model returns the existing operation.
+    request for the same ``(node, model)`` returns the existing operation.
     """
     payload = await request.json()
     name = str(payload.get("name", ""))
     if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", name):
         raise HTTPException(422, "Invalid model name")
-    from .pull_executor import start_pull
+    node = str(payload.get("node") or "").strip() or None
+    from .pull_executor import PlacementError, start_pull
     actor, _role = _actor_from_request(request)
-    return start_pull(name, requested_by=actor)
+    try:
+        return start_pull(name, requested_by=actor, node_name=node)
+    except PlacementError as error:
+        raise HTTPException(error.status_code, error.message) from error
 
 
 @app.post("/api/system/models/pull/{operation_id}/cancel")
@@ -2635,9 +2698,16 @@ async def cancel_pull_model(operation_id: str):
 
 
 @app.delete("/api/system/models/{name:path}")
-async def delete_system_model(name: str):
+async def delete_system_model(name: str, request: Request, node: str | None = None):
     if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", name):
         raise HTTPException(422, "Invalid model name")
+    if node:
+        from .pull_executor import PlacementError, start_delete
+        actor, _role = _actor_from_request(request)
+        try:
+            return start_delete(name, requested_by=actor, node_name=node)
+        except PlacementError as error:
+            raise HTTPException(error.status_code, error.message) from error
     return await _internal_api("DELETE", "OLLAMA_URL", "/api/delete", {"name": name})
 
 

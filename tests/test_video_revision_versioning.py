@@ -173,17 +173,16 @@ class TestVersionBoundApproval:
         job = _make_job_for_store(tmp_path)
         job.video_versions = []
         job.active_video_version = None
+        store, job = _make_store(tmp_path, job)
         with pytest.raises(ValueError, match="No active video version"):
-            approve_video(SimpleNamespace(transition=lambda j, s, e: j), job, "test")
+            approve_video(store, job, "test")
 
     def test_approve_persists_on_version_record(self, tmp_path):
         from core.pipeline import approve_video
         job = _make_job_for_store(tmp_path)
         job.video_versions = [_make_video_version(1)]
         job.active_video_version = 1
-        store = SimpleNamespace(
-            transition=lambda j, s, e: setattr(j, "status", s) or j,
-        )
+        store, job = _make_store(tmp_path, job)
         with patch("core.pipeline._progress"):
             result = approve_video(store, job, "telegram:42")
         assert job.video_versions[0].approved is True
@@ -194,7 +193,7 @@ class TestVersionBoundApproval:
         job = _make_job_for_store(tmp_path)
         job.video_versions = [_make_video_version(1), _make_video_version(2)]
         job.active_video_version = 2
-        store = SimpleNamespace(transition=lambda j, s, e: j)
+        store, job = _make_store(tmp_path, job)
         with pytest.raises(ValueError, match="Stale video approval"):
             approve_video(store, job, "test", expected_version=1)
 
@@ -203,7 +202,7 @@ class TestVersionBoundApproval:
         job = _make_job_for_store(tmp_path)
         job.video_versions = [_make_video_version(2)]
         job.active_video_version = 2
-        store = SimpleNamespace(transition=lambda j, s, e: setattr(j, "status", s) or j)
+        store, job = _make_store(tmp_path, job)
         with patch("core.pipeline._progress"):
             approve_video(store, job, "test", expected_version=2)
         assert job.video_versions[0].approved is True
@@ -213,7 +212,7 @@ class TestVersionBoundApproval:
         job = _make_job_for_store(tmp_path)
         job.video_versions = [_make_video_version(3)]
         job.active_video_version = 3
-        store = SimpleNamespace(transition=lambda j, s, e: setattr(j, "status", s) or j)
+        store, job = _make_store(tmp_path, job)
         with patch("core.pipeline._progress"):
             approve_video(store, job, "legacy_callback", expected_version=None)
         assert job.video_versions[0].approved is True
@@ -269,26 +268,41 @@ class TestStructuredVideoRevisions:
         job = _make_job_for_store(tmp_path)
         job.active_video_version = 1
         job.video_versions = [_make_video_version(1)]
-        store = SimpleNamespace(transition=lambda j, s, e: setattr(j, "status", s) or j)
+        store, job = _make_store(tmp_path, job)
         result = request_video_revision(store, job, "Make the intro longer", "telegram:42")
         assert len(result.video_revisions) == 1
         rev = result.video_revisions[0]
         assert rev.version == 1
         assert rev.text == "Make the intro longer"
         assert rev.actor == "telegram:42"
-        assert result.status == JobStatus.VIDEO_REVISION_REQUESTED
+        # Issue #81 R1: free text is applied to generation (script loop)
+        assert result.status == JobStatus.SCRIPT_QUEUED
+        assert result.video_revision_upstream == "Make the intro longer"
+        assert result.approval_status == "revision_requested"
 
     def test_multiple_revisions_track_history(self, tmp_path):
         from core.pipeline import request_video_revision
         job = _make_job_for_store(tmp_path)
         job.active_video_version = 1
-        store = SimpleNamespace(transition=lambda j, s, e: setattr(j, "status", s) or j)
+        store, job = _make_store(tmp_path, job)
         request_video_revision(store, job, "Edit 1", "user")
         job.status = JobStatus.VIDEO_PENDING_APPROVAL
         request_video_revision(store, job, "Edit 2", "user")
         assert len(job.video_revisions) == 2
         assert job.video_revisions[0].text == "Edit 1"
         assert job.video_revisions[1].text == "Edit 2"
+        # Issue #81 R1: the latest free-text revision drives the upstream regen
+        assert job.video_revision_upstream == "Edit 2"
+
+    def test_request_rejects_empty_revision_text(self, tmp_path):
+        from core.pipeline import request_video_revision
+        job = _make_job_for_store(tmp_path)
+        job.active_video_version = 1
+        store, job = _make_store(tmp_path, job)
+        with pytest.raises(ValueError, match="required"):
+            request_video_revision(store, job, "   ", "user")
+        assert job.video_revisions == []
+        assert job.status == JobStatus.VIDEO_PENDING_APPROVAL
 
 
 # ---------------------------------------------------------------------------
@@ -356,18 +370,21 @@ class TestE2ELifecycle:
         assert job.active_video_version == 1
         assert job.status == JobStatus.VIDEO_PENDING_APPROVAL
 
-        # Request revision
+        # Request revision (Issue #81 R1: free text goes upstream to the script loop)
         job = request_video_revision(store, job, "Make it brighter", "test")
-        assert job.status == JobStatus.VIDEO_REVISION_REQUESTED
+        assert job.status == JobStatus.SCRIPT_QUEUED
+        assert job.video_revision_upstream == "Make it brighter"
         assert len(job.video_revisions) == 1
 
-        # Re-render (simulating a regeneration producing version 2)
-        job.status = JobStatus.VIDEO_REVISION_REQUESTED
+        # Upstream regeneration completed; re-render (producing version 2)
+        job.status = JobStatus.ASSETS_READY
         with patch("core.pipeline.providers") as mp:
             mp.video_engine.return_value.render.side_effect = lambda out, **kw: _write_file(out, b"v2")
             job = finalize_job(store, job, images)
         assert job.active_video_version == 2
         assert len(job.video_versions) == 2
+        assert job.video_versions[1].revision_note == "Make it brighter"
+        assert job.video_revision_upstream is None
 
         # Stale approval of v1 must be rejected
         with patch("core.pipeline._progress"):

@@ -132,7 +132,32 @@ def verify_node_certificate(node_id: str, supplied_serial: str) -> bool:
     expected = str(record.get("certificate_serial", "")).upper().lstrip("0") or "0"
     actual = str(supplied_serial).strip().upper().removeprefix("0X").lstrip("0") or "0"
     return (record.get("status") != "REVOKED" and bool(record.get("certificate_serial"))
+            and not _certificate_expired(record.get("certificate_expires_at"))
             and secrets.compare_digest(expected, actual))
+
+
+def _certificate_expired(value) -> bool:
+    """True when a stored certificate expiry is in the past or unparseable.
+
+    Fail-closed: an unparseable expiry is treated as expired so a corrupted
+    registry row can never keep a stale certificate trusted.
+    """
+    if not value:
+        return True
+    text = str(value).strip()
+    for pattern in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y"):
+        try:
+            expires = datetime.strptime(text, pattern).replace(tzinfo=timezone.utc)
+            return expires <= datetime.now(timezone.utc)
+        except ValueError:
+            continue
+    try:
+        expires = datetime.fromisoformat(text)
+    except ValueError:
+        return True
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires <= datetime.now(timezone.utc)
 
 
 def enroll_node(token: str, requested_id: str, capabilities: list[str], hardware: dict,
@@ -272,6 +297,7 @@ def renew_node(node_id: str, csr: str) -> dict:
             "self_test_capabilities": [], "last_self_test_at": None,
             "jwt": jwt, "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": ca_certificate,
+            "certificate_serial": serial, "certificate_expires_at": expires,
             "configuration": {"capabilities": capabilities, "heartbeat_seconds": 15}}
 
 

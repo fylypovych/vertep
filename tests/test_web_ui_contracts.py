@@ -203,6 +203,33 @@ def test_integrations_includes_publisher_channels():
     assert isinstance(platforms["youtube"]["configured"], bool)
 
 
+def test_integrations_error_field_is_redacted(monkeypatch):
+    """Issue #84: a probe failure may embed credentials (proxy URL auth, token
+    query strings), so the API must not echo the raw transport error."""
+    import httpx
+
+    original_get = httpx.Client.get
+
+    def boom(self, url, *args, **kwargs):
+        # The TestClient used for the request itself also subclasses
+        # httpx.Client, so only fail the node-local probe targets.
+        if "11434" in str(url) or "8188" in str(url):
+            raise httpx.ConnectError(
+                "connect failed: https://user:s3cret@ollama:11434?token=abcd1234")
+        return original_get(self, url, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "get", boom)
+    client = _client()
+    data = client.get("/api/integrations").json()
+    errors = [payload["error"] for payload in data.values()
+              if isinstance(payload, dict) and "error" in payload]
+    assert errors, "expected the mocked probe failure to be reported"
+    for error in errors:
+        assert "s3cret" not in error
+        assert "abcd1234" not in error
+        assert "[REDACTED]" in error
+
+
 # ── Secrets ───────────────────────────────────────────────────────
 
 def test_secrets_shape():
