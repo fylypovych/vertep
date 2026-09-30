@@ -7,6 +7,10 @@ import time
 from pathlib import Path
 
 
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)\.(\d+)$")
 UKRAINIAN_RE = re.compile(r"[А-Яа-яІіЇїЄєҐґ]")
 SECRET_PATTERNS = [

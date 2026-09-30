@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.15
+- Виправлено збірку ComfyUI Docker image: `COMFYUI_VERSION` змінено з неіснуючого `v0.34.0` на `v0.38.0` у `docker/comfyui-nvidia/Dockerfile` та `docker/comfyui-amd/Dockerfile`.
+- Виправлено клонування ComfyUI-VideoHelperSuite у `docker/comfyui-nvidia/Dockerfile`: оскільки репо не має тегів, змінено `VHS_VERSION` з `1.0.4` на `main` та прибрано префікс `v` у `--branch`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.14
 - Частково виконано i.0.0.0.77 (#77): узгоджено Workflow Form+JSON із API, додано серверну валідацію незбереженого workflow, відображення залежностей Character+Job і structured 409; виправлено перетворення типів полів та закриття редактора після збереження.
 - У межах часткових робіт i.0.0.0.78 (#78) та i.0.0.0.83 (#83) додано перевірку налаштованого inventory ComfyUI, workflow і моделей за версіями та SHA256, persistent WORKFLOWS_ROOT і запис фактичних commit компонентів під час Docker build; прибрано приховування помилок інсталяції.

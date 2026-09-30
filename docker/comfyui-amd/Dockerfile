@@ -1,5 +1,5 @@
 FROM rocm/pytorch:rocm6.4.4_ubuntu24.04_py3.12_pytorch_release_2.7.1
-ARG COMFYUI_VERSION=v0.34.0
+ARG COMFYUI_VERSION=v0.38.0
 ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
 # set -eux so a failed clone/install fails the build instead of being masked.
 RUN set -eux; \

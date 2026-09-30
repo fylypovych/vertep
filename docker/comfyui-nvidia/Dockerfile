@@ -2,8 +2,8 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 # Pinned runtime. The tags below are the *requested* versions; the resolved git
 # commits are recorded in the runtime inventory below so readiness checks can
 # detect any drift from what this image was actually built from.
-ARG COMFYUI_VERSION=v0.34.0
-ARG VHS_VERSION=1.0.4
+ARG COMFYUI_VERSION=v0.38.0
+ARG VHS_VERSION=main
 ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
 # Every step below must succeed: a masked install failure used to produce an image
 # that reported itself ready while missing ComfyUI or its custom nodes.
@@ -12,7 +12,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-pip; \
     rm -rf /var/lib/apt/lists/*; \
     git clone --depth 1 --branch "$COMFYUI_VERSION" https://github.com/Comfy-Org/ComfyUI.git /opt/comfyui; \
-    git clone --depth 1 --branch "v${VHS_VERSION}" https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite
+    git clone --depth 1 --branch "${VHS_VERSION}" https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite
 RUN set -eux; \
     python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu124 torch torchvision torchaudio; \
     python3 -m pip install -r /opt/comfyui/requirements.txt; \
