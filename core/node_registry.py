@@ -63,6 +63,19 @@ def _token_hash(token: str) -> str:
     return hmac.new(key, token.encode(), hashlib.sha256).hexdigest()
 
 
+def _enrollment_hash(enrollment_id: str) -> str:
+    key = ensure_secret_store()["internal_api_key"].encode()
+    return hmac.new(key, f"enrollment:{enrollment_id}".encode(), hashlib.sha256).hexdigest()
+
+
+def _enrollment_id(value: object) -> str | None:
+    """Normalise a client-supplied enrollment id, or ``None`` when absent/invalid."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    return text if re.fullmatch(r"[a-z0-9][a-z0-9-]{7,63}", text) else None
+
+
 def create_registration_token(role: str, ttl_seconds: int = 900, push_token: bool = False) -> dict:
     if role not in node_roles() or role == "core":
         raise ValueError("Unsupported registration role")
@@ -161,7 +174,16 @@ def _certificate_expired(value) -> bool:
 
 
 def enroll_node(token: str, requested_id: str, capabilities: list[str], hardware: dict,
-                version: str, csr: str) -> dict:
+                version: str, csr: str, enrollment_id: str | None = None) -> dict:
+    """Enroll a node with a disposable, single-use registration token.
+
+    ``enrollment_id`` is an optional client-supplied idempotency key.  A node
+    that committed its enrollment but lost the HTTP response retries with the
+    same key: instead of deadlocking on its own burned token, Core re-issues a
+    fresh secret/generation/certificate for the very same node id.  The key is
+    stored only as an HMAC, so a leaked registry file cannot be replayed, and a
+    key presented for a different node id never matches.
+    """
     node_id = requested_id.strip().lower()
     if not NODE_ID.fullmatch(node_id):
         raise ValueError("Node ID must contain 3-64 lowercase letters, numbers or hyphens")
@@ -169,14 +191,26 @@ def enroll_node(token: str, requested_id: str, capabilities: list[str], hardware
         raise ValueError("A PEM certificate signing request is required")
     clean_capabilities = sorted({item for item in capabilities
                                  if isinstance(item, str) and re.fullmatch(r"[a-z][a-z0-9_]{1,63}", item)})
+    enrollment_key = _enrollment_id(enrollment_id)
+    enrollment_hash = _enrollment_hash(enrollment_key) if enrollment_key else None
     if _postgres_enabled():
-        return _enroll_postgres(token, node_id, clean_capabilities, hardware, version, csr)
+        return _enroll_postgres(token, node_id, clean_capabilities, hardware, version, csr,
+                                enrollment_hash)
     with _lock:
         registry = _load()
         token_key = _token_hash(token)
         token_record = registry["tokens"].get(token_key)
         if not token_record or token_record["expires_at"] < time.time():
-            raise PermissionError("Registration token is invalid, expired, or already used")
+            # Lost-response retry: the token was already burned by a committed
+            # enrollment.  Re-issue only for the same node id and the same
+            # enrollment key, so a stolen token still cannot enroll anybody else.
+            if not enrollment_hash or not _reissue_for_lost_response(
+                    registry, node_id, enrollment_hash, csr):
+                raise PermissionError("Registration token is invalid, expired, or already used")
+            result = _reissue_record(registry, node_id)
+            _save(registry)
+            write_node_crl()
+            return result
         role = token_record["role"]
         allowed = set(node_roles()[role]["capabilities"])
         effective = sorted(set(clean_capabilities) & allowed) if clean_capabilities else sorted(allowed)
@@ -185,15 +219,24 @@ def enroll_node(token: str, requested_id: str, capabilities: list[str], hardware
         node_secret = secrets.token_urlsafe(48)
         certificate, core_certificate, certificate_serial, certificate_expires_at = _issue_certificate(node_id, csr)
         registry["tokens"].pop(token_key)
+        # Re-enrolling a known node must not leave its previous certificate trusted.
+        previous_node = registry["nodes"].get(node_id) or {}
+        if previous_node.get("certificate_serial"):
+            registry.setdefault("revoked_serials", []).append(
+                {"serial": previous_node["certificate_serial"],
+                 "revoked_at": datetime.now(timezone.utc).isoformat()})
         registry["nodes"][node_id] = {"node_id": node_id, "role": role,
              "capabilities": effective, "hardware": hardware, "version": version,
              "secret_hash": _token_hash(node_secret),
              "status": "READY", "runtime_status": "PENDING_SELF_TEST",
              "self_test_capabilities": [], "last_self_test_at": None,
+             "enrollment_hash": enrollment_hash,
              "credential_generation": 1,
              "certificate_serial": certificate_serial, "certificate_expires_at": certificate_expires_at,
              "registered_at": datetime.now(timezone.utc).isoformat()}
         _save(registry)
+        if previous_node.get("certificate_serial"):
+            write_node_crl()
     jwt = issue_node_token(node_id, role, 1)
     return {"worker_id": node_id, "role": role, "status": "READY",
             "runtime_status": "PENDING_SELF_TEST",
@@ -201,7 +244,115 @@ def enroll_node(token: str, requested_id: str, capabilities: list[str], hardware
             "jwt": jwt,
             "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": core_certificate,
+            "certificate_serial": certificate_serial, "certificate_expires_at": certificate_expires_at,
             "configuration": {"capabilities": effective, "heartbeat_seconds": 15}}
+
+
+def _reissue_for_lost_response(registry: dict, node_id: str, enrollment_hash: str, csr: str) -> bool:
+    """Prepare a fresh credential set for a retried enrollment of the same node."""
+    node = registry.get("nodes", {}).get(node_id)
+    if not node or node.get("status") == "REVOKED" or node.get("enrollment_hash") != enrollment_hash:
+        return False
+    node_secret = secrets.token_urlsafe(48)
+    certificate, _core_certificate, serial, expires = _issue_certificate(node_id, csr)
+    previous_serial = node.get("certificate_serial")
+    if previous_serial:
+        registry.setdefault("revoked_serials", []).append(
+            {"serial": previous_serial, "revoked_at": datetime.now(timezone.utc).isoformat()})
+    node["secret_hash"] = _token_hash(node_secret)
+    node["credential_generation"] = int(node.get("credential_generation", 1)) + 1
+    node["certificate_serial"] = serial
+    node["certificate_expires_at"] = expires
+    node["runtime_status"] = "PENDING_SELF_TEST"
+    node["self_test_capabilities"] = []
+    node["last_self_test_at"] = None
+    node["reissued_at"] = datetime.now(timezone.utc).isoformat()
+    node["_pending_secret"] = node_secret
+    node["_pending_certificate"] = certificate
+    return True
+
+
+def _reissue_record(registry: dict, node_id: str) -> dict:
+    node = registry["nodes"][node_id]
+    node_secret = node.pop("_pending_secret")
+    certificate = node.pop("_pending_certificate")
+    result = {"worker_id": node_id, "role": node["role"], "status": "READY",
+              "runtime_status": "PENDING_SELF_TEST",
+              "self_test_capabilities": [], "last_self_test_at": None,
+              "jwt": issue_node_token(node_id, node["role"], node["credential_generation"]),
+              "worker_secret": node_secret,
+              "certificate": certificate, "core_certificate": _core_certificate_pem(),
+              "certificate_serial": node["certificate_serial"],
+              "certificate_expires_at": node["certificate_expires_at"],
+              "configuration": {"capabilities": node["capabilities"], "heartbeat_seconds": 15}}
+    return result
+
+
+def _core_certificate_pem() -> str:
+    ca_cert = Path(os.getenv("NODE_CA_CERT_PATH", str(config_root() / "pki/ca.crt")))
+    return ca_cert.read_text(encoding="utf-8") if ca_cert.is_file() else ""
+
+
+def rotate_node_credentials(node_id: str) -> dict:
+    """Admin-forced credential rotation: invalidate everything the node holds now.
+
+    The operator does not own the node private key, so a rotation cannot be
+    signed from the Core side.  Instead the currently issued secret, JWT
+    generation and certificate are invalidated and the previous certificate
+    serial is added to the CRL; the node must re-establish itself by calling
+    ``POST /api/nodes/{node_id}/renew`` with a fresh CSR, which mints a brand
+    new secret, generation and certificate.  Fail-closed: a missing or revoked
+    node raises ``KeyError`` so an operator can never believe a rotation
+    happened for an unknown node.
+    """
+    if _postgres_enabled():
+        from psycopg.rows import dict_row
+        with _connect() as connection:
+            # The outgoing serial must be read before the rotation clears it, otherwise
+            # the previously issued certificate would never reach the CRL.
+            previous_row = connection.cursor(row_factory=dict_row).execute(
+                """SELECT certificate_serial FROM registered_nodes
+                   WHERE node_id=%s AND status<>'REVOKED'""", (node_id,)).fetchone()
+            if not previous_row:
+                raise KeyError(node_id)
+            with connection.cursor(row_factory=dict_row) as cursor:
+                row = cursor.execute("""UPDATE registered_nodes SET secret_hash='',
+                    credential_generation=credential_generation+1,status='READY',
+                    runtime_status='PENDING_SELF_TEST',self_test_capabilities='[]'::jsonb,
+                    last_self_test_at=NULL,certificate_serial=NULL,certificate_expires_at=NULL
+                    WHERE node_id=%s AND status<>'REVOKED'
+                    RETURNING node_id,role,capabilities,hardware,version,status,
+                    credential_generation,certificate_serial,certificate_expires_at,
+                    runtime_status,last_self_test_at,registered_at,revoked_at""",
+                    (node_id,)).fetchone()
+            if not row:
+                raise KeyError(node_id)
+            _record_revoked_serial(previous_row.get("certificate_serial"),
+                                   datetime.now(timezone.utc), connection)
+        result = dict(row)
+    else:
+        with _lock:
+            registry = _load()
+            node = registry.get("nodes", {}).get(node_id)
+            if not node or node.get("status") == "REVOKED":
+                raise KeyError(node_id)
+            previous_serial = node.get("certificate_serial")
+            node["secret_hash"] = ""
+            node["credential_generation"] = int(node.get("credential_generation", 1)) + 1
+            node["status"] = "READY"
+            node["runtime_status"] = "PENDING_SELF_TEST"
+            node["self_test_capabilities"] = []
+            node["last_self_test_at"] = None
+            node["certificate_serial"] = None
+            node["certificate_expires_at"] = None
+            if previous_serial:
+                registry.setdefault("revoked_serials", []).append(
+                    {"serial": previous_serial,
+                     "revoked_at": datetime.now(timezone.utc).isoformat()})
+            _save(registry)
+            result = {key: value for key, value in node.items() if key != "secret_hash"}
+    write_node_crl()
+    return result
 
 
 def registered_nodes() -> list[dict]:
@@ -211,6 +362,7 @@ def registered_nodes() -> list[dict]:
             with connection.cursor(row_factory=dict_row) as cursor:
                 rows = cursor.execute("""SELECT node_id,role,capabilities,hardware,version,status,
                     credential_generation,certificate_serial,certificate_expires_at,
+                    runtime_status,self_test_capabilities,last_self_test_at,
                     registered_at,revoked_at FROM registered_nodes ORDER BY registered_at""").fetchall()
         return [dict(row) for row in rows]
     return [{key: value for key, value in node.items() if key != "secret_hash"}
@@ -359,13 +511,45 @@ def _node_record(node_id: str) -> dict:
 
 
 def _enroll_postgres(token: str, node_id: str, clean_capabilities: list[str], hardware: dict,
-                     version: str, csr: str) -> dict:
+                     version: str, csr: str, enrollment_hash: str | None = None) -> dict:
     import json as json_module
     with _connect() as connection:
         token_record = connection.execute("""DELETE FROM node_registration_tokens
             WHERE token_hash=%s AND expires_at>now() RETURNING role""", (_token_hash(token),)).fetchone()
         if not token_record:
-            raise PermissionError("Registration token is invalid, expired, or already used")
+            # Lost-response retry: token already burned by a committed enrollment.
+            row = None
+            if enrollment_hash:
+                row = connection.execute("""SELECT node_id,role,capabilities FROM registered_nodes
+                    WHERE node_id=%s AND enrollment_hash=%s AND status<>'REVOKED'""",
+                    (node_id, enrollment_hash)).fetchone()
+            if not row:
+                raise PermissionError("Registration token is invalid, expired, or already used")
+            previous = connection.execute(
+                "SELECT certificate_serial FROM registered_nodes WHERE node_id=%s", (node_id,)).fetchone()
+            role, capabilities = row[1], row[2]
+            node_secret = secrets.token_urlsafe(48)
+            certificate, _core_certificate, serial, expires = _issue_certificate(node_id, csr)
+            row = connection.execute("""UPDATE registered_nodes SET secret_hash=%s,
+                credential_generation=credential_generation+1,certificate_serial=%s,
+                certificate_expires_at=%s,runtime_status='PENDING_SELF_TEST',
+                self_test_capabilities='[]'::jsonb,last_self_test_at=NULL
+                WHERE node_id=%s AND enrollment_hash=%s AND status<>'REVOKED'
+                RETURNING credential_generation""",
+                (_token_hash(node_secret), serial, expires, node_id, enrollment_hash)).fetchone()
+            if not row:
+                raise PermissionError("Registration token is invalid, expired, or already used")
+            if previous and previous[0]:
+                _record_revoked_serial(previous[0], datetime.now(timezone.utc), connection)
+            generation = row[0]
+            return {"worker_id": node_id, "role": role, "status": "READY",
+                    "runtime_status": "PENDING_SELF_TEST",
+                    "self_test_capabilities": [], "last_self_test_at": None,
+                    "jwt": issue_node_token(node_id, role, generation),
+                    "worker_secret": node_secret,
+                    "certificate": certificate, "core_certificate": _core_certificate_pem(),
+                    "certificate_serial": serial, "certificate_expires_at": expires,
+                    "configuration": {"capabilities": capabilities, "heartbeat_seconds": 15}}
         role = token_record[0]
         allowed = set(node_roles()[role]["capabilities"])
         effective = sorted(set(clean_capabilities) & allowed) if clean_capabilities else sorted(allowed)
@@ -373,25 +557,34 @@ def _enroll_postgres(token: str, node_id: str, clean_capabilities: list[str], ha
             raise ValueError("Node did not report any capability allowed for its registration role")
         node_secret = secrets.token_urlsafe(48)
         certificate, core_certificate, serial, expires = _issue_certificate(node_id, csr)
+        # Read the outgoing serial before it is replaced, so re-enrolling a known
+        # node cannot leave its previous certificate trusted.
+        previous = connection.execute("SELECT certificate_serial FROM registered_nodes WHERE node_id=%s",
+                                      (node_id,)).fetchone()
         connection.execute("""INSERT INTO registered_nodes(node_id,role,capabilities,hardware,version,
              secret_hash,status,runtime_status,self_test_capabilities,last_self_test_at,
-             credential_generation,certificate_serial,certificate_expires_at)
-             VALUES(%s,%s,%s::jsonb,%s::jsonb,%s,%s,'READY','PENDING_SELF_TEST','[]'::jsonb,NULL,1,%s,%s)
+             enrollment_hash,credential_generation,certificate_serial,certificate_expires_at)
+             VALUES(%s,%s,%s::jsonb,%s::jsonb,%s,%s,'READY','PENDING_SELF_TEST','[]'::jsonb,NULL,
+             %s,1,%s,%s)
              ON CONFLICT(node_id) DO UPDATE SET role=excluded.role,capabilities=excluded.capabilities,
              hardware=excluded.hardware,version=excluded.version,secret_hash=excluded.secret_hash,status='READY',
-             runtime_status='PENDING_SELF_TEST',
+             runtime_status='PENDING_SELF_TEST',self_test_capabilities='[]'::jsonb,
+             last_self_test_at=NULL,enrollment_hash=excluded.enrollment_hash,
              credential_generation=registered_nodes.credential_generation+1,
              certificate_serial=excluded.certificate_serial,certificate_expires_at=excluded.certificate_expires_at,
              registered_at=now(),revoked_at=NULL""",
-             (node_id, role, json_module.dumps(effective), json_module.dumps(hardware), version,
-              _token_hash(node_secret), serial, expires))
+              (node_id, role, json_module.dumps(effective), json_module.dumps(hardware), version,
+               _token_hash(node_secret), enrollment_hash, serial, expires))
         generation = connection.execute("SELECT credential_generation FROM registered_nodes WHERE node_id=%s",
                                         (node_id,)).fetchone()[0]
+        if previous and previous[0]:
+            _record_revoked_serial(previous[0], datetime.now(timezone.utc), connection)
     return {"worker_id": node_id, "role": role, "status": "READY",
             "runtime_status": "PENDING_SELF_TEST",
             "self_test_capabilities": [], "last_self_test_at": None,
             "jwt": issue_node_token(node_id, role, generation), "worker_secret": node_secret,
             "certificate": certificate, "core_certificate": core_certificate,
+            "certificate_serial": serial, "certificate_expires_at": expires,
             "configuration": {"capabilities": effective, "heartbeat_seconds": 15}}
 
 

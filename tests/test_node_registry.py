@@ -1,12 +1,15 @@
 import json
 import shutil
 import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from core.node_registry import (create_registration_token, enroll_node, registered_nodes,
                                 create_node_csr, record_self_test, renew_node, revoke_node,
-                                verify_node_certificate, verify_node_token)
+                                verify_node_certificate, verify_node_token,
+                                rotate_node_credentials)
 
 
 pytestmark = pytest.mark.skipif(
@@ -215,5 +218,279 @@ def test_outbound_only_renew_and_revoke_roundtrip(monkeypatch, tmp_path):
     assert not verify_node_token(renewed["worker_secret"], "gpu-01")
     crl_text = subprocess.run(["openssl", "crl", "-in", str(tmp_path / "node-ca.crl"),
                                "-text", "-noout"], check=True,
-                              capture_output=True, text=True).stdout.lower().replace(":", "")
+                               capture_output=True, text=True).stdout.lower().replace(":", "")
     assert renewed["certificate_serial"].lower().lstrip("0") in crl_text
+
+
+def test_lost_response_retry_reissues_credentials_for_same_node(monkeypatch, tmp_path):
+    """Issue #80: a node that committed its enrollment but lost the response must be
+    able to retry with the same enrollment id instead of deadlocking on a burned token."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    token = create_registration_token("gpu", 900)
+    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
+    first = enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr,
+                        enrollment_id="enroll-abc123")
+
+    second = enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr,
+                         enrollment_id="enroll-abc123")
+    assert second["worker_secret"] != first["worker_secret"]
+    assert second["jwt"] != first["jwt"]
+    assert second["certificate_serial"] != first["certificate_serial"]
+    assert verify_node_token(second["worker_secret"], "gpu-01")
+    assert not verify_node_token(first["worker_secret"], "gpu-01")
+    assert verify_node_certificate("gpu-01", second["certificate_serial"])
+    assert not verify_node_certificate("gpu-01", first["certificate_serial"])
+    assert registered_nodes()[0]["runtime_status"] == "PENDING_SELF_TEST"
+    # The enrollment key is stored only as an HMAC.
+    assert "enroll-abc123" not in (tmp_path / "node-registry.json").read_text(encoding="utf-8")
+
+
+def test_reenrolling_a_known_node_revokes_its_previous_certificate(monkeypatch, tmp_path):
+    """A node re-enrolled with a fresh token must lose the certificate it held."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    first_token = create_registration_token("gpu", 900)
+    first = enroll_node(first_token["token"], "gpu-01", ["image_generation"], {}, "1.5.0",
+                        create_node_csr("gpu-01", tmp_path / "client-pki"))
+    assert verify_node_certificate("gpu-01", first["certificate_serial"])
+
+    second_token = create_registration_token("gpu", 900)
+    second = enroll_node(second_token["token"], "gpu-01", ["image_generation"], {}, "1.5.0",
+                         create_node_csr("gpu-01", tmp_path / "client-pki"))
+    assert second["certificate_serial"] != first["certificate_serial"]
+    assert verify_node_certificate("gpu-01", second["certificate_serial"])
+    assert not verify_node_certificate("gpu-01", first["certificate_serial"])
+    from cryptography import x509
+    crl = x509.load_pem_x509_crl((tmp_path / "node-ca.crl").read_bytes())
+    revoked = {format(entry.serial_number, "X") for entry in crl}
+    assert first["certificate_serial"] in revoked
+    assert second["certificate_serial"] not in revoked
+
+
+def test_postgres_rotation_revokes_the_outgoing_certificate(monkeypatch, tmp_path):
+    """On the PostgreSQL backend the rotation must still CRL the old certificate.
+
+    The rotation clears ``certificate_serial`` in the same statement, so the value
+    has to be read before the UPDATE; reading it back afterwards would silently
+    leave the previous certificate trusted.
+    """
+    from core import node_registry
+
+    # Materialise a real CA so the CRL rewrite after rotation is exercised.
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    token = create_registration_token("gpu", 900)
+    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
+    enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr)
+
+    statements = []
+
+    class Cursor:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=()):
+            statements.append((" ".join(str(sql).split()), params))
+            return self
+
+        def fetchone(self):
+            if "SELECT certificate_serial FROM registered_nodes" in statements[-1][0]:
+                return {"certificate_serial": "0AABBCC"}
+            if "UPDATE registered_nodes SET secret_hash=''" in statements[-1][0]:
+                return {"node_id": "gpu-01", "role": "gpu", "capabilities": ["image_generation"],
+                        "hardware": {}, "version": "1.5.0", "status": "READY",
+                        "credential_generation": 2, "certificate_serial": None,
+                        "certificate_expires_at": None, "runtime_status": "PENDING_SELF_TEST",
+                        "last_self_test_at": None, "registered_at": "2026-09-29T00:00:00+00:00",
+                        "revoked_at": None}
+            return None
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def cursor(self, row_factory=None):
+            return Cursor(self)
+
+        def execute(self, sql, params=()):
+            statements.append((" ".join(str(sql).split()), params))
+            return self
+
+        def fetchone(self):
+            return None
+
+        def fetchall(self):
+            if "FROM node_revoked_certificates" in statements[-1][0]:
+                return [("0AABBCC", "2026-09-30T00:00:00+00:00")]
+            return []
+
+    psycopg = SimpleNamespace(connect=lambda *a, **k: Connection())
+    rows = SimpleNamespace(dict_row=lambda row: row)
+    psycopg.rows = rows
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+    monkeypatch.setitem(sys.modules, "psycopg", psycopg)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", rows)
+    monkeypatch.setattr(node_registry, "_postgres_enabled", lambda: True)
+
+    result = rotate_node_credentials("gpu-01")
+
+    assert result["node_id"] == "gpu-01"
+    assert result["credential_generation"] == 2
+    # The outgoing certificate must be revoked, and the read must precede the UPDATE.
+    crl = [entry for entry in statements if "node_revoked_certificates" in entry[0]]
+    assert crl and crl[0][1][0] == "0AABBCC"
+    select_index = next(i for i, entry in enumerate(statements)
+                        if "SELECT certificate_serial FROM registered_nodes" in entry[0])
+    update_index = next(i for i, entry in enumerate(statements)
+                        if "UPDATE registered_nodes SET secret_hash=''" in entry[0])
+    assert select_index < update_index
+
+
+def test_lost_response_retry_over_real_http(monkeypatch, tmp_path):
+    """End-to-end: Core commits the enrollment, the response never arrives, and the
+    worker's own retry over a real HTTP socket still gets working credentials.
+
+    This exercises the real `/api/nodes/register` handler over a socket instead of
+    a stub, so it proves the retry contract rather than the retry wrapper alone.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.request import Request, urlopen
+
+    from core.api.nodes import router as nodes_router
+    from core.first_run import ensure_secret_store
+
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    token = create_registration_token("gpu", 900)
+    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
+    body = json.dumps({"registration_token": token["token"], "node_id": "gpu-01",
+                       "enrollment_id": "enroll-http01", "capabilities": ["image_generation"],
+                       "hardware": {"gpu": "RTX 4090"}, "version": "1.5.0",
+                       "csr": csr}).encode("utf-8")
+    delivered = {"count": 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            assert self.path == "/api/nodes/register"
+            delivered["count"] += 1
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if delivered["count"] == 1:
+                # Commit the enrollment, then drop the connection without an answer.
+                enroll_node(payload["registration_token"], payload["node_id"],
+                            payload["capabilities"], payload["hardware"], payload["version"],
+                            payload["csr"], payload.get("enrollment_id"))
+                self.close_connection = True
+                return
+            result = enroll_node(payload["registration_token"], payload["node_id"],
+                                 payload["capabilities"], payload["hardware"], payload["version"],
+                                 payload["csr"], payload.get("enrollment_id"))
+            body_bytes = json.dumps(result).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/api/nodes/register"
+        with pytest.raises(Exception):
+            urlopen(Request(url, data=body, headers={"Content-Type": "application/json"}), timeout=10)
+        with urlopen(Request(url, data=body, headers={"Content-Type": "application/json"}),
+                     timeout=10) as response:
+            credentials = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert delivered["count"] == 2
+    assert credentials["worker_id"] == "gpu-01"
+    assert verify_node_token(credentials["worker_secret"], "gpu-01")
+    assert verify_node_certificate("gpu-01", credentials["certificate_serial"])
+    assert registered_nodes()[0]["runtime_status"] == "PENDING_SELF_TEST"
+    assert ensure_secret_store()["internal_api_key"]
+    assert nodes_router is not None
+
+
+def test_lost_response_retry_requires_the_same_node_and_key(monkeypatch, tmp_path):
+    """A burned token must not become a universal re-enrollment bypass."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    token = create_registration_token("gpu", 900)
+    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
+    enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr,
+                enrollment_id="enroll-abc123")
+    with pytest.raises(PermissionError, match="already used"):
+        enroll_node(token["token"], "gpu-02", ["image_generation"], {}, "1.5.0",
+                    create_node_csr("gpu-02", tmp_path / "pki2"), enrollment_id="enroll-abc123")
+    with pytest.raises(PermissionError, match="already used"):
+        enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr,
+                    enrollment_id="enroll-zzz999")
+    with pytest.raises(PermissionError, match="already used"):
+        enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr)
+
+
+def test_rotate_invalidates_credentials_until_the_node_renews(monkeypatch, tmp_path):
+    """Issue #80: the advertised `rotate` action must actually work end to end."""
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    token = create_registration_token("gpu", 900)
+    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
+    enrolled = enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr)
+    serial = registered_nodes()[0]["certificate_serial"]
+
+    rotated = rotate_node_credentials("gpu-01")
+    assert rotated["node_id"] == "gpu-01"
+    assert rotated["runtime_status"] == "PENDING_SELF_TEST"
+    assert not verify_node_token(enrolled["jwt"], "gpu-01")
+    assert not verify_node_token(enrolled["worker_secret"], "gpu-01")
+    assert not verify_node_certificate("gpu-01", serial)
+    crl_text = subprocess.run(["openssl", "crl", "-in", str(tmp_path / "node-ca.crl"),
+                               "-text", "-noout"], check=True,
+                              capture_output=True, text=True).stdout.lower().replace(":", "")
+    assert serial.lower().lstrip("0") in crl_text
+
+    renewed = renew_node("gpu-01", csr)
+    assert verify_node_token(renewed["worker_secret"], "gpu-01")
+    with pytest.raises(KeyError):
+        rotate_node_credentials("no-such-node")
+    revoke_node("gpu-01")
+    with pytest.raises(KeyError):
+        rotate_node_credentials("gpu-01")
+
+
+def test_rotate_action_endpoint_succeeds(monkeypatch, tmp_path):
+    """The /api/nodes/{id}/actions `rotate` action must not fail with 422."""
+    from fastapi import HTTPException
+
+    from core.api.nodes import control_node
+    from core.models import NodeAction
+    from core.state import store
+
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    token = create_registration_token("gpu", 900)
+    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
+    enroll_node(token["token"], "gpu-01", ["image_generation"], {}, "1.5.0", csr)
+    store.save_worker({"node_id": "gpu-01", "node_name": "gpu-01", "role": "gpu",
+                       "status": "READY", "last_seen": "2026-09-29T00:00:00+00:00",
+                       "capabilities": ["image_generation"]})
+    try:
+        result = control_node("gpu-01", NodeAction(action="rotate", reason="compromise"))
+        assert result["node_id"] == "gpu-01"
+        assert registered_nodes()[0]["runtime_status"] == "PENDING_SELF_TEST"
+        # A rotate for an unknown node is a 404, never a silent success.
+        with pytest.raises(HTTPException) as error:
+            control_node("no-such-node", NodeAction(action="rotate"))
+        assert error.value.status_code == 404
+    finally:
+        store.workers.pop("gpu-01", None)

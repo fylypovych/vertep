@@ -23,9 +23,19 @@ def _substitute_placeholders(obj, mapping: dict[str, str]):
     return obj
 
 
+class PromptCancelledError(RuntimeError):
+    """Raised when a prompt was cancelled and its (late) result must be discarded."""
+
+
 class ComfyUIAdapter:
     def __init__(self) -> None:
         self.current_prompt_id: str | None = None
+        # Prompts we could not remove from the ComfyUI queue.  ComfyUI only allows
+        # deleting a *pending* prompt; an executing one cannot be stopped without a
+        # global ``/interrupt`` that would also abort unrelated work.  Such prompts
+        # are therefore abandoned locally: their late result is rejected instead of
+        # being reported as a success.
+        self._abandoned_prompts: set[str] = set()
 
     def submit(self, workflow: dict) -> dict:
         if os.getenv("DEMO_MODE", "true").lower() == "true":
@@ -40,9 +50,15 @@ class ComfyUIAdapter:
             return {"prompt_id": prompt_id, "status": "STUB"}
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if prompt_id in self._abandoned_prompts:
+                raise PromptCancelledError(f"ComfyUI prompt was cancelled: {prompt_id}")
             response = httpx.get(f"{os.getenv('COMFYUI_URL', 'http://localhost:8188')}/history/{prompt_id}", timeout=10)
             response.raise_for_status()
             history = response.json()
+            # A result that arrives after the cancellation was requested is stale by
+            # definition: it must never be turned into an artifact.
+            if prompt_id in self._abandoned_prompts:
+                raise PromptCancelledError(f"ComfyUI prompt was cancelled: {prompt_id}")
             if prompt_id in history:
                 return history[prompt_id]
             time.sleep(2)
@@ -65,22 +81,17 @@ class ComfyUIAdapter:
         p = Path(workflow_path)
         if p.is_absolute():
             path = p.resolve()
+        elif p.parts and p.parts[0] == "workflows":
+            # ``workflows/<name>`` is the repository-relative convention; it is always
+            # resolved inside WORKFLOWS_ROOT so a node cannot silently read a
+            # different, non-persistent copy of the same workflow.
+            path = (workflow_root / Path(*p.parts[1:])).resolve()
         else:
-            if p.parts and p.parts[0] == "workflows":
-                cand1 = (workflow_root / Path(*p.parts[1:])).resolve()
-                cand2 = (workflow_root.parent / p).resolve()
-                cand3 = (workflow_root / p).resolve()
-                path = cand1 if cand1.exists() else (cand2 if cand2.exists() else cand1)
-            else:
-                path = (workflow_root / p).resolve()
+            path = (workflow_root / p).resolve()
         if path != workflow_root and workflow_root not in path.parents and not (workflow_root.name == "workflows" and workflow_root.parent in path.parents):
             raise ValueError("Workflow path escapes WORKFLOWS_ROOT")
         if not path.exists():
-            fallback = (Path("workflows") / (Path(*p.parts[1:]) if p.parts and p.parts[0] == "workflows" else p)).resolve()
-            if fallback.exists() and (Path("workflows").resolve() in fallback.parents or fallback == Path("workflows").resolve()):
-                path = fallback
-            else:
-                raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
+            raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
         workflow = json.loads(path.read_text(encoding="utf-8"))
         # API workflows may use {{TOPIC}}/{{CHECKPOINT}}/{{SEED}}/{{WIDTH}}/{{HEIGHT}}
         # in any string input. Substitute inside the workflow structure so that
@@ -102,6 +113,8 @@ class ComfyUIAdapter:
             result = self.wait_for_result(prompt_id)
         finally:
             self.current_prompt_id = None
+            if prompt_id not in self._abandoned_prompts:
+                self._abandoned_prompts.discard(prompt_id)
         output_keys = ("images",) if task_type == "image" else ("videos", "gifs")
         for node in result.get("outputs", {}).values():
             for output_key in output_keys:
@@ -114,28 +127,35 @@ class ComfyUIAdapter:
         raise RuntimeError(f"ComfyUI completed without a {task_type} output")
 
     def cancel(self) -> bool:
+        """Cancel *only* this adapter's prompt.
+
+        Returns ``True`` when the prompt was actually removed from the ComfyUI
+        queue.  ComfyUI has no per-prompt cancel for an already executing prompt:
+        the only way to stop it is the global ``/interrupt`` endpoint, which aborts
+        whatever else the single shared ComfyUI instance is running — including
+        prompts owned by other jobs, other workers and the interactive UI.  This
+        adapter therefore never calls ``/interrupt``; when the prompt is already
+        executing it is *abandoned* instead, and its late result is rejected by
+        :meth:`wait_for_result` rather than reported as a success.
+        """
         if os.getenv("DEMO_MODE", "true").lower() == "true":
             self.current_prompt_id = None
             return True
-        url = os.getenv("COMFYUI_URL", "http://localhost:8188")
-        # Try prompt-scoped removal first (queued prompts that have not started
-        # executing can be removed individually without interrupting other work).
-        if self.current_prompt_id:
-            try:
-                response = httpx.delete(
-                    f"{url}/queue",
-                    params={"prompt_id": self.current_prompt_id},
-                    timeout=10)
-                response.raise_for_status()
-                self.current_prompt_id = None
-                return True
-            except httpx.HTTPError:
-                pass  # prompt may already be executing; fall through to global interrupt
-        # Global interrupt as fallback for the currently-executing prompt.
-        try:
-            response = httpx.post(f"{url}/interrupt", timeout=10)
-            response.raise_for_status()
-            self.current_prompt_id = None
+        prompt_id = self.current_prompt_id
+        if not prompt_id:
+            # Nothing of ours is running: never fall back to a global action.
             return True
+        self.current_prompt_id = None
+        self._abandoned_prompts.add(prompt_id)
+        try:
+            response = httpx.delete(f"{os.getenv('COMFYUI_URL', 'http://localhost:8188')}/queue",
+                                    params={"prompt_id": prompt_id},
+                                    timeout=10)
+            response.raise_for_status()
         except httpx.HTTPError:
+            # Executing (or already finished) prompts cannot be removed one by one.
             return False
+        # ComfyUI answers 200 even when the prompt had already started executing, so
+        # the prompt stays abandoned either way: a removal that worked makes the waiter
+        # time out, and a removal that did not must not deliver a late result as success.
+        return True

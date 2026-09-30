@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from adapters.comfyui import ComfyUIAdapter, _substitute_placeholders
+from adapters.comfyui import ComfyUIAdapter, PromptCancelledError, _substitute_placeholders
 
 
 # ── _substitute_placeholders unit tests ────────────────────────────────────
@@ -236,25 +236,20 @@ class TestGenerateOutputIntegration:
 
 
 class TestCancelContract:
-    def test_cancel_returns_true_via_global_interrupt(self):
-        """Without a stored prompt_id, cancel falls back to POST /interrupt."""
+    """Cancellation must be prompt-scoped and never escalate to a global stop."""
+
+    def test_cancel_without_a_prompt_never_calls_the_backend(self):
         import httpx as _httpx
         adapter = ComfyUIAdapter()
         assert adapter.current_prompt_id is None
-        fake_resp = MagicMock(raise_for_status=lambda: None)
-        with patch.object(_httpx, "post", return_value=fake_resp) as mock_post:
+        with patch.object(_httpx, "post", side_effect=AssertionError("must not post")) as mock_post, \
+             patch.object(_httpx, "delete", side_effect=AssertionError("must not delete")) as mock_delete:
             assert adapter.cancel() is True
-        mock_post.assert_called_once()
-        assert "/interrupt" in mock_post.call_args[0][0]
-
-    def test_cancel_catches_http_error(self):
-        import httpx as _httpx
-        adapter = ComfyUIAdapter()
-        with patch.object(_httpx, "post", side_effect=_httpx.HTTPError("fail")):
-            assert adapter.cancel() is False
+        mock_post.assert_not_called()
+        mock_delete.assert_not_called()
 
     def test_cancel_prompt_scoped_delete_first(self):
-        """When current_prompt_id is set, DELETE /queue is tried before /interrupt."""
+        """When current_prompt_id is set, DELETE /queue is the only backend call."""
         import httpx as _httpx
         adapter = ComfyUIAdapter()
         adapter.current_prompt_id = "prompt-abc"
@@ -265,29 +260,76 @@ class TestCancelContract:
             mock_del.assert_called_once()
             assert "/queue" in mock_del.call_args[0][0]
             assert mock_del.call_args[1]["params"]["prompt_id"] == "prompt-abc"
-            # Global interrupt should NOT be called when delete succeeds
             mock_post.assert_not_called()
             assert adapter.current_prompt_id is None
 
-    def test_cancel_prompt_scoped_falls_back_to_interrupt(self):
-        """When DELETE /queue fails, cancel falls back to global /interrupt."""
+    def test_cancel_never_falls_back_to_global_interrupt(self):
+        """An executing prompt cannot be removed one by one; it is abandoned.
+
+        Calling the global ``/interrupt`` would abort prompts owned by other jobs,
+        other workers and the interactive UI, so it must not happen.
+        """
         import httpx as _httpx
         adapter = ComfyUIAdapter()
         adapter.current_prompt_id = "prompt-xyz"
-        fake_resp = MagicMock(raise_for_status=lambda: None)
-        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("gone")), \
-             patch.object(_httpx, "post", return_value=fake_resp) as mock_post:
-            assert adapter.cancel() is True
-            mock_post.assert_called_once()
-            assert "/interrupt" in mock_post.call_args[0][0]
-            assert adapter.current_prompt_id is None
+        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("already executing")), \
+             patch.object(_httpx, "post", side_effect=AssertionError("must not post")) as mock_post:
+            assert adapter.cancel() is False
+        mock_post.assert_not_called()
+        assert adapter.current_prompt_id is None
+        # The prompt stays abandoned so its late result is rejected.
+        assert "prompt-xyz" in adapter._abandoned_prompts
+
+    def test_late_result_of_an_abandoned_prompt_is_rejected(self, tmp_path):
+        """A result produced after the cancellation must never become an artifact."""
+        import httpx as _httpx
+        adapter = ComfyUIAdapter()
+        adapter.current_prompt_id = "prompt-late"
+        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("already executing")):
+            assert adapter.cancel() is False
+        history = MagicMock(raise_for_status=lambda: None)
+        history.json.return_value = {"prompt-late": {"outputs": {"1": {"images": [
+            {"filename": "scene-001.png", "subfolder": "", "type": "output"}]}}}}
+        with patch.object(_httpx, "get", return_value=history):
+            with pytest.raises(PromptCancelledError):
+                adapter.wait_for_result("prompt-late", timeout=5)
+
+    def test_cancelled_prompt_raises_instead_of_returning_media(self, tmp_path):
+        """generate_output must fail loudly rather than fetch a cancelled output."""
+        wf = _write_workflow(tmp_path)
+        fake = FakeHTTPTransport()
+        adapter = ComfyUIAdapter()
+        real_submit = adapter.submit
+        posted = {}
+
+        def _delete(url, params=None, headers=None, timeout=None):
+            # ComfyUI cannot remove a prompt that already started executing.
+            posted["delete"] = params
+            import httpx as _httpx
+            raise _httpx.HTTPError("already executing")
+
+        def _submit_then_cancel(workflow):
+            response = real_submit(workflow)
+            adapter.current_prompt_id = response["prompt_id"]
+            adapter.cancel()
+            return response
+
+        with patch.object(adapter, "submit", _submit_then_cancel), \
+             patch("adapters.comfyui.httpx.post", fake.post), \
+             patch("adapters.comfyui.httpx.get", fake.get), \
+             patch("adapters.comfyui.httpx.delete", _delete):
+            with pytest.raises(PromptCancelledError):
+                adapter.generate_output(wf, "x")
+        # The prompt-scoped delete was the only backend cancellation call.
+        assert posted["delete"]["prompt_id"] == "abc-123"
 
     def test_cancel_both_fail_returns_false(self):
-        """When both DELETE and /interrupt fail, cancel returns False."""
+        """When the prompt-scoped delete fails, cancel reports it was not isolated."""
         import httpx as _httpx
         adapter = ComfyUIAdapter()
         adapter.current_prompt_id = "prompt-fail"
-        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("err")), \
-             patch.object(_httpx, "post", side_effect=_httpx.HTTPError("err")):
+        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("err")):
             assert adapter.cancel() is False
+        with patch.object(_httpx, "delete", return_value=MagicMock(raise_for_status=lambda: None)):
+            assert adapter.cancel() is True
 

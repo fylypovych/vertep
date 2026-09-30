@@ -1,5 +1,15 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.14
+- Частково виконано i.0.0.0.77 (#77): узгоджено Workflow Form+JSON із API, додано серверну валідацію незбереженого workflow, відображення залежностей Character+Job і structured 409; виправлено перетворення типів полів та закриття редактора після збереження.
+- У межах часткових робіт i.0.0.0.78 (#78) та i.0.0.0.83 (#83) додано перевірку налаштованого inventory ComfyUI, workflow і моделей за версіями та SHA256, persistent WORKFLOWS_ROOT і запис фактичних commit компонентів під час Docker build; прибрано приховування помилок інсталяції.
+- Частково виконано i.0.0.0.80 (#80): додано повторну реєстрацію вузла після втрати відповіді за enrollment_id, інвалідацію облікових даних через rotate, durable self-test metadata і runtime_status ролей у API, UI та dispatch; додано міграцію PostgreSQL і перевірку outbound-only Compose.
+- Посилено deployment-перевірки наявності migrate evidence, складу сервісів, стану модулів і відновлення runtime inventory після rollback.
+- Частково виконано i.0.0.0.83 (#83): скасування ComfyUI більше не використовує глобальний /interrupt, пізні результати відкидаються; додано controlled HTTP перевірки шляху CORE → GPU Worker → ComfyUI → артефакт.
+- У межах часткових робіт i.0.0.0.81 (#81) та i.0.0.0.83 (#83) додано media contract із SHA256, розміром і MIME та його перевірку на Worker і CORE; виправлено розпізнавання сигнатури MP4/MOV.
+- Розширено regression та Browser E2E перевірки workflow, enrollment, runtime readiness, deployment, cancellation і цілісності медіа.
+- У AGENTS.md встановлено спільну послідовність номерів для i, ir, lab і var.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.13
 - Issue #77: екран моделей перероблено в розділ «Налаштування → Моделі» з показом локального каталогу Ollama, per-node розміщенням, готовністю вузлів, віком каталогу та керуванням pull/delete; додано попередження про застарілий каталог і pending-команду.
 - Issue #78: додано `core/provider_switch.py` — збереження вибору backend у overrides із застосуванням при старті CORE, `GET /api/settings/providers` і `POST /api/settings/providers/{slot}` з контрактом persist → apply → verify → rollback; перемикання обмежено перевіркою switchable/configured.

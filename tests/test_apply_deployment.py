@@ -249,6 +249,37 @@ def test_wait_for_healthy_succeeds_on_successful_migrate(tmp_path):
     mod.wait_for_healthy(["docker", "compose"], {"migrate"}, runner=runner)
 
 
+def test_wait_for_healthy_fails_when_migrate_evidence_is_absent(tmp_path):
+    """M6: an absent migrate record is not migration evidence and must not pass."""
+    root = fixture(tmp_path)
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = ('{"Service": "core", "State": "running", "Health": "healthy"}\n'
+                          '{"Service": "postgres", "State": "running", "Health": "healthy"}\n')
+            return Result()
+        return None
+    with pytest.raises(RuntimeError, match="Migration evidence is missing"):
+        mod.wait_for_healthy(["docker", "compose"], {"core", "postgres", "migrate"},
+                             runner=runner, timeout_seconds=0)
+
+
+def test_wait_for_healthy_without_migrate_service_does_not_require_evidence(tmp_path):
+    """A role that runs no migrations (GPU/Text/Voice) is not blocked by the gate."""
+    root = fixture(tmp_path)
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = ('{"Service": "worker", "State": "running", "Health": "healthy"}\n'
+                          '{"Service": "comfyui", "State": "running", "Health": "healthy"}\n')
+            return Result()
+        return None
+    mod.wait_for_healthy(["docker", "compose"], {"worker", "comfyui"}, runner=runner,
+                         timeout_seconds=0)
+
+
 def test_apply_deployment_rolls_back_env_and_plan_on_failure(tmp_path):
     root = fixture(tmp_path)
     original_env = (root / ".env").read_text(encoding="utf-8")
@@ -414,3 +445,141 @@ def test_apply_rolls_back_previous_runtime_set_after_partial_compose(tmp_path):
     # The service introduced only by the failed gpu apply (comfyui) was torn down.
     assert any("stop" in c and "comfyui" in c for c in recorded)
     assert any("rm" in c and "-f" in c and "comfyui" in c for c in recorded)
+
+
+def test_restore_runtime_verifies_set_with_no_previous_services(tmp_path):
+    """M6: a first-ever deployment rollback must still prove the leftover set is gone."""
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = ""
+            return Result()
+        return None
+    result = mod._restore_runtime(["docker", "compose"], set(), {"comfyui"}, runner=runner)
+    assert result["restored"] is True
+    assert result["health_verified"] is True
+    assert result["runtime_set_verified"] is True
+    assert result["observed_services"] == []
+    assert not result["errors"]
+
+
+def test_restore_runtime_fails_when_superseded_service_survives(tmp_path):
+    """M6: a leftover service from the failed apply must block a restored claim."""
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = '{"Service": "comfyui", "State": "running", "Health": "healthy"}\n'
+            return Result()
+        return None
+    result = mod._restore_runtime(["docker", "compose"], set(), {"comfyui"}, runner=runner)
+    assert result["restored"] is False
+    assert result["runtime_set_verified"] is False
+    assert result["errors"]
+
+
+def test_restore_runtime_reports_incomplete_restored_set(tmp_path):
+    """M6: restored health that does not cover the previous set is not attested."""
+    mod = module()
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = '{"Service": "ollama", "State": "running", "Health": "healthy"}\n'
+            return Result()
+        return None
+    result = mod._restore_runtime(["docker", "compose"], {"ollama", "worker"}, {"comfyui"},
+                                  runner=runner)
+    assert result["restored"] is False
+    assert result["runtime_set_verified"] is False
+    assert "worker" in result["missing_services"]
+
+
+def test_apply_fails_when_observed_runtime_set_differs_from_plan(tmp_path):
+    """M6: a partially applied runtime set must not be reported as SUCCEEDED."""
+    root = fixture(tmp_path)
+    mod = module()
+    selected = {"comfyui", "update-agent", "worker"}
+
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                # comfyui never appears: the runtime set does not match the plan.
+                stdout = "\n".join(
+                    json.dumps({"Service": s, "State": "running", "Health": "healthy"})
+                    for s in selected - {"comfyui"}) + "\n"
+            return Result()
+        return None
+
+    with pytest.raises(RuntimeError, match="Missing services"):
+        mod.apply(root, runner=runner)
+    status = json.loads((root / "config/deployment-status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED"
+
+
+def test_apply_records_verified_runtime_set_on_success(tmp_path):
+    """M6: a successful apply attests the observed runtime set explicitly."""
+    root = fixture(tmp_path)
+    mod = module()
+    selected = {"comfyui", "update-agent", "worker"}
+
+    def runner(command, **kwargs):
+        if "ps" in command:
+            class Result:
+                stdout = "\n".join(
+                    json.dumps({"Service": s, "State": "running", "Health": "healthy"})
+                    for s in selected) + "\n"
+            return Result()
+        return None
+
+    result = mod.apply(root, runner=runner)
+    assert result["runtime_set_verified"] is True
+    assert result["observed_services"] == sorted(selected)
+    inventory = json.loads((root / "config/runtime-inventory.json").read_text(encoding="utf-8"))
+    assert inventory["runtime_set_verified"] is True
+    assert inventory["missing_services"] == []
+
+
+def test_module_status_is_derived_from_observed_containers(tmp_path):
+    """M6: module status must be measured, never a fabricated HEALTHY constant."""
+    mod = module()
+    containers = [{"service": "worker", "state": "running", "health": "healthy"},
+                  {"service": "comfyui", "state": "exited", "health": ""}]
+    status = mod._module_status(containers, ["worker", "comfyui", "web_ui"])
+    assert status["worker"] == "HEALTHY"
+    assert status["comfyui"] == "DEGRADED"
+    # A module with no observed container is UNKNOWN, not a fabricated HEALTHY.
+    assert status["web_ui"] == "UNKNOWN"
+    assert mod._module_status([], ["worker"]) == {"worker": "UNKNOWN"}
+    healthy = mod._module_status([{"service": "worker", "state": "running", "health": "healthy"}],
+                                 ["worker", "comfyui"])
+    assert healthy == {"worker": "HEALTHY", "comfyui": "HEALTHY"}
+
+
+def test_apply_refreshes_inventory_after_rollback(tmp_path):
+    """M6: after a rollback the inventory must describe the restored runtime."""
+    root = fixture(tmp_path)
+    mod = module()
+    roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
+    previous = mod.create_plan(roles, "text", "0.0.0.20")
+    (root / "config/deployment-plan.json").write_text(json.dumps(previous), encoding="utf-8")
+    restored_services = set(previous["services"])
+
+    def runner(command, **kwargs):
+        if "ps" in command:
+            rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
+                    for s in sorted(restored_services)]
+            class Result:
+                stdout = "\n".join(rows) + "\n"
+            return Result()
+        return None
+
+    with pytest.raises(RuntimeError):
+        mod.apply(root, runner=runner)
+
+    inventory = json.loads((root / "config/runtime-inventory.json").read_text(encoding="utf-8"))
+    assert inventory.get("after_rollback") is True
+    assert set(inventory["services"]) == restored_services
+    status = json.loads((root / "config/deployment-status.json").read_text(encoding="utf-8"))
+    assert status["rollback"]["runtime_set_verified"] is True
+    assert status["rollback"]["inventory_refreshed"] is True

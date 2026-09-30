@@ -6,6 +6,7 @@ import json
 import os
 import time as _time
 import uuid
+from pathlib import Path
 
 import httpx
 from adapters.providers import providers
@@ -16,6 +17,73 @@ def _artifact(filename: str, kind: str, data: bytes) -> dict:
         raise RuntimeError(f"{kind} runtime returned an empty artifact")
     return {"filename": filename, "kind": kind,
             "data_base64": base64.b64encode(data).decode("ascii")}
+
+
+# Minimal magic-byte signatures for the media Vertep accepts.  A runtime that
+# answers with an HTML error page, a truncated download or an empty body must be
+# rejected on the worker instead of being shipped to CORE as an artifact.
+_MEDIA_SIGNATURES: dict[str, tuple[tuple[bytes, ...], str]] = {
+    ".png": ((b"\x89PNG\r\n\x1a\n",), "image/png"),
+    ".jpg": ((b"\xff\xd8\xff",), "image/jpeg"),
+    ".jpeg": ((b"\xff\xd8\xff",), "image/jpeg"),
+    ".webp": ((b"RIFF",), "image/webp"),
+    ".ppm": ((b"P1", b"P2", b"P3", b"P4", b"P5", b"P6"), "image/x-portable-pixmap"),
+    ".mp4": ((b"ftyp",), "video/mp4"),
+    ".webm": ((b"\x1a\x45\xdf\xa3",), "video/webm"),
+    ".mov": ((b"ftyp",), "video/quicktime"),
+}
+
+
+def media_signature(suffix: str) -> str:
+    """Return the declared mime type for a supported media suffix."""
+    signatures = _MEDIA_SIGNATURES.get(suffix.lower())
+    if not signatures:
+        raise RuntimeError(f"Unsupported media artifact type: {suffix}")
+    return signatures[1]
+
+
+def verify_media(data: bytes, suffix: str) -> str:
+    """Validate that ``data`` really is the media its filename claims.
+
+    Raises ``RuntimeError`` on an empty, truncated or mismatched payload so a
+    broken runtime response can never become a stored artifact.
+    """
+    signatures = _MEDIA_SIGNATURES.get(suffix.lower())
+    if not signatures:
+        raise RuntimeError(f"Unsupported media artifact type: {suffix}")
+    if not data:
+        raise RuntimeError(f"Empty {suffix} payload from the compute runtime")
+    matches = (len(data) >= 12 and data[4:8] == b"ftyp"
+               if suffix.lower() in {".mp4", ".mov"}
+               else any(data.startswith(marker) for marker in signatures[0]))
+    if not matches:
+        raise RuntimeError(f"{suffix} payload does not match its declared media signature")
+    if suffix.lower() == ".webp" and data[8:12] != b"WEBP":
+        raise RuntimeError("WebP payload does not match its declared media signature")
+    return signatures[1]
+
+
+def _media_artifact(filename: str, kind: str, data: bytes, *, workflow: str | None = None,
+                    task_type: str | None = None) -> dict:
+    """Build a media artifact with a verifiable contract (sha256 + mime + size).
+
+    CORE re-checks the contract when the result arrives, so a truncated or
+    swapped payload is detected end-to-end rather than trusted.
+    """
+    suffix = Path(filename).suffix or (".png" if kind == "image" else ".mp4")
+    mime_type = verify_media(data, suffix)
+    artifact = _artifact(filename, kind, data)
+    artifact["contract"] = {
+        "format": "media_contract/v1",
+        "kind": kind,
+        "task_type": task_type or kind,
+        "mime_type": mime_type,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "workflow": workflow or None,
+        "generated_at": _time.time(),
+    }
+    return artifact
 
 
 def execute_text(task: dict) -> list[dict]:
@@ -364,12 +432,13 @@ def execute_image(task: dict) -> list[dict]:
             data, filename, kind = adapter.generate_output(workflow, scene.get("prompt") or topic, "image")
             if kind != "image":
                 raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
-            artifacts.append(_artifact(f"scene-{index:03d}{Path(filename).suffix or '.png'}", "image", data))
+            artifacts.append(_media_artifact(f"scene-{index:03d}{Path(filename).suffix or '.png'}",
+                                            "image", data, workflow=workflow, task_type="image"))
         return artifacts
     data, filename, kind = adapter.generate_output(workflow, topic, "image")
     if kind != "image":
         raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
-    return [_artifact(filename, "image", data)]
+    return [_media_artifact(filename, "image", data, workflow=workflow, task_type="image")]
 
 
 def execute_video(task: dict) -> list[dict]:
@@ -381,19 +450,23 @@ def execute_video(task: dict) -> list[dict]:
             data, filename, kind = adapter.generate_output(workflow, topic, "video")
             if kind != "video":
                 raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
-            return [_artifact(filename, "video", data)]
+            return [_media_artifact(filename, "video", data, workflow=workflow, task_type="video")]
         except RuntimeError as error:
             if "no synthetic video workflow" not in str(error):
                 raise
     scenes = (task.get("script") or {}).get("scenes") or [{"prompt": topic}]
     artifacts = []
     for index, scene in enumerate(scenes, 1):
+        scene_workflow = (task.get("workflow")
+                          or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json"))
         scene_data, scene_filename, kind = adapter.generate_output(
-            task.get("workflow") or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json"),
+            scene_workflow,
             scene.get("prompt") or topic, "image")
         if kind != "image":
             raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
-        artifacts.append(_artifact(f"scene-{index:03d}{Path(scene_filename).suffix or '.png'}", "image", scene_data))
+        artifacts.append(_media_artifact(f"scene-{index:03d}{Path(scene_filename).suffix or '.png'}",
+                                        "image", scene_data, workflow=scene_workflow,
+                                        task_type="video"))
     return artifacts
 
 

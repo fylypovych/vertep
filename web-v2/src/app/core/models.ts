@@ -23,6 +23,8 @@ export interface Worker {
   supported_workflows?: string[];
   runtime_status?: string;
   tested_capabilities?: string[];
+  self_test_capabilities?: string[];
+  last_self_test_at?: string | null;
   disk_free_mb?: number;
   modules?: string[];
   services?: string[];
@@ -332,7 +334,21 @@ export interface SystemRole {
   count?: number;
   services?: string[];
   capabilities?: string[];
+  modules?: string[];
   deployment_status?: string;
+  runtime_status?: string;
+  runtime_evidence?: {
+    source?: string;
+    nodes?: { node_id?: string; runtime_status?: string; heartbeat?: string; live?: boolean }[];
+    local?: {
+      checked_at?: string;
+      checks_ok?: boolean;
+      failed_checks?: string[];
+      services_total?: number | null;
+      services_missing?: string[];
+      services_unhealthy?: string[];
+    };
+  };
 }
 
 export interface RolesDeploymentState {
@@ -356,6 +372,7 @@ export interface SystemRolesResponse {
   node_role: string;
   active_roles: string[];
   available_roles: SystemRole[];
+  role_runtime_status?: Record<string, string>;
   deployment?: RolesDeploymentState;
   queued?: boolean;
 }
@@ -466,7 +483,7 @@ export interface WorkflowFormSchema {
   schema: {
     placeholders: string[];
     node_types: string[];
-    editable_inputs: Array<{ node_id: string; class_type: string; input_name: string; current_value: unknown }>;
+    editable_inputs: Array<{ node_id: string; class_type: string; input_name: string; current_value: unknown; type?: 'str' | 'int' | 'float' | 'bool' }>;
   };
 }
 

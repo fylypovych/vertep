@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from ..models import NodeAction, utc_now
 from ..node_registry import (create_registration_token, enroll_node, registered_nodes,
-                             renew_node, record_self_test, revoke_node, verify_node_certificate, node_roles)
+                             renew_node, record_self_test, revoke_node, verify_node_certificate, node_roles,
+                             rotate_node_credentials)
 from ..security import _valid_worker_request
 from ..state import store
 from .workers import workers
@@ -34,6 +35,10 @@ def _node_context(node: dict) -> dict:
         **node,
         "node_name": node.get("node_name") or node.get("node_id"),
         "capabilities": capabilities,
+        # Runtime readiness is measured, never implied by a heartbeat alone.
+        "runtime_status": node.get("runtime_status") or "PENDING_SELF_TEST",
+        "self_test_capabilities": node.get("self_test_capabilities") or [],
+        "last_self_test_at": node.get("last_self_test_at"),
         "modules": definition.get("modules", []),
         "services": definition.get("services", []),
         "capability_backends": {
@@ -60,6 +65,7 @@ async def register_node(request: Request):
         if (not isinstance(payload, dict) or len(str(payload.get("registration_token", ""))) > 64
                 or len(str(payload.get("node_id", ""))) > 64 or len(str(payload.get("version", ""))) > 64
                 or len(str(payload.get("csr", ""))) > 16384
+                or len(str(payload.get("enrollment_id", "") or "")) > 128
                 or not isinstance(payload.get("capabilities", []), list)
                 or len(payload.get("capabilities", [])) > 32
                 or not isinstance(payload.get("hardware", {}), dict)
@@ -67,7 +73,8 @@ async def register_node(request: Request):
             raise ValueError("Node registration payload exceeds allowed limits")
         return enroll_node(str(payload.get("registration_token", "")), str(payload.get("node_id", "")),
                            payload.get("capabilities") or [], payload.get("hardware") or {},
-                           str(payload.get("version", "unknown")), str(payload.get("csr", "")))
+                           str(payload.get("version", "unknown")), str(payload.get("csr", "")),
+                           payload.get("enrollment_id"))
     except PermissionError as error:
         raise HTTPException(401, str(error)) from error
     except ValueError as error:
@@ -105,9 +112,16 @@ def node_detail(node_id: str):
         merged["credential_generation"] = record.get("credential_generation")
         merged["registered_at"] = record.get("registered_at")
         merged["revoked_at"] = record.get("revoked_at")
+    # The durable self-test result in the registry is authoritative for runtime
+    # readiness; a heartbeat without self-test must not advertise the node as ready.
+    merged["runtime_status"] = (record.get("runtime_status")
+                                or merged.get("runtime_status") or "PENDING_SELF_TEST")
     merged.setdefault("status", "OFFLINE")
     merged.setdefault("capabilities", [])
     merged.setdefault("hardware", {})
+    merged.setdefault("runtime_status", "PENDING_SELF_TEST")
+    merged.setdefault("self_test_capabilities", [])
+    merged.setdefault("last_self_test_at", None)
     # Fleet contract: expose transient control/update fields inside a single
     # `update_state` envelope, mirroring the `/api/workers` listing shape so the
     # (detail, listing) digests never drift apart.
@@ -158,13 +172,11 @@ def control_node(node_id: str, command: NodeAction):
         worker["self_test_requested_at"] = timestamp
         worker["status"] = "SELF_TESTING"
     elif command.action == "rotate":
-        from ..node_registry import renew_node
+        from ..node_registry import rotate_node_credentials
         try:
-            renew_node(node_id, "")
+            rotate_node_credentials(node_id)
         except KeyError as error:
             raise HTTPException(404, "Node is missing or revoked") from error
-        except ValueError as error:
-            raise HTTPException(422, str(error)) from error
     elif command.action == "disable":
         worker.update({"desired_state": "DISABLED", "status": "OFFLINE"})
     elif command.action == "enable":

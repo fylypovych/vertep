@@ -115,6 +115,12 @@ class ComputeProvider(ABC):
 
     @abstractmethod
     def cancel(self) -> bool:
+        """Cancel only this provider's own work.
+
+        Returns ``True`` when the work was actually stopped/removed and ``False``
+        when it could only be abandoned.  Implementations must never escalate to a
+        backend-wide stop that would abort work owned by somebody else.
+        """
         ...
 
 

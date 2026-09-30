@@ -1,4 +1,5 @@
 """First-run / setup routes for the Vertep CORE web application."""
+import asyncio
 import os
 import re
 import socket
@@ -14,6 +15,47 @@ from ..state import store, task_queue
 from ..version import application_version
 
 router = APIRouter()
+
+
+def _ensure_enrollment_id(pki: Path) -> str:
+    """Return a stable local enrollment id used as the lost-response retry key."""
+    path = pki / "enrollment.id"
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]{7,63}", existing):
+            return existing
+    except OSError:
+        pass
+    import secrets
+    pki.mkdir(parents=True, exist_ok=True)
+    value = f"onboarding-{secrets.token_hex(8)}"
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(value, encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    return value
+
+
+async def _enroll_with_retry(core_url: str, body: dict, verify, attempts: int = 3,
+                             base_delay: float = 0.5) -> httpx.Response:
+    """Register a non-Core node, retrying transport failures and lost responses.
+
+    A single-use registration token must not be burned by a dropped connection
+    that happened after Core already committed the enrollment, so the request
+    carries a stable ``enrollment_id`` that makes the retry idempotent on the
+    Core side.  Permanent 4xx answers are surfaced at once.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30, verify=verify) as enrollment_client:
+                return await enrollment_client.post(f"{core_url}/api/nodes/register", json=body)
+        except (httpx.HTTPError, httpx.TimeoutException) as error:
+            last_error = error
+            if attempt >= max(1, attempts):
+                raise
+            await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
+    raise last_error if last_error else RuntimeError("enrollment produced no response")  # pragma: no cover
 
 
 @router.get("/api/setup")
@@ -73,11 +115,14 @@ async def first_run_complete(request: Request):
                 pinned.write_text(core_certificate, encoding="utf-8")
                 os.chmod(pinned, 0o600)
                 verify = str(pinned)
-            async with httpx.AsyncClient(timeout=30, verify=verify) as enrollment_client:
-                response = await enrollment_client.post(f"{core_url}/api/nodes/register", json={
-                    "registration_token": payload.get("registration_token"), "node_id": node_id,
-                    "capabilities": role_definition["capabilities"], "hardware": setup_status()["hardware"],
-                    "version": application_version(), "csr": csr})
+            enrollment_id = _ensure_enrollment_id(config_root() / "pki")
+            response = await _enroll_with_retry(
+                core_url,
+                {"registration_token": payload.get("registration_token"), "node_id": node_id,
+                 "enrollment_id": enrollment_id,
+                 "capabilities": role_definition["capabilities"], "hardware": setup_status()["hardware"],
+                 "version": application_version(), "csr": csr},
+                verify)
             if response.status_code != 200:
                 raise ValueError(f"Core registration failed: {response.text[:300]}")
             credentials = response.json()

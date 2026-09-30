@@ -329,6 +329,110 @@ def test_workflow_list_shape():
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
+
+def test_workflow_list_exposes_type_and_validation(tmp_path, monkeypatch):
+    from core import state
+    monkeypatch.setattr(state.workflow_registry, "root", tmp_path / "workflows")
+    client = _client()
+    saved = client.put(
+        "/api/workflows/image/list-shape.json",
+        json={"n1": {"class_type": "KSampler", "inputs": {"seed": 1}}},
+    )
+    assert saved.status_code == 200, saved.text
+    items = [w for w in client.get("/api/workflows").json() if w["name"] == "list-shape.json"]
+    assert len(items) == 1, items
+    item = items[0]
+    assert item["type"] == "image", item
+    assert item["valid"] is True, item
+    assert item["path"] == "workflows/image/list-shape.json", item
+    assert item["schema"]["node_count"] == 1, item
+    assert "KSampler" in item["schema"]["node_types"], item
+
+
+def test_workflow_form_schema_exposes_editable_inputs(tmp_path, monkeypatch):
+    from core import state
+    monkeypatch.setattr(state.workflow_registry, "root", tmp_path / "workflows")
+    client = _client()
+    saved = client.put(
+        "/api/workflows/image/form-shape.json",
+        json={"n1": {"class_type": "KSampler", "inputs": {"seed": 7, "model": "x.json"}}},
+    )
+    assert saved.status_code == 200, saved.text
+    resp = client.get("/api/workflows/image/form-shape.json/form")
+    assert resp.status_code == 200, resp.text
+    schema = resp.json()["schema"]
+    assert schema["editable_inputs"], schema
+    assert schema["node_count"] == 1, schema
+    assert "KSampler" in schema["node_types"], schema
+    inputs = {item["input_name"]: item for item in schema["editable_inputs"]}
+    assert inputs["seed"]["node_id"] == "n1", inputs
+    assert inputs["seed"]["current_value"] == 7, inputs
+    assert inputs["seed"]["class_type"] == "KSampler", inputs
+
+
+def test_workflow_validate_endpoint_returns_server_report():
+    client = _client()
+    valid = client.post(
+        "/api/workflows/validate",
+        json={"n1": {"class_type": "KSampler", "inputs": {"prompt": "hi {{TOPIC}}"}}},
+    )
+    assert valid.status_code == 200, valid.text
+    report = valid.json()
+    assert report["valid"] is True, report
+    assert "TOPIC" in report["schema"]["has_placeholders"], report
+
+    invalid = client.post("/api/workflows/validate", json={"n1": {"inputs": {}}})
+    assert invalid.status_code == 200, invalid.text
+    assert invalid.json()["valid"] is False, invalid.json()
+    assert invalid.json()["errors"], invalid.json()
+
+    bad_placeholder = client.post(
+        "/api/workflows/validate",
+        json={"n1": {"class_type": "X", "inputs": {"prompt": "{{BOGUS}}"}}},
+    )
+    assert bad_placeholder.json()["valid"] is False, bad_placeholder.json()
+
+
+def test_workflow_usage_reports_jobs_and_characters(tmp_path, monkeypatch):
+    from core import state
+    from core.api import job_helpers
+    monkeypatch.setattr(state.workflow_registry, "root", tmp_path / "workflows")
+    monkeypatch.setattr(job_helpers, "workflow_registry", state.workflow_registry)
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
+    character_dir = tmp_path / "characters" / "narrator"
+    character_dir.mkdir(parents=True)
+    (character_dir / "character.json").write_text(
+        '{"id": "narrator", "name": "Narrator"}', encoding="utf-8"
+    )
+    (character_dir / "generation.json").write_text(
+        '{"workflow": "workflows/image/usage-test.json"}', encoding="utf-8"
+    )
+    client = _client()
+    saved = client.put(
+        "/api/workflows/image/usage-test.json",
+        json={"n1": {"class_type": "KSampler", "inputs": {}}},
+    )
+    assert saved.status_code == 200, saved.text
+    job = client.post(
+        "/api/jobs",
+        json={
+            "topic": "Usage test",
+            "character_id": "narrator",
+            "workflow": "workflows/image/usage-test.json",
+        },
+    )
+    assert job.status_code == 200, job.text
+
+    resp = client.get("/api/workflows/image/usage-test.json/usage")
+    assert resp.status_code == 200, resp.text
+    usage = resp.json()
+    assert usage["workflow"] == "workflows/image/usage-test.json", usage
+    assert usage["total_characters"] == 1, usage
+    assert usage["characters"][0]["character_id"] == "narrator", usage
+    assert usage["total_jobs"] >= 1, usage
+
+
+
 def test_workflow_delete_conflict_structured_409(tmp_path, monkeypatch):
     from core import state
     from core.api import job_helpers

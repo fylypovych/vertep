@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..artifacts import register_artifact
-from ..file_validation import validate_signature
+from ..file_validation import validate_media_contract, validate_signature
 from ..models import (JobStatus, StageName, StageStatus, TaskClaim, TaskRenew,
                       TaskResult, utc_now)
 from ..orchestration import (all_scenes_ready, cancel_scene, fail_scene,
@@ -558,6 +558,21 @@ def task_result(result: TaskResult, request: Request):
         worker.update({"status": next_status, "current_job": None,
                        "current_task": None, "last_seen": utc_now()})
         store.save_worker(worker)
+    if result.cancelled:
+        # CORE already asked for this task to stop and the compute backend could
+        # not interrupt an executing prompt without harming other work.  The late
+        # result is a terminal cancellation: ack it, free the scene and never
+        # retry or fail the job for it.
+        task_queue.ack(result.task_id)
+        store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id},
+                                     "CANCELLED", result.node_name)
+        job.active_task_ids.pop(result.task_id, None)
+        job.active_task_id = None
+        job.assigned_worker = None
+        scene.task_id = None
+        scene.assigned_worker = None
+        cancel_scene(scene, result.error or "cancelled by CORE")
+        return store.event(job, f"{scene.scene_id} CANCELLED (late result discarded)")
     if not result.success:
         task_queue.ack(result.task_id)
         store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id}, "FAILED", result.node_name, result.error)
@@ -623,6 +638,12 @@ def task_result(result: TaskResult, request: Request):
             validate_signature(data, suffix)
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
+        expected_media = "video" if folder == "videos" else ("image" if folder == "images" else None)
+        if expected_media:
+            try:
+                validate_media_contract(artifact, data, expected=expected_media)
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from error
         filename = f"{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"{scene.scene_id}-{artifact_index:03d}{suffix}"
         image_path = store.root / job.job_id / folder / filename
         prepared_images.append((image_path, data))

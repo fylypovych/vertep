@@ -98,6 +98,27 @@ def _satisfies_locality(worker: dict, job: Job) -> bool:
     return required.issubset(tags)
 
 
+def role_runtime_blocks(worker: dict | str) -> bool:
+    """True when a locally deployed role contract is measured as not ready.
+
+    The role catalog in ``config/node_roles.json`` is only a declaration, so
+    dispatch additionally consults the measured per-role runtime status.  A role
+    that this installation claims to run (its own role or an additional role)
+    but whose runtime is measured ``OFFLINE``/``DEGRADED`` must not keep
+    attracting work.  Roles without evidence stay dispatchable: the per-node
+    self-test guard remains the authoritative runtime gate.
+    """
+    from .role_runtime import role_blocks_dispatch
+
+    role = worker if isinstance(worker, str) else worker.get("role")
+    if not role:
+        return False
+    try:
+        return role_blocks_dispatch(str(role))
+    except Exception:
+        return False
+
+
 def available_worker(workers: list[dict], job: Job, task_type: str | None = None, min_vram_mb: int | None = None,
                      voice_requirements: dict | None = None) -> dict | None:
     now = datetime.now(timezone.utc)
@@ -115,6 +136,8 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
         if require_self_test and not tested_capabilities:
             continue
         if require_self_test and not runtime_ready(worker):
+            continue
+        if role_runtime_blocks(worker):
             continue
         available_vram = worker.get("free_vram_mb")
         if available_vram is None:

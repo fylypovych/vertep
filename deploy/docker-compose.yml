@@ -138,6 +138,8 @@ services:
       REGISTRATION_TOKEN: "${REGISTRATION_TOKEN:-}"
       CORE_CA_PATH: "${CORE_CA_PATH:-}"
       NODE_CONFIG_PATH: /data/config/node-credentials.json
+      WORKFLOWS_ROOT: /data/storage/workflows
+      MODELS_ROOT: /data/models
       COMFYUI_URL: http://comfyui:8188
       COMFYUI_HEALTH_URL: http://comfyui:8188/system_stats
       OLLAMA_URL: http://ollama:11434
@@ -156,7 +158,10 @@ services:
     restart: unless-stopped
   comfyui:
     image: ${VERTEP_COMFYUI_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/comfyui:${VERTEP_VERSION}}
-    volumes: ["./models:/data/models", "./storage:/data/output"]
+    # The pinned runtime inventory is mounted so the node can verify the ComfyUI
+    # build and its custom nodes against the workflow/model checksums it serves.
+    volumes: ["./models:/data/models", "./storage:/data/output", "./storage:/data/workflows:ro",
+              "./config:/data/config:ro"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8188/system_stats"]
       interval: 20s

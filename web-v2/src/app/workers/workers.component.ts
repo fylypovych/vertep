@@ -42,6 +42,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                 <th class="px-4 py-3">Роль</th>
                 <th class="px-4 py-3">Можливості</th>
                 <th class="px-4 py-3">Статус</th>
+                <th class="px-4 py-3">Runtime</th>
                 <th class="px-4 py-3">Навантаження</th>
                 <th class="px-4 py-3">Дії</th>
               </tr>
@@ -55,6 +56,21 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                    </td>
                   <td class="px-4 py-3">{{ nodeRoleLabel(worker.role) }}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
+                  <td class="px-4 py-3">
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
+                      [class.bg-emerald-50]="runtimeStatusLabel(worker.runtime_status) === 'Готовий'"
+                      [class.text-emerald-700]="runtimeStatusLabel(worker.runtime_status) === 'Готовий'"
+                      [class.bg-amber-50]="runtimeStatusLabel(worker.runtime_status) === 'Очікує self-test'"
+                      [class.text-amber-700]="runtimeStatusLabel(worker.runtime_status) === 'Очікує self-test'"
+                      [class.bg-slate-100]="!['Готовий', 'Очікує self-test'].includes(runtimeStatusLabel(worker.runtime_status))"
+                      [class.text-slate-600]="!['Готовий', 'Очікує self-test'].includes(runtimeStatusLabel(worker.runtime_status))"
+                      [attr.data-testid]="'worker-runtime-status-' + worker.node_id">
+                      {{ runtimeStatusLabel(worker.runtime_status) }}
+                    </span>
+                    @if (worker.last_self_test_at) {
+                      <div class="text-xs text-slate-400 mt-0.5">self-test: {{ worker.last_self_test_at }}</div>
+                    }
+                  </td>
                   <td class="px-4 py-3">
                     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
                       [class.bg-emerald-50]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
@@ -74,7 +90,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                   </td>
                 </tr>
               } @empty {
-                <tr><td colspan="6" class="px-4 py-6 text-center text-slate-500" data-testid="workers-empty">Воркерів не знайдено</td></tr>
+                <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500" data-testid="workers-empty">Воркерів не знайдено</td></tr>
               }
             </tbody>
           </table>
@@ -260,6 +276,17 @@ export class WorkersComponent implements OnInit {
 
   nodeRoleLabel(role: string): string { return roleLabel(role); }
   nodeStatusLabel(status: string): string { return workerStatusLabel(status); }
+  runtimeStatusLabel(runtimeStatus: string | undefined): string {
+    switch (runtimeStatus) {
+      case 'ONLINE': return 'Готовий';
+      case 'DEGRADED': return 'Деградує';
+      case 'OFFLINE': return 'Недоступний';
+      case 'PENDING_SELF_TEST': return 'Очікує self-test';
+      case 'UPDATING': return 'Оновлюється';
+      case 'REVOKED': return 'Відкликаний';
+      default: return 'Невідомо';
+    }
+  }
   nodeLoad(worker: Worker): string {
     const value = worker.gpu_load ?? worker.cpu_load;
     return value == null ? 'Немає даних' : `${value}%`;

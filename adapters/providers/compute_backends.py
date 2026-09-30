@@ -25,7 +25,7 @@ from pathlib import Path
 
 from .base import ComputeProvider
 from ._http import check_response as _check
-from ..comfyui import _substitute_placeholders
+from ..comfyui import PromptCancelledError, _substitute_placeholders
 from publishers.transport import HttpTransport
 
 class ComfyUIDistributedProvider(ComputeProvider):
@@ -58,6 +58,9 @@ class ComfyUIDistributedProvider(ComputeProvider):
         self._poll_interval = poll_interval
         self._timeout = timeout
         self.current_prompt_id: str | None = None
+        # Prompts that could not be removed from the queue one by one.  Their late
+        # result is rejected instead of being reported as a success.
+        self._abandoned_prompts: set[str] = set()
 
     @property
     def provider(self) -> str:
@@ -78,22 +81,14 @@ class ComfyUIDistributedProvider(ComputeProvider):
         p = Path(workflow_path)
         if p.is_absolute():
             path = p.resolve()
+        elif p.parts and p.parts[0] == "workflows":
+            path = (workflow_root / Path(*p.parts[1:])).resolve()
         else:
-            if p.parts and p.parts[0] == "workflows":
-                cand1 = (workflow_root / Path(*p.parts[1:])).resolve()
-                cand2 = (workflow_root.parent / p).resolve()
-                cand3 = (workflow_root / p).resolve()
-                path = cand1 if cand1.exists() else (cand2 if cand2.exists() else cand1)
-            else:
-                path = (workflow_root / p).resolve()
+            path = (workflow_root / p).resolve()
         if path != workflow_root and workflow_root not in path.parents and not (workflow_root.name == "workflows" and workflow_root.parent in path.parents):
             raise ValueError("Workflow path escapes WORKFLOWS_ROOT")
         if not path.exists():
-            fallback = (Path("workflows") / (Path(*p.parts[1:]) if p.parts and p.parts[0] == "workflows" else p)).resolve()
-            if fallback.exists() and (Path("workflows").resolve() in fallback.parents or fallback == Path("workflows").resolve()):
-                path = fallback
-            else:
-                raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
+            raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
         # Substitute inside the parsed workflow structure so arbitrary ``topic``
         # values (newlines/backslashes/quotes/Unicode) cannot corrupt JSON.
         return _substitute_placeholders(json.loads(path.read_text(encoding="utf-8")), {
@@ -130,6 +125,8 @@ class ComfyUIDistributedProvider(ComputeProvider):
             result = self._wait_for_result(prompt_id)
         finally:
             self.current_prompt_id = None
+            if prompt_id not in self._abandoned_prompts:
+                self._abandoned_prompts.discard(prompt_id)
 
         output_keys = ("images",) if task_type == "image" else ("videos", "gifs")
         for node in result.get("outputs", {}).values():
@@ -152,6 +149,8 @@ class ComfyUIDistributedProvider(ComputeProvider):
     def _wait_for_result(self, prompt_id: str) -> dict:
         deadline = time.monotonic() + self._timeout
         while time.monotonic() < deadline:
+            if prompt_id in self._abandoned_prompts:
+                raise PromptCancelledError(f"ComfyUI prompt was cancelled: {prompt_id}")
             response = self._transport.get(
                 f"{self._url}/history/{prompt_id}",
                 headers=self._headers(),
@@ -159,21 +158,38 @@ class ComfyUIDistributedProvider(ComputeProvider):
             )
             _check(response)
             history = response.json()
+            if prompt_id in self._abandoned_prompts:
+                raise PromptCancelledError(f"ComfyUI prompt was cancelled: {prompt_id}")
             if prompt_id in history:
                 return history[prompt_id]
             time.sleep(self._poll_interval)
         raise TimeoutError(f"ComfyUI prompt timed out: {prompt_id}")
 
     def cancel(self) -> bool:
+        """Cancel only this provider's own prompt; never the whole backend.
+
+        ``/interrupt`` is backend-wide and would abort prompts owned by other jobs
+        and other workers, so it is not used as a fallback.  A prompt that is
+        already executing is abandoned and its late result is rejected.
+        """
+        prompt_id = self.current_prompt_id
         if not self._url:
             return False
+        if not prompt_id:
+            return True
+        self.current_prompt_id = None
+        self._abandoned_prompts.add(prompt_id)
         try:
-            response = self._transport.post(
-                f"{self._url}/interrupt",
+            response = self._transport.delete(
+                f"{self._url}/queue",
+                params={"prompt_id": prompt_id},
                 headers=self._headers(),
                 timeout=10,
             )
             _check(response)
-            return True
         except Exception:  # noqa: BLE001
             return False
+        # The proxy answers 200 even when the prompt had already started executing, so
+        # the prompt stays abandoned either way: a removal that worked makes the waiter
+        # stop, and a removal that did not must not deliver a late result as success.
+        return True

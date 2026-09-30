@@ -7,6 +7,7 @@ of ``ComfyUIDistributedProvider`` against a ``FakeTransport`` (no network).
 import httpx
 import pytest
 
+from adapters.comfyui import PromptCancelledError
 from adapters.providers import (
     ComfyUIDistributedProvider,
     DefaultComputeProvider,
@@ -152,11 +153,64 @@ def test_distributed_api_error_surfaces_http_code(monkeypatch, tmp_path):
     assert "proxy down" in str(exc.value)
 
 
-def test_distributed_cancel_posts_interrupt():
+def test_distributed_cancel_is_prompt_scoped():
     fake = FakeTransport([httpx.Response(200, json={})])
     provider = ComfyUIDistributedProvider(url="http://proxy:8188", transport=fake)
+    provider.current_prompt_id = "prompt-42"
     assert provider.cancel() is True
-    assert fake.requests[0][1].endswith("/interrupt")
+    assert fake.requests[0][0] == "DELETE"
+    assert fake.requests[0][1].endswith("/queue")
+    # A backend-wide stop would abort prompts owned by other jobs and workers.
+    assert not any(request[1].endswith("/interrupt") for request in fake.requests)
+    assert provider.current_prompt_id is None
+    assert "prompt-42" in provider._abandoned_prompts
+
+
+def test_distributed_cancel_without_prompt_does_nothing(fake=None):
+    fake = FakeTransport([])
+    provider = ComfyUIDistributedProvider(url="http://proxy:8188", transport=fake)
+    assert provider.cancel() is True
+    assert fake.requests == []
+
+
+def test_distributed_cancel_failure_reports_false():
+    fake = FakeTransport([httpx.Response(500, text="boom")])
+    provider = ComfyUIDistributedProvider(url="http://proxy:8188", transport=fake)
+    provider.current_prompt_id = "prompt-42"
+    assert provider.cancel() is False
+    # Even a failed removal must not let a late result be reported as success.
+    assert "prompt-42" in provider._abandoned_prompts
+
+
+def test_distributed_late_result_after_cancel_is_rejected():
+    """A queued prompt that is cancelled while executing must not yield an artifact.
+
+    ComfyUI answers ``DELETE /queue`` with 200 even for a prompt that already
+    started, so the provider keeps it abandoned and rejects the result that
+    arrives afterwards.
+    """
+    finished = {
+        "prompt-42": {
+            "outputs": {
+                "9": {"images": [{"filename": "out.png", "subfolder": "", "type": "output"}]}
+            }
+        }
+    }
+    fake = FakeTransport([
+        httpx.Response(200, json={}),                       # DELETE /queue
+        httpx.Response(200, json=finished),                 # late history read
+        httpx.Response(200, content=b"png-bytes"),           # would be fetched as an image
+    ])
+    provider = ComfyUIDistributedProvider(url="http://proxy:8188", transport=fake)
+    provider.current_prompt_id = "prompt-42"
+
+    assert provider.cancel() is True
+    assert provider.current_prompt_id is None
+
+    with pytest.raises(PromptCancelledError):
+        provider._wait_for_result("prompt-42")
+    # The rejected result was never downloaded.
+    assert not any("/view" in request[1] for request in fake.requests)
 
 
 def test_registry_compute_is_swappable():

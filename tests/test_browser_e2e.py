@@ -2,6 +2,7 @@
 """Browser E2E smoke tests for Vertep Web UI V2."""
 import json
 import os
+import re
 import socket
 import sys
 from pathlib import Path
@@ -428,7 +429,7 @@ def test_settings_security_shows_effective_checks_and_remediation():
                 "integrations": [{"name": "publisher:telegram", "status": "not_configured"}],
             },
         }))
-        page.route("**/api/security/certificates*", lambda route: route.fulfill(json={"certificates": []}))
+        page.route("**/api/system/certificates*", lambda route: route.fulfill(json={"certificates": []}))
 
         page.goto(f"{BASE_URL}/settings?tab=security")
         section = page.locator("[data-testid='settings-security']")
@@ -477,7 +478,7 @@ def test_settings_security_renders_ok_state():
                 "integrations": [],
             },
         }))
-        page.route("**/api/security/certificates*", lambda route: route.fulfill(json={"certificates": []}))
+        page.route("**/api/system/certificates*", lambda route: route.fulfill(json={"certificates": []}))
 
         page.goto(f"{BASE_URL}/settings?tab=security")
         section = page.locator("[data-testid='settings-security']")
@@ -836,6 +837,322 @@ def test_workflows_page_loads():
         browser.close()
 
 
+# Реальна форма payload, яку повертає WorkflowRegistry.list() — містить `type`,
+# а не `kind`. Мокати `kind` тут не можна: це маскувало б розбіжність контракту.
+WORKFLOW_LIST_ITEM = {
+    "type": "image",
+    "name": "demo.json",
+    "path": "workflows/image/demo.json",
+    "valid": True,
+    "errors": [],
+    "warnings": [],
+    "schema": {
+        "node_count": 1,
+        "node_types": ["KSampler"],
+        "has_placeholders": ["TOPIC"],
+        "estimated_vram_mb": 0,
+    },
+}
+
+WORKFLOW_DOCUMENT = {
+    "workflow": {"n1": {"class_type": "KSampler", "inputs": {"seed": 42, "model": "sd.json"}}},
+    "validation": {
+        "valid": True,
+        "errors": [],
+        "warnings": [],
+        "schema": {
+            "node_count": 1,
+            "node_types": ["KSampler"],
+            "has_placeholders": [],
+            "estimated_vram_mb": 0,
+        },
+    },
+    "meta": {"updated_at": "2026-09-30T00:00:00+00:00"},
+}
+
+WORKFLOW_FORM_SCHEMA = {
+    "type": "image",
+    "kind": "image",
+    "name": "demo.json",
+    "validation": WORKFLOW_DOCUMENT["validation"],
+    "form_fields": [
+        {"node_id": "n1", "input_name": "seed", "current_value": 42, "type": "int", "class_type": "KSampler"},
+        {"node_id": "n1", "input_name": "model", "current_value": "sd.json", "type": "str", "class_type": "KSampler"},
+    ],
+    "schema": {
+        "placeholders": [],
+        "node_types": ["KSampler"],
+        "node_count": 1,
+        "editable_inputs": [
+            {"node_id": "n1", "input_name": "seed", "current_value": 42, "type": "int", "class_type": "KSampler"},
+            {"node_id": "n1", "input_name": "model", "current_value": "sd.json", "type": "str", "class_type": "KSampler"},
+        ],
+    },
+}
+
+WORKFLOW_USAGE = {
+    "workflow": "workflows/image/demo.json",
+    "jobs": [{"job_id": "2026-000001", "topic": "Usage", "status": "SCRIPT_QUEUED"}],
+    "characters": [{"character_id": "narrator", "field": "generation"}],
+    "total_jobs": 1,
+    "total_characters": 1,
+}
+
+
+def _mock_workflow_registry(page, list_items=None, usage=None, versions=None, capture=None, put_status=200, put_json=None):
+    """Мокує workflow registry реальними формами payload від WorkflowRegistry."""
+    items = list_items if list_items is not None else [WORKFLOW_LIST_ITEM]
+    usage_payload = usage if usage is not None else WORKFLOW_USAGE
+    versions_payload = versions if versions is not None else [
+        {"version": 1, "archived_at": "2026-09-29T10:00:00+00:00", "deleted": False, "size_bytes": 128},
+    ]
+
+    def handler(route):
+        url = route.request.url
+        method = route.request.method
+        if method == "POST" and "/api/workflows/validate" in url:
+            body = route.request.post_data or "{}"
+            try:
+                payload = json.loads(body)
+            except ValueError:
+                return route.fulfill(json={
+                    "valid": False, "errors": ["Невалідний формат JSON"], "warnings": [],
+                    "schema": {"node_count": 0, "node_types": [], "has_placeholders": []},
+                })
+            if not isinstance(payload, dict) or not payload:
+                errors = ["Workflow must be a non-empty object"]
+            else:
+                errors = [
+                    f"Node {node_id} has no class_type"
+                    for node_id, node in payload.items()
+                    if not isinstance(node, dict) or not node.get("class_type")
+                ]
+            return route.fulfill(json={
+                "valid": not errors,
+                "errors": errors,
+                "warnings": [],
+                "schema": {
+                    "node_count": len(payload) if isinstance(payload, dict) else 0,
+                    "node_types": ["KSampler"],
+                    "has_placeholders": ["TOPIC"],
+                    "estimated_vram_mb": 0,
+                },
+            })
+        if method == "DELETE":
+            if "force=true" in url:
+                return route.fulfill(json={"deleted": "workflows/image/demo.json", "dependencies": None, "archived": True})
+            return route.fulfill(
+                status=409,
+                json={"detail": {
+                    "message": "Робочий процес використовується у: персонаж narrator",
+                    "error_code": "WORKFLOW_IN_USE",
+                    "usage": {"jobs": usage_payload["jobs"], "characters": usage_payload["characters"]},
+                }},
+            )
+        if method == "PUT":
+            if capture is not None:
+                capture.append({
+                    "url": url,
+                    "body": json.loads(route.request.post_data or "{}"),
+                })
+            if put_status != 200:
+                return route.fulfill(status=put_status, json=put_json or {"detail": "Workflow already exists and is valid. Use force=true to overwrite."})
+            return route.fulfill(json=put_json or {"type": "image", "name": "demo.json", "valid": True, "validation": WORKFLOW_DOCUMENT["validation"]})
+        if url.endswith("/form"):
+            return route.fulfill(json=WORKFLOW_FORM_SCHEMA)
+        if url.endswith("/usage"):
+            return route.fulfill(json=usage_payload)
+        if "/versions/" in url:
+            return route.fulfill(json=versions_payload)
+        if url.endswith("/versions"):
+            return route.fulfill(json=versions_payload)
+        if url.rstrip("/").endswith("/api/workflows/image/demo.json"):
+            return route.fulfill(json=WORKFLOW_DOCUMENT)
+        return route.fulfill(json=items)
+
+    page.route("**/api/workflows**", handler)
+
+
+def test_workflows_list_renders_type_from_backend_payload():
+    """Backend віддає `type`, Angular має показати колонку «Тип» і usage graph."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page)
+        page.goto(f"{BASE_URL}/workflows")
+        expect(page.locator("[data-testid='workflows-page']")).to_be_visible()
+        table = page.locator("[data-testid='workflows-table']")
+        expect(table).to_contain_text("demo.json")
+        expect(table.locator("tbody tr").first.locator("td").first).to_have_text("image")
+        expect(page.locator("[data-testid='workflow-validation-status']").first).to_have_text("Валідний")
+        expect(table).to_contain_text("персонаж: narrator")
+        expect(table).to_contain_text("завдання: 2026-000001")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_editor_form_and_validation_report_tabs():
+    """Form-вкладка має реальні editable_inputs, звіт — серверну валідацію."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page)
+        page.goto(f"{BASE_URL}/workflows")
+        page.get_by_role("button", name="Редагувати").first.click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+        expect(editor.locator("textarea")).to_have_value(re.compile("KSampler"))
+
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        form_view = page.locator("[data-testid='workflow-form-view']")
+        expect(form_view).to_be_visible()
+        expect(form_view).to_contain_text("KSampler")
+        expect(form_view).to_contain_text("seed")
+        expect(form_view.locator("input")).to_have_count(2)
+
+        editor.get_by_role("button", name="Звіт валідації", exact=True).click()
+        report = page.locator("[data-testid='workflow-validation-report']")
+        expect(report).to_be_visible()
+        expect(report).to_contain_text("Сценарій валідний")
+        expect(report).to_contain_text("KSampler")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_form_control_edits_json_and_persists_with_immutable_identity():
+    """Типований контрол форми має оновлювати JSON і зберегатися з незмінною identity."""
+    captured = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page, capture=captured)
+        page.goto(f"{BASE_URL}/workflows")
+        page.get_by_role("button", name="Редагувати").first.click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        form_view = page.locator("[data-testid='workflow-form-view']")
+        expect(form_view).to_be_visible()
+        form_view.locator("input").nth(0).fill("1234")
+        form_view.locator("input").nth(1).fill("sdxl.json")
+
+        editor.get_by_role("button", name="JSON", exact=True).click()
+        expect(editor.locator("textarea")).to_have_value(re.compile(r'"seed": 1234'))
+        expect(editor.locator("textarea")).to_have_value(re.compile(r'"model": "sdxl.json"'))
+
+        editor.get_by_role("button", name="Зберегти").click()
+        expect(page.locator("[data-testid='workflow-editor-modal']")).to_be_hidden()
+
+        assert len(captured) == 1, f"expected exactly one PUT, got {captured}"
+        assert captured[0]["url"].endswith("/api/workflows/image/demo.json?force=true")
+        assert captured[0]["body"]["n1"]["inputs"]["seed"] == 1234
+        assert captured[0]["body"]["n1"]["inputs"]["model"] == "sdxl.json"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_create_rejects_duplicate_name_without_force():
+    """Створення з існуючим ім'ям не перезаписує файл мовчки (immutable create identity)."""
+    captured = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page, capture=captured, put_status=400)
+        page.goto(f"{BASE_URL}/workflows")
+        page.locator("[data-testid='create-workflow-button']").click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+        editor.locator("[data-testid='workflow-name-input']").fill("demo.json")
+        editor.locator("textarea").fill('{"n1": {"class_type": "KSampler", "inputs": {"seed": 1}}}')
+        editor.get_by_role("button", name="Зберегти").click()
+
+        # Модалка лишається відкритою: create не перезаписує файл мовчки.
+        expect(editor).to_be_visible()
+        assert len(captured) == 1, f"expected exactly one PUT, got {captured}"
+        assert captured[0]["url"].endswith("/api/workflows/image/demo.json"), captured[0]["url"]
+        assert "force=true" not in captured[0]["url"], "create must not send force"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_editor_validation_updates_from_server():
+    """Правка JSON має оновлювати звіт із серверного validate endpoint."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page)
+        page.goto(f"{BASE_URL}/workflows")
+        page.get_by_role("button", name="Редагувати").first.click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+        editor.get_by_role("button", name="Звіт валідації", exact=True).click()
+        expect(page.locator("[data-testid='workflow-validation-report']")).to_contain_text("Сценарій валідний")
+
+        editor.get_by_role("button", name="JSON", exact=True).click()
+        editor.locator("textarea").fill('{"n1": {"inputs": {}}}')
+        editor.get_by_role("button", name="Звіт валідації", exact=True).click()
+        report = page.locator("[data-testid='workflow-validation-report']")
+        expect(report).to_contain_text("Сценарій містить помилки")
+        expect(report).to_contain_text("no class_type")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_version_history_and_restore():
+    """Модалка історії показує версії та відновлює обрану."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page)
+        page.goto(f"{BASE_URL}/workflows")
+        page.get_by_role("button", name="Історія").first.click()
+        modal = page.locator("[data-testid='workflow-versions-modal']")
+        expect(modal).to_be_visible()
+        expect(modal).to_contain_text("Версія 1")
+        modal.get_by_role("button", name="Відновити").click()
+        expect(modal).to_be_hidden()
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_delete_conflict_shows_structured_usage():
+    """409 має відкривати модалку з usage і підтримувати force-видалення."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page)
+        page.goto(f"{BASE_URL}/workflows")
+        page.locator("[data-testid='workflows-table']").get_by_role("button", name="Видалити").first.click()
+        confirm_dialog = page.get_by_role("dialog", name="Видалити сценарій")
+        expect(confirm_dialog).to_be_visible()
+        confirm_dialog.get_by_role("button", name="Підтвердити").click()
+
+        conflict = page.locator("[data-testid='workflow-conflict-modal']")
+        expect(conflict).to_be_visible()
+        expect(conflict).to_contain_text("Конфлікт видалення (409)")
+        expect(conflict).to_contain_text("narrator")
+        expect(conflict).to_contain_text("2026-000001")
+        conflict.get_by_role("button", name="Видалити примусово").click()
+        expect(conflict).to_be_hidden()
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
 def test_brands_page_loads():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -925,9 +1242,16 @@ def test_settings_roles_shows_deployment_status():
         _mock_status(page, {"update": {"current_version": "0.0.1.99", "state": "IDLE"}})
         page.route("**/api/system/roles", lambda route: route.fulfill(json={
             "node_role": "core", "active_roles": [],
+            "role_runtime_status": {"core": "READY", "gpu": "DEGRADED", "text": "OFFLINE"},
             "available_roles": [
-                {"id": "gpu", "label": "GPU Node", "services": ["comfyui"], "capabilities": ["image_generation"]},
-                {"id": "text", "label": "Text Node", "services": ["ollama"], "capabilities": ["text_generation"]},
+                {"id": "gpu", "label": "GPU Node", "services": ["comfyui"],
+                 "capabilities": ["image_generation"], "runtime_status": "DEGRADED",
+                 "runtime_evidence": {"source": "nodes",
+                                       "nodes": [{"node_id": "gpu-01", "runtime_status": "OFFLINE",
+                                                  "heartbeat": "OFFLINE", "live": False}]}},
+                {"id": "text", "label": "Text Node", "services": ["ollama"],
+                 "capabilities": ["text_generation"], "runtime_status": "OFFLINE",
+                 "runtime_evidence": {"source": "nodes", "nodes": []}},
             ],
             "deployment": {"state": None, "error": None},
             "queued": False,
@@ -944,6 +1268,11 @@ def test_settings_roles_shows_deployment_status():
         page.locator("a[href='/settings?tab=roles']").click()
         expect(page).to_have_url(f"{BASE_URL}/settings?tab=roles")
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
+        # Measured runtime status per role contract must be rendered, not just declared.
+        expect(page.locator("[data-testid='role-runtime-status-list']")).to_be_visible()
+        expect(page.locator("[data-testid='role-status-core']")).to_have_text("READY")
+        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("DEGRADED")
+        expect(page.locator("[data-testid='role-status-text']")).to_have_text("OFFLINE")
         page.locator("nav a[href='/settings?tab=system']").click()
         expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()
         page.go_back()

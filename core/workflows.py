@@ -309,11 +309,28 @@ class WorkflowRegistry:
 
         return {
             "type": kind,
+            "kind": kind,
             "name": name,
             "validation": validation,
             "form_fields": form_fields,
-            "schema": validation["schema"],
+            "schema": {
+                "placeholders": validation["schema"]["has_placeholders"],
+                "node_types": validation["schema"]["node_types"],
+                "node_count": validation["schema"]["node_count"],
+                "editable_inputs": form_fields,
+            },
         }
+
+    def validate(self, workflow: Any) -> dict:
+        """Validate an unsaved workflow payload without touching the registry."""
+        if not isinstance(workflow, dict):
+            return {
+                "valid": False,
+                "errors": ["Workflow must be a JSON object"],
+                "warnings": [],
+                "schema": {"node_count": 0, "node_types": [], "has_placeholders": [], "estimated_vram_mb": 0},
+            }
+        return validate_workflow(workflow)
 
     def _archive_version(self, kind: str, name: str, workflow: dict, deleted: bool = False) -> None:
         versions_dir = self.root / kind / VERSION_DIR

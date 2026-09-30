@@ -60,7 +60,7 @@ def queue_image_storyboard(store, job: Job, storyboard_version: int, scene_index
 def handle_image_result(store, job: Job, task_id: str, success: bool, image_base64: str | None = None,
                         error: str | None = None, artifacts: list[dict] | None = None) -> Job:
     from .artifacts import register_artifact
-    from .file_validation import validate_signature
+    from .file_validation import validate_media_contract, validate_signature
     scene_id = job.image_storyboard_task_ids.get(task_id)
     if scene_id is None:
         return job
@@ -95,6 +95,7 @@ def handle_image_result(store, job: Job, task_id: str, success: bool, image_base
             except (binascii.Error, ValueError) as exc:
                 raise ValueError(f"Invalid base64: {exc}") from exc
             validate_signature(data, Path(fname).suffix.lower() or ".png")
+            validate_media_contract(item, data, expected="image")
             raw_images.append((fname, data))
     elif image_base64:
         try:

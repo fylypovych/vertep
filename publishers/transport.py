@@ -40,6 +40,18 @@ class HttpTransport:
     ) -> httpx.Response:
         return httpx.put(url, headers=headers, content=content, timeout=timeout)
 
+    def delete(
+        self,
+        url: str,
+        *,
+        params: dict | None = None,
+        headers: dict | None = None,
+        timeout: float = 120,
+    ) -> httpx.Response:
+        return httpx.delete(
+            url, params=params, headers=headers, timeout=timeout,
+        )
+
     def get(
         self,
         url: str,
@@ -79,3 +91,6 @@ class FakeTransport:
 
     def get(self, url: str, **kwargs) -> httpx.Response:
         return self._next("GET", url, kwargs)
+
+    def delete(self, url: str, **kwargs) -> httpx.Response:
+        return self._next("DELETE", url, kwargs)

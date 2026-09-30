@@ -1,4 +1,33 @@
+import hashlib
 import json
+
+MEDIA_CONTRACT_FORMAT = "media_contract/v1"
+IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/x-portable-pixmap"}
+VIDEO_MIME_TYPES = {"video/mp4", "video/webm", "video/quicktime"}
+
+
+def validate_media_contract(artifact: dict, data: bytes, *, expected: str) -> None:
+    """Verify a worker-supplied media contract against the received bytes.
+
+    A contract is optional, but when present it must be truthful: the declared
+    size, checksum and media kind are re-derived by CORE so a truncated, swapped
+    or mislabelled payload cannot be stored as a finished artifact.
+    ``expected`` is either ``"image"`` or ``"video"``.
+    """
+    contract = artifact.get("contract") or {}
+    if not contract:
+        return
+    if contract.get("format") != MEDIA_CONTRACT_FORMAT:
+        raise ValueError(f"Unsupported artifact contract: {contract.get('format')}")
+    if contract.get("size") != len(data):
+        raise ValueError("Artifact size does not match its contract")
+    if contract.get("sha256") != hashlib.sha256(data).hexdigest():
+        raise ValueError("Artifact checksum does not match its contract")
+    mime_type = contract.get("mime_type")
+    if expected == "image" and mime_type not in IMAGE_MIME_TYPES:
+        raise ValueError("Artifact contract declares a non-image payload")
+    if expected == "video" and mime_type not in VIDEO_MIME_TYPES:
+        raise ValueError("Artifact contract declares a non-video payload")
 
 
 def validate_signature(data: bytes, suffix: str) -> None:

@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { catchError } from 'rxjs/operators';
+import { catchError, map } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
 import { Character, Brand, Channel, Workflow, BrandCreateDTO, BrandUpdateDTO, ChannelCreateDTO, ChannelUpdateDTO, WorkflowSaveResponse, WorkflowDeleteResponse } from '../models';
 
@@ -23,7 +23,11 @@ export class ResourcesApiService {
   createChannel = (brandId: string, p: ChannelCreateDTO): Observable<Channel> => this.http.post<Channel>(`${this.base.url}/brands/${this.base.enc(brandId)}/channels`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   updateChannel = (channelId: string, p: ChannelUpdateDTO): Observable<Channel> => this.http.put<Channel>(`${this.base.url}/channels/${this.base.enc(channelId)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   deleteChannel = (channelId: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/channels/${this.base.enc(channelId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  workflows = (): Observable<Workflow[]> => this.http.get<Workflow[]>(`${this.base.url}/workflows`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  workflows = (): Observable<Workflow[]> => this.http.get<Workflow[]>(`${this.base.url}/workflows`, { headers: this.h() }).pipe(
+    catchError(this.base.handleError),
+    map((items) => (items || []).map((item): Workflow => ({ ...item, kind: item.kind || item.type || '' })))
+  );
+  validateWorkflow = (p: unknown): Observable<import('../models').WorkflowValidation> => this.http.post<import('../models').WorkflowValidation>(`${this.base.url}/workflows/validate`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   workflow = (kind: string, name: string): Observable<import('../models').WorkflowDocument> => this.http.get<import('../models').WorkflowDocument>(`${this.base.url}/workflows/${this.base.enc(kind)}/${this.base.enc(name)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   saveWorkflow = (kind: string, name: string, p: Record<string, unknown>, force = false): Observable<WorkflowSaveResponse> => this.http.put<WorkflowSaveResponse>(`${this.base.url}/workflows/${this.base.enc(kind)}/${this.base.enc(name)}${force ? '?force=true' : ''}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   deleteWorkflow = (kind: string, name: string, force = false): Observable<WorkflowDeleteResponse> => this.http.delete<WorkflowDeleteResponse>(`${this.base.url}/workflows/${this.base.enc(kind)}/${this.base.enc(name)}${force ? '?force=true' : ''}`, { headers: this.h() }).pipe(catchError(this.base.handleError));

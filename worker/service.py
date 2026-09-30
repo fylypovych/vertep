@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import httpx
+from adapters.comfyui import PromptCancelledError
+from adapters import comfyui_runtime
 from adapters.providers import providers
 from adapters.providers.base import ComputeProvider
 from core.gpu_profiles import gpu_profile
@@ -24,6 +26,20 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 logger = configure_logging("worker")
 pending_logs: list[dict] = []
+
+def verify_gpu_runtime_inventory() -> dict | None:
+    """Check the GPU node against its pinned ComfyUI runtime inventory.
+
+    Fail-closed: a missing inventory, a component that drifted from its pin or a
+    workflow/model whose checksum no longer matches must keep the node out of
+    dispatch, because an unpinned GPU runtime silently changes what Vertep
+    produces.  Returns ``None`` when no inventory is configured, which keeps a
+    bare development checkout working.
+    """
+    if not comfyui_runtime.inventory_path():
+        return None
+    return comfyui_runtime.verify_runtime(comfyui_runtime.installed_components())
+
 
 def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = None) -> dict:
     started = time.monotonic()
@@ -46,6 +62,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
         elif role == "gpu":
             if os.getenv("DEMO_MODE", "true").lower() != "true" and not metrics.get("gpu_available"):
                 raise RuntimeError("NVIDIA GPU/driver is unavailable")
+            verify_gpu_runtime_inventory()
             adapter = adapter or providers.compute()
             data, _, kind = adapter.generate_output(os.getenv("SELF_TEST_WORKFLOW", "workflows/image/demo.json"),
                                                      "Vertep worker self-test", "image")
@@ -362,15 +379,52 @@ def _ensure_csr(node_name: str, pki: Path, csr_path: Path | None = None) -> str:
     return csr.read_text(encoding="utf-8")
 
 
+def _enrollment_id(pki: Path) -> str:
+    """Return a stable, locally persisted enrollment id used as a retry key.
+
+    The key survives process restarts so a node whose enrollment response was
+    lost can retry idempotently instead of deadlocking on its own burned
+    single-use token.
+    """
+    path = pki / "enrollment.id"
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]{7,63}", existing):
+            return existing
+    except OSError:
+        pass
+    value = f"{node_id_slug()}-{secrets.token_hex(8)}"
+    pki.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(value, encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    return value
+
+
+def node_id_slug() -> str:
+    """Node id prefix used for the locally generated enrollment id."""
+    return re.sub(r"[^a-z0-9-]", "-", str(os.getenv("NODE_NAME", "vertep-node")).lower()).strip("-") or "vertep-node"
+
+
 def _retry_enrollment(client: httpx.Client, core: str, node_name: str, metrics: dict,
                      capabilities: list[str], config_path: Path | None = None) -> str:
     """Submit the enrollment request with bounded lost-response retry.
 
     Disposable nodes (single-use registration tokens, short-lived CSR) must not
     be lost because a transient transport failure arrived between the local key
-    generation and the Core acknowledgement.  Only transport-level failures are
-    retried: a rejected token, a malformed response or a permanent 4xx is surfaced
-    immediately so the operator sees the real problem instead of a retry loop.
+    generation and the Core acknowledgement.  Two failure classes are handled:
+
+    * transport-level failures and transient 5xx/429 are retried, because the
+      request may never have reached Core;
+    * a lost *response* — Core committed the enrollment but the answer never
+      arrived — is retried with the same ``enrollment_id`` idempotency key, so
+      Core re-issues credentials for this node instead of rejecting the burned
+      token.
+
+    A rejected token, a malformed response or any other permanent 4xx is
+    surfaced immediately so the operator sees the real problem instead of a
+    retry loop.
     """
     config_path = Path(config_path or os.getenv("NODE_CONFIG_PATH", "/data/config/node-credentials.json"))
     registration_token = os.getenv("REGISTRATION_TOKEN", "")
@@ -384,6 +438,7 @@ def _retry_enrollment(client: httpx.Client, core: str, node_name: str, metrics: 
     pki = config_path.parent / "pki"
     pki.mkdir(parents=True, exist_ok=True)
     csr = _ensure_csr(node_name, pki)
+    enrollment_id = _enrollment_id(pki)
 
     max_attempts = max(1, int(os.getenv("ENROLLMENT_RETRY_ATTEMPTS", "5")))
     base_delay = max(0.05, float(os.getenv("ENROLLMENT_RETRY_BASE_SECONDS", "0.5")))
@@ -393,6 +448,7 @@ def _retry_enrollment(client: httpx.Client, core: str, node_name: str, metrics: 
         try:
             response = client.post(f"{core}/api/nodes/register", json={
                 "registration_token": registration_token, "node_id": node_name,
+                "enrollment_id": enrollment_id,
                 "capabilities": capabilities, "version": os.getenv("VERTEP_VERSION", "unknown"),
                 "csr": csr,
                 "hardware": {**metrics, "ram_mb": memory_mb,
@@ -570,6 +626,14 @@ def execute_task(adapter: ComputeProvider, task: dict, node_name: str) -> dict:
                 "filename": artifacts[0]["filename"],
                 "image_base64": images[0]["image_base64"] if images else None,
                 "images": images, "artifacts": artifacts}
+    except PromptCancelledError as error:
+        # CORE requested the cancellation: this is a terminal, expected outcome and
+        # must not be reported as a failure (which would trigger a pointless retry
+        # of a scene the operator already abandoned).
+        logger.info("Task cancelled by CORE", extra={"job_id": task.get("job_id"), "node_name": node_name})
+        pending_logs.append({"level": "INFO", "message": str(error), "job_id": task.get("job_id")})
+        return {"job_id": task["job_id"], "task_id": task["task_id"], "node_name": node_name,
+                "success": False, "cancelled": True, "error": str(error)}
     except Exception as error:
         logger.exception("Worker task failed", extra={"job_id": task.get("job_id"), "node_name": node_name})
         pending_logs.append({"level": "ERROR", "message": str(error), "job_id": task.get("job_id")})

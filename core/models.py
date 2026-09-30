@@ -479,6 +479,10 @@ class TaskResult(BaseModel):
     image_base64: str | None = None
     filename: str = "scene-001.png"
     error: str | None = None
+    # Set by the worker when CORE had already cancelled the task and the compute
+    # backend could not stop an executing prompt one by one.  Such a result is a
+    # terminal cancellation, never a retryable failure.
+    cancelled: bool = False
     images: list[dict[str, Any]] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
 

@@ -169,7 +169,12 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
         # detail: a node that last reported PENDING_SELF_TEST / OFFLINE must
         # still carry that status in the listing even after its live record
         # goes offline, so dispatch never treats a stale record as ready.
-        item.setdefault("runtime_status", record.get("runtime_status"))
+        if record.get("runtime_status"):
+            item["runtime_status"] = record["runtime_status"]
+        else:
+            item.setdefault("runtime_status", None)
+        item["self_test_capabilities"] = record.get("self_test_capabilities") or []
+        item["last_self_test_at"] = record.get("last_self_test_at")
         item["update_state"] = {
             "desired_state": item.pop("desired_state", None),
             "update_target_version": item.pop("update_target_version", None),

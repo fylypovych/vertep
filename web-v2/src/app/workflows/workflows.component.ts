@@ -1,13 +1,33 @@
-import { Component, OnInit, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
+import { forkJoin, of } from 'rxjs';
+import { catchError, map } from 'rxjs/operators';
 import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
-import { Workflow, Character, WorkflowValidation, WorkflowVersion, WorkflowUsage, WorkflowFormSchema } from '../core/models';
+import { Workflow, WorkflowValidation, WorkflowVersion, WorkflowUsage, WorkflowFormSchema } from '../core/models';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
+
+function coerceInputValue(value: unknown, type?: string): unknown {
+  if (type === 'str') return String(value);
+  if (type === 'bool') {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    throw new Error('Логічне поле має містити true або false');
+  }
+  if (type === 'int' || type === 'float') {
+    const number = Number(value);
+    if (String(value).trim() === '' || !Number.isFinite(number)
+        || (type === 'int' && !Number.isInteger(number))) {
+      throw new Error(type === 'int' ? 'Поле має містити ціле число' : 'Поле має містити число');
+    }
+    return number;
+  }
+  return value;
+}
 
 @Component({
   selector: 'app-workflows',
@@ -96,7 +116,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
             </div>
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">Назва</label>
-              <input [(ngModel)]="editorForm.name" placeholder="наприклад, demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              <input [(ngModel)]="editorForm.name" data-testid="workflow-name-input" placeholder="наприклад, demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
             </div>
           </div>
 
@@ -108,7 +128,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               </div>
             } @else if (activeTab() === 'form') {
               <div class="space-y-4" data-testid="workflow-form-view">
-                @if (formSchema() && formSchema()!.schema.editable_inputs.length > 0) {
+                @if (formSchema() && (formSchema()!.schema.editable_inputs || []).length > 0) {
                   <h4 class="text-sm font-semibold text-slate-800">Редаговані входи нод</h4>
                   <div class="space-y-3">
                     @for (item of formSchema()!.schema.editable_inputs; track item.node_id + '_' + item.input_name) {
@@ -155,6 +175,8 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                     <div><span class="font-medium">Типи нод:</span> {{ validationReport()!.schema.node_types.join(', ') || '—' }}</div>
                     <div><span class="font-medium">Плейсхолдери:</span> {{ validationReport()!.schema.has_placeholders.join(', ') || '—' }}</div>
                   </div>
+                } @else if (!editorForm.content.trim()) {
+                  <div class="text-slate-500 py-6 text-center">Немає вмісту для валідації. Введіть JSON сценарію.</div>
                 } @else {
                   <div class="text-slate-500 py-6 text-center">Завантаження звіту валідації...</div>
                 }
@@ -240,7 +262,6 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 })
 export class WorkflowsComponent implements OnInit {
   workflows = signal<Workflow[]>([]);
-  usage = signal<Character[]>([]);
   loading = signal(false);
   error = signal<string | null>(null);
   saving = signal(false);
@@ -250,6 +271,8 @@ export class WorkflowsComponent implements OnInit {
   editorForm: { kind: string; name: string; content: string } = { kind: 'image', name: '', content: '' };
   validationReport = signal<WorkflowValidation | null>(null);
   formSchema = signal<WorkflowFormSchema | null>(null);
+  private validateTimer: ReturnType<typeof setTimeout> | null = null;
+  private originalContent = '';
 
   showVersions = signal(false);
   activeVersionWf: Workflow | null = null;
@@ -270,37 +293,48 @@ export class WorkflowsComponent implements OnInit {
     this.loadWorkflows();
   }
 
-  usageMap = computed(() => {
-    const map: Record<string, string[]> = {};
-    for (const char of this.usage()) {
-      const key = char.workflow;
-      if (key && key.startsWith('workflows/')) {
-        const ref = key.replace('workflows/', '');
-        const [kind, name] = ref.split('/');
-        const fullKey = kind + '/' + (name || '');
-        if (!map[fullKey]) map[fullKey] = [];
-        map[fullKey].push(char.name);
-      }
+  usageMap = signal<Record<string, string[]>>({});
+
+  loadUsageMap(items: Workflow[]): void {
+    if (items.length === 0) {
+      this.usageMap.set({});
+      return;
     }
-    return map;
-  });
+    forkJoin(
+      items.map((wf) =>
+        this.resources.workflowUsage(wf.kind, wf.name).pipe(
+          map((usage) => [wf.kind + '/' + wf.name, this.usageLabels(usage)] as const),
+          catchError(() => of([wf.kind + '/' + wf.name, [] as string[]] as const))
+        )
+      )
+    ).subscribe((entries) => this.usageMap.set(Object.fromEntries(entries)));
+  }
+
+  private usageLabels(usage: WorkflowUsage | null): string[] {
+    if (!usage) return [];
+    return [
+      ...usage.characters.map((char) => `персонаж: ${char.character_id}`),
+      ...usage.jobs.map((job) => `завдання: ${job.job_id}`),
+    ];
+  }
 
   loadWorkflows(): void {
     this.loading.set(true);
     this.error.set(null);
     this.resources.workflows().subscribe({
-      next: (wfs) => { this.workflows.set(wfs); this.loading.set(false); },
-      error: (err) => { this.error.set(err.message); this.loading.set(false); },
-    });
-    this.resources.characters().subscribe({
-      next: (chars) => this.usage.set(chars),
-      error: () => this.usage.set([]),
+      next: (wfs) => {
+        this.workflows.set(wfs);
+        this.loading.set(false);
+        this.loadUsageMap(wfs);
+      },
+      error: (err) => { this.error.set(err.message); this.loading.set(false); this.usageMap.set({}); },
     });
   }
 
   openEditor(): void {
     this.editingWf = null;
     this.editorForm = { kind: 'image', name: '', content: '' };
+    this.originalContent = '';
     this.activeTab.set('json');
     this.validationReport.set(null);
     this.formSchema.set(null);
@@ -310,10 +344,12 @@ export class WorkflowsComponent implements OnInit {
   editWorkflow(wf: Workflow): void {
     this.editingWf = wf;
     this.editorForm = { kind: wf.kind, name: wf.name, content: '' };
+    this.originalContent = '';
     this.activeTab.set('json');
     this.resources.workflow(wf.kind, wf.name).subscribe({
       next: (data) => {
         this.editorForm.content = JSON.stringify(data.workflow, null, 2);
+        this.originalContent = this.editorForm.content;
         this.validationReport.set(data.validation);
         this.showEditor.set(true);
         this.loadFormSchema(wf.kind, wf.name);
@@ -330,23 +366,32 @@ export class WorkflowsComponent implements OnInit {
   }
 
   onJsonChange(): void {
+    if (this.validateTimer) clearTimeout(this.validateTimer);
+    this.validateTimer = setTimeout(() => this.runValidation(), 250);
+  }
+
+  private runValidation(): void {
+    const raw = this.editorForm.content.trim();
+    if (!raw) {
+      this.validationReport.set(null);
+      return;
+    }
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(this.editorForm.content);
-      // Client-side quick check
-      this.validationReport.set({
-        valid: true,
-        errors: [],
-        warnings: [],
-        schema: { node_count: Object.keys(parsed).length, node_types: [], has_placeholders: [] }
-      });
+      parsed = JSON.parse(raw);
     } catch {
       this.validationReport.set({
         valid: false,
         errors: ['Невалідний формат JSON'],
         warnings: [],
-        schema: { node_count: 0, node_types: [], has_placeholders: [] }
+        schema: { node_count: 0, node_types: [], has_placeholders: [] },
       });
+      return;
     }
+    this.resources.validateWorkflow(parsed).subscribe({
+      next: (report) => this.validationReport.set(report),
+      error: (err) => this.toast.show(err.message || 'Помилка валідації', 'error'),
+    });
   }
 
   updateJsonFromForm(): void {
@@ -354,16 +399,18 @@ export class WorkflowsComponent implements OnInit {
     if (!schema) return;
     try {
       const parsed = JSON.parse(this.editorForm.content);
-      for (const item of schema.schema.editable_inputs) {
+      for (const item of schema.schema.editable_inputs || []) {
         if (parsed[item.node_id] && parsed[item.node_id].inputs) {
-          parsed[item.node_id].inputs[item.input_name] = item.current_value;
+          parsed[item.node_id].inputs[item.input_name] = coerceInputValue(item.current_value, item.type);
+          item.current_value = parsed[item.node_id].inputs[item.input_name];
         }
       }
       this.editorForm.content = JSON.stringify(parsed, null, 2);
-      this.onJsonChange();
-    } catch {
-      // ignore JSON parse error during visual update
+    } catch (error) {
+      this.toast.show(error instanceof Error ? error.message : 'Некоректне значення поля', 'error');
+      return;
     }
+    this.runValidation();
   }
 
   viewVersions(wf: Workflow): void {
@@ -390,19 +437,30 @@ export class WorkflowsComponent implements OnInit {
     });
   }
 
-  closeEditor(): void {
-    if (this.hasUnsavedChanges()) {
+  closeEditor(saved = false): void {
+    if (!saved && this.hasUnsavedChanges()) {
       if (!confirm('Є незбережені зміни. Закрити без збереження?')) return;
     }
+    this.cancelPendingValidation();
     this.showEditor.set(false);
     this.editingWf = null;
     this.editorForm = { kind: 'image', name: '', content: '' };
+    this.validationReport.set(null);
+    this.formSchema.set(null);
+    this.activeTab.set('json');
+  }
+
+  private cancelPendingValidation(): void {
+    if (this.validateTimer) {
+      clearTimeout(this.validateTimer);
+      this.validateTimer = null;
+    }
   }
 
   hasUnsavedChanges(): boolean {
     if (!this.editorForm.name.trim() && !this.editorForm.content.trim()) return false;
     if (this.editingWf) {
-      return this.editorForm.content.trim() !== JSON.stringify(this.editingWf, null, 2).trim();
+      return this.editorForm.content.trim() !== (this.originalContent || '').trim();
     }
     return this.editorForm.name.trim().length > 0 || this.editorForm.content.trim().length > 0;
   }
@@ -425,7 +483,7 @@ export class WorkflowsComponent implements OnInit {
     if (this.editingWf) {
       this.resources.saveWorkflow(this.editingWf.kind, this.editingWf.name, content, true).subscribe({
         next: () => {
-          this.closeEditor();
+          this.closeEditor(true);
           this.loadWorkflows();
           this.saving.set(false);
           this.toast.show('Сценарій збережено', 'success');
@@ -435,7 +493,7 @@ export class WorkflowsComponent implements OnInit {
     } else {
       this.resources.saveWorkflow(this.editorForm.kind, this.editorForm.name, content).subscribe({
         next: () => {
-          this.closeEditor();
+          this.closeEditor(true);
           this.loadWorkflows();
           this.saving.set(false);
           this.toast.show('Сценарій створено', 'success');
@@ -451,15 +509,16 @@ export class WorkflowsComponent implements OnInit {
       this.resources.deleteWorkflow(wf.kind, wf.name).subscribe({
         next: () => { this.loadWorkflows(); this.toast.show('Сценарій видалено', 'success'); },
         error: (err) => {
-          if (err.error && err.error.detail && typeof err.error.detail === 'object') {
-            const detail = err.error.detail;
+          const detail = (err as { detail?: { message?: string; usage?: WorkflowUsage } })?.detail;
+          if (detail && typeof detail === 'object' && detail.usage) {
             this.pendingDeleteWf = wf;
             this.conflictMessage.set(detail.message || 'Сценарій використовується');
-            this.conflictUsage.set(detail.usage || null);
+            this.conflictUsage.set(detail.usage);
             this.showConflictModal.set(true);
-          } else if (err.message?.includes('409')) {
+          } else if (err.status === 409) {
             this.pendingDeleteWf = wf;
-            this.conflictMessage.set('Сценарій використовується у персонажах або завданнях');
+            this.conflictMessage.set(detail?.message || err.message || 'Сценарій використовується у персонажах або завданнях');
+            this.conflictUsage.set(null);
             this.showConflictModal.set(true);
           } else {
             this.toast.show(err.message || 'Помилка видалення', 'error');

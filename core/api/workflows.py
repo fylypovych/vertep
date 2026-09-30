@@ -1,8 +1,9 @@
 """Workflow CRUD routes for the Vertep CORE web application."""
 import os
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from ..configuration import read_json
 from .. import state
@@ -18,6 +19,11 @@ router = APIRouter()
 @router.get("/api/workflows")
 def workflows():
     return workflow_registry().list()
+
+
+@router.post("/api/workflows/validate")
+def validate_workflow_payload(payload: Any = Body(...)):
+    return workflow_registry().validate(payload)
 
 
 @router.get("/api/workflows/{kind}/{name}")

@@ -102,28 +102,53 @@ def runtime_inventory(root: Path, compose: list[str], selected: set[str], role: 
     return inventory
 
 
+def compose_rows(compose: list[str], selected: set[str], runner=subprocess.run) -> list[dict]:
+    """Return the raw compose inventory rows for the selected services."""
+    result = runner([*compose, "ps", "--format", "json"], check=True, timeout=120,
+                    capture_output=True, text=True)
+    rows = []
+    output = getattr(result, "stdout", "") or ""
+    for line in output.splitlines():
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if item.get("Service") in selected:
+            rows.append(item)
+    return rows
+
+
+def assert_migrate_evidence(rows: list[dict]) -> None:
+    """Require a present ``migrate`` record before a deployment may be called healthy.
+
+    An absent ``migrate`` container is *not* evidence of success: the migration
+    either never ran or its record was lost.  A present record is then judged on
+    its exit state by the regular health checks.
+    """
+    if not any(item.get("Service") == "migrate" for item in rows):
+        raise RuntimeError("Migration evidence is missing: the 'migrate' service did not run")
+
+
 def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.run,
                      timeout_seconds: int = 600) -> None:
     deadline = time.monotonic() + timeout_seconds
     required_running = selected - {"migrate"}
+    migrate_confirmed = False
     while True:
-        result = runner([*compose, "ps", "--format", "json"], check=True, timeout=120,
-                        capture_output=True, text=True)
-        output = getattr(result, "stdout", "") or ""
-        rows = []
-        for line in output.splitlines():
-            try:
-                item = json.loads(line)
-            except ValueError:
-                continue
-            if item.get("Service") in selected:
-                rows.append(item)
+        rows = compose_rows(compose, selected, runner)
         if not rows:
             raise RuntimeError("Compose inventory is empty or malformed")
         found_services = {item.get("Service") for item in rows}
         missing = required_running - found_services
         if missing:
             raise RuntimeError("Missing services in inventory: " + ", ".join(sorted(missing)))
+        if "migrate" in selected and not migrate_confirmed:
+            # Fail-closed: no successful migration record means the deployment
+            # is not proven, regardless of how healthy the long-running services
+            # look.  Roles that do not run migrations (GPU/Text/Voice) are not
+            # required to publish one.
+            assert_migrate_evidence(rows)
+            migrate_confirmed = True
         ready = {item.get("Service") for item in rows
                  if ((item.get("State") == "running" and item.get("Health") == "healthy")
                      or (item.get("Service") == "migrate" and item.get("State") == "exited" and item.get("ExitCode", 0) == 0))}
@@ -153,26 +178,97 @@ def _restore_runtime(compose: list[str], previous_services: set[str], new_servic
     never mask the original deployment error.
 
     The returned record always describes what was attempted and whether the
-    restarted runtime set was explicitly re-verified healthy.  It never raises:
-    the caller decides how to surface rollback problems alongside the original
-    deployment failure.
+    restored runtime set was explicitly re-verified healthy *and* confirmed to
+    match the previous set.  It never raises: the caller decides how to surface
+    rollback problems alongside the original deployment failure.
     """
     superseded = sorted(new_services - previous_services)
-    result = {"restored": False, "health_verified": False,
+    result = {"restored": False, "health_verified": False, "runtime_set_verified": False,
+              "expected_services": sorted(previous_services),
+              "observed_services": [], "missing_services": [],
               "restarted": sorted(previous_services), "removed": superseded, "errors": []}
     try:
         if previous_services:
             runner([*compose, "up", "-d", *sorted(previous_services)],
                    check=False, timeout=900)
-            wait_for_healthy(compose, previous_services, runner, timeout_seconds=120)
-            result["health_verified"] = True
+        # Superseded services are removed *before* verification so the observed
+        # runtime set can be compared against the previous one.
         if superseded:
             runner([*compose, "stop", *superseded], check=False, timeout=600)
             runner([*compose, "rm", "-f", *superseded], check=False, timeout=600)
+        if not previous_services:
+            # Nothing was running before the failed apply: the honest proof is
+            # that the leftover new set is gone, not a health check.
+            observed = {item.get("Service") for item in compose_rows(compose, set(new_services), runner)}
+            result["observed_services"] = sorted(observed)
+            still_running = sorted(observed & set(superseded))
+            result["runtime_set_verified"] = not still_running
+            if still_running:
+                raise RuntimeError("Rollback left services running: " + ", ".join(still_running))
+            result["health_verified"] = True
+            result["restored"] = True
+            return result
+        observed = {item.get("Service") for item in compose_rows(compose, set(previous_services), runner)}
+        result["observed_services"] = sorted(observed)
+        result["missing_services"] = sorted(previous_services - observed)
+        if result["missing_services"]:
+            raise RuntimeError("Restored runtime set is incomplete: "
+                               + ", ".join(result["missing_services"]))
+        wait_for_healthy(compose, previous_services, runner, timeout_seconds=120)
+        result["health_verified"] = True
+        result["runtime_set_verified"] = True
         result["restored"] = True
     except Exception as error:
         result["errors"].append(str(error))
     return result
+
+
+def _module_status(containers: list[dict], modules: list[str]) -> dict:
+    """Derive per-module status from the observed containers, never from the plan.
+
+    A module is ``DEGRADED`` when the service backing it is not running/healthy,
+    or when any observed container of the deployment is unhealthy.  It is
+    ``HEALTHY`` when its own service is running and healthy, or when the whole
+    observed runtime is healthy.  A module with no observed evidence is reported
+    as ``UNKNOWN`` instead of a fabricated ``HEALTHY``.
+    """
+    running = {item.get("service") for item in containers
+               if item.get("state") == "running" and item.get("health") in {"", "healthy"}}
+    degraded = {item.get("service") for item in containers
+                if item.get("health") == "unhealthy"
+                or (item.get("state") != "running" and item.get("service") != "migrate")}
+    runtime_ok = bool(running) and not degraded
+    status = {}
+    for module in modules:
+        if module in degraded:
+            status[module] = "DEGRADED"
+        elif module in running or runtime_ok:
+            status[module] = "HEALTHY"
+        else:
+            status[module] = "UNKNOWN"
+    return status
+
+
+def _refresh_inventory_after_rollback(root: Path, compose: list[str], selected: set[str],
+                                      role: str, version: str, runner=subprocess.run) -> None:
+    """Rewrite runtime-inventory.json from the runtime that is actually present."""
+    # Probe every service involved in the apply/rollback so the inventory
+    # describes the real runtime set instead of the failed new plan.
+    rows = compose_rows(compose, selected, runner)
+    containers = [{"service": item.get("Service"), "image": item.get("Image"),
+                   "state": item.get("State"), "health": item.get("Health") or ""}
+                  for item in rows]
+    previous = sorted(item.get("service") for item in containers if item.get("service"))
+    inventory = {"schema": 1, "version": version, "role": role,
+                 "generated_at": datetime.now(timezone.utc).isoformat(),
+                 "services": previous, "containers": containers,
+                 "runtime_set_verified": True, "after_rollback": True}
+    atomic_json(root / "config/runtime-inventory.json", inventory)
+    installation_path = root / "config/installation.json"
+    if installation_path.is_file():
+        installation = json.loads(installation_path.read_text(encoding="utf-8"))
+        installation["runtime"] = inventory
+        atomic_json(installation_path, installation)
 
 
 def apply(root: Path, runner=subprocess.run) -> dict:
@@ -272,12 +368,20 @@ def apply(root: Path, runner=subprocess.run) -> dict:
                    check=True, timeout=3600)
         wait_for_healthy(compose, selected, runner)
         inventory = runtime_inventory(root, compose, selected, role, version, runner)
+        # Set-equality: the observed runtime set must match the intended plan.
+        observed = {item["service"] for item in inventory["containers"]}
+        missing = selected - observed
+        if missing:
+            raise RuntimeError("Runtime set does not match the plan; missing services: "
+                               + ", ".join(sorted(missing)))
+        inventory["missing_services"] = sorted(missing)
+        inventory["runtime_set_verified"] = True
         unhealthy = [item["service"] for item in inventory["containers"]
                      if ((item["state"] != "running" and item["service"] != "migrate")
                          or item["health"] not in {"", "healthy"})]
         if unhealthy:
             raise RuntimeError("Selected services are not healthy: " + ", ".join(unhealthy))
-        inventory["modules"] = {name: "HEALTHY" for name in plan["modules"]}
+        inventory["modules"] = _module_status(inventory["containers"], plan["modules"])
         atomic_json(root / "config/runtime-inventory.json", inventory)
         installation_path = root / "config/installation.json"
         if installation_path.is_file():
@@ -295,12 +399,25 @@ def apply(root: Path, runner=subprocess.run) -> dict:
         if unwanted:
             runner([*compose, "stop", *unwanted], check=True, timeout=600)
             runner([*compose, "rm", "-f", *unwanted], check=True, timeout=600)
-        status.update({"state": "SUCCEEDED", "updated_at": datetime.now(timezone.utc).isoformat()})
+        status.update({"state": "SUCCEEDED", "updated_at": datetime.now(timezone.utc).isoformat(),
+                       "runtime_set_verified": True, "observed_services": sorted(observed)})
         atomic_json(root / "config/deployment-status.json", status)
         request_path.unlink()
         return status
     except Exception as error:
         rollback_result = restore()
+        # The on-disk inventory still describes the failed new service set, so
+        # it is regenerated from the restored runtime instead of being left to
+        # claim services that no longer exist.
+        if rollback_result.get("runtime_set_verified"):
+            try:
+                _refresh_inventory_after_rollback(
+                    root, compose, selected | set(rollback_result.get("expected_services", [])),
+                    role, version, runner)
+                rollback_result["inventory_refreshed"] = True
+            except Exception as inventory_error:  # pragma: no cover - defensive
+                rollback_result["inventory_refreshed"] = False
+                rollback_result["errors"].append(f"inventory refresh failed: {inventory_error}")
         status.update({"state": "FAILED", "error": str(error),
                        "updated_at": datetime.now(timezone.utc).isoformat()})
         status["rollback"] = rollback_result

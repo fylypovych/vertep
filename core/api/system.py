@@ -31,9 +31,13 @@ def recover_normal_operation():
 @router.get("/api/system/roles")
 def local_roles_status():
     from ..node_registry import node_roles
+    from ..role_runtime import role_runtime_matrix
     definitions = node_roles()
-    return {"roles": [{"id": r, "label": d.get("label", r)} for r, d in definitions.items()
-                       if r != "core" and isinstance(d, dict)]}
+    runtime = {item["role"]: item for item in role_runtime_matrix()}
+    return {"roles": [{"id": role, "label": (definitions.get(role) or {}).get("label", role),
+                       "runtime_status": (runtime.get(role) or {}).get("runtime_status", "UNKNOWN")}
+                      for role in definitions
+                      if role != "core" and isinstance(definitions.get(role), dict)]}
 
 
 @router.post("/api/system/roles")

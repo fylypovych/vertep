@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from adapters.comfyui import ComfyUIAdapter
 from core.dispatcher import available_worker, current_tested_capabilities
@@ -94,6 +95,41 @@ def test_scheduler_scores_healthy_candidates(monkeypatch):
     idle_gpu = {**common, "node_name": "gpu-idle", "vram_mb": 16000,
                 "free_vram_mb": 12000, "gpu_load": 10}
     assert available_worker([busy_gpu, idle_gpu], job())["node_name"] == "gpu-idle"
+
+
+def test_dispatch_skips_a_locally_deployed_broken_role(monkeypatch, tmp_path):
+    """A role this installation claims to run but whose runtime is measured broken
+    must not keep attracting work, even when the node itself looks healthy."""
+    from core import role_runtime
+    from core.first_run import config_root
+
+    monkeypatch.setenv("REQUIRE_WORKER_SELF_TEST", "true")
+    monkeypatch.setenv("NODE_ROLE", "core")
+    monkeypatch.setattr(role_runtime, "registered_nodes", lambda: [{
+        "node_id": "gpu-01", "role": "gpu", "status": "READY", "runtime_status": "OFFLINE",
+        "capabilities": ["image_generation"], "revoked_at": None}])
+    plan_path = Path(config_root()) / "deployment-plan.json"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps({"role": "core", "additional_roles": ["gpu"]}), encoding="utf-8")
+    monkeypatch.setattr(role_runtime, "store", role_runtime.store, raising=False)
+
+    now = datetime.now(timezone.utc)
+    healthy = {"node_name": "gpu-01", "node_id": "gpu-01", "status": "FREE",
+               "last_seen": now.isoformat(), "role": "gpu", "vram_mb": 16000,
+               "capabilities": ["image_generation"], "supported_workflows": ["*"],
+               "self_test": {"status": "PASSED", "role": "gpu", "checked_at": now.isoformat()},
+               "tested_capabilities": ["image_generation"], "runtime_status": "ONLINE"}
+    # The role contract is measured OFFLINE (node has no live registry state), so
+    # the healthy-looking heartbeat must not be dispatchable.
+    assert available_worker([healthy], job()) is None
+
+    # With the role contract healthy again the very same node is dispatchable.
+    monkeypatch.setattr(role_runtime, "registered_nodes", lambda: [{
+        "node_id": "gpu-01", "role": "gpu", "status": "READY", "runtime_status": "ONLINE",
+        "capabilities": ["image_generation"], "revoked_at": None}])
+    monkeypatch.setattr(role_runtime.store, "load_workers", lambda: [
+        {"node_id": "gpu-01", "status": "READY", "last_seen": now.isoformat()}], raising=False)
+    assert available_worker([healthy], job())["node_name"] == "gpu-01"
 
 
 def test_coordinated_update_request_is_idempotent(monkeypatch, tmp_path):

@@ -117,7 +117,7 @@ async def lifespan(_app):
             from .state import workflow_registry as _wr
             env_wf = os.getenv("WORKFLOWS_ROOT")
             if env_wf and str(_wr.root) != env_wf:
-                _wr.root = env_wf
+                _wr.root = Path(env_wf)
         except Exception:
             pass
         try:
@@ -2394,6 +2394,9 @@ def local_roles_status():
     request = _read_optional_json(config_root() / "deployment-request.json")
     active = plan.get("additional_roles", []) if plan.get("role") == "core" else []
     queued = bool(request)
+    # Measured runtime status per role contract, not a static declaration.
+    from .role_runtime import role_runtime_matrix
+    runtime = {item["role"]: item for item in role_runtime_matrix()}
     return {
         "node_role": plan.get("role") or installation().get("node_role") or "core",
         "active_roles": active,
@@ -2401,10 +2404,14 @@ def local_roles_status():
             {"id": role, "label": definition.get("label", role),
              "services": [service for service in definition.get("services", [])
                           if service not in {"worker", "update-agent"}],
-             "capabilities": definition.get("capabilities", [])}
+             "capabilities": definition.get("capabilities", []),
+             "modules": definition.get("modules", []),
+             "runtime_status": (runtime.get(role) or {}).get("runtime_status", "UNKNOWN"),
+             "runtime_evidence": (runtime.get(role) or {}).get("evidence", {})}
             for role, definition in definitions.items() if role != "core"
             and isinstance(definition, dict)
         ],
+        "role_runtime_status": {role: item["runtime_status"] for role, item in runtime.items()},
         "deployment": deployment,
         "queued": queued,
     }

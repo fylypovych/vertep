@@ -76,8 +76,8 @@ role catalog, capability filtering, bootstrap і First Run UI. Але жодне
 | Monitoring Node | Частково | Prometheus і Grafana заявлені з health checks; немає log store/collector, provisioned dashboards і alert rules. |
 | Backup Node | Частково | Backup service contract і storage read/write self-test є; snapshot/archive executor, remote retention і restore verification не завершені. |
 | Add Worker одноразовий token | Є базово | PostgreSQL atomic consume є. Потрібні token naming/audit, cancellation, explicit capability scope UI та rate limiting. |
-| Автоматична реєстрація | Є базово | CSR/mTLS/JWT, renewal, serial binding і CA-signed CRL із proxy enforcement працюють. Потрібні retry-safe enrollment та proxy failover/expiry integration tests. |
-| NAT/VPN outbound connection | Є архітектурно | Потрібні integration tests через NAT, proxy, clock skew, TLS renewal і Core failover. |
+| Автоматична реєстрація | Є базово | CSR/mTLS/JWT, renewal, serial binding і CA-signed CRL із proxy enforcement працюють; `enrollment_id` робить enroll retry-safe при втраченій відповіді, admin `rotate` інварідує облікові дані вузла. Потрібні proxy failover/expiry integration tests. |
+| NAT/VPN outbound connection | Частково | Напрямок з'єднань перевірено автоматично: `core/outbound_only.py` забороняє inbound-порти non-Core ролей у Compose-файлах. Ще потрібні реальні integration tests через NAT, proxy, clock skew, TLS renewal і Core failover. |
 | Capability-driven dispatch | Частково | Dispatcher використовує persisted `tested_capabilities`, вимагає свіжий role-matched self-test і відхиляє capability поза role allowlist. Ще потрібні model/module attestation, load score, locality та fair scheduling. |
 | Worker states | Частково | Є `WorkerState`, legal transitions та admin actions drain/resume/quarantine/unquarantine/self-test; ще потрібен окремий PostgreSQL transition audit. |
 | Worker health | Частково | Heartbeat має GPU, available RAM, disk, CPU load і runtime version; ще потрібні Docker/model status, latency та production role qualification. |
