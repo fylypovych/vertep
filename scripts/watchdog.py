@@ -63,8 +63,9 @@ def check_core_api(core_url: str) -> dict:
 
 
 def check_update_agent() -> dict:
-    from core.first_run import default_update_state_dir
-    state_dir = default_update_state_dir()
+    # This script runs on the host; CORE and its dependencies live in Docker.
+    root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
+    state_dir = Path(os.getenv("UPDATE_STATE_DIR", str(root / "config" / "update")))
     status_file = state_dir / "status.json"
     if not status_file.exists():
         return {"update_agent": False}

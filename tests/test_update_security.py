@@ -169,6 +169,18 @@ def test_bootstrap_installs_only_checksum_verified_host_update_executor():
     assert "Pending update superseded by bootstrap" in bootstrap
 
 
+def test_bootstrap_defers_background_runtime_writers_until_health_is_recorded():
+    bootstrap = (Path(__file__).parents[1] / "bootstrap.sh").read_text()
+    stop = bootstrap.index('systemctl stop "$trigger"')
+    guard = bootstrap.index('systemctl show -p ActiveState --value "$executor"')
+    start = bootstrap.index('"${compose[@]}" up -d --remove-orphans')
+    inventory = bootstrap.index('chmod 0600 "$INSTALL_ROOT/config/runtime-inventory.json"')
+    resume = bootstrap.index('systemctl enable --now vertep-update.path vertep-update.timer')
+    assert stop < guard < start < inventory < resume
+    assert bootstrap.count('systemctl enable --now vertep-update.path') == 1
+    assert 'active|activating|deactivating)' in bootstrap
+
+
 def test_bootstrap_preflight_and_text_model_provisioning_contract():
     bootstrap = (Path(__file__).parents[1] / "bootstrap.sh").read_text()
     assert "getent ahosts" in bootstrap

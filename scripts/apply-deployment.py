@@ -76,7 +76,7 @@ def atomic_json(path: Path, value: dict) -> None:
 
 def runtime_inventory(root: Path, compose: list[str], selected: set[str], role: str,
                       version: str, runner=subprocess.run) -> dict:
-    result = runner([*compose, "ps", "--format", "json"], check=True, timeout=120,
+    result = runner([*compose, "ps", "--all", "--format", "json"], check=True, timeout=120,
                     capture_output=True, text=True)
     rows = []
     output = getattr(result, "stdout", "") or ""
@@ -104,7 +104,7 @@ def runtime_inventory(root: Path, compose: list[str], selected: set[str], role: 
 
 def compose_rows(compose: list[str], selected: set[str], runner=subprocess.run) -> list[dict]:
     """Return the raw compose inventory rows for the selected services."""
-    result = runner([*compose, "ps", "--format", "json"], check=True, timeout=120,
+    result = runner([*compose, "ps", "--all", "--format", "json"], check=True, timeout=120,
                     capture_output=True, text=True)
     rows = []
     output = getattr(result, "stdout", "") or ""
@@ -272,6 +272,22 @@ def _refresh_inventory_after_rollback(root: Path, compose: list[str], selected: 
 
 
 def apply(root: Path, runner=subprocess.run) -> dict:
+    request_path = root / "config/deployment-request.json"
+    original_request = request_path.read_bytes()
+    try:
+        return _apply(root, runner)
+    except Exception:
+        # PathExists otherwise immediately retries the failed request, repeatedly
+        # applying and rolling back the same runtime. Preserve it for diagnosis,
+        # without consuming a replacement request submitted during this attempt.
+        if request_path.is_file() and request_path.read_bytes() == original_request:
+            failed = root / "config/deployment-failed"
+            failed.mkdir(parents=True, exist_ok=True)
+            request_path.replace(failed / f"request-{time.time_ns()}.json")
+        raise
+
+
+def _apply(root: Path, runner=subprocess.run) -> dict:
     request_path = root / "config/deployment-request.json"
     request = json.loads(request_path.read_text(encoding="utf-8"))
     roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))

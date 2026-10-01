@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.16
+- Виправлено `scripts/apply-deployment.py`: невдалий `deployment-request.json` переміщується у `config/deployment-failed/` замість повторного спрацювання PathExists, який безкінечно застосовував і відкатував той самий runtime; новий запит, поданий під час спроби, зберігається.
+- У `scripts/apply-deployment.py` інвентаризація Compose виконується з `--all`, щоб враховувати завершені контейнери на кшталт міграції.
+- Виправлено `scripts/watchdog.py`: host-сторож читає `status.json` без імпорту `core.first_run` і з повагою до `VERTEP_ROOT` та `UPDATE_STATE_DIR`.
+- У `bootstrap.sh` фонові тригери `vertep-update`, `vertep-deployment` і `vertep-watchdog` зупиняються перед зміною встановленого релізу, активні виконувачі блокують bootstrap, а запуск відкладається до моменту після фіксації перевіреного runtime-інвентарю.
+- У `AGENTS.md` додано розділ 0 з правилами стислої відповіді агентів.
+- Додано тести `tests/test_watchdog_host.py` та розширено `tests/test_apply_deployment.py` і `tests/test_update_security.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.15
 - Виправлено збірку ComfyUI Docker image: `COMFYUI_VERSION` змінено з неіснуючого `v0.34.0` на `v0.38.0` у `docker/comfyui-nvidia/Dockerfile` та `docker/comfyui-amd/Dockerfile`.
 - Виправлено клонування ComfyUI-VideoHelperSuite у `docker/comfyui-nvidia/Dockerfile`: оскільки репо не має тегів, змінено `VHS_VERSION` з `1.0.4` на `main` та прибрано префікс `v` у `--branch`.

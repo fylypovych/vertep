@@ -15,10 +15,18 @@ MIN_DISK_MB=${VERTEP_MIN_DISK_MB:-20480}
 fail(){ printf 'VERTEP: %s\n' "$*" >&2; exit 1; }
 progress(){ printf '\n==> %s\n' "$*"; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run bootstrap as root (curl … | sudo bash)"
-if command -v systemctl >/dev/null && systemctl is-active --quiet vertep-update.service; then
-  fail "a Vertep update is currently active; wait for it to finish before running bootstrap"
-fi
-systemctl stop vertep-update.path >/dev/null 2>&1 || true
+# Quiesce automatic runtime writers before changing the installed release.
+# Do not stop an executor halfway through an apply/rollback.
+for trigger in vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer; do
+  systemctl stop "$trigger" >/dev/null 2>&1 || true
+done
+for executor in vertep-update.service vertep-deployment.service vertep-watchdog.service vertep-startup-recovery.service; do
+  executor_state=$(systemctl show -p ActiveState --value "$executor" 2>/dev/null || true)
+  case "$executor_state" in
+    active|activating|deactivating)
+      fail "$executor is currently active; wait for it to finish before running bootstrap" ;;
+  esac
+done
 . /etc/os-release
 [[ ${ID:-} == ubuntu && ${VERSION_ID:-} == 24.04 ]] || fail "Ubuntu Server 24.04 LTS is required"
 arch=$(dpkg --print-architecture)
@@ -620,7 +628,8 @@ for unit in vertep-update.service vertep-update.path vertep-update-check.service
   rm -f "/tmp/$unit"
 done
 systemctl daemon-reload
-systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
+# Enable now, but start only after bootstrap has verified and recorded health.
+systemctl enable vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
 # Startup recovery is a boot-time guard. Running it here would race the initial
 # Compose deployment that bootstrap performs immediately below.
 systemctl enable vertep-startup-recovery.service
@@ -694,6 +703,7 @@ if [[ $installation_complete == true ]]; then
   chmod 0600 "$installation_tmp"
   mv -f "$installation_tmp" "$INSTALL_ROOT/config/installation.json"
 fi
+systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
 server_ip=$(hostname -I | awk '{print $1}')
 if [[ $installation_complete == true ]]; then
   setup_url="https://$server_ip:8443/"

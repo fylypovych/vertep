@@ -14,6 +14,55 @@ def module():
     return value
 
 
+def test_failed_request_is_archived_and_cannot_retrigger(tmp_path):
+    root = fixture(tmp_path)
+    request = root / "config/deployment-request.json"
+    payload = json.loads(request.read_text())
+    payload["plan_sha256"] = "invalid"
+    original = json.dumps(payload).encode()
+    request.write_bytes(original)
+    commands = []
+    deployment = module()
+    with pytest.raises(RuntimeError):
+        deployment.apply(root, runner=lambda *args, **kwargs: commands.append(args))
+    assert not request.exists()
+    archived = list((root / "config/deployment-failed").glob("*.json"))
+    assert len(archived) == 1
+    assert archived[0].read_bytes() == original
+    with pytest.raises(FileNotFoundError):
+        deployment.apply(root, runner=lambda *args, **kwargs: commands.append(args))
+    assert commands == []
+
+
+def test_health_inventory_includes_completed_migration():
+    from types import SimpleNamespace
+
+    def runner(command, **kwargs):
+        rows = [{"Service": "core", "State": "running", "Health": "healthy"}]
+        if "--all" in command:
+            rows.append({"Service": "migrate", "State": "exited", "ExitCode": 0})
+        return SimpleNamespace(stdout="\n".join(json.dumps(row) for row in rows))
+
+    module().wait_for_healthy(["docker", "compose"], {"core", "migrate"}, runner)
+
+
+def test_failed_apply_preserves_a_new_pending_request(tmp_path, monkeypatch):
+    root = fixture(tmp_path)
+    request = root / "config/deployment-request.json"
+    replacement = b'{"request_id":"new-request"}'
+    deployment = module()
+
+    def fail_with_replacement(root, runner):
+        request.write_bytes(replacement)
+        raise RuntimeError("apply failed")
+
+    monkeypatch.setattr(deployment, "_apply", fail_with_replacement)
+    with pytest.raises(RuntimeError, match="apply failed"):
+        deployment.apply(root)
+    assert request.read_bytes() == replacement
+    assert not (root / "config/deployment-failed").exists()
+
+
 def fixture(tmp_path, role="gpu"):
     root = tmp_path / "vertep"
     (root / "config").mkdir(parents=True)
@@ -45,7 +94,7 @@ def test_apply_deployment_uses_only_catalog_services_and_erases_token(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-3:] == ["ps", "--format", "json"]:
+        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
@@ -81,7 +130,7 @@ def test_text_deployment_provisions_selected_model(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-3:] == ["ps", "--format", "json"]:
+        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
@@ -100,7 +149,7 @@ def test_core_deployment_provisions_managed_ollama_model(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-3:] == ["ps", "--format", "json"]:
+        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
@@ -125,7 +174,7 @@ def test_core_deployment_activates_multiple_local_roles(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-3:] == ["ps", "--format", "json"]:
+        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
