@@ -46,7 +46,7 @@ jobs:
   release-gate:
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -58,7 +58,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python scripts/check-release-gate.py "${{ github.sha }}" --repo "${{ github.repository }}"
+          python scripts/check-release-gate.py "${{ github.sha }}" \
+            --repo "${{ github.repository }}" \
+            --wait-timeout 4800 --wait-interval 30
 
   build-images:
     needs: [prepare, release-gate]

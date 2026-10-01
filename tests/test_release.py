@@ -380,7 +380,7 @@ def test_release_runs_push_first_then_triggers_workflow(tmp_path, monkeypatch):
     monkeypatch.setattr(release, "require_ukrainian", lambda *_a, **_kw: None)
 
     result = release.orchestrate_release(
-        target_root, skip_tests=True, timeout=10, trigger=FakeTrigger()
+        target_root, skip_tests=True, timeout=10, gate_timeout=0, trigger=FakeTrigger()
     )
 
     assert result == "0.0.0.21"
@@ -445,7 +445,7 @@ def test_release_does_not_create_commit_when_tree_is_clean(tmp_path, monkeypatch
             sequence.append(("verify", version, expected_sha))
 
     release.orchestrate_release(
-        target_root, skip_tests=True, timeout=10, trigger=FakeTrigger()
+        target_root, skip_tests=True, timeout=10, gate_timeout=0, trigger=FakeTrigger()
     )
 
     assert sequence == [
@@ -501,7 +501,8 @@ def test_release_failed_workflow_reports_failed_jobs(tmp_path, monkeypatch):
 
     try:
         release.orchestrate_release(
-            target_root, skip_tests=True, timeout=10, trigger=FailingTrigger()
+            target_root, skip_tests=True, timeout=10, gate_timeout=0,
+            trigger=FailingTrigger()
         )
     except RuntimeError as error:
         message = str(error)
@@ -754,3 +755,266 @@ def test_gate_required_workflows_include_browser_e2e():
     gate = _load_gate_module()
     assert "Browser E2E" in gate.REQUIRED_WORKFLOWS
     assert "CI" in gate.REQUIRED_WORKFLOWS
+
+
+def test_gate_waits_until_pending_workflows_terminate(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    samples = [
+        _fake_runs({"CI": ("queued", None, sha)}),
+        _fake_runs({
+            "CI": ("completed", "success", sha),
+            "Browser E2E": ("in_progress", None, sha),
+        }),
+        _fake_runs({
+            "CI": ("completed", "success", sha),
+            "Browser E2E": ("completed", "success", sha),
+        }),
+    ]
+    calls = {"n": 0}
+
+    def fake_runs(_s, _r):
+        index = min(calls["n"], len(samples) - 1)
+        calls["n"] += 1
+        return samples[index]
+
+    slept = []
+    clock = {"t": 0.0}
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", fake_runs)
+    report = gate.wait_for_gate(
+        sha, "fylypovych/vertep", timeout=600, interval=30,
+        sleep=slept.append, monotonic=lambda: clock["t"],
+    )
+
+    assert report["passed"] is True
+    assert calls["n"] == 3
+    assert len(slept) == 2
+
+
+def test_gate_waits_for_missing_run_registration(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    ready = _fake_runs({
+        "CI": ("completed", "success", sha),
+        "Browser E2E": ("completed", "success", sha),
+    })
+    samples = [_fake_runs({}), ready]
+
+    def fake_runs(_s, _r):
+        return samples.pop(0) if len(samples) > 1 else samples[0]
+
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", fake_runs)
+    report = gate.wait_for_gate(
+        sha, "fylypovych/vertep", timeout=600, interval=10, sleep=lambda _s: None
+    )
+
+    assert report["passed"] is True
+
+
+def test_gate_wait_times_out_while_workflow_still_pending(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    runs = _fake_runs({
+        "CI": ("in_progress", None, sha),
+        "Browser E2E": ("completed", "success", sha),
+    })
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", lambda s, r: runs)
+    clock = {"t": 0.0}
+
+    def monotonic():
+        clock["t"] += 120
+        return clock["t"]
+
+    report = gate.wait_for_gate(
+        sha, "fylypovych/vertep", timeout=300, interval=30,
+        sleep=lambda _s: None, monotonic=monotonic,
+    )
+
+    assert report["passed"] is False
+    ci = next(c for c in report["checks"] if c["workflow"] == "CI")
+    assert ci["passed"] is False
+    assert "in_progress" in ci["reason"]
+
+
+def test_gate_does_not_wait_for_failed_workflow(monkeypatch):
+    gate = _load_gate_module()
+    sha = "abc123" * 10
+    runs = _fake_runs({
+        "CI": ("completed", "failure", sha),
+        "Browser E2E": ("completed", "success", sha),
+    })
+    monkeypatch.setattr(gate, "_workflow_runs_for_sha", lambda s, r: runs)
+    slept = []
+    report = gate.wait_for_gate(
+        sha, "fylypovych/vertep", timeout=600, interval=10, sleep=slept.append
+    )
+
+    assert report["passed"] is False
+    assert slept == []
+
+
+def test_gate_workflow_passes_wait_arguments():
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "check-release-gate.py" in workflow
+    assert "--wait-timeout" in workflow
+    assert "--wait-interval" in workflow
+
+
+# ── C3: release.py waits for CI and Browser E2E before dispatching ─────
+
+def _gate_run(name, status, conclusion, sha):
+    return {"workflowName": name, "status": status, "conclusion": conclusion,
+            "headSha": sha}
+
+
+def test_wait_for_gates_blocks_until_both_workflows_pass(tmp_path, monkeypatch):
+    release = load_release_module()
+    sha = "abcdef" * 5
+    samples = [
+        [_gate_run("CI", "queued", None, sha)],
+        [_gate_run("CI", "completed", "success", sha),
+         _gate_run("Browser E2E", "in_progress", None, sha)],
+        [_gate_run("CI", "completed", "success", sha),
+         _gate_run("Browser E2E", "completed", "success", sha)],
+    ]
+    calls = {"n": 0}
+
+    def fake_gate_runs(root, target_sha):
+        index = min(calls["n"], len(samples) - 1)
+        calls["n"] += 1
+        return samples[index]
+
+    slept = []
+    clock = {"t": 0.0}
+    monkeypatch.setattr(release, "gate_runs", fake_gate_runs)
+    state = release.wait_for_gates(
+        tmp_path, sha, timeout=900, interval=30,
+        sleep=slept.append, monotonic=lambda: clock["t"],
+    )
+
+    assert state["CI"]["conclusion"] == "success"
+    assert state["Browser E2E"]["conclusion"] == "success"
+    assert calls["n"] == 3
+    assert slept == [30.0, 30.0]
+
+
+def test_wait_for_gates_treats_missing_run_as_pending(tmp_path, monkeypatch):
+    release = load_release_module()
+    sha = "abcdef" * 5
+    samples = [
+        [],
+        [_gate_run("CI", "completed", "success", sha),
+         _gate_run("Browser E2E", "completed", "success", sha)],
+    ]
+
+    def fake_gate_runs(root, target_sha):
+        return samples.pop(0) if len(samples) > 1 else samples[0]
+
+    monkeypatch.setattr(release, "gate_runs", fake_gate_runs)
+    state = release.wait_for_gates(
+        tmp_path, sha, timeout=900, interval=15, sleep=lambda _s: None
+    )
+
+    assert set(state) == {"CI", "Browser E2E"}
+
+
+def test_wait_for_gates_ignores_green_run_of_another_sha(tmp_path, monkeypatch):
+    release = load_release_module()
+    sha = "abcdef" * 5
+    other = "123456" * 5
+    runs = [_gate_run("CI", "completed", "success", other),
+            _gate_run("Browser E2E", "completed", "success", sha)]
+    monkeypatch.setattr(release, "gate_runs", lambda r, s: runs)
+    clock = {"t": 0.0}
+
+    def monotonic():
+        clock["t"] += 200
+        return clock["t"]
+
+    try:
+        release.wait_for_gates(
+            tmp_path, sha, timeout=400, interval=30,
+            sleep=lambda _s: None, monotonic=monotonic,
+        )
+    except RuntimeError as error:
+        assert "CI" in str(error)
+    else:
+        raise AssertionError("A green CI run of another SHA must not pass the gate")
+
+
+def test_wait_for_gates_reports_failed_workflow_without_waiting(tmp_path, monkeypatch):
+    release = load_release_module()
+    sha = "abcdef" * 5
+    runs = [_gate_run("CI", "completed", "failure", sha),
+            _gate_run("Browser E2E", "completed", "success", sha)]
+    monkeypatch.setattr(release, "gate_runs", lambda r, s: runs)
+    slept = []
+    try:
+        release.wait_for_gates(
+            tmp_path, sha, timeout=900, interval=30, sleep=slept.append
+        )
+    except RuntimeError as error:
+        assert "CI (failure)" in str(error)
+    else:
+        raise AssertionError("A failed CI run must block the release")
+    assert slept == []
+
+
+def test_release_waits_for_gates_before_triggering_workflow(tmp_path, monkeypatch):
+    release = load_release_module()
+    target_root = tmp_path
+    version = "0.0.0.23"
+    (target_root / "VERSION").write_text(version + "\n", encoding="utf-8")
+    (target_root / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## ПРАВИЛЬНА НАЗВА: {version}\n- Готово.\n",
+        encoding="utf-8",
+    )
+    (target_root / "releases").mkdir()
+    (target_root / "releases" / f"{version}.md").write_text(
+        f"# Vertep {version}\n\n- Готово.\n", encoding="utf-8",
+    )
+    sha = "1234567" * 5
+
+    def fake_git(r, *args):
+        if args[:2] == ("status",) and args[1:3] == ("--porcelain", "--untracked-files=no"):
+            return ""
+        if args[:1] == ("rev-parse",):
+            return sha
+        if args[:1] == ("log",) and (
+            args[1:3] == ("--format=%s",)
+            or args[1:4] == ("-1", "--pretty=%s")
+            or (len(args) >= 2 and args[1] == "-1")
+        ):
+            return version
+        return ""
+
+    monkeypatch.setattr(release, "git", fake_git)
+    sequence = []
+
+    def fake_wait_for_gates(root, target_sha, *, timeout):
+        sequence.append(("gate", target_sha, timeout))
+
+    monkeypatch.setattr(release, "wait_for_gates", fake_wait_for_gates)
+
+    class FakeTrigger:
+        def run(self, root, *, workflow, sha):
+            sequence.append(("run", sha))
+            return 5
+
+        def wait(self, root, *, run_id, timeout):
+            sequence.append(("wait", run_id))
+            return {"conclusion": "success"}
+
+        def failed_jobs(self, root, *, run_id):
+            return ""
+
+        def verify(self, root, *, version, expected_sha):
+            sequence.append(("verify", version, expected_sha))
+
+    release.orchestrate_release(
+        target_root, skip_tests=True, timeout=10, gate_timeout=600,
+        trigger=FakeTrigger(),
+    )
+
+    assert sequence[0] == ("gate", sha, 600)
+    assert sequence[1] == ("run", sha)

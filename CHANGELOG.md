@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.17
+- Додано очікування gate перед релізом: `scripts/check-release-gate.py` підтримує `--wait-timeout` та `--wait-interval` і опитує GitHub API, доки CI та Browser E2E не завершаться для точного SHA; `scripts/release.py` додано `wait_for_gates()` і параметр `--gate-timeout`, щоб не запускати release workflow до завершення CI та Browser E2E.
+- У `.github/workflows/release.yml` крок `release-gate` очікує завершення CI та Browser E2E (`--wait-timeout 4800 --wait-interval 30`) з підвищеним `timeout-minutes`.
+- Додано тести `tests/test_watchdog_host.py` та 12 тестів очікування gate у `tests/test_release.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.16
 - Виправлено `scripts/apply-deployment.py`: невдалий `deployment-request.json` переміщується у `config/deployment-failed/` замість повторного спрацювання PathExists, який безкінечно застосовував і відкатував той самий runtime; новий запит, поданий під час спроби, зберігається.
 - У `scripts/apply-deployment.py` інвентаризація Compose виконується з `--all`, щоб враховувати завершені контейнери на кшталт міграції.

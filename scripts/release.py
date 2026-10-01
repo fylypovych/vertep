@@ -270,11 +270,78 @@ def verify_release(root: Path, version: str, expected_sha: str) -> None:
         raise RuntimeError("Release не містить обов'язкових артефактів: " + ", ".join(missing))
 
 
+REQUIRED_GATE_WORKFLOWS = ("CI", "Browser E2E")
+PENDING_GATE_STATUSES = {"queued", "in_progress", "pending", "waiting"}
+
+
+def gate_runs(root: Path, sha: str) -> list[dict]:
+    """Return workflow runs reported for *sha*."""
+    result = gh_run_json(root, [
+        "run", "list", "--commit", sha, "--limit", "100",
+        "--json", "workflowName,status,conclusion,headSha",
+    ])
+    return result if isinstance(result, list) else []
+
+
+def gate_state(runs: list[dict], sha: str) -> dict[str, dict]:
+    """Reduce workflow runs to the newest state of every required gate."""
+    state: dict[str, dict] = {}
+    for name in REQUIRED_GATE_WORKFLOWS:
+        matching = [run for run in runs if run.get("workflowName") == name]
+        run = matching[0] if matching else None
+        if run is None or run.get("headSha") != sha:
+            state[name] = {"status": "not found", "conclusion": None}
+        else:
+            state[name] = {
+                "status": run.get("status", ""),
+                "conclusion": run.get("conclusion"),
+            }
+    return state
+
+
+def wait_for_gates(
+    root: Path,
+    sha: str,
+    *,
+    timeout: int,
+    interval: int = 30,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+) -> dict[str, dict]:
+    """Block until CI and Browser E2E terminate successfully for *sha*."""
+    deadline = monotonic() + timeout
+    while True:
+        state = gate_state(gate_runs(root, sha), sha)
+        pending = [
+            name for name, value in state.items()
+            if value["status"] == "not found" or value["status"] in PENDING_GATE_STATUSES
+        ]
+        if not pending:
+            break
+        if monotonic() >= deadline:
+            raise RuntimeError(
+                "Release gate не завершився за відведений час для SHA "
+                f"{sha[:12]}: " + ", ".join(
+                    f"{name} ({state[name]['status']})" for name in pending
+                )
+            )
+        sleep(min(interval, max(0.0, deadline - monotonic())))
+    failed = [
+        f"{name} ({value['conclusion']})"
+        for name, value in state.items()
+        if value["conclusion"] != "success"
+    ]
+    if failed:
+        raise RuntimeError("Release gate не пройдено: " + ", ".join(failed))
+    return state
+
+
 def orchestrate_release(
     root: Path,
     *,
     skip_tests: bool,
     timeout: int,
+    gate_timeout: int,
     trigger,
 ) -> str:
     status = git(root, "status", "--porcelain", "--untracked-files=no")
@@ -283,6 +350,8 @@ def orchestrate_release(
     else:
         version = check_release(root)
     local_sha = git(root, "rev-parse", "HEAD")
+    if gate_timeout > 0:
+        wait_for_gates(root, local_sha, timeout=gate_timeout)
     run_id = trigger.run(root, workflow="Vertep Release", sha=local_sha)
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -350,6 +419,8 @@ def main() -> None:
                         help="виконати повний реліз: пуш + GitHub Actions + верифікація")
     parser.add_argument("--timeout", type=int, default=10800,
                         help="таймаут очікування workflow у секундах (за замовчуванням 10800)")
+    parser.add_argument("--gate-timeout", type=int, default=5400,
+                        help="таймаут очікування CI та Browser E2E перед релізом у секундах; 0 — не чекати")
     parser.add_argument("--show-next", action="store_true",
                         help="показати наступний номер без змін")
     parser.add_argument("--check", action="store_true",
@@ -366,7 +437,8 @@ def main() -> None:
         if args.release:
             trigger = GitHubActionsTrigger()
             version = orchestrate_release(
-                root, skip_tests=args.skip_tests, timeout=args.timeout, trigger=trigger
+                root, skip_tests=args.skip_tests, timeout=args.timeout,
+                gate_timeout=args.gate_timeout, trigger=trigger
             )
             print(f"Реліз {version} успішно створено та пройдено всі перевірки.")
             return

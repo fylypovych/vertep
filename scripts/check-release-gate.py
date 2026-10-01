@@ -9,10 +9,13 @@ different SHA does **not** satisfy the gate.
 
 Negative checks (any of these blocks the release):
 - no run found for the workflow (missing)
-- run still pending / in progress
+- run still pending / in progress after the wait budget is exhausted
 - run cancelled or skipped
 - run failed
 - run succeeded but for a different SHA (rejected explicitly)
+
+With ``--wait-timeout`` the gate polls the API until every required workflow
+reaches a terminal conclusion instead of failing on the first pending sample.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 
 REQUIRED_WORKFLOWS = {
@@ -119,6 +123,39 @@ def check_gate(sha: str, repo: str) -> dict:
     }
 
 
+def _is_waitable(report: dict) -> bool:
+    """True while the gate can still change by waiting.
+
+    A missing run stays waitable as well: workflow runs are registered by the
+    API asynchronously, so an immediate call right after the push legitimately
+    observes nothing yet.
+    """
+    return any(
+        check["status"] == "not found" or check["status"] in NON_TERMINAL_STATUSES
+        for check in report["checks"]
+    )
+
+
+def wait_for_gate(
+    sha: str,
+    repo: str,
+    *,
+    timeout: float,
+    interval: float = 15.0,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+) -> dict:
+    """Poll the gate until it passes, fails or the timeout budget is spent."""
+    deadline = monotonic() + timeout
+    report = check_gate(sha, repo)
+    while not report["passed"] and _is_waitable(report):
+        if monotonic() >= deadline:
+            break
+        sleep(min(interval, max(0.0, deadline - monotonic())))
+        report = check_gate(sha, repo)
+    return report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Verify CI and Browser E2E gates passed for the release SHA."
@@ -128,6 +165,14 @@ def main() -> None:
         "--repo", default=None,
         help="Repository in OWNER/NAME format (defaults to $GITHUB_REPOSITORY)",
     )
+    parser.add_argument(
+        "--wait-timeout", type=float, default=0.0,
+        help="seconds to wait for pending runs before failing the gate",
+    )
+    parser.add_argument(
+        "--wait-interval", type=float, default=15.0,
+        help="seconds between gate samples while waiting",
+    )
     args = parser.parse_args()
 
     repo = args.repo or os.environ.get("GITHUB_REPOSITORY", "")
@@ -135,7 +180,12 @@ def main() -> None:
         print("Error: --repo or GITHUB_REPOSITORY must be set", file=sys.stderr)
         sys.exit(2)
 
-    report = check_gate(args.sha, repo)
+    if args.wait_timeout > 0:
+        report = wait_for_gate(
+            args.sha, repo, timeout=args.wait_timeout, interval=args.wait_interval
+        )
+    else:
+        report = check_gate(args.sha, repo)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     sys.exit(0 if report["passed"] else 1)
 
