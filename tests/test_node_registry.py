@@ -261,9 +261,14 @@ def test_reenrolling_a_known_node_revokes_its_previous_certificate(monkeypatch, 
     assert not verify_node_certificate("gpu-01", first["certificate_serial"])
     from cryptography import x509
     crl = x509.load_pem_x509_crl((tmp_path / "node-ca.crl").read_bytes())
-    revoked = {format(entry.serial_number, "X") for entry in crl}
-    assert first["certificate_serial"] in revoked
-    assert second["certificate_serial"] not in revoked
+    # CRL serials are rendered as bare hex, so a stored serial with a leading
+    # zero ("0A18…") must be compared in the same normalised form.
+    def _normalise(serial: str) -> str:
+        return serial.upper().lstrip("0") or "0"
+
+    revoked = {_normalise(format(entry.serial_number, "X")) for entry in crl}
+    assert _normalise(first["certificate_serial"]) in revoked
+    assert _normalise(second["certificate_serial"]) not in revoked
 
 
 def test_postgres_rotation_revokes_the_outgoing_certificate(monkeypatch, tmp_path):

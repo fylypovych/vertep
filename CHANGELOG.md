@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.20
+- Виправлено `tests/test_node_registry.py::test_reenrolling_a_known_node_revokes_its_previous_certificate`: порівняння serial з CRL тепер нормалізує провідні нулі, як це робить `core/node_registry.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.19
 - Issue #122 P1: додано versioned bridge contract для зовнішнього VideoEngine (`BRIDGE_SCHEMA_VERSION`, `BridgeContractError` з кодом відмови) у `adapters/providers/base.py`.
 - `adapters/providers/video_engines.py`: `BridgeContractProfile` та `MONEY_PRINTER_CONTRACT` (pin `harry0703/MoneyPrinterTurbo@2e1b3039`) з повною матрицею mandatory inputs, 20 кодів `pre_dispatch_rejections`, `capabilities()` як instance-метод, `validate_contract()`, `build_upstream_request()`, `map_upstream_status()`, `parse_output_reference()`.
