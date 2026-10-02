@@ -152,6 +152,23 @@ class PublisherProvider(ABC):
         ...
 
 
+BRIDGE_SCHEMA_VERSION = "v1"
+
+
+class BridgeContractError(ValueError):
+    """Contract violation detected before an external engine is called.
+
+    External engines declare what they can actually honour (Issue #122, P1).
+    A rejected input must fail here — before dispatch, with an explicit reason —
+    instead of being ignored upstream or silently degrading to another engine.
+    ``code`` is the stable rejection code recorded in Job/task state.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class VideoEngine(ABC):
     """High-level video assembly driver (not to be confused with ``VideoProvider``).
 

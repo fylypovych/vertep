@@ -35,3 +35,4 @@ config/secret-store.passphrase
 
 # Test output (transient)
 /test-results/
+/agents

@@ -19,6 +19,10 @@ class StoryboardService:
         self.store = store
         self.executor = executor
 
+    def generate(self, job_id: str, revision: str | None = None) -> Job:
+        job = self._job(job_id)
+        return self.queue(job, revision)
+
     def queue(self, job: Job, revision: str | None = None) -> Job:
         job.storyboard_error = None
         self.store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
