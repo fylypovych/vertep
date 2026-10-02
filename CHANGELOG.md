@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.18
+- Виправлено вхід через Web UI: `AdminAuthMiddleware` більше не повертає `WWW-Authenticate: Basic` для `/api/session`, що відкривало другий нативний діалог браузера поверх форми Angular.
+- Посилено контракт сесії: 401 без `WWW-Authenticate` та з `X-Content-Type-Options: nosniff` (`tests/test_backend_contracts.py`).
+- `/api/security/check` показує реальний обсяг сертифіката (`subjectAltName`, `san_count`); сертифікат лише з CN отримує remediation про hostname verification.
+- `RemoteVideoEngine`: валідація `schema_version`/`aspect_ratio`, `capabilities()` для MoneyPrinterTurbo (pin 2e1b3039), атомарний запис артефакту, стійкий polling (до 5 transient помилок).
+- `ir`-приймання fail-closed (Issue #95): `commit_sha` лише повний SHA (без `VERSION`/`unknown`), звірка з незалежним SHA/версією деплою, повне покриття mandatory checks; `core_api` probe `not-applicable` без `CORE_ADDRESS`.
+- Додано контракт життєвого циклу secret-store (`tests/test_secret_store_lifecycle.py`): ротація, відкат, fail-closed без passphrase, concurrency.
+- Видалено тимчасові `docker-compose.mpt.yml` та `web-v2/repro-login.mjs`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.17
 - Додано очікування gate перед релізом: `scripts/check-release-gate.py` підтримує `--wait-timeout` та `--wait-interval` і опитує GitHub API, доки CI та Browser E2E не завершаться для точного SHA; `scripts/release.py` додано `wait_for_gates()` і параметр `--gate-timeout`, щоб не запускати release workflow до завершення CI та Browser E2E.
 - У `.github/workflows/release.yml` крок `release-gate` очікує завершення CI та Browser E2E (`--wait-timeout 4800 --wait-interval 30`) з підвищеним `timeout-minutes`.

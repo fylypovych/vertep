@@ -1,3 +1,4 @@
+from adapters.providers.video_engines import RemoteVideoEngine
 """Phase 5 tests: VideoEngine pattern (native default + opt-in external engines).
 
 Covers the opt-in/fallback behaviour of the video-engine factory, the native
@@ -141,6 +142,59 @@ def test_remote_engine_api_error_surfaces_http_code(tmp_path):
         engine.render(tmp_path / "v.mp4", **(_job_assets(tmp_path)))
     assert "400" in str(exc.value)
     assert "engine down" in str(exc.value)
+
+
+def test_remote_engine_contract_negative_cases(tmp_path):
+    engine = MoneyPrinterEngine(url="http://engine:8000")
+    assets = _job_assets(tmp_path)
+
+    # Invalid aspect ratio validation
+    assets_invalid_ar = dict(assets)
+    assets_invalid_ar["aspect_ratio"] = "21:9"
+    with pytest.raises(ValueError) as exc:
+        engine.render(tmp_path / "v.mp4", **assets_invalid_ar)
+    assert "aspect ratio" in str(exc.value)
+
+    # Capabilities structure check
+    caps = RemoteVideoEngine.capabilities()
+    assert caps["schema_version"] == "v1"
+    assert "16:9" in caps["supported_aspect_ratios"]
+
+
+def test_remote_engine_artifact_delivery_empty_download(tmp_path):
+    fake = FakeTransport([
+        httpx.Response(200, json={"job_id": "j-empty"}),
+        httpx.Response(200, json={"status": "READY"}),
+        httpx.Response(200, content=b""),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    assets = _job_assets(tmp_path)
+    with pytest.raises(RuntimeError) as exc:
+        engine.render(tmp_path / "final" / "empty.mp4", **assets)
+    assert "empty" in str(exc.value).lower()
+
+
+def test_remote_engine_cancel(tmp_path):
+    fake = FakeTransport([
+        httpx.Response(204),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    assert engine.cancel("job-123") is True
+    assert fake.requests[0][0] == "DELETE"
+    assert fake.requests[0][1].endswith("/jobs/job-123")
+
+
+def test_remote_engine_polling_transient_retry(tmp_path):
+    fake = FakeTransport([
+        httpx.Response(200, json={"job_id": "j-retry"}),
+        httpx.Response(502, text="Bad Gateway"),
+        httpx.Response(200, json={"status": "READY"}),
+        httpx.Response(200, content=b"retry-success"),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake, poll_interval=0.01)
+    assets = _job_assets(tmp_path)
+    output = engine.render(tmp_path / "final" / "retry.mp4", **assets)
+    assert output.read_bytes() == b"retry-success"
 
 
 # ---------------------------------------------------------------------------

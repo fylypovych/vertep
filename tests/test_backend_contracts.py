@@ -560,6 +560,7 @@ class TestSessionIdentityContract:
         credentials = base64.b64encode(b"primary-admin:wrong-password").decode()
         resp = client.post("/api/session", headers={"Authorization": f"Basic {credentials}"})
         assert resp.status_code == 401
+        assert "www-authenticate" not in resp.headers
         assert "vertep_session" not in resp.cookies
 
     def test_utf8_basic_credentials_open_a_session(self, monkeypatch, tmp_path):
@@ -612,7 +613,10 @@ class TestSessionIdentityContract:
         for path in ("/", "/v1/"):
             assert client.get(path).status_code == 200, f"{path} is not publicly reachable"
         for path in ("/api/session", "/api/jobs", "/api/characters"):
-            assert client.get(path).status_code == 401, f"{path} is publicly readable"
+            response = client.get(path)
+            assert response.status_code == 401, f"{path} is publicly readable"
+            assert "www-authenticate" not in response.headers, f"{path} triggers browser login"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
 
     def test_unconfigured_installation_reports_explicitly_unauthenticated(self, monkeypatch, tmp_path):
         monkeypatch.delenv("ADMIN_PASSWORD", raising=False)

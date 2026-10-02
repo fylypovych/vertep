@@ -81,6 +81,26 @@ def health_history(limit: int = 100):
 
 
 
+def _subject_alt_names(cert) -> dict:
+    """Report the certificate SAN entries so the operator sees the real scope.
+
+    ``security/check`` must not present a certificate without SANs as fully
+    covered: modern TLS clients ignore CN entirely, so a certificate that only
+    carries a Common Name will fail hostname verification in practice.
+    """
+    from cryptography import x509
+
+    names: list[str] = []
+    try:
+        extension = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        names = [str(name.value) for name in extension.value]
+    except x509.ExtensionNotFound:
+        names = []
+    except Exception:
+        names = []
+    return {"subject_alt_names": names, "san_count": len(names)}
+
+
 @router.get("/api/security/check")
 def security_check():
     weak = _env_weak_values()
@@ -102,6 +122,10 @@ def security_check():
             remediation.append(f"{label} is missing; provision it")
         elif info.get("status") == "unreadable":
             remediation.append(f"{label} is present but unreadable; restore or replace it")
+        elif label != "server_key" and info.get("san_count") == 0:
+            remediation.append(
+                f"{label} carries no subjectAltName; reissue it with SAN entries so "
+                "hostname verification succeeds")
 
     # Fail-closed: a missing or unreadable certificate is never reported as ok.
     # Previously a missing cert was folded into the "ok" bucket alongside a
@@ -184,6 +208,7 @@ def _certificate_statuses() -> dict:
                     "days_remaining": days,
                     "subject": cert.subject.rfc4514_string(),
                 })
+                info.update(_subject_alt_names(cert))
         except Exception:
             info["status"] = "unreadable"
         certificates[label] = info

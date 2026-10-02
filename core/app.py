@@ -297,7 +297,9 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         session_identity = _valid_session(request.cookies.get("vertep_session", ""))
         basic_role = _authenticate_user(user, supplied) if scheme.lower() == "basic" else None
         if not session_identity and not basic_role:
-            return Response("Authentication required", 401, {"WWW-Authenticate": 'Basic realm="Vertep"'})
+            # The Angular login form submits credentials explicitly. A Basic
+            # challenge on its session probe opens a second, native browser login.
+            return self._secure(Response("Authentication required", 401))
         actor, role = session_identity or (user, basic_role)
         if request.method != "GET" and role == "viewer" and not request.url.path.startswith("/api/session"):
             return Response("Insufficient role", 403)

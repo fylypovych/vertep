@@ -141,6 +141,52 @@ def test_certificate_statuses_include_sha256_and_subject(client, tmp_path):
     assert statuses["server_key"]["status"] == "ok"
 
 
+def _certificate(tmp_path: Path, name: str, *, sans: list[str] | None = None):
+    """Write a self-signed certificate (and its key) for the server slot."""
+    import datetime as _dt
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "vertep-test")])
+    builder = (x509.CertificateBuilder()
+               .subject_name(subject).issuer_name(subject)
+               .public_key(key.public_key()).serial_number(1)
+               .not_valid_before(_dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc))
+               .not_valid_after(_dt.datetime(2030, 1, 1, tzinfo=_dt.timezone.utc)))
+    if sans:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(n) for n in sans]), critical=False)
+    cert = builder.sign(key, hashes.SHA256())
+    (tmp_path / name).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "vertep.key").write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    return cert
+
+
+def test_certificate_subject_alt_names_are_reported(client, tmp_path):
+    """Issue #84: the effective certificate scope must be visible, not inferred."""
+    _certificate(tmp_path, "vertep.crt", sans=["vertep.local", "10.0.0.5"])
+    statuses = _certificate_statuses()
+    info = statuses["server_certificate"]
+    assert info["san_count"] == 2
+    assert "vertep.local" in info["subject_alt_names"]
+
+
+def test_certificate_without_san_is_flagged_for_remediation(client, tmp_path):
+    """A certificate carrying only a CN fails modern hostname verification, so
+    the check must name it instead of reporting an unqualified ok."""
+    _certificate(tmp_path, "vertep.crt")
+    statuses = _certificate_statuses()
+    assert statuses["server_certificate"]["san_count"] == 0
+
+    body = client()
+    assert any("subjectAltName" in line for line in body["recommendation"].split(" ; "))
+
+
 def test_weak_env_value_fails_security_check(client, tmp_path):
     os.environ["ADMIN_PASSWORD"] = "changeme"
     body = client()

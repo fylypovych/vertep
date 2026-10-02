@@ -37,11 +37,11 @@ from .storage import (
 def _git_commit() -> str:
     """Return the full commit SHA for deployment identity.
 
-    Priority: GITHUB_SHA env → git rev-parse → VERSION file → 'unknown'.
-    The full SHA (40 hex chars) is always returned for GITHUB_SHA and
-    git rev-parse; VERSION file values are passed through as-is.
-    Returns 'unknown' only as absolute last resort; callers should
-    not accept 'unknown' for version-bound acceptance.
+    Priority: GITHUB_SHA env → git rev-parse.  Returns an empty string when
+    neither source yields a SHA (Issue #95): a ``VERSION`` value or the literal
+    ``unknown`` is not a commit identity and must never reach acceptance.
+    ``can_close_issue`` treats an empty/unknown SHA as fail-closed, so an
+    unresolved identity cannot auto-close an rt Issue.
     """
     github_sha = os.getenv("GITHUB_SHA", "").strip()
     if github_sha:
@@ -56,17 +56,7 @@ def _git_commit() -> str:
             return result.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         pass
-    try:
-        version_file = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "VERSION",
-        )
-        with open(version_file, encoding="utf-8") as f:
-            v = f.read().strip()
-            if v:
-                return v
-    except OSError:
-        pass
-    return "unknown"
+    return ""
 
 
 def _environment() -> dict[str, Any]:

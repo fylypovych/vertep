@@ -97,6 +97,20 @@ def _check_redis_tcp() -> tuple[bool, str]:
     return check_tcp(host, port)
 
 
+def _check_core_api_probe() -> tuple[bool, str]:
+    """Zero-argument CORE API probe for the check registry.
+
+    ``core.health_checks.check_core_api`` requires an explicit URL, while the
+    runner calls every registry entry without arguments (Issue #95).  An
+    unconfigured CORE is reported as not-applicable instead of being folded
+    into "ok", so a run without a remote CORE cannot pass silently.
+    """
+    core_url = os.getenv("CORE_ADDRESS", "").strip()
+    if not core_url:
+        return None, "not-applicable: CORE_ADDRESS is not configured"
+    return check_core_api(core_url)
+
+
 def _check_ollama_probe() -> tuple[bool, str]:
     """Real HTTP probe for Ollama availability."""
     return check_ollama()
@@ -138,7 +152,7 @@ CHECK_REGISTRY: dict[str, CheckFn] = {
     "postgres_tcp": _check_postgres_tcp,
     "redis": check_redis,
     "redis_tcp": _check_redis_tcp,
-    "core_api": check_core_api,
+    "core_api": _check_core_api_probe,
     "ollama": check_ollama,
     "ollama_probe": _check_ollama_probe,
     "comfyui": check_comfyui,

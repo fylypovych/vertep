@@ -626,5 +626,118 @@ class TestSecretRedaction:
         assert _SECRET_PATTERN.search("token=AKIAIOSFODNN7EXAMPLE")
 
 
+# ---------------------------------------------------------------------------
+# Issue #95 — adapter, deployment identity, auto-close
+# ---------------------------------------------------------------------------
+
+class TestIssue95:
+    """Regression tests for i.0.0.0.95 (zero-arg core_api, honest identity,
+    strict acceptance for auto-close)."""
+
+    def test_core_api_registry_entry_is_zero_argument_callable(self, monkeypatch):
+        monkeypatch.delenv("CORE_ADDRESS", raising=False)
+        result = CHECK_REGISTRY["core_api"]()
+        assert isinstance(result, tuple) and len(result) == 2
+        status, detail = result
+        assert status is None, "unconfigured CORE must be not-applicable, not ok"
+        assert "not-applicable" in detail
+
+    def test_core_api_registry_entry_uses_core_address(self, monkeypatch):
+        called = {}
+
+        def fake_check(core_url: str):
+            called["url"] = core_url
+            return True, "ok"
+
+        monkeypatch.setenv("CORE_ADDRESS", "http://core:8080")
+        monkeypatch.setattr("core.real_tests.scenarios.check_core_api", fake_check)
+        assert CHECK_REGISTRY["core_api"]() == (True, "ok")
+        assert called["url"] == "http://core:8080"
+
+    def test_git_commit_has_no_version_or_unknown_fallback(self, monkeypatch):
+        from core.real_tests import runner as runner_mod
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+        def boom(*args, **kwargs):
+            raise OSError("no git")
+
+        monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+        assert runner_mod._git_commit() == "", "identity must fail closed, not fall back"
+
+    def test_run_without_identity_cannot_close_issue(self, tmp_path, monkeypatch):
+        reporter = GitHubReporter()
+        run = TestRun(
+            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            commit_sha="unknown", final_result="PASS",
+        )
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "test-ver", "commit_sha": "unknown"}
+        assert reporter.can_close_issue(run) is False
+
+    def test_missing_reported_identity_cannot_close_issue(self, tmp_path, monkeypatch):
+        reporter = GitHubReporter()
+        sha = "a" * 40
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        run = TestRun(
+            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            commit_sha=sha, final_result="PASS",
+        )
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z"}
+        assert reporter.can_close_issue(run) is False
+
+    def test_partial_mandatory_set_cannot_close_issue(self, tmp_path, monkeypatch):
+        reporter = GitHubReporter()
+        sha = "b" * 40
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
+                            lambda rt_id: {"docker", "core_api"})
+        run = TestRun(
+            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            commit_sha=sha, final_result="PASS",
+        )
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "test-ver", "commit_sha": sha}
+        assert reporter.can_close_issue(run) is False
+
+    def test_mismatched_expected_identity_cannot_close_issue(self, tmp_path, monkeypatch):
+        reporter = GitHubReporter()
+        sha = "c" * 40
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names", lambda rt_id: set())
+        run = TestRun(
+            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            commit_sha="d" * 40, final_result="PASS",
+        )
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "test-ver", "commit_sha": "d" * 40}
+        assert reporter.can_close_issue(run) is False
+
+    def test_full_identity_and_coverage_can_close_issue(self, tmp_path, monkeypatch):
+        reporter = GitHubReporter()
+        sha = "e" * 40
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
+                            lambda rt_id: {"docker", "core_api"})
+        run = TestRun(
+            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            commit_sha=sha, final_result="PASS",
+        )
+        run.checks = [
+            CheckResult(name="docker", status=CheckStatus.PASS),
+            CheckResult(name="core_api", status=CheckStatus.PASS),
+        ]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "test-ver", "commit_sha": sha}
+        assert reporter.can_close_issue(run) is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

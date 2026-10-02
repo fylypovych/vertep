@@ -30,6 +30,41 @@ from .storage import audit_entry, record_github_report, update_test_run
 
 _REPORT_MARKER = "REAL-TEST-RUN:"
 _IDEMPOTENCY_RE = re.compile(rf"{_REPORT_MARKER}([0-9a-f]{{32}})")
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _deployment_sha() -> str:
+    """Independently resolve this deployment's commit SHA (no VERSION/unknown)."""
+    github_sha = os.getenv("GITHUB_SHA", "").strip()
+    if github_sha:
+        return github_sha
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+            cwd=os.getcwd(),
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def _deployment_version() -> str:
+    """Independently resolve the installed Vertep version for acceptance."""
+    from ..version import application_version
+    return application_version().strip()
+
+
+def _expected_mandatory_names(rt_id: str) -> set[str]:
+    """The scenario's mandatory check set — full coverage, not a single PASS."""
+    from .scenarios import find_scenario
+    scenario = find_scenario(rt_id=rt_id)
+    if not scenario:
+        return set()
+    return set(scenario.get("checks") or [])
 
 
 def _is_configured() -> bool:
@@ -183,10 +218,17 @@ class GitHubReporter:
         Conditions:
         1. final_result is PASS.
         2. The run was successfully reported to GitHub.
-        3. The reported version and commit_sha match the run's values.
-        4. All mandatory checks were evaluated.
-        5. All mandatory checks have status PASS (not WARNING/SKIPPED/etc).
-        6. The run has not already been used for acceptance.
+        3. The run carries a resolved deployment identity (full commit SHA and
+           version); ``unknown``/empty values are rejected (Issue #95).
+        4. The reported version and commit_sha are present and *exactly* match
+           the run's values — a missing reported identity is never accepted.
+        5. The run's identity matches the independently resolved expected
+           identity of this deployment (env/git SHA and installed version),
+           so a stale or forged report cannot close the Issue.
+        6. All mandatory checks were evaluated and cover the scenario's full
+           mandatory check set.
+        7. All mandatory checks have status PASS (not WARNING/SKIPPED/etc).
+        8. The run has not already been used for acceptance.
         """
         if run.final_result != "PASS":
             return False
@@ -197,19 +239,31 @@ class GitHubReporter:
             return False
         if reported.get("already_accepted"):
             return False
-        expected_version = run.version
-        expected_sha = run.commit_sha
-        reported_version = reported.get("version")
-        reported_sha = reported.get("commit_sha")
-        if expected_version and reported_version and expected_version != reported_version:
+        expected_version = (run.version or "").strip()
+        expected_sha = (run.commit_sha or "").strip()
+        if not expected_version or expected_version.lower() in {"unknown", "none"}:
             return False
-        if expected_sha and reported_sha and expected_sha != reported_sha:
+        if not _FULL_SHA_RE.fullmatch(expected_sha):
+            return False
+        reported_version = (reported.get("version") or "").strip()
+        reported_sha = (reported.get("commit_sha") or "").strip()
+        if not reported_version or not reported_sha:
+            return False
+        if expected_version != reported_version or expected_sha != reported_sha:
+            return False
+        # Independent identity: resolve the deployment's own SHA/version now and
+        # compare — never trust the report alone (Issue #95, #66).
+        if expected_sha != _deployment_sha() or expected_version != _deployment_version():
             return False
         mandatory_checks = [c for c in run.checks if c.mandatory]
         if not mandatory_checks:
             return False
         non_pass_mandatory = [c for c in mandatory_checks if c.status != CheckStatus.PASS]
         if non_pass_mandatory:
+            return False
+        expected_names = _expected_mandatory_names(run.rt_id)
+        reported_names = {c.name for c in mandatory_checks}
+        if expected_names and not expected_names.issubset(reported_names):
             return False
         return True
 

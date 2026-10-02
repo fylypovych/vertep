@@ -141,8 +141,14 @@ class RemoteVideoEngine(VideoEngine):
         *,
         images, clips, durations, audio, music, subtitles,
         aspect_ratio, preset, watermark, task_type,
+        schema_version: str = "v1",
     ) -> dict:
+        if schema_version != "v1":
+            raise ValueError(f"Unsupported bridge schema version: {schema_version}")
+        if aspect_ratio not in {"16:9", "9:16", "1:1"}:
+            raise ValueError(f"Invalid or unsupported aspect ratio: {aspect_ratio}")
         return {
+            "schema_version": schema_version,
             "task_type": task_type,
             "aspect_ratio": aspect_ratio,
             "preset": preset,
@@ -153,6 +159,21 @@ class RemoteVideoEngine(VideoEngine):
             "music": _path(music),
             "subtitles": _path(subtitles),
             "watermark": _path(watermark),
+        }
+
+    def capabilities() -> dict:
+        # Pinned upstream 2e1b3039 (TaskVideoRequest): video_aspect supports only
+        # portrait/landscape/square (16:9, 9:16, 1:1). No preset, no watermark,
+        # no ready SRT input; subtitles are style params + Whisper from script.
+        return {
+            "schema_version": "v1",
+            "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
+            "supported_task_types": ["video"],
+            "supports_watermark": False,
+            "supports_subtitles": False,
+            "subtitle_contract": "generated_from_script_only",
+            "duration_model": "uniform_clip_duration_int_1_15",
+            "preset_contract": "unsupported",
         }
 
     def render(
@@ -201,19 +222,58 @@ class RemoteVideoEngine(VideoEngine):
             timeout=180,
         )
         _check(download)
-        output.write_bytes(download.content)
+        if not download.content:
+            raise RuntimeError(f"{self.name} downloaded video content is empty")
+
+        temp_target = output.with_suffix(output.suffix + ".tmp")
+        try:
+            temp_target.write_bytes(download.content)
+            if temp_target.stat().st_size == 0:
+                raise RuntimeError("Imported artifact size verification failed: 0 bytes")
+            temp_target.replace(output)
+        except Exception:
+            if temp_target.exists():
+                temp_target.unlink()
+            raise
         return output
 
-    def _wait_for_status(self, job_id: str) -> dict:
-        deadline = time.monotonic() + self._timeout
-        while time.monotonic() < deadline:
-            response = self._transport.get(
-                f"{self._url}/jobs/{job_id}",
+    def cancel(self, job_id: str | None = None) -> bool:
+        """Cancel an active render job on the remote engine."""
+        target_id = job_id or self.current_job_id
+        if not target_id or not self._url:
+            return False
+        try:
+            resp = self._transport.delete(
+                f"{self._url}/jobs/{target_id}",
                 headers=self._headers(),
                 timeout=10,
             )
-            _check(response)
-            status = response.json()
+            return resp.status_code in {200, 202, 204}
+        except Exception:
+            return False
+
+    def _wait_for_status(self, job_id: str) -> dict:
+        deadline = time.monotonic() + self._timeout
+        consecutive_transient_errors = 0
+        while time.monotonic() < deadline:
+            try:
+                response = self._transport.get(
+                    f"{self._url}/jobs/{job_id}",
+                    headers=self._headers(),
+                    timeout=10,
+                )
+                _check(response)
+                status = response.json()
+                consecutive_transient_errors = 0
+            except Exception as err:
+                consecutive_transient_errors += 1
+                if consecutive_transient_errors > 5:
+                    raise RuntimeError(
+                        f"{self.name} failed during polling: {err}"
+                    ) from err
+                time.sleep(self._poll_interval)
+                continue
+
             state = str(status.get("status", "")).upper()
             if state == "READY":
                 return status
