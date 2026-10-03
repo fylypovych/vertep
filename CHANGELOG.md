@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.27
+- Виправлено `scripts/moneyprinter-runtime-check.py`: тимчасовий каталог із runtime API key створювався `mkdtemp` (права `0700`), тому не-`root` uid образу не міг прочитати bind mount і `entrypoint.sh` завершувався ще до прослуховування порту (`No public port '8098' published`); каталог робиться прохідним, а ефемерний ключ — читабельним (`test_runtime_check_leaves_the_mounted_key_readable_for_the_image_user`).
+- Перевірка pinned runtime тепер друкує стан контейнера та його лог перед видаленням, щоб падіння зберігало власний доказ (`test_runtime_check_reports_the_container_log_before_it_is_discarded`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.26
 - Виправлено `scripts/moneyprinter-runtime-check.py`: інформаційне читання registry digest більше не завершує перевірку на порожньому `RepoDigests` (`{{index .RepoDigests 0}}` змушує daemon повернути `slice index out of range`, тож перевірка падала до першого запиту до runtime); список читається як JSON (`test_runtime_check_reads_an_empty_repo_digest_list_without_failing`).
 

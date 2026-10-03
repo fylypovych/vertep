@@ -22,6 +22,7 @@ import json
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -1374,6 +1375,66 @@ def test_dockerfile_bounded_transfer_uses_real_curl_options():
 
     assert "--max-time" in dockerfile
     assert "curl -fsSL --retry 3 --timeout" not in dockerfile
+
+
+def test_runtime_check_leaves_the_mounted_key_readable_for_the_image_user():
+    """The runtime runs as its own non-root uid, so a 0700 host mount is unreadable.
+
+    A bind mount keeps the host permissions, so an ephemeral key written by the gate is
+    invisible to that uid and the entrypoint fails closed before it ever listens — which
+    surfaces as a container that never publishes a port.
+    """
+    import stat
+
+    check = _load_runtime_check()
+
+    with tempfile.TemporaryDirectory() as directory:
+        key_directory = Path(directory)
+        key_file, api_key = check.write_api_key(key_directory)
+
+        assert key_file.name == "api_key"
+        assert key_file.read_text(encoding="utf-8").strip() == api_key
+        assert api_key
+        assert stat.S_IMODE(key_file.stat().st_mode) & stat.S_IROTH
+        # The directory must be traversable, not just the file readable.
+        assert stat.S_IMODE(key_directory.stat().st_mode) & stat.S_IXOTH
+
+
+def test_runtime_check_reports_the_container_log_before_it_is_discarded(monkeypatch, capsys):
+    """A runtime that never answers must leave its own log behind as evidence.
+
+    The container is removed in ``finally``, so without this the gate can only report
+    that a port was never published and never says why.
+    """
+    check = _load_runtime_check()
+    monkeypatch.setattr(check, "docker_available", lambda: True)
+    monkeypatch.setattr(check, "build_image", lambda version: None)
+    monkeypatch.setattr(check, "image_digest", lambda name: "sha256:" + "a" * 64)
+    monkeypatch.setattr(check, "registry_digest", lambda name: "")
+    monkeypatch.setattr(check, "start_container", lambda *a, **k: None)
+    monkeypatch.setattr(
+        check,
+        "mapped_port",
+        lambda name: (_ for _ in ()).throw(check.CheckFailure("no public port '8098'")),
+    )
+    reported: dict = {}
+
+    def fake_report(name, lines=60):
+        reported["name"] = name
+
+    monkeypatch.setattr(check, "report_container_log", fake_report)
+    monkeypatch.setattr(
+        check.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "", "stderr": ""})()
+    )
+    monkeypatch.setattr(
+        check.argparse.ArgumentParser,
+        "parse_args",
+        lambda self, *a, **k: type("A", (), {"keep": True, "timeout": 1, "evidence": ""})(),
+    )
+
+    assert check.main() == 1
+    assert reported["name"].startswith("moneyprinter-runtime-check-")
+    assert "no public port" in capsys.readouterr().err
 
 
 def test_runtime_check_refuses_a_re_enabled_auto_upload_config():

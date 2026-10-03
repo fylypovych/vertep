@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import shutil
 import subprocess
@@ -294,6 +295,43 @@ def write_evidence(directory: Path, image_digest_value: str, runtime: dict, sbom
     log(f"evidence written to {directory}")
 
 
+def container_exit_status(name: str) -> str:
+    """Exit code and state of the container, empty while it still runs."""
+    state = docker("inspect", "--format", "{{.State.Status}}", name).strip()
+    code = docker("inspect", "--format", "{{.State.ExitCode}}", name).strip()
+    return f"{state} (exit code {code})"
+
+
+def report_container_log(name: str, lines: int = 60) -> None:
+    """Print the container log before it is discarded, so a failure is diagnosable."""
+    log(f"container state {container_exit_status(name)}")
+    output = subprocess.run(
+        [shutil.which("docker") or "docker", "logs", "--tail", str(lines), name],
+        capture_output=True,
+        text=True,
+    )
+    for stream in (output.stdout, output.stderr):
+        for line in stream.splitlines():
+            if line.strip():
+                print(f"[moneyprinter-runtime-check] container | {line}", file=sys.stderr)
+
+
+def write_api_key(key_directory: Path) -> tuple[Path, str]:
+    """Write the ephemeral key so the runtime's own uid can read the mount.
+
+    The key never leaves the disposable container, but the runtime deliberately runs
+    as its own non-root uid, which cannot read a 0700 host directory. Without read
+    access the entrypoint fails closed before it ever listens, so the mount is made
+    traversable and the short-lived key readable by that uid.
+    """
+    api_key = secrets.token_urlsafe(32)
+    key_file = key_directory / "api_key"
+    key_file.write_text(f"{api_key}\n", encoding="utf-8")
+    os.chmod(key_directory, 0o755)
+    os.chmod(key_file, 0o444)
+    return key_file, api_key
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -315,10 +353,9 @@ def main() -> int:
 
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     name = f"moneyprinter-runtime-check-{secrets.token_hex(4)}"
-    api_key = secrets.token_urlsafe(32)
+    api_key = ""
     key_directory = Path(tempfile.mkdtemp(prefix="vertep-mpt-key-"))
-    key_file = key_directory / "api_key"
-    key_file.write_text(f"{api_key}\n", encoding="utf-8")
+    _key_file, api_key = write_api_key(key_directory)
     container_started = False
 
     try:
@@ -358,6 +395,10 @@ def main() -> int:
         return 0
     except CheckFailure as failure:
         print(f"[moneyprinter-runtime-check] FAILED: {failure}", file=sys.stderr)
+        if container_started:
+            # The container is about to be removed, so its log is the only evidence left
+            # of why the runtime never answered.
+            report_container_log(name)
         return 1
     finally:
         if container_started:
