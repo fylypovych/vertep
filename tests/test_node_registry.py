@@ -22,7 +22,13 @@ def test_registration_token_is_one_time_and_issues_bound_credentials(monkeypatch
     token = create_registration_token("gpu", 900)
     csr = create_node_csr("gpu-01", tmp_path / "client-pki")
     assert token["token"].startswith("VT-")
-    enrolled = enroll_node(token["token"], "gpu-01", ["image_generation", "video_generation"],
+    # A capability no role declares must be dropped at enrollment: the reported set
+    # is intersected with the registration role. Which capabilities a role owns is a
+    # catalog decision that changes (Issue #122 added `video_generation` and
+    # `video_assembly` to `gpu`), so the filter is proven with a capability that is
+    # outside every role instead of a catalog snapshot.
+    enrolled = enroll_node(token["token"], "gpu-01",
+                           ["image_generation", "quantum_ray_tracing"],
                            {"gpu": "Tesla P100", "vram_mb": 16384, "cuda": "12.6"}, "1.3.0", csr)
     assert enrolled["status"] == "READY"
     assert enrolled["certificate"].startswith("-----BEGIN CERTIFICATE-----")

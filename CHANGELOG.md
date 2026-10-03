@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.23
+- Виправлено `tests/test_node_registry.py::test_registration_token_is_one_time_and_issues_bound_credentials`: перевірка фільтрації capabilities більше не залежить від знімка каталогу ролей. Capability `video_generation`, якої раніше не мала роль `gpu`, тепер оголошена для assembly-диспетчеризації, тому тест довів фільтр capability поза будь-якою роллю (`quantum_ray_tracing`).
+- Перевірено на CI-профілі: `openssl` у PATH відкриває 14 тестів `tests/test_node_registry.py`, які локально пропускалися, тому зміну `config/node_roles.json` не було видно до CI; повний прогін без browser E2E з `openssl` — 1474 passed.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.22
 - Виправлено `scripts/release.py`: версійний коміт більше не відкидає файли, які створює сам реліз (`git add -u` → `git add -A`), і відмовляється створювати порожній коміт. Коміт `0.0.2.21` вийшов без `services/moneyprinter_service.py`, `core/engine_config.py`, `scripts/moneyprinter-runtime-check.py`, runtime-файлів MoneyPrinterTurbo та трьох нових тестових модулів, тож compose, CI й `qualify-release.py` посилалися на відсутні файли.
 - Додано `services/moneyprinter_service.py`: wrapper ізольованого runtime з `/health`, `/runtime`, `/sbom`, `/self-test`, `POST /api/v1/video_materials`, `POST /api/v1/videos`, `GET|DELETE /api/v1/videos/{submit_key}` (durable submit record, reconciliation, abort), `GET|DELETE /api/v1/tasks/{task_id}` і `GET /api/v1/download/{file_path}`; матеріали доставляються multipart-конвертом із полем `data.file` у task-scoped каталог attempt-а, імпорт перевіряє checksum, розмір, media-контракт і доступність файлу.
