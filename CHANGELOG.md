@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.26
+- Виправлено `scripts/moneyprinter-runtime-check.py`: інформаційне читання registry digest більше не завершує перевірку на порожньому `RepoDigests` (`{{index .RepoDigests 0}}` змушує daemon повернути `slice index out of range`, тож перевірка падала до першого запиту до runtime); список читається як JSON (`test_runtime_check_reads_an_empty_repo_digest_list_without_failing`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.25
 - Виправлено `docker/moneyprinter/Dockerfile`: образ копіював лише `adapters` і `services`, але `adapters.providers` імпортує `publishers.transport`, тому збірка CI падала на `No module named 'publishers'`; до образу додано `publishers`.
 - Додано `test_the_image_copies_every_package_the_wrapper_imports`: обхід реального графу імпортів entrypoint-ів wrapper-а (з урахуванням `__init__.py` та відносних імпортів, без імпортів усередині функцій) вимагає, щоб образ копіював кожен потрібний пакет; перевірено, що без `COPY publishers` тест падає.

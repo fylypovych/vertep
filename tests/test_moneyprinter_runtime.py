@@ -1178,7 +1178,7 @@ def test_runtime_check_identifies_a_locally_built_image_by_its_content_digest():
     image_id = "sha256:" + "a" * 64
     answers = {
         ("image", "inspect", "--format", "{{.Id}}", check.IMAGE_NAME): image_id,
-        ("image", "inspect", "--format", "{{index .RepoDigests 0}}", check.IMAGE_NAME): "",
+        ("image", "inspect", "--format", "{{json .RepoDigests}}", check.IMAGE_NAME): "[]",
     }
     check.docker = lambda *args, **kwargs: answers[tuple(args)]
 
@@ -1188,6 +1188,24 @@ def test_runtime_check_identifies_a_locally_built_image_by_its_content_digest():
     answers[("image", "inspect", "--format", "{{.Id}}", check.IMAGE_NAME)] = "not-a-digest"
     with pytest.raises(check.CheckFailure, match="immutable content digest"):
         check.image_digest(check.IMAGE_NAME)
+
+
+def test_runtime_check_reads_an_empty_repo_digest_list_without_failing():
+    """`{{index .RepoDigests 0}}` makes the daemon fail on an empty slice.
+
+    A locally built image has no registry digest, and that is normal — reading it as
+    an index must not end the verification before the runtime is ever asked anything.
+    """
+    check = _load_runtime_check()
+    template = ("image", "inspect", "--format", "{{json .RepoDigests}}", check.IMAGE_NAME)
+    check.docker = lambda *args, **kwargs: "[]" if tuple(args) == template else ""
+
+    assert check.registry_digest(check.IMAGE_NAME) == ""
+
+    check.docker = lambda *args, **kwargs: (
+        '["vertep/moneyprinter-runtime-check@sha256:' + "b" * 64 + '"]'
+        if tuple(args) == template else "")
+    assert check.registry_digest(check.IMAGE_NAME).endswith("@sha256:" + "b" * 64)
 
 
 def _module_roots(path: Path) -> set[str]:

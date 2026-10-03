@@ -122,9 +122,21 @@ def image_digest(reference: str) -> str:
 
 
 def registry_digest(reference: str) -> str:
-    """Registry digest of the image, when the daemon knows one (informational)."""
-    digest = docker("image", "inspect", "--format", "{{index .RepoDigests 0}}", reference)
-    return digest if "@sha256:" in (digest or "") else ""
+    """Registry digest of the image, when the daemon knows one (informational).
+
+    ``{{index .RepoDigests 0}}`` makes the daemon fail on an empty ``RepoDigests``,
+    which is the normal state of a locally built image, so the slice is read as JSON
+    and an image without one simply reports nothing.
+    """
+    raw = docker("image", "inspect", "--format", "{{json .RepoDigests}}", reference)
+    try:
+        entries = json.loads(raw or "[]") or []
+    except json.JSONDecodeError:
+        return ""
+    for entry in entries:
+        if isinstance(entry, str) and "@sha256:" in entry:
+            return entry
+    return ""
 
 
 def local_image_id(reference: str) -> str:
