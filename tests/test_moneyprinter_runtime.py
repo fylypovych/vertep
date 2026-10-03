@@ -1132,7 +1132,7 @@ def _ready_health(**checks) -> dict:
         "snapshot": {"image_digest": "sha256:" + "a" * 64},
         "upstream_auth_enforced": True,
         "submit_schema": sorted(REQUIRED_SUBMIT_FIELDS),
-        "media_pipeline": {"produced_bytes": 4096},
+        "media_pipeline": {"bytes": 4096, "duration_seconds": 3.0},
     }
     payload.update(checks)
     return {"status": "ready", "checks": payload}
@@ -1202,7 +1202,7 @@ def test_runtime_check_reads_the_contract_when_run_as_a_script():
         "spec.loader.exec_module(module);"
         "health = {'status': 'ready', 'checks': {'snapshot': {'image_digest': 'sha256:' + 'a' * 64},"
         " 'upstream_auth_enforced': True, 'submit_schema': ['video_subject'],"
-        " 'media_pipeline': {'produced_bytes': 4096}}};"
+        " 'media_pipeline': {'bytes': 4096, 'duration_seconds': 3.0}}};"
         "\ntry:\n module.verify_gate(health)\nexcept module.CheckFailure as refusal:\n"
         "    print('REFUSED', refusal)\n"
     )
@@ -1218,6 +1218,42 @@ def test_runtime_check_reads_the_contract_when_run_as_a_script():
     assert "REFUSED" in completed.stdout
     # The refusal must come from the contract, not from a missing import.
     assert "submit schema is missing" in completed.stdout
+
+
+def test_runtime_check_reads_only_keys_the_wrapper_health_actually_publishes(
+    monkeypatch, tmp_path,
+):
+    """The gate must not require a field the health report does not carry.
+
+    ``/health`` is a cheap readiness report; the produced media file is proven by the
+    self-test gate. Requiring ``media_pipeline`` here failed a fully healthy runtime for
+    a field its report never publishes, which no unit test of either side alone could see.
+    """
+    from services import moneyprinter_service as wrapper
+
+    check = _load_runtime_check()
+    monkeypatch.setattr(wrapper, "check_upstream_authenticated", lambda *a, **k: None)
+    monkeypatch.setattr(wrapper, "check_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        wrapper, "check_media_pipeline", lambda: {"duration_seconds": 3.0, "bytes": 4096}
+    )
+    monkeypatch.setattr(
+        wrapper,
+        "check_submit_schema",
+        lambda: {name: "str" for name in wrapper.REQUIRED_SUBMIT_FIELDS},
+    )
+    client = _wrapper_client(monkeypatch, tmp_path)
+
+    published = set(client.get("/health").json()["checks"])
+
+    assert set(check.HEALTH_GATE_KEYS).issubset(published), (
+        "the readiness gate reads fields the wrapper's /health does not publish"
+    )
+    assert "media_pipeline" not in check.HEALTH_GATE_KEYS
+    # The media proof has to stay enforced somewhere: the self-test report.
+    self_test = client.get("/self-test").json()
+    assert self_test["checks"]["media_pipeline"]["bytes"] == 4096
+    check.verify_self_test(self_test)
 
 
 def test_runtime_check_requires_every_readiness_gate():
@@ -1244,8 +1280,19 @@ def test_runtime_check_requires_every_readiness_gate():
                 "submit_schema": [],
             },
         })
-    with pytest.raises(check.CheckFailure, match="media pipeline did not produce"):
-        check.verify_gate(_ready_health(media_pipeline={"produced_bytes": 0}))
+    # The media proof belongs to the self-test report, so a zero byte count must be
+    # refused there — not by the readiness gate, whose report never carries it.
+    check.verify_gate(_ready_health())
+    with pytest.raises(check.CheckFailure, match="without a produced media file"):
+        check.verify_self_test({
+            "status": "passed",
+            "checks": {"media_pipeline": {"bytes": 0, "duration_seconds": 3.0}},
+        })
+    with pytest.raises(check.CheckFailure, match="undecodable media file"):
+        check.verify_self_test({
+            "status": "passed",
+            "checks": {"media_pipeline": {"bytes": 4096, "duration_seconds": 0}},
+        })
 
 
 def test_runtime_check_refuses_a_runtime_that_dropped_a_script_or_voice_field():
@@ -1565,13 +1612,13 @@ def test_runtime_check_requires_a_self_test_that_produced_media():
 
     check.verify_self_test({
         "status": "passed",
-        "checks": {"media_pipeline": {"produced_bytes": 2048}},
+        "checks": {"media_pipeline": {"bytes": 2048, "duration_seconds": 3.0}},
     })
     with pytest.raises(check.CheckFailure, match="self-test did not pass"):
         check.verify_self_test({"status": "failed", "reason": "upstream_unreachable"})
     with pytest.raises(check.CheckFailure, match="without a produced media file"):
         check.verify_self_test({
-            "status": "passed", "checks": {"media_pipeline": {"produced_bytes": 0}},
+            "status": "passed", "checks": {"media_pipeline": {"bytes": 0, "duration_seconds": 3.0}},
         })
 
 

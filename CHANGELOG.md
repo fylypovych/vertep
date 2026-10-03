@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.30
+- Виправлено `scripts/moneyprinter-runtime-check.py`: readiness gate вимагав `media_pipeline`, якого `/health` ніколи не публікує, через що здоровий образ відхилявся; доведення медіафайлу лишається в self-test gate, а список ключів, які читає gate, оголошено константою `HEALTH_GATE_KEYS`.
+- Виправлено читання медіадоказу у self-test gate: wrapper публікує `bytes` і `duration_seconds`, gate читав неіснуючий `produced_bytes`; тепер перевіряються реальні байти та тривалість (`test_runtime_check_reads_only_keys_the_wrapper_health_actually_publishes`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.29
 - Виправлено `scripts/moneyprinter-runtime-check.py`: скрипт запускається як `python scripts/moneyprinter-runtime-check.py`, тому в `sys.path` опинявся `scripts/`, а не корінь репозиторію, і gate падав з `No module named 'adapters'` при імпорті контракту (те саме стосувалося `verify_runtime`); додано bootstrap `sys.path` як в інших скриптах репозиторію.
 - Додано `test_runtime_check_reads_the_contract_when_run_as_a_script`, який запускає gate так само, як CI, і перевірено, що без bootstrap тест падає.

@@ -198,6 +198,13 @@ def wait_for_wrapper(port: int, api_key: str, deadline: float) -> dict:
     raise CheckFailure(f"wrapper /health never answered: {last_error}")
 
 
+# Keys this gate reads from the wrapper ``/health`` report. The media proof is not one of
+# them: ``/health`` is a cheap readiness report, and the produced media file is proven by
+# the self-test gate below. Reading a field the report never publishes would fail a
+# perfectly healthy runtime for a reason it cannot fix.
+HEALTH_GATE_KEYS = ("snapshot", "upstream_auth_enforced", "submit_schema")
+
+
 def verify_gate(health: dict) -> None:
     if health.get("status") != "ready":
         raise CheckFailure(
@@ -221,9 +228,6 @@ def verify_gate(health: dict) -> None:
             f"upstream submit schema is missing {missing}; the bridge submits "
             f"{', '.join(REQUIRED_SUBMIT_FIELDS)}"
         )
-    media = checks.get("media_pipeline") or {}
-    if not media.get("produced_bytes"):
-        raise CheckFailure("the pinned media pipeline did not produce a file")
 
 
 def verify_runtime(runtime: dict, image_digest_value: str) -> None:
@@ -261,8 +265,18 @@ def verify_self_test(self_test: dict) -> None:
             f"self-test did not pass: {self_test.get('reason')} {self_test.get('detail')}"
         )
     checks = self_test.get("checks") or {}
-    if not (checks.get("media_pipeline") or {}).get("produced_bytes"):
-        raise CheckFailure("self-test passed without a produced media file")
+    # ``check_media_pipeline`` publishes the byte count and the duration it measured on
+    # the file the pinned compose path produced; both have to be real for the §9.12 media
+    # gate to mean anything.
+    media = checks.get("media_pipeline") or {}
+    if not media.get("bytes"):
+        raise CheckFailure(
+            f"self-test passed without a produced media file: {media!r}"
+        )
+    if not media.get("duration_seconds"):
+        raise CheckFailure(
+            f"self-test passed with an undecodable media file: {media!r}"
+        )
 
 
 def verify_config_auto_upload(container: str) -> None:
