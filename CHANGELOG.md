@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.31
+- Виправлено `verify_config_auto_upload` у `scripts/moneyprinter-runtime-check.py`: перевірка вважала перемикачем публікації будь-який ключ `upload_post_*` і відхиляла заблоковані ним мітки видимості акаунта (`upload_post_youtube_privacy_status = "private"`); тепер перевіряються лише налаштування, здатні щось опублікувати (enable, credentials, platforms), і gate вимагає присутності всіх чотирьох ключів поверхні (`test_runtime_check_refuses_every_way_the_runtime_could_publish`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.30
 - Виправлено `scripts/moneyprinter-runtime-check.py`: readiness gate вимагав `media_pipeline`, якого `/health` ніколи не публікує, через що здоровий образ відхилявся; доведення медіафайлу лишається в self-test gate, а список ключів, які читає gate, оголошено константою `HEALTH_GATE_KEYS`.
 - Виправлено читання медіадоказу у self-test gate: wrapper публікує `bytes` і `duration_seconds`, gate читав неіснуючий `produced_bytes`; тепер перевіряються реальні байти та тривалість (`test_runtime_check_reads_only_keys_the_wrapper_health_actually_publishes`).

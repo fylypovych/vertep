@@ -279,27 +279,61 @@ def verify_self_test(self_test: dict) -> None:
         )
 
 
+# Markers of a setting that can make the pinned runtime publish on its own: an enable
+# switch, a credential or a configured platform. Only settings carrying one of these must
+# be empty in the rendered config. ``upload_post_youtube_privacy_status`` and
+# ``_made_for_kids`` are account visibility labels — a locked non-empty value there
+# cannot publish anything, and refusing it would be refusing a value the configuration
+# lock deliberately pins.
+PUBLICATION_MARKERS = (
+    "enabled",
+    "auto_upload",
+    "api_key",
+    "username",
+    "password",
+    "token",
+    "cookie",
+    "secret",
+    "platform",
+    "url",
+)
+
+
+def _publication_switches(config: str) -> list[tuple[str, str]]:
+    """Every ``key = value`` pair in the config that could enable publishing."""
+    switches: list[tuple[str, str]] = []
+    for line in config.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(("upload_post", "auto_upload")) or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if not any(marker in key for marker in PUBLICATION_MARKERS):
+            continue
+        switches.append((key, value.strip()))
+    return switches
+
+
 def verify_config_auto_upload(container: str) -> None:
     """Auto-upload must stay disabled in the config the runtime actually rendered."""
     config = docker("exec", container, "cat", "/opt/moneyprinter/config.toml")
     falsy = {"false", '""', "''", "[]", "{}", "0"}
-    checked = 0
-    for line in config.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith(("upload_post", "auto_upload")):
-            continue
-        if "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        if key.strip().startswith("upload_post_platforms"):
-            continue
-        checked += 1
-        if value.strip() not in falsy:
-            raise CheckFailure(f"auto-upload is enabled in the rendered config: {stripped}")
+    switches = _publication_switches(config)
+    for key, value in switches:
+        if value not in falsy:
+            raise CheckFailure(f"auto-upload is enabled in the rendered config: {key} = {value}")
     if "upload_post_auto_upload" not in config:
         raise CheckFailure("the rendered config does not declare the auto-upload switch")
-    if checked < 2:
-        raise CheckFailure("the rendered config does not declare the auto-upload surface")
+    if not {key for key, _ in switches} >= {
+        "upload_post_enabled",
+        "upload_post_auto_upload",
+        "upload_post_api_key",
+        "upload_post_platforms",
+    }:
+        raise CheckFailure(
+            "the rendered config does not declare the auto-upload surface: "
+            f"{sorted(key for key, _ in switches)}"
+        )
 
 
 def collect_sbom(port: int, api_key: str) -> dict:

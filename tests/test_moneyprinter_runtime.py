@@ -1591,11 +1591,16 @@ def test_runtime_check_reports_the_container_log_before_it_is_discarded(monkeypa
 def test_runtime_check_refuses_a_re_enabled_auto_upload_config():
     check = _load_runtime_check()
 
+    # The locked config, including the account visibility labels the lock pins.
     check.verify_config_auto_upload.__globals__["docker"] = lambda *args, **kwargs: (
         'upload_post_enabled = false\n'
         'upload_post_api_key = ""\n'
-        'upload_post_auto_upload = false\n'
+        'upload_post_username = ""\n'
         'upload_post_platforms = []\n'
+        'upload_post_auto_upload = false\n'
+        'upload_post_youtube_privacy_status = "private"\n'
+        'upload_post_youtube_made_for_kids = false\n'
+        'upload_post_max_pending_tasks = 0\n'
     )
     check.verify_config_auto_upload("container")
 
@@ -1604,6 +1609,46 @@ def test_runtime_check_refuses_a_re_enabled_auto_upload_config():
         "upload_post_auto_upload = true\n"
     )
     with pytest.raises(check.CheckFailure, match="auto-upload is enabled"):
+        check.verify_config_auto_upload("container")
+
+
+def test_runtime_check_refuses_every_way_the_runtime_could_publish():
+    """Publishing needs an enable switch, a credential or a configured platform.
+
+    A visibility label such as ``upload_post_youtube_privacy_status`` cannot publish
+    anything, so refusing it would be refusing a value the lock deliberately pins — but
+    every real switch must still be caught, including one that reappears with a name the
+    check has never seen.
+    """
+    check = _load_runtime_check()
+    locked = (
+        'upload_post_enabled = false\n'
+        'upload_post_api_key = ""\n'
+        'upload_post_platforms = []\n'
+        'upload_post_auto_upload = false\n'
+        'upload_post_youtube_privacy_status = "private"\n'
+    )
+
+    for reenabled in (
+        "upload_post_enabled = true",
+        "upload_post_auto_upload = true",
+        'upload_post_api_key = "token"',
+        'upload_post_platforms = ["youtube"]',
+        'upload_post_youtube_cookies = "session=1"',
+        'upload_post_tiktok_token = "token"',
+    ):
+        check.verify_config_auto_upload.__globals__["docker"] = (
+            lambda *args, **kwargs: locked + reenabled + "\n"
+        )
+        with pytest.raises(check.CheckFailure, match="auto-upload is enabled"):
+            check.verify_config_auto_upload("container")
+
+    # A config that dropped the switches entirely is refused as well, not accepted
+    # because nothing is enabled.
+    check.verify_config_auto_upload.__globals__["docker"] = (
+        lambda *args, **kwargs: "upload_post_youtube_privacy_status = \"private\"\n"
+    )
+    with pytest.raises(check.CheckFailure, match="auto-upload"):
         check.verify_config_auto_upload("container")
 
 
