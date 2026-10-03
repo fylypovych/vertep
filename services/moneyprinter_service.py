@@ -208,6 +208,18 @@ def check_upstream_authenticated(client: httpx.Client, api_key: str) -> None:
         )
 
 
+def _annotation_name(annotation) -> str:
+    """Name of a field annotation that never raises.
+
+    ``video_materials`` is an ``Optional[List[...]]`` and ``video_aspect`` an
+    ``Optional[...]``, whose ``__name__`` is not guaranteed to exist. The schema proof
+    must describe the pinned fields, so an unrepresentable annotation falls back to its
+    text instead of turning a healthy runtime into an error.
+    """
+    name = getattr(annotation, "__name__", None)
+    return name if isinstance(name, str) and name else str(annotation)
+
+
 def check_submit_schema() -> dict:
     """Confirm the pinned upstream still declares the fields we submit."""
     try:
@@ -231,7 +243,10 @@ def check_submit_schema() -> dict:
             REASON_SCHEMA_UNSUPPORTED,
             f"upstream TaskVideoRequest is missing required fields: {', '.join(missing)}",
         )
-    return {name: fields[name].annotation.__name__ for name in REQUIRED_SUBMIT_FIELDS}
+    return {
+        name: _annotation_name(fields[name].annotation)
+        for name in REQUIRED_SUBMIT_FIELDS
+    }
 
 
 def task_local_voice_capability() -> dict:

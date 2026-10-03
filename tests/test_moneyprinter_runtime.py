@@ -1120,21 +1120,75 @@ def test_runtime_check_refuses_an_unpinned_dependency_inventory():
         )
 
 
+def _ready_health(**checks) -> dict:
+    """A ``/health`` report that satisfies every §9.12 readiness gate.
+
+    The submit schema is built from the bridge contract so this report cannot claim to
+    be ready while proving less than the engine requires.
+    """
+    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+
+    payload = {
+        "snapshot": {"image_digest": "sha256:" + "a" * 64},
+        "upstream_auth_enforced": True,
+        "submit_schema": sorted(REQUIRED_SUBMIT_FIELDS),
+        "media_pipeline": {"produced_bytes": 4096},
+    }
+    payload.update(checks)
+    return {"status": "ready", "checks": payload}
+
+
+def test_wrapper_proves_inherited_optional_submit_fields_without_failing():
+    """``video_script``/``video_materials``/``custom_audio_file`` are inherited fields.
+
+    They live on the pinned ``VideoParams``, so a proof that only looked at the
+    request's own fields would report a healthy runtime as drifted. Their annotations are
+    also ``Optional[...]``, which has no guaranteed ``__name__``, so describing them must
+    not turn the proof into an error.
+    """
+    import typing
+
+    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+    from services import moneyprinter_service as wrapper
+
+    class _Field:
+        def __init__(self, annotation):
+            self.annotation = annotation
+
+    class _MaterialInfo:
+        pass
+
+    class _VideoAspect:
+        pass
+
+    fields = {
+        "video_subject": _Field(str),
+        "video_script": _Field(str),
+        "video_materials": _Field(typing.Optional[typing.List[_MaterialInfo]]),
+        "custom_audio_file": _Field(typing.Optional[str]),
+        "video_aspect": _Field(typing.Optional[_VideoAspect]),
+        "video_source": _Field(typing.Optional[str]),
+        "subtitle_enabled": _Field(bool),
+        "video_clip_duration": _Field(int),
+    }
+    request = type("TaskVideoRequest", (), {"model_fields": fields})
+    module = type("schema", (), {"TaskVideoRequest": request})
+    monkey = pytest.MonkeyPatch()
+    monkey.setitem(__import__("sys").modules, "app.models.schema", module)
+    try:
+        proved = wrapper.check_submit_schema()
+    finally:
+        monkey.undo()
+
+    assert set(REQUIRED_SUBMIT_FIELDS).issubset(fields)
+    assert set(proved) == set(REQUIRED_SUBMIT_FIELDS)
+    assert all(isinstance(value, str) and value for value in proved.values())
+
+
 def test_runtime_check_requires_every_readiness_gate():
     check = _load_runtime_check()
 
-    healthy = {
-        "status": "ready",
-        "checks": {
-            "snapshot": {"image_digest": "sha256:" + "a" * 64},
-            "upstream_auth_enforced": True,
-            "submit_schema": [
-                "video_subject", "video_script", "video_materials", "custom_audio_file",
-            ],
-            "media_pipeline": {"produced_bytes": 4096},
-        },
-    }
-    check.verify_gate(healthy)
+    check.verify_gate(_ready_health())
 
     with pytest.raises(check.CheckFailure, match="without a verified snapshot"):
         check.verify_gate({"status": "ready", "checks": {"upstream_auth_enforced": True}})
@@ -1156,16 +1210,31 @@ def test_runtime_check_requires_every_readiness_gate():
             },
         })
     with pytest.raises(check.CheckFailure, match="media pipeline did not produce"):
-        check.verify_gate({
-            "status": "ready",
-            "checks": {
-                "snapshot": {"image_digest": "sha256:" + "a" * 64},
-                "upstream_auth_enforced": True,
-                "submit_schema": ["video_subject", "video_script", "video_materials",
-                                  "custom_audio_file"],
-                "media_pipeline": {"produced_bytes": 0},
-            },
-        })
+        check.verify_gate(_ready_health(media_pipeline={"produced_bytes": 0}))
+
+
+def test_runtime_check_refuses_a_runtime_that_dropped_a_script_or_voice_field():
+    """The §9.3 inputs must be proved, not just the fields that start a task.
+
+    A runtime that stopped accepting the script, the staged clips or the approved voice
+    can still accept a bare subject and would then regenerate content the factory owns,
+    so the gate takes its expected fields from the bridge contract instead of keeping a
+    copy of its own.
+    """
+    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+
+    check = _load_runtime_check()
+
+    for dropped in ("video_script", "video_materials", "custom_audio_file"):
+        assert dropped in REQUIRED_SUBMIT_FIELDS
+        proved = [name for name in REQUIRED_SUBMIT_FIELDS if name != dropped]
+
+        with pytest.raises(check.CheckFailure) as refusal:
+            check.verify_gate(_ready_health(submit_schema=proved))
+
+        assert dropped in str(refusal.value)
+
+    check.verify_gate(_ready_health())
 
 
 def test_runtime_check_identifies_a_locally_built_image_by_its_content_digest():

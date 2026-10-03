@@ -203,13 +203,19 @@ def verify_gate(health: dict) -> None:
         raise CheckFailure("wrapper reported ready without a verified snapshot")
     if not checks.get("upstream_auth_enforced"):
         raise CheckFailure("wrapper reported ready without a proven upstream authentication")
-    missing = [
-        field
-        for field in ("video_subject", "video_script", "video_materials", "custom_audio_file")
-        if field not in (checks.get("submit_schema") or [])
-    ]
+    # The expected fields come from the bridge contract, not from a copy made here: a
+    # hand-kept subset silently accepted a runtime that had stopped accepting the
+    # script, the staged materials or the approved voice (§9.3).
+    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+
+    proved = checks.get("submit_schema") or ()
+    proved_names = set(proved)
+    missing = [field for field in REQUIRED_SUBMIT_FIELDS if field not in proved_names]
     if missing:
-        raise CheckFailure(f"upstream submit schema is missing {missing}")
+        raise CheckFailure(
+            f"upstream submit schema is missing {missing}; the bridge submits "
+            f"{', '.join(REQUIRED_SUBMIT_FIELDS)}"
+        )
     media = checks.get("media_pipeline") or {}
     if not media.get("produced_bytes"):
         raise CheckFailure("the pinned media pipeline did not produce a file")

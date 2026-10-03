@@ -3,6 +3,7 @@ from adapters.providers.base import (
     BRIDGE_SCHEMA_VERSION,
     REASON_SUBMIT_UNKNOWN,
     REASON_VOICE_STAGING_UNSUPPORTED,
+    REQUIRED_SUBMIT_FIELDS,
 )
 from adapters.providers.video_engines import (
     MONEY_PRINTER_CONTRACT,
@@ -1376,13 +1377,9 @@ def _wrapper_ready_body(**overrides):
             "inventory_digest": "b" * 64,
         },
         "upstream_auth_enforced": True,
-        "submit_schema": [
-            "video_subject",
-            "video_aspect",
-            "video_source",
-            "subtitle_enabled",
-            "video_clip_duration",
-        ],
+        # Built from the contract, so a widened §9.12 field list cannot leave this
+        # "ready" report proving less than the engine requires.
+        "submit_schema": sorted(REQUIRED_SUBMIT_FIELDS),
     }
     checks.update(overrides)
     return {"service": "moneyprinter", "status": "ready", "checks": checks}

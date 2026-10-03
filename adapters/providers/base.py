@@ -197,8 +197,17 @@ BRIDGE_VERSION = "v1"
 # of these fields, otherwise the bridge cannot build a request and the runtime is
 # refused. The wrapper proves this against the real ``TaskVideoRequest`` inside the
 # container; the engine consumes the same list when reading that proof.
+#
+# The list covers every input the bridge actually submits, not only the ones needed to
+# start a task: §9.3 requires the deterministic script (``video_script``), the staged
+# scene clips (``video_materials``) and the approved voice (``custom_audio_file``) to
+# reach the pinned engine. A runtime that stopped accepting any of them could still
+# accept a bare subject and would then silently regenerate content the factory owns.
 REQUIRED_SUBMIT_FIELDS = (
     "video_subject",
+    "video_script",
+    "video_materials",
+    "custom_audio_file",
     "video_aspect",
     "video_source",
     "subtitle_enabled",
