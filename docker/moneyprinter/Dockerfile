@@ -63,8 +63,12 @@ RUN set -eux; \
     test -f /opt/moneyprinter/app/asgi.py
 
 # --- Vertep wrapper ----------------------------------------------------------
+# Only the packages the wrapper actually imports are copied. `adapters` reaches
+# `publishers.transport` (its HTTP helper), so the publisher stack has to travel
+# with it or importing the bridge contract inside the image fails on `publishers`.
 COPY adapters /opt/vertep/adapters
 COPY services /opt/vertep/services
+COPY publishers /opt/vertep/publishers
 COPY docker/moneyprinter/config.lock.toml /opt/moneyprinter/config.lock.toml
 COPY docker/moneyprinter/entrypoint.sh /usr/local/bin/moneyprinter-entrypoint
 RUN set -eux; \

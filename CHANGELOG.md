@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.25
+- Виправлено `docker/moneyprinter/Dockerfile`: образ копіював лише `adapters` і `services`, але `adapters.providers` імпортує `publishers.transport`, тому збірка CI падала на `No module named 'publishers'`; до образу додано `publishers`.
+- Додано `test_the_image_copies_every_package_the_wrapper_imports`: обхід реального графу імпортів entrypoint-ів wrapper-а (з урахуванням `__init__.py` та відносних імпортів, без імпортів усередині функцій) вимагає, щоб образ копіював кожен потрібний пакет; перевірено, що без `COPY publishers` тест падає.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.24
 - Виправлено `docker/moneyprinter/Dockerfile`: завантаження pinned tarball мало неіснуючий параметр curl `--timeout` (CI: `curl: option --timeout: is unknown`), тепер `--connect-timeout` і `--max-time`; вимогу фіксує `test_dockerfile_bounded_transfer_uses_real_curl_options`.
 - Виправлено `scripts/moneyprinter-runtime-check.py`: локально збудований образ не має `RepoDigests`, тому перевірка завершувалася відмовою `no immutable repository digest` ще до першого запиту до runtime — ідентифікатором розгорнутого образу тепер є content digest (`ImageId`) з перевіркою форми `sha256:<64 hex>`, а `RepoDigests` лишається інформаційним (`test_runtime_check_identifies_a_locally_built_image_by_its_content_digest`).

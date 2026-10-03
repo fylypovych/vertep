@@ -21,6 +21,7 @@ import importlib.util
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -1187,6 +1188,138 @@ def test_runtime_check_identifies_a_locally_built_image_by_its_content_digest():
     answers[("image", "inspect", "--format", "{{.Id}}", check.IMAGE_NAME)] = "not-a-digest"
     with pytest.raises(check.CheckFailure, match="immutable content digest"):
         check.image_digest(check.IMAGE_NAME)
+
+
+def _module_roots(path: Path) -> set[str]:
+    """Top-level module names imported by one Python file."""
+    roots: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            roots.add(node.module.split(".")[0])
+    return roots
+
+
+class _ImportCollector(ast.NodeVisitor):
+    """Collect the imports that actually run when a module is imported.
+
+    Imports inside a function or a class body only run when that code runs, so the
+    wrapper does not need the package at import time: treating them as requirements
+    would force unrelated Vertep packages into the isolated image.
+    """
+
+    def __init__(self, package: str) -> None:
+        self.package = package
+        self.modules: set[str] = set()
+
+    def visit_FunctionDef(self, node):  # noqa: N802 - ast visitor protocol
+        return None
+
+    def visit_AsyncFunctionDef(self, node):  # noqa: N802 - ast visitor protocol
+        return None
+
+    def visit_ClassDef(self, node):  # noqa: N802 - ast visitor protocol
+        for statement in node.body:
+            if isinstance(statement, (ast.Import, ast.ImportFrom)):
+                self.visit(statement)
+        return None
+
+    def visit_Import(self, node):  # noqa: N802 - ast visitor protocol
+        self.modules.update(alias.name for alias in node.names)
+
+    def visit_ImportFrom(self, node):  # noqa: N802 - ast visitor protocol
+        if node.level:
+            base = self.package.split(".")
+            trimmed = base[:len(base) - (node.level - 1)] if node.level > 1 else base
+            prefix = ".".join(trimmed)
+            if node.module:
+                self.modules.add(f"{prefix}.{node.module}" if prefix else node.module)
+            else:
+                self.modules.update(f"{prefix}.{alias.name}" if prefix else alias.name
+                                     for alias in node.names)
+        elif node.module:
+            self.modules.add(node.module)
+
+
+def _imported_modules(path: Path) -> set[str]:
+    """Absolute dotted modules that importing one Python file requires.
+
+    Relative imports are resolved against the importing module's package, because
+    importing a submodule also executes every ``__init__.py`` on the way — and those
+    package inits are exactly where a cross-package import like
+    ``adapters.providers -> publishers.transport`` hides.
+    """
+    package = ".".join(path.with_suffix("").parts[:-1])
+    collector = _ImportCollector(package)
+    collector.visit(ast.parse(path.read_text(encoding="utf-8")))
+    return collector.modules
+
+
+def _module_file(module: str) -> Path | None:
+    parts = module.split(".")
+    candidate = Path(*parts).with_suffix(".py")
+    if candidate.is_file():
+        return candidate
+    package = Path(*parts) / "__init__.py"
+    return package if package.is_file() else None
+
+
+def _package_inits(module: str) -> list[Path]:
+    """``__init__.py`` of every package that importing ``module`` executes."""
+    parts = module.split(".")[:-1]
+    inits: list[Path] = []
+    for depth in range(1, len(parts) + 1):
+        init = Path(*parts[:depth]) / "__init__.py"
+        if init.is_file():
+            inits.append(init)
+    return inits
+
+
+def _image_packages(dockerfile: str) -> set[str]:
+    """Top-level packages the image copies into ``/opt/vertep``."""
+    return set(re.findall(r"^COPY\s+(\w+)\s+/opt/vertep/\1\s*$", dockerfile, re.MULTILINE))
+
+
+def test_the_image_copies_every_package_the_wrapper_imports():
+    """A package the wrapper imports but the image does not copy cannot be imported.
+
+    ``adapters`` reaches ``publishers.transport``, so the wrapper image needs the
+    publisher stack too; the CI build proved it by failing on ``No module named
+    'publishers'`` while recording the runtime inventory.
+    """
+    dockerfile = Path("docker/moneyprinter/Dockerfile").read_text(encoding="utf-8")
+    copied = _image_packages(dockerfile)
+    assert copied, "the image must copy the wrapper packages"
+
+    # Follow the real import graph of the modules the entrypoint loads: importing the
+    # wrapper must not need a package the image does not ship.
+    queue = [Path("services/moneyprinter_service.py"),
+             Path("adapters/providers/runtime_manifest.py"),
+             Path("adapters/providers/base.py")]
+    seen: set[Path] = set()
+    required: set[str] = set()
+    while queue:
+        current = queue.pop()
+        if current in seen or not current.is_file():
+            continue
+        seen.add(current)
+        for module in _imported_modules(current):
+            root = module.split(".")[0]
+            if root in sys.stdlib_module_names:
+                continue
+            if not (Path(root) / "__init__.py").is_file():
+                continue  # third-party dependency, pinned in requirements.lock
+            required.add(root)
+            resolved = _module_file(module)
+            if resolved is not None:
+                queue.append(resolved)
+            queue.extend(_package_inits(module))
+
+    assert required <= copied, (
+        f"the wrapper imports packages the image does not copy: "
+        f"{sorted(required - copied)}"
+    )
 
 
 def test_runtime_check_mounts_the_api_key_directory_the_entrypoint_reads():
