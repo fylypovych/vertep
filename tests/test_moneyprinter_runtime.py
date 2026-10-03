@@ -1185,6 +1185,41 @@ def test_wrapper_proves_inherited_optional_submit_fields_without_failing():
     assert all(isinstance(value, str) and value for value in proved.values())
 
 
+def test_runtime_check_reads_the_contract_when_run_as_a_script():
+    """CI runs ``python scripts/moneyprinter-runtime-check.py``, not pytest.
+
+    That invocation puts ``scripts/`` on the path instead of the repository root, so
+    importing the bridge contract failed with ``No module named 'adapters'`` — a failure
+    no test running under pytest can see, because pytest already provides the root. This
+    runs the module the way CI does and asserts the gate reaches its verdict.
+    """
+    import subprocess
+
+    program = (
+        "import importlib.util, sys;"
+        f"spec = importlib.util.spec_from_file_location('runtime_check', r'{REPO_ROOT / 'scripts' / 'moneyprinter-runtime-check.py'}');"
+        "module = importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(module);"
+        "health = {'status': 'ready', 'checks': {'snapshot': {'image_digest': 'sha256:' + 'a' * 64},"
+        " 'upstream_auth_enforced': True, 'submit_schema': ['video_subject'],"
+        " 'media_pipeline': {'produced_bytes': 4096}}};"
+        "\ntry:\n module.verify_gate(health)\nexcept module.CheckFailure as refusal:\n"
+        "    print('REFUSED', refusal)\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", program],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT / "scripts",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "REFUSED" in completed.stdout
+    # The refusal must come from the contract, not from a missing import.
+    assert "submit schema is missing" in completed.stdout
+
+
 def test_runtime_check_requires_every_readiness_gate():
     check = _load_runtime_check()
 

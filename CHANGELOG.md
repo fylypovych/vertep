@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.29
+- Виправлено `scripts/moneyprinter-runtime-check.py`: скрипт запускається як `python scripts/moneyprinter-runtime-check.py`, тому в `sys.path` опинявся `scripts/`, а не корінь репозиторію, і gate падав з `No module named 'adapters'` при імпорті контракту (те саме стосувалося `verify_runtime`); додано bootstrap `sys.path` як в інших скриптах репозиторію.
+- Додано `test_runtime_check_reads_the_contract_when_run_as_a_script`, який запускає gate так само, як CI, і перевірено, що без bootstrap тест падає.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.28
 - Виправлено контракт submit у `adapters/providers/base.py`: `REQUIRED_SUBMIT_FIELDS` не містив `video_script`, `video_materials` і `custom_audio_file`, хоча саме їх надсилає bridge (§9.3), тому schema-proof був слабшим за реальний submit.
 - `scripts/moneyprinter-runtime-check.py` більше не тримає власну копію очікуваних полів: gate вимагає доведення всього `REQUIRED_SUBMIT_FIELDS`, тому відсутність script, staged materials або approved voice у pinned upstream відтепер відхиляє образ (`test_runtime_check_refuses_a_runtime_that_dropped_a_script_or_voice_field`).

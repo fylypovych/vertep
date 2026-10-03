@@ -41,6 +41,11 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# This gate is executed as ``python scripts/moneyprinter-runtime-check.py``, which puts
+# ``scripts/`` and not the repository root on the path, so the bridge contract could not
+# be imported. Every other repo script does the same bootstrap.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 DOCKERFILE = ROOT / "docker" / "moneyprinter" / "Dockerfile"
 IMAGE_NAME = "vertep/moneyprinter-runtime-check"
 WRAPPER_PORT = 8098
