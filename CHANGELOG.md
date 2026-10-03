@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.24
+- Виправлено `docker/moneyprinter/Dockerfile`: завантаження pinned tarball мало неіснуючий параметр curl `--timeout` (CI: `curl: option --timeout: is unknown`), тепер `--connect-timeout` і `--max-time`; вимогу фіксує `test_dockerfile_bounded_transfer_uses_real_curl_options`.
+- Виправлено `scripts/moneyprinter-runtime-check.py`: локально збудований образ не має `RepoDigests`, тому перевірка завершувалася відмовою `no immutable repository digest` ще до першого запиту до runtime — ідентифікатором розгорнутого образу тепер є content digest (`ImageId`) з перевіркою форми `sha256:<64 hex>`, а `RepoDigests` лишається інформаційним (`test_runtime_check_identifies_a_locally_built_image_by_its_content_digest`).
+- Виправлено монтування ключа в `scripts/moneyprinter-runtime-check.py`: bind key-файлу на шлях, який entrypoint читає як каталог (`/run/vertep-runtime-check/api_key`), робив цей шлях файлом і runtime не стартував; тепер монтується каталог із ключем (`test_runtime_check_mounts_the_api_key_directory_the_entrypoint_reads`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.23
 - Виправлено `tests/test_node_registry.py::test_registration_token_is_one_time_and_issues_bound_credentials`: перевірка фільтрації capabilities більше не залежить від знімка каталогу ролей. Capability `video_generation`, якої раніше не мала роль `gpu`, тепер оголошена для assembly-диспетчеризації, тому тест довів фільтр capability поза будь-якою роллю (`quantum_ray_tracing`).
 - Перевірено на CI-профілі: `openssl` у PATH відкриває 14 тестів `tests/test_node_registry.py`, які локально пропускалися, тому зміну `config/node_roles.json` не було видно до CI; повний прогін без browser E2E з `openssl` — 1474 passed.

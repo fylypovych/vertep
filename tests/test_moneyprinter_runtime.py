@@ -1166,6 +1166,65 @@ def test_runtime_check_requires_every_readiness_gate():
         })
 
 
+def test_runtime_check_identifies_a_locally_built_image_by_its_content_digest():
+    """A locally built image has no ``RepoDigests``.
+
+    Reading ``RepoDigests`` made every clean verification run fail closed before the
+    runtime was ever asked anything, so the content identity of the image that was
+    just built is what identifies the deployed runtime.
+    """
+    check = _load_runtime_check()
+    image_id = "sha256:" + "a" * 64
+    answers = {
+        ("image", "inspect", "--format", "{{.Id}}", check.IMAGE_NAME): image_id,
+        ("image", "inspect", "--format", "{{index .RepoDigests 0}}", check.IMAGE_NAME): "",
+    }
+    check.docker = lambda *args, **kwargs: answers[tuple(args)]
+
+    assert check.image_digest(check.IMAGE_NAME) == image_id
+    assert check.registry_digest(check.IMAGE_NAME) == ""
+
+    answers[("image", "inspect", "--format", "{{.Id}}", check.IMAGE_NAME)] = "not-a-digest"
+    with pytest.raises(check.CheckFailure, match="immutable content digest"):
+        check.image_digest(check.IMAGE_NAME)
+
+
+def test_runtime_check_mounts_the_api_key_directory_the_entrypoint_reads():
+    """The entrypoint reads ``<mount>/api_key``.
+
+    Mounting the key *file* onto the mount path itself would turn that path into a
+    file, so the runtime would refuse to start with an unreadable key.
+    """
+    check = _load_runtime_check()
+    recorded: dict = {}
+
+    def fake_docker(*args, **kwargs):
+        recorded["args"] = args
+        return ""
+
+    check.docker = fake_docker
+    check.start_container("c", "sha256:" + "a" * 64, Path("/host/keys"))
+
+    mounts = [str(value) for value in recorded["args"] if str(value).startswith("type=bind")]
+    assert len(mounts) == 1
+    assert mounts[0].endswith("target=/run/vertep-runtime-check,readonly")
+    assert "api_key" not in mounts[0], \
+        "the key file itself must not be mounted onto the directory the entrypoint reads"
+    assert "MONEYPRINTER_API_KEY_FILE=/run/vertep-runtime-check/api_key" in recorded["args"]
+    # The API is proven only through the wrapper port; no published upstream port.
+    assert "127.0.0.1::8098" in recorded["args"]
+    assert not [value for value in recorded["args"]
+                if isinstance(value, str) and value.count(":") == 1 and value.endswith(":8080")]
+
+
+def test_dockerfile_bounded_transfer_uses_real_curl_options():
+    """`--timeout` is not a curl option and made the image build fail on CI."""
+    dockerfile = Path("docker/moneyprinter/Dockerfile").read_text(encoding="utf-8")
+
+    assert "--max-time" in dockerfile
+    assert "curl -fsSL --retry 3 --timeout" not in dockerfile
+
+
 def test_runtime_check_refuses_a_re_enabled_auto_upload_config():
     check = _load_runtime_check()
 

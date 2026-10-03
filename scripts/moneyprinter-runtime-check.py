@@ -107,17 +107,31 @@ def _build_arg(name: str) -> str:
 
 
 def image_digest(reference: str) -> str:
+    """Content identity of the image that was just built.
+
+    A locally built image has no ``RepoDigests`` — those exist only for images pulled
+    from or pushed to a registry — so the check would fail closed on every clean run
+    before the runtime was ever asked anything. The local image ID *is* the
+    content-addressed identity of exactly the image this script built, and it has the
+    ``sha256:<64 hex>`` shape the runtime requires of a deployed image.
+    """
+    identity = local_image_id(reference)
+    if not identity.startswith("sha256:") or len(identity) != len("sha256:") + 64:
+        raise CheckFailure(f"image {reference} has no immutable content digest: {identity!r}")
+    return identity
+
+
+def registry_digest(reference: str) -> str:
+    """Registry digest of the image, when the daemon knows one (informational)."""
     digest = docker("image", "inspect", "--format", "{{index .RepoDigests 0}}", reference)
-    if not digest or "@sha256:" not in digest:
-        raise CheckFailure(f"image {reference} has no immutable repository digest")
-    return digest
+    return digest if "@sha256:" in (digest or "") else ""
 
 
 def local_image_id(reference: str) -> str:
     return docker("image", "inspect", "--format", "{{.Id}}", reference)
 
 
-def start_container(name: str, digest: str, key_file: Path) -> None:
+def start_container(name: str, digest: str, key_directory: Path) -> None:
     docker(
         "run", "-d", "--rm",
         "--name", name,
@@ -126,7 +140,10 @@ def start_container(name: str, digest: str, key_file: Path) -> None:
         "-p", f"127.0.0.1::{WRAPPER_PORT}",
         "-e", "MONEYPRINTER_API_KEY_FILE=/run/vertep-runtime-check/api_key",
         "-e", f"VERTEP_MONEYPRINTER_IMAGE_DIGEST={digest}",
-        "--mount", f"type=bind,source={key_file},target=/run/vertep-runtime-check,readonly",
+        # The entrypoint reads `<mount>/api_key`, so the *directory* holding the
+        # key is mounted: binding the key file onto the directory path itself would
+        # make that path a file and the read would fail closed.
+        "--mount", f"type=bind,source={key_directory},target=/run/vertep-runtime-check,readonly",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges:true",
@@ -297,11 +314,12 @@ def main() -> int:
             raise CheckFailure("docker is not available on this host")
         build_image(version)
         digest = image_digest(IMAGE_NAME)
-        image_id = local_image_id(IMAGE_NAME)
-        log(f"built image id {image_id}")
-        log(f"repository digest {digest}")
+        log(f"built image content digest {digest}")
+        registry = registry_digest(IMAGE_NAME)
+        if registry:
+            log(f"registry digest {registry}")
 
-        start_container(name, digest, key_file)
+        start_container(name, digest, key_directory)
         container_started = True
         port = mapped_port(name)
         log(f"wrapper listens on 127.0.0.1:{port}")

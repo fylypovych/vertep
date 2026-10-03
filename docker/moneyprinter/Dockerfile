@@ -50,8 +50,10 @@ RUN set -eux; \
     rm -f /tmp/requirements.lock
 
 # --- Pinned upstream sources -------------------------------------------------
+# `--max-time` is the curl option that bounds the whole transfer; `--timeout` is not
+# a curl option at all and made this layer fail on a clean CI build.
 RUN set -eux; \
-    curl -fsSL --retry 3 --timeout 120 \
+    curl -fsSL --retry 3 --connect-timeout 30 --max-time 300 \
         "https://codeload.github.com/harry0703/MoneyPrinterTurbo/tar.gz/${MPT_COMMIT}" \
         -o /tmp/mpt.tar.gz; \
     echo "${MPT_TARBALL_SHA256}  /tmp/mpt.tar.gz" | sha256sum -c -; \
