@@ -202,10 +202,15 @@ def prepare_release(root: Path, *, skip_tests: bool) -> str:
         f"# Vertep {version}\n\n" + "\n".join(notes) + "\n",
         encoding="utf-8",
     )
-    # Update tracked files and add only the generated release note. Unrelated
-    # untracked workspace files must never leak into a release commit.
-    git(root, "add", "-u")
-    git(root, "add", str(release_path.relative_to(root)))
+    # One version is one commit (AGENTS.md §3.5): every file of the release must be
+    # in it, including files this release creates. Staging only tracked changes would
+    # silently ship a version whose manifest, compose, CI and tests reference files
+    # that do not exist in `main`. Everything Git would actually track is therefore
+    # staged; local runtime artifacts are kept out by `.gitignore`, and the staged
+    # content is still scanned for secrets before the commit exists.
+    git(root, "add", "-A")
+    if not git(root, "diff", "--cached", "--name-only"):
+        raise RuntimeError("Немає жодного файлу для коміту релізу")
     scan_staged_secrets(root)
     git(root, "commit", "-m", version)
     check_release(root)

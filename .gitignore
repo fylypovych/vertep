@@ -36,3 +36,9 @@ config/secret-store.passphrase
 # Test output (transient)
 /test-results/
 /agents
+
+# Local release-tool output (transient): `qualify-release.py --output`,
+# `moneyprinter-runtime-check.py --evidence`, `moneyprinter-runtime-check`.
+/qualification.json
+/moneyprinter-runtime-evidence/
+/moneyprinter-runtime-check

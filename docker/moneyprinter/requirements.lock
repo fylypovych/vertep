@@ -1,0 +1,55 @@
+# MoneyPrinterTurbo runtime dependency lock (Issue #122 P2).
+#
+# Upstream: harry0703/MoneyPrinterTurbo@2e1b30396e059e55939cc802c60faac2061e4d41
+# Source:   upstream pyproject.toml / requirements.txt at the pinned commit,
+#           minus the WebUI-only and Vertep-unused packages listed below.
+#
+# Excluded on purpose:
+#   streamlit, streamlit-tour  — WebUI only. Vertep never loads webui/Main.py;
+#                               the API runs from app.asgi.
+#   faster-whisper             — brings ctranslate2 (~large native runtime) and is
+#                               imported by app.services.subtitle behind a
+#                               try/except ImportError. Vertep renders with
+#                               subtitle_enabled=false and owns subtitle burn as
+#                               a post-step, so upstream transcription is never used.
+#   twelvelabs                 — optional extra, imported lazily by
+#                               app.services.twelvelabs and never configured.
+#   audioop-lts                — marker is python_version >= "3.13"; this image is
+#                               built on python:3.12-slim where the stdlib audioop
+#                               module pydub needs is still present.
+#
+# The first block mirrors upstream exactly (17 of the 21 upstream declarations,
+# minus the four excluded above). The second block pins what the pinned tree
+# imports or needs but does not declare, so the image does not depend on whatever
+# a resolver happens to pick on build day. Nothing here may float.
+
+# --- Declared by the pinned upstream commit ---------------------------------
+edge-tts==7.2.7
+fastapi==0.136.3
+uvicorn==0.32.1
+moviepy==2.2.1
+openai==2.24.0
+litellm==1.86.2
+google-genai==2.11.0
+dashscope==1.20.14
+azure-cognitiveservices-speech==1.41.1
+redis==5.2.0
+requests==2.33.1
+packaging==24.2
+socksio==1.0.0
+loguru==0.7.3
+python-multipart==0.0.27
+pyyaml==6.0.3
+pydub==0.25.1
+
+# --- Required by the pinned tree or by the Vertep wrapper, undeclared upstream -
+#   toml               — app/config/config.py does `import toml`.
+#   httpx              — the Vertep wrapper probes the upstream API with httpx.
+#   numpy, pillow,
+#   imageio-ffmpeg     — moviepy's actual workhorses; pinned so clip rendering and
+#                        the FFmpeg binary lookup cannot shift under a build.
+toml==0.10.2
+httpx==0.28.1
+numpy==2.4.4
+pillow==11.3.0
+imageio-ffmpeg==0.6.0

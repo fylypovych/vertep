@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.22
+- Виправлено `scripts/release.py`: версійний коміт більше не відкидає файли, які створює сам реліз (`git add -u` → `git add -A`), і відмовляється створювати порожній коміт. Коміт `0.0.2.21` вийшов без `services/moneyprinter_service.py`, `core/engine_config.py`, `scripts/moneyprinter-runtime-check.py`, runtime-файлів MoneyPrinterTurbo та трьох нових тестових модулів, тож compose, CI й `qualify-release.py` посилалися на відсутні файли.
+- Додано `services/moneyprinter_service.py`: wrapper ізольованого runtime з `/health`, `/runtime`, `/sbom`, `/self-test`, `POST /api/v1/video_materials`, `POST /api/v1/videos`, `GET|DELETE /api/v1/videos/{submit_key}` (durable submit record, reconciliation, abort), `GET|DELETE /api/v1/tasks/{task_id}` і `GET /api/v1/download/{file_path}`; матеріали доставляються multipart-конвертом із полем `data.file` у task-scoped каталог attempt-а, імпорт перевіряє checksum, розмір, media-контракт і доступність файлу.
+- Додано `core/engine_config.py` — ефективна конфігурація VideoEngine (`selected`/`effective`/`config_revision`/`agree`, endpoint identity без credentials, посилання на secret, probe реального executor-а) та `GET /api/settings/video-engine`.
+- Додано opt-in runtime MoneyPrinterTurbo: `docker/moneyprinter/config.lock.toml`, `entrypoint.sh`, `requirements.lock`; будь-який drift конфігурації або inventory зупиняє контейнер, публікація upstream вимкнена, ключ генерується в `bootstrap.sh`.
+- Додано `scripts/moneyprinter-runtime-check.py` — єдина перевірка, що реально збирає й запускає pinned-образ; крок CI зберігає її докази як artifact.
+- Додано тести `tests/test_assembly_worker_route.py`, `tests/test_engine_configuration.py`, `tests/test_moneyprinter_runtime.py`, а в `tests/test_release.py` — регресію `test_release_commit_contains_files_that_this_release_creates` та виправлення `test_release_commit_is_complete_and_ci_never_commits_to_main`.
+- Додано `docs/moneyprinter-runtime.md`; `.gitignore` фіксує локальні артефакти інструментів релізу (`qualification.json`, `moneyprinter-runtime-evidence/`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.21
 - Issue #122 P3: `services/moneyprinter_service.py` реалізує wrapper ізольованого runtime з маршрутами `/health`, `/runtime`, `/sbom`, `/self-test`, `POST /api/v1/video_materials`, `POST /api/v1/videos`, `GET|DELETE /api/v1/videos/{submit_key}` (durable submit record, reconciliation і abort), `GET|DELETE /api/v1/tasks/{task_id}` та `GET /api/v1/download/{file_path}`; матеріали доставляються multipart-конвертом із реальним полем `data.file` у task-scoped каталог attempt-а.
 - Verified import артефакту звіряє checksum, розмір, media-контракт і доступність файлу; додані негативні кейси (порожній, недекодований, нечитабельний download, обмежені retry) та приймання іншого root.

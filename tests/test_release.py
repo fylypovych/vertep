@@ -72,13 +72,16 @@ def test_runtime_version_comes_from_version_file():
     assert len(parts) == 4 and all(part.isdigit() for part in parts)
 
 
-def test_release_is_prepared_once_and_ci_never_commits_to_main():
+def test_release_commit_is_complete_and_ci_never_commits_to_main():
     script = Path("scripts/release.py").read_text(encoding="utf-8")
     assert 'git(root, "commit", "-m", version)' in script
     assert "release_path.write_text" in script
     assert "scan_staged_secrets" in script
-    assert 'git(root, "add", "-A")' not in script
-    assert 'git(root, "add", "-u")' in script
+    # One version is one commit: files this release creates must be staged too,
+    # otherwise the version ships references to files that do not exist in main.
+    assert 'git(root, "add", "-A")' in script
+    assert 'git(root, "add", "-u")' not in script
+    assert "Немає жодного файлу для коміту релізу" in script
     assert '"--untracked-files=no"' in script
     assert 'git(root, "tag", "-a"' not in script
     assert "--title" not in script
@@ -207,7 +210,7 @@ def test_push_creates_release_notes_file_with_strict_header(tmp_path, monkeypatc
         ):
             return state["committed_subject"]
         if args[:1] == ("diff",):
-            return ""
+            return "VERSION"
         if args[:2] == ("tag", "--list"):
             return "v0.0.0.96"
         if args[:2] == ("ls-remote", "--tags"):
@@ -283,7 +286,9 @@ def test_push_emits_only_version_subject_and_does_not_run_release_workflow(tmp_p
         if args[:1] == ("status",):
             return ""
         if args[:1] == ("diff",):
-            return ""
+            # Staged content: an empty result must abort the release, so the fake
+            # reports the staged VERSION.
+            return "VERSION"
         if args[0] in ("fetch", "add", "show"):
             return ""
         if args[0] == "commit":
@@ -310,6 +315,60 @@ def test_push_emits_only_version_subject_and_does_not_run_release_workflow(tmp_p
     assert commit_call == ("commit", "-m", "0.0.0.11")
     # Workflow must not be triggered by push.
     assert not any("workflow" in (a or "") for args in git_calls for a in args)
+
+
+def test_release_commit_contains_files_that_this_release_creates(tmp_path, monkeypatch):
+    """A version commit must be complete (AGENTS.md §3.5).
+
+    Regression: staging only tracked changes published a version whose compose,
+    CI and tests referenced files that did not exist in `main`.
+    """
+    release = load_release_module()
+    target_root = tmp_path
+    (target_root / "VERSION").write_text("0.0.0.10\n", encoding="utf-8")
+    (target_root / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n- Додано новий runtime.\n", encoding="utf-8")
+    (target_root / "releases").mkdir()
+    (target_root / "releases" / "0.0.0.10.md").write_text(
+        "# Vertep 0.0.0.10\n\n- Додано новий runtime.\n", encoding="utf-8")
+    created = target_root / "services" / "new_runtime.py"
+    created.parent.mkdir(parents=True)
+    created.write_text("VALUE = 1\n", encoding="utf-8")
+    calls = []
+    state = {"subject": "0.0.0.10"}
+
+    def fake_git(r, *args):
+        calls.append(args)
+        if args[:2] == ("tag", "--list"):
+            return "v0.0.0.10"
+        if args[:2] == ("ls-remote", "--tags"):
+            return ""
+        if args[:1] == ("rev-parse",):
+            return "cafebabe" * 5
+        if args[:1] == ("log",):
+            return state["subject"]
+        if args[:1] == ("status",):
+            return ""
+        if args[:1] == ("diff",):
+            return "VERSION\nservices/new_runtime.py\n"
+        if args[0] == "commit":
+            if len(args) >= 3 and args[1] == "-m":
+                state["subject"] = args[2]
+            return ""
+        return ""
+
+    monkeypatch.setattr(release, "git", fake_git)
+    monkeypatch.setattr(release, "run", lambda *_a, **_kw: "")
+    monkeypatch.setattr(release, "scan_staged_secrets", lambda _r: None)
+    monkeypatch.setattr(release, "require_ukrainian", lambda *_a, **_kw: None)
+
+    version = release.prepare_release(target_root, skip_tests=True)
+
+    assert version == "0.0.0.11"
+    assert ("add", "-A") in calls, "files created by the release must be staged"
+    assert ("commit", "-m", "0.0.0.11") in calls
+    # Nothing is ever staged by path, so no release file can be left out.
+    assert not [args for args in calls if args and args[0] == "add" and args != ("add", "-A")]
 
 
 def test_release_runs_push_first_then_triggers_workflow(tmp_path, monkeypatch):
@@ -358,7 +417,7 @@ def test_release_runs_push_first_then_triggers_workflow(tmp_path, monkeypatch):
         if args[:1] == ("status",) and args[1:3] == ("--porcelain", "--untracked-files=no"):
             return "M README.md\n" if state["dirty"] else ""
         if args[:1] == ("diff",):
-            return ""
+            return "VERSION"
         if args[0] in ("fetch", "add", "show"):
             return ""
         if args[0] == "commit":
