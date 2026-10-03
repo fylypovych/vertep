@@ -155,3 +155,123 @@ class FFmpegAdapter:
         if float(payload.get("format", {}).get("duration", 0)) <= 0:
             raise RuntimeError("ffprobe reported an invalid duration")
         return payload
+
+    # --- Issue #122: external-engine assembly primitives ---------------------
+
+    PRE_CUT_FPS = 30
+
+    def _normalise_video_filters(self, fps: int | None = None) -> str:
+        rate = fps or self.PRE_CUT_FPS
+        # Even dimensions keep yuv420p encoders happy; the source resolution is
+        # preserved because the external engine rescales with its own fit mode.
+        return (f"scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,fps={rate},"
+                f"format=yuv420p,setpts=PTS-STARTPTS")
+
+    def pre_cut(self, source: Path, duration: float, output: Path) -> Path:
+        """Cut one approved asset to exactly ``duration`` seconds (§9.3).
+
+        Still images are held for the whole scene, clips are trimmed. The result
+        is silent and has a constant frame rate, which is what an external engine
+        needs to concatenate it without re-timing the approved scene.
+        """
+        if duration <= 0:
+            raise ValueError("Scene duration must be positive")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        is_image = source.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        command = [self._executable(), "-nostdin", "-loglevel", "error", "-y"]
+        if is_image:
+            command.extend(["-loop", "1", "-t", f"{duration:.3f}", "-i", str(source)])
+        else:
+            command.extend(["-i", str(source)])
+        command.extend([
+            "-t", f"{duration:.3f}",
+            "-vf", self._normalise_video_filters(),
+            "-an", "-c:v", "libx264", "-preset", "ultrafast",
+            "-pix_fmt", "yuv420p", "-r", str(self.PRE_CUT_FPS),
+            "-movflags", "+faststart", str(output),
+        ])
+        subprocess.run(command, check=True, capture_output=True)
+        if not output.exists() or output.stat().st_size == 0:
+            raise RuntimeError(f"pre-cut produced no clip for {source.name}")
+        return output
+
+    def apply_post_step(
+        self,
+        output: Path,
+        video: Path,
+        *,
+        audio: Path | None = None,
+        music: Path | None = None,
+        subtitles: Path | None = None,
+        aspect_ratio: str = "16:9",
+        preset: str | None = None,
+        watermark: Path | None = None,
+    ) -> Path:
+        """Finish an externally rendered video exactly like a Native render (§9.5).
+
+        The filter chain and its order mirror :meth:`assemble`: watermark overlay,
+        then the conditional subtitle burn, then the audio mix. Audio timing is
+        unchanged (``amix duration=first`` plus ``-shortest``), so the final file
+        is audibly identical to the Native route (§9.7).
+        """
+        if not video.is_file():
+            raise ValueError("Post-step source video is not readable")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        width, height, fps = self.PRESETS.get(
+            preset or "",
+            (720, 1280, 30) if aspect_ratio == "9:16" else (1280, 720, 25),
+        )
+        command = [self._executable(), "-nostdin", "-loglevel", "error", "-y", "-i", str(video)]
+        next_index = 1
+        watermark_index = None
+        if watermark and watermark.is_file():
+            command.extend(["-i", str(watermark)])
+            watermark_index = next_index
+            next_index += 1
+        audio_index = None
+        if audio and audio.is_file():
+            command.extend(["-i", str(audio)])
+            audio_index = next_index
+            next_index += 1
+        music_index = None
+        if music and music.is_file():
+            command.extend(["-stream_loop", "-1", "-i", str(music)])
+            music_index = next_index
+
+        filters = [
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},"
+            f"format=yuv420p[base]"
+        ]
+        video_label = "base"
+        if watermark_index is not None:
+            filters.append(f"[{watermark_index}:v]scale={max(80, width // 7)}:-1[logo]")
+            filters.append(f"[{video_label}][logo]overlay=W-w-24:H-h-24[branded]")
+            video_label = "branded"
+        if subtitles and subtitles.is_file() and os.getenv("BURN_SUBTITLES", "false").lower() == "true":
+            escaped = str(subtitles.resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            filters.append(f"[{video_label}]subtitles='{escaped}'[subtitled]")
+            video_label = "subtitled"
+
+        audio_label = None
+        if audio_index is not None and music_index is not None:
+            filters.append(f"[{audio_index}:a]loudnorm=I=-16:LRA=11:TP=-1.5[voice]")
+            filters.append(f"[{music_index}:a]volume=0.15[music]")
+            filters.append("[voice][music]amix=inputs=2:duration=first:dropout_transition=2[mixed]")
+            audio_label = "mixed"
+        elif audio_index is not None:
+            filters.append(f"[{audio_index}:a]loudnorm=I=-16:LRA=11:TP=-1.5[mixed]")
+            audio_label = "mixed"
+
+        command.extend(["-filter_complex", ";".join(filters), "-map", f"[{video_label}]"])
+        if audio_label:
+            command.extend(["-map", f"[{audio_label}]", "-c:a", "aac", "-shortest"])
+        command.extend([
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-r", str(fps), "-movflags", "+faststart", str(output),
+        ])
+        subprocess.run(command, check=True, capture_output=True)
+        if not output.exists() or output.stat().st_size == 0:
+            raise RuntimeError("post-step produced no output")
+        self.probe(output)
+        return output

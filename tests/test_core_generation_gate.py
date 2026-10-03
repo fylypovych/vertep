@@ -74,12 +74,18 @@ def core_violations():
 
 # ---------------------------------------------------------------------------
 # Allowlist of known, documented occurrences.
-# Each entry: (core-relative path, exact line number, reason).
+# Each entry: (core-relative path, the exact call site, reason).
 # These are control-plane operations or explicit LOCAL_WORKER_FALLBACK paths.
+#
+# An exception is identified by the *call site itself*, not by a line number: an
+# unrelated edit above the line would otherwise turn a documented fallback into a
+# false positive, and the reason for an exception would drift away from the code it
+# describes. Every entry must still match exactly one real hit — removing the call or
+# moving it to another file fails the gate.
 ALLOWLIST = {
     # LLM — ScriptAgent local fallback when no Text Worker is available
     # (guarded by LOCAL_WORKER_FALLBACK / _has_text_worker()).
-    ("core/api/job_helpers.py", 251):
+    ("core/api/job_helpers.py", "ScriptAgent().generate_script"):
         "LOCAL_WORKER_FALLBACK: ScriptAgent().generate_script() when no Text Worker",
 
     # LLM — ScriptAgent is the shared LLM/script inference implementation. It is
@@ -87,19 +93,24 @@ ALLOWLIST = {
     # provider LLM backend (adapters/providers/DefaultLLMProvider). It is not
     # CORE orchestration performing inference; this line is the definition site,
     # not a CORE dispatch-path invocation.
-    ("core/script_agent.py", 21):
+    ("core/script_agent.py", "get_llm_client().complete"):
         "ScriptAgent = LLM inference impl executed on Text Worker / wrapped as LLMProvider",
 }
+
+
+def _allowed(violation) -> str | None:
+    """Reason an allowlist entry covers this violation, or ``None``."""
+    for (allowed_file, call_site), reason in ALLOWLIST.items():
+        if violation["file"] == allowed_file and call_site in violation["line"]:
+            return reason
+    return None
 
 
 class TestCoreGenerationGate:
     """CORE must not perform direct generation / execution."""
 
     def _unauthorized(self, violations):
-        return [
-            v for v in violations
-            if (v["file"], v["lineno"]) not in ALLOWLIST
-        ]
+        return [v for v in violations if _allowed(v) is None]
 
     def test_no_unauthorized_generation_calls(self, core_violations):
         unauthorized = self._unauthorized(core_violations)
@@ -126,10 +137,17 @@ class TestCoreGenerationGate:
         )
 
     def test_allowlist_entries_are_current(self, core_violations):
-        """Each allowlist entry must correspond to an actual source hit."""
-        hits = {(v["file"], v["lineno"]) for v in core_violations}
-        stale = [(f, ln, r) for (f, ln), r in ALLOWLIST.items() if (f, ln) not in hits]
-        assert not stale, f"Stale allowlist entries (no matching source hit): {stale}"
+        """Each allowlist entry must still match exactly one real source hit."""
+        stale = []
+        for (allowed_file, call_site), reason in ALLOWLIST.items():
+            hits = [v for v in core_violations
+                    if v["file"] == allowed_file and call_site in v["line"]]
+            if not hits:
+                stale.append((allowed_file, call_site, reason))
+            elif len(hits) > 1:
+                stale.append((allowed_file, call_site,
+                              f"ambiguous: {len(hits)} matching call sites"))
+        assert not stale, f"Stale or ambiguous allowlist entries: {stale}"
 
 
 class TestCoreGenerationGateDocumentation:

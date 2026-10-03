@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.21
+- Issue #122 P3: `services/moneyprinter_service.py` реалізує wrapper ізольованого runtime з маршрутами `/health`, `/runtime`, `/sbom`, `/self-test`, `POST /api/v1/video_materials`, `POST /api/v1/videos`, `GET|DELETE /api/v1/videos/{submit_key}` (durable submit record, reconciliation і abort), `GET|DELETE /api/v1/tasks/{task_id}` та `GET /api/v1/download/{file_path}`; матеріали доставляються multipart-конвертом із реальним полем `data.file` у task-scoped каталог attempt-а.
+- Verified import артефакту звіряє checksum, розмір, media-контракт і доступність файлу; додані негативні кейси (порожній, недекодований, нечитабельний download, обмежені retry) та приймання іншого root.
+- Voice staging на pinned upstream неможливий (`resolve_custom_audio_file` приймає лише task-каталог, а `POST /api/v1/audio` запускає власний TTS), тому render fail-closed відхиляється з `upstream_voice_staging_unsupported` до будь-якого upload чи submit; підміна TTS заборонена.
+- Issue #122 P2: додано `docker/moneyprinter/Dockerfile`, `config.lock.toml`, `entrypoint.sh` і `requirements.lock`; будь-який drift конфігурації або inventory зупиняє контейнер, опублікування upstream вимкнено.
+- `deploy/docker-compose.yml`: opt-in профіль `moneyprinter` без опублікованих портів і secret `moneyprinter_api_key`; Worker отримує спільний `JOB_ROOT=/data/storage/jobs`; `bootstrap.sh` генерує ключ і не ламається, якщо образ відсутній у manifest.
+- `scripts/qualify-release.py`: `moneyprinter` у `REQUIRED_IMAGES` і release matrix, arm64-виняток, заборона потрапляння опціонного runtime у будь-яку роль.
+- Issue #122 P5/P6: зовнішній VideoEngine більше не виконується в CORE — `core/pipeline.py` будує `assembly_plan` іdispatchить задачу на Worker із capability `video_assembly` (`core/dispatcher.py`, `config/node_roles.json`); CORE лише планує, приймає й імпортує перевірений результат.
+- Матеріали поза каталогом Job копіюються у content-addressed staging `.assembly-staging` і очищаються після прийнятого імпорту, скасування та термінального `FAILED`; restart-відтворення зберігає staging і той самий submit key.
+- Реалізовано claim/renew/fencing assembly-задачі, відкидання пізніх і чужих результатів, retry з тим самим submit key для незмінних входів і новий ключ для змінених затверджених входів, а також скасування attempt-а.
+- `worker/role_executor.py`: `execute_assembly` з перевіркою шляхів відносно Job, перевіркою version contract, рендером у `.part` і перевірним артефактом; `worker/service.py` передає скасування за `submit_key`; `core/queue.py` додано read-only `TaskQueue.find`.
+- `adapters/providers/base.py`: контракт `AssemblyProvider.pre_cut`/`apply_post_step`, `BRIDGE_VERSION`, `REQUIRED_SUBMIT_FIELDS`, стабільні коди відмов readiness і `VideoEngine.cancel(..., submit_key=...)`; `adapters/ffmpeg.py` реалізує контрольовані pre-cut і post-step.
+- Issue #122 P7: додано `core/engine_config.py` — знімок `selected`/`effective`/`config_revision`/`agree`, endpoint identity без credentials, посилання на secret замість значення і probe реального executor-а; `core/provider_switch.py` приймає зовнішній рушій лише після перевірки runtime і відкатує вибір при неготовності; `GET /api/settings/video-engine` показує стан у Web UI.
+- Snapshot assembly-спроби описує саме той engine, якому attempt передано, і для зовнішнього рушія несе лише `endpoint_reference` та `secret_reference`; `tests/test_engine_configuration.py` і 17 тестів `tests/test_assembly_worker_route.py` фіксують контракт.
+- `tests/test_core_generation_gate.py`: allowlist документованих винятків тепер ідентифікується за call site, а не за номером рядка, тож незмінна правка выше виклику більше не створює хибний збій; перевірено, що реальна регресія в `core/` і далі падає.
+- Додано `scripts/moneyprinter-runtime-check.py`, крок CI з перевіркою pinned-образу і завантаженням доказів як artifact; документація `docs/moneyprinter-runtime.md` і `docs/providers.md`.
+- Виправлено `finalize_job`: відновлено повний Native-хвост статусів і сповіщлень, а `effective_engine_id` визначає рушій за рядковим ідентифікатором, тож mock-об'єкт більше не вводить CORE в зовнішню гілку.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.20
 - Виправлено `tests/test_node_registry.py::test_reenrolling_a_known_node_revokes_its_previous_certificate`: порівняння serial з CRL тепер нормалізує провідні нулі, як це робить `core/node_registry.py`.
 

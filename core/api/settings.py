@@ -20,6 +20,20 @@ def provider_backends():
     return {"matrix": provider_matrix()}
 
 
+@router.get("/api/settings/video-engine")
+def effective_video_engine(probe: bool = False):
+    """Effective video-engine configuration (Issue #122 P7).
+
+    ``selected``, ``effective`` and ``config_revision`` are returned together so a
+    caller can prove they describe one and the same engine. No secret value is ever
+    exposed: only the reference of the secret the engine uses. ``probe=true``
+    additionally verifies readiness on the actual runtime.
+    """
+    from ..engine_config import effective_engine_config
+
+    return effective_engine_config(probe=probe)
+
+
 @router.post("/api/settings/providers/{slot}")
 def switch_provider_backend(slot: str, payload: dict):
     """Switch one provider slot with persist → apply → verify → rollback."""

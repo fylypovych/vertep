@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import time as _time
 import uuid
 from pathlib import Path
@@ -470,12 +471,106 @@ def execute_video(task: dict) -> list[dict]:
     return artifacts
 
 
+def execute_assembly(task: dict) -> list[dict]:
+    """Render the final video version of a Job on this node (Issue #122 P5/P6/P7).
+
+    The engine decision is fixed by CORE before the task was dispatched and
+    travels with it as an immutable snapshot: this node must run exactly that
+    engine, and it refuses the task when its effective configuration drifted
+    (P7). The result is returned as a verifiable media contract, so CORE can
+    import only a complete, decodable render of the dispatched version.
+    """
+    snapshot = task.get("engine_snapshot") or {}
+    engine_id = str(snapshot.get("engine_id") or "")
+    if not engine_id:
+        raise RuntimeError("Assembly task carries no engine snapshot")
+    engine = providers.video_engine()
+    if getattr(engine, "engine_id", None) != engine_id:
+        raise RuntimeError(
+            f"Effective engine {getattr(engine, 'engine_id', None)!r} does not match the "
+            f"dispatched snapshot {engine_id!r}"
+        )
+
+    job_id = str(task["job_id"])
+    root = _job_root()
+    output = _job_path(root, job_id, str(task.get("output") or ""))
+    materials = [_job_path(root, job_id, item) for item in (task.get("materials") or [])]
+    audio = _job_path(root, job_id, task.get("audio")) if task.get("audio") else None
+    music = _job_path(root, job_id, task.get("music")) if task.get("music") else None
+    subtitles = _job_path(root, job_id, task.get("subtitles")) if task.get("subtitles") else None
+    watermark = _job_path(root, job_id, task.get("watermark")) if task.get("watermark") else None
+    if not materials or any(item is None or not item.is_file() for item in materials):
+        raise RuntimeError("Assembly materials are missing from the Job storage")
+    for label, optional in (("audio", audio), ("music", music), ("subtitles", subtitles),
+                            ("watermark", watermark)):
+        if optional is not None and not optional.is_file():
+            raise RuntimeError(f"Assembly {label} is missing from the Job storage")
+
+    version = int(task.get("version") or 1)
+    # The render is written to an attempt-scoped temporary name; CORE promotes it
+    # to the immutable version only after it verified the bytes (P3/P6).
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.parent / f".{output.name}.{task['task_id'][:8]}.part"
+    try:
+        engine.render(
+            temporary,
+            images=None if task.get("task_type") == "video" else materials,
+            clips=materials if task.get("task_type") == "video" else None,
+            durations=[float(value) for value in (task.get("durations") or [])],
+            audio=audio,
+            music=music,
+            subtitles=subtitles,
+            aspect_ratio=str(task.get("aspect_ratio") or "16:9"),
+            preset=task.get("preset"),
+            watermark=watermark,
+            task_type=str(task.get("task_type") or "image"),
+            script=task.get("script"),
+            submit_key=task.get("submit_key"),
+        )
+        data = temporary.read_bytes()
+        verify_media(data, output.suffix)
+        artifact = _media_artifact(output.name, "video", data,
+                                   workflow=engine_id, task_type="video")
+        artifact["contract"]["video_version"] = version
+        artifact["contract"]["engine_id"] = engine_id
+        artifact["contract"]["engine_snapshot"] = snapshot
+        return [artifact]
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _job_root() -> Path:
+    return Path(os.getenv("JOB_ROOT", "jobs")).resolve()
+
+
+def _job_path(root: Path, job_id: str, relative: str) -> Path | None:
+    """Resolve a Job-scoped relative path, refusing anything outside the Job.
+
+    CORE never sends an absolute path of its own filesystem (Issue #122 §6/P3):
+    a path that escapes the Job directory, or an id that is not a plain directory
+    name, is refused instead of being resolved.
+    """
+    if not relative:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", job_id):
+        raise RuntimeError(f"Invalid job id in assembly task: {job_id!r}")
+    candidate = Path(relative)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise RuntimeError(f"Assembly input must be a Job-scoped relative path: {relative!r}")
+    resolved = (root / job_id / candidate).resolve()
+    if not resolved.is_relative_to(root / job_id):
+        raise RuntimeError(f"Assembly input escapes the Job directory: {relative!r}")
+    return resolved
+
+
 EXECUTORS = {"text": execute_text, "script": execute_script, "voice": execute_voice,
              "publish": execute_publisher, "backup": execute_backup,
              "image": execute_image, "video": execute_video,
+             "assembly": execute_assembly,
              "storyboard": execute_storyboard}
 ROLE_TASKS = {"text": {"text", "script", "storyboard"}, "voice": {"voice"}, "publisher": {"publish"},
-              "backup": {"backup"}, "gpu": {"image", "video"}}
+              "backup": {"backup"}, "gpu": {"image", "video", "assembly"}}
 
 
 def execute_role_task(role: str, task: dict) -> list[dict]:

@@ -26,6 +26,7 @@
 - `job-lifecycle.md` — стани Job і системні стани.
 - `nodes-and-capabilities.md` — ролі, реєстрація, capabilities, raiting диспетчера.
 - `providers.md` — інтерфейси движків і матриця backend.
+- `moneyprinter-runtime.md` — ізольований opt-in runtime MoneyPrinterTurbo (Issue #122 P2).
 - `content-pipeline.md` — сценарій → storyboard → голос → відео → монтаж.
 - `characters-and-workflows.md` — формат персонажів і ComfyUI-workflow.
 - `publishing.md` — Publisher-адаптери, receipts, правила публікації.

@@ -144,6 +144,26 @@ class DefaultAssemblyProvider(AssemblyProvider):
     def concat_audio(self, sources: list[Path], output: Path) -> Path:
         return self._adapter.concat_audio(sources, output)
 
+    def pre_cut(self, source: Path, duration: float, output: Path) -> Path:
+        return self._adapter.pre_cut(source, duration, output)
+
+    def apply_post_step(
+        self,
+        output: Path,
+        video: Path,
+        *,
+        audio: Path | None = None,
+        music: Path | None = None,
+        subtitles: Path | None = None,
+        aspect_ratio: str = "16:9",
+        preset: str | None = None,
+        watermark: Path | None = None,
+    ) -> Path:
+        return self._adapter.apply_post_step(
+            output, video, audio=audio, music=music, subtitles=subtitles,
+            aspect_ratio=aspect_ratio, preset=preset, watermark=watermark,
+        )
+
     def probe(self, path: Path) -> dict:
         return self._adapter.probe(path)
 

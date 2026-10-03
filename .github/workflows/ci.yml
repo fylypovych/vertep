@@ -56,6 +56,17 @@ jobs:
             -check-syntax -config.file=/etc/promtail/config.yml -config.expand-env=true
       - name: Run appliance release qualification gates
         run: python scripts/qualify-release.py --root . --docker --output qualification.json
+      - name: Verify the pinned MoneyPrinterTurbo runtime once
+        run: |
+          python scripts/moneyprinter-runtime-check.py \
+            --timeout 900 --evidence moneyprinter-runtime-evidence
+      - name: Upload MoneyPrinterTurbo runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: moneyprinter-runtime-check
+          path: moneyprinter-runtime-evidence
+          if-no-files-found: warn
       - name: Upload qualification evidence
         if: always()
         uses: actions/upload-artifact@v7

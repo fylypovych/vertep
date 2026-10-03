@@ -252,6 +252,9 @@ def resume_job(job_id: str):
 
 @router.post("/api/jobs/{job_id}/cancel")
 def cancel_job(job_id: str):
+    # Issue #122 P5/P6: cancellation never reaches into an engine from CORE. The
+    # in-flight attempt is fenced and the owning Worker is asked to stop the
+    # upstream work; a late result is discarded, never imported.
     return _job_action(job_id, JobStatus.CANCELLED, "JOB CANCELLED")
 
 

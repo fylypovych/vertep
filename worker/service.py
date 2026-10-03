@@ -130,7 +130,9 @@ def configured_role() -> str:
         return "gpu"
 
 def node_capabilities() -> list[str]:
-    defaults = {"gpu": "image_generation,image_upscale,controlnet,inpainting",
+    # Issue #122 P5: a GPU node also finishes the assembly of an external engine,
+    # so it advertises video generation and video assembly.
+    defaults = {"gpu": "image_generation,image_upscale,controlnet,inpainting,video_generation,video_assembly",
                 "text": "text_generation", "voice": "speech_synthesis",
                 "publisher": "publishing", "backup": "backup,snapshot,archive",
                 "monitoring": "metrics,logs,alerting"}
@@ -639,6 +641,28 @@ def execute_task(adapter: ComputeProvider, task: dict, node_name: str) -> dict:
         pending_logs.append({"level": "ERROR", "message": str(error), "job_id": task.get("job_id")})
         return {"job_id": task["job_id"], "task_id": task["task_id"], "node_name": node_name, "success": False, "error": str(error)}
 
+def cancel_video_engine(submit_key: str | None = None, *, task_id: str | None = None) -> None:
+    """Ask the effective engine runtime to stop an external assembly attempt.
+
+    The attempt is addressed by its durable submit key, which is the identity CORE
+    owns for the whole attempt and which survives a lost submit response; the
+    transient CORE task id is only a fallback. A pinned runtime that is still
+    processing answers with 409; that is reported as "still running" and the
+    attempt stays cancelled logically while CORE discards any late result (Issue
+    #122 §5, §9.8). Failure to reach the runtime must not raise here: the attempt
+    is already fenced by CORE.
+    """
+    try:
+        engine = providers.video_engine()
+        if getattr(engine, "engine_id", "native") == "native":
+            return
+        stopped = engine.cancel(task_id, submit_key=submit_key) if hasattr(engine, "cancel") else False
+        logger.info("Assembly cancellation forwarded to the engine runtime",
+                    extra={"task_id": task_id, "submit_key": submit_key, "stopped": bool(stopped)})
+    except Exception as error:  # noqa: BLE001 - cancellation is best effort
+        logger.warning("Assembly cancellation could not be forwarded",
+                       extra={"task_id": task_id, "error": str(error)})
+
 def main() -> None:
     core = os.getenv("CORE_ADDRESS", "http://localhost:8080")
     supported_tasks = [item.strip() for item in os.getenv("SUPPORTED_TASKS", "image").split(",") if item.strip()]
@@ -731,7 +755,14 @@ def main() -> None:
                                                                   "task_id": active_task["task_id"]}).raise_for_status()
                     cancellations = client.get(f"{core}/api/tasks/cancellations/{payload['node_name']}").json()
                     if any(item["task_id"] == active_task["task_id"] for item in cancellations):
-                        adapter.cancel()
+                        if active_task.get("task") == "assembly":
+                            # Issue #122 P6: the assembly attempt talks to an
+                            # external engine, so cancellation is forwarded to that
+                            # runtime instead of the local compute adapter.
+                            cancel_video_engine(active_task.get("submit_key"),
+                                                task_id=active_task["task_id"])
+                        else:
+                            adapter.cancel()
                 heartbeat_response = client.post(f"{core}/api/workers/heartbeat", json=payload)
                 heartbeat_response.raise_for_status()
                 control = heartbeat_response.json()

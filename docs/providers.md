@@ -30,6 +30,22 @@
 | VideoEngine | `native` | `money-printer`, `shortgpt` | `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`, `MONEY_PRINTER_TOKEN`, `SHORTGPT_URL`, `SHORTGPT_TOKEN` |
 | Publisher | `vertep-official` | Telegram + офіційні API YouTube/TikTok/FB/IG/Threads | `PUBLISHER_MOCK` / credentials платформ |
 
+## Ізольований runtime MoneyPrinterTurbo
+
+`money-printer` — єдиний зовнішній VideoEngine, який має власний pinned-контейнер:
+opt-in compose-профіль `moneyprinter`, окремий образ, заборона silent fallback на
+`native`. Повний опис — [`moneyprinter-runtime.md`](moneyprinter-runtime.md).
+
+## Ефективна конфігурація VideoEngine
+
+Знімок ефективного движка (`selected` / `effective` / `config_revision` /
+endpoint identity / посилання на secret / `ready`) доступний у
+`GET /api/settings/video-engine` і в UI **Налаштування → Движки обробки
+(backends)**. Значення секрету не експонується; перемикання на зовнішній рушій
+приймається лише після перевірки реального runtime, інакше попередній рушій
+лишається ефективним. Контракт — `core/engine_config.py`, деталі —
+[`moneyprinter-runtime.md`](moneyprinter-runtime.md#ефективна-конфігурація-движка-p7).
+
 ## Правила
 
 - Адаптери напряму в `worker/service.py` не викликаються — лише `providers.*` та `execute_role_task()`.

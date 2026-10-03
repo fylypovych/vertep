@@ -12,6 +12,7 @@ from .orchestration import initialize_plan, recover_after_restart, transition_st
 from .models import StageName, StageStatus
 from .artifacts import register_artifact, _digest
 from .script_schema import normalize_script
+from .dispatcher import available_worker
 
 logger = configure_logging("core")
 
@@ -461,71 +462,89 @@ def _do_publish_single(job: Job, channel: str) -> dict:
     return publisher.publish(channel, video_path, metadata)
 
 
-def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
-    if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
-        return job
-    image_list = [images] if isinstance(images, Path) else images
-    store.update(job, JobStatus.ASSETS_READY, f"{len(image_list)} IMAGE(S) READY")
-    transition_stage(job, StageName.ASSEMBLY, StageStatus.RUNNING)
-    store.update(job, JobStatus.ASSEMBLY, "ASSEMBLY STARTED")
-    _progress(job, "ASSEMBLY")
+def assembly_plan(job_store: JobStore, job: Job, images: list[Path]) -> dict:
+    """Resolve the approved inputs of one assembly attempt (Issue #122 §9.3).
+
+    Everything the render needs is read from the approved Job state, so the plan
+    is identical for the Native route and for a Worker-executed attempt: the same
+    materials, voice, music, subtitles, watermark, aspect, preset and script.
+    """
+    image_list = [images] if isinstance(images, Path) else list(images)
     scenes = (job.script or {}).get("scenes", [])
     durations = [float(scene.get("duration", 5)) for scene in scenes]
-    audio_files = [path for path in (store.root / job.job_id / "audio").glob("*")
+    audio_files = [path for path in (job_store.root / job.job_id / "audio").glob("*")
                    if path.suffix.lower() in {".wav", ".mp3", ".aac", ".m4a", ".ogg"}]
     voice = next((path for path in audio_files if path.stem.startswith("voice")), None)
     music = next((path for path in audio_files if path.stem.startswith("music")), None)
-    subtitles = _write_subtitles(store, job)
+    subtitles = _write_subtitles(job_store, job)
     brand_path = Path(os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json"
     try:
         brand = json.loads(brand_path.read_text(encoding="utf-8")) if brand_path.exists() else {}
     except ValueError:
         brand = {}
     watermark_value = brand.get("metadata", {}).get("watermark")
-    watermark = Path(watermark_value) if watermark_value else None
-    # Determine versioned output path (immutable: never overwrite previous version)
-    job_dir = store.root / job.job_id
-    final_dir = job_dir / "final"
     existing = [int(v.version) for v in job.video_versions if v.version is not None]
     next_version = max(existing, default=0) + 1
-    output = final_dir / f"video-v{next_version}.mp4"
-    # Use VideoEngine for rendering (per AGENTS.md §4.1/§28, Issue #31).
-    # VideoEngine wraps AssemblyProvider for native engine, or dispatches to
-    # remote engines (MoneyPrinter/ShortGPT) when configured.
-    video_engine = providers.video_engine()
-    video_engine.render(
-        output,
-        images=None if job.task_type == "video" else list(image_list),
-        clips=list(image_list) if job.task_type == "video" else None,
-        durations=durations,
-        audio=voice,
-        music=music,
-        subtitles=subtitles,
-        aspect_ratio=job.aspect_ratio,
-        preset=job.output_preset,
-        watermark=watermark,
-        task_type=job.task_type,
+    job_dir = job_store.root / job.job_id
+    return {
+        "materials": image_list,
+        "audio": voice,
+        "music": music,
+        "subtitles": subtitles,
+        "watermark": Path(watermark_value) if watermark_value else None,
+        "durations": durations,
+        "aspect_ratio": job.aspect_ratio,
+        "preset": job.output_preset,
+        "task_type": job.task_type,
+        "script": approved_narration(job),
+        "version": next_version,
+        "output": job_dir / "final" / f"video-v{next_version}.mp4",
+    }
+
+
+def approved_narration(job: Job) -> str:
+    """Canonical approved narration text (Issue #122 §9.11.1).
+
+    The concatenation of the approved scene texts in scene order, separated by one
+    newline, with no pause tags and no content the operator has not approved: the
+    external engine may never generate its own script (LLM) or narration (TTS).
+    """
+    scenes = (job.script or {}).get("scenes", [])
+    return "\n".join(
+        str(scene.get("text") or "").strip() for scene in scenes
+        if str(scene.get("text") or "").strip()
     )
-    if subtitles:
-        register_artifact(job, store.root, subtitles, "subtitles", workflow="srt")
-    register_artifact(job, store.root, output, "video", workflow="ffmpeg")
-    # Record immutable video version
-    rel_path = f"final/{output.name}"
-    # Issue #49: bind the structured revision request to the version it produced,
-    # so the render that follows a video revision documents (and does not silently
-    # drop) the revision text it was generated for.
+
+
+def effective_engine_id(engine) -> str:
+    """Identifier of the effective video engine, ``native`` when there is none.
+
+    Only a real engine id routes an assembly to a Worker; anything else (including
+    a stand-in used in tests) keeps the Native control-plane route, so CORE never
+    dispatches an assembly it cannot identify (Issue #122 P5).
+    """
+    value = getattr(engine, "engine_id", None)
+    return value if isinstance(value, str) and value else "native"
+
+
+def _finish_video_version(job: Job, job_store: JobStore, output: Path, version: int) -> None:
+    """Record an accepted render as the new current immutable video version.
+
+    Shared by the Native route and the Worker-executed assembly result, so a
+    version is registered identically no matter which engine produced it.
+    """
     revision_note = job.video_revisions[-1].text if job.video_revisions else None
-    vv = VideoVersion(
-        version=next_version, path=rel_path, sha256=_digest(output),
+    job.video_versions.append(VideoVersion(
+        version=version, path=f"final/{output.name}", sha256=_digest(output),
         revision_note=revision_note,
-    )
-    job.video_versions.append(vv)
-    job.active_video_version = next_version
+    ))
+    job.active_video_version = version
     job.output_path = str(output)
     # Issue #81 R1: the upstream text (script + storyboard regeneration) has
     # been consumed by this render, so it must not leak into later storyboard
     # regenerations of the job.
     job.video_revision_upstream = None
+    final_dir = output.parent
     # Backward-compat pointer so legacy consumers of final/video.mp4 keep working
     legacy_latest = final_dir / "video.mp4"
     try:
@@ -538,6 +557,72 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
             shutil.copy2(str(output), str(legacy_latest))
         except OSError:
             pass
+
+
+def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
+    if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
+        return job
+    image_list = [images] if isinstance(images, Path) else images
+    store.update(job, JobStatus.ASSETS_READY, f"{len(image_list)} IMAGE(S) READY")
+    transition_stage(job, StageName.ASSEMBLY, StageStatus.RUNNING)
+    store.update(job, JobStatus.ASSEMBLY, "ASSEMBLY STARTED")
+    _progress(job, "ASSEMBLY")
+    plan = assembly_plan(store, job, image_list)
+    subtitles = plan["subtitles"]
+    output = plan["output"]
+    next_version = plan["version"]
+    job_dir = store.root / job.job_id
+    final_dir = job_dir / "final"
+    video_engine = providers.video_engine()
+    if effective_engine_id(video_engine) != "native":
+        # Issue #122 P5: an external engine is executed by a Worker, never inside
+        # CORE. CORE only decides the attempt (immutable engine/config snapshot,
+        # durable submit key) and dispatches it; there is no CORE-side fallback to
+        # Native, so a missing or incapable executor is a refusal, not a
+        # substitution (§9.12).
+        from .api.job_helpers import (_assembly_submit_key, _assembly_input_digest,
+                                      _assembly_task_for, _engine_snapshot,
+                                      _enqueue_assembly_task)
+        digest = _assembly_input_digest(
+            job, materials=plan["materials"], audio=plan["audio"],
+            music=plan["music"], subtitles=subtitles, watermark=plan["watermark"],
+            script=plan["script"],
+        )
+        submit_key = _assembly_submit_key(job, version=next_version, input_digest=digest)
+        snapshot = _engine_snapshot(job, version=next_version, submit_key=submit_key,
+                                 engine=video_engine)
+        task = _assembly_task_for(job, submit_key=submit_key, snapshot=snapshot, **plan)
+        _enqueue_assembly_task(job, task)
+        store.event(job, f"ASSEMBLY v{next_version} DISPATCHED TO WORKER "
+                         f"(engine={snapshot['engine_id']})")
+        return job
+    # Use VideoEngine for rendering (per AGENTS.md §4.1/§28, Issue #31).
+    # VideoEngine wraps AssemblyProvider for native engine, or dispatches to
+    # remote engines (MoneyPrinter/ShortGPT) when configured.
+    video_engine.render(
+        output,
+        images=None if job.task_type == "video" else plan["materials"],
+        clips=plan["materials"] if job.task_type == "video" else None,
+        durations=plan["durations"],
+        audio=plan["audio"],
+        music=plan["music"],
+        subtitles=subtitles,
+        aspect_ratio=plan["aspect_ratio"],
+        preset=plan["preset"],
+        watermark=plan["watermark"],
+        task_type=plan["task_type"],
+        script=plan["script"],
+    )
+    if subtitles:
+        register_artifact(job, store.root, subtitles, "subtitles", workflow="srt")
+    register_artifact(job, store.root, output, "video", workflow="ffmpeg")
+    job.video_engine_snapshot = {
+        "engine_id": "native",
+        "bridge_schema_version": None,
+        "video_version": next_version,
+        "config_revision": None,
+    }
+    _finish_video_version(job, store, output, next_version)
     store.update(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{next_version})")
     transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
     store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, f"VIDEO PENDING APPROVAL (v{next_version})")
@@ -546,6 +631,7 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     else:
         _progress(job, "VIDEO_PENDING_APPROVAL")
     return job
+
 
 def prepare_job(store: JobStore, job: Job) -> Job:
     if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:

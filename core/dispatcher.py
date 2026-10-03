@@ -148,7 +148,10 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
         effective_task_type = task_type or job.task_type
         required_capability = {"image": "image_generation", "video": "video_generation",
                                "text": "text_generation", "voice": "speech_synthesis",
-                               "publish": "publishing"}.get(effective_task_type, effective_task_type)
+                               "publish": "publishing",
+                               # Issue #122 P5: final assembly of an external engine
+                               # runs on a Worker, so it is gated like any other task.
+                               "assembly": "video_assembly"}.get(effective_task_type, effective_task_type)
         capabilities = tested_capabilities if require_self_test else set(worker.get("capabilities") or [])
         if capabilities and required_capability not in capabilities:
             continue

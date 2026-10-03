@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,11 +24,66 @@ REQUIRED_IMAGES = {
     "core", "worker", "comfyui", "tts", "publisher-worker", "backup-service",
     "proxy", "postgres", "redis", "ollama", "monitoring", "grafana",
     "log-store", "log-collector", "update-agent", "license-manager",
-    "dispatcher", "scheduler", "certificate-manager",
+    "dispatcher", "scheduler", "certificate-manager", "moneyprinter",
 }
 
 REQUIRED_PLATFORMS = {"linux/amd64", "linux/arm64"}
-ARM64_EXEMPT_SERVICES = {"comfyui"}
+# moneyprinter ships linux/amd64 only: its dependency lock is resolved against
+# the pinned upstream commit for that platform and is not qualified for arm64 yet.
+# The service is opt-in, so an arm64-only install simply leaves the profile off.
+ARM64_EXEMPT_SERVICES = {"comfyui", "moneyprinter"}
+
+# Issue #122 P2: the isolated MoneyPrinterTurbo runtime must never become part of
+# a Native install. A role that pulls it in would make the appliance depend on an
+# optional external engine, so the dependency is rejected explicitly.
+FORBIDDEN_IN_ANY_ROLE = {"moneyprinter"}
+
+
+def _compose_service(compose: str, name: str) -> str:
+    """Return the raw YAML block of one compose service, or an empty string."""
+    lines = compose.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if line == f"  {name}:":
+            start = index
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if re.match(r"^  \S", lines[index]):
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
+def _locked_config_values(text: str, section: str) -> dict:
+    """Read ``key = value`` pairs of one TOML section without a TOML dependency.
+
+    The release gate must run on the same interpreters as the rest of the toolchain,
+    so it cannot assume ``tomllib`` or ``toml`` is importable. Only the shapes this
+    lock uses are supported: booleans, quoted strings and empty inline lists.
+    """
+    values: dict[str, object] = {}
+    current = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            current = stripped.strip("[]")
+            continue
+        if current != section or "=" not in stripped or stripped.startswith("#"):
+            continue
+        key, _, raw = stripped.partition("=")
+        raw = raw.strip()
+        if raw in ("true", "false"):
+            values[key.strip()] = raw == "true"
+        elif raw.startswith('"') and raw.endswith('"'):
+            values[key.strip()] = raw[1:-1]
+        elif raw == "[]":
+            values[key.strip()] = []
+        else:
+            values[key.strip()] = raw
+    return values
 
 
 def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = None) -> dict:
@@ -53,6 +109,10 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
                 "docker/proxy/Dockerfile", "docker/proxy/entrypoint.sh", "docker/monitoring/Dockerfile",
                 "docker/log-store/Dockerfile", "docker/log-collector/Dockerfile",
                 "docker/grafana/Dockerfile",
+                "docker/moneyprinter/Dockerfile", "docker/moneyprinter/entrypoint.sh",
+                "docker/moneyprinter/requirements.lock", "docker/moneyprinter/config.lock.toml",
+                "services/moneyprinter_service.py",
+                "adapters/providers/runtime_manifest.py",
                 "monitoring/prometheus.yml", "monitoring/alerts.yml", "monitoring/loki.yml",
                 "monitoring/promtail.yml", "monitoring/grafana/provisioning/datasources/vertep.yml",
                 "monitoring/grafana/provisioning/dashboards/vertep.yml",
@@ -66,6 +126,15 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
             services = set(roles[role]["services"])
             unexpected = sorted(services & forbidden)
             record(f"role_isolation:{role}", not unexpected, ", ".join(unexpected))
+        optional_leaks = sorted({
+            f"{role}:{service}"
+            for role, definition in roles.items()
+            if isinstance(definition, dict) and isinstance(definition.get("services"), list)
+            for service in definition["services"]
+            if service in FORBIDDEN_IN_ANY_ROLE
+        })
+        record("optional_engine_stays_out_of_roles", not optional_leaks,
+               ", ".join(optional_leaks))
     except (OSError, ValueError, KeyError, TypeError) as error:
         record("role_catalog", False, str(error))
     try:
@@ -94,11 +163,38 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
                        "VERTEP_LOG_STORE_IMAGE", "VERTEP_LOG_COLLECTOR_IMAGE",
                        "VERTEP_UPDATE_AGENT_IMAGE", "VERTEP_LICENSE_MANAGER_IMAGE",
                        "VERTEP_DISPATCHER_IMAGE", "VERTEP_SCHEDULER_IMAGE",
-                       "VERTEP_CERTIFICATE_MANAGER_IMAGE"}
+                       "VERTEP_CERTIFICATE_MANAGER_IMAGE", "VERTEP_MONEYPRINTER_IMAGE"}
     missing_image_variables = sorted(name for name in image_variables if f"${{{name}" not in compose)
     record("compose_image_digest_overrides", not missing_image_variables,
            ", ".join(missing_image_variables))
     record("no_docker_socket", "/var/run/docker.sock" not in compose)
+
+    # --- Issue #122 P2: the pinned MoneyPrinterTurbo runtime stays optional ---
+    moneyprinter_block = _compose_service(compose, "moneyprinter")
+    if not moneyprinter_block:
+        record("moneyprinter_opt_in", False, "moneyprinter service is missing from compose")
+    else:
+        opt_in = "profiles:" in moneyprinter_block and "moneyprinter" in moneyprinter_block
+        unpublished = not re.search(r"^\s{4}ports:", moneyprinter_block, re.MULTILINE)
+        record("moneyprinter_opt_in", bool(opt_in and unpublished),
+               "profiles" if not opt_in else ("published port" if not unpublished else ""))
+    try:
+        lock_text = (root / "docker/moneyprinter/config.lock.toml").read_text(encoding="utf-8")
+        config_lock = _locked_config_values(lock_text, "app")
+        root_lock = _locked_config_values(lock_text, "")
+        upload_locked = all(
+            not config_lock.get(key)
+            for key in ("upload_post_enabled", "upload_post_api_key",
+                        "upload_post_username", "upload_post_auto_upload")
+        ) and config_lock.get("upload_post_platforms") == []
+        record("moneyprinter_auto_upload_disabled", upload_locked)
+        record("moneyprinter_upstream_isolated",
+               root_lock.get("listen_host") == "127.0.0.1"
+               and config_lock.get("material_directory") == "task"
+               and not config_lock.get("enable_redis"))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        record("moneyprinter_auto_upload_disabled", False, str(error))
+        record("moneyprinter_upstream_isolated", False, str(error))
     mutable_runtime_mounts = ["./runtime/proxy.conf", "./monitoring/prometheus.yml",
                               "./monitoring/loki.yml", "./monitoring/promtail.yml",
                               "./monitoring/grafana/provisioning"]

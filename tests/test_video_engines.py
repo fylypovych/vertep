@@ -1,4 +1,9 @@
-from adapters.providers.base import BridgeContractError
+from adapters.providers.base import (
+    BridgeContractError,
+    BRIDGE_SCHEMA_VERSION,
+    REASON_SUBMIT_UNKNOWN,
+    REASON_VOICE_STAGING_UNSUPPORTED,
+)
 from adapters.providers.video_engines import (
     MONEY_PRINTER_CONTRACT,
     RemoteVideoEngine,
@@ -18,7 +23,9 @@ and the request/status mappings of the pinned upstream API.
 Issue #122 P2 tests: material upload, health check, runtime manifest.
 """
 
+import hashlib
 import json
+from pathlib import Path
 import math
 import struct
 import wave
@@ -36,6 +43,7 @@ from adapters.providers import (
     ShortGPTEngine,
     VideoEngine,
 )
+from adapters.ffmpeg import FFmpegAdapter
 from publishers.transport import FakeTransport
 
 
@@ -100,7 +108,61 @@ def _job_assets(tmp_path):
         "preset": None,
         "watermark": None,
         "task_type": "image",
+        "script": APPROVED_SCRIPT,
     }
+
+
+APPROVED_SCRIPT = "Сцена: Vertep готує схвалений короткий текст для озвучення."
+
+
+def _runtime_body(task_local_voice: bool = True, **overrides) -> dict:
+    """Wrapper ``/runtime`` snapshot as the bridge reads it."""
+    body = {
+        "service": "vertep-moneyprinter",
+        "upstream_commit": MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[1],
+        "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
+        "capabilities": {
+            "task_local_voice": task_local_voice,
+            "reason": None if task_local_voice else "upstream_voice_staging_unsupported",
+        },
+    }
+    body.update(overrides)
+    return body
+
+
+def _staged_voice(audio) -> httpx.Response:
+    """Wrapper answer to the approved-voice staging call (§9.3 row 5).
+
+    The runtime stores the approved bytes itself and answers with a
+    content-addressed reference, never with a path CORE could not read.
+    """
+    payload = Path(audio).read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    return httpx.Response(200, json={
+        "status": 200,
+        "message": "success",
+        "data": {"voice": f"vertep-voice:{digest}.wav", "sha256": digest, "bytes": len(payload)},
+    })
+
+
+@pytest.fixture(scope="module")
+def mp4_factory(tmp_path_factory):
+    """Bytes of a real, decodable MP4 of a given length (the runtime result)."""
+    root = tmp_path_factory.mktemp("rendered")
+
+    def build(seconds: float = 2.0) -> bytes:
+        target = root / f"result-{seconds}.mp4"
+        if not target.exists():
+            NativeVertepEngine().render(
+                target,
+                images=[_png(root / f"result-{seconds}.png")],
+                durations=[seconds],
+                audio=_wav(root / f"result-{seconds}.wav", seconds=seconds),
+                aspect_ratio="9:16",
+            )
+        return target.read_bytes()
+
+    return build
 
 
 # ---------------------------------------------------------------------------
@@ -156,31 +218,296 @@ def test_remote_engine_isolation_not_configured_without_url(monkeypatch, tmp_pat
         engine.render(tmp_path / "v.mp4", **(_job_assets(tmp_path)))
 
 
-def test_remote_engine_http_flow(tmp_path):
-    """Test remote engine HTTP flow with material upload (Issue #122 P2)."""
+def test_submit_matches_the_fixed_bridge_contract(tmp_path, mp4_factory):
+    """§9.4: materials carry their scene duration, clip duration is ceil(max).
+
+    The previous implementation passed ``int(durations[0])`` and ``duration:
+    None``, so a 3.4 s scene rendered as 3 s clips and the upstream received a
+    receive window it could not honour.
+    """
+    assets = _job_assets(tmp_path)
+    assets["durations"] = [3.4]
+    assets["audio"] = _wav(tmp_path / "voice-3s.wav", seconds=3.4)
     fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "a.png"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j1"}}),
+        httpx.Response(200, json={"data": {"state": 1, "videos": ["tasks/j1/final-1.mp4"]}}),
+        httpx.Response(200, content=mp4_factory(3.4)),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    engine.render(tmp_path / "final" / "external.mp4", **assets)
+
+    # GET /runtime, POST upload, POST voice, POST submit, GET status, GET download
+    submit = fake.requests[3][2]["json"]
+    assert submit["video_clip_duration"] == 4
+    assert submit["video_materials"][0]["duration"] == 3.4
+
+
+def test_clip_duration_never_exceeds_the_upstream_limit(tmp_path, mp4_factory):
+    assets = _job_assets(tmp_path)
+    assets["durations"] = [15.0]
+    assets["audio"] = _wav(tmp_path / "voice-15s.wav", seconds=15.0)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "a.png"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j1"}}),
+        httpx.Response(200, json={"data": {"state": 1, "videos": ["tasks/j1/final-1.mp4"]}}),
+        httpx.Response(200, content=mp4_factory(15.0)),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    engine.render(tmp_path / "final" / "external.mp4", **assets)
+
+    assert fake.requests[3][2]["json"]["video_clip_duration"] == 15
+
+
+def test_submit_sends_every_fixed_submission_value(tmp_path, mp4_factory):
+    """§9.4 fixed set: no LLM, no TTS, no subtitles, no BGM, no cross-post."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "a.png"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j1"}}),
+        httpx.Response(200, json={"data": {"state": 1, "videos": ["tasks/j1/final-1.mp4"]}}),
+        httpx.Response(200, content=mp4_factory(2.0)),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    engine.render(tmp_path / "final" / "external.mp4", **assets)
+
+    submit = fake.requests[3][2]["json"]
+    assert submit["video_source"] == "local"
+    assert submit["video_terms"] is None
+    assert submit["video_fit_mode"] == "contain"
+    assert submit["video_concat_mode"] == "sequential"
+    assert submit["video_transition_mode"] is None
+    assert submit["video_clip_speed"] == 1.0
+    assert submit["match_materials_to_script"] is False
+    assert submit["video_count"] == 1
+    assert submit["bgm_type"] == ""
+    assert submit["bgm_file"] == ""
+    assert submit["bgm_volume"] == 0.0
+    assert submit["subtitle_enabled"] is False
+    assert submit["video_language"] == ""
+    assert submit["n_threads"] == 2
+    assert submit["video_script"] == APPROVED_SCRIPT
+
+
+def test_render_refuses_a_runtime_that_cannot_stage_the_approved_voice(tmp_path):
+    """§9.6: without task-local voice staging the runtime would run its own TTS."""
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body(task_local_voice=False)),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    with pytest.raises(BridgeContractError) as exc:
+        engine.render(tmp_path / "final" / "refused.mp4", **(_job_assets(tmp_path)))
+    assert exc.value.code == REASON_VOICE_STAGING_UNSUPPORTED
+    # Refused pre-dispatch: nothing was uploaded, submitted or polled.
+    assert [request[0] for request in fake.requests] == ["GET"]
+    assert not (tmp_path / "final" / "refused.mp4").exists()
+
+
+def test_render_refuses_without_the_approved_script(tmp_path):
+    """§9.4: an empty script would let the runtime generate narration text."""
+    fake = FakeTransport([])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    assets = _job_assets(tmp_path)
+    assets["script"] = "   "
+    with pytest.raises(BridgeContractError) as exc:
+        engine.render(tmp_path / "final" / "refused.mp4", **assets)
+    assert exc.value.code == "script_unavailable"
+    assert fake.requests == []
+
+
+def test_render_refuses_a_mixed_media_type_job(tmp_path):
+    """§9.3: mixed image and video materials are not a supported executor input."""
+    assets = _job_assets(tmp_path)
+    assets["images"] = []
+    assets["clips"] = [_mp4(tmp_path / "scene.mp4")]
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=FakeTransport([]))
+    with pytest.raises(BridgeContractError) as exc:
+        engine.render(tmp_path / "final" / "refused.mp4", **assets)
+    assert exc.value.code in {
+        "material_channel_mismatch",
+        "mixed_media_type",
+        "unsupported_media_type",
+    }
+
+
+def test_remote_engine_http_flow(tmp_path, mp4_factory):
+    """Test remote engine HTTP flow with material upload (Issue #122 P2)."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        # Runtime capability snapshot (approved voice staging)
+        httpx.Response(200, json=_runtime_body()),
         # Material upload response
-        httpx.Response(200, json={"filename": "uploaded-scene.png"}),
+        httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.png"}}),
+        # Approved voice staging response
+        _staged_voice(assets["audio"]),
         # Submit task response
         httpx.Response(200, json={"task_id": "j1"}),
         # Status check response (for MoneyPrinterEngine - map_upstream_status)
         httpx.Response(200, json={"state": 1, "videos": ["tasks/j1/final-1.mp4"]}),
         # Download response
-        httpx.Response(200, content=b"mp4-bytes"),
+        httpx.Response(200, content=mp4_factory(2.0)),
     ])
     engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
-    assets = _job_assets(tmp_path)
     output = engine.render(tmp_path / "final" / "external.mp4", **assets)
 
-    assert output.read_bytes() == b"mp4-bytes"
+    # §9.5: the downloaded render is finished exactly like a Native render, so the
+    # final artifact is the post-step output, not the raw upstream download.
+    assert output.stat().st_size > 0
+    assert output.read_bytes() != mp4_factory(2.0)
     methods = [r[0] for r in fake.requests]
-    # POST upload, POST submit, GET status, GET download
-    assert methods == ["POST", "POST", "GET", "GET"]
-    assert fake.requests[0][1].endswith("/api/v1/video_materials")
-    assert fake.requests[1][1].endswith("/api/v1/videos")
-    assert fake.requests[2][1].endswith("/api/v1/tasks/j1")
+    # GET runtime, POST upload, POST voice, POST submit, GET status, GET download
+    assert methods == ["GET", "POST", "POST", "POST", "GET", "GET"]
+    assert fake.requests[0][1].endswith("/runtime")
+    assert fake.requests[1][1].endswith("/api/v1/video_materials")
+    assert fake.requests[2][1].endswith("/api/v1/voice")
+    assert fake.requests[3][1].endswith("/api/v1/videos")
+    assert fake.requests[4][1].endswith("/api/v1/tasks/j1")
     # Download endpoint uses the contract template
-    assert "/api/v1/download/" in fake.requests[3][1]
+    assert "/api/v1/download/" in fake.requests[5][1]
+    # The approved voice travels as raw bytes plus its name, never as a CORE path.
+    voice_call = fake.requests[2]
+    assert voice_call[2]["headers"]["x-vertep-filename"] == Path(assets["audio"]).name
+    assert voice_call[2]["content"] == Path(assets["audio"]).read_bytes()
+
+
+class _RecordingAssembly:
+    """Wraps the real assembly provider and records where staging happened."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.staging_dirs = []
+
+    def __getattr__(self, name):
+        attribute = getattr(self._inner, name)
+        if name != "pre_cut":
+            return attribute
+
+        def pre_cut(source, duration, output):
+            self.staging_dirs.append(output.parent)
+            return attribute(source, duration, output)
+
+        return pre_cut
+
+
+def _mpt_runtime_responses(result_bytes, task_id="j1", material="uploaded-scene.mp4", audio=None):
+    return [
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": material}}),
+        _staged_voice(audio),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": task_id}}),
+        httpx.Response(200, json={"data": {"state": 1, "videos": [f"tasks/{task_id}/final-1.mp4"]}}),
+        httpx.Response(200, content=result_bytes),
+    ]
+
+
+def test_each_attempt_owns_and_removes_its_staging_area(tmp_path, mp4_factory):
+    """P3: staging is attempt-scoped and never outlives the attempt."""
+    assets = _job_assets(tmp_path)
+    assembly = _RecordingAssembly(
+        DefaultAssemblyProvider(FFmpegAdapter())
+    )
+    engine = MoneyPrinterEngine(
+        url="http://engine:8000", transport=FakeTransport([]), assembly=assembly,
+    )
+
+    for attempt, task_id in enumerate(("j1", "j2"), start=1):
+        engine._transport.responses = _mpt_runtime_responses(
+            mp4_factory(2.0), task_id=task_id, audio=assets["audio"],
+        )
+        engine.render(
+            tmp_path / "final" / f"video-v{attempt}.mp4", **assets,
+        )
+
+    assert len(assembly.staging_dirs) == 2
+    assert assembly.staging_dirs[0] != assembly.staging_dirs[1]
+    # Both attempt directories are gone once the attempts finished.
+    for directory in assembly.staging_dirs:
+        assert not directory.exists()
+    assert not list((tmp_path / "final").glob(".*-bridge"))
+
+
+def test_a_failed_attempt_also_removes_its_staging_area(tmp_path):
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(500, json={"error": {"message": "storage offline"}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    with pytest.raises(BridgeContractError):
+        engine.render(tmp_path / "final" / "video-v1.mp4", **(_job_assets(tmp_path)))
+
+    assert not list((tmp_path / "final").glob(".*-bridge"))
+
+
+def test_submission_never_leaks_a_core_filesystem_path(tmp_path, mp4_factory):
+    """P3: the runtime is addressed by storage keys, not by CORE paths."""
+    assets_root = tmp_path / "core-storage"
+    assets_root.mkdir()
+    images = [_png(assets_root / "scene.png")]
+    assets = _job_assets(tmp_path)
+    assets["images"] = images
+    assets["audio"] = _wav(assets_root / "voice.wav")
+    fake = FakeTransport(_mpt_runtime_responses(mp4_factory(2.0), audio=assets["audio"]))
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    # The staging root of the Job is a different tree than the CORE storage root.
+    engine.render(tmp_path / "jobs" / "2026-000001" / "final" / "video-v1.mp4", **assets)
+
+    submit = fake.requests[3][2]["json"]
+    assert str(assets_root) not in json.dumps(submit)
+    assert submit["video_materials"][0]["url"] == "uploaded-scene.mp4"
+    # The approved voice is submitted as a staged content address, not as a path.
+    assert submit["custom_audio_file"] == (
+        "vertep-voice:"
+        f"{hashlib.sha256(Path(assets['audio']).read_bytes()).hexdigest()}.wav"
+    )
+    assert submit["video_materials"][0]["original_name"].startswith("scene-")
+
+
+def test_verified_import_is_readable_and_checksummed(tmp_path, mp4_factory):
+    """P3: checksum, size and access are all verified on the imported artifact."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport(_mpt_runtime_responses(mp4_factory(2.0), audio=assets["audio"]))
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    output = engine.render(tmp_path / "final" / "video-v1.mp4", **assets)
+
+    assert output.is_file() and output.stat().st_size > 0
+    assert engine._verify_readable(output) == output.stat().st_size
+    sidecar = output.with_suffix(output.suffix + ".sha256")
+    assert sidecar.read_text(encoding="utf-8") == hashlib.sha256(
+        output.read_bytes()
+    ).hexdigest()
+    assert not output.with_suffix(output.suffix + ".tmp").exists()
+
+
+def test_an_unreadable_import_is_never_registered(tmp_path, mp4_factory, monkeypatch):
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport(_mpt_runtime_responses(mp4_factory(2.0), audio=assets["audio"]))
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    real_open = Path.open
+
+    def guarded(self, mode="r", *args, **kwargs):
+        if "r" in mode and self.name == "video-v1.mp4":
+            raise OSError("permission denied")
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded)
+
+    with pytest.raises(BridgeContractError) as exc:
+        engine.render(tmp_path / "final" / "video-v1.mp4", **assets)
+
+    assert exc.value.code == "upstream_result_corrupted"
+    assert "not readable" in str(exc.value)
 
 
 def test_remote_engine_sends_bearer_token(tmp_path):
@@ -214,6 +541,7 @@ def test_remote_engine_api_error_surfaces_http_code(tmp_path):
 def test_moneyprinter_upload_error_surfaces(tmp_path):
     """MoneyPrinterEngine material upload error surfaces before submit (Issue #122 P2)."""
     fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
         httpx.Response(400, json={"error": {"message": "storage full"}}),
     ])
     engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
@@ -254,19 +582,72 @@ def test_remote_engine_artifact_delivery_empty_download(tmp_path):
     assert "empty" in str(exc.value).lower()
 
 
+def test_moneyprinter_refuses_a_download_that_is_not_decodable_media(tmp_path):
+    """A 200 with garbage bytes must never become the Job artifact (§9.5)."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-corrupt"}}),
+        httpx.Response(200, json={"data": {"state": 1, "videos": ["tasks/j-corrupt/final-1.mp4"]}}),
+        httpx.Response(200, content=b"not-a-video"),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    with pytest.raises(BridgeContractError) as exc:
+        engine.render(tmp_path / "final" / "corrupt.mp4", **assets)
+
+    assert exc.value.code == "upstream_result_corrupted"
+    assert not (tmp_path / "final" / "corrupt.mp4").exists()
+    # No post-step artefact is left behind either.
+    assert not list((tmp_path / "final").glob("*-poststep.mp4"))
+
+
+def test_moneyprinter_bounds_polling_retries_and_refuses_the_task(tmp_path):
+    """Transient upstream errors are retried a bounded number of times, then refused."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-flaky"}}),
+        httpx.Response(502, text="Bad Gateway"),
+        httpx.Response(503, text="Service Unavailable"),
+        httpx.Response(200, json={"data": {"state": 1, "videos": ["tasks/j-flaky/final-1.mp4"]}}),
+    ])
+    engine = MoneyPrinterEngine(
+        url="http://engine:8000", transport=fake,
+        max_read_attempts=2, read_backoff=0.0,
+    )
+
+    with pytest.raises(BridgeContractError) as exc:
+        engine.render(tmp_path / "final" / "flaky.mp4", **assets)
+
+    assert exc.value.code == "upstream_transient_failure"
+    # Snapshot, upload, voice and submit were never retried, only the read.
+    assert [request[0] for request in fake.requests] == [
+        "GET", "POST", "POST", "POST", "GET", "GET",
+    ]
+    assert not (tmp_path / "final" / "flaky.mp4").exists()
+
+
 def test_moneyprinter_empty_download_rejected(tmp_path):
     """MoneyPrinterEngine rejects empty download (Issue #122 P2)."""
+    assets = _job_assets(tmp_path)
     fake = FakeTransport([
-        httpx.Response(200, json={"filename": "uploaded-scene.png"}),
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.png"}}),
+        _staged_voice(assets["audio"]),
         httpx.Response(200, json={"task_id": "j-empty"}),
         httpx.Response(200, json={"state": 1, "videos": ["tasks/j-empty/final-1.mp4"]}),
         httpx.Response(200, content=b""),
     ])
     engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
-    assets = _job_assets(tmp_path)
     with pytest.raises(RuntimeError) as exc:
         engine.render(tmp_path / "final" / "empty.mp4", **assets)
     assert "empty" in str(exc.value).lower()
+    assert not (tmp_path / "final" / "empty.mp4").exists()
 
 
 def test_remote_engine_cancel(tmp_path):
@@ -276,21 +657,168 @@ def test_remote_engine_cancel(tmp_path):
     engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
     assert engine.cancel("job-123") is True
     assert fake.requests[0][0] == "DELETE"
-    assert fake.requests[0][1].endswith("/jobs/job-123")
+    assert fake.requests[0][1].endswith("/api/v1/tasks/job-123")
 
 
-def test_remote_engine_polling_transient_retry(tmp_path):
-    """ShortGPTEngine (legacy flow) retries transient polling errors (Issue #122 P2)."""
+def test_remote_engine_cancel_treats_busy_task_as_not_cancelled(tmp_path):
+    """A 409 from the pinned upstream means the task is still running."""
+    fake = FakeTransport([
+        httpx.Response(409, json={"status": 409, "message": "task is still running"}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    assert engine.cancel("job-123") is False
+
+
+def test_remote_engine_cancel_treats_unknown_task_as_not_cancelled(tmp_path):
+    fake = FakeTransport([
+        httpx.Response(404, json={"status": 404, "message": "task not found"}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    assert engine.cancel("job-123") is False
+
+
+# ---------------------------------------------------------------------------
+# Durable submit key: one approved render, one upstream task (Issue #122 §5)
+# ---------------------------------------------------------------------------
+
+
+def _raises(error):
+    """A queued FakeTransport response that fails with a transport error."""
+    def _raise():
+        raise error
+    return _raise
+
+
+def test_render_sends_the_durable_submit_key_and_uses_the_reconciled_task(
+    tmp_path, mp4_factory
+):
+    """A lost submit response is resolved through the key, never resent blindly."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.png"}}),
+        _staged_voice(assets["audio"]),
+        _raises(httpx.TimeoutException("lost response")),
+        # Reconciliation of the key into the upstream task that already exists.
+        httpx.Response(200, json={"status": 200, "state": "submitted",
+                                  "data": {"task_id": "j-reconciled"}}),
+        httpx.Response(200, json={"data": {"state": 1,
+                                           "videos": ["tasks/j-reconciled/final-1.mp4"]}}),
+        httpx.Response(200, content=mp4_factory(2.0)),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    output = engine.render(tmp_path / "final" / "reconciled.mp4",
+                           submit_key="job-1-v1-abc", **assets)
+
+    assert output.stat().st_size > 0
+    submit_call = fake.requests[3]
+    assert submit_call[0] == "POST" and submit_call[1].endswith("/api/v1/videos")
+    assert submit_call[2]["headers"]["x-vertep-submit-key"] == "job-1-v1-abc"
+    # Exactly one submit, and it was resolved into the existing upstream task.
+    assert [item for item in fake.requests
+            if item[0] == "POST" and item[1].endswith("/api/v1/videos")] == [submit_call]
+    reconcile = fake.requests[4]
+    assert reconcile[0] == "GET"
+    assert reconcile[1].endswith("/api/v1/videos/job-1-v1-abc")
+
+
+def test_a_lost_submit_that_cannot_be_reconciled_is_terminal(tmp_path):
+    """An unprovable submit is refused as unknown, never as a fresh attempt."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.png"}}),
+        _staged_voice(assets["audio"]),
+        _raises(httpx.TimeoutException("lost response")),
+        httpx.Response(200, json={"status": 200, "state": "unknown", "data": {}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(tmp_path / "final" / "unknown.mp4",
+                      submit_key="job-1-v1-abc", **assets)
+
+    assert refusal.value.code == REASON_SUBMIT_UNKNOWN
+    assert [item for item in fake.requests
+            if item[0] == "POST" and item[1].endswith("/api/v1/videos")] != []
+    # The submit was sent exactly once and never repeated.
+    assert len([item for item in fake.requests
+                if item[0] == "POST" and item[1].endswith("/api/v1/videos")]) == 1
+
+
+def test_an_in_flight_submit_is_reconciled_instead_of_repeated(tmp_path):
+    """A 409 for the same key resolves into the running attempt, not a new one."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.png"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(409, json={"status": 409, "reason": "upstream_submit_unknown"}),
+        httpx.Response(200, json={"status": 200, "state": "submitted",
+                                  "data": {"task_id": "j-inflight"}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    engine._wait_for_status = lambda task_id: {
+        "data": {"state": 1, "videos": [f"tasks/{task_id}/final-1.mp4"]},
+    }
+
+    with pytest.raises(Exception):
+        # The render cannot finish without a download response, but the submit
+        # itself must already have been resolved into the in-flight task.
+        engine.render(tmp_path / "final" / "inflight.mp4",
+                      submit_key="job-1-v1-abc", **assets)
+
+    assert len([item for item in fake.requests
+                if item[0] == "POST" and item[1].endswith("/api/v1/videos")]) == 1
+
+
+def test_an_unresolvable_in_flight_submit_is_terminal(tmp_path):
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.png"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(409, json={"status": 409, "reason": "upstream_submit_unknown"}),
+        httpx.Response(200, json={"status": 200, "state": "unknown", "data": {}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(tmp_path / "final" / "inflight.mp4",
+                      submit_key="job-1-v1-abc", **assets)
+
+    assert refusal.value.code == REASON_SUBMIT_UNKNOWN
+
+
+def test_cancel_addresses_the_durable_submit_key(tmp_path):
+    """Cancellation uses the key, so it works without the upstream task id."""
+    fake = FakeTransport([httpx.Response(204)])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    assert engine.cancel("tsk-1", submit_key="job-1-v1-abc") is True
+    assert fake.requests[0][0] == "DELETE"
+    assert fake.requests[0][1].endswith("/api/v1/videos/job-1-v1-abc")
+
+
+def test_cancel_of_an_in_flight_submit_is_not_reported_as_cancelled(tmp_path):
+    fake = FakeTransport([httpx.Response(409, json={"status": 409})])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+
+    assert engine.cancel("tsk-1", submit_key="job-1-v1-abc") is False
+
+
+def test_remote_engine_polling_transient_retry(tmp_path, mp4_factory):
     fake = FakeTransport([
         httpx.Response(200, json={"job_id": "j-retry"}),
         httpx.Response(502, text="Bad Gateway"),
         httpx.Response(200, json={"status": "READY"}),
-        httpx.Response(200, content=b"retry-success"),
+        httpx.Response(200, content=mp4_factory(2.0)),
     ])
     engine = ShortGPTEngine(url="http://engine:9000", transport=fake, poll_interval=0.01)
     assets = _job_assets(tmp_path)
     output = engine.render(tmp_path / "final" / "retry.mp4", **assets)
-    assert output.read_bytes() == b"retry-success"
+    assert output.stat().st_size > 100
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +826,7 @@ def test_remote_engine_polling_transient_retry(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_engine_parity_native_vs_external_on_same_job(tmp_path):
+def test_engine_parity_native_vs_external_on_same_job(tmp_path, mp4_factory):
     assets = _job_assets(tmp_path)
 
     # Native engine renders a real video from the Job assets.
@@ -309,26 +837,31 @@ def test_engine_parity_native_vs_external_on_same_job(tmp_path):
     # External engine receives the exact same Job assets and produces the final
     # artifact at the requested output path (remote render + download).
     fake = FakeTransport([
-        httpx.Response(200, json={"filename": "uploaded-scene.png"}),
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.png"}}),
+        _staged_voice(assets["audio"]),
         httpx.Response(200, json={"task_id": "j-parity"}),
         httpx.Response(200, json={"state": 1, "videos": ["tasks/j-parity/final-1.mp4"]}),
-        httpx.Response(200, content=b"external-mp4"),
+        httpx.Response(200, content=mp4_factory(2.0)),
     ])
     external_out = tmp_path / "external" / "video.mp4"
     MoneyPrinterEngine(url="http://engine:8000", transport=fake).render(
         external_out, **assets
     )
-    assert external_out.read_bytes() == b"external-mp4"
+    assert external_out.stat().st_size > 100
 
     # Parity: same render contract — both engines consumed the same assets
     # (images, durations, aspect ratio, task type) and produced the final output
-    # path for the same Job. The submitted request is the second call: the first
-    # one uploads the approved scene material.
-    spec = fake.requests[1][2]["json"]
+    # path for the same Job. The submitted request is the fourth call: the first
+    # reads the runtime snapshot, the second uploads the approved scene clip and
+    # the third stages the approved voice.
+    spec = fake.requests[3][2]["json"]
+    # §9.3: the executor receives one pre-cut clip per scene, never the raw asset.
     assert [material["original_name"] for material in
-            spec["video_materials"]] == [assets["images"][0].name]
+            spec["video_materials"]] == ["scene-000.mp4"]
     assert spec["video_materials"][0]["url"] == "uploaded-scene.png"
-    assert spec["custom_audio_file"] == str(assets["audio"])
+    assert spec["video_materials"][0]["duration"] == assets["durations"][0]
+    assert spec["custom_audio_file"].startswith("vertep-voice:")
     assert spec["video_aspect"] == assets["aspect_ratio"]
     assert spec["video_source"] == "local"
 
@@ -684,7 +1217,7 @@ def test_parse_output_reference_normalises_task_scoped_paths():
         }
 
 
-def test_generic_profile_keeps_legacy_render_contract(tmp_path):
+def test_generic_profile_keeps_legacy_render_contract(tmp_path, mp4_factory):
     clip = tmp_path / "scene.mp4"
     clip.write_bytes(b"\x00" * 32)
     assets = {
@@ -702,13 +1235,14 @@ def test_generic_profile_keeps_legacy_render_contract(tmp_path):
     fake = FakeTransport([
         httpx.Response(200, json={"job_id": "j-generic"}),
         httpx.Response(200, json={"status": "READY"}),
-        httpx.Response(200, content=b"generic-mp4"),
+        httpx.Response(200, content=mp4_factory(2.0)),
     ])
     output = ShortGPTEngine(url="http://engine:9000", transport=fake).render(
         tmp_path / "final" / "v.mp4", **assets
     )
 
-    assert output.read_bytes() == b"generic-mp4"
+    assert output.stat().st_size > 100
+    assert fake.requests[-1][1].endswith("/download/j-generic")
 
 
 # ---------------------------------------------------------------------------
@@ -729,9 +1263,22 @@ def test_registry_video_engine_is_swappable():
 
 
 def test_material_upload_sends_files_with_sha256(tmp_path):
-    """Material upload wrapper sends files and records SHA256 (Issue #122 P2)."""
+    """Material upload wrapper sends files and records SHA256 (Issue #122 P2).
+
+    The response is the real pinned-upstream envelope
+    ``{"status": 200, "message": "success", "data": {"file": <storage key>}}``
+    (app/controllers/v1/video.py:upload_video_material_file), not a flat
+    filename object.
+    """
     fake = FakeTransport([
-        httpx.Response(200, json={"filename": "uploaded-scene.png"}),
+        httpx.Response(
+            200,
+            json={
+                "status": 200,
+                "message": "success",
+                "data": {"file": "8f14e45fceea167a5a36dedd4bea2543-scene.png"},
+            },
+        ),
     ])
     engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
     image = _png(tmp_path / "scene.png")
@@ -744,11 +1291,46 @@ def test_material_upload_sends_files_with_sha256(tmp_path):
     assert len(uploaded) == 1
     assert uploaded[0]["original_name"] == "scene.png"
     assert "sha256" in uploaded[0]
-    assert uploaded[0]["url"] == "uploaded-scene.png"
+    assert uploaded[0]["url"] == "8f14e45fceea167a5a36dedd4bea2543-scene.png"
     assert uploaded[0]["provider"] == "local"
     assert len(fake.requests) == 1
     assert fake.requests[0][1].endswith("/api/v1/video_materials")
-    assert "file" in fake.requests[0][2]["files"]
+    # The wrapper is the only reachable endpoint and builds the multipart envelope,
+    # so the clip travels as raw bytes with its name in a header.
+    assert fake.requests[0][2]["content"] == image.read_bytes()
+    assert fake.requests[0][2]["headers"]["x-vertep-filename"] == "scene.png"
+    assert "files" not in fake.requests[0][2]
+
+
+def test_material_upload_reads_the_real_upstream_envelope(tmp_path):
+    """Regression: the pinned API returns ``data.file``.
+
+    Reading ``data.filename`` (or a top-level ``filename``) made every
+    real upload fail with ``upstream_upload_failed`` even though the
+    upstream had accepted the file.
+    """
+    fake = FakeTransport([
+        httpx.Response(200, json={"status": 200, "data": {"file": "material-1.mp4"}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    image = _png(tmp_path / "scene.png")
+
+    uploaded = engine._upload_materials(materials=[image], task_id="test-task")
+
+    assert uploaded[0]["url"] == "material-1.mp4"
+
+
+def test_material_upload_rejects_wrong_envelope_key(tmp_path):
+    """A response that does not carry ``data.file`` is rejected."""
+    fake = FakeTransport([
+        httpx.Response(200, json={"status": 200, "data": {"filename": "scene.png"}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    image = _png(tmp_path / "scene.png")
+
+    with pytest.raises(BridgeContractError) as exc:
+        engine._upload_materials(materials=[image], task_id="test-task")
+    assert exc.value.code == "upstream_upload_failed"
 
 
 def test_material_upload_fails_on_unreadable_file(tmp_path):
@@ -780,6 +1362,37 @@ def test_material_upload_fails_on_upstream_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _wrapper_ready_body(**overrides):
+    """A wrapper ``/health`` report that satisfies every §9.12 readiness gate."""
+    checks = {
+        "snapshot": {
+            "upstream_commit": MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[-1],
+            "upstream_reference": MONEY_PRINTER_CONTRACT.upstream_reference,
+            "upstream_version": "1.3.7",
+            "bridge_version": "v1",
+            "bridge_schema_version": "v1",
+            "image_digest": "sha256:" + "a" * 64,
+            "dependency_count": 2,
+            "inventory_digest": "b" * 64,
+        },
+        "upstream_auth_enforced": True,
+        "submit_schema": [
+            "video_subject",
+            "video_aspect",
+            "video_source",
+            "subtitle_enabled",
+            "video_clip_duration",
+        ],
+    }
+    checks.update(overrides)
+    return {"service": "moneyprinter", "status": "ready", "checks": checks}
+
+
+def _health_from(body, status_code=200):
+    fake = FakeTransport([httpx.Response(status_code, json=body)])
+    return MoneyPrinterEngine(url="http://engine:8098", transport=fake).health_check()
+
+
 def test_health_check_fails_without_url():
     """Health check fails when URL not configured (Issue #122 P2)."""
     engine = MoneyPrinterEngine(url="")
@@ -787,32 +1400,124 @@ def test_health_check_fails_without_url():
 
     assert health["available"] is False
     assert health["endpoint_reachable"] is False
-    assert health["error"] is not None
+    assert health["reason"] == "engine_not_configured"
     assert "MONEY_PRINTER_URL" in health["error"]
 
 
 def test_health_check_reports_endpoint_reachable():
-    """Health check reports endpoint reachability (Issue #122 P2)."""
-    fake = FakeTransport([
-        httpx.Response(200, json={"data": []}),
-    ])
-    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
-    health = engine.health_check()
+    """Readiness is proven by the wrapper, on the real executor (Issue #122 §9.12)."""
+    health = _health_from(_wrapper_ready_body())
 
     assert health["available"] is True
     assert health["endpoint_reachable"] is True
+    assert health["auth_enforced"] is True
+    assert health["schema_compatible"] is True
+    assert health["snapshot_verified"] is True
+    assert health["reason"] is None
     assert health["error"] is None
 
 
 def test_health_check_reports_schema_compatibility():
-    """Health check checks schema compatibility (Issue #122 P2)."""
-    fake = FakeTransport([
-        httpx.Response(200, json={"data": []}),
-    ])
-    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
-    health = engine.health_check()
+    """Schema compatibility comes from the upstream submit schema, not from a dict."""
+    health = _health_from(_wrapper_ready_body())
 
     assert health["schema_compatible"] is True
+
+
+def test_health_check_refuses_an_unauthenticated_upstream():
+    """HTTP 401 from the runtime must not read as ready (Issue #122 P2)."""
+    health = _health_from({
+        "service": "moneyprinter",
+        "status": "unavailable",
+        "checks": {
+            "reason": "upstream_unauthenticated",
+            "detail": "pinned upstream API does not enforce x-api-key authentication",
+        },
+    }, status_code=503)
+
+    assert health["available"] is False
+    assert health["reason"] == "upstream_unauthenticated"
+    assert "x-api-key" in health["error"]
+
+
+def test_health_check_refuses_a_runtime_without_inventory():
+    """A runtime that publishes no inventory is refused, not assumed ready."""
+    health = _health_from(_wrapper_ready_body(snapshot=None))
+
+    assert health["available"] is False
+    assert health["reason"] == "runtime_inventory_unverified"
+    assert health["snapshot_verified"] is False
+
+
+def test_health_check_refuses_an_arbitrary_response_as_schema():
+    """An arbitrary dict is not a proof of schema compatibility."""
+    health = _health_from(_wrapper_ready_body(submit_schema={"unexpected": "shape"}))
+
+    assert health["available"] is False
+    assert health["reason"] == "upstream_schema_unsupported"
+    assert health["schema_compatible"] is False
+
+
+def test_health_check_refuses_when_auth_is_not_proven():
+    """Reachability without an auth proof is not readiness."""
+    health = _health_from(_wrapper_ready_body(upstream_auth_enforced=False))
+
+    assert health["available"] is False
+    assert health["endpoint_reachable"] is False
+
+
+def test_health_check_refuses_a_missing_submit_schema():
+    health = _health_from(_wrapper_ready_body(submit_schema=None))
+
+    assert health["available"] is False
+    assert health["reason"] == "upstream_schema_unsupported"
+
+
+def test_health_check_refuses_runtime_commit_drift():
+    health = _health_from(_wrapper_ready_body(snapshot={
+        "upstream_commit": "0" * 40,
+        "bridge_version": "v1",
+        "bridge_schema_version": "v1",
+        "image_digest": "sha256:" + "a" * 64,
+    }))
+
+    assert health["available"] is False
+    assert health["reason"] == "runtime_inventory_unverified"
+    assert "commit drift" in health["error"]
+
+
+def test_health_check_refuses_a_mutable_image_tag():
+    health = _health_from(_wrapper_ready_body(snapshot={
+        "upstream_commit": MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[-1],
+        "bridge_version": "v1",
+        "bridge_schema_version": "v1",
+        "image_digest": "moneyprinter:1.3.7",
+    }))
+
+    assert health["available"] is False
+    assert health["reason"] == "engine_snapshot_mismatch"
+
+
+def test_health_check_refuses_bridge_schema_drift():
+    health = _health_from(_wrapper_ready_body(snapshot={
+        "upstream_commit": MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[-1],
+        "bridge_version": "v1",
+        "bridge_schema_version": "v2",
+        "image_digest": "sha256:" + "a" * 64,
+    }))
+
+    assert health["available"] is False
+    assert health["reason"] == "engine_snapshot_mismatch"
+
+
+def test_health_check_refuses_an_unreachable_wrapper():
+    fake = FakeTransport([httpx.ConnectError("connection refused")])
+    engine = MoneyPrinterEngine(url="http://engine:8098", transport=fake)
+
+    health = engine.health_check()
+
+    assert health["available"] is False
+    assert health["reason"] == "wrapper_unreachable"
 
 
 def test_health_check_includes_pinned_upstream_reference():
@@ -827,41 +1532,42 @@ def test_health_check_includes_pinned_upstream_reference():
 
 
 def test_health_check_reports_snapshot_verification():
-    """Health check attempts to verify runtime snapshot (Issue #122 P2)."""
-    manifest_data = {
-        "format": "moneyprinter_runtime/v1",
-        "bridge_version": "v1",
-        "bridge_schema_version": "v1",
-        "components": {
-            "moneyprinter": {
-                "commit": "2e1b30396e059e55939cc802c60faac2061e4d41",
-                "repository": "harry0703/MoneyPrinterTurbo"
-            }
-        },
-        "dependencies": []
-    }
-    fake = FakeTransport([
-        httpx.Response(200, json={"data": []}),
-        httpx.Response(200, text=json.dumps(manifest_data)),
-    ])
-    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
-    health = engine.health_check()
+    """A verified snapshot is reported back to the caller."""
+    health = _health_from(_wrapper_ready_body())
 
     assert health["runtime_manifest"] is not None
     assert health["snapshot_verified"] is True
+    assert health["image_digest"] == "sha256:" + "a" * 64
 
 
 def test_capabilities_includes_health_check():
     """Capabilities endpoint includes health check for MoneyPrinterEngine (Issue #122 P2)."""
     fake = FakeTransport([
-        httpx.Response(200, json={"data": []}),
+        httpx.Response(200, json=_wrapper_ready_body()),
     ])
-    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    engine = MoneyPrinterEngine(url="http://engine:8098", transport=fake)
     caps = engine.capabilities()
 
     assert "health" in caps
     assert caps["health"]["available"] is True
     assert caps["ready"] is True
+
+
+def test_capabilities_are_not_ready_without_a_proof():
+    """A refused runtime must not be advertised as ready to dispatch."""
+    fake = FakeTransport([
+        httpx.Response(503, json={
+            "service": "moneyprinter",
+            "status": "unavailable",
+            "checks": {"reason": "upstream_schema_unsupported"},
+        }),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8098", transport=fake)
+    caps = engine.capabilities()
+
+    assert caps["health"]["available"] is False
+    assert caps["ready"] is False
+    assert caps["health"]["reason"] == "upstream_schema_unsupported"
 
 
 # ---------------------------------------------------------------------------

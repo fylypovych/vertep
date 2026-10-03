@@ -143,6 +143,32 @@ def claim_task(payload: TaskClaim, request: Request):
             store.event(job, f"{payload.node_name} PUBLISH CLAIMED {task['task_id']} for {channel}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
+        if task.get("task") == "assembly":
+            version = job.assembly_task_ids.get(task.get("task_id")) if job else None
+            if version is None or job.status not in {JobStatus.ASSEMBLY, JobStatus.VIDEO_GENERATION}:
+                # The attempt was cancelled, superseded or already imported: the
+                # task is dropped instead of being executed by some other node.
+                task_queue.ack(task["task_id"])
+                continue
+            if job.assembly_cancel_requested:
+                task_queue.ack(task["task_id"])
+                continue
+            worker = _select_worker([worker_data], job, task_type="assembly", min_vram_mb=0)
+            if not worker:
+                held_tasks.append(task["task_id"])
+                continue
+            for held_task_id in held_tasks:
+                task_queue.release(held_task_id)
+            held_tasks.clear()
+            store.workers[payload.node_name] = worker_data
+            store.workers[payload.node_name]["status"] = "BUSY"
+            store.workers[payload.node_name]["current_job"] = job.job_id
+            store.workers[payload.node_name]["current_task"] = task["task_id"]
+            store.save_worker(store.workers[payload.node_name])
+            job.assigned_worker = payload.node_name
+            store.event(job, f"{payload.node_name} ASSEMBLY CLAIMED {task['task_id']} FOR v{version}")
+            store.repository.record_task(task, "CLAIMED", payload.node_name)
+            return {"task": task}
         scene = _scene_for_task(job, task.get("task_id", ""))
         is_tts = job.status == JobStatus.TTS_GENERATING and task.get("task") == "voice"
         effective_task_type = task.get("task") if is_tts else job.task_type
@@ -190,10 +216,22 @@ def renew_task(payload: TaskRenew, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     job = next((job for job in store.jobs.values() if payload.task_id in job.active_task_ids), None)
-    scene = _scene_for_task(job, payload.task_id) if job else None
-    if not job or not scene or scene.assigned_worker != payload.node_name:
-        raise HTTPException(409, "Task is no longer assigned to this worker")
-    return {"renewed": task_queue.renew(payload.task_id)}
+    if job is not None and _scene_for_task(job, payload.task_id):
+        scene = _scene_for_task(job, payload.task_id)
+        if scene.assigned_worker != payload.node_name:
+            raise HTTPException(409, "Task is no longer assigned to this worker")
+        return {"renewed": task_queue.renew(payload.task_id)}
+    # Issue #122 P6: an assembly attempt is long-running, so its lease must be
+    # renewable too. Ownership is fenced on the Job mapping and the worker record.
+    assembly_job = next((job for job in store.jobs.values()
+                         if payload.task_id in job.assembly_task_ids), None)
+    if assembly_job is not None:
+        worker = store.workers.get(payload.node_name)
+        if not worker or worker.get("current_task") != payload.task_id \
+                or worker.get("current_job") != assembly_job.job_id:
+            raise HTTPException(409, "Task is no longer assigned to this worker")
+        return {"renewed": task_queue.renew(payload.task_id)}
+    raise HTTPException(409, "Task is no longer assigned to this worker")
 
 
 @router.get("/api/tasks/cancellations/{node_name}")
@@ -355,6 +393,104 @@ def task_result(result: TaskResult, request: Request):
                                      "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
         if not result.success:
             _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "script"}, result.error)
+        return job
+    if result.task_id in job.assembly_task_ids:
+        from .job_helpers import (_assembly_retry_task, _assembly_worker_owns,
+                                  _clear_assembly_staging, _enqueue_assembly_task,
+                                  _handle_assembly_result, _release_worker)
+        from ..state import task_queue as _tq2
+        # Fencing first: a result from a node that no longer owns the attempt (lease
+        # expired, node reassigned, attempt cancelled) is refused without touching
+        # the Job, so a late or duplicate result can never overwrite an accepted
+        # version (Issue #122 §5).
+        if not _assembly_worker_owns(job, result.task_id, result.node_name):
+            store.event(job, f"ASSEMBLY RESULT {result.task_id} REJECTED: "
+                             f"fencing mismatch (node={result.node_name})")
+            raise HTTPException(409, "Assembly result does not match the active attempt lease")
+        if job.assembly_cancel_requested:
+            _tq2.ack(result.task_id)
+            job.assembly_task_ids.pop(result.task_id, None)
+            if job.assembly_task_id == result.task_id:
+                job.assembly_task_id = None
+            _release_worker(store.workers.get(result.node_name))
+            store.repository.record_task(
+                {"job_id": job.job_id, "task_id": result.task_id, "task": "assembly"},
+                "CANCELLED", result.node_name, None)
+            store.event(job, f"ASSEMBLY RESULT {result.task_id} DISCARDED: attempt cancelled")
+            return job
+        _release_worker(store.workers.get(result.node_name))
+        if not result.success:
+            _tq2.ack(result.task_id)
+            job.assembly_task_ids.pop(result.task_id, None)
+            if job.assembly_task_id == result.task_id:
+                job.assembly_task_id = None
+            job.assembly_error = result.error
+            job.assembly_attempt += 1
+            job.assigned_worker = None
+            store.repository.record_task(
+                {"job_id": job.job_id, "task_id": result.task_id, "task": "assembly"},
+                "FAILED", result.node_name, result.error)
+            if job.assembly_attempt <= job.max_retries:
+                task = _assembly_retry_task(job)
+
+                if task is not None:
+                    _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id,
+                                      "task": "assembly"}, result.error)
+                    _enqueue_assembly_task(job, task, new_attempt=True)
+                    store.update(job, JobStatus.ASSEMBLY,
+                                 f"ASSEMBLY RETRY {job.assembly_attempt}/{job.max_retries}")
+                    return job
+            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id,
+                              "task": "assembly"}, result.error)
+            transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED, result.error or "assembly failed")
+            store.update(job, JobStatus.FAILED, f"ASSEMBLY FAILED: {result.error or 'unknown'}")
+            # Terminal failure: no retry will reuse the staged copies, so they go.
+            _clear_assembly_staging(store.root, job.job_id)
+            return job
+        try:
+            _handle_assembly_result(job, {"success": True, "task_id": result.task_id,
+                                          "worker_name": result.node_name},
+                                    result.artifacts or [])
+        except (ValueError, RuntimeError) as error:
+            _tq2.ack(result.task_id)
+            job.assembly_task_ids.pop(result.task_id, None)
+            if job.assembly_task_id == result.task_id:
+                job.assembly_task_id = None
+            job.assembly_error = str(error)
+            job.assembly_attempt += 1
+            store.repository.record_task(
+                {"job_id": job.job_id, "task_id": result.task_id, "task": "assembly"},
+                "FAILED", result.node_name, str(error))
+            store.event(job, f"ASSEMBLY RESULT {result.task_id} REJECTED: {error}")
+            if job.assembly_attempt <= job.max_retries:
+                task = _assembly_retry_task(job)
+
+                if task is not None:
+                    _enqueue_assembly_task(job, task, new_attempt=True)
+                    store.update(job, JobStatus.ASSEMBLY,
+                                 f"ASSEMBLY RETRY {job.assembly_attempt}/{job.max_retries}")
+                    return job
+            transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED, str(error))
+            store.update(job, JobStatus.FAILED, f"ASSEMBLY REJECTED: {error}")
+            _clear_assembly_staging(store.root, job.job_id)
+            return job
+        _tq2.ack(result.task_id)
+        job.assembly_attempt = 0
+        job.assembly_error = None
+        job.assigned_worker = None
+        store.repository.record_task(
+            {"job_id": job.job_id, "task_id": result.task_id, "task": "assembly"},
+            "COMPLETED", result.node_name, None)
+        transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
+        version = job.active_video_version
+        store.update(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{version})")
+        store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, f"VIDEO PENDING APPROVAL (v{version})")
+        if job.source.startswith("telegram:"):
+            from ..pipeline import _send_video_approval_to_telegram
+            _send_video_approval_to_telegram(job)
+        else:
+            from ..pipeline import _progress
+            _progress(job, "VIDEO_PENDING_APPROVAL")
         return job
     if result.task_id in job.publish_task_ids:
         from ..api.job_helpers import _handle_publish_result

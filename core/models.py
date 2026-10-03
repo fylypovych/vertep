@@ -391,6 +391,20 @@ class Job(BaseModel):
     published_channels: set[str] = Field(default_factory=set)
     publish_delivery_contract: dict[str, object] = Field(default_factory=dict)
     publish_intent: dict[str, dict[str, object]] = Field(default_factory=dict)
+    # Issue #122 P5/P6/P7: final video assembly executed by a Worker.
+    #
+    # ``assembly_task_ids`` maps every in-flight assembly task to the video
+    # version it is allowed to produce, so a result can only ever be imported for
+    # the exact version that was dispatched (immutable versions, Issue #49).
+    # ``video_engine_snapshot`` is the immutable engine/config decision of the
+    # attempt: a later Settings change applies to new Jobs only.
+    assembly_task_ids: dict[str, int] = Field(default_factory=dict)
+    assembly_task_id: str | None = None
+    assembly_attempt: int = 0
+    assembly_error: str | None = None
+    assembly_cancel_requested: bool = False
+    assembly_submit_keys: dict[str, str] = Field(default_factory=dict)
+    video_engine_snapshot: dict[str, Any] | None = None
 
 class WorkerHeartbeat(BaseModel):
     node_name: str

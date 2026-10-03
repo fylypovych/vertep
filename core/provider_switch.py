@@ -120,13 +120,41 @@ def switch_provider(slot: str, backend: str, actor: str = "web") -> dict[str, An
         if after.get("backend") != requested:
             raise ProviderSwitchError(
                 500, f"Backend '{requested}' did not take effect for slot '{slot}'")
+        effective = _verify_effective_engine(slot, requested)
     except ProviderSwitchError as error:
         _rollback(env_name, overrides, had_override, old_override,
                   previous_value, actor=actor, slot=slot)
         raise error
 
     return {"slot": slot, "backend": requested, "changed": True,
-            "env": env_name, "matrix": provider_matrix()}
+            "env": env_name, "matrix": provider_matrix(), **effective}
+
+
+def _verify_effective_engine(slot: str, requested: str) -> dict[str, Any]:
+    """Issue #122 P7: verify a switch on the actual executor, not only in the matrix.
+
+    For the video engine the selected backend only becomes effective when the real
+    runtime proves its pinned snapshot; anything else is rolled back by the caller,
+    so a failed apply keeps the previous effective engine.
+    """
+    if slot != "video_engine":
+        return {}
+    from .engine_config import effective_engine_config
+
+    config = effective_engine_config(probe=True)
+    if config["effective"] != requested or not config["agree"]:
+        raise ProviderSwitchError(
+            409,
+            f"Engine '{requested}' is not effective; "
+            f"readiness: {config.get('reason') or 'unknown'}",
+        )
+    if not config["ready"]:
+        raise ProviderSwitchError(
+            409,
+            f"Engine '{requested}' runtime is not ready: "
+            f"{config.get('reason') or 'runtime_not_ready'}",
+        )
+    return {"effective_engine": config}
 
 
 def _rollback(env_name: str, overrides: dict[str, str], had_override: bool,

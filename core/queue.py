@@ -123,6 +123,30 @@ return cjson.encode(task)
         with self._lock:
             return task_id in self._inflight
 
+    def find(self, task_id: str) -> dict | None:
+        """Read-only lookup of a queued or in-flight task by id.
+
+        It never claims, renews or removes anything, so inspecting an attempt (for
+        status reporting or diagnostics) cannot change its ownership.
+        """
+        if self._redis:
+            record = self._redis.hget("vertep:tasks:inflight", task_id)
+            if record is not None:
+                return json.loads(record)
+            for raw in self._redis.zrange("vertep:tasks:ready", 0, -1):
+                item = json.loads(raw)
+                if item.get("task_id") == task_id:
+                    return item
+            return None
+        with self._lock:
+            record = self._inflight.get(task_id)
+            if record is not None:
+                return record[1]
+            for row in self._local:
+                if row[2].get("task_id") == task_id:
+                    return row[2]
+            return None
+
     def enqueue(self, task: dict, *, new_attempt: bool = False) -> dict:
         item = dict(task)
         if new_attempt or not item.get("task_id"):

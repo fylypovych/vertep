@@ -111,6 +111,15 @@ def recover_after_restart(job: Job) -> Job:
     job.active_task_id = None
     job.active_task_ids.clear()
     job.assigned_worker = None
+    job.video_revision_upstream = None
+    # Issue #122 P6: an assembly attempt cannot be resumed by CORE — the Worker
+    # owns it. The task id is dropped so nothing can report into a stale attempt,
+    # and the Job is replayed from its approved inputs. The replayed attempt gets
+    # the same video version and therefore the same durable submit key, so the
+    # runtime answers it from its submit record instead of creating a second
+    # upstream task for the same approved render.
+    job.assembly_task_ids.clear()
+    job.assembly_task_id = None
     for scene in job.scenes:
         scene.task_id = None
         scene.assigned_worker = None

@@ -420,6 +420,7 @@ postgres_password=$(existing_secret "$INSTALL_ROOT/config/postgres.password" POS
 redis_password=$(existing_secret "$INSTALL_ROOT/config/redis.password" REDIS_PASSWORD)
 encryption_key=$(existing_secret "$INSTALL_ROOT/config/backup.key" ENCRYPTION_KEY)
 secret_store_passphrase=$(existing_secret "$INSTALL_ROOT/config/secret-store.passphrase" SECRET_STORE_PASSPHRASE)
+moneyprinter_api_key=$(existing_secret "$INSTALL_ROOT/config/moneyprinter-api.key" MONEYPRINTER_API_KEY)
 jwt_secret=$(env_value JWT_SECRET); worker_secret=$(env_value WORKER_SECRET)
 internal_api_key=$(env_value INTERNAL_API_KEY); session_secret=$(env_value SESSION_SECRET)
 grafana_password=$(env_value GRAFANA_ADMIN_PASSWORD); node_api_token=$(env_value NODE_API_TOKEN)
@@ -446,6 +447,9 @@ fi
 [[ -n $session_secret ]] || session_secret=$(secret 48)
 [[ -n $grafana_password ]] || grafana_password=$(secret 36)
 [[ -n $node_api_token ]] || node_api_token=$(secret 48)
+# The isolated MoneyPrinterTurbo runtime is opt-in (Issue #122 P2), but its key is
+# always generated so enabling the profile later needs no manual secret handling.
+[[ -n $moneyprinter_api_key ]] || moneyprinter_api_key=$(secret 32)
 existing_web_domain=$(env_value WEB_DOMAIN)
 WEB_DOMAIN=${VERTEP_WEB_DOMAIN:-${existing_web_domain:-$(hostname -f 2>/dev/null || hostname)}}
 installation_complete=false
@@ -464,6 +468,9 @@ else
   setup_token_expires_at=$(date -u -d "+${VERTEP_SETUP_TOKEN_TTL_MINUTES:-60} minutes" +%Y-%m-%dT%H:%M:%SZ)
 fi
 resolved_image(){ jq -er --arg service "$1" '.images[$service] | .reference + "@" + .digest' "$manifest_tmp"; }
+# moneyprinter is an opt-in profile, so a missing signed image must not fail the
+# whole bootstrap: the profile simply stays unavailable for this install.
+optional_image(){ jq -er --arg service "$1" '.images[$service] | .reference + "@" + .digest' "$manifest_tmp" 2>/dev/null || true; }
 existing_env_tmp=$(mktemp)
 [[ -f "$INSTALL_ROOT/.env" ]] && cp "$INSTALL_ROOT/.env" "$existing_env_tmp"
 env_tmp=$(mktemp "$INSTALL_ROOT/.env.XXXXXX")
@@ -489,6 +496,10 @@ VERTEP_GRAFANA_IMAGE=$(resolved_image grafana)
 VERTEP_LOG_STORE_IMAGE=$(resolved_image log-store)
 VERTEP_LOG_COLLECTOR_IMAGE=$(resolved_image log-collector)
 VERTEP_UPDATE_AGENT_IMAGE=$(resolved_image update-agent)
+VERTEP_MONEYPRINTER_IMAGE=$(optional_image moneyprinter)
+# The self-test refuses to report ready without an immutable digest, so export the
+# digest separately instead of letting it parse the image reference.
+VERTEP_MONEYPRINTER_IMAGE_DIGEST=$(jq -r '.images["moneyprinter"].digest // empty' "$manifest_tmp")
 POSTGRES_PASSWORD=$postgres_password
 UPDATE_DATABASE_URL=postgresql://vertep:$postgres_password@127.0.0.1:5432/vertep
 SYSTEM_STATE_BACKEND=postgres
@@ -551,8 +562,11 @@ rm -f "$existing_env_tmp"
   || printf '%s' "$redis_password" > "$INSTALL_ROOT/config/redis.password"
 [[ -s "$INSTALL_ROOT/config/backup.key" ]] \
   || printf '%s' "$encryption_key" > "$INSTALL_ROOT/config/backup.key"
+[[ -s "$INSTALL_ROOT/config/moneyprinter-api.key" ]] \
+  || printf '%s' "$moneyprinter_api_key" > "$INSTALL_ROOT/config/moneyprinter-api.key"
 chmod 0600 "$INSTALL_ROOT/config/secret-store.passphrase" "$INSTALL_ROOT/config/postgres.password" \
-  "$INSTALL_ROOT/config/redis.password" "$INSTALL_ROOT/config/backup.key"
+  "$INSTALL_ROOT/config/redis.password" "$INSTALL_ROOT/config/backup.key" \
+  "$INSTALL_ROOT/config/moneyprinter-api.key"
 [[ -f "$INSTALL_ROOT/runtime/deployment-plan.py" ]] \
   || curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/$version/deployment-plan.py" -o "$INSTALL_ROOT/runtime/deployment-plan.py"
 printf '%s  %s\n' "$planner_sha" "$INSTALL_ROOT/runtime/deployment-plan.py" | sha256sum -c - >/dev/null

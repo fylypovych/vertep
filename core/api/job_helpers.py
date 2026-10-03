@@ -5,9 +5,12 @@ Business helpers (no route registration) used by ``core.api.jobs``,
 and the watchdog.  Extracted from ``core.app.py`` so the job domain can live in
 dedicated router modules instead of one large file.
 """
+import base64
+import binascii
 import hashlib
 import json
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 from functools import wraps
@@ -21,13 +24,25 @@ from adapters.telegram import TelegramAdapter
 from ..artifacts import register_artifact
 from ..configuration import load_character
 from ..dispatcher import available_worker, can_retry
-from ..models import JobStatus, SceneRecord, StageName, StageStatus, TaskResult
+from ..models import (JobStatus, SceneRecord, StageName, StageStatus, TaskResult,
+                      VideoVersion, utc_now)
 from ..orchestration import (all_scenes_ready, finish_scene, initialize_plan,
                              interrupt_scene, pending_scenes, transition_stage)
 from ..pipeline import JobStore, finalize_job_safe, prepare_job_safe, queue_storyboard
 from ..script_prompt import build_script_prompt
 from ..script_schema import normalize_script
 from ..state import executor, result_locks, store, task_queue, workflow_registry
+
+MAX_VIDEO_ARTIFACT_BYTES = 268435456
+
+# Attempt-scoped staging area of a Job directory (Issue #122 §6/P3): inputs that
+# do not live inside the Job directory are copied here content-addressed, so a
+# Worker receives Job-relative references and CORE paths never leave CORE.
+ASSEMBLY_STAGING_DIR = ".assembly-staging"
+
+
+def _max_video_artifact_bytes() -> int:
+    return int(os.getenv("MAX_VIDEO_ARTIFACT_BYTES", str(MAX_VIDEO_ARTIFACT_BYTES)))
 
 
 def _serialize_job_result(function):
@@ -62,6 +77,308 @@ def _job_is_due(job) -> bool:
 def _scene_for_task(job, task_id: str):
     scene_id = job.active_task_ids.get(task_id) or job.tts_active_task_ids.get(task_id)
     return next((scene for scene in job.scenes if scene.scene_id == scene_id), None)
+
+
+# ---------------------------------------------------------------------------
+# Video assembly executed by a Worker (Issue #122 P5/P6/P7)
+# ---------------------------------------------------------------------------
+
+
+def _engine_snapshot(job, *, version: int, submit_key: str, engine=None) -> dict:
+    """Immutable engine/config decision of one assembly attempt (§9.15).
+
+    The snapshot is taken when the attempt is dispatched and travels with the
+    task, so a later Settings change (P7) applies to new Jobs only. Secret values
+    are never copied into it: only the engine identity, the bridge contract and
+    the pinned runtime reference that readiness proved on the executor. The engine
+    is passed in by the caller, so the snapshot always describes the very engine
+    whose attempt is being dispatched.
+    """
+    from adapters.providers import providers
+    from adapters.providers.base import BRIDGE_SCHEMA_VERSION
+
+    if engine is None:
+        engine = providers.video_engine()
+    snapshot: dict = {
+        "engine_id": getattr(engine, "engine_id", "native"),
+        "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
+        "config_revision": engine_config_revision(engine),
+        "job_id": job.job_id,
+        "video_version": version,
+        "aspect_ratio": job.aspect_ratio,
+        "preset": job.output_preset,
+        "task_type": job.task_type,
+        "submit_key": submit_key,
+    }
+    reference = getattr(getattr(engine, "contract_profile", None), "upstream_reference", None)
+    if reference:
+        snapshot["upstream_reference"] = reference
+    if getattr(engine, "engine_id", "native") != "native":
+        # Only the *reference* of the endpoint and the secret travels with the task
+        # (P7): a Worker can prove it has the same configuration without the CORE
+        # ever handing out a credential.
+        from ..engine_config import endpoint_reference, secret_reference
+
+        snapshot["endpoint_reference"] = endpoint_reference(engine)
+        snapshot["secret_reference"] = secret_reference(engine)
+    return snapshot
+
+
+def engine_config_revision(engine=None) -> str:
+    """Revision of the effective engine configuration (Issue #122 P7).
+
+    Thin re-export of the shared implementation in :mod:`core.engine_config`, so
+    the revision recorded in a Job snapshot, the one shown by Settings and the one
+    a Worker recomputes are the same value by construction. The engine is passed
+    through so a snapshot describes the engine it was handed.
+    """
+    from ..engine_config import engine_config_revision as shared_revision
+
+    return shared_revision(engine)
+
+
+def _assembly_submit_key(job, *, version: int, input_digest: str) -> str:
+    """Durable submit key of one assembly attempt (Issue #122 §5, §9.8).
+
+    The key is derived from the Job, the version and the digest of the approved
+    inputs, so the same attempt always reuses it (making a repeated submit
+    idempotent in the runtime) while any change of approved input produces a new
+    attempt with a new key.
+    """
+    return f"{job.job_id}-v{version}-{input_digest[:16]}"
+
+
+def _assembly_input_digest(job, *, materials: list[Path], audio: Path | None,
+                           music: Path | None, subtitles: Path | None,
+                           watermark: Path | None, script: str) -> str:
+    parts = [f"script:{hashlib.sha256(script.encode('utf-8')).hexdigest()}"]
+    for label, value in (("audio", audio), ("music", music), ("subtitles", subtitles),
+                         ("watermark", watermark)):
+        parts.append(f"{label}:{_file_digest(value)}")
+    for path in materials:
+        parts.append(f"material:{_file_digest(path)}")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _file_digest(path: Path | None) -> str:
+    if not path:
+        return "-"
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _job_relative(job_root: Path, job_id: str, path: Path | None) -> str | None:
+    """Job-scoped relative reference delivered to a Worker (§6/P3).
+
+    A Worker never receives a CORE filesystem path: it receives a reference
+    relative to the shared Job directory, so the same delivery works on another
+    host with a different root.
+    """
+    if not path:
+        return None
+    resolved = Path(path).resolve()
+    root = Path(job_root).resolve()
+    try:
+        return resolved.relative_to(root / job_id).as_posix()
+    except ValueError as error:
+        raise ValueError(
+            f"Assembly input {resolved} is outside the Job directory"
+        ) from error
+
+
+def _stage_input(job_root: Path, job_id: str, path: Path | None) -> str | None:
+    """Deliver one approved input to a Worker as a Job-relative reference (§6/P3).
+
+    An input that already lives inside the Job directory is referenced as is. An
+    input that does not (a shared brand watermark, an image kept by an older
+    layout) is copied once into the content-addressed staging area of that Job
+    directory, so the Worker still receives a Job-relative reference instead of a
+    CORE filesystem path, and a repeated attempt of the same input reuses the
+    copy instead of transferring it again.
+    """
+    if not path:
+        return None
+    try:
+        return _job_relative(job_root, job_id, path)
+    except ValueError:
+        pass
+    resolved = Path(path).resolve()
+    job_dir = (Path(job_root) / job_id).resolve()
+    staged = job_dir / ASSEMBLY_STAGING_DIR / _file_digest(resolved) / resolved.name
+    if not staged.is_file():
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        temporary = staged.with_name(f"{staged.name}.part")
+        shutil.copy2(str(resolved), str(temporary))
+        temporary.replace(staged)
+    return staged.relative_to(job_dir).as_posix()
+
+
+def _clear_assembly_staging(job_root: Path, job_id: str) -> None:
+    """Remove the staged copies of a Job directory after a terminal attempt (§6/P3).
+
+    Only the staging area is removed; approved outputs, versions and artifacts of
+    the Job are never touched.
+    """
+    shutil.rmtree(Path(job_root) / job_id / ASSEMBLY_STAGING_DIR, ignore_errors=True)
+
+
+def _assembly_task_for(job, *, version: int, output: Path, materials: list[Path],
+                       audio: Path | None, music: Path | None, subtitles: Path | None,
+                       watermark: Path | None, script: str, submit_key: str,
+                       snapshot: dict, durations: list[float], aspect_ratio: str,
+                       preset: str | None, task_type: str) -> dict:
+    job_root = store.root
+    references = [_stage_input(job_root, job.job_id, path) for path in materials]
+    return {
+        "job_id": job.job_id,
+        "task": "assembly",
+        "priority": job.priority,
+        "min_vram_mb": 0,
+        "workflow": job.workflow or "",
+        "topic": job.topic,
+        "task_id": None,
+        "version": version,
+        "output": _job_relative(job_root, job.job_id, output),
+        "materials": references,
+        "audio": _stage_input(job_root, job.job_id, audio),
+        "music": _stage_input(job_root, job.job_id, music),
+        "subtitles": _stage_input(job_root, job.job_id, subtitles),
+        "watermark": _stage_input(job_root, job.job_id, watermark),
+        "durations": [float(value) for value in durations],
+        "aspect_ratio": aspect_ratio,
+        "preset": preset,
+        "task_type": task_type,
+        "script": script,
+        "submit_key": submit_key,
+        "engine_snapshot": snapshot,
+    }
+
+
+def _enqueue_assembly_task(job, task: dict, *, new_attempt: bool = False) -> dict:
+    queued = task_queue.enqueue(task, new_attempt=new_attempt)
+    job.assembly_task_id = queued["task_id"]
+    job.assembly_task_ids[queued["task_id"]] = int(task["version"])
+    job.video_engine_snapshot = task.get("engine_snapshot")
+    store.repository.record_task(queued, "QUEUED")
+    store.event(job, f"ASSEMBLY TASK {queued['task_id']} QUEUED FOR v{task['version']}")
+    return queued
+
+
+def _release_worker(worker: dict | None) -> None:
+    if not worker:
+        return
+    desired_status = worker.get("desired_state")
+    next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+    worker.update({"status": next_status, "current_job": None, "current_task": None,
+                   "last_seen": utc_now()})
+    store.save_worker(worker)
+
+
+def _assembly_worker_owns(job, task_id: str, node_name: str) -> bool:
+    """Fencing: only the node that still owns the attempt may report it (§5)."""
+    worker = store.workers.get(node_name)
+    return bool(
+        worker
+        and worker.get("current_task") == task_id
+        and worker.get("current_job") == job.job_id
+    )
+
+
+def _handle_assembly_result(job, result: dict, artifacts: list[dict]) -> None:
+    """Import a verified render as the immutable video version it was made for.
+
+    Everything is checked before any side effect: the attempt must still be the
+    dispatched one, the artifact must be exactly one decodable video whose
+    declared contract matches the received bytes and whose version is the one that
+    was dispatched. A rejected result leaves the previous version current.
+    """
+    from core.file_validation import validate_media_contract, validate_signature
+
+    task_id = result["task_id"]
+    version = job.assembly_task_ids.get(task_id)
+    if version is None:
+        raise ValueError(f"Assembly result {task_id} does not match a dispatched attempt")
+    if not result.get("success"):
+        raise ValueError(result.get("error") or "Assembly failed")
+    artifacts = list(artifacts or [])
+    if len(artifacts) != 1:
+        raise ValueError("Assembly must return exactly one video artifact")
+    artifact = artifacts[0]
+    contract = artifact.get("contract") or {}
+    if contract.get("format") != "media_contract/v1" or contract.get("kind") != "video":
+        raise ValueError("Assembly artifact must declare a video media_contract/v1")
+    try:
+        data = base64.b64decode(artifact.get("data_base64") or "", validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("Assembly artifact is not valid base64") from error
+    if not data:
+        raise ValueError("Assembly artifact is empty")
+    if len(data) > _max_video_artifact_bytes():
+        raise ValueError("Assembly artifact exceeds the accepted video size")
+    if contract.get("sha256") != hashlib.sha256(data).hexdigest():
+        raise ValueError("Assembly artifact sha256 does not match its payload")
+    if int(contract.get("size") or 0) != len(data):
+        raise ValueError("Assembly artifact size does not match its payload")
+    if contract.get("video_version") is not None and int(contract["video_version"]) != version:
+        raise ValueError("Assembly artifact declares a different video version")
+    suffix = ".mp4"
+    validate_signature(data, suffix)
+    validate_media_contract(contract, data, expected="video")
+    if any(int(existing.version or 0) == version for existing in job.video_versions):
+        raise ValueError(f"Video version {version} already exists")
+
+    final_dir = store.root / job.job_id / "final"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    path = final_dir / f"video-v{version}.mp4"
+    temporary = final_dir / f".{path.name}.{task_id[:8]}.part"
+    try:
+        temporary.write_bytes(data)
+        temporary.replace(path)
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(f"Could not import the assembled video: {error}") from error
+    record = register_artifact(job, store.root, path, "video", task_id=task_id,
+                               node_name=result.get("worker_name"),
+                               workflow=f"assembly:{contract.get('engine_id') or (job.video_engine_snapshot or {}).get('engine_id')}")
+    from ..pipeline import _finish_video_version
+
+    _finish_video_version(job, store, path, version)
+    job.assembly_task_ids.pop(task_id, None)
+    if job.assembly_task_id == task_id:
+        job.assembly_task_id = None
+    _clear_assembly_staging(store.root, job.job_id)
+
+
+def _assembly_retry_task(job) -> dict | None:
+    """Rebuild the identical assembly attempt after a failed or rejected result.
+
+    The approved inputs and the durable submit key stay the same, so a retry can
+    never create a second upstream task for the same approved render: the runtime
+    answers the repeat submit from its submit record (Issue #122 §5, §9.8). Any
+    change of approved input produces a new version, a new key and a new attempt.
+    """
+    from ..pipeline import assembly_plan
+
+    snapshot = job.video_engine_snapshot or {}
+    version = int(snapshot.get("video_version") or 0)
+    if not version:
+        return None
+    materials = _ordered_scene_files(job)
+    if not materials:
+        return None
+    try:
+        plan = assembly_plan(store, job, materials)
+    except (ValueError, OSError):
+        return None
+    if plan["version"] != version:
+        # The approved inputs changed under the attempt: it is a new version, not a
+        # retry, and it must be dispatched with its own key.
+        return None
+    return _assembly_task_for(job, submit_key=str(snapshot["submit_key"]),
+                              snapshot=snapshot, **plan)
 
 
 def _select_worker(workers: list[dict], job, task_type: str | None = None, min_vram_mb: int | None = None,
@@ -654,6 +971,30 @@ def _recover_stale_workers() -> None:
             store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
+        elif job and current_task in job.assembly_task_ids:
+            # Issue #122 P6: a Worker that disappears while it owns an assembly
+            # attempt releases the lease, the version stays unaccepted and the
+            # attempt is re-dispatched with the SAME durable submit key, so the
+            # retry reconciles to the same upstream work instead of starting a
+            # second render.
+            task_queue.release(current_task)
+            job.assembly_task_ids.pop(current_task, None)
+            if job.assembly_task_id == current_task:
+                job.assembly_task_id = None
+            job.assembly_attempt += 1
+            job.assigned_worker = None
+            store.event(job, f"{worker.get('node_name')} OFFLINE; ASSEMBLY TASK "
+                             f"{current_task} REQUEUED")
+            retry = _assembly_retry_task(job) if job.assembly_attempt <= job.max_retries else None
+            if retry is not None:
+                _enqueue_assembly_task(job, retry, new_attempt=True)
+            else:
+                transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED,
+                                 "assembly worker lost")
+                store.update(job, JobStatus.FAILED,
+                             f"ASSEMBLY FAILED: worker {worker.get('node_name')} was lost")
+            worker["current_job"] = None
+            worker["current_task"] = None
         elif job and current_task == job.active_task_id and job.status in {
                 JobStatus.ASSET_GENERATION, JobStatus.VIDEO_GENERATION, JobStatus.SCRIPT_QUEUED,
                 JobStatus.SCRIPT_GENERATING, JobStatus.TTS_GENERATING}:
@@ -945,6 +1286,29 @@ def _job_action(job_id: str, status: JobStatus, event: str):
             store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "script"},
                                          task_status, worker)
             job.script_task_id = None
+        # Issue #122 P5/P6: an in-flight assembly attempt is fenced the same way.
+        # The logical cancellation is immediate; the Worker is told to stop the
+        # upstream work and a late result is discarded, because a running upstream
+        # task cannot be confirmed stopped (the pinned runtime answers DELETE 409
+        # while it is busy, §9.8).
+        if job.assembly_task_ids:
+            for task_id, version in list(job.assembly_task_ids.items()):
+                worker = job.assigned_worker
+                if worker:
+                    task_queue.request_cancel(worker, task_id)
+                task_queue.discard(task_id)
+                store.repository.record_task(
+                    {"job_id": job.job_id, "task_id": task_id, "task": "assembly",
+                     "version": version}, task_status, worker)
+            job.assembly_task_ids.clear()
+            job.assembly_task_id = None
+            job.assembly_cancel_requested = True
+            _clear_assembly_staging(store.root, job.job_id)
+            if job.stages and job.stages.get(StageName.ASSEMBLY.value) \
+                    and job.stages[StageName.ASSEMBLY.value].status == StageStatus.RUNNING:
+                transition_stage(job, StageName.ASSEMBLY,
+                                 StageStatus.CANCELLED if status == JobStatus.CANCELLED
+                                 else StageStatus.PAUSED)
         for task_id, channel in list(job.publish_task_ids.items()):
             worker = job.assigned_worker
             if worker:

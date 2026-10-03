@@ -84,6 +84,7 @@ jobs:
           - {name: log-collector, file: docker/log-collector/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: grafana, file: docker/grafana/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: comfyui, file: docker/comfyui-nvidia/Dockerfile, platforms: "linux/amd64"}
+          - {name: moneyprinter, file: docker/moneyprinter/Dockerfile, platforms: "linux/amd64"}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v3
