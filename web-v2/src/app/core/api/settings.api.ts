@@ -78,6 +78,40 @@ export interface ProviderSwitchResponse {
   changed: boolean;
   env?: string;
   matrix: Record<string, ProviderMatrixEntry>;
+  effective_engine?: EffectiveEngineConfig;
+}
+
+export interface EngineOption {
+  id: string;
+  label: string;
+}
+
+export interface EngineField {
+  name: string;
+  env: string | null;
+  value: string | null;
+  configured: boolean;
+  secret: boolean;
+}
+
+export interface EffectiveEngineConfig {
+  selected: string;
+  effective: string;
+  agree: boolean;
+  label: string;
+  config_revision: string;
+  endpoint: string | null;
+  secret: string | null;
+  fields: EngineField[];
+  required_fields?: Record<string, EngineField[]>;
+  upstream_reference: string | null;
+  ready: boolean;
+  reason: string | null;
+  probed: boolean;
+  options: EngineOption[];
+  system_state: string;
+  change_allowed: boolean;
+  values_exposed: boolean;
 }
 
 export interface OperationState {
@@ -181,6 +215,27 @@ export class SettingsApiService {
     return this.http.post<ProviderSwitchResponse>(
       `${this.baseUrl}/settings/providers/${encodeURIComponent(slot)}`,
       { backend, ...(actor ? { actor } : {}) },
+      { headers: this.getHeaders() },
+    ).pipe(catchError(this.handleError));
+  }
+
+  videoEngine(probe = false): Observable<EffectiveEngineConfig> {
+    return this.http
+      .get<EffectiveEngineConfig>(`${this.baseUrl}/settings/video-engine`, {
+        headers: this.getHeaders(),
+        params: { probe },
+      })
+      .pipe(catchError(this.handleError));
+  }
+
+  switchVideoEngine(backend: string, endpoint?: string, actor?: string): Observable<ProviderSwitchResponse> {
+    return this.http.post<ProviderSwitchResponse>(
+      `${this.baseUrl}/settings/providers/video_engine`,
+      {
+        backend,
+        ...(endpoint ? { endpoint } : {}),
+        ...(actor ? { actor } : {}),
+      },
       { headers: this.getHeaders() },
     ).pipe(catchError(this.handleError));
   }

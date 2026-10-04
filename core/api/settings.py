@@ -36,10 +36,23 @@ def effective_video_engine(probe: bool = False):
 
 @router.post("/api/settings/providers/{slot}")
 def switch_provider_backend(slot: str, payload: dict):
-    """Switch one provider slot with persist → apply → verify → rollback."""
+    """Switch one provider slot with persist → apply → verify → rollback.
+
+    The system-state guard for this write is the existing ``configuration`` rule applied
+    to ``/api/settings`` in :mod:`core.app`; the read model advertises the same rule as
+    ``change_allowed`` so Settings can disable the control instead of only explaining a
+    refusal after it. For the video engine an ``endpoint`` may be supplied with the same
+    apply → verify → rollback flow (Issue #122 P8).
+    """
     actor = str(payload.get("actor") or "").strip()[:120] or f"web:settings:{slot}"
+    endpoint = payload.get("endpoint")
     try:
-        return switch_provider(slot, str(payload.get("backend") or ""), actor=actor)
+        return switch_provider(
+            slot,
+            str(payload.get("backend") or ""),
+            actor=actor,
+            endpoint=str(endpoint) if endpoint is not None else None,
+        )
     except ProviderSwitchError as error:
         raise HTTPException(error.status_code, error.message) from error
 

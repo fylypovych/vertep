@@ -188,3 +188,73 @@ def test_provider_switch_endpoint_rolls_back_unconfigured(isolated_config):
     assert response.status_code == 409
     assert provider_matrix()["llm"]["backend"] == "ollama"
     assert load_provider_overrides() == {}
+
+
+# ---------------------------------------------------------------------------
+# HTTP contract used by Settings -> Движок відео (Issue #122 P8)
+# ---------------------------------------------------------------------------
+
+
+def test_the_video_engine_endpoint_renders_both_names_and_the_required_fields(
+    isolated_config, monkeypatch
+):
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://user:pass@runtime:8098/internal")
+    monkeypatch.delenv("MONEY_PRINTER_TOKEN", raising=False)
+
+    response = client.get("/api/settings/video-engine")
+
+    assert response.status_code == 200
+    body = response.json()
+    labels = {option["id"]: option["label"] for option in body["options"]}
+    assert labels["native"] == "Vertep Native"
+    assert labels["money-printer"] == "MoneyPrinterTurbo"
+    fields = {field["name"]: field for field in body["fields"]}
+    assert fields["endpoint"]["env"] == "MONEY_PRINTER_URL"
+    assert fields["endpoint"]["value"] == "http://runtime:8098"
+    assert fields["token"]["env"] == "MONEY_PRINTER_TOKEN"
+    assert fields["token"]["value"] is None
+    assert body["values_exposed"] is False
+    assert "pass" not in response.text
+
+
+def test_a_switch_that_could_carry_a_secret_in_the_endpoint_is_refused(isolated_config):
+    response = client.post("/api/settings/providers/video_engine", json={
+        "backend": "money-printer", "endpoint": "http://user:pass@runtime:8098",
+    })
+
+    assert response.status_code == 422
+    assert "credentials" in response.json()["detail"]
+    assert load_provider_overrides() == {}
+
+
+def test_switching_the_engine_is_refused_while_the_system_state_forbids_it(
+    isolated_config, monkeypatch
+):
+    from core.system_state import SystemState, get_system_state, set_system_state
+
+    previous = get_system_state()["state"]
+    try:
+        set_system_state(SystemState.UPDATING, "test rollout")
+        response = client.post("/api/settings/providers/video_engine", json={
+            "backend": "money-printer", "endpoint": "http://runtime:8098",
+        })
+
+        assert response.status_code == 423, response.text
+        assert "configuration" in response.text
+        assert load_provider_overrides() == {}
+    finally:
+        set_system_state(previous, "test restore")
+
+
+def test_the_video_engine_endpoint_reflects_a_state_that_forbids_changes(isolated_config):
+    from core.system_state import SystemState, get_system_state, set_system_state
+
+    previous = get_system_state()["state"]
+    try:
+        set_system_state(SystemState.EMERGENCY, "test lock")
+        body = client.get("/api/settings/video-engine").json()
+        assert body["system_state"] == "EMERGENCY"
+        assert body["change_allowed"] is False
+    finally:
+        set_system_state(previous, "test restore")

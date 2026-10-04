@@ -524,25 +524,49 @@ def _write_silence(path: Path, seconds: float = 1.0, rate: int = 24000) -> None:
         handle.writeframes(b"\x00\x00" * int(rate * seconds))
 
 
-def _stage_probe_clip(path: Path, seconds: int = 3) -> None:
+def _stage_probe_clip(path: Path, seconds: int = 3, colour: str = "black") -> None:
     subprocess.run(
         [
             "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s=320x568:r=30:d={seconds}",
+            "-f", "lavfi", "-i", f"color=c={colour}:s=320x568:r=30:d={seconds}",
             "-pix_fmt", "yuv420p", str(path),
         ],
         check=True, capture_output=True, timeout=120,
     )
 
 
-def check_media_pipeline() -> dict:
-    """Stage one local clip and prove the pinned compose path returns playable output.
+#: One probe per approved scene: label, distinct colour and its exact approved duration
+#: (§9.3 rows 2–4). The durations differ on purpose — a compose path that ignored them,
+#: or reordered the scenes, cannot produce this timeline.
+PROBE_SCENES = (
+    ("scene-1", "red", 2),
+    ("scene-2", "green", 3),
+    ("scene-3", "blue", 4),
+)
 
-    This is the §9.12 media check: it exercises the real MoviePy/FFmpeg assembly
-    the engine depends on, without calling any paid or external provider.
+
+def _mean_colour(clip, at_seconds: float) -> tuple[float, float, float]:
+    import numpy as np
+
+    frame = clip.get_frame(min(max(at_seconds, 0.0), float(clip.duration) - 0.1))
+    return tuple(float(value) for value in np.asarray(frame, dtype=float).reshape(-1, 3).mean(axis=0))
+
+
+def check_media_pipeline() -> dict:
+    """Prove the pinned compose path honours scene order, scene durations and aspect.
+
+    This is the §9.12 media check plus the §9.3 rows the runtime is actually responsible
+    for: the materials arrive as pre-cut clips in scene order, each one carries the exact
+    approved scene duration, and the compose uses the job aspect with ``contain`` fit —
+    the same call the bridge makes. Each probe clip has its own solid colour, so the
+    timeline of the rendered output is verifiable instead of merely "playable": a compose
+    that reordered or re-timed the scenes changes the colours at the expected timestamps.
+
+    Nothing here calls a paid or external provider: the voice is a locally written WAV and
+    the upstream's own TTS/LLM/publication are never involved.
     """
     try:
-        from app.models.schema import VideoAspect, VideoConcatMode
+        from app.models.schema import VideoAspect, VideoConcatMode, VideoFitMode
         from app.services.video import combine_videos
         from moviepy import VideoFileClip
     except ImportError as error:
@@ -553,29 +577,20 @@ def check_media_pipeline() -> dict:
 
     staging = Path(tempfile.mkdtemp(prefix="vertep-self-test-"))
     try:
-        clip_path = staging / "probe.mp4"
+        scenes = []
+        for label, colour, seconds in PROBE_SCENES:
+            clip_path = staging / f"{label}.mp4"
+            _stage_probe_clip(clip_path, seconds=seconds, colour=colour)
+            scenes.append({"label": label, "path": clip_path, "seconds": seconds,
+                           "colour": colour})
+        total_seconds = sum(scene["seconds"] for scene in scenes)
         audio_path = staging / "probe.wav"
+        _write_silence(audio_path, seconds=total_seconds)
         combined_path = staging / "probe-combined.mp4"
-        _stage_probe_clip(clip_path)
-        _write_silence(audio_path)
-
-        try:
-            combine_videos(
-                str(combined_path),
-                [str(clip_path)],
-                str(audio_path),
-                video_aspect=VideoAspect.portrait,
-                video_concat_mode=VideoConcatMode.sequential,
-                video_transition_mode=None,
-                max_clip_duration=5,
-                threads=2,
-                clip_speed=1.0,
-            )
-        except Exception as error:  # noqa: BLE001 - any failure must fail closed
-            raise SelfTestFailure(
-                REASON_MEDIA_PIPELINE_FAILED,
-                f"pinned combine_videos failed: {type(error).__name__}: {error}",
-            ) from error
+        _combine_probe_scenes(
+            combine_videos, combined_path, scenes, audio_path, VideoAspect, VideoConcatMode,
+            VideoFitMode,
+        )
 
         if not combined_path.is_file() or combined_path.stat().st_size == 0:
             raise SelfTestFailure(
@@ -583,31 +598,113 @@ def check_media_pipeline() -> dict:
                 "pinned combine_videos produced no output",
             )
 
-        try:
-            with VideoFileClip(str(combined_path)) as probe:
-                duration = float(probe.duration or 0.0)
-                width, height = probe.size
-        except Exception as error:  # noqa: BLE001 - decode failure must fail closed
-            raise SelfTestFailure(
-                REASON_MEDIA_PIPELINE_FAILED,
-                f"pinned combine_videos output is not decodable: {type(error).__name__}",
-            ) from error
-
+        expected_colours = {}
+        with VideoFileClip(str(combined_path)) as probe:
+            duration = float(probe.duration or 0.0)
+            width, height = probe.size
+            timeline = _probe_scene_timeline(probe, scenes, VideoFileClip, expected_colours)
         if duration <= 0 or int(width) <= 0 or int(height) <= 0:
             raise SelfTestFailure(
                 REASON_MEDIA_PIPELINE_FAILED,
                 "pinned combine_videos output has no usable video stream",
             )
+        _verify_probe_timeline(timeline, total_seconds, width, height, VideoAspect)
         return {
             "duration_seconds": round(duration, 3),
             "width": int(width),
             "height": int(height),
             "bytes": combined_path.stat().st_size,
+            "scenes": timeline,
+            "scene_order": [entry["label"] for entry in timeline],
+            "expected_scene_order": [scene["label"] for scene in scenes],
+            "expected_duration_seconds": total_seconds,
+            "aspect": str(getattr(VideoAspect.portrait, "value", VideoAspect.portrait)),
+            "fit_mode": str(getattr(VideoFitMode.contain, "value", VideoFitMode.contain)),
+            "concat_mode": str(getattr(VideoConcatMode.sequential, "value",
+                                        VideoConcatMode.sequential)),
         }
     finally:
         for child in staging.glob("*"):
             child.unlink(missing_ok=True)
         staging.rmdir()
+
+
+def _combine_probe_scenes(combine_videos, combined_path: Path, scenes: list[dict],
+                          audio_path: Path, VideoAspect, VideoConcatMode, VideoFitMode) -> None:
+    """Compose the probe scenes through the pinned entry point with the bridge's values."""
+    try:
+        combine_videos(
+            str(combined_path),
+            [str(scene["path"]) for scene in scenes],
+            str(audio_path),
+            video_aspect=VideoAspect.portrait,
+            video_concat_mode=VideoConcatMode.sequential,
+            video_transition_mode=None,
+            max_clip_duration=max(scene["seconds"] for scene in scenes),
+            threads=2,
+            clip_speed=1.0,
+            video_fit_mode=VideoFitMode.contain,
+        )
+    except Exception as error:  # noqa: BLE001 - any failure must fail closed
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"pinned combine_videos failed: {type(error).__name__}: {error}",
+        ) from error
+
+
+def _probe_scene_timeline(probe, scenes: list[dict], VideoFileClip,
+                          expected_colours: dict) -> list[dict]:
+    """Sample the rendered output at the timestamp each approved scene must occupy."""
+    offset = 0.0
+    timeline = []
+    for scene in scenes:
+        midpoint = offset + scene["seconds"] / 2
+        with VideoFileClip(str(scene["path"])) as source:
+            expected = _mean_colour(source, scene["seconds"] / 2)
+        expected_colours[scene["label"]] = expected
+        timeline.append({
+            "label": scene["label"],
+            "seconds": scene["seconds"],
+            "at_seconds": round(midpoint, 3),
+            "mean_colour": [round(value, 1) for value in _mean_colour(probe, midpoint)],
+            "expected_colour": [round(value, 1) for value in expected],
+        })
+        offset += scene["seconds"]
+    return timeline
+
+
+def _verify_probe_timeline(timeline: list[dict], total_seconds: float, width: int,
+                           height: int, VideoAspect) -> None:
+    """Fail closed unless the output shows every scene, in order, at its own duration."""
+    if len(timeline) != len(PROBE_SCENES):
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"compose produced {len(timeline)} of {len(PROBE_SCENES)} scenes",
+        )
+    # Each probe is a distinct solid colour, so a mean difference beyond this tolerance
+    # means the output shows a different scene (or none) at that timestamp.
+    for entry in timeline:
+        drift = max(abs(actual - expected) for actual, expected
+                    in zip(entry["mean_colour"], entry["expected_colour"]))
+        if drift > 48:
+            raise SelfTestFailure(
+                REASON_MEDIA_PIPELINE_FAILED,
+                f"scene order or duration is wrong at {entry['at_seconds']}s: "
+                f"expected {entry['expected_colour']}, rendered {entry['mean_colour']}",
+            )
+    expected_width, expected_height = VideoAspect.portrait.to_resolution()
+    if (int(width), int(height)) != (int(expected_width), int(expected_height)):
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"compose ignored the job aspect: rendered {width}x{height}, "
+            f"expected {expected_width}x{expected_height}",
+        )
+    last = timeline[-1]["at_seconds"]
+    if last >= total_seconds:
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"scene timeline runs past the approved duration: {last}s of {total_seconds}s",
+        )
 
 
 # ---------------------------------------------------------------------------

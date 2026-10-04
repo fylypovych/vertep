@@ -167,7 +167,7 @@ def mp4_factory(tmp_path_factory):
 
 
 # ---------------------------------------------------------------------------
-# Factory: opt-in + fallback
+# Factory: explicit opt-in, no substitution
 # ---------------------------------------------------------------------------
 
 
@@ -177,10 +177,19 @@ def test_video_engine_default_is_native(monkeypatch):
     assert isinstance(engine, NativeVertepEngine)
 
 
-def test_video_engine_falls_back_when_external_not_configured(monkeypatch):
+def test_video_engine_is_not_substituted_when_selected_engine_lacks_an_endpoint(monkeypatch):
+    """Issue #122 §9.12: a selected engine is never silently replaced by Native.
+
+    The engine object is still the one that was asked for, so it refuses the render with
+    a readiness reason and no job is assembled by an engine the operator did not choose.
+    """
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
     monkeypatch.setenv("MONEY_PRINTER_URL", "")
-    assert isinstance(_make_video_engine(), NativeVertepEngine)
+
+    engine = _make_video_engine()
+
+    assert isinstance(engine, MoneyPrinterEngine)
+    assert engine.configured() is False
 
 
 def test_video_engine_enables_money_printer_when_configured(monkeypatch):
@@ -192,6 +201,12 @@ def test_video_engine_enables_money_printer_when_configured(monkeypatch):
 def test_video_engine_enables_shortgpt_when_configured(monkeypatch):
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "shortgpt")
     monkeypatch.setenv("SHORTGPT_URL", "http://engine:9000")
+    assert isinstance(_make_video_engine(), ShortGPTEngine)
+
+
+def test_video_engine_keeps_shortgpt_selected_without_an_endpoint(monkeypatch):
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "shortgpt")
+    monkeypatch.setenv("SHORTGPT_URL", "")
     assert isinstance(_make_video_engine(), ShortGPTEngine)
 
 

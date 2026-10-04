@@ -819,9 +819,23 @@ def test_compose_keeps_the_runtime_opt_in():
     assert "ports" not in service
     assert service["environment"]["MONEYPRINTER_API_KEY_FILE"] == (
         "/run/secrets/moneyprinter_api_key"
-    )
+)
     assert "moneyprinter_api_key" in compose["secrets"]
     assert "moneyprinter-tasks" in compose["volumes"]
+
+    # Optional means optional: without `--profile moneyprinter` the whole platform must
+    # still come up on Native, so nothing that CORE needs may depend on this service.
+    dependents = [
+        name
+        for name, other in compose["services"].items()
+        if "moneyprinter" in (other.get("depends_on") or {})
+    ]
+    assert not dependents, f"moneyprinter is opt-in but {dependents} depend on it"
+    for name, other in compose["services"].items():
+        if name != "moneyprinter":
+            assert "moneyprinter" not in (other.get("volumes") or []), (
+                f"{name} mounts moneyprinter storage, so Native needs the profile"
+            )
 
 
 def test_release_builds_the_moneyprinter_image():
@@ -1235,7 +1249,13 @@ def test_runtime_check_reads_only_keys_the_wrapper_health_actually_publishes(
     monkeypatch.setattr(wrapper, "check_upstream_authenticated", lambda *a, **k: None)
     monkeypatch.setattr(wrapper, "check_ffmpeg", lambda: "/usr/bin/ffmpeg")
     monkeypatch.setattr(
-        wrapper, "check_media_pipeline", lambda: {"duration_seconds": 3.0, "bytes": 4096}
+        wrapper, "check_media_pipeline",
+        lambda: {"duration_seconds": 9.0, "bytes": 4096,
+                 "scenes": [{"label": "scene-1", "seconds": 9, "at_seconds": 4.5,
+                             "mean_colour": [1.0, 1.0, 1.0],
+                             "expected_colour": [1.0, 1.0, 1.0]}],
+                 "scene_order": ["scene-1"], "expected_scene_order": ["scene-1"],
+                 "aspect": "9:16", "fit_mode": "contain"},
     )
     monkeypatch.setattr(
         wrapper,
@@ -1293,6 +1313,113 @@ def test_runtime_check_requires_every_readiness_gate():
             "status": "passed",
             "checks": {"media_pipeline": {"bytes": 4096, "duration_seconds": 0}},
         })
+
+
+def _media_report(**overrides) -> dict:
+    """A self-test media report that proves scene order, durations and aspect."""
+    report = {
+        "duration_seconds": 9.0,
+        "bytes": 4096,
+        "width": 1080,
+        "height": 1920,
+        "scenes": [
+            {"label": "scene-1", "seconds": 2, "at_seconds": 1.0,
+             "mean_colour": [200.0, 10.0, 10.0], "expected_colour": [200.0, 10.0, 10.0]},
+            {"label": "scene-2", "seconds": 3, "at_seconds": 3.5,
+             "mean_colour": [10.0, 200.0, 10.0], "expected_colour": [10.0, 200.0, 10.0]},
+            {"label": "scene-3", "seconds": 4, "at_seconds": 7.0,
+             "mean_colour": [10.0, 10.0, 200.0], "expected_colour": [10.0, 10.0, 200.0]},
+        ],
+        "scene_order": ["scene-1", "scene-2", "scene-3"],
+        "expected_scene_order": ["scene-1", "scene-2", "scene-3"],
+        "expected_duration_seconds": 9,
+        "aspect": "9:16",
+        "fit_mode": "contain",
+        "concat_mode": "sequential",
+    }
+    report.update(overrides)
+    return {"media_pipeline": report}
+
+
+def test_runtime_check_requires_a_proven_scene_timeline():
+    """§9.3 rows 2–4/8 are the runtime's own duty, so the gate has to prove them.
+
+    A self-test that merely says "media file produced" cannot tell a runtime that keeps
+    scene order and the approved scene durations from one that reorders or re-times the
+    scenes, so the reported timeline is required and every scene is compared with the
+    clip it had to come from.
+    """
+    check = _load_runtime_check()
+
+    check.verify_self_test({"status": "passed", "checks": _media_report()})
+
+    with pytest.raises(check.CheckFailure, match="without a proven scene timeline"):
+        check.verify_self_test({
+            "status": "passed",
+            "checks": {"media_pipeline": {"bytes": 4096, "duration_seconds": 9.0}},
+        })
+    reordered = _media_report()
+    reordered["media_pipeline"]["scenes"] = list(
+        reversed(reordered["media_pipeline"]["scenes"]))
+    reordered["media_pipeline"]["scene_order"] = ["scene-3", "scene-2", "scene-1"]
+    with pytest.raises(check.CheckFailure, match="out of order"):
+        check.verify_self_test({"status": "passed", "checks": reordered})
+
+    lying = _media_report()
+    lying["media_pipeline"]["scene_order"] = ["scene-1", "scene-2", "scene-3"]
+    lying["media_pipeline"]["scenes"][1]["mean_colour"] = [10.0, 10.0, 200.0]
+    with pytest.raises(check.CheckFailure, match="does not match its approved clip"):
+        check.verify_self_test({"status": "passed", "checks": lying})
+
+    outside = _media_report()
+    outside["media_pipeline"]["scenes"][2]["at_seconds"] = 30.0
+    with pytest.raises(check.CheckFailure, match="outside the rendered timeline"):
+        check.verify_self_test({"status": "passed", "checks": outside})
+
+    without_aspect = _media_report()
+    without_aspect["media_pipeline"].pop("fit_mode")
+    with pytest.raises(check.CheckFailure, match="aspect/fit mode"):
+        check.verify_self_test({"status": "passed", "checks": without_aspect})
+
+
+def test_wrapper_media_proof_refuses_a_wrong_scene_timeline(monkeypatch):
+    """The in-image proof fails closed on order, duration and aspect drift."""
+    from services import moneyprinter_service as wrapper
+
+    correct = [
+        {"label": "scene-1", "seconds": 2, "at_seconds": 1.0,
+         "mean_colour": [200.0, 10.0, 10.0], "expected_colour": [200.0, 10.0, 10.0]},
+        {"label": "scene-2", "seconds": 3, "at_seconds": 3.5,
+         "mean_colour": [10.0, 200.0, 10.0], "expected_colour": [10.0, 200.0, 10.0]},
+        {"label": "scene-3", "seconds": 4, "at_seconds": 7.0,
+         "mean_colour": [10.0, 10.0, 200.0], "expected_colour": [10.0, 10.0, 200.0]},
+    ]
+    reordered = [
+        dict(correct[0]),
+        dict(correct[1], mean_colour=[10.0, 10.0, 200.0]),
+        dict(correct[2]),
+    ]
+
+    class _Aspect:
+        portrait = None
+
+        @staticmethod
+        def to_resolution():
+            return 1080, 1920
+
+    _Aspect.portrait = _Aspect
+    wrapper._verify_probe_timeline(correct, 9, 1080, 1920, _Aspect)
+
+    with pytest.raises(wrapper.SelfTestFailure, match="scene order or duration is wrong"):
+        wrapper._verify_probe_timeline(reordered, 9, 1080, 1920, _Aspect)
+    with pytest.raises(wrapper.SelfTestFailure, match="ignored the job aspect"):
+        wrapper._verify_probe_timeline(correct, 9, 1920, 1080, _Aspect)
+    with pytest.raises(wrapper.SelfTestFailure, match="runs past the approved duration"):
+        wrapper._verify_probe_timeline(
+            [dict(entry, at_seconds=entry["at_seconds"] + 20) for entry in correct],
+            9, 1080, 1920, _Aspect)
+    with pytest.raises(wrapper.SelfTestFailure, match="of 3 scenes"):
+        wrapper._verify_probe_timeline(correct[:1], 9, 1080, 1920, _Aspect)
 
 
 def test_runtime_check_refuses_a_runtime_that_dropped_a_script_or_voice_field():
@@ -1657,7 +1784,7 @@ def test_runtime_check_requires_a_self_test_that_produced_media():
 
     check.verify_self_test({
         "status": "passed",
-        "checks": {"media_pipeline": {"bytes": 2048, "duration_seconds": 3.0}},
+        "checks": _media_report(bytes=2048, duration_seconds=9.0),
     })
     with pytest.raises(check.CheckFailure, match="self-test did not pass"):
         check.verify_self_test({"status": "failed", "reason": "upstream_unreachable"})
@@ -1828,7 +1955,7 @@ def test_wrapper_refuses_an_unusable_voice_staging_request(
     assert response.status_code == expected
 
 
-def _submit(client, **overrides):
+def _submit(client, *, submit_key: str | None = None, **overrides):
     payload = {
         "video_subject": "topic",
         "video_script": "approved narration",
@@ -1838,9 +1965,10 @@ def _submit(client, **overrides):
         "video_aspect": "16:9",
     }
     payload.update(overrides)
-    return client.post(
-        "/api/v1/videos", json=payload, headers={"x-api-key": "runtime-key"},
-    )
+    headers = {"x-api-key": "runtime-key"}
+    if submit_key:
+        headers["x-vertep-submit-key"] = submit_key
+    return client.post("/api/v1/videos", json=payload, headers=headers)
 
 
 def test_wrapper_places_the_staged_voice_in_the_task_directory(monkeypatch, tmp_path):
@@ -1872,8 +2000,76 @@ def test_wrapper_places_the_staged_voice_in_the_task_directory(monkeypatch, tmp_
     assert not staged.with_suffix(".wav.part").exists()
 
 
+def test_wrapper_never_asks_the_pinned_runtime_to_generate_or_publish(
+    monkeypatch, tmp_path
+):
+    """P4/§9.6: Vertep owns script, narration and publication.
+
+    The whole wrapper flow runs against a recording upstream: the narration is staged,
+    every scene is uploaded, the approved script is submitted, the status is polled and
+    the result is downloaded. The recording is the proof that not one of those steps
+    used the pinned narration, script or publication capability — those belong to
+    Vertep, and a runtime that quietly used them would render content nobody approved.
+    """
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    digest = hashlib.sha256(b"approved-voice-bytes").hexdigest()
+    client.post(
+        "/api/v1/voice",
+        content=b"approved-voice-bytes",
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice-0001.wav"},
+    )
+    calls: list[tuple[str, str]] = []
+    payloads: list[dict] = []
+
+    def fake_upstream(method, path, *, api_key, **kwargs):
+        calls.append((method, path))
+        if path == "/api/v1/videos":
+            payloads.append(json.loads(kwargs.get("content")))
+            return httpx.Response(200, json={"status": 200, "message": "success",
+                                             "data": {"task_id": "j-77"}})
+        if path == "/api/v1/video_materials":
+            return httpx.Response(200, json={"status": 200, "message": "success",
+                                             "data": {"file": "scene-000.mp4"}})
+        if path == "/api/v1/videos/vertep-j-77":
+            return httpx.Response(200, json={"status": 200, "message": "success",
+                                             "data": {"state": "completed", "file_url":
+                                                      "final/j-77.mp4"}})
+        if path.startswith("/api/v1/tasks/"):
+            return httpx.Response(200, json={"status": 200, "message": "success",
+                                             "data": {"state": "completed",
+                                                      "file_url": "final/j-77.mp4"}})
+        raise AssertionError(f"unexpected upstream call: {method} {path}")
+
+    monkeypatch.setattr("services.moneyprinter_service._upstream", fake_upstream)
+    uploaded = client.post(
+        "/api/v1/video_materials",
+        content=b"staged-scene-bytes",
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "scene-000.mp4"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    submitted = _submit(client, submit_key="vertep-job-77-v1-abc123",
+                        custom_audio_file=f"vertep-voice:{digest}.wav",
+                        video_materials=[{"provider": "local", "url": "scene-000.mp4",
+                                          "duration": 2.0}])
+    assert submitted.status_code == 200, submitted.text
+    polled = client.get("/api/v1/videos/vertep-job-77-v1-abc123",
+                        headers={"x-api-key": "runtime-key"})
+    assert polled.status_code == 200, polled.text
+
+    forbidden = ("audio", "tts", "voice/synth", "llm", "gpt", "script", "prompt",
+                 "publish", "upload", "youtube", "douyin", "tiktok")
+    used = [f"{method} {path}" for method, path in calls]
+    assert used, "the flow never reached the upstream, so nothing was proven"
+    for entry in used:
+        route = entry.split(" ", 1)[1].lower()
+        assert not any(word in route for word in forbidden), (
+            f"the wrapper used the pinned generation/publication route: {entry}")
+    assert payloads[0]["video_script"] == "approved narration"
+    assert payloads[0]["custom_audio_file"] == "vertep-voice.wav"
+
+
 def test_wrapper_cancels_the_task_when_the_voice_cannot_be_placed(monkeypatch, tmp_path):
-    """A submit whose voice cannot be placed fails closed and leaves no task."""
     client = _wrapper_client(monkeypatch, tmp_path)
     _pinned_upstream(monkeypatch, tmp_path)
     calls: list = []

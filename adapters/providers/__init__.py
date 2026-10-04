@@ -344,22 +344,20 @@ def _make_compute() -> ComputeProvider:
 def _make_video_engine() -> VideoEngine:
     """Resolve the video assembly engine.
 
-    Default is the native Vertep FFmpeg pipeline (``NativeVertepEngine``).
-    External engines (MoneyPrinter / ShortGPT) are used only on explicit opt-in
-    via ``VERTEP_VIDEO_ENGINE`` **and** a configured render URL; otherwise the
-    factory falls back to the native engine.
+    Default is the native Vertep FFmpeg pipeline (``NativeVertepEngine``). An external
+    engine is selected explicitly through ``VERTEP_VIDEO_ENGINE`` and is then *not*
+    substituted: a selected engine that has no endpoint yet is still the engine that was
+    asked for, so the attempt is refused with a readiness reason instead of being quietly
+    assembled by Native (Issue #122 §9.12 — «тихий fallback на Native заборонений»).
+    Native remains the default only when no engine was selected at all.
     """
     engine_name = (
         os.getenv("VERTEP_VIDEO_ENGINE", "native").lower().strip()
     )
     if engine_name == "money-printer":
-        engine = MoneyPrinterEngine()
-        if engine.configured():
-            return engine
-    elif engine_name == "shortgpt":
-        engine = ShortGPTEngine()
-        if engine.configured():
-            return engine
+        return MoneyPrinterEngine()
+    if engine_name == "shortgpt":
+        return ShortGPTEngine()
     return NativeVertepEngine()
 
 
@@ -463,16 +461,19 @@ def provider_matrix() -> dict[str, dict]:
     )
     if engine_name == "money-printer":
         engine_configured = MoneyPrinterEngine().configured()
-        engine_active = (
-            "money-printer" if engine_configured else "native"
-        )
+        engine_active = "money-printer"
     elif engine_name == "shortgpt":
         engine_configured = ShortGPTEngine().configured()
-        engine_active = "shortgpt" if engine_configured else "native"
+        engine_active = "shortgpt"
     else:
         engine_active, engine_configured = "native", True
     matrix["video_engine"] = {
+        # The selection is reported as the active backend even when it is not configured:
+        # a display that answered "native" here would show the operator an engine that
+        # was never applied while their own selection silently assembled the job
+        # (Issue #122 §9.12, P8 «відображений вибір має відповідати реально застосованому»).
         "backend": engine_active,
+        "selected": engine_active,
         "options": ["native", "money-printer", "shortgpt"],
         "env": "VERTEP_VIDEO_ENGINE",
         "configured": engine_configured,

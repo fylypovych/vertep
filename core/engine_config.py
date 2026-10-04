@@ -24,18 +24,76 @@ import hashlib
 import os
 from typing import Any
 
+from adapters.providers.video_engines import MoneyPrinterEngine, ShortGPTEngine
+
 #: Env var that holds the token of each external engine. Only the *name* is ever
 #: reported: a secret value never leaves the process.
 _SECRET_ENV_BY_ENGINE = {
-    "money-printer": "MONEY_PRINTER_TOKEN",
-    "shortgpt": "SHORTGPT_TOKEN",
+    "money-printer": MoneyPrinterEngine.env_token,
+    "shortgpt": ShortGPTEngine.env_token,
 }
 
-#: Env var that holds the endpoint of each external engine.
+#: Env var that holds the endpoint of each external engine. Taken from the engine
+#: classes themselves, so the read model and the switch can never report or persist an
+#: address under a name the runtime does not read.
 _ENDPOINT_ENV_BY_ENGINE = {
-    "money-printer": "MONEY_PRINTER_URL",
-    "shortgpt": "SHORTGPT_URL",
+    "money-printer": MoneyPrinterEngine.env_url,
+    "shortgpt": ShortGPTEngine.env_url,
 }
+
+#: User-facing names of the engines. The technical values stay the API contract
+#: (``native`` / ``money-printer`` / ``shortgpt``, Issue #122 §1), so only the labels are
+#: added here — Settings must be able to show "Vertep Native" and "MoneyPrinterTurbo"
+#: without the operator having to know the env value.
+ENGINE_LABELS = {
+    "native": "Vertep Native",
+    "money-printer": "MoneyPrinterTurbo",
+    "shortgpt": "ShortGPT",
+}
+
+
+def engine_options(matrix: dict | None = None) -> list[dict[str, Any]]:
+    """Selectable engines with their user-facing names."""
+    from adapters.providers import provider_matrix
+
+    entries = (matrix or provider_matrix()).get("video_engine", {})
+    options = list(entries.get("options") or [])
+    if not options:
+        options = ["native"]
+    return [
+        {"id": option, "label": ENGINE_LABELS.get(option, option)}
+        for option in options
+    ]
+
+
+def required_engine_fields(engine_id: str) -> list[dict[str, Any]]:
+    """Non-secret inputs an external engine needs before it can be applied.
+
+    Only references are reported — the env var a value belongs to and whether it is set.
+    A secret value has no place in a Settings payload, and an endpoint is reduced to its
+    identity (scheme, host, port) for the same reason.
+    """
+    endpoint_env = _ENDPOINT_ENV_BY_ENGINE.get(engine_id)
+    if not endpoint_env:
+        return []
+    secret_env = _SECRET_ENV_BY_ENGINE.get(engine_id)
+    identity = _url_identity(os.getenv(endpoint_env, ""))
+    return [
+        {
+            "name": "endpoint",
+            "env": endpoint_env,
+            "value": identity,
+            "configured": bool(identity),
+            "secret": False,
+        },
+        {
+            "name": "token",
+            "env": secret_env,
+            "value": None,
+            "configured": bool(os.getenv(secret_env or "", "")),
+            "secret": True,
+        },
+    ]
 
 
 def _engine():
@@ -60,16 +118,14 @@ def _configured(engine) -> bool:
     return bool(value)
 
 
-def endpoint_identity(engine) -> str:
-    """Non-secret endpoint identity of an engine: scheme, host and port only.
+def _url_identity(url: str) -> str:
+    """Reduce a URL to the part that proves *which* runtime is addressed.
 
-    A URL may carry credentials in its userinfo, path, query or fragment, so the
-    identity is reduced to the part that proves *which* runtime is addressed and
-    nothing else — no credentials can survive this reduction.
+    A URL may carry credentials in its userinfo, path, query or fragment, so only
+    scheme, host and port survive — no credential can pass through this reduction.
     """
     from urllib.parse import urlsplit, urlunsplit
 
-    url = str(getattr(engine, "_url", "") or "")
     if not url:
         return ""
     try:
@@ -84,6 +140,11 @@ def endpoint_identity(engine) -> str:
     if parts.port:
         host = f"{host}:{parts.port}"
     return urlunsplit((parts.scheme, host, "", "", ""))
+
+
+def endpoint_identity(engine) -> str:
+    """Non-secret endpoint identity of an engine: scheme, host and port only."""
+    return _url_identity(str(getattr(engine, "_url", "") or ""))
 
 
 def secret_reference(engine) -> dict[str, Any]:
@@ -196,25 +257,42 @@ def verify_effective_engine(*, probe: bool = True, engine=None) -> dict[str, Any
 def effective_engine_config(*, probe: bool = False, engine=None) -> dict[str, Any]:
     """Read model of the effective video-engine configuration.
 
-    ``selected``/``effective``/``config_revision`` are always reported together, so
-    a caller can prove they describe one and the same engine.
+    ``selected``/``effective``/``config_revision`` are always reported together, so a
+    caller can prove they describe one and the same engine. What Settings needs to render
+    the engine choice is reported next to them: the user-facing names, the non-secret
+    inputs each external engine still needs, and whether the current system state allows
+    changing the engine at all (Issue #122 P8).
     """
+    from .system_state import get_system_state, operation_allowed
+
     engine = engine if engine is not None else _engine()
     engine_id = _engine_id(engine)
     from adapters.providers import provider_matrix
 
     matrix = provider_matrix().get("video_engine", {})
+    selected = str(matrix.get("selected") or matrix.get("backend") or "native")
     report = verify_effective_engine(probe=probe, engine=engine)
+    options = engine_options()
     return {
-        "selected": str(matrix.get("backend") or "native"),
+        "selected": selected,
         "effective": engine_id,
-        "agree": str(matrix.get("backend") or "native") == engine_id,
+        "agree": selected == engine_id,
+        "label": ENGINE_LABELS.get(engine_id, engine_id),
         "config_revision": report["config_revision"],
         "endpoint": report["endpoint"],
         "secret": report["secret"],
+        "fields": required_engine_fields(engine_id),
+        # What each engine needs, so the operator can fill in an engine they are about to
+        # apply — not only the one that is effective right now (Issue #122 P8).
+        "required_fields": {
+            option["id"]: required_engine_fields(option["id"]) for option in options
+        },
         "upstream_reference": report["upstream_reference"],
         "ready": report["ready"],
         "reason": report["reason"],
-        "options": list(matrix.get("options") or []),
+        "probed": bool(probe) and engine_id != "native",
+        "options": options,
+        "system_state": get_system_state()["state"],
+        "change_allowed": operation_allowed("configuration"),
         "values_exposed": False,
     }

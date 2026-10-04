@@ -562,3 +562,313 @@ def test_a_native_attempt_snapshot_carries_no_external_reference(assembly_state,
     assert snapshot["engine_id"] == "native"
     assert "endpoint_reference" not in snapshot
     assert "secret_reference" not in snapshot
+
+
+def test_a_switch_during_an_active_attempt_does_not_change_the_dispatched_snapshot(
+    assembly_state, monkeypatch
+):
+    """P8: the effective configuration may change while an attempt is in flight.
+
+    The attempt keeps the engine and the revision it was dispatched with — its snapshot
+    is immutable, and a Worker already holding it is not re-routed. The next attempt is
+    decided by the configuration that is effective at that moment.
+    """
+    store = assembly_state["store"]
+    job = assembly_state["job"]
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://runtime:8098")
+    monkeypatch.setenv("MONEY_PRINTER_TOKEN", "token")
+
+    first_engine = _ExternalEngine()
+    first_engine._url = "http://runtime:8098"
+    dispatched = _dispatch(assembly_state, first_engine)
+    first_revision = dispatched.video_engine_snapshot["config_revision"]
+    assert first_revision
+    _register_worker(store)
+    claim = _claim()["task"]
+    assert claim["task_id"]
+    in_flight = assembly_state["queue"].find(claim["task_id"])
+    assert in_flight["engine_snapshot"]["engine_id"] == "money-printer"
+    assert in_flight["engine_snapshot"]["config_revision"] == first_revision
+
+    # The operator applies a different configuration in Settings while the attempt runs.
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://other-runtime:8098")
+    second_engine = _ExternalEngine()
+    second_engine._url = "http://other-runtime:8098"
+
+    assert assembly_state["queue"].find(claim["task_id"])["engine_snapshot"] == \
+        in_flight["engine_snapshot"], \
+        "an attempt that was already dispatched keeps the snapshot it was given"
+
+    job.status = JobStatus.VIDEO_REVISION_REQUESTED
+    later = _dispatch(assembly_state, second_engine)
+    assert later.video_engine_snapshot["engine_id"] == "money-printer"
+    assert later.video_engine_snapshot["config_revision"] != first_revision, \
+        "a new attempt is decided by the configuration that is effective now"
+    assert job.assembly_task_id != claim["task_id"]
+
+
+# ---------------------------------------------------------------------------
+# P9: the external engine passes through the same approval gates and history
+# ---------------------------------------------------------------------------
+
+
+class _RecordingPublisher:
+    """A Publisher stand-in: the route may reach it only through a queued task."""
+
+    def __init__(self) -> None:
+        self.published: list[Path] = []
+        self.channels = ["youtube"]
+
+    def available_channels(self) -> list[str]:
+        return list(self.channels)
+
+    def configured(self, channel: str) -> bool:
+        return True
+
+    def publish(self, channel: str, output: Path, metadata: dict | None = None, **kwargs):
+        self.published.append(Path(output))
+        return {"status": "PUBLISHED", "channel": channel}
+
+    def cancel(self, *args, **kwargs) -> bool:  # pragma: no cover - not used here
+        return True
+
+
+def _publish_route(assembly_state, monkeypatch):
+    """Point the publish route at the isolated store, queue and publisher of this test."""
+    from core.api import jobs as jobs_api
+
+    publisher = _RecordingPublisher()
+    monkeypatch.setattr(jobs_api, "store", assembly_state["store"])
+    monkeypatch.setattr(jobs_api, "task_queue", assembly_state["queue"])
+    monkeypatch.setattr(jobs_api, "providers", type("_P", (), {
+        "publisher": staticmethod(lambda: publisher),
+    }))
+    monkeypatch.setattr(job_helpers, "task_queue", assembly_state["queue"])
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    return jobs_api.publish_job, publisher
+
+
+def _queued_tasks(queue) -> list[dict]:
+    """Every task the isolated local queue currently holds, ready or in flight."""
+    return [row[2] for row in queue._local] + [entry[1] for entry in queue._inflight.values()]
+
+
+def _publish_tasks(assembly_state, job) -> list[dict]:
+    return [task for task in _queued_tasks(assembly_state["queue"])
+            if task.get("task_type") == "publish" and task.get("job_id") == job.job_id]
+
+
+def _publish_contract(assembly_state, job) -> dict:
+    """The delivery contract of the publish task the route queued for this Job."""
+    tasks = _publish_tasks(assembly_state, job)
+    assert len(tasks) == 1, f"expected one publish task for {job.job_id}, got {len(tasks)}"
+    return tasks[0]["delivery_contract"]
+
+
+def _render_v(assembly_state, job, data: bytes, node: str = "gpu-01") -> Job:
+    """Claim and accept the Job's current external render."""
+    store = assembly_state["store"]
+    _register_worker(store, node)
+    current = job.assembly_task_id
+    claimed = _claim(node)["task"]
+    assert claimed is not None, "the dispatched assembly attempt was not claimable"
+    assert claimed["task_id"] == current, \
+        f"CORE offered attempt {claimed['task_id']} instead of the current {current}"
+    return tasks_api.task_result(
+        _result(job.job_id, current, data,
+                version=job.assembly_task_ids[current], node=node),
+        _Request())
+
+
+def test_an_external_render_cannot_be_published_before_approval(assembly_state, monkeypatch):
+    """P9: the external engine does not own publication and cannot skip approval.
+
+    A Worker may return a finished render, but the imported version stops at
+    ``VIDEO_PENDING_APPROVAL``; publishing is refused until a reviewer accepted that
+    exact version.
+    """
+    from core.pipeline import approve_video
+
+    store, job = assembly_state["store"], assembly_state["job"]
+    publish_job, _publisher = _publish_route(assembly_state, monkeypatch)
+    accepted = _render_v(assembly_state, _dispatch(assembly_state),
+                         _mp4(assembly_state["tmp_path"] / "v1.mp4").read_bytes())
+
+    assert accepted.status == JobStatus.VIDEO_PENDING_APPROVAL
+    with pytest.raises(HTTPException) as refusal:
+        publish_job(job.job_id)
+    assert refusal.value.status_code == 409
+    assert _publish_tasks(assembly_state, job) == [], \
+        "an unapproved external render was handed to the Publisher"
+
+    approve_video(store, store.jobs[job.job_id], "reviewer")
+    publish_job(job.job_id)
+    delivery = _publish_contract(assembly_state, store.jobs[job.job_id])
+    assert delivery["version"] == 1
+    assert delivery["sha256"] == accepted.video_versions[0].sha256
+
+
+def test_only_the_current_approved_artifact_is_publishable(assembly_state, monkeypatch):
+    """P9: an approval covers one version; a newer render invalidates it.
+
+    While the newer version waits for approval nothing is handed to the Publisher, and
+    the delivery contract that finally leaves CORE pins the approved version — never
+    the earlier one that the previous approval covered.
+    """
+    from core.pipeline import approve_video, request_video_revision
+
+    store, job = assembly_state["store"], assembly_state["job"]
+    publish_job, _publisher = _publish_route(assembly_state, monkeypatch)
+    first = _render_v(assembly_state, _dispatch(assembly_state),
+                      _mp4(assembly_state["tmp_path"] / "v1.mp4", 600).read_bytes())
+    v1_hash = first.video_versions[0].sha256
+    request_video_revision(store, first, "regenerate", "reviewer")
+    second = _render_v(assembly_state, _dispatch(assembly_state),
+                       _mp4(assembly_state["tmp_path"] / "v2.mp4", 700).read_bytes())
+    v2_hash = second.video_versions[1].sha256
+
+    assert second.status == JobStatus.VIDEO_PENDING_APPROVAL
+    with pytest.raises(HTTPException) as refusal:
+        publish_job(job.job_id)
+    assert refusal.value.status_code == 409
+    assert "approval" in refusal.value.detail
+    assert _publish_tasks(assembly_state, job) == [], \
+        "the superseded version was handed to the Publisher while v2 waits for approval"
+
+    approve_video(store, second, "reviewer")
+    publish_job(job.job_id)
+    delivery = _publish_contract(assembly_state, store.jobs[job.job_id])
+    assert delivery["version"] == 2
+    assert delivery["sha256"] == v2_hash
+    assert delivery["sha256"] != v1_hash
+
+
+def test_two_revision_loops_keep_every_accepted_version_immutable(assembly_state, monkeypatch):
+    """P9: two revision loops keep the accepted renders and their history intact."""
+    from core.pipeline import approve_video, request_video_revision
+
+    store, job = assembly_state["store"], assembly_state["job"]
+    first = _render_v(assembly_state, _dispatch(assembly_state),
+                      _mp4(assembly_state["tmp_path"] / "v1.mp4", 600).read_bytes())
+    assert first.status == JobStatus.VIDEO_PENDING_APPROVAL
+    v1 = first.video_versions[0]
+    v1_bytes = (store.root / job.job_id / v1.path).read_bytes()
+
+    request_video_revision(store, first, "regenerate", "reviewer")
+    second = _render_v(assembly_state, _dispatch(assembly_state),
+                       _mp4(assembly_state["tmp_path"] / "v2.mp4", 700).read_bytes())
+
+    request_video_revision(store, second, "regenerate", "reviewer")
+    third = _render_v(assembly_state, _dispatch(assembly_state),
+                      _mp4(assembly_state["tmp_path"] / "v3.mp4", 800).read_bytes())
+
+    # Every accepted render is still on disk with its own hash, and none of them was
+    # accepted without a reviewer: only the last one carries the approval.
+    assert [v.version for v in third.video_versions] == [1, 2, 3]
+    assert third.video_versions[0].sha256 == hashlib.sha256(v1_bytes).hexdigest()
+    assert (store.root / job.job_id / v1.path).read_bytes() == v1_bytes
+    assert [v.approved for v in third.video_versions] == [False, False, False]
+    assert third.active_video_version == 3
+
+    approve_video(store, third, "reviewer")
+    final = store.jobs[job.job_id]
+    assert final.active_video_version == 3
+    assert final.status == JobStatus.READY
+    assert (store.root / job.job_id / v1.path).read_bytes() == v1_bytes
+    assert final.video_versions[0].approved is False, \
+        "an old version must not inherit the approval given to the current one"
+
+
+def test_a_stale_or_duplicate_approval_cannot_accept_a_superseded_version(
+    assembly_state, monkeypatch
+):
+    """P9: a late approval targets the version that was reviewed, not the current one."""
+    from core.pipeline import approve_video, request_video_revision
+
+    store, job = assembly_state["store"], assembly_state["job"]
+    first = _render_v(assembly_state, _dispatch(assembly_state),
+                      _mp4(assembly_state["tmp_path"] / "v1.mp4", 600).read_bytes())
+    v1_hash = first.video_versions[0].sha256
+    request_video_revision(store, first, "regenerate", "reviewer")
+    second = _render_v(assembly_state, _dispatch(assembly_state),
+                       _mp4(assembly_state["tmp_path"] / "v2.mp4", 700).read_bytes())
+
+    # The reviewer still looks at the v1 they were sent.
+    with pytest.raises(ValueError, match="Stale video approval"):
+        approve_video(store, second, "reviewer", expected_version=1)
+    with pytest.raises(ValueError, match="Stale video approval"):
+        approve_video(store, second, "reviewer", expected_sha256=v1_hash)
+    assert second.active_video_version == 2
+    assert not any(v.approved for v in second.video_versions)
+
+    approve_video(store, second, "reviewer", expected_version=2,
+                  expected_sha256=second.video_versions[1].sha256)
+    # A duplicate approval after READY is refused instead of approving again.
+    with pytest.raises(ValueError, match="Cannot approve video"):
+        approve_video(store, store.jobs[job.job_id], "reviewer")
+
+
+def test_a_late_result_of_a_superseded_attempt_cannot_overwrite_the_accepted_version(
+    assembly_state, monkeypatch
+):
+    """P9: a straggling Worker result never replaces what was already accepted."""
+    store, job = assembly_state["store"], assembly_state["job"]
+    first = _dispatch(assembly_state)
+    stale_task_id = first.assembly_task_id
+    stale_key = first.video_engine_snapshot["submit_key"]
+
+    # An approved input changes, so the next attempt is a different render: a new
+    # version, a new submit key, and the previous attempt is no longer the current one.
+    job.status = JobStatus.VIDEO_REVISION_REQUESTED
+    job.script = dict(job.script, scenes=[
+        {"prompt": "Shot", "text": "Approved but changed line", "duration": 3},
+    ])
+    second = _dispatch(assembly_state)
+    assert second.assembly_task_id != stale_task_id
+    assert second.video_engine_snapshot["submit_key"] != stale_key, \
+        "a changed approved input must produce a new attempt key"
+
+    accepted = _render_v(assembly_state, second,
+                         _mp4(assembly_state["tmp_path"] / "v2.mp4", 700).read_bytes())
+    assert accepted.active_video_version == 1
+    accepted_bytes = (store.root / job.job_id / accepted.video_versions[0].path).read_bytes()
+
+    with pytest.raises(HTTPException) as refusal:
+        tasks_api.task_result(
+            _result(job.job_id, stale_task_id,
+                    _mp4(assembly_state["tmp_path"] / "late.mp4", 600).read_bytes(),
+                    version=1), _Request())
+    assert refusal.value.status_code == 409
+
+    final = store.jobs[job.job_id]
+    assert final.active_video_version == 1
+    assert len(final.video_versions) == 1
+    assert (store.root / job.job_id / final.video_versions[0].path).read_bytes() \
+        == accepted_bytes, "a late result replaced the accepted artifact"
+
+
+def test_a_superseded_attempt_is_not_offered_to_a_worker(assembly_state):
+    """P5/P9: a node never spends an upstream render on an attempt that was replaced.
+
+    The superseded task is still mapped to a version, so only the current attempt may
+    be leased; the old one is dropped from the queue instead of being executed and
+    refused later.
+    """
+    store, job = assembly_state["store"], assembly_state["job"]
+    _register_worker(store)
+    first = _dispatch(assembly_state)
+    stale_task_id = first.assembly_task_id
+
+    job.status = JobStatus.VIDEO_REVISION_REQUESTED
+    job.script = dict(job.script, scenes=[
+        {"prompt": "Shot", "text": "Approved but changed line", "duration": 3},
+    ])
+    second = _dispatch(assembly_state)
+    current_task_id = second.assembly_task_id
+    assert stale_task_id in second.assembly_task_ids, "the superseded attempt is still mapped"
+
+    claimed = _claim()["task"]
+
+    assert claimed is not None and claimed["task_id"] == current_task_id
+    assert assembly_state["queue"].find(stale_task_id) is None, \
+        "the superseded attempt stayed claimable after the revision"

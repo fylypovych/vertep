@@ -104,19 +104,16 @@ Upstream не бачить `VERTEP_*`, `JWT_SECRET` чи будь-які інш�
 
 Виконано: multipart-доставка сцен через wrapper, реальний envelope `data.file`,
 task-scoped власність staging-каталогу attempt-а, verified import із
-checksum/size/media/access, негативні кейси (порожній, недекодований, нечитабелий
+checksum/size/media/access, негативні кейси (порожній, недекодований, нечитабельний
 download, обмежені retry), different-root приймання.
 
-Блокер піну: **audio staging неможливий на `2e1b303…`**.
-`resolve_custom_audio_file(task_id, …, allow_server_file_input=False)` приймає
-лише шлях у task-каталозі, task id генерує сервер у момент submit, а
-`POST /api/v1/audio` не приймає файл, а запускає `stop_at="audio"` з власним
-TTS; маршруту завантаження audio в API немає. Обхід можливий лише через
-приватні параметри `app.services.task` поза API-контрактом, що §9.2 забороняє.
-Тому `_require_task_local_voice()` fail-closed відхиляє render з
-`upstream_voice_staging_unsupported` до будь-якого upload чи submit. Вирішення —
-новий pin з task-local audio upload або рішення власника; підміна TTS заборонена
-§9.6.
+Approved voice (§9.3 рядок 5) доставляється wrapper-ом через
+`POST /api/v1/voice`: байти зберігаються content-addressed (SHA-256 у назві) і
+`_stage_task_voice()` кладе їх у task-каталог pinned-резолвера перед submit, після
+чого `resolve_custom_audio_file` приймає шлях у task-каталозі. Підміна TTS
+заборонена §9.6, тому `task_local_voice_capability()` перевіряє саме цей маршрут
+і fail-closed відхиляє render з `upstream_voice_staging_unsupported`, якщо staging
+не довів файл до pinned-резолвера. `POST /api/v1/audio` не використовується.
 
 ## Конфігурація
 
@@ -205,11 +202,12 @@ artifact.
 - `faster_whisper` і `twelvelabs` імпортуються під `try`/lazily, тому
   `requirements.lock` їх виключає; усі інші імпорти `app/` покриті lock-ом;
 - усі версії з `requirements.lock` існують на PyPI;
-- pinned upstream не приймає pre-rendered voice: `resolve_custom_audio_file`
-  дозволяє лише шлях у task-каталозі, task id створюється сервером у момент
-  submit, а `POST /api/v1/audio` не приймає файл, а синтезує мовлення власним
-  TTS. Тому `/runtime` повідомляє `task_local_voice: false`, і render
-  відхиляється pre-dispatch з `upstream_voice_staging_unsupported` (§9.6).
+- pinned upstream приймає pre-rendered voice лише з task-каталогу:
+  `resolve_custom_audio_file` дозволяє тільки такий шлях, а wrapper доставляє
+  схвалений голос через `POST /api/v1/voice` і `_stage_task_voice()` (§9.3 рядок 5).
+  Власний TTS upstream-а (`POST /api/v1/audio`) не використовується, тому
+  `/runtime` повідомляє `task_local_voice: true`, а render без доведеного
+  staging відхиляється pre-dispatch з `upstream_voice_staging_unsupported` (§9.6).
 
 Не перевірено локально і потребує середовища з Docker: реальна збірка образу,
 старт контейнера та фактичний compose render. Скрипт

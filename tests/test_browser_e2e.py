@@ -444,6 +444,230 @@ def test_settings_security_shows_effective_checks_and_remediation():
         browser.close()
 
 
+# ---------------------------------------------------------------------------
+# Issue #122 P8 — Settings → Движок відео
+# ---------------------------------------------------------------------------
+
+VIDEO_ENGINE_NATIVE = {
+    "selected": "native", "effective": "native", "agree": True,
+    "label": "Vertep Native", "config_revision": "sha256:" + "a" * 64,
+    "endpoint": None, "secret": None, "fields": [], "upstream_reference": None,
+    "ready": True, "reason": "native_engine", "probed": False,
+    "options": [{"id": "native", "label": "Vertep Native"},
+                {"id": "money-printer", "label": "MoneyPrinterTurbo"}],
+    "required_fields": {
+        "native": [],
+        "money-printer": [
+            {"name": "endpoint", "env": "MONEY_PRINTER_URL", "value": None,
+             "configured": False, "secret": False},
+            {"name": "token", "env": "MONEY_PRINTER_TOKEN", "value": None,
+             "configured": False, "secret": True},
+        ],
+    },
+    "system_state": "NORMAL", "change_allowed": True, "values_exposed": False,
+}
+
+
+def _video_engine_state(backend: str, ready: bool, reason: str, endpoint=None):
+    """A read model of the engine that is currently effective."""
+    selected = backend if backend != "native" else "money-printer"
+    fields = []
+    if backend != "native":
+        fields = [
+            {"name": "endpoint", "env": "MONEY_PRINTER_URL", "value": endpoint,
+             "configured": bool(endpoint), "secret": False},
+            {"name": "token", "env": "MONEY_PRINTER_TOKEN", "value": None,
+             "configured": False, "secret": True},
+        ]
+    return {
+        **VIDEO_ENGINE_NATIVE,
+        "selected": selected,
+        "effective": backend,
+        "agree": True,
+        "label": "Vertep Native" if backend == "native" else "MoneyPrinterTurbo",
+        "ready": ready,
+        "reason": reason,
+        "fields": fields,
+        "endpoint": endpoint,
+        "probed": backend != "native",
+    }
+
+
+def test_settings_video_engine_names_both_engines_and_shows_the_effective_one():
+    """Both names are rendered, and the displayed choice is the one the API reports."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        page.route("**/api/settings/video-engine*",
+                   lambda route: route.fulfill(json=VIDEO_ENGINE_NATIVE))
+
+        page.goto(f"{BASE_URL}/settings?tab=video-engine")
+
+        section = page.locator("[data-testid='settings-video-engine']")
+        expect(section).to_be_visible()
+        options = page.locator("[data-testid='video-engine-select'] option")
+        expect(options).to_have_count(2)
+        expect(options.nth(0)).to_have_text("Vertep Native")
+        expect(options.nth(1)).to_have_text("MoneyPrinterTurbo")
+        expect(page.locator("[data-testid='video-engine-selected']")).to_have_text("Vertep Native")
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text("Vertep Native")
+        expect(page.locator("[data-testid='video-engine-revision']")).to_contain_text("sha256:")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_settings_video_engine_applies_an_engine_through_the_real_api():
+    """Browser → POST → read model: the applied engine is the effective engine.
+
+    The mutation is answered by the route handler the real API would answer, and the
+    answer the UI renders afterwards is the one the read model reports.
+    """
+    applied = {}
+    state = {"config": VIDEO_ENGINE_NATIVE}
+
+    def _switch(route):
+        payload = route.request.post_data_json or {}
+        applied.update(payload)
+        state["config"] = _video_engine_state(
+            payload.get("backend", "native"), True, "ok", endpoint=payload.get("endpoint"))
+        route.fulfill(json={
+            "slot": "video_engine", "backend": payload.get("backend"), "changed": True,
+            "env": "VERTEP_VIDEO_ENGINE", "matrix": {},
+            "effective_engine": state["config"],
+        })
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        page.route("**/api/settings/video-engine*",
+                   lambda route: route.fulfill(json=state["config"]))
+        page.route("**/api/settings/providers/video_engine", _switch)
+
+        page.goto(f"{BASE_URL}/settings?tab=video-engine")
+        expect(page.locator("[data-testid='video-engine-panel']")).to_be_visible()
+
+        # Select the external engine, give its runtime address, apply.
+        page.select_option("[data-testid='video-engine-select']", "money-printer")
+        expect(page.locator("[data-testid='video-engine-endpoint']")).to_be_visible()
+        page.fill("[data-testid='video-engine-endpoint']", "http://runtime:8098")
+        page.click("[data-testid='video-engine-apply']")
+
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text("MoneyPrinterTurbo")
+        assert applied["backend"] == "money-printer"
+        assert applied["endpoint"] == "http://runtime:8098", \
+            "the endpoint must be applied together with the engine"
+        expect(page.locator("[data-testid='video-engine-token-state']")).to_contain_text(
+            "MONEY_PRINTER_TOKEN")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_settings_video_engine_reports_a_refused_apply_and_stays_on_the_previous_engine():
+    """A runtime that cannot prove readiness must not appear as applied."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        page.route("**/api/settings/video-engine*",
+                   lambda route: route.fulfill(json=VIDEO_ENGINE_NATIVE))
+        page.route("**/api/settings/providers/video_engine", lambda route: route.fulfill(
+            status=409,
+            json={"detail": "Engine 'money-printer' runtime is not ready: upstream_unreachable"},
+        ))
+
+        page.goto(f"{BASE_URL}/settings?tab=video-engine")
+        expect(page.locator("[data-testid='video-engine-panel']")).to_be_visible()
+        page.select_option("[data-testid='video-engine-select']", "money-printer")
+        page.click("[data-testid='video-engine-apply']")
+
+        expect(page.locator("[data-testid='video-engine-error']")).to_contain_text("not ready")
+        expect(page.locator("[data-testid='video-engine-rollback']")).to_contain_text(
+            "Попередній движок збережено")
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text("Vertep Native")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_settings_video_engine_returns_to_native():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        current = {"config": _video_engine_state("money-printer", True, "ok",
+                                                 endpoint="http://runtime:8098")}
+        page.route("**/api/settings/video-engine*",
+                   lambda route: route.fulfill(json=current["config"]))
+
+        def _switch(route):
+            payload = route.request.post_data_json or {}
+            current["config"] = _video_engine_state(
+                payload.get("backend", "native"), True, "native_engine")
+            route.fulfill(json={
+                "slot": "video_engine", "backend": payload.get("backend"), "changed": True,
+                "env": "VERTEP_VIDEO_ENGINE", "matrix": {},
+                "effective_engine": current["config"],
+            })
+
+        page.route("**/api/settings/providers/video_engine", _switch)
+
+        page.goto(f"{BASE_URL}/settings?tab=video-engine")
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text("MoneyPrinterTurbo")
+        page.click("[data-testid='video-engine-return-native']")
+
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text("Vertep Native")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_settings_video_engine_is_locked_while_the_system_state_forbids_changes():
+    """A state that forbids configuration must not offer the change at all."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        page.route("**/api/settings/video-engine*", lambda route: route.fulfill(json={
+            **VIDEO_ENGINE_NATIVE, "system_state": "UPDATING", "change_allowed": False,
+        }))
+
+        page.goto(f"{BASE_URL}/settings?tab=video-engine")
+
+        expect(page.locator("[data-testid='video-engine-system-state']")).to_have_text("UPDATING")
+        expect(page.locator("[data-testid='video-engine-locked']")).to_contain_text("UPDATING")
+        expect(page.locator("[data-testid='video-engine-apply']")).to_be_disabled()
+        expect(page.locator("[data-testid='video-engine-select']")).to_be_disabled()
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_settings_video_engine_shows_a_mismatch_instead_of_hiding_it():
+    """A selection that is not effective must be visible, never silently replaced."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        page.route("**/api/settings/video-engine*", lambda route: route.fulfill(json={
+            **VIDEO_ENGINE_NATIVE, "selected": "money-printer", "agree": False,
+            "ready": False, "reason": "endpoint_missing",
+        }))
+
+        page.goto(f"{BASE_URL}/settings?tab=video-engine")
+
+        expect(page.locator("[data-testid='video-engine-selected']")).to_have_text("MoneyPrinterTurbo")
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text("Vertep Native")
+        expect(page.locator("[data-testid='video-engine-mismatch']")).to_be_visible()
+        expect(page.locator("[data-testid='video-engine-reason']")).to_contain_text("адресу")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
 def test_settings_security_renders_ok_state():
     """Issue #84: a healthy installation must render the localized 'ok' state and
     still show the effective detail rows."""
@@ -2262,6 +2486,180 @@ def test_real_backend_system_state_blocks_mutations():
             expect(page.get_by_test_id("create-job-button")).to_be_enabled(timeout=20000)
             allowed = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": ""}, headers=headers)
             assert allowed.status != 423, f"NORMAL job create was blocked: {allowed.status}"
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            _write_system_state("NORMAL", "Browser E2E teardown")
+            browser.close()
+
+
+# ── Issue #122 P8: video engine against a real backend ─────────────────────
+# Ці тести не мокують /api/settings/video-engine чи /api/settings/providers/*:
+# вони доводять, що екран показує саме той движок, який запущений CORE обрав для
+# себе, і що відмова застосування не лишає на екрані нічого, чого не відбулося.
+
+def _engine_state(page) -> dict:
+    response = page.request.get(f"{BASE_URL}/api/settings/video-engine")
+    assert response.status == 200, response.text()
+    return response.json()
+
+
+def test_real_backend_video_engine_shows_the_effective_executor():
+    """Відображений вибір дорівнює руху, який реально обрав процес."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+            page.goto(f"{BASE_URL}/settings?tab=video-engine")
+            expect(page.get_by_test_id("settings-video-engine")).to_be_visible(timeout=20000)
+            expect(page.get_by_test_id("video-engine-panel")).to_be_visible(timeout=20000)
+
+            config = _engine_state(page)
+            labels = {option["id"]: option["label"] for option in config["options"]}
+            assert labels["native"] == "Vertep Native"
+            assert labels["money-printer"] == "MoneyPrinterTurbo"
+            expect(page.get_by_test_id("video-engine-selected")).to_have_text(
+                labels[config["selected"]], timeout=20000)
+            expect(page.get_by_test_id("video-engine-effective")).to_have_text(
+                labels[config["effective"]], timeout=20000)
+            expect(page.get_by_test_id("video-engine-revision")).to_have_text(
+                config["config_revision"])
+
+            # Той самий engine має бути й у матриці активних бекендів: це те, що
+            # обрав процес, а не лише те, що надіслав браузер.
+            matrix = page.request.get(f"{BASE_URL}/api/settings/providers").json()["matrix"]
+            assert matrix["video_engine"]["selected"] == config["effective"]
+            if config["effective"] != "native":
+                assert matrix["video_engine"]["configured"] is True, (
+                    "an effective external engine that is not configured could not be "
+                    "what the screen shows"
+                )
+
+            # Перезавантаження не змінює показане: воно знову читає те саме API.
+            page.reload()
+            expect(page.get_by_test_id("video-engine-effective")).to_have_text(
+                labels[_engine_state(page)["effective"]], timeout=20000)
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            browser.close()
+
+
+def test_real_backend_video_engine_refuses_a_runtime_it_cannot_prove():
+    """Відмова застосування видима, а рух лишається тим, який був."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+            headers = _csrf_headers(page.context)
+            before = _engine_state(page)
+            # Адреса, яку ніхто не слухає: застосування мусить відмовититися.
+            page.goto(f"{BASE_URL}/settings?tab=video-engine")
+            expect(page.get_by_test_id("video-engine-panel")).to_be_visible(timeout=20000)
+            page.select_option("[data-testid='video-engine-select']", "money-printer")
+            page.fill("[data-testid='video-engine-endpoint']", "http://127.0.0.1:9/")
+            page.click("[data-testid='video-engine-apply']")
+
+            expect(page.get_by_test_id("video-engine-error")).to_be_visible(timeout=30000)
+            expect(page.get_by_test_id("video-engine-rollback")).to_contain_text(
+                "Попередній движок збережено")
+
+            after = _engine_state(page)
+            assert after["effective"] == before["effective"], \
+                "a refused apply must not change the effective engine"
+            assert after["config_revision"] == before["config_revision"]
+            labels = {option["id"]: option["label"] for option in after["options"]}
+            expect(page.get_by_test_id("video-engine-effective")).to_have_text(
+                labels[after["effective"]], timeout=20000)
+
+            # Той самий запит напряму: refusal, не мовчазливий Native.
+            refused = page.request.post(
+                f"{BASE_URL}/api/settings/providers/video_engine",
+                data={"backend": "money-printer", "endpoint": "http://127.0.0.1:9"},
+                headers=headers,
+            )
+            assert refused.status == 409, f"unprovable runtime returned {refused.status}"
+            assert _engine_state(page)["effective"] == before["effective"]
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            browser.close()
+
+
+def test_real_backend_viewer_cannot_change_the_video_engine():
+    """P8 RBAC: the engine controls are admin-only in the UI and in the API.
+
+    ``/settings`` is behind the existing admin guard, so a viewer is redirected away
+    instead of being offered the control; the API refuses the same switch even if the
+    request is made directly.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, VIEWER_USER, VIEWER_PASSWORD)
+            page.goto(f"{BASE_URL}/settings?tab=video-engine")
+            expect(page.get_by_test_id("settings-video-engine")).not_to_be_visible(timeout=20000)
+            assert "/settings" not in page.url, \
+                f"a viewer reached the admin settings screen: {page.url}"
+
+            before = _engine_state(page)
+            refused = page.request.post(
+                f"{BASE_URL}/api/settings/providers/video_engine",
+                data={"backend": "money-printer", "endpoint": "http://127.0.0.1:9"},
+                headers=_csrf_headers(page.context),
+            )
+            assert refused.status == 403, f"viewer engine switch returned {refused.status}"
+            after = _engine_state(page)
+            assert after["effective"] == before["effective"]
+            assert after["config_revision"] == before["config_revision"]
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            browser.close()
+
+
+def test_real_backend_system_state_locks_the_video_engine():
+    """Системний стан, що забороняє конфігурацію, блокує і цей екран."""
+    if not E2E_STATE_DIR:
+        pytest.skip("VERTEP_E2E_STATE_DIR is not set: the running CORE state store "
+                    "cannot be addressed from the isolated test process")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+            headers = _csrf_headers(page.context)
+            _write_system_state("READ_ONLY", "Browser E2E video engine lock")
+            try:
+                blocked = page.request.post(
+                    f"{BASE_URL}/api/settings/providers/video_engine",
+                    data={"backend": "money-printer", "endpoint": "http://127.0.0.1:9"},
+                    headers=headers,
+                )
+                assert blocked.status == 423, blocked.text()
+                page.goto(f"{BASE_URL}/settings?tab=video-engine")
+                expect(page.get_by_test_id("video-engine-locked")).to_be_visible(timeout=20000)
+                expect(page.get_by_test_id("video-engine-apply")).to_be_disabled()
+                assert _engine_state(page)["change_allowed"] is False
+            finally:
+                _write_system_state("NORMAL", "Browser E2E restored")
+            # UI reads the system state while the app initialises, so the restore is
+            # made deterministic by reloading after a short pause.
+            page.wait_for_timeout(500)
+            page.reload()
+            expect(page.get_by_test_id("video-engine-locked")).not_to_be_visible(timeout=20000)
+            restored = _engine_state(page)
+            assert restored["change_allowed"] is True
+            assert restored["system_state"] == "NORMAL"
+            allowed = page.request.post(
+                f"{BASE_URL}/api/settings/providers/video_engine",
+                data={"backend": "native"},
+                headers=headers,
+            )
+            assert allowed.status != 423, f"NORMAL engine switch was blocked: {allowed.status}"
             _assert_no_js_errors(page_errors, console_errors)
         finally:
             _write_system_state("NORMAL", "Browser E2E teardown")

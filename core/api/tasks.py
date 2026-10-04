@@ -145,9 +145,13 @@ def claim_task(payload: TaskClaim, request: Request):
             return {"task": task}
         if task.get("task") == "assembly":
             version = job.assembly_task_ids.get(task.get("task_id")) if job else None
-            if version is None or job.status not in {JobStatus.ASSEMBLY, JobStatus.VIDEO_GENERATION}:
+            if (version is None or job.assembly_task_id != task.get("task_id")
+                    or job.status not in {JobStatus.ASSEMBLY, JobStatus.VIDEO_GENERATION}):
                 # The attempt was cancelled, superseded or already imported: the
                 # task is dropped instead of being executed by some other node.
+                # A superseded attempt is dropped too: it is still mapped to a version,
+                # but its render would be refused on import, so no node may spend an
+                # upstream render on it (Issue #122 P5/P6/P9).
                 task_queue.ack(task["task_id"])
                 continue
             if job.assembly_cancel_requested:

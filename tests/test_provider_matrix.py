@@ -82,16 +82,34 @@ def test_provider_matrix_compute_comfyui_configured(monkeypatch):
 def test_provider_matrix_video_engine(monkeypatch):
     _clean(monkeypatch)
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
-    # No render URL → native fallback, not configured.
+    # No render URL → the selection stays money-printer and is reported as not
+    # configured. Reporting "native" here would hide the selection and let the job be
+    # assembled by an engine nobody chose (Issue #122 §9.12).
     matrix = provider_matrix()
-    assert matrix["video_engine"]["backend"] == "native"
+    assert matrix["video_engine"]["backend"] == "money-printer"
+    assert matrix["video_engine"]["selected"] == "money-printer"
     assert matrix["video_engine"]["configured"] is False
 
     monkeypatch.setenv("MONEY_PRINTER_URL", "http://mp:8080")
     assert provider_matrix()["video_engine"]["backend"] == "money-printer"
 
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "shortgpt")
-    assert provider_matrix()["video_engine"]["backend"] == "native"
+    assert provider_matrix()["video_engine"]["backend"] == "shortgpt"
+
+
+def test_a_selected_external_engine_is_never_substituted_by_native(monkeypatch):
+    """A selected engine is refused at render time, not quietly replaced by Native."""
+    from adapters.providers import _make_video_engine
+
+    _clean(monkeypatch)
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
+    assert _make_video_engine().engine_id == "money-printer"
+
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "shortgpt")
+    assert _make_video_engine().engine_id == "shortgpt"
+
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "")
+    assert _make_video_engine().engine_id == "native"
 
 
 def test_provider_matrix_tts_backend_switch(monkeypatch):

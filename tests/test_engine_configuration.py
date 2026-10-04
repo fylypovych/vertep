@@ -247,3 +247,162 @@ def test_the_persisted_choice_is_reproduced_after_a_restart(registry, monkeypatc
 
     assert providers_module.providers.video_engine().engine_id == "money-printer"
     assert load_provider_overrides()["VERTEP_VIDEO_ENGINE"] == "money-printer"
+
+
+# ---------------------------------------------------------------------------
+# P8: the read model Settings renders
+# ---------------------------------------------------------------------------
+
+
+def test_the_read_model_names_both_engines_and_lists_the_required_fields(registry, monkeypatch):
+    registry["engine"] = _Runtime(ready=True)
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://user:pass@runtime:8098/internal?token=s3cret")
+    monkeypatch.delenv("MONEY_PRINTER_TOKEN", raising=False)
+
+    config = engine_config.effective_engine_config()
+
+    labels = {option["id"]: option["label"] for option in config["options"]}
+    assert labels["native"] == "Vertep Native"
+    assert labels["money-printer"] == "MoneyPrinterTurbo"
+
+    fields = {field["name"]: field for field in config["fields"]}
+    assert set(fields) == {"endpoint", "token"}
+    assert fields["endpoint"]["env"] == "MONEY_PRINTER_URL"
+    assert fields["endpoint"]["configured"] is True
+    assert fields["endpoint"]["value"] == "http://runtime:8098", \
+        "the reported endpoint must be an identity, not the raw value"
+    assert fields["token"]["env"] == "MONEY_PRINTER_TOKEN"
+    assert fields["token"]["configured"] is False
+    assert fields["token"]["value"] is None, "a secret value must never be reported"
+    serialized = json.dumps(config)
+    assert "pass" not in serialized and "s3cret" not in serialized
+
+
+def test_the_read_model_reports_the_current_system_state_and_its_change_permission(
+    registry, monkeypatch
+):
+    from core.system_state import SystemState, get_system_state, set_system_state
+
+    registry["engine"] = _Native()
+    previous = get_system_state()["state"]
+    try:
+        config = engine_config.effective_engine_config()
+        assert config["system_state"] == previous
+        assert config["change_allowed"] is True
+
+        set_system_state(SystemState.UPDATING, "test rollout")
+        blocked = engine_config.effective_engine_config()
+        assert blocked["system_state"] == "UPDATING"
+        assert blocked["change_allowed"] is False
+    finally:
+        set_system_state(previous, "test restore")
+
+
+def test_the_read_model_exposes_no_secret_value(registry, monkeypatch):
+    registry["engine"] = _Runtime(ready=True)
+    monkeypatch.setenv("MONEY_PRINTER_TOKEN", "super-secret-token")
+
+    config = engine_config.effective_engine_config()
+
+    assert config["secret"]["env"] == "MONEY_PRINTER_TOKEN"
+    assert "super-secret-token" not in json.dumps(config)
+
+
+def test_the_read_model_lists_the_inputs_of_every_engine_not_only_the_effective_one(
+    registry, monkeypatch
+):
+    """Settings must be able to fill in an engine that is not effective yet."""
+    registry["engine"] = _Native()
+    monkeypatch.setenv("MONEY_PRINTER_URL", "")
+    monkeypatch.delenv("MONEY_PRINTER_TOKEN", raising=False)
+
+    config = engine_config.effective_engine_config()
+
+    assert config["effective"] == "native"
+    assert config["fields"] == [], "Vertep Native needs no external runtime"
+    external = {field["name"]: field for field in config["required_fields"]["money-printer"]}
+    assert external["endpoint"]["configured"] is False
+    assert external["token"]["configured"] is False
+    assert set(config["required_fields"]) == {option["id"] for option in config["options"]}
+
+
+# ---------------------------------------------------------------------------
+# P8: the endpoint can be given through the same apply → verify → rollback flow
+# ---------------------------------------------------------------------------
+
+
+def _written_overrides() -> dict[str, str]:
+    """The overrides as they are actually persisted.
+
+    :func:`core.provider_switch.load_provider_overrides` applies them to ``os.environ``
+    on load, so an env-only value is indistinguishable from a persisted one afterwards.
+    P8 has to prove what survives a restart, which is exactly what the file holds.
+    """
+    import json as _json
+    from core.provider_switch import _overrides_path
+
+    raw = _json.loads(_overrides_path().read_text(encoding="utf-8"))
+    return dict(raw.get("overrides") or raw)
+
+
+def test_an_endpoint_applied_together_with_the_engine_is_persisted_and_reported(
+    registry, monkeypatch
+):
+    monkeypatch.setenv("MONEY_PRINTER_URL", "")
+    monkeypatch.delenv("MONEY_PRINTER_TOKEN", raising=False)
+    registry["engine"] = _Runtime(ready=True)
+
+    result = switch_provider("video_engine", "money-printer", actor="test",
+                             endpoint="http://runtime:8098")
+
+    assert result["changed"] is True
+    assert result["effective_engine"]["effective"] == "money-printer"
+    overrides = _written_overrides()
+    assert overrides["VERTEP_VIDEO_ENGINE"] == "money-printer"
+    assert overrides["MONEY_PRINTER_URL"] == "http://runtime:8098"
+
+
+def test_a_refused_apply_rolls_the_endpoint_back_as_well(registry, monkeypatch):
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://runtime:8098")
+    registry["engine"] = _Runtime(ready=False)
+    before = engine_config.effective_engine_config()
+
+    with pytest.raises(ProviderSwitchError):
+        switch_provider("video_engine", "money-printer", actor="test",
+                        endpoint="http://other:9000")
+
+    assert "MONEY_PRINTER_URL" not in _written_overrides()
+    after = engine_config.effective_engine_config()
+    assert after["effective"] == before["effective"]
+    assert after["config_revision"] == before["config_revision"]
+
+
+@pytest.mark.parametrize("endpoint", [
+    "http://user:password@runtime:8098",   # credentials in the URL
+    "http://runtime:8098/internal",       # a path is not an origin
+    "http://runtime:8098?token=secret",   # a query is not an origin
+    "ftp://runtime",                      # not an HTTP runtime
+    "runtime:8098",                        # no scheme
+    "",                                   # empty
+])
+def test_an_endpoint_that_could_carry_a_secret_or_is_not_an_origin_is_refused(
+    registry, monkeypatch, endpoint
+):
+    monkeypatch.setenv("MONEY_PRINTER_URL", "")
+    registry["engine"] = _Runtime(ready=True)
+
+    with pytest.raises(ProviderSwitchError) as refusal:
+        switch_provider("video_engine", "money-printer", actor="test", endpoint=endpoint)
+
+    assert refusal.value.status_code == 422
+    assert "MONEY_PRINTER_URL" not in load_provider_overrides()
+    assert "VERTEP_VIDEO_ENGINE" not in load_provider_overrides()
+
+
+def test_native_has_no_endpoint_to_give(registry, monkeypatch):
+    registry["engine"] = _Native()
+
+    with pytest.raises(ProviderSwitchError) as refusal:
+        switch_provider("video_engine", "native", actor="test", endpoint="http://runtime:8098")
+
+    assert refusal.value.status_code == 422

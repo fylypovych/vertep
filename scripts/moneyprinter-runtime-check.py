@@ -277,6 +277,44 @@ def verify_self_test(self_test: dict) -> None:
         raise CheckFailure(
             f"self-test passed with an undecodable media file: {media!r}"
         )
+    # §9.3 rows 2–4 and 8 are the runtime's own responsibility: materials arrive as
+    # pre-cut clips in scene order, each carrying its approved scene duration, and the
+    # compose uses the job aspect. A self-test that no longer proves the timeline would
+    # let a runtime that reorders or re-times scenes pass the gate unnoticed.
+    scenes = media.get("scenes") or []
+    expected_order = media.get("expected_scene_order") or []
+    if not scenes or not expected_order:
+        raise CheckFailure(
+            f"self-test passed without a proven scene timeline: {media!r}"
+        )
+    if [scene.get("label") for scene in scenes] != expected_order:
+        raise CheckFailure(
+            f"pinned compose rendered scenes out of order: "
+            f"{[scene.get('label') for scene in scenes]} != {expected_order}"
+        )
+    if media.get("scene_order") != expected_order:
+        raise CheckFailure(
+            f"self-test reported a different scene order than it measured: "
+            f"{media.get('scene_order')!r} != {expected_order!r}"
+        )
+    for scene in scenes:
+        if not scene.get("seconds") or not scene.get("at_seconds"):
+            raise CheckFailure(f"scene timeline entry has no duration: {scene!r}")
+        if scene["at_seconds"] <= 0 or scene["at_seconds"] >= media["duration_seconds"]:
+            raise CheckFailure(
+                f"scene {scene.get('label')!r} lies outside the rendered timeline: {scene!r}"
+            )
+        drift = max(
+            abs(actual - expected)
+            for actual, expected in zip(scene.get("mean_colour") or [],
+                                       scene.get("expected_colour") or [])
+        ) if scene.get("mean_colour") and scene.get("expected_colour") else None
+        if drift is None or drift > 48:
+            raise CheckFailure(
+                f"scene {scene.get('label')!r} does not match its approved clip: {scene!r}"
+            )
+    if not media.get("aspect") or not media.get("fit_mode"):
+        raise CheckFailure(f"self-test did not report the compose aspect/fit mode: {media!r}")
 
 
 # Markers of a setting that can make the pinned runtime publish on its own: an enable
