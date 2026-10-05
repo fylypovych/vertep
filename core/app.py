@@ -1719,7 +1719,7 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
     if source_chat_id is not None and source_chat_id != chat_id:
         if action in {"vid_ok", "vid_reject", "vid_edit", "vid_regen"}:
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: chat не є власником job")
-    from .pipeline import approve_video, request_video_revision
+    from .pipeline import approve_video, claim_video_regeneration, request_video_revision
     try:
         if action == "vid_ok":
             job = approve_video(store, job, f"telegram:{chat_id}",
@@ -1742,6 +1742,12 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
             elif job.status != JobStatus.VIDEO_REVISION_REQUESTED:
                 text = f"Неможливо перегенерувати (status={job.status.value})"
                 return TelegramAdapter().answer_callback(callback_id, text)
+            # Issue #82: the claim is taken atomically under the store lock before
+            # dispatch, so two concurrent callbacks admit exactly one render.
+            try:
+                claim_video_regeneration(store, job, f"telegram:{chat_id}")
+            except ValueError:
+                return TelegramAdapter().answer_callback(callback_id, "🔄 Відео вже генерується")
             executor.submit(_finalize_video_regenerate, job)
             text = "🔄 Перегенеровую відео…"
         elif action == "vid_reject":
@@ -1760,7 +1766,12 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
 
 
 def _finalize_video_regenerate(job) -> None:
-    """Re-run assembly for video revision using registered scene artifacts."""
+    """Re-run assembly for video revision using registered scene artifacts.
+
+    The claim taken before dispatch is released on *every* exit path — success,
+    refusal, no inputs and failure — so a finished or aborted render can never
+    leave the Job permanently blocked for regeneration (Issue #82).
+    """
     try:
         from .pipeline import finalize_job_safe
         job = store.jobs.get(job.job_id)
@@ -1789,6 +1800,15 @@ def _finalize_video_regenerate(job) -> None:
             with store.lock:
                 job.video_regenerating = False
             _notify_video_regeneration(job, f"❌ Помилка перегенерування {job.job_id}: {error}")
+        except Exception:
+            pass
+    finally:
+        # Success path included: the claim is a per-attempt lease, not a state.
+        try:
+            from .pipeline import release_video_regeneration
+            current = store.jobs.get(job.job_id)
+            if current is not None:
+                release_video_regeneration(store, current)
         except Exception:
             pass
 

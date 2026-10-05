@@ -2,11 +2,26 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.41
+- `core/api/jobs.py`, `core/app.py`, `core/pipeline.py`: Issue #82 — atomic claim/release для video regeneration; lease займається перед dispatch і звільняється на кожному exit path, тому паралельні рендери не допускаються, а завершений рендер не блокує Job.
+- `tests/test_video_regeneration_claim.py`, `tests/media_harness.py`: додано перевірку persistence-safe regeneration lease — успішний рендер звільняє claim, concurrent claim відхиляється, CORE restart звільняє stale claim, cancel під час рендеру не реєструє артефакт.
+- `tests/test_full_media_harness.py`: оновлено harness під новий claim/release contract.
+- `services/moneyprinter_service.py`: чистий Python radix-2 FFT з `0.0.2.39` замінено на `np.fft.rfft`/`rfftfreq` (лінивий імпорт у функції); обчислення RMS також перейшло на NumPy.
+- `tests/test_moneyprinter_runtime.py`: тестові PCM-дані для перевірки озвучки знову використовують NumPy.
+- Виправлено download URL self-test MoneyPrinter: прибрано зайвий префікс `tasks/`, який спричиняв HTTP 404 у CI.
+- Виправлено media harness: запуск Telegram job, перевірку chat ownership, revision до схвалення відео, порядок аргументів генерації та перевірку SHA256 версій.
+- Додано NumPy до загальних залежностей для перевірок частоти та RMS у CI й release tests.
+- Уточнено документальну історію версій у CHANGELOG та нотатках 0.0.2.40 без зміни Git history.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.40
+## ОРИГІНАЛЬНА НАЗВА: 0.0.2.39
+- Виправлено шлях завантаження MPT output: `parse_output_reference()` прибирає початковий `tasks/`, щоб download endpoint отримував `{task_id}/{filename}`.
+- Оновлено regression test нормалізації upstream output references.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.39
-- `adapters/providers/video_engines.py`: `RemoteVideoEngine.parse_output_reference` тепер стриже erroneous leading `tasks/` prefix, який додає pinned upstream `_task_file_to_uri`; download endpoint очікує `{task_id}/{filename}` (без `tasks/`), тому wrapper будує правильний URL і CI submit/combine route більше не падає на 404 "file does not exist" для real pinned MPT container.
-- `tests/test_video_engines.py`: `test_parse_output_reference_normalises_task_scoped_paths` перевіряє нову нормалізацію `tasks/{task_id}/{filename}` → `{task_id}/{filename}`.
-- `services/moneyprinter_service.py`: вимір домінантної частоти й RMS озвучки більше не імпортує NumPy — PCM s16 декодується через `array`, а спектр рахується власним радикс-2 FFT (`_magnitude_spectrum`), тож gate затвердженого голосу 440 Гц працює там, де NumPy не встановлено (CI, unit-тести), а не лише у pinned runtime; відмова, яка працює тільки з необов'язковою залежністю, не є відмовою.
-- `tests/test_moneyprinter_runtime.py`: тест маршруту озвучки генерує speech-like PCM чистим Python замість NumPy, тож три тести gate озвучки більше не падають із `ModuleNotFoundError` у середовищі без NumPy.
+## ОРИГІНАЛЬНА НАЗВА: Fix CI failure: replace numpy-dependent spectrum analysis with pure-Python FFT
+- Прибрано залежність перевірки частоти та RMS озвучки від NumPy: PCM s16 декодується через `array`, спектр обчислюється реалізацією radix-2 FFT на Python.
+- Тестові PCM-дані для перевірки озвучки генеруються без NumPy.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.38
 - `adapters/providers/base.py`: додано контракт `FIXED_SUBMIT_FIELDS` — увесь фіксований набір submit полів §9.4, а не лише ті, з яких можна запустити задачу. Pinned request model ігнорує невідомі ключі, тому перейменований або вилучений compose-поле (`video_fit_mode`, `video_concat_mode`, швидкість кліпу, кількість потоків) не ламало б submit: runtime тихо склав би рендер зі своїми дефолтами, а Vertep вважав би затверджений контракт виконаним. Тепер кожне поле, яке надсилає bridge, доводиться проти pinned schema, а readiness gate відмовляє runtime, який не довів їх усі (§9.4, §9.12).
@@ -289,6 +304,9 @@
 - Issue #106: відновлено Angular routes і шаблони Web UI, виправлено endpoint інтеграцій у proxy-середовищі та повернуто успішну production-збірку.
 - Перевірено повний Python regression, update/security/fleet/recovery сценарії, Web UI contracts та Angular production build.
 
+## ПРАВИЛЬНА НАЗВА: 0.0.1.98
+- Оновлено Angular routes, компоненти та Settings; додано HTTP interceptors для помилок і loading state, сервіс стану завантаження та відповідні зміни UI-тестів.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.97
 - Issue #79: Міграція web-v2 з VertepApiService на domain clients — 8 нових сервісів (AuthApiService, LogsApiService, SettingsApiService, SecurityApiService, SystemApiService, WorkersApiService, JobsApiService, ResourcesApiService + QueueApiService).
 - Видалено `VertepApiService` (facade ~618 рядків), main bundle: 223 kB → 205 kB.
@@ -320,6 +338,9 @@
 - i.0.0.0.72 Task 1: Audio contract/checksum обов'язковий — `_persist_tts_contract` відхиляє відсутній contract та sha256; pre-validation у `tasks.py` reject TTS results без contract/provider/voice; duplicate result обробляється ідемпотентно.
 - i.0.0.0.72 Task 2: Controlled TTS lifecycle — `TTS_GENERATING`/`TTS_READY` додані до restart recovery set; `_pending_voice_scenes` включає PENDING сцени для коректного re-dispatch; tests: cancel, pause, duplicate, worker loss, restart recovery, metadata flow.
 - Тести: 15 acceptance-тестів (`test_voice_acceptance.py`), оновлено generation gate allowlist та `test_features.py` для контракту.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.1.91
+- Розширено Telegram system callbacks, звітування стану та self-test; додано перевірки системних операцій і захист повторного підтвердження відео.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.1.90
 - i.0.0.0.70: CORE isolation — вилучено LOCAL_WORKER_FALLBACK paths для Text/Storyboard/Publisher.

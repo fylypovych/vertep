@@ -24,7 +24,7 @@ from ..dispatcher import can_retry
 from ..file_validation import validate_signature
 from ..models import JobCreate, JobStatus, JobUpdate, StageName, StageStatus
 from ..orchestration import initialize_plan, transition_stage
-from ..pipeline import approve_script, approve_video, generate_script, queue_storyboard, regenerate_script, regenerate_video, request_script_revision, request_video_revision
+from ..pipeline import approve_script, approve_video, claim_video_regeneration, generate_script, queue_storyboard, regenerate_script, regenerate_video, release_video_regeneration, request_script_revision, request_video_revision
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state, jobs_may_be_created
 from .job_helpers import (_job_action, _job_is_due,
@@ -362,9 +362,21 @@ def regenerate_video_endpoint(job_id: str, body: ScriptAction | None = None):
         job = request_video_revision(store, job, "regenerate", actor)
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
+    # Issue #82: the regeneration attempt is claimed atomically before dispatch
+    # and released by the shared regeneration function on every exit path, so a
+    # duplicate request cannot start a parallel render and a finished render
+    # cannot leave the Job blocked.
+    try:
+        job = claim_video_regeneration(store, job, actor)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
     # Submit real regeneration (shared path with Telegram)
     from core.app import _finalize_video_regenerate
-    executor.submit(_finalize_video_regenerate, job)
+    try:
+        executor.submit(_finalize_video_regenerate, job)
+    except Exception as error:
+        release_video_regeneration(store, job)
+        raise HTTPException(500, f"Could not dispatch regeneration: {error}") from error
     return job
 
 

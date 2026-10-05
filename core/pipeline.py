@@ -65,6 +65,17 @@ class JobStore:
             try:
                 job = loaded_job
                 original_status = job.status
+                # Issue #82: a regeneration claim is a per-attempt lease held by an
+                # in-process render thread. No such thread survives a CORE restart,
+                # so a persisted claim is stale by definition and is released on
+                # load; otherwise Telegram/Web would refuse every later attempt.
+                if job.video_regenerating:
+                    job.video_regenerating = False
+                    job.events.append(f"{utc_now()} STALE VIDEO REGENERATION CLAIM RELEASED")
+                    job.event_log.append(JobEvent(
+                        message="STALE VIDEO REGENERATION CLAIM RELEASED",
+                        type="status", state=original_status.value))
+                    self.repository.save_job(job)
                 if original_status == JobStatus.PUBLISHING:
                     job.status = JobStatus.READY
                     job.events.append(f"{utc_now()} PUBLISHING INTERRUPTED; RETURNED TO READY")
@@ -432,6 +443,38 @@ def request_video_revision(store: JobStore, job: Job, revision: str, actor: str 
     return regenerate_script(store, job, revision=text)
 
 
+def claim_video_regeneration(store: JobStore, job: Job, actor: str = "api") -> Job:
+    """Reserve the single regeneration attempt slot of a Job (Issue #82).
+
+    The claim is taken *before* the render is submitted and is persisted, so a
+    second concurrent request — Web, Telegram or retry — is refused instead of
+    starting a parallel render that would race on the same version number. The
+    claim is released by :func:`release_video_regeneration` and by CORE restart
+    (an in-flight render thread never survives a restart, so a persisted claim
+    is stale by definition).
+    """
+    with store.lock:
+        if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
+            raise ValueError(f"Cannot regenerate video in status {job.status.value}")
+        if job.video_regenerating:
+            raise ValueError("Video regeneration already in progress")
+        job.video_regenerating = True
+        store._save(job)
+        store.event(job, f"VIDEO REGENERATION CLAIMED by {actor}")
+    return job
+
+
+def release_video_regeneration(store: JobStore, job: Job) -> Job:
+    """Release the regeneration claim on every exit path, success included."""
+    with store.lock:
+        if not job.video_regenerating:
+            return job
+        job.video_regenerating = False
+        store._save(job)
+        store.event(job, "VIDEO REGENERATION CLAIM RELEASED")
+    return job
+
+
 def regenerate_video(store: JobStore, job: Job) -> Job:
     """Re-run assembly after video revision request."""
     if job.status != JobStatus.VIDEO_REVISION_REQUESTED:
@@ -615,6 +658,23 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     )
     if subtitles:
         register_artifact(job, store.root, subtitles, "subtitles", workflow="srt")
+    # Issue #82: the render can take minutes, so a pause/cancel accepted while it
+    # runs must win over the result. Re-reading the persisted state under the lock
+    # closes the window between the entry check and the version registration —
+    # otherwise a cancelled Job would be resurrected as VIDEO_PENDING_APPROVAL.
+    with store.lock:
+        superseded = job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}
+    if superseded:
+        try:
+            output.unlink(missing_ok=True)
+        except OSError:
+            pass
+        transition_stage(job, StageName.ASSEMBLY, StageStatus.CANCELLED,
+                         "render superseded by pause/cancel")
+        store.event(job, f"ASSEMBLY RESULT DISCARDED (v{next_version}): "
+                         f"job is {job.status.value} — no version registered")
+        release_video_regeneration(store, job)
+        return job
     register_artifact(job, store.root, output, "video", workflow="ffmpeg")
     job.video_engine_snapshot = {
         "engine_id": "native",

@@ -1,267 +1,168 @@
-"""Issue #82 — Disposable First Run→Text/Voice/GPU/Publisher E2E harness.
+"""Issue #82 вЂ” disposable First Runв†’Text/Voice/GPU/Publisher acceptance harness.
 
-This test provides evidence for the complete media acceptance contract:
-- Persistence-safe regeneration/result/cancel/retry/dedup during render
-- Disposable First Run→CORE/storage/queue→controlled Text/Voice/GPU/Publisher
-- Failure/lease/stale/duplicate/cancel/partial publish/restart checkpoints
-- Shared backup/update smoke
-- CI report SHA/config/expected-actual/artifacts/receipts
+Every test drives the real control plane: the FastAPI app, the real task queue
+with leases, the real CORE result/receipt boundaries and the real disk-backed
+persistence. Only generators and external providers are replaced (LLM, GPU
+compute, TTS HTTP runtime, FFmpeg binary, publishing platform) вЂ” see
+``tests/media_harness.py``. No test sets a job status directly to reach a
+conclusion.
 
-The harness uses structural tests that verify the orchestration layer
-without requiring async queues or external services.
+Declared acceptance rows (also consumed by ``scripts/media-acceptance-report.py``):
+
+* ``first_run``      вЂ” First Runв†’CORE/storage/queueв†’controlled Text/Voice/GPU/Publisher
+* ``approval_loops`` вЂ” script/storyboard/video approval and two video revision loops
+* ``telegram_flow``  вЂ” Telegram-sourced Job, chat-bound approval and sandbox receipt
+* ``partial_publish``вЂ” partial publish receipts, bounded retry, receipt correlation
+* ``dedup``          вЂ” duplicate regeneration refused while a render claim is held
+* ``cancel``         вЂ” cancel during render discards the result, no version registered
+* ``stale_result``   вЂ” late worker result after cancel is refused
+* ``lease``          вЂ” expired lease requeues the task and fences the stale result
+* ``restart``        вЂ” restart replays the Job, releases a stale claim, keeps approval
+* ``backup_update``  вЂ” backup snapshot receipt import and update-agent smoke
+* ``evidence``       вЂ” CI evidence: SHA-anchored artifacts and receipts
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import os
+import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
-from core.models import JobStatus, VideoVersion
-from core.pipeline import JobStore
-from core.repository import FileRepository
-
-
-class TestFullMediaHarness:
-    """Disposable First Run→Text/Voice/GPU/Publisher E2E harness."""
-
-    @pytest.fixture
-    def temp_store(self, tmp_path):
-        """Create a temporary JobStore with FileRepository."""
-        root = tmp_path / "jobs"
-        root.mkdir(parents=True, exist_ok=True)
-        return JobStore(root=str(root), repository=FileRepository(root))
-
-    def test_persistence_across_restart(self, tmp_path):
-        """Verify job state survives CORE restart."""
-        root = tmp_path / "jobs"
-        root.mkdir(parents=True, exist_ok=True)
-
-        # Create store and job
-        store1 = JobStore(root=str(root), repository=FileRepository(root))
-        job = store1.create(
-            topic="Restart test",
-            character_id="test_char",
-            priority=5,
-            source="web",
-            task_type="image",
-            brand_id="brand01",
-        )
-
-        job_id = job.job_id
-        status_before = job.status
-
-        # Simulate restart: create new store over same root
-        store2 = JobStore(root=str(root), repository=FileRepository(root))
-        loaded_job = store2.jobs.get(job_id)
-
-        assert loaded_job is not None
-        assert loaded_job.job_id == job_id
-        assert loaded_job.status == status_before
-        assert loaded_job.topic == "Restart test"
-
-    def test_failure_checkpoint_during_render(self, temp_store):
-        """Failure checkpoint: render failure should not corrupt job state."""
-        job = temp_store.create(
-            topic="Failure test",
-            character_id="test_char",
-            priority=5,
-            source="web",
-            task_type="image",
-            brand_id="brand01",
-        )
-
-        # Simulate failure by setting status to FAILED
-        temp_store.update(job, JobStatus.FAILED, "Render failed (structural test)")
-
-        # Job should still be in a valid state, not corrupted
-        loaded = temp_store.jobs.get(job.job_id)
-        assert loaded is not None
-        assert loaded.job_id == job.job_id
-        assert loaded.status == JobStatus.FAILED
-
-    def test_duplicate_render_dedup(self, temp_store):
-        """Duplicate render dedup: second render with same inputs should be deduped."""
-        job = temp_store.create(
-            topic="Dedup test",
-            character_id="test_char",
-            priority=5,
-            source="web",
-            task_type="image",
-            brand_id="brand01",
-        )
-
-        # Set first version
-        job.video_versions = [
-            VideoVersion(
-                version=1,
-                path="final/video-v1.mp4",
-                sha256="abc123",
-                approved=False
-            )
-        ]
-        job.active_video_version = 1
-        temp_store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, "VIDEO PENDING APPROVAL")
-
-        # Attempt second render with same inputs (structural test)
-        job.video_versions.append(
-            VideoVersion(
-                version=2,
-                path="final/video-v2.mp4",
-                sha256="def456",
-                approved=False
-            )
-        )
-        job.active_video_version = 2
-        temp_store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, "VIDEO PENDING APPROVAL v2")
-
-        # Verify both versions are tracked (implementation-dependent)
-        assert len(job.video_versions) == 2
-        assert job.active_video_version == 2
-
-    def test_cancel_during_generation(self, temp_store):
-        """Cancel checkpoint: job cancellation during generation should be clean."""
-        job = temp_store.create(
-            topic="Cancel test",
-            character_id="test_char",
-            priority=5,
-            source="web",
-            task_type="image",
-            brand_id="brand01",
-        )
-
-        # Cancel immediately (structural test)
-        temp_store.update(job, JobStatus.CANCELLED, "CANCELLED (structural test)")
-
-        loaded = temp_store.jobs.get(job.job_id)
-        assert loaded is not None
-        assert loaded.status == JobStatus.CANCELLED
-
-    def test_partial_publish_recovery(self, temp_store):
-        """Partial publish: if one channel fails, others should continue."""
-        job = temp_store.create(
-            topic="Partial publish test",
-            character_id="test_char",
-            priority=5,
-            source="web",
-            task_type="image",
-            brand_id="brand01",
-        )
-
-        # Set job as READY with approved video
-        job.status = JobStatus.READY
-        job.active_video_version = 1
-        job.video_versions = [
-            SimpleNamespace(
-                version=1,
-                path="final/video-v1.mp4",
-                sha256="abc123",
-                approved=True
-            )
-        ]
-        temp_store.update(job, JobStatus.READY, "READY")
-
-        # Simulate partial publish status (structural test)
-        temp_store.update(job, JobStatus.PUBLISHING, "PUBLISHING (partial)")
-
-        # Job should handle partial failure gracefully
-        loaded = temp_store.jobs.get(job.job_id)
-        assert loaded is not None
-        assert loaded.job_id == job.job_id
-        assert loaded.status == JobStatus.PUBLISHING
-
-    def test_lease_expiry_recovery(self, temp_store):
-        """Lease expiry: stale lease should be recoverable."""
-        job = temp_store.create(
-            topic="Lease test",
-            character_id="test_char",
-            priority=5,
-            source="web",
-            task_type="image",
-            brand_id="brand01",
-        )
-
-        # Simulate lease expiry (structural test) - just verify job state changes
-        temp_store.update(job, JobStatus.ASSET_GENERATION, "ASSET GENERATION")
-        temp_store.update(job, JobStatus.NEW, "LEASE EXPIRED; RESTARTED")
-
-        loaded = temp_store.jobs.get(job.job_id)
-        assert loaded is not None
-        assert loaded.job_id == job.job_id
-        assert loaded.status == JobStatus.NEW
-
-    def test_stale_result_rejection(self, temp_store):
-        """Stale result: late result after cancellation should be rejected."""
-        job = temp_store.create(
-            topic="Stale test",
-            character_id="test_char",
-            priority=5,
-            source="web",
-            task_type="image",
-            brand_id="brand01",
-        )
-
-        # Cancel job (structural test)
-        temp_store.update(job, JobStatus.CANCELLED, "CANCELLED (structural test)")
-
-        # Simulate late result arriving (structural test)
-        # System should reject result for CANCELLED job
-        loaded = temp_store.jobs.get(job.job_id)
-        assert loaded is not None
-        assert loaded.status == JobStatus.CANCELLED
+from core.app import app
+from core.models import JobStatus
+from core.state import store, task_queue
+from tests import media_harness as harness
 
 
-class TestBackupUpdateSmoke:
-    """Shared backup/update smoke checkpoint."""
-
-    def test_update_agent_skip_drain(self):
-        """Update agent should accept --skip-drain flag."""
-        import sys
-        from pathlib import Path
-
-        update_script = Path("scripts/update-agent.py")
-        if not update_script.exists():
-            pytest.skip("update-agent.py not found")
-
-        result = pytest.importorskip("subprocess").run(
-            [sys.executable, str(update_script), "--help"],
-            capture_output=True, text=True, check=True
-        )
-        assert "--skip-drain" in result.stdout
+@pytest.fixture
+def client():
+    return TestClient(app, raise_server_exceptions=False)
 
 
-class TestCIReport:
-    """CI report SHA/config/expected-actual/artifacts/receipts."""
+@pytest.fixture
+def fleet(client, monkeypatch, tmp_path):
+    """Disposable installation: characters, node fleet and generator stubs."""
+    harness.reset_counters()
+    harness.register_fleet(client, characters_root=tmp_path / "characters",
+                           character_id="harnesschar", monkeypatch=monkeypatch)
+    return client
 
-    def test_report_git_sha(self):
-        """Report should include current Git SHA."""
-        import subprocess
-        try:
-            sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                stderr=subprocess.DEVNULL,
-                text=True
-            ).strip()
-            assert len(sha) == 40  # SHA-1 length
-        except subprocess.CalledProcessError:
-            pytest.skip("Not in git repository")
 
-    def test_report_config_snapshot(self):
-        """Report should capture configuration snapshot."""
-        config_file = Path("config/node_roles.json")
-        if not config_file.exists():
-            pytest.skip("node_roles.json not found")
+def _run_to_video(client, monkeypatch, job_id: str, *, revision: str | None = None,
+                  min_version: int = 1) -> dict:
+    """Script в†’ storyboard в†’ images в†’ TTS в†’ render, through the real boundaries."""
+    harness.approve_script(client, job_id, revision=revision)
+    harness.generate_assets(client, job_id, monkeypatch)
+    return harness.wait_for_video(client, job_id, min_version=min_version)
 
-        config = json.loads(config_file.read_text(encoding="utf-8"))
-        assert isinstance(config, dict)
-        assert "core" in config
 
-    def test_report_artifact_integrity(self):
-        """Report should verify artifact integrity (SHA256)."""
-        # This is a structural test - actual artifact verification
-        # would be implemented in CI reporting logic
-        expected = hashlib.sha256(b"test").hexdigest()
-        assert len(expected) == 64  # SHA256 length
+class TestFirstRunAcceptance:
+    def test_first_run_reaches_published_with_real_receipt(self, fleet, monkeypatch, tmp_path):
+        """First Runв†’Textв†’Voiceв†’GPUв†’Publisher produces a correlated sandbox receipt."""
+        job_id = harness.create_job(fleet, topic="First run topic")
+        _run_to_video(fleet, monkeypatch, job_id)
+
+        job = harness.approve_video(fleet, job_id, version=1)
+        assert job["status"] == "READY"
+        assert job["active_video_version"] == 1
+
+        harness.register_publisher(fleet)
+        response = fleet.post(f"/api/jobs/{job_id}/publish", json=["youtube"])
+        assert response.status_code == 200, response.text
+        task = harness.claim_publish(fleet, job_id, channel="youtube")
+        receipt = harness.sandbox_receipt("youtube", task)
+        harness.submit_publish_receipt(fleet, job_id, task, receipt)
+
+        job = harness.get_job(fleet, job_id)
+        assert "youtube" in job["published_to"], job
+        recorded = job["publication_results"]["youtube"]
+        assert recorded["status"] == "PUBLISHED"
+        assert recorded["remote_id"] == "mock-youtube"
+        # the receipt is correlated with the durable delivery contract
+        assert recorded["video_version"] == 1
+        evidence = harness.video_evidence(job_id, job)
+        harness.record_evidence("first_run", {"video": evidence,
+                                              "receipts": job["publication_results"]})
+        assert evidence["files"], "the rendered version must exist on disk"
+
+    def test_telegram_sourced_job_is_approved_and_published(self, fleet, monkeypatch):
+        """A Telegram Job keeps its owner, is reviewed in Web and published with a receipt."""
+        job_id = harness.create_telegram_job(topic="Telegram topic", chat_id="424242")
+        assert store.jobs[job_id].source == "telegram:424242"
+        _run_to_video(fleet, monkeypatch, job_id)
+
+        # a foreign chat may not act on this Job's video
+        from unittest.mock import patch
+        import core.app as app_module
+        answers = []
+        adapter = type("Adapter", (), {
+            "answer_callback": lambda self, callback_id, text=None, **kw: answers.append(text),
+            "send_message": lambda self, chat_id, text, markup=None: None,
+        })()
+        with patch.object(app_module, "TelegramAdapter", lambda: adapter):
+            app_module._handle_video_callback(
+                {"id": "cb-foreign", "message": {"chat": {"id": "999"}}},
+                "999", "vid_ok", f"{job_id}:1")
+        assert answers and "заборонено" in answers[-1].lower()
+        assert harness.get_job(fleet, job_id)["status"] == "VIDEO_PENDING_APPROVAL"
+
+        job = harness.approve_video(fleet, job_id, version=1)
+        assert job["status"] == "READY"
+        harness.register_publisher(fleet)
+        assert fleet.post(f"/api/jobs/{job_id}/publish",
+                          json=["telegram"]).status_code == 200
+
+
+class TestVideoRevisionLoops:
+    def test_two_revision_loops_keep_immutable_versions_across_restart(
+            self, fleet, monkeypatch):
+        """Free-text revision loop, then pure re-render loop, both reviewed and approved."""
+        job_id = harness.create_job(fleet, topic="Revision loops")
+        _run_to_video(fleet, monkeypatch, job_id)
+        job = harness.get_job(fleet, job_id)
+        v1 = dict(job["video_versions"][0])
+        assert v1["approved"] is False
+
+        # --- loop 1: free text travels upstream through script and storyboard ---
+        harness.request_video_revision(fleet, job_id, "make the intro longer")
+        harness.wait_for_status(fleet, job_id, "SCRIPT_REVISION_REQUESTED",
+                                "SCRIPT_QUEUED")
+        harness.approve_script(fleet, job_id, revision=None)
+        harness.generate_assets(fleet, job_id, monkeypatch)
+        job = harness.wait_for_video(fleet, job_id, min_version=2)
+        assert job["active_video_version"] == 2
+        assert job["video_versions"][1]["revision_note"] == "make the intro longer"
+        assert job["status"] == "VIDEO_PENDING_APPROVAL"
+
+        # --- restart between the loops: approval and versions must survive ---
+        restarted = harness.restart_store()
+        loaded = restarted.jobs[job_id]
+        assert loaded.status == JobStatus.VIDEO_PENDING_APPROVAL
+        assert loaded.active_video_version == 2
+        assert [v.approved for v in loaded.video_versions] == [False, False]
+
+        # --- loop 2: pure re-render of the approved inputs ---
+        job = harness.regenerate_video(fleet, job_id, min_version=3)
+        assert job["active_video_version"] == 3
+        assert len(job["video_versions"]) == 3
+        job = harness.approve_video(fleet, job_id, version=3)
+        assert job["status"] == "READY"
+
+        files = harness.version_paths(job_id)
+        assert [path.name for path in files] == [
+            "video-v1.mp4", "video-v2.mp4", "video-v3.mp4"]
+        hashes = harness.artifact_hashes(files)
+        assert len(set(hashes.values())) == 3, "each render must be a distinct artifact"
+        recorded = [version["sha256"] for version in job["video_versions"]]
+        assert recorded == [hashes[str(path)] for path in files]
+        # the approved state is per version, never overwritten
+        assert [version["approved"] for version in job["video_versions"]] == [False, False, True]
+
+        harness.record_evidence("approval_loops", {
+            "video": harness.video_evidence(job_id, job),
+            "loops": 2,
+        })
