@@ -405,6 +405,14 @@ class Job(BaseModel):
     assembly_cancel_requested: bool = False
     assembly_submit_keys: dict[str, str] = Field(default_factory=dict)
     video_engine_snapshot: dict[str, Any] | None = None
+    # Issue #122 P6/§5: what is known about the compute of every cancelled assembly
+    # attempt, keyed by its durable submit key. A logical cancel says nothing about
+    # resources — the pinned runtime keeps rendering until it observes the abort, and
+    # a busy task answers 409 while it does (§9.8) — so an attempt whose release was
+    # not proven stays ``unconfirmed`` and keeps that runtime out of new renders
+    # instead of being assumed free. Each entry records the engine identity the
+    # release belongs to, so repointing the engine does not silently release it.
+    assembly_releases: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class WorkerHeartbeat(BaseModel):
     node_name: str
@@ -456,6 +464,11 @@ class TaskClaim(BaseModel):
     supported_workflows: list[str] = Field(default_factory=lambda: ["*"])
     capabilities: list[str] = Field(default_factory=lambda: ["image_generation"])
     voice_catalog: dict[str, Any] = Field(default_factory=dict)
+    # Effective video-engine configuration and readiness of the claiming node
+    # (Issue #122 P5/P7). Only non-secret snapshot fields are reported, so CORE can
+    # refuse an attempt on a node whose engine, endpoint, revision or pinned upstream
+    # differs from the one the attempt was dispatched with.
+    video_engine: dict[str, Any] | None = None
 
 
 class NodeAction(BaseModel):

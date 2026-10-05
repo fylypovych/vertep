@@ -232,6 +232,34 @@ REASON_VOICE_STAGING_UNSUPPORTED = "upstream_voice_staging_unsupported"
 # accepted the work. The attempt is refused as explicitly unknown instead of being
 # resubmitted blindly or reported as success (Issue #122 §5, §9.8).
 REASON_SUBMIT_UNKNOWN = "upstream_submit_unknown"
+# A durable submit record exists but cannot be read or parsed. It is not the same as
+# "no record": treating it as absent would let one approved render create a second
+# upstream task (Issue #122 P6), so the attempt is refused with this reason instead.
+REASON_SUBMIT_RECORD_UNREADABLE = "submit_record_unreadable"
+# The approved voice could not be placed in the pinned task directory of an already
+# accepted upstream task, so that task was aborted rather than left to narrate itself
+# (Issue #122 P3/§9.6).
+REASON_VOICE_STAGING_FAILED = "voice_staging_failed"
+# A finished render was transferred incompletely. The container still probes, so without
+# this check an interrupted download would be registered as a truncated video version
+# (Issue #122 §5, P6).
+REASON_DOWNLOAD_INCOMPLETE = "upstream_download_incomplete"
+# The runtime no longer knows the resource it was asked about: the task or its result is
+# gone. That is an absent attempt, not a transient read failure, so it is reported with
+# its own reason and never as a retryable transport error (Issue #122 §5, P6).
+REASON_TASK_ABSENT = "upstream_task_absent"
+
+# Resource-release states of an engine runtime after a cancelled attempt (§5,
+# §9.8). A logical cancel says nothing about compute, so CORE keeps the runtime
+# out of new renders until one of these is proven.
+#: The runtime is demonstrably free: the abort was accepted, or the task reached a
+#: terminal state or disappeared.
+RELEASE_RELEASED = "released"
+#: The runtime may still be busy. Fail-closed default of
+#: :meth:`VideoEngine.release_state`.
+RELEASE_UNCONFIRMED = "unconfirmed"
+#: No remote runtime holds the attempt (a local render), so no remote lease exists.
+RELEASE_NOT_APPLIED = "not_applied"
 
 
 class BridgeContractError(ValueError):
@@ -294,3 +322,23 @@ class VideoEngine(ABC):
         logically and discards any late result (Issue #122 §5, §9.8).
         """
         return False
+
+    def release_state(self, submit_key: str | None = None) -> str:
+        """Whether the runtime that ran one attempt is provably free again (§5).
+
+        A logical cancel proves nothing about compute: the pinned runtime keeps
+        rendering until it observes the abort, and a busy task answers ``409`` while
+        it does (§9.8).  CORE therefore needs the real state of that runtime before it
+        may hand the same runtime another render, so this reports one of:
+
+        ``RELEASE_RELEASED``
+            the runtime is demonstrably free: the abort was accepted, or its task
+            reached a terminal state or disappeared;
+        ``RELEASE_UNCONFIRMED``
+            the runtime may still be busy.  This is the fail-closed default: an engine
+            that cannot answer is never treated as free;
+        ``RELEASE_NOT_APPLIED``
+            no remote runtime holds this attempt (a local render), so no remote lease
+            is involved.
+        """
+        return RELEASE_UNCONFIRMED

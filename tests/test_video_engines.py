@@ -1,8 +1,14 @@
 from adapters.providers.base import (
     BridgeContractError,
     BRIDGE_SCHEMA_VERSION,
+    REASON_SCHEMA_UNSUPPORTED,
     REASON_SUBMIT_UNKNOWN,
+    REASON_TASK_ABSENT,
+    REASON_UPSTREAM_UNREACHABLE,
     REASON_VOICE_STAGING_UNSUPPORTED,
+    RELEASE_NOT_APPLIED,
+    RELEASE_RELEASED,
+    RELEASE_UNCONFIRMED,
     REQUIRED_SUBMIT_FIELDS,
 )
 from adapters.providers.video_engines import (
@@ -27,6 +33,7 @@ Issue #122 P2 tests: material upload, health check, runtime manifest.
 import hashlib
 import json
 from pathlib import Path
+import gzip
 import math
 import struct
 import wave
@@ -618,6 +625,86 @@ def test_moneyprinter_refuses_a_download_that_is_not_decodable_media(tmp_path):
     assert not (tmp_path / "final" / "corrupt.mp4").exists()
     # No post-step artefact is left behind either.
     assert not list((tmp_path / "final").glob("*-poststep.mp4"))
+
+
+def test_an_interrupted_download_is_retried_under_the_same_submit_key(tmp_path, mp4_factory):
+    """§5: обірваний download не реєструє артефакт і не вимагає нової генерації.
+
+    Перерване завантаження — це транспортний збій уже прийнятої роботи. Attempt лишається
+    без артефакту, а повтор іде з тим самим durable submit key, тому runtime відповідає
+    з власного запису й upstream не отримує друге завдання для тієї самої генерації.
+    """
+    assets = _job_assets(tmp_path)
+    key = "job-1-v1-interrupted"
+    complete = mp4_factory(2.0)
+    truncated = complete[: len(complete) // 3]
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-interrupted"}}),
+        httpx.Response(200, json={"state": 1, "videos": ["tasks/j-interrupted/final-1.mp4"]}),
+        # The runtime declares the finished length, but the transfer stopped early.
+        httpx.Response(200, content=truncated,
+                      headers={"content-length": str(len(complete))}),
+        # The retry asks the runtime again and is answered from its durable record.
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "message": "reconciled",
+                                  "data": {"task_id": "j-interrupted"}}),
+        httpx.Response(200, json={"state": 1, "videos": ["tasks/j-interrupted/final-1.mp4"]}),
+        httpx.Response(200, content=complete),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    output = tmp_path / "final" / "interrupted.mp4"
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(output, submit_key=key, **assets)
+
+    assert refusal.value.code == "upstream_download_incomplete"
+    assert not output.exists(), "обірваний download не стає артефактом"
+    final_dir = tmp_path / "final"
+    assert not list(final_dir.glob("*.tmp")), "тимчасовий файл не лишається"
+    assert not list(final_dir.glob("*-poststep.mp4"))
+
+    assert engine.render(output, submit_key=key, **assets) == output
+    assert output.is_file() and output.stat().st_size > 0
+
+    submits = [entry for entry in fake.requests if entry[1].endswith("/api/v1/videos")]
+    assert len(submits) == 2
+    assert all(entry[2]["headers"]["x-vertep-submit-key"] == key for entry in submits), \
+        "обидва submit несуть той самий durable key — нова генерація неможлива"
+    assert any(entry[1].endswith("/api/v1/videos/" + key) for entry in fake.requests) is False
+
+
+def test_a_download_transferred_encoded_is_not_judged_by_its_wire_length(
+    tmp_path, mp4_factory
+):
+    """The declared length of an encoded transfer describes the wire, not the artifact.
+
+    A proxy may compress the result on the way out, so the bytes that arrive are not the
+    bytes the runtime counted. Refusing such a result as interrupted would reject a
+    complete artifact, so the comparison applies to an unencoded transfer only.
+    """
+    assets = _job_assets(tmp_path)
+    complete = mp4_factory(2.0)
+    encoded = gzip.compress(complete)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-encoded"}}),
+        httpx.Response(200, json={"state": 1, "videos": ["tasks/j-encoded/final-1.mp4"]}),
+        httpx.Response(200, content=encoded,
+                       headers={"content-encoding": "gzip",
+                                "content-length": str(len(encoded))}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
+    output = tmp_path / "final" / "encoded.mp4"
+
+    assert engine.render(output, submit_key="job-1-v1-encoded", **assets) == output
+    assert output.is_file() and output.stat().st_size > 0
 
 
 def test_moneyprinter_bounds_polling_retries_and_refuses_the_task(tmp_path):
@@ -1680,3 +1767,211 @@ def test_generate_sbom_from_manifest(tmp_path):
     assert sbom["components"][0]["commit"] == "2e1b30396e059e55939cc802c60faac2061e4d41"
     assert "digest" in sbom
     assert len(sbom["dependencies"]) == 1
+
+# ---------------------------------------------------------------------------
+# P6 §5: the release of a cancelled attempt comes from the runtime, not from CORE
+# ---------------------------------------------------------------------------
+
+
+class _StatusTransport(FakeTransport):
+    """Transport that answers the submit-status route and refuses the abort."""
+
+    def __init__(self, runtime_state, *, abort_status: int = 409, status_status: int = 200):
+        super().__init__([])
+        self.runtime_state = runtime_state
+        self.abort_status = abort_status
+        self.status_status = status_status
+
+    def delete(self, url, headers=None, timeout=None):
+        self.requests.append(("DELETE", url))
+        return httpx.Response(self.abort_status, json={"status": self.abort_status})
+
+    def get(self, url, headers=None, timeout=None):
+        self.requests.append(("GET", url))
+        if self.status_status != 200:
+            return httpx.Response(self.status_status, json={"status": self.status_status})
+        return httpx.Response(200, json={
+            "status": 200, "state": "submitted", "runtime_state": self.runtime_state,
+            "data": {"task_id": "j-1"},
+        })
+
+
+def _external(status_transport) -> MoneyPrinterEngine:
+    return MoneyPrinterEngine(url="http://engine:8000", transport=status_transport)
+
+
+@pytest.mark.parametrize("runtime_state", ["finished", "failed", "absent"])
+def test_a_runtime_that_no_longer_runs_the_attempt_is_released(runtime_state):
+    engine = _external(_StatusTransport(runtime_state))
+
+    assert engine.release_state("job-1-v1-abc") == RELEASE_RELEASED
+
+
+def test_a_still_running_runtime_is_never_released():
+    """A refused abort plus a running task is the exact case §9.8 describes."""
+    engine = _external(_StatusTransport("running"))
+
+    assert engine.release_state("job-1-v1-abc") == RELEASE_UNCONFIRMED
+
+
+@pytest.mark.parametrize("status_status", [500, 503])
+def test_an_unanswering_runtime_is_never_released(status_status):
+    engine = _external(_StatusTransport("running", status_status=status_status))
+
+    assert engine.release_state("job-1-v1-abc") == RELEASE_UNCONFIRMED
+
+
+def test_an_unknown_submit_key_at_the_runtime_is_a_release():
+    """The runtime no longer holds the key, so nothing of that attempt is running."""
+    engine = _external(_StatusTransport("running", status_status=404))
+
+    assert engine.release_state("job-1-v1-abc") == RELEASE_RELEASED
+
+
+def test_a_transport_failure_is_never_a_release():
+    class _BrokenTransport(FakeTransport):
+        def get(self, url, headers=None, timeout=None):
+            raise httpx.ConnectError("runtime unreachable")
+
+    assert _external(_BrokenTransport([])).release_state("job-1-v1-abc") == RELEASE_UNCONFIRMED
+
+
+def test_an_engine_without_a_key_or_a_route_never_releases():
+    assert MoneyPrinterEngine(url="http://engine:8000", transport=FakeTransport([])) \
+        .release_state(None) == RELEASE_UNCONFIRMED
+    assert _external(_StatusTransport("absent")).release_state("") == RELEASE_UNCONFIRMED
+
+
+def test_a_local_render_holds_no_remote_runtime():
+    """Native has no pinned upstream, so there is no remote lease to keep or prove."""
+    assert NativeVertepEngine().release_state("job-1-v1-abc") == RELEASE_NOT_APPLIED
+
+
+def test_a_task_the_upstream_no_longer_knows_reports_absent(tmp_path):
+    """§5: a runtime that answers 404 holds no task, and the attempt says so.
+
+    An unknown task is not a transient read failure. The attempt must end
+    terminally with the absent reason, register no artifact, and leave the runtime
+    provably free — never be retried as a degraded upstream or reported as success.
+    """
+    assets = _job_assets(tmp_path)
+    key = "job-1-v1-absent"
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-absent"}}),
+        *[httpx.Response(404, json={"status": 404, "message": "task not found"})
+          for _ in range(2)],
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake,
+                                poll_interval=0.0, read_backoff=0.0,
+                                max_read_attempts=2)
+    output = tmp_path / "final" / "absent.mp4"
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(output, submit_key=key, **assets)
+
+    assert refusal.value.code == REASON_TASK_ABSENT
+    assert "404" in str(refusal.value), "відмова має назвати те, що відповів upstream"
+    assert not output.exists(), "відсутній task не реєструє артефакт"
+    assert [request[0] for request in fake.requests] == [
+        "GET", "POST", "POST", "POST", "GET", "GET",
+    ], "snapshot, upload, voice і submit не повторюються — повторюється лише читання"
+
+    # The runtime no longer holds the key either, so nothing of the attempt runs.
+    assert _external(_StatusTransport("running", status_status=404)).release_state(key) \
+        == RELEASE_RELEASED
+
+
+def test_an_unreachable_upstream_is_unreachable_and_never_absent(tmp_path):
+    """§5: an upstream that cannot be reached proves nothing about its state.
+
+    The render must end terminally as unreachable rather than hang, and the release
+    stays unconfirmed: a silent runtime is never read as an absent task or a free one,
+    so CORE keeps it out of the next render.
+    """
+    assets = _job_assets(tmp_path)
+
+    class _Unreachable(FakeTransport):
+        def get(self, url, **kwargs):
+            if "/api/v1/tasks/j-dark" in url:
+                self.requests.append(("GET", url, dict(kwargs)))
+                raise httpx.ConnectError("runtime unreachable")
+            return super().get(url, **kwargs)
+
+    fake = _Unreachable([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-dark"}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake,
+                                poll_interval=0.0, read_backoff=0.0,
+                                max_read_attempts=2)
+    output = tmp_path / "final" / "dark.mp4"
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(output, submit_key="job-1-v1-dark", **assets)
+
+    assert refusal.value.code == REASON_UPSTREAM_UNREACHABLE
+    assert not output.exists(), "недосяжний upstream не реєструє артефакт"
+    status_calls = [request for request in fake.requests if request[0] == "GET"
+                    and "/api/v1/tasks/j-dark" in request[1]]
+    assert len(status_calls) == 2, "опитування обмежене, а не нескінченне"
+
+    class _Silent(_StatusTransport):
+        def get(self, url, headers=None, timeout=None):
+            raise httpx.ConnectError("runtime unreachable")
+
+    assert _external(_Silent("absent")).release_state("job-1-v1-dark") \
+        == RELEASE_UNCONFIRMED
+
+
+def test_a_rate_limited_status_is_retried_within_a_bound_and_ends_terminally(tmp_path):
+    """§5: 429 is retried a bounded number of times, then refused with its cause."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-limited"}}),
+        *[httpx.Response(429, json={"status": 429, "message": "slow down"})
+          for _ in range(6)],
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake,
+                                poll_interval=0.0, timeout=60.0,
+                                max_read_attempts=2, read_backoff=0.0)
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(tmp_path / "final" / "limited.mp4", **assets)
+
+    assert refusal.value.code == "upstream_transient_failure"
+    assert "429" in str(refusal.value), "the refusal must name what the upstream answered"
+    status_calls = [request for request in fake.requests if request[0] == "GET"
+                    and "/api/v1/tasks/j-limited" in request[1]]
+    assert len(status_calls) == 2, \
+        f"a rate limit must be retried exactly within the bound, made {len(status_calls)}"
+    assert not (tmp_path / "final" / "limited.mp4").exists()
+
+
+def test_a_malformed_status_body_is_a_clear_terminal_failure(tmp_path):
+    """§5: a malformed response fails with a contract reason, not a decoder crash."""
+    assets = _job_assets(tmp_path)
+    fake = FakeTransport([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-garbage"}}),
+        *[httpx.Response(200, text="<html>not json</html>") for _ in range(4)],
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake,
+                                poll_interval=0.0, timeout=60.0,
+                                max_read_attempts=1, read_backoff=0.0)
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(tmp_path / "final" / "garbage.mp4", **assets)
+
+    assert refusal.value.code == REASON_SCHEMA_UNSUPPORTED
+    assert not (tmp_path / "final" / "garbage.mp4").exists(), \
+        "an unmappable status must never be registered as a finished render"

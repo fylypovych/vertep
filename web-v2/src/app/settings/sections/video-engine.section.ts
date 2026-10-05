@@ -53,7 +53,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <div class="mt-4 flex flex-wrap gap-2">
         <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm"
                 data-testid="video-engine-apply"
-                [disabled]="!canEdit() || applying() || choice() === cfg.effective"
+                [disabled]="!canApply()"
                 (click)="apply()">Застосувати</button>
         <button class="px-3 py-1 bg-slate-700 text-white rounded text-sm"
                 data-testid="video-engine-return-native"
@@ -120,6 +120,28 @@ export class VideoEngineSectionComponent implements OnInit {
     () => this.activeFields().find(field => field.name === 'token') ?? null,
   );
 
+  /** The runtime address the operator typed is not the one this engine is running with.
+
+      An external engine is pointed at its runtime through an endpoint, so repointing it
+      is a real change of the effective configuration even when the engine itself stays
+      the same. Binding Apply to the engine name alone left the current engine's runtime
+      address unchangeable from Settings (Issue #122 P8). */
+  readonly endpointChanged = computed(() => {
+    const field = this.endpointField();
+    if (!field) return false;
+    return this.endpoint().trim() !== String(field.value ?? '').trim();
+  });
+
+  /** Nothing to apply while the form describes exactly what is already effective.
+
+      Both halves of the decision are compared: the engine and, for an external engine,
+      the runtime address it uses. */
+  readonly canApply = computed(() => {
+    const config = this.config();
+    if (!config || !this.canEdit() || this.applying()) return false;
+    return this.choice() !== config.effective || this.endpointChanged();
+  });
+
   /** The inputs of the engine the operator is choosing, falling back to the effective one. */
   private activeFields(): EngineField[] {
     const config = this.config();
@@ -157,7 +179,10 @@ export class VideoEngineSectionComponent implements OnInit {
   /** Keep the form in sync with the API answer without overwriting the operator's input. */
   private choose(effective: string, config: EffectiveEngineConfig): void {
     this.choice.set(effective);
-    const field = config.fields?.find(item => item.name === 'endpoint');
+    // The address is read from the same place the input is rendered from, so the form
+    // never starts out describing something other than what it displays.
+    const field = (config.required_fields?.[effective] ?? config.fields ?? [])
+      .find(item => item.name === 'endpoint');
     if (field?.value) {
       this.endpoint.set(field.value);
     }

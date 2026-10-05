@@ -3,10 +3,19 @@
 Covers the provider half of "Voice preview та provider switch через перевірений
 deployment/config flow, із погодженими negative paths": persist → apply →
 verify → rollback, plus the HTTP contract the Web UI Settings screen uses.
+
+The last block additionally closes the "Settings → real API → real executor"
+chain of Issue #122 P8: the engine is applied through the HTTP endpoint the Web
+UI calls, and the verify step is answered by an actual HTTP listener standing in
+for the pinned runtime, so nothing about the successful path is stubbed inside
+CORE.
 """
 
+import contextlib
 import json
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -258,3 +267,132 @@ def test_the_video_engine_endpoint_reflects_a_state_that_forbids_changes(isolate
         assert body["change_allowed"] is False
     finally:
         set_system_state(previous, "test restore")
+
+
+# ---------------------------------------------------------------------------
+# P8: Settings → the real API → the real executor (Issue #122)
+# ---------------------------------------------------------------------------
+
+
+class _WrapperHandler(BaseHTTPRequestHandler):
+    """Answers the readiness route the wrapper exposes on its own endpoint.
+
+    The verify step of a switch talks to the runtime over HTTP, so the runtime in
+    these tests is a real listener rather than a replaced method: an apply that
+    succeeds here succeeded because something addressed by the configured endpoint
+    proved its pinned inventory over a socket.
+    """
+
+    def do_GET(self):  # noqa: N802 - name imposed by BaseHTTPRequestHandler
+        report = getattr(self.server, "report", None)
+        if self.path.rstrip("/") != "/health" or not isinstance(report, dict):
+            self.send_error(404)
+            return
+        body = json.dumps(report).encode("utf-8")
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):  # noqa: A003 - name imposed by the base class
+        return
+
+
+@contextlib.contextmanager
+def _runtime_on_loopback(report: dict):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _WrapperHandler)
+    server.report = report
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _ready_report(*, bridge_schema_version: str | None = None,
+                  upstream_commit: str | None = None) -> dict:
+    """A readiness report of a runtime that satisfies the pinned contract."""
+    from adapters.providers.base import BRIDGE_SCHEMA_VERSION, REQUIRED_SUBMIT_FIELDS
+    from adapters.providers.video_engines import MONEY_PRINTER_CONTRACT
+
+    pinned = MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[-1]
+    return {
+        "checks": {
+            "upstream_auth_enforced": True,
+            "submit_schema": list(REQUIRED_SUBMIT_FIELDS),
+            "snapshot": {
+                "upstream_commit": upstream_commit or pinned,
+                "image_digest": "sha256:" + "a" * 64,
+                "bridge_schema_version": bridge_schema_version or BRIDGE_SCHEMA_VERSION,
+            },
+        },
+    }
+
+
+def test_applying_the_engine_through_the_real_api_is_verified_by_the_runtime(isolated_config):
+    with _runtime_on_loopback(_ready_report()) as endpoint:
+        response = client.post("/api/settings/providers/video_engine", json={
+            "backend": "money-printer", "endpoint": endpoint,
+        })
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["changed"] is True
+    assert body["backend"] == "money-printer"
+    effective = body["effective_engine"]
+    assert effective["effective"] == "money-printer"
+    assert effective["selected"] == effective["effective"]
+    assert effective["agree"] is True
+    assert effective["ready"] is True
+    assert effective["probed"] is True
+    assert effective["endpoint"] == endpoint
+    assert load_provider_overrides()["MONEY_PRINTER_URL"] == endpoint
+    # The read model reports the same engine the apply proved.
+    read_model = client.get("/api/settings/video-engine").json()
+    assert read_model["effective"] == "money-printer"
+    assert read_model["config_revision"] == effective["config_revision"]
+
+
+def test_a_runtime_that_cannot_prove_its_inventory_keeps_the_previous_engine(isolated_config):
+    with _runtime_on_loopback(_ready_report(bridge_schema_version="0.0.0-drift")) as endpoint:
+        response = client.post("/api/settings/providers/video_engine", json={
+            "backend": "money-printer", "endpoint": endpoint,
+        })
+
+    assert response.status_code == 409, response.text
+    assert load_provider_overrides() == {}
+    read_model = client.get("/api/settings/video-engine").json()
+    assert read_model["effective"] == "native"
+    assert read_model["selected"] == "native"
+
+
+def test_the_applied_choice_is_reproduced_after_a_restart_of_the_core(isolated_config):
+    with _runtime_on_loopback(_ready_report()) as endpoint:
+        client.post("/api/settings/providers/video_engine", json={
+            "backend": "money-printer", "endpoint": endpoint,
+        })
+        # A restart drops the live environment and the cached provider instances; only
+        # the persisted choice remains, and it has to reproduce the same configuration.
+        os.environ.pop("VERTEP_VIDEO_ENGINE", None)
+        os.environ.pop("MONEY_PRINTER_URL", None)
+        reset_provider_registry()
+        assert provider_matrix()["video_engine"]["backend"] == "native"
+
+        apply_provider_overrides()
+
+        read_model = client.get("/api/settings/video-engine").json()
+        assert read_model["selected"] == read_model["effective"] == "money-printer"
+        assert read_model["agree"] is True
+        assert read_model["endpoint"] == endpoint
+        # The secret is restored as a reference only — no value is ever reported.
+        assert read_model["secret"] == {
+            "env": "MONEY_PRINTER_TOKEN", "configured": False, "source": "unset",
+        }
+        # Readiness is only claimed when the runtime is probed again, so the restored
+        # choice is verified on the actual executor rather than assumed.
+        assert read_model["probed"] is False
+        assert client.get("/api/settings/video-engine?probe=true").json()["ready"] is True

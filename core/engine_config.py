@@ -24,6 +24,7 @@ import hashlib
 import os
 from typing import Any
 
+from adapters.providers.base import BRIDGE_SCHEMA_VERSION, REASON_SNAPSHOT_MISMATCH
 from adapters.providers.video_engines import MoneyPrinterEngine, ShortGPTEngine
 
 #: Env var that holds the token of each external engine. Only the *name* is ever
@@ -201,6 +202,78 @@ def engine_config_revision(engine=None) -> str:
         f"secret_configured={int(bool(secret_reference(engine)['configured']))}",
     ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+class EngineSnapshotMismatch(RuntimeError):
+    """The dispatched snapshot no longer describes this executor (P5/P7).
+
+    The attempt was decided against one exact engine configuration; a node whose
+    effective configuration has drifted since the dispatch must refuse it instead
+    of rendering with something else. ``code`` is the stable refusal code
+    ``engine_snapshot_mismatch`` recorded on the task.
+    """
+
+    def __init__(self, field: str, expected: Any, actual: Any) -> None:
+        super().__init__(
+            f"snapshot field {field!r} drifted: dispatched {expected!r}, "
+            f"this executor has {actual!r}"
+        )
+        self.code = REASON_SNAPSHOT_MISMATCH
+        self.field = field
+        self.expected = expected
+        self.actual = actual
+
+
+def engine_snapshot_fields(engine) -> dict[str, Any]:
+    """Recompute the verifiable engine part of a §9.15 snapshot on this node.
+
+    Only non-secret facts are recomputed: the engine identity, the bridge contract,
+    the configuration revision and — for an external engine — the pinned upstream
+    reference plus the endpoint and secret *references*. A secret value never takes
+    part, so a Worker can prove it runs the same configuration without CORE ever
+    handing out a credential.
+    """
+    profile = getattr(engine, "contract_profile", None)
+    engine_id = _engine_id(engine)
+    fields: dict[str, Any] = {
+        "engine_id": engine_id,
+        "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
+        "config_revision": engine_config_revision(engine),
+    }
+    if engine_id != "native":
+        fields["upstream_reference"] = getattr(profile, "upstream_reference", None)
+        fields["endpoint_reference"] = endpoint_reference(engine)
+        fields["secret_reference"] = secret_reference(engine)
+    return fields
+
+
+def verify_engine_snapshot(engine, snapshot: dict | None, *,
+                           extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Refuse an attempt whose dispatched snapshot drifted on this executor.
+
+    Issue #122 §5 requires the attempt in flight to keep the configuration it was
+    dispatched with, and §9.15 makes that snapshot the contract. Comparing only the
+    engine name would let a repointed endpoint, a rotated revision or a different
+    pinned upstream render the Job, so every field the snapshot declares is
+    recomputed here and compared. ``extra`` adds the per-attempt facts that must
+    agree with the snapshot as well (aspect, preset, task type).
+
+    A fact the dispatch left undecided is not compared: the snapshot is the reference,
+    so a field it does not pin cannot reject this executor. The same rule governs the
+    claim gate (``ENGINE_CLAIM_FIELDS``): the attempt is refused over drift, never over
+    something CORE itself never decided.
+    """
+    snapshot = dict(snapshot or {})
+    fields = engine_snapshot_fields(engine)
+    for name, value in fields.items():
+        if snapshot.get(name) in (None, ""):
+            continue
+        if snapshot[name] != value:
+            raise EngineSnapshotMismatch(name, snapshot[name], value)
+    for name, value in (extra or {}).items():
+        if name in snapshot and snapshot[name] != value:
+            raise EngineSnapshotMismatch(name, snapshot[name], value)
+    return fields
 
 
 def verify_effective_engine(*, probe: bool = True, engine=None) -> dict[str, Any]:

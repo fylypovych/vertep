@@ -19,6 +19,11 @@ from pathlib import Path
 import httpx
 from fastapi import HTTPException, Request
 
+from adapters.providers.base import (
+    RELEASE_NOT_APPLIED,
+    RELEASE_RELEASED,
+    RELEASE_UNCONFIRMED,
+)
 from adapters.telegram import TelegramAdapter
 
 from ..artifacts import register_artifact
@@ -225,6 +230,35 @@ def _clear_assembly_staging(job_root: Path, job_id: str) -> None:
     shutil.rmtree(Path(job_root) / job_id / ASSEMBLY_STAGING_DIR, ignore_errors=True)
 
 
+def _snapshot_input(job_root: Path, job_id: str, reference: str | None) -> dict | None:
+    """One delivered approved input: its Job-relative reference and its digest."""
+    if not reference:
+        return None
+    path = (Path(job_root) / job_id / reference).resolve()
+    return {"reference": reference, "sha256": _file_digest(path)}
+
+
+def _with_delivered_inputs(snapshot: dict, job_root: Path, job_id: str, *,
+                           materials: list[str], inputs: dict[str, str | None]) -> dict:
+    """Add what the Worker will actually receive to the attempt snapshot (§9.15).
+
+    A snapshot that names only the engine cannot prove *which* approved inputs the
+    render used. Every staged reference therefore travels with its SHA256, so the
+    executor verifies the delivered bytes against the approved ones instead of
+    trusting whatever happens to be in its Job directory (Issue #122 P3/P5).
+    """
+    snapshot = dict(snapshot)
+    snapshot["materials"] = [
+        entry for entry in (_snapshot_input(job_root, job_id, reference) for reference in materials)
+        if entry
+    ]
+    snapshot["inputs"] = {
+        label: _snapshot_input(job_root, job_id, reference)
+        for label, reference in inputs.items()
+    }
+    return snapshot
+
+
 def _assembly_task_for(job, *, version: int, output: Path, materials: list[Path],
                        audio: Path | None, music: Path | None, subtitles: Path | None,
                        watermark: Path | None, script: str, submit_key: str,
@@ -232,6 +266,12 @@ def _assembly_task_for(job, *, version: int, output: Path, materials: list[Path]
                        preset: str | None, task_type: str) -> dict:
     job_root = store.root
     references = [_stage_input(job_root, job.job_id, path) for path in materials]
+    delivered = {
+        "audio": _stage_input(job_root, job.job_id, audio),
+        "music": _stage_input(job_root, job.job_id, music),
+        "subtitles": _stage_input(job_root, job.job_id, subtitles),
+        "watermark": _stage_input(job_root, job.job_id, watermark),
+    }
     return {
         "job_id": job.job_id,
         "task": "assembly",
@@ -243,17 +283,19 @@ def _assembly_task_for(job, *, version: int, output: Path, materials: list[Path]
         "version": version,
         "output": _job_relative(job_root, job.job_id, output),
         "materials": references,
-        "audio": _stage_input(job_root, job.job_id, audio),
-        "music": _stage_input(job_root, job.job_id, music),
-        "subtitles": _stage_input(job_root, job.job_id, subtitles),
-        "watermark": _stage_input(job_root, job.job_id, watermark),
+        "audio": delivered["audio"],
+        "music": delivered["music"],
+        "subtitles": delivered["subtitles"],
+        "watermark": delivered["watermark"],
         "durations": [float(value) for value in durations],
         "aspect_ratio": aspect_ratio,
         "preset": preset,
         "task_type": task_type,
         "script": script,
         "submit_key": submit_key,
-        "engine_snapshot": snapshot,
+        "engine_snapshot": _with_delivered_inputs(
+            snapshot, job_root, job.job_id, materials=references, inputs=delivered
+        ),
     }
 
 
@@ -284,6 +326,185 @@ def _assembly_worker_owns(job, task_id: str, node_name: str) -> bool:
         worker
         and worker.get("current_task") == task_id
         and worker.get("current_job") == job.job_id
+    )
+
+
+def _engine_identity(snapshot: dict | None) -> dict[str, str]:
+    """The runtime identity a release belongs to (P6/§5).
+
+    The hold protects the exact runtime that may still be rendering, so it is keyed
+    by the engine together with its endpoint reference: a Settings change that
+    repoints the engine describes a different runtime and must not inherit, nor
+    silently drop, another runtime's unproven release.
+    """
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    reference = snapshot.get("endpoint_reference")
+    if isinstance(reference, dict):
+        reference = reference.get("endpoint")
+    return {
+        "engine_id": str(snapshot.get("engine_id") or "native"),
+        "endpoint_reference": str(reference or ""),
+    }
+
+
+def _cancel_and_release_state(job, *, submit_key: str) -> tuple[str, str]:
+    """Cancel one attempt and report what is proven about its compute (§5, §9.8).
+
+    The abort is addressed to the durable submit key of the attempt, and only to the
+    runtime the attempt was actually dispatched with: after a Settings change the
+    current engine is a different runtime, and stopping a job on it would prove
+    nothing about the runtime that is still rendering. The answer is
+    ``released`` only when the runtime says so — the abort was accepted, or its task
+    is in a terminal state or unknown to it — and ``unconfirmed`` otherwise.
+    """
+    snapshot = job.video_engine_snapshot or {}
+    identity = _engine_identity(snapshot)
+    try:
+        from adapters.providers import providers
+
+        engine = providers.video_engine()
+    except Exception as error:  # noqa: BLE001 - an unreadable engine stays unconfirmed
+        return RELEASE_UNCONFIRMED, f"engine_unavailable:{type(error).__name__}"
+    if (str(getattr(engine, "engine_id", "native")) != identity["engine_id"]
+            or _engine_endpoint_reference(engine) != identity["endpoint_reference"]):
+        return RELEASE_UNCONFIRMED, "engine_changed:attempt_runtime_not_current"
+    try:
+        if engine.cancel(job.job_id, submit_key=submit_key):
+            return RELEASE_RELEASED, "abort_accepted"
+        state = engine.release_state(submit_key)
+    except Exception as error:  # noqa: BLE001 - silence is not a confirmation
+        return RELEASE_UNCONFIRMED, f"cancel_unconfirmed:{type(error).__name__}"
+    if state == RELEASE_NOT_APPLIED:
+        return RELEASE_NOT_APPLIED, "no_remote_runtime"
+    if state == RELEASE_RELEASED:
+        return RELEASE_RELEASED, "abort_refused_but_runtime_reports_no_running_task"
+    return RELEASE_UNCONFIRMED, "abort_refused_or_still_running"
+
+
+def _engine_endpoint_reference(engine) -> str:
+    """Endpoint identity of an engine, or an empty string for a local render.
+
+    Only the non-secret scheme/host/port identity is compared, which is exactly what
+    :func:`core.engine_config.endpoint_identity` publishes for drift detection.
+    """
+    try:
+        from ..engine_config import endpoint_identity
+
+        return str(endpoint_identity(engine) or "")
+    except Exception:  # noqa: BLE001 - an unreadable reference never matches a snapshot
+        return ""
+
+
+def cancelled_attempt_release(job, task_id: str) -> dict | None:
+    """The recorded release of a cancelled attempt, addressed by its task id (§5).
+
+    A result of a cancelled attempt is the one thing that proves the render ended, so
+    the attempt is looked up by its task id instead of being rejected as unknown: the
+    result is discarded and its release becomes proven.
+    """
+    for submit_key, record in (job.assembly_releases or {}).items():
+        if record.get("task_id") == task_id:
+            return {**record, "submit_key": submit_key}
+    return None
+
+
+def record_assembly_release(job, *, submit_key: str, snapshot: dict | None,
+                            state: str, reason: str, task_id: str | None = None) -> dict:
+    """Record what is known about the compute of a cancelled attempt (§5).
+
+    ``state`` is one of the ``RELEASE_*`` values of
+    :mod:`adapters.providers.base`. Only a ``released`` state removes the runtime
+    from the hold; everything else is recorded as ``unconfirmed`` with its reason so
+    the decision stays visible in Job state instead of being assumed. The task id is
+    kept as well, so a late result of that attempt can later prove that the render
+    really ended.
+    """
+    identity = _engine_identity(snapshot)
+    record = {
+        **identity,
+        "state": state,
+        "reason": reason,
+        "task_id": task_id or "",
+        "recorded_at": utc_now(),
+    }
+    job.assembly_releases[submit_key] = record
+    store.repository.save_job(job)
+    store.event(job, f"ASSEMBLY RELEASE {submit_key} {state.upper()}"
+                     + (f": {reason}" if reason else ""))
+    return record
+
+
+def release_assembly_hold(job, submit_key: str, *, state: str, reason: str) -> dict | None:
+    """Move a recorded release to a proven state (a late fenced result ended it)."""
+    record = job.assembly_releases.get(submit_key)
+    if record is None or record.get("state") == state:
+        return record
+    record = {**record, "state": state, "reason": reason, "recorded_at": utc_now()}
+    job.assembly_releases[submit_key] = record
+    store.repository.save_job(job)
+    store.event(job, f"ASSEMBLY RELEASE {submit_key} {state.upper()}: {reason}")
+    return record
+
+
+def unconfirmed_release_for(job, *, snapshot: dict | None) -> dict | None:
+    """Why this runtime may not be given another render yet, or ``None`` (§5).
+
+    The lease of a runtime whose release was never proven is not handed to another
+    task: the next assembly attempt stays queued with an explicit reason instead of
+    competing with work the runtime may still be doing.
+    """
+    identity = _engine_identity(snapshot)
+    for submit_key, record in (job.assembly_releases or {}).items():
+        if record.get("state") != RELEASE_UNCONFIRMED:
+            continue
+        if (record.get("engine_id") == identity["engine_id"]
+                and str(record.get("endpoint_reference") or "") == identity["endpoint_reference"]):
+            return {**record, "submit_key": submit_key}
+    return None
+
+
+def engine_release_hold(snapshot: dict | None) -> dict | None:
+    """Unproven release of this runtime by *any* Job (§5).
+
+    The compute of a cancelled attempt is a property of the runtime, not of one Job,
+    so a second Job must not take the same runtime either.
+    """
+    identity = _engine_identity(snapshot)
+    for other in store.jobs.values():
+        if not isinstance(getattr(other, "assembly_releases", None), dict):
+            continue
+        hold = unconfirmed_release_for(other, snapshot=snapshot)
+        if hold:
+            return {**hold, "job_id": other.job_id}
+    return None
+
+
+def confirm_assembly_release(job, *, submit_key: str) -> dict | None:
+    """Resolve one recorded release against the runtime that ran the attempt (§5).
+
+    A confirmation exists only when the runtime itself reports the attempt as free:
+    an abort it accepted, a task in a terminal state, or a task it no longer knows.
+    Silence is not a confirmation, so an unreachable runtime stays ``unconfirmed``.
+    """
+    record = job.assembly_releases.get(submit_key)
+    if record is None or record.get("state") != RELEASE_UNCONFIRMED:
+        return record
+    snapshot = dict(job.video_engine_snapshot or {})
+    snapshot["engine_id"] = record.get("engine_id")
+    if record.get("endpoint_reference"):
+        snapshot["endpoint_reference"] = record["endpoint_reference"]
+    try:
+        from adapters.providers import providers
+
+        engine = providers.video_engine()
+        state = engine.release_state(submit_key)
+    except Exception as error:  # noqa: BLE001 - an unreadable state stays unconfirmed
+        return record
+    if state not in {RELEASE_RELEASED, RELEASE_NOT_APPLIED}:
+        return record
+    return release_assembly_release(
+        job, submit_key, state=RELEASE_RELEASED,
+        reason="abort_accepted" if state == RELEASE_RELEASED else "no_remote_runtime",
     )
 
 
@@ -379,6 +600,47 @@ def _assembly_retry_task(job) -> dict | None:
         return None
     return _assembly_task_for(job, submit_key=str(snapshot["submit_key"]),
                               snapshot=snapshot, **plan)
+
+
+#: Every snapshot field the claiming node has to report back unchanged. The attempt was
+#: dispatched against one exact engine configuration, so any drift in the engine identity,
+#: the bridge contract, the configuration revision or the external references keeps the task
+#: queued instead of rendering an approved Job somewhere else. Fields the dispatched
+#: snapshot does not pin are skipped: a node cannot be rejected over an undecided fact.
+ENGINE_CLAIM_FIELDS = (
+    "engine_id",
+    "bridge_schema_version",
+    "config_revision",
+    "upstream_reference",
+    "endpoint_reference",
+    "secret_reference",
+)
+
+
+def assembly_worker_mismatch(reported: dict | None, snapshot: dict | None) -> str | None:
+    """Why this node may not run the dispatched attempt, or ``None`` when it may.
+
+    Issue #122 P5/P7: the attempt was decided against one exact engine configuration
+    and must not be rendered anywhere else. CORE compares what the claiming node
+    reports about its own effective engine with the snapshot of the attempt, so a
+    node with a different revision, a repointed endpoint, a different pinned upstream
+    or a runtime that is not ready keeps the task queued instead of producing an
+    approved Job. The reported fields are non-secret by construction.
+    """
+    if not isinstance(reported, dict) or not reported:
+        return "engine_state_not_reported"
+    if not isinstance(snapshot, dict) or not snapshot:
+        return "snapshot_missing"
+    for name in ENGINE_CLAIM_FIELDS:
+        if snapshot.get(name) in (None, ""):
+            continue
+        if name not in reported:
+            return "engine_state_incomplete"
+        if reported.get(name) != snapshot.get(name):
+            return f"{name}_mismatch"
+    if reported.get("ready") is not True:
+        return f"engine_not_ready:{reported.get('reason') or 'unknown'}"
+    return None
 
 
 def _select_worker(workers: list[dict], job, task_type: str | None = None, min_vram_mb: int | None = None,
@@ -1291,7 +1553,12 @@ def _job_action(job_id: str, status: JobStatus, event: str):
         # upstream work and a late result is discarded, because a running upstream
         # task cannot be confirmed stopped (the pinned runtime answers DELETE 409
         # while it is busy, §9.8).
+        #
+        # What the cancel cannot prove is recorded instead of assumed: each cancelled
+        # attempt gets its real release state, so a runtime that may still be
+        # rendering is kept out of new attempts until evidence frees it (§5).
         if job.assembly_task_ids:
+            snapshot = job.video_engine_snapshot or {}
             for task_id, version in list(job.assembly_task_ids.items()):
                 worker = job.assigned_worker
                 if worker:
@@ -1300,6 +1567,14 @@ def _job_action(job_id: str, status: JobStatus, event: str):
                 store.repository.record_task(
                     {"job_id": job.job_id, "task_id": task_id, "task": "assembly",
                      "version": version}, task_status, worker)
+                submit_key = (snapshot.get("submit_key")
+                              or job.assembly_submit_keys.get(str(version)))
+                if submit_key:
+                    state, reason = _cancel_and_release_state(job, submit_key=submit_key)
+                    record_assembly_release(
+                        job, submit_key=submit_key, snapshot=snapshot,
+                        state=state, reason=reason, task_id=task_id,
+                    )
             job.assembly_task_ids.clear()
             job.assembly_task_id = None
             job.assembly_cancel_requested = True

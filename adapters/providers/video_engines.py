@@ -35,12 +35,18 @@ import httpx
 from ._http import check_response as _check
 from .base import (
     BRIDGE_SCHEMA_VERSION,
+    REASON_DOWNLOAD_INCOMPLETE,
     REASON_INVENTORY_UNVERIFIED,
     REASON_SCHEMA_UNSUPPORTED,
     REASON_SNAPSHOT_MISMATCH,
     REASON_UPSTREAM_UNAUTHENTICATED,
     REASON_VOICE_STAGING_UNSUPPORTED,
     REASON_SUBMIT_UNKNOWN,
+    REASON_TASK_ABSENT,
+    REASON_UPSTREAM_UNREACHABLE,
+    RELEASE_NOT_APPLIED,
+    RELEASE_RELEASED,
+    RELEASE_UNCONFIRMED,
     REQUIRED_SUBMIT_FIELDS,
     BridgeContractError,
     VideoEngine,
@@ -189,6 +195,15 @@ class NativeVertepEngine(VideoEngine):
     @property
     def provider(self) -> str:
         return "native"
+
+    def release_state(self, submit_key: str | None = None) -> str:
+        """A local render holds no remote runtime, so no remote lease is involved.
+
+        The Native route assembles Vertep's own assets in this process; there is no
+        pinned upstream that could keep rendering after a cancel, so the only thing a
+        cancel has to fence is the attempt itself (§5, §9.8).
+        """
+        return RELEASE_NOT_APPLIED
 
     def render(
         self,
@@ -413,7 +428,7 @@ class RemoteVideoEngine(VideoEngine):
             reconciled = self._reconcile_submit(submit_key)
             if reconciled is None:
                 raise BridgeContractError(
-                    REASON_SUBMIT_UNKNOWN,
+REASON_SUBMIT_UNKNOWN,
                     f"{self.name} lost the submit response and cannot prove whether "
                     f"the work was accepted: {error}",
                 ) from error
@@ -422,13 +437,19 @@ class RemoteVideoEngine(VideoEngine):
             # The runtime reports that an attempt with this key is still in flight:
             # resolving it into the existing task is the only correct answer,
             # because forwarding the submit again could create a second upstream
-            # task for one render.
+            # task for one render. A key the runtime already refused (an attempt it
+            # aborted) is terminal and keeps its own reason instead.
             reconciled = self._reconcile_submit(submit_key)
             if reconciled is None:
+                try:
+                    body = submit.json()
+                except ValueError:
+                    body = None
+                reason = body.get("reason") if isinstance(body, dict) else None
                 raise BridgeContractError(
-                    REASON_SUBMIT_UNKNOWN,
-                    f"{self.name} reports an in-flight submit for key {submit_key!r} "
-                    f"that cannot be resolved into a task yet",
+                    str(reason or REASON_SUBMIT_UNKNOWN),
+                    f"{self.name} refused the submit for key {submit_key!r} and cannot "
+                    f"resolve it into a task",
                 )
             return reconciled
         _check(submit)
@@ -947,10 +968,23 @@ class RemoteVideoEngine(VideoEngine):
         """
         url = path if path.startswith("http") else f"{self._url}{path}"
         last_error: Exception | None = None
+        last_code = "upstream_transient_failure"
         for attempt in range(self._max_read_attempts):
             try:
                 response = self._transport.get(url, headers=self._headers(), timeout=180)
-                if response.status_code in {429, 500, 502, 503, 504}:
+                if response.status_code == 404:
+                    # §5: the runtime does not know this resource. A bounded retry may
+                    # still find a task that is not visible yet right after a submit,
+                    # but a runtime that keeps answering 404 holds nothing of the
+                    # attempt. That is an absent task, not a transient read failure,
+                    # and it must not be reported as one.
+                    last_code = REASON_TASK_ABSENT
+                    last_error = BridgeContractError(
+                        REASON_TASK_ABSENT,
+                        f"{what} answered 404: the runtime no longer knows it",
+                    )
+                elif response.status_code in {429, 500, 502, 503, 504}:
+                    last_code = "upstream_transient_failure"
                     last_error = BridgeContractError(
                         "upstream_transient_failure",
                         f"{what} answered {response.status_code}",
@@ -960,13 +994,20 @@ class RemoteVideoEngine(VideoEngine):
                     return response
             except BridgeContractError:
                 raise
+            except (httpx.TimeoutException, httpx.TransportError) as error:
+                # No answer at all: the runtime cannot be reached. That is unreachability
+                # rather than a busy or degraded upstream, and it never proves the
+                # runtime is free again (§5).
+                last_code = REASON_UPSTREAM_UNREACHABLE
+                last_error = error
             except Exception as error:  # noqa: BLE001 - transport failures are retried
+                last_code = "upstream_transient_failure"
                 last_error = error
             if time.monotonic() >= deadline:
                 break
             time.sleep(self._read_backoff * (2 ** attempt))
         raise BridgeContractError(
-            "upstream_transient_failure",
+            last_code,
             f"{what} failed after {self._max_read_attempts} attempts: {last_error}",
         )
 
@@ -998,6 +1039,35 @@ class RemoteVideoEngine(VideoEngine):
                 f"Imported artifact is truncated: read {read} of {path.stat().st_size} bytes",
             )
         return read
+
+    def _verify_complete_download(self, download: httpx.Response) -> None:
+        """Refuse a result that arrived shorter than the runtime declared (§5).
+
+        A transfer interrupted after the upstream finished still answers 200, and the
+        bytes that did arrive are often a container a probe still accepts. Registering
+        that would record a truncated video version as an approved render, so the length
+        the runtime declared is compared with what actually arrived before the bytes are
+        written anywhere. A runtime that declares no length, or that transferred the
+        bytes encoded, is not second-guessed: the declared length then describes the
+        wire form rather than the artifact.
+        """
+        encoding = (download.headers.get("content-encoding") or "identity").strip().lower()
+        if encoding != "identity":
+            return
+        declared = download.headers.get("content-length")
+        if not declared:
+            return
+        try:
+            expected = int(declared)
+        except (TypeError, ValueError):
+            return
+        received = len(download.content)
+        if received != expected:
+            raise BridgeContractError(
+                REASON_DOWNLOAD_INCOMPLETE,
+                f"{self.name} delivered {received} of {expected} declared bytes: "
+                f"the transfer was interrupted",
+            )
 
     def _verify_media(self, path: Path, *, expected_duration: float | None = None) -> dict:
         """Prove an imported or post-processed file is real, decodable media."""
@@ -1156,7 +1226,22 @@ class RemoteVideoEngine(VideoEngine):
                     status_response = self._get_with_retry(
                         f"/api/v1/tasks/{job_id}", deadline, "task status"
                     )
-                    status_json = status_response.json()
+                    try:
+                        status_json = status_response.json()
+                    except ValueError as error:
+                        # A body that cannot be decoded maps to no state at all, and
+                        # guessing one would either hang or invent a result (§5).
+                        raise BridgeContractError(
+                            REASON_SCHEMA_UNSUPPORTED,
+                            f"task status of {job_id} is not JSON",
+                        ) from error
+                    if not isinstance(status_json, dict):
+                        # A body that is not an object cannot be mapped to any state, and
+                        # guessing one would either hang or invent a result (§5).
+                        raise BridgeContractError(
+                            REASON_SCHEMA_UNSUPPORTED,
+                            f"task status of {job_id} is not a JSON object",
+                        )
                     status_payload = status_json.get("data") if isinstance(status_json, dict) and "data" in status_json else status_json
                     status_data = self.map_upstream_status(status_payload)
                     state = status_data.get("state")
@@ -1221,6 +1306,7 @@ class RemoteVideoEngine(VideoEngine):
             raise RuntimeError(f"{self.name} download failed - no response")
         if not download.content:
             raise RuntimeError(f"{self.name} downloaded video content is empty")
+        self._verify_complete_download(download)
 
         temp_target = output.with_suffix(output.suffix + ".tmp")
         try:
@@ -1328,6 +1414,46 @@ class RemoteVideoEngine(VideoEngine):
             # attempt fenced logically instead of reporting success.
             return False
         return resp.status_code in {200, 202, 204}
+
+    def release_state(self, submit_key: str | None = None) -> str:
+        """Ask the runtime whether it is provably free again (§5, §9.8).
+
+        The abort may be refused while the upstream task is busy, and a lost
+        response may hide the task entirely, so the release is resolved from the
+        runtime's own report of the task state rather than from the cancel result.
+        Anything the runtime cannot answer stays ``unconfirmed``: a silent runtime
+        must never be read as a released one.
+        """
+        if not submit_key or not self._url:
+            return RELEASE_UNCONFIRMED
+        route = None
+        if self.contract_profile is not None:
+            route = self.contract_profile.endpoints.get("submit_status")
+        if not route:
+            return RELEASE_UNCONFIRMED
+        try:
+            response = self._transport.get(
+                f"{self._url}{route.format(submit_key=submit_key)}",
+                headers=self._headers(),
+                timeout=10,
+            )
+        except Exception:
+            return RELEASE_UNCONFIRMED
+        if response.status_code == 404:
+            # The runtime no longer knows this submit key: nothing of it is running.
+            return RELEASE_RELEASED
+        if response.status_code >= 400:
+            return RELEASE_UNCONFIRMED
+        try:
+            payload = response.json()
+        except Exception:
+            return RELEASE_UNCONFIRMED
+        if not isinstance(payload, dict):
+            return RELEASE_UNCONFIRMED
+        runtime_state = str(payload.get("runtime_state") or "")
+        if runtime_state in {"finished", "failed", "absent"}:
+            return RELEASE_RELEASED
+        return RELEASE_UNCONFIRMED
 
     def _wait_for_status(self, job_id: str) -> dict:
         deadline = time.monotonic() + self._timeout

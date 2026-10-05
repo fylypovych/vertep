@@ -3,14 +3,16 @@
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import time as _time
 import uuid
 from pathlib import Path
-
 import httpx
 from adapters.providers import providers
+
+logger = logging.getLogger("worker.executor")
 
 
 def _artifact(filename: str, kind: str, data: bytes) -> dict:
@@ -481,18 +483,32 @@ def execute_assembly(task: dict) -> list[dict]:
     import only a complete, decodable render of the dispatched version.
     """
     snapshot = task.get("engine_snapshot") or {}
-    engine_id = str(snapshot.get("engine_id") or "")
-    if not engine_id:
+    if not snapshot:
         raise RuntimeError("Assembly task carries no engine snapshot")
     engine = providers.video_engine()
-    if getattr(engine, "engine_id", None) != engine_id:
-        raise RuntimeError(
-            f"Effective engine {getattr(engine, 'engine_id', None)!r} does not match the "
-            f"dispatched snapshot {engine_id!r}"
-        )
+    from core.engine_config import EngineSnapshotMismatch, verify_engine_snapshot
 
+    try:
+        verify_engine_snapshot(engine, snapshot, extra={
+            "aspect_ratio": str(task.get("aspect_ratio") or "16:9"),
+            "preset": task.get("preset"),
+            "task_type": str(task.get("task_type") or "image"),
+        })
+    except EngineSnapshotMismatch as error:
+        # Issue #122 P5/P7: the attempt was decided against one exact configuration.
+        # A node whose engine, endpoint, revision or pinned upstream drifted since
+        # the dispatch refuses the render instead of silently producing the video
+        # with something else.
+        raise RuntimeError(
+            f"{error.code}: {error}; dispatched {snapshot.get('engine_id')!r}"
+        ) from error
+
+    engine_id = str(snapshot.get("engine_id") or "")
     job_id = str(task["job_id"])
     root = _job_root()
+    # A Worker does not have to share CORE's storage: the approved bytes are pulled into
+    # this node's own Job root when they are not there already (Issue #122 P3).
+    _deliver_inputs(task, snapshot, job_id, root)
     output = _job_path(root, job_id, str(task.get("output") or ""))
     materials = [_job_path(root, job_id, item) for item in (task.get("materials") or [])]
     audio = _job_path(root, job_id, task.get("audio")) if task.get("audio") else None
@@ -500,11 +516,16 @@ def execute_assembly(task: dict) -> list[dict]:
     subtitles = _job_path(root, job_id, task.get("subtitles")) if task.get("subtitles") else None
     watermark = _job_path(root, job_id, task.get("watermark")) if task.get("watermark") else None
     if not materials or any(item is None or not item.is_file() for item in materials):
-        raise RuntimeError("Assembly materials are missing from the Job storage")
+        raise RuntimeError(
+            "Assembly materials are missing from the Job storage of this node and could "
+            "not be delivered from CORE"
+        )
     for label, optional in (("audio", audio), ("music", music), ("subtitles", subtitles),
                             ("watermark", watermark)):
         if optional is not None and not optional.is_file():
             raise RuntimeError(f"Assembly {label} is missing from the Job storage")
+    _verify_delivered_inputs(snapshot, materials=materials, audio=audio, music=music,
+                             subtitles=subtitles, watermark=watermark)
 
     version = int(task.get("version") or 1)
     # The render is written to an attempt-scoped temporary name; CORE promotes it
@@ -540,6 +561,53 @@ def execute_assembly(task: dict) -> list[dict]:
             temporary.unlink()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_delivered_inputs(snapshot: dict, *, materials, audio, music, subtitles,
+                             watermark) -> None:
+    """Prove the delivered inputs are the approved ones (Issue #122 P3/P5).
+
+    The dispatching CORE records every staged reference with the SHA256 of the
+    approved bytes (§9.15). Verifying them here is what makes delivery across a
+    different storage root provable: a Worker does not trust its own Job directory,
+    it renders exactly the input the approval was given for. A changed or missing
+    digest is refused instead of rendered.
+    """
+    approved_materials = snapshot.get("materials")
+    if not isinstance(approved_materials, list):
+        raise RuntimeError("Assembly snapshot carries no approved scene inputs")
+    if len(approved_materials) != len(materials):
+        raise RuntimeError(
+            f"Assembly materials do not match the approved snapshot: "
+            f"{len(materials)} delivered, {len(approved_materials)} approved"
+        )
+    for entry, path in zip(approved_materials, materials):
+        if _file_sha256(path) != str(entry.get("sha256") or ""):
+            raise RuntimeError(
+                f"Assembly scene {entry.get('reference')!r} does not match its approved digest"
+            )
+    inputs = snapshot.get("inputs")
+    if not isinstance(inputs, dict):
+        raise RuntimeError("Assembly snapshot carries no approved input references")
+    for label, path in (("audio", audio), ("music", music), ("subtitles", subtitles),
+                        ("watermark", watermark)):
+        entry = inputs.get(label)
+        if entry is None:
+            if path is not None:
+                raise RuntimeError(f"Assembly {label} is not part of the approved snapshot")
+            continue
+        if path is None:
+            raise RuntimeError(f"Approved assembly {label} was not delivered")
+        if _file_sha256(path) != str(entry.get("sha256") or ""):
+            raise RuntimeError(f"Assembly {label} does not match its approved digest")
+
+
 def _job_root() -> Path:
     return Path(os.getenv("JOB_ROOT", "jobs")).resolve()
 
@@ -562,6 +630,99 @@ def _job_path(root: Path, job_id: str, relative: str) -> Path | None:
     if not resolved.is_relative_to(root / job_id):
         raise RuntimeError(f"Assembly input escapes the Job directory: {relative!r}")
     return resolved
+
+
+def _core_base_url() -> str:
+    """The CORE this node registered at, used to pull approved inputs (Issue #122 P3)."""
+    return (os.getenv("CORE_URL") or os.getenv("CORE_API_URL")
+            or os.getenv("VERTEP_CORE_URL") or "").rstrip("/")
+
+
+def _worker_auth_headers(node_name: str) -> dict[str, str]:
+    """The same worker authentication CORE accepts for claim/renew/result."""
+    token = os.getenv("WORKER_TOKEN") or os.getenv("NODE_API_TOKEN") or ""
+    headers = {"x-vertep-node": node_name}
+    if token:
+        headers["x-vertep-token"] = token
+    return headers
+
+
+def _fetch_approved_input(task: dict, relative: str, destination: Path,
+                          expected_sha256: str) -> Path:
+    """Pull one approved input from CORE when this node cannot see the bytes locally.
+
+    Issue #122 P3: the dispatching CORE owns the approved bytes, and this node may run
+    with a different ``JOB_ROOT`` on another host. The transfer is authenticated like
+    every other worker route and the digest from the approved snapshot is verified before
+    the file is used, so a node renders exactly the approved input or refuses the attempt.
+    """
+    base = _core_base_url()
+    node_name = str(os.getenv("NODE_NAME") or os.getenv("WORKER_NAME") or "")
+    if not base or not node_name:
+        raise RuntimeError(
+            f"Assembly input {relative!r} is not available on this node and CORE_URL/"
+            f"NODE_NAME are not configured for its delivery"
+        )
+    task_id = str(task.get("task_id") or "")
+    url = f"{base}/api/tasks/{task_id}/inputs/{relative.lstrip('/')}"
+    with httpx.Client(timeout=httpx.Timeout(60.0, read=600.0)) as client:
+        response = client.get(url, headers=_worker_auth_headers(node_name))
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"CORE refused to deliver assembly input {relative!r}: "
+            f"HTTP {response.status_code} {response.text[:200]}"
+        )
+    data = response.content
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != expected_sha256:
+        raise RuntimeError(
+            f"Delivered assembly input {relative!r} does not match its approved digest"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.parent / f".{destination.name}.delivering"
+    try:
+        temporary.write_bytes(data)
+        # An interrupted transfer must never leave a partial file that the digest check
+        # of a later run could mistake for a delivered input.
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return destination
+
+
+def _deliver_inputs(task: dict, snapshot: dict, job_id: str, root: Path) -> None:
+    """Make every approved input of the attempt available under this node's ``JOB_ROOT``.
+
+    Shared storage keeps working exactly as before: a file that is already there is left
+    alone and only verified. When it is missing, the approved bytes are pulled from CORE
+    into the same Job-scoped location, so a Worker on another host renders the approved
+    input rather than failing or substituting something else. A file that exists but does
+    not match its approved digest is never silently replaced — the attempt is refused by
+    :func:`_verify_delivered_inputs`, so a tampered delivery is visible instead of healed.
+    """
+    approved: dict[str, str] = {}
+    for entry in snapshot.get("materials") or []:
+        reference = str(entry.get("reference") or "")
+        if reference:
+            approved[reference] = str(entry.get("sha256") or "")
+    for entry in (snapshot.get("inputs") or {}).values():
+        reference = str((entry or {}).get("reference") or "")
+        if reference:
+            approved[reference] = str((entry or {}).get("sha256") or "")
+    if not approved:
+        return
+    delivered = False
+    for reference, digest in approved.items():
+        path = _job_path(root, job_id, reference)
+        if path is None or not digest:
+            raise RuntimeError(f"Assembly snapshot pins an undeliverable input: {reference!r}")
+        if path.exists():
+            continue
+        _fetch_approved_input(task, reference, path, digest)
+        delivered = True
+    if delivered:
+        logger.info("Assembly inputs delivered from CORE for %s", job_id)
 
 
 EXECUTORS = {"text": execute_text, "script": execute_script, "voice": execute_voice,

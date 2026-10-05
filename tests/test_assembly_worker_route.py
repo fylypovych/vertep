@@ -21,6 +21,7 @@ import hashlib
 import json
 import struct
 import zlib
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,18 @@ class _UnidentifiableEngine:
 
     engine_id = None
     provider = "native"
+
+    def render(self, output: Path, **kwargs) -> Path:
+        return _mp4(Path(output))
+
+
+class _WorkerRenderer(_ExternalEngine):
+    """The same engine, rendering where a real node renders it: inside the Worker.
+
+    The Worker executor tests drive the node side of the route, so the render has to
+    happen there. It carries the identical snapshot fields, which is what makes the
+    delivery proofs comparable with the refusal tests above.
+    """
 
     def render(self, output: Path, **kwargs) -> Path:
         return _mp4(Path(output))
@@ -173,8 +186,20 @@ def _register_worker(store, name: str = "gpu-01") -> dict:
     return worker
 
 
-def _claim(name: str = "gpu-01") -> dict:
-    return tasks_api.claim_task(TaskClaim(node_name=name, capabilities=[]), _Request())
+def _worker_engine_state(engine=None, *, ready: bool = True, reason: str | None = None) -> dict:
+    """What a real Worker reports with every claim (Issue #122 P5/P7)."""
+    from core.engine_config import engine_snapshot_fields
+
+    return {**engine_snapshot_fields(engine if engine is not None else _ExternalEngine()),
+            "ready": ready, "reason": reason}
+
+
+def _claim(name: str = "gpu-01", *, video_engine: dict | None = None) -> dict:
+    payload = TaskClaim(node_name=name, capabilities=[])
+    # A real node always reports its effective engine configuration with a claim;
+    # ``video_engine=None`` builds that report for the engine the tests dispatch with.
+    payload.video_engine = (_worker_engine_state() if video_engine is None else video_engine)
+    return tasks_api.claim_task(payload, _Request())
 
 
 def _artifact_for(task_id: str, data: bytes, version: int = 1) -> dict:
@@ -428,16 +453,53 @@ def test_a_restart_drops_the_stale_attempt_and_replays_the_same_key(assembly_sta
 # ---------------------------------------------------------------------------
 
 
-def _worker_task(**overrides) -> dict:
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _worker_task(tmp_path: Path, **overrides) -> dict:
+    """Build a Worker task carrying the snapshot CORE would really dispatch.
+
+    The snapshot is recomputed with the shared engine contract instead of being
+    written by hand, so a test can only prove drift by changing a field the real
+    dispatch records.
+    """
+    from core.engine_config import engine_snapshot_fields
+
+    job_id = "job-122"
+    job_dir = tmp_path / "jobs" / job_id
+    version = int(overrides.get("version", 1))
+    submit_key = str(overrides.get("submit_key") or f"job-122-v{version}-abc")
+    task_type = str(overrides.get("task_type") or "video")
+    materials = list(overrides.get("materials") or ["video/scene-000.mp4"])
+    audio = overrides.get("audio")
     task = {
-        "job_id": "job-122", "task_id": "tsk-assembly-1", "task": "assembly",
-        "version": 1, "output": "final/video-v1.mp4",
-        "materials": ["video/scene-000.mp4"], "durations": [3.0],
-        "aspect_ratio": "16:9", "task_type": "video", "script": "Approved first line",
-        "submit_key": "job-122-v1-abc",
-        "engine_snapshot": {"engine_id": "money-printer", "submit_key": "job-122-v1-abc"},
+        "job_id": job_id, "task_id": "tsk-assembly-1", "task": "assembly",
+        "version": version, "output": "final/video-v1.mp4",
+        "materials": materials, "durations": [3.0],
+        "aspect_ratio": "16:9", "task_type": task_type, "script": "Approved first line",
+        "submit_key": submit_key,
     }
     task.update(overrides)
+    task["engine_snapshot"] = {
+        **engine_snapshot_fields(_ExternalEngine()),
+        "job_id": job_id,
+        "video_version": version,
+        "aspect_ratio": task["aspect_ratio"],
+        "preset": task.get("preset"),
+        "task_type": task_type,
+        "submit_key": submit_key,
+        "materials": [
+            {"reference": reference, "sha256": _sha256(job_dir / reference)}
+            for reference in materials
+        ],
+        "inputs": {
+            "audio": ({"reference": audio, "sha256": _sha256(job_dir / audio)}
+                      if audio else None),
+            "music": None, "subtitles": None, "watermark": None,
+        },
+    }
+    task["engine_snapshot"].update(overrides.get("engine_snapshot") or {})
     return task
 
 
@@ -458,9 +520,247 @@ def test_worker_refuses_an_attempt_whose_engine_drifted(tmp_path, monkeypatch):
 
     _worker_job_dir(tmp_path, monkeypatch)
 
-    with pytest.raises(RuntimeError, match="does not match the dispatched snapshot"):
+    with pytest.raises(RuntimeError, match="engine_snapshot_mismatch"):
         role_executor.execute_assembly(
-            _worker_task(engine_snapshot={"engine_id": "shortgpt"}))
+            _worker_task(tmp_path, engine_snapshot={"engine_id": "shortgpt"}))
+
+
+@pytest.mark.parametrize("field", ["config_revision", "bridge_schema_version",
+                                   "upstream_reference", "endpoint_reference",
+                                   "secret_reference"])
+def test_worker_refuses_a_drifted_configuration_field(tmp_path, monkeypatch, field):
+    """Issue #122 P5/P7: the whole snapshot is verified, not only the engine name.
+
+    A node whose endpoint, revision or pinned upstream changed since the dispatch
+    must refuse the attempt: rendering it would produce the Job with a
+    configuration nobody approved.
+    """
+    from worker import role_executor
+
+    _worker_job_dir(tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match=rf"engine_snapshot_mismatch.*{field}"):
+        role_executor.execute_assembly(
+            _worker_task(tmp_path, engine_snapshot={field: "drifted"}))
+
+
+def test_worker_refuses_an_attempt_whose_task_contradicts_the_snapshot(tmp_path, monkeypatch):
+    """The payload and the snapshot must describe one attempt, not two."""
+    from worker import role_executor
+
+    _worker_job_dir(tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="engine_snapshot_mismatch.*aspect_ratio"):
+        role_executor.execute_assembly(
+            _worker_task(tmp_path, aspect_ratio="9:16",
+                         engine_snapshot={"aspect_ratio": "16:9"}))
+
+
+def test_worker_refuses_a_scene_that_is_not_the_approved_one(tmp_path, monkeypatch):
+    """Issue #122 P3/P5: delivery is verified, so a substituted scene cannot render."""
+    from worker import role_executor
+
+    _worker_job_dir(tmp_path, monkeypatch)
+    task = _worker_task(tmp_path)
+    # The Job directory holds different bytes than the approved dispatch recorded.
+    _mp4(tmp_path / "jobs" / "job-122" / "video" / "scene-000.mp4", size=4096)
+
+    with pytest.raises(RuntimeError, match="does not match its approved digest"):
+        role_executor.execute_assembly(task)
+
+
+def test_worker_refuses_a_voice_that_is_not_the_approved_one(tmp_path, monkeypatch):
+    from worker import role_executor
+
+    _worker_job_dir(tmp_path, monkeypatch)
+    _mp4(tmp_path / "jobs" / "job-122" / "audio" / "voice.wav")
+    task = _worker_task(tmp_path, audio="audio/voice.wav")
+    _mp4(tmp_path / "jobs" / "job-122" / "audio" / "voice.wav", size=4096)
+
+    with pytest.raises(RuntimeError, match="audio does not match its approved digest"):
+        role_executor.execute_assembly(task)
+
+
+# ---------------------------------------------------------------------------
+# P3: approved inputs reach a Worker whose storage root is not CORE's
+# ---------------------------------------------------------------------------
+
+
+def _delivering_worker(assembly_state, tmp_path_factory, monkeypatch):
+    """A Worker that shares nothing with CORE but the approved references.
+
+    Its ``JOB_ROOT`` is a different directory tree, so the only way it can render the
+    attempt is the delivery route — exactly the topology of a Worker on another host.
+    """
+    from worker import role_executor
+
+    node_root = tmp_path_factory.mktemp("worker-host")
+    monkeypatch.setenv("JOB_ROOT", str(node_root / "jobs"))
+    monkeypatch.setattr(role_executor, "providers", type("_P", (), {
+        "video_engine": staticmethod(_WorkerRenderer),
+    }))
+    return role_executor, node_root
+
+
+def test_approved_inputs_reach_a_worker_with_a_different_storage_root(
+    assembly_state, monkeypatch, tmp_path_factory,
+):
+    """Issue #122 P3: delivery is proved across roots, not assumed from a shared volume.
+
+    CORE serves the approved bytes of the attempt to the node that owns it; the Worker
+    writes them into its own Job directory, verifies the approved digests and renders.
+    Nothing in the task carries a path of CORE's filesystem.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    import httpx as _httpx
+
+    from core.api import tasks as tasks_module
+
+    store = assembly_state["store"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    task = assembly_state["queue"].find(finalized.assembly_task_id)
+    _claim()  # the node owns the attempt, which is what authorises the delivery
+    role_executor, node_root = _delivering_worker(assembly_state, tmp_path_factory,
+                                                  monkeypatch)
+
+    served: list[str] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def _dispatch(self, method: str) -> None:
+            path = self.path.split("?")[0]
+            prefix = "/api/tasks/"
+            rest = path[len(prefix):] if path.startswith(prefix) else ""
+            task_id, _, reference = rest.partition("/inputs/")
+            request = _Request()
+            request.headers = {key.lower(): value for key, value in self.headers.items()}
+            try:
+                response = tasks_module.task_input(task_id, reference, request)
+            except HTTPException as error:
+                self.send_response(error.status_code)
+                self.send_header("content-length", "0")
+                self.end_headers()
+                return
+            body = response.body if hasattr(response, "body") else b""
+            if method == "HEAD":
+                body = b""
+            served.append(reference)
+            self.send_response(200)
+            self.send_header("content-length", str(len(body)))
+            for name, value in response.headers.items():
+                if name.lower() != "content-length":
+                    self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802 - http.server API
+            self._dispatch("GET")
+
+        def do_HEAD(self) -> None:  # noqa: N802 - http.server API
+            self._dispatch("HEAD")
+
+        def log_message(self, *args):  # pragma: no cover - silence the test server
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        monkeypatch.setenv("CORE_URL", base)
+        monkeypatch.setenv("NODE_NAME", "gpu-01")
+        monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+        monkeypatch.setattr(tasks_module, "_valid_worker_request",
+                            lambda node_name, request: True)
+
+        artifacts = role_executor.execute_assembly(task)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    approved = ([entry["reference"] for entry in finalized.video_engine_snapshot["materials"]]
+                + [entry["reference"] for entry in finalized.video_engine_snapshot["inputs"].values()
+                   if entry])
+    assert sorted(served) == sorted(approved), \
+        "every approved input was pulled by reference, and nothing else"
+    assert len(served) == len(set(served)), "no approved input was fetched twice"
+    for reference in approved:
+        delivered = node_root / "jobs" / finalized.job_id / reference
+        assert delivered.is_file(), f"{reference} did not land in the Worker's own root"
+        assert _sha256(delivered) == _sha256(Path(store.root) / finalized.job_id / reference), \
+            f"{reference} differs from the approved bytes"
+    assert artifacts[0]["contract"]["video_version"] == 1
+    # The attempt still carried no path of CORE's filesystem.
+    assert not Path(task["materials"][0]).is_absolute()
+
+
+def test_the_input_route_refuses_anything_but_the_owning_node_and_approved_inputs(
+    assembly_state, monkeypatch,
+):
+    """Access and ownership: only the rendering node reads only the approved references."""
+    store = assembly_state["store"]
+    _register_worker(store)
+    _register_worker(store, "gpu-02")
+    finalized = _dispatch(assembly_state)
+    _claim()
+
+    def request_for(node: str) -> _Request:
+        request = _Request()
+        request.headers = {"x-vertep-node": node, "x-vertep-token": "worker-token"}
+        return request
+
+    monkeypatch.setattr(tasks_api, "_valid_worker_request", lambda node_name, req: True)
+    reference = finalized.video_engine_snapshot["materials"][0]["reference"]
+
+    # An unauthenticated or nameless caller never reaches the storage.
+    monkeypatch.setattr(tasks_api, "_valid_worker_request", lambda node_name, req: False)
+    with pytest.raises(HTTPException) as anonymous:
+        tasks_api.task_input(finalized.assembly_task_id, reference, request_for("gpu-01"))
+    assert anonymous.value.status_code == 401
+
+    monkeypatch.setattr(tasks_api, "_valid_worker_request", lambda node_name, req: True)
+    # Another registered node may not read the inputs of an attempt it does not own.
+    with pytest.raises(HTTPException) as foreign:
+        tasks_api.task_input(finalized.assembly_task_id, reference, request_for("gpu-02"))
+    assert foreign.value.status_code == 409
+
+    # A file of the same Job that the approved snapshot does not pin stays private.
+    (Path(store.root) / finalized.job_id / "audio").mkdir(parents=True, exist_ok=True)
+    secret = Path(store.root) / finalized.job_id / "audio" / "other.wav"
+    secret.write_bytes(b"not-approved")
+    with pytest.raises(HTTPException) as unapproved:
+        tasks_api.task_input(finalized.assembly_task_id, "audio/other.wav",
+                             request_for("gpu-01"))
+    assert unapproved.value.status_code == 403
+    # A path that escapes the Job directory is refused before it is read.
+    with pytest.raises(HTTPException) as escaping:
+        tasks_api.task_input(finalized.assembly_task_id, "../../secret.key",
+                             request_for("gpu-01"))
+    assert escaping.value.status_code == 403
+
+    # The owning node receives exactly the approved bytes.
+    response = tasks_api.task_input(finalized.assembly_task_id, reference,
+                                    request_for("gpu-01"))
+    body = response.body
+    assert hashlib.sha256(body).hexdigest() == _sha256(
+        Path(store.root) / finalized.job_id / reference)
+
+
+def test_a_worker_without_core_delivery_refuses_instead_of_rendering(tmp_path, monkeypatch):
+    """No CORE_URL means no delivery: the attempt is refused, never approximated."""
+    from worker import role_executor
+
+    _worker_job_dir(tmp_path, monkeypatch)
+    task = _worker_task(tmp_path)
+    # The node's own root does not hold the approved scene, and nothing can fetch it.
+    monkeypatch.setenv("JOB_ROOT", str(tmp_path / "worker-jobs"))
+    for name in ("CORE_URL", "CORE_API_URL", "VERTEP_CORE_URL", "NODE_NAME"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(RuntimeError, match="not configured for its delivery"):
+        role_executor.execute_assembly(task)
 
 
 def test_worker_refuses_a_reference_that_escapes_the_job_directory(tmp_path, monkeypatch):
@@ -470,7 +770,8 @@ def test_worker_refuses_a_reference_that_escapes_the_job_directory(tmp_path, mon
     _mp4(tmp_path / "outside" / "secret.mp4")
 
     with pytest.raises(RuntimeError, match="must be a Job-scoped relative path"):
-        role_executor.execute_assembly(_worker_task(materials=["../../outside/secret.mp4"]))
+        role_executor.execute_assembly(
+            _worker_task(tmp_path, materials=["../../outside/secret.mp4"]))
 
 
 def test_worker_renders_the_dispatched_version_and_returns_a_verifiable_contract(
@@ -492,9 +793,8 @@ def test_worker_renders_the_dispatched_version_and_returns_a_verifiable_contract
     }))
 
     artifacts = role_executor.execute_assembly(
-        _worker_task(version=2, output="final/video-v2.mp4", submit_key="job-122-v2-abc",
-                     engine_snapshot={"engine_id": "money-printer",
-                                      "submit_key": "job-122-v2-abc"}))
+        _worker_task(tmp_path, version=2, output="final/video-v2.mp4",
+                     submit_key="job-122-v2-abc"))
 
     assert len(artifacts) == 1
     artifact = artifacts[0]
@@ -520,6 +820,128 @@ def test_renew_requires_the_owning_worker(assembly_state):
     assert refusal.value.status_code == 409
 
     assert tasks_api.renew_task(TaskRenew(node_name="gpu-01", task_id=task_id), _Request())["renewed"]
+
+
+# ---------------------------------------------------------------------------
+# P5/P7: CORE hands the attempt only to a node that can prove it runs the exact
+# configuration the attempt was dispatched with
+# ---------------------------------------------------------------------------
+
+
+def test_a_node_that_reports_a_drifted_configuration_is_not_handed_the_attempt(assembly_state):
+    """The claim is refused before any node spends an upstream render (Issue #122 P5)."""
+    store, job = assembly_state["store"], assembly_state["job"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    snapshot = finalized.video_engine_snapshot
+    drifted = _worker_engine_state()
+    drifted["config_revision"] = "0" * 16
+
+    assert _claim(video_engine=drifted)["task"] is None
+    assert any("config_revision_mismatch" in event for event in store.jobs[job.job_id].events), \
+        "the operator must see why the attempt is not running"
+    assert assembly_state["queue"].find(finalized.assembly_task_id) is not None, \
+        "the attempt stays queued instead of being handed to a mismatched node"
+
+
+def test_a_node_whose_runtime_is_not_ready_is_not_handed_the_attempt(assembly_state):
+    store = assembly_state["store"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+
+    assert _claim(video_engine=_worker_engine_state(ready=False,
+                                                   reason="runtime_not_ready"))["task"] is None
+    assert assembly_state["queue"].find(finalized.assembly_task_id) is not None
+
+
+def test_a_node_that_reports_no_engine_state_is_not_handed_the_attempt(assembly_state):
+    _register_worker(assembly_state["store"])
+    finalized = _dispatch(assembly_state)
+
+    assert _claim(video_engine={})["task"] is None
+    assert assembly_state["queue"].find(finalized.assembly_task_id) is not None
+
+
+def test_a_matching_node_is_handed_the_attempt(assembly_state):
+    _register_worker(assembly_state["store"])
+    _dispatch(assembly_state)
+
+    assert _claim()["task"]["task"] == "assembly"
+
+
+@pytest.mark.parametrize("field", [
+    "endpoint_reference", "secret_reference", "engine_id", "bridge_schema_version",
+])
+def test_a_node_that_reports_a_drifted_external_reference_is_not_handed_the_attempt(
+    assembly_state, field,
+):
+    """A repointed endpoint, another pinned upstream or another bridge keeps the task queued.
+
+    Comparing only the engine name would hand a node with a different runtime — or one
+    pointed at another endpoint with the same name — an attempt decided against this exact
+    configuration (Issue #122 P5/P7).
+    """
+    store, job = assembly_state["store"], assembly_state["job"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    snapshot = finalized.video_engine_snapshot
+    assert snapshot.get(field) not in (None, ""), f"{field} is pinned by this snapshot"
+    drifted = _worker_engine_state()
+    drifted[field] = "reference-of-another-node"
+
+    assert _claim(video_engine=drifted)["task"] is None
+    assert any(f"{field}_mismatch" in event for event in store.jobs[job.job_id].events), \
+        f"the operator must see the {field} drift that blocks the attempt"
+    assert assembly_state["queue"].find(finalized.assembly_task_id) is not None
+
+
+def test_a_node_that_does_not_report_a_pinned_reference_is_not_handed_the_attempt(
+    assembly_state,
+):
+    """Reporting only part of the snapshot is not a proof of the whole configuration."""
+    store = assembly_state["store"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    incomplete = _worker_engine_state()
+    incomplete.pop("endpoint_reference", None)
+
+    assert _claim(video_engine=incomplete)["task"] is None
+    assert assembly_state["queue"].find(finalized.assembly_task_id) is not None
+
+
+def test_the_claim_gate_covers_every_pinned_reference():
+    """The gate itself, including the pinned upstream the fake engine does not carry.
+
+    A real external engine pins an upstream commit in its contract profile; a node built
+    from another tarball reports a different one and must not be handed the attempt.
+    """
+    from core.api.job_helpers import assembly_worker_mismatch
+
+    snapshot = {
+        "engine_id": "money-printer",
+        "bridge_schema_version": "v1",
+        "config_revision": "471bbd668dbe951c",
+        "upstream_reference": "fylypovych/moneyprinter@2e1b3039",
+        "endpoint_reference": {"configured": True, "endpoint": "http://runtime:8098",
+                               "env": "MONEY_PRINTER_URL"},
+        "secret_reference": {"configured": True, "env": "MONEY_PRINTER_TOKEN"},
+    }
+
+    assert assembly_worker_mismatch(dict(snapshot, ready=True), snapshot) is None
+    for field in ("upstream_reference", "endpoint_reference", "secret_reference",
+                  "engine_id", "bridge_schema_version", "config_revision"):
+        drifted = dict(snapshot, ready=True)
+        drifted[field] = "something-else"
+        assert assembly_worker_mismatch(drifted, snapshot) == f"{field}_mismatch"
+
+    # A node that omits a pinned reference cannot prove it runs the same configuration.
+    incomplete = dict(snapshot, ready=True)
+    incomplete.pop("secret_reference")
+    assert assembly_worker_mismatch(incomplete, snapshot) == "engine_state_incomplete"
+    # Readiness is still part of the proof: a configured node that is not ready is refused.
+    assert assembly_worker_mismatch(
+        dict(snapshot, ready=False, reason="runtime_not_ready"), snapshot,
+    ) == "engine_not_ready:runtime_not_ready"
 
 
 # ---------------------------------------------------------------------------
@@ -584,7 +1006,7 @@ def test_a_switch_during_an_active_attempt_does_not_change_the_dispatched_snapsh
     first_revision = dispatched.video_engine_snapshot["config_revision"]
     assert first_revision
     _register_worker(store)
-    claim = _claim()["task"]
+    claim = _claim(video_engine=_worker_engine_state(first_engine))["task"]
     assert claim["task_id"]
     in_flight = assembly_state["queue"].find(claim["task_id"])
     assert in_flight["engine_snapshot"]["engine_id"] == "money-printer"
@@ -872,3 +1294,193 @@ def test_a_superseded_attempt_is_not_offered_to_a_worker(assembly_state):
     assert claimed is not None and claimed["task_id"] == current_task_id
     assert assembly_state["queue"].find(stale_task_id) is None, \
         "the superseded attempt stayed claimable after the revision"
+
+# ---------------------------------------------------------------------------
+# P6 §5: what is known about the compute of a cancelled attempt
+# ---------------------------------------------------------------------------
+
+
+class _RefusesAbortEngine(_ExternalEngine):
+    """A runtime whose abort is refused while the upstream task is busy (§9.8)."""
+
+    def __init__(self, runtime_state: str = "running") -> None:
+        super().__init__()
+        self.runtime_state = runtime_state
+        self.cancelled_with: list[str] = []
+
+    def cancel(self, job_id=None, *, submit_key=None) -> bool:
+        self.cancelled_with.append(submit_key or "")
+        return False
+
+    def release_state(self, submit_key: str | None = None) -> str:
+        from adapters.providers.base import RELEASE_RELEASED, RELEASE_UNCONFIRMED
+
+        return RELEASE_RELEASED if self.runtime_state == "absent" else RELEASE_UNCONFIRMED
+
+
+@contextmanager
+def _effective_engine(engine):
+    """Install ``engine`` as the effective engine, leaving no stale registry behind.
+
+    ``adapters.providers.providers`` is a lazy proxy, so patching the attribute through
+    it and then undoing the patch would write a bound method of whichever registry
+    existed at that moment onto the proxy — pinning every later caller, in this process,
+    to an engine built from an unrelated environment. The real registry object is
+    therefore patched directly and the instance attribute is removed again afterwards.
+    """
+    from adapters.providers import get_providers
+
+    registry = get_providers()
+    existed = "video_engine" in registry.__dict__
+    previous = registry.__dict__.get("video_engine")
+    registry.video_engine = lambda: engine
+    try:
+        yield
+    finally:
+        if existed:
+            registry.video_engine = previous
+        else:
+            del registry.__dict__["video_engine"]
+
+
+def _cancel_job(state, engine) -> dict:
+    """Cancel the Job with ``engine`` as the effective runtime of the attempt."""
+    with _effective_engine(engine):
+        job_helpers._job_action(state["job"].job_id, JobStatus.CANCELLED, "JOB CANCELLED")
+    return state["store"].jobs[state["job"].job_id].assembly_releases
+
+
+def test_a_refused_abort_is_recorded_as_an_unconfirmed_release(assembly_state):
+    """A logical cancel must not be read as released compute (§5).
+
+    The pinned runtime answers 409 while it is busy, so the attempt is fenced and the
+    release stays unconfirmed with its reason instead of being assumed.
+"""
+    store, job = assembly_state["store"], assembly_state["job"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    key = finalized.video_engine_snapshot["submit_key"]
+    attempt_id = finalized.assembly_task_id
+    engine = _RefusesAbortEngine()
+
+    releases = _cancel_job(assembly_state, engine)
+
+    assert set(releases) == {key}
+    record = releases[key]
+    assert record["state"] == "unconfirmed"
+    assert record["reason"] == "abort_refused_or_still_running"
+    assert record["engine_id"] == "money-printer"
+    assert record["task_id"] == attempt_id, \
+        "the release must be addressable by the attempt it belongs to"
+    assert engine.cancelled_with == [key], "the abort must be addressed to the durable key"
+    assert any("RELEASE" in event for event in store.jobs[job.job_id].events)
+
+
+def test_a_runtime_whose_task_is_gone_is_recorded_as_released(assembly_state):
+    """Only what the runtime reports may release it (§5, §9.8)."""
+    _register_worker(assembly_state["store"])
+    _dispatch(assembly_state)
+    engine = _RefusesAbortEngine(runtime_state="absent")
+
+    releases = _cancel_job(assembly_state, engine)
+
+    assert [record["state"] for record in releases.values()] == ["released"]
+    assert releases[next(iter(releases))]["reason"] == \
+        "abort_refused_but_runtime_reports_no_running_task"
+
+
+def test_an_accepted_abort_is_recorded_as_released(assembly_state):
+    _register_worker(assembly_state["store"])
+    _dispatch(assembly_state)
+    engine = _ExternalEngine()  # confirms the abort
+
+    releases = _cancel_job(assembly_state, engine)
+
+    assert [record["state"] for record in releases.values()] == ["released"]
+    assert list(releases.values())[0]["reason"] == "abort_accepted"
+
+
+def test_an_unreachable_runtime_never_reports_a_release(assembly_state):
+    """Silence is not a confirmation: an unreadable engine stays unconfirmed."""
+    _register_worker(assembly_state["store"])
+    _dispatch(assembly_state)
+
+    class _BrokenEngine(_ExternalEngine):
+        def cancel(self, job_id=None, *, submit_key=None) -> bool:
+            raise ConnectionError("runtime unreachable")
+
+    releases = _cancel_job(assembly_state, _BrokenEngine())
+
+    assert [record["state"] for record in releases.values()] == ["unconfirmed"]
+    assert "cancel_unconfirmed" in list(releases.values())[0]["reason"]
+
+
+def test_a_lease_is_not_handed_to_another_job_while_the_release_is_unproven(assembly_state):
+    """§5: the runtime is not offered another render on the strength of a cancel."""
+    store, job = assembly_state["store"], assembly_state["job"]
+    _register_worker(store)
+
+    # Another Job holds this very runtime with a release it could not prove.
+    other = _job(job_id="job-122-b")
+    store.jobs[other.job_id] = other
+    engine = _RefusesAbortEngine()
+    job_helpers.record_assembly_release(
+        other, submit_key="job-122-b-v1-older",
+        snapshot={"engine_id": "money-printer", "endpoint_reference": {"endpoint": ""}},
+        state="unconfirmed", reason="abort_refused_or_still_running",
+        task_id="task-older",
+    )
+
+    _dispatch(assembly_state)
+    finalized = store.jobs[job.job_id]
+    finalized.video_engine_snapshot["job_id"] = job.job_id
+
+    claimed = _claim()
+
+    assert claimed.get("task") is None, \
+        "an attempt must not be handed to a runtime with an unconfirmed release"
+    assert any("unconfirmed release" in event for event in finalized.events), \
+        "the hold must say why the attempt is not leased"
+    assert job_helpers.engine_release_hold(finalized.video_engine_snapshot)["job_id"] == other.job_id
+
+
+def test_a_release_of_another_runtime_does_not_hold_this_one(assembly_state):
+    """The hold belongs to one runtime: repointing the engine is not blocked by it."""
+    store, job = assembly_state["store"], assembly_state["job"]
+    _register_worker(store)
+    other = _job(job_id="job-122-b")
+    store.jobs[other.job_id] = other
+    job_helpers.record_assembly_release(
+        other, submit_key="job-122-b-v1-other-endpoint",
+        snapshot={"engine_id": "money-printer",
+                  "endpoint_reference": {"endpoint": "http://mpt-old:8080"}},
+        state="unconfirmed", reason="abort_refused_or_still_running",
+        task_id="task-other-endpoint",
+    )
+
+    _dispatch(assembly_state)
+    finalized = store.jobs[job.job_id]
+
+    assert job_helpers.engine_release_hold(finalized.video_engine_snapshot) is None, \
+        "an unproven release of a different endpoint must not block this runtime"
+
+
+def test_the_hold_is_released_when_the_late_render_proves_the_release(assembly_state):
+    """A cancelled attempt that comes back finished is the proof a cancel was not."""
+    from adapters.providers.base import RELEASE_UNCONFIRMED
+
+    store, job = assembly_state["store"], assembly_state["job"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    task_id = finalized.assembly_task_id
+    key = finalized.video_engine_snapshot["submit_key"]
+    _cancel_job(assembly_state, _RefusesAbortEngine())
+    assert store.jobs[job.job_id].assembly_releases[key]["state"] == RELEASE_UNCONFIRMED
+
+    late = _mp4(assembly_state["tmp_path"] / "late-release.mp4").read_bytes()
+    with pytest.raises(HTTPException) as refusal:
+        tasks_api.task_result(_result(job.job_id, task_id, late), _Request())
+
+    assert refusal.value.status_code == 409, "a late artifact of a cancelled attempt is refused"
+    assert store.jobs[job.job_id].assembly_releases[key]["state"] == "released"
+    assert job_helpers.engine_release_hold(job.video_engine_snapshot) is None

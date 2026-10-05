@@ -659,6 +659,7 @@ def test_wrapper_self_test_passes_when_every_gate_is_green(monkeypatch, tmp_path
     monkeypatch.setattr(wrapper, "check_upstream_authenticated", lambda *a, **k: None)
     monkeypatch.setattr(wrapper, "check_ffmpeg", lambda: "/usr/bin/ffmpeg")
     monkeypatch.setattr(wrapper, "check_media_pipeline", lambda: {"duration_seconds": 3.0})
+    monkeypatch.setattr(wrapper, "check_submit_route", lambda: _route_report())
     monkeypatch.setattr(
         wrapper, "check_submit_schema", lambda: {name: "str" for name in wrapper.REQUIRED_SUBMIT_FIELDS}
     )
@@ -669,6 +670,9 @@ def test_wrapper_self_test_passes_when_every_gate_is_green(monkeypatch, tmp_path
     body = response.json()
     assert body["status"] == "passed"
     assert body["checks"]["upstream"]["authenticated"] is True
+    # The whole route the factory uses is part of the eligibility gate, not only the
+    # compose helper (Issue #122 P4).
+    assert body["checks"]["submit_route"]["voice_staged"] is True
 
 
 def test_wrapper_requires_a_non_empty_api_key(monkeypatch, tmp_path):
@@ -1134,6 +1138,29 @@ def test_runtime_check_refuses_an_unpinned_dependency_inventory():
         )
 
 
+def _route_report(**overrides) -> dict:
+    """A completed submit → status → download proof through the real route (P4).
+
+    The shape mirrors :func:`check_submit_route`: ``state`` is the pinned runtime's own
+    finished marker, and the colours prove the download shows the submitted scene.
+    """
+    report = {
+        "submit_key": "self-test-1-1",
+        "task_id": "j-self-test",
+        "state": 1,
+        "bytes": 4096,
+        "duration_seconds": 2.0,
+        "width": 1080,
+        "height": 1920,
+        "mean_colour": [200.0, 10.0, 10.0],
+        "expected_colour": [200.0, 10.0, 10.0],
+        "voice_staged": True,
+        "output": "final/video-20260101-000000.mp4",
+    }
+    report.update(overrides)
+    return report
+
+
 def _ready_health(**checks) -> dict:
     """A ``/health`` report that satisfies every §9.12 readiness gate.
 
@@ -1257,6 +1284,7 @@ def test_runtime_check_reads_only_keys_the_wrapper_health_actually_publishes(
                  "scene_order": ["scene-1"], "expected_scene_order": ["scene-1"],
                  "aspect": "9:16", "fit_mode": "contain"},
     )
+    monkeypatch.setattr(wrapper, "check_submit_route", lambda: _route_report())
     monkeypatch.setattr(
         wrapper,
         "check_submit_schema",
@@ -1273,7 +1301,58 @@ def test_runtime_check_reads_only_keys_the_wrapper_health_actually_publishes(
     # The media proof has to stay enforced somewhere: the self-test report.
     self_test = client.get("/self-test").json()
     assert self_test["checks"]["media_pipeline"]["bytes"] == 4096
+    assert self_test["checks"]["submit_route"]["task_id"] == "j-self-test"
     check.verify_self_test(self_test)
+
+
+def test_runtime_check_requires_a_proven_submit_route(monkeypatch, tmp_path):
+    """A runtime that cannot render through its own submit route is not eligible.
+
+    The compose helper alone proved nothing about the route the factory uses, so the
+    gate also requires a completed submit → status → download with the approved voice
+    staged (Issue #122 P4).
+    """
+    from services import moneyprinter_service as wrapper
+
+    check = _load_runtime_check()
+    monkeypatch.setattr(wrapper, "check_upstream_authenticated", lambda *a, **k: None)
+    monkeypatch.setattr(wrapper, "check_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(wrapper, "check_media_pipeline", lambda: {
+        "duration_seconds": 9.0, "bytes": 4096,
+        "scenes": [{"label": "scene-1", "seconds": 9, "at_seconds": 4.5,
+                    "mean_colour": [1.0, 1.0, 1.0], "expected_colour": [1.0, 1.0, 1.0]}],
+        "scene_order": ["scene-1"], "expected_scene_order": ["scene-1"],
+        "aspect": "9:16", "fit_mode": "contain",
+    })
+    monkeypatch.setattr(wrapper, "check_submit_route", lambda: _route_report())
+    monkeypatch.setattr(
+        wrapper, "check_submit_schema",
+        lambda: {name: "str" for name in wrapper.REQUIRED_SUBMIT_FIELDS},
+    )
+    client = _wrapper_client(monkeypatch, tmp_path)
+    passing = client.get("/self-test").json()
+    check.verify_self_test(passing)
+
+    for broken, expected in (
+        ({"voice_staged": False}, "approved voice"),
+        ({"task_id": None}, "no upstream task"),
+        ({"state": 0}, "did not finish"),
+        ({"bytes": 0}, "no media bytes"),
+        ({"duration_seconds": 0}, "no media duration"),
+        ({"submit_key": ""}, "no durable submit key"),
+        ({"width": 1920, "height": 1080}, "9:16 aspect"),
+        ({"mean_colour": [10.0, 200.0, 200.0]}, "did not render the submitted scene"),
+    ):
+        monkeypatch.setattr(wrapper, "check_submit_route",
+                            lambda report={**broken}: _route_report(**report))
+        failing = client.get("/self-test").json()
+        with pytest.raises(check.CheckFailure, match=expected):
+            check.verify_self_test(failing)
+
+    # A runtime that reports no submit route at all is refused as well.
+    monkeypatch.setattr(wrapper, "check_submit_route", lambda: {})
+    with pytest.raises(check.CheckFailure, match="submit route"):
+        check.verify_self_test(client.get("/self-test").json())
 
 
 def test_runtime_check_requires_every_readiness_gate():
@@ -1338,7 +1417,9 @@ def _media_report(**overrides) -> dict:
         "concat_mode": "sequential",
     }
     report.update(overrides)
-    return {"media_pipeline": report}
+    # Every self-test the gate accepts also carries the real submit-route proof, so a
+    # fixture that is only about the compose path cannot silently drift out of contract.
+    return {"media_pipeline": report, "submit_route": _route_report()}
 
 
 def test_runtime_check_requires_a_proven_scene_timeline():
@@ -2085,9 +2166,98 @@ def test_wrapper_cancels_the_task_when_the_voice_cannot_be_placed(monkeypatch, t
     response = _submit(client)
 
     assert response.status_code == 503
-    assert response.json()["reason"] == "upstream_voice_staging_unsupported"
+    # The category tells CORE the approved voice was the reason, the cause tells an
+    # operator which check failed — the attempt is never reported as merely "failed".
+    assert response.json()["reason"] == "voice_staging_failed"
+    assert response.json()["cause"] == "upstream_voice_staging_unsupported"
     assert [call[0] for call in calls] == ["POST", "DELETE"]
     assert calls[1][1] == "/api/v1/tasks/j-43"
+
+
+def test_a_repeat_submit_after_a_restart_completes_the_voice_staging(monkeypatch, tmp_path):
+    """Issue #122 P3/P6: the durable record outlives the process that staged the voice.
+
+    A restart between writing the task mapping and staging the approved audio left a
+    task that could only be narrated by the pinned TTS. The repeat submit now finishes
+    the staging before it answers "reconciled", and refuses the key outright when it
+    cannot.
+    """
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    digest = hashlib.sha256(b"approved-voice-bytes").hexdigest()
+    marker = f"vertep-voice:{digest}.wav"
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    calls: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: (
+            calls.append((method, path)),
+            httpx.Response(200, json={"status": 200, "data": {"task_id": "j-79"}}),
+        )[1],
+    )
+    # A record written by a process that died before the voice reached the task dir.
+    wrapper_module._remember_submit("job-1-v1-restart", task_id="j-79", marker=marker,
+                                    state="submitted")
+
+    refused = _submit_with_key(client, "job-1-v1-restart", custom_audio_file=marker)
+
+    assert refused.status_code == 503
+    assert refused.json()["reason"] == "voice_staging_failed"
+    assert ("DELETE", "/api/v1/tasks/j-79") in calls, \
+        "an attempt that cannot be narrated by the approved voice is aborted"
+
+    # The voice bytes are staged now, so the same key is answered from the record
+    # instead of creating a second upstream task.
+    client.post(
+        "/api/v1/voice",
+        content=b"approved-voice-bytes",
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice-0001.wav"},
+    )
+    reconciled = _submit_with_key(client, "job-1-v1-restart", custom_audio_file=marker)
+
+    assert reconciled.status_code == 409, "a refused key is terminal, not retried"
+    assert reconciled.json()["reason"] == "voice_staging_failed"
+
+
+def test_a_corrupted_submit_record_is_never_treated_as_a_new_submit(monkeypatch, tmp_path):
+    """Issue #122 P6: an unreadable record fails closed instead of resubmitting."""
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service",
+                                fromlist=["_submit_record_path"])
+    path = wrapper_module._submit_record_path("job-1-v1-broken")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    calls: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, route, *, api_key, **kwargs: (
+            calls.append((method, route)),
+            httpx.Response(200, json={"status": 200, "data": {"task_id": "j-80"}}),
+        )[1],
+    )
+
+    response = _submit_with_key(client, "job-1-v1-broken")
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "submit_record_unreadable"
+    assert calls == [], "a corrupted record must never become a second upstream submit"
+
+
+def test_a_submit_record_that_belongs_to_another_key_is_refused(monkeypatch, tmp_path):
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service",
+                                fromlist=["_submit_record_path"])
+    path = wrapper_module._submit_record_path("job-1-v1-other")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"submit_key": "job-1-v1-mine", "task_id": "j-81",
+                                "state": "staged"}), encoding="utf-8")
+
+    response = _submit_with_key(client, "job-1-v1-other")
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "submit_record_unreadable"
 
 
 @pytest.mark.parametrize("overrides,expected", [
@@ -2212,7 +2382,13 @@ def test_wrapper_reconciles_a_lost_response_through_the_submit_key(
     ]
 
     status = client.get("/api/v1/videos/job-1-v1-abc", headers={"x-api-key": "runtime-key"})
+    # The approved voice is verified inside the pinned task directory, so the record is
+    # not merely "submitted": a repeat submit can be answered as fully reconciled.
+    # ``runtime_state`` is resolved from the upstream task; this stand-in answers every
+    # request like a submit, so the real state of the task cannot be read from it.
     assert status.json() == {"status": 200, "state": "submitted",
+                             "record_state": "staged", "voice_staged": True,
+                             "runtime_state": "unreachable",
                              "data": {"task_id": "j-77"}}
 
 
@@ -2251,6 +2427,50 @@ def test_wrapper_reports_an_unknown_submit_key_as_unknown(monkeypatch, tmp_path)
 
     assert status.status_code == 404
     assert status.json()["state"] == "unknown"
+
+
+def test_a_definitively_refused_submit_releases_its_key_for_a_retry(monkeypatch, tmp_path):
+    """A 4xx submit created no upstream task, so the attempt stays retryable.
+
+    Keeping the key reserved after a definitive refusal would turn one rejected submit
+    into a permanently blocked attempt, and a 5xx must not release it: the upstream may
+    already hold the work.
+    """
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    calls: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: (
+            calls.append((method, path)),
+            httpx.Response(422, json={"status": 422, "message": "unsupported parameter"}),
+        )[1],
+    )
+
+    refused = _submit_with_key(client, "job-1-v1-refused")
+
+    assert refused.status_code == 422
+    assert len(calls) == 1
+    # The key is free again: a retry reaches the upstream instead of being blocked.
+    retried = _submit_with_key(client, "job-1-v1-refused")
+    assert retried.status_code == 422
+    assert len(calls) == 2
+
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: (
+            calls.append((method, path)),
+            httpx.Response(503, text="Service Unavailable"),
+        )[1],
+    )
+    assert _submit_with_key(client, "job-1-v1-ambiguous").status_code == 503
+    # A server-side failure leaves the key reserved, so a retry is reported as unknown
+    # instead of risking a second upstream task.
+    calls.clear()
+    again = _submit_with_key(client, "job-1-v1-ambiguous")
+    assert again.status_code == 409
+    assert again.json()["reason"] == "upstream_submit_unknown"
+    assert calls == []
 
 
 def test_wrapper_aborts_an_attempt_by_its_durable_submit_key(monkeypatch, tmp_path):
@@ -2324,3 +2544,116 @@ def test_wrapper_reports_no_voice_capability_without_the_pinned_resolver(monkeyp
 
     assert capability["task_local_voice"] is False
     assert capability["reason"] == "upstream_schema_unsupported"
+
+
+# ---------------------------------------------------------------------------
+# P6 §5/§9.8: the real state of a cancelled attempt is reported, never assumed
+# ---------------------------------------------------------------------------
+
+
+def _status_of(client, submit_key: str):
+    return client.get(f"/api/v1/videos/{submit_key}", headers={"x-api-key": "runtime-key"})
+
+
+def test_the_runtime_state_of_a_submitted_attempt_is_reported_from_the_upstream(
+        monkeypatch, tmp_path):
+    """A logical cancel proves nothing about compute, so the state is resolved (§9.8)."""
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    wrapper_module._remember_submit("job-1-v1-state", task_id="j-81")
+    seen: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: (
+            seen.append((method, path)),
+            httpx.Response(200, json={"status": 200, "data": {"state": 4}}),
+        )[1],
+    )
+
+    body = _status_of(client, "job-1-v1-state").json()
+
+    assert body["state"] == "submitted"
+    assert body["runtime_state"] == "running", "a busy upstream task is still rendering"
+    assert seen == [("GET", "/api/v1/tasks/j-81")]
+
+
+@pytest.mark.parametrize("upstream_state, expected", [
+    (1, "finished"),
+    (-1, "failed"),
+    (4, "running"),
+])
+def test_every_upstream_task_state_is_mapped(monkeypatch, tmp_path, upstream_state, expected):
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    wrapper_module._remember_submit("job-1-v1-map", task_id="j-82")
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: httpx.Response(
+            200, json={"status": 200, "data": {"state": upstream_state}}),
+    )
+
+    assert _status_of(client, "job-1-v1-map").json()["runtime_state"] == expected
+
+
+def test_a_task_the_upstream_no_longer_knows_reports_absent(monkeypatch, tmp_path):
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    wrapper_module._remember_submit("job-1-v1-gone", task_id="j-83")
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: httpx.Response(404, json={"status": 404}),
+    )
+
+    assert _status_of(client, "job-1-v1-gone").json()["runtime_state"] == "absent"
+
+
+def test_an_unreachable_upstream_is_unreachable_and_never_absent(monkeypatch, tmp_path):
+    """Silence must never be read as "stopped" (§5)."""
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    wrapper_module._remember_submit("job-1-v1-silent", task_id="j-84")
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        _raises(httpx.ConnectError("upstream unreachable")),
+    )
+
+    body = _status_of(client, "job-1-v1-silent").json()
+
+    assert body["state"] == "submitted"
+    assert body["runtime_state"] == "unreachable"
+
+
+def test_an_unreadable_upstream_body_is_unreachable(monkeypatch, tmp_path):
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    wrapper_module._remember_submit("job-1-v1-garbage", task_id="j-85")
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: httpx.Response(200, text="not json"),
+    )
+
+    assert _status_of(client, "job-1-v1-garbage").json()["runtime_state"] == "unreachable"
+
+
+def test_a_submit_without_an_upstream_task_reports_absent(monkeypatch, tmp_path):
+    """A refused submit never created upstream work, so nothing of it is running."""
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    wrapper_module._remember_submit("job-1-v1-refused", task_id=None)
+    calls: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: calls.append(path) or httpx.Response(204),
+    )
+
+    body = _status_of(client, "job-1-v1-refused").json()
+
+    assert body["state"] == "unknown"
+    assert body["runtime_state"] == "absent"
+    assert calls == [], "an attempt without an upstream task needs no upstream call"

@@ -315,6 +315,47 @@ def verify_self_test(self_test: dict) -> None:
             )
     if not media.get("aspect") or not media.get("fit_mode"):
         raise CheckFailure(f"self-test did not report the compose aspect/fit mode: {media!r}")
+    # The compose helper in isolation proves nothing about the attempt the factory makes.
+    # §9.4 acceptance is a real submit through the wrapper's own upload/submit routes, an
+    # approved voice staged inside the accepted task, an upstream task that finished and a
+    # download that decodes to the job aspect — a runtime that would narrate on its own or
+    # publish by itself cannot pass this gate.
+    route = checks.get("submit_route")
+    if not isinstance(route, dict) or not route:
+        raise CheckFailure(f"self-test passed without a proven submit route: {route!r}")
+    # ``1`` is the pinned runtime's own "task finished" state.
+    if route.get("state") != 1:
+        raise CheckFailure(f"the submit route did not finish an upstream task: {route!r}")
+    task_id = route.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise CheckFailure(f"the submit route produced no upstream task: {route!r}")
+    if not route.get("submit_key"):
+        raise CheckFailure(f"the submit route used no durable submit key: {route!r}")
+    if route.get("voice_staged") is not True:
+        raise CheckFailure(
+            f"the submit route did not prove the approved voice inside the task: {route!r}"
+        )
+    if not route.get("bytes"):
+        raise CheckFailure(f"the submit route downloaded no media bytes: {route!r}")
+    if not route.get("duration_seconds"):
+        raise CheckFailure(f"the submit route downloaded no media duration: {route!r}")
+    width, height = route.get("width") or 0, route.get("height") or 0
+    if not width or not height:
+        raise CheckFailure(f"the submit route reported no video stream size: {route!r}")
+    if not 1.6 <= height / width <= 1.95:
+        raise CheckFailure(
+            f"the submit route rendered outside the submitted 9:16 aspect: "
+            f"{width}x{height}"
+        )
+    drift = max(
+        abs(actual - expected)
+        for actual, expected in zip(route.get("mean_colour") or [],
+                                   route.get("expected_colour") or [])
+    ) if route.get("mean_colour") and route.get("expected_colour") else None
+    if drift is None or drift > 48:
+        raise CheckFailure(
+            f"the submit route did not render the submitted scene: {route!r}"
+        )
 
 
 # Markers of a setting that can make the pinned runtime publish on its own: an enable

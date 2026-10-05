@@ -16,6 +16,7 @@ the engine-specific part:
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -61,6 +62,27 @@ class _Native:
         return {"ready": True}
 
 
+class _EnvRuntime(_Runtime):
+    """An external engine that resolves its address the way the real factory does.
+
+    A process rebuilds its engine from the persisted environment, so an applied endpoint
+    becomes visible without anything rewriting the engine object. Reading the environment
+    on access is what makes persist → apply → verify → restart observable in a test
+    instead of being asserted by hand.
+    """
+
+    def __init__(self, ready: bool = True, engine_id: str = "money-printer") -> None:
+        super().__init__(ready=ready, url="", engine_id=engine_id)
+
+    @property
+    def _url(self) -> str:
+        return os.getenv("MONEY_PRINTER_URL", "")
+
+    @_url.setter
+    def _url(self, value: str) -> None:
+        return None
+
+
 @pytest.fixture
 def registry(monkeypatch):
     """A controllable provider registry for the video-engine slot.
@@ -69,8 +91,6 @@ def registry(monkeypatch):
     effective engine is whatever the test put into the registry — the same split a
     real process has between a persisted choice and a resolved factory.
     """
-    import os
-
     import adapters.providers as providers_module
 
     current = {"engine": _Native()}
@@ -406,3 +426,144 @@ def test_native_has_no_endpoint_to_give(registry, monkeypatch):
         switch_provider("video_engine", "native", actor="test", endpoint="http://runtime:8098")
 
     assert refusal.value.status_code == 422
+
+
+def test_the_runtime_address_of_the_effective_engine_can_be_repointed(registry, monkeypatch):
+    """P8: адресу runtime змінюють без перемикання движка — і це теж apply.
+
+    Зовнішній движок вказується на свій runtime адресою, тому її зміна є зміною ефективної
+    конфігурації навіть тоді, коли сам движок лишається тим самим. Раніше такий запит не
+    проходив через жоден маршрут: Settings не надсилав його, а apply без зміни движка
+    повертався як ``changed: false``.
+    """
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://runtime:8098")
+    registry["engine"] = _EnvRuntime(ready=True)
+    switch_provider("video_engine", "money-printer", actor="test",
+                    endpoint="http://runtime:8098")
+    before = engine_config.effective_engine_config()
+    assert before["effective"] == "money-printer"
+    assert before["fields"][0]["value"] == "http://runtime:8098"
+
+    result = switch_provider("video_engine", "money-printer", actor="test",
+                             endpoint="http://runtime:9090")
+
+    assert result["changed"] is True
+    after = result["effective_engine"]
+    assert after["effective"] == "money-printer", "движок лишається тим самим"
+    assert after["endpoint"] == "http://runtime:9090"
+    assert after["fields"][0]["value"] == "http://runtime:9090"
+    assert after["config_revision"] != before["config_revision"], \
+        "інша адреса — це інша ревізія конфігурації"
+    assert _written_overrides()["MONEY_PRINTER_URL"] == "http://runtime:9090"
+
+
+def test_a_refused_repointing_keeps_the_previous_runtime_address(registry, monkeypatch):
+    """Нездатний перевірити runtime не лишає Job на іншій адресі."""
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://runtime:8098")
+    registry["engine"] = _EnvRuntime(ready=True)
+    switch_provider("video_engine", "money-printer", actor="test",
+                    endpoint="http://runtime:8098")
+    registry["engine"] = _EnvRuntime(ready=False)
+
+    with pytest.raises(ProviderSwitchError) as refusal:
+        switch_provider("video_engine", "money-printer", actor="test",
+                        endpoint="http://other:9000")
+
+    assert refusal.value.status_code == 409
+    assert _written_overrides()["MONEY_PRINTER_URL"] == "http://runtime:8098"
+    assert engine_config.effective_engine_config()["endpoint"] == "http://runtime:8098"
+
+
+def test_a_repeated_switch_without_an_endpoint_is_a_no_op(registry, monkeypatch):
+    """Нічого не змінювати — нічого й не переписувати."""
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://runtime:8098")
+    registry["engine"] = _EnvRuntime(ready=True)
+    switch_provider("video_engine", "money-printer", actor="test",
+                    endpoint="http://runtime:8098")
+
+    result = switch_provider("video_engine", "money-printer", actor="test")
+
+    assert result["changed"] is False
+    assert _written_overrides()["MONEY_PRINTER_URL"] == "http://runtime:8098"
+
+
+# ---------------------------------------------------------------------------
+# P7: the Worker reports its own effective configuration, and CORE believes it
+# ---------------------------------------------------------------------------
+
+
+def _worker_registry(monkeypatch, registry) -> None:
+    """Point the Worker's own registry at the engine this process resolved.
+
+    A node builds its registry when it imports the provider layer, so the test has to
+    replace that binding rather than the module attribute the factory reads.
+    """
+    from worker import service as worker_service
+
+    monkeypatch.setattr(worker_service, "providers", type("_P", (), {
+        "video_engine": staticmethod(lambda: registry["engine"]),
+    }))
+
+
+def test_a_worker_reports_the_effective_engine_of_its_own_executor(registry, monkeypatch):
+    """P7: звіт про готовність надходить із процесу виконавця, а не з CORE.
+
+    CORE не може нікчемно підтвердити конфігурацію іншого вузла, тому вузол сам
+    повідомляє несекретні поля своєї конфігурації та результат перевірки готовності на
+    власному процесі. Саме цей звіт і є тим, що CORE порівнює зі snapshot спроби.
+    """
+    from worker.service import claim_video_engine_state
+
+    _worker_registry(monkeypatch, registry)
+    registry["engine"] = _Native()
+    monkeypatch.setenv("MONEY_PRINTER_URL", "")
+    native = claim_video_engine_state()
+    assert native["engine_id"] == "native"
+    assert native["ready"] is True
+    assert native["reason"] is None
+    assert "endpoint_reference" not in native, "Vertep Native не має зовнішніх полів"
+
+    registry["engine"] = _EnvRuntime(ready=True)
+    switch_provider("video_engine", "money-printer", actor="test",
+                    endpoint="http://runtime:8098")
+    external = claim_video_engine_state()
+    assert external["engine_id"] == "money-printer"
+    assert external["ready"] is True
+    assert external["endpoint_reference"] == {
+        "env": "MONEY_PRINTER_URL", "endpoint": "http://runtime:8098", "configured": True}
+    assert external["config_revision"] == engine_config.engine_config_revision()
+    monkeypatch.setenv("MONEY_PRINTER_TOKEN", "super-secret-token")
+    assert "super-secret-token" not in json.dumps(claim_video_engine_state())
+
+
+def test_a_worker_reports_an_unready_runtime_instead_of_claiming_readiness(registry,
+                                                                          monkeypatch):
+    from worker.service import claim_video_engine_state
+
+    _worker_registry(monkeypatch, registry)
+    registry["engine"] = _EnvRuntime(ready=False)
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
+    monkeypatch.setenv("MONEY_PRINTER_URL", "http://runtime:8098")
+
+    report = claim_video_engine_state()
+
+    assert report["ready"] is False
+    assert report["reason"] == "upstream_unreachable"
+
+
+def test_a_worker_whose_engine_state_cannot_be_read_reports_not_ready(registry, monkeypatch):
+    """Незрозумілий стан вузла — це відмова, а не мовчазливе «готово»."""
+    from worker import service as worker_service
+
+    def _broken():
+        raise RuntimeError("provider registry is unreadable")
+
+    monkeypatch.setattr(worker_service, "providers", type("_P", (), {
+        "video_engine": staticmethod(_broken),
+    }))
+
+    report = worker_service.claim_video_engine_state()
+
+    assert report["ready"] is False
+    assert report["engine_id"] == "unknown"
+    assert report["reason"].startswith("engine_state_error:")

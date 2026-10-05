@@ -19,11 +19,14 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -37,8 +40,11 @@ from adapters.providers.base import (
     REASON_MEDIA_PIPELINE_FAILED,
     REASON_SCHEMA_UNSUPPORTED,
     REASON_SNAPSHOT_MISMATCH,
+    REASON_SUBMIT_RECORD_UNREADABLE,
+    REASON_SUBMIT_UNKNOWN,
     REASON_UPSTREAM_UNAUTHENTICATED,
     REASON_UPSTREAM_UNREACHABLE,
+    REASON_VOICE_STAGING_FAILED,
     REASON_VOICE_STAGING_UNSUPPORTED,
     REQUIRED_SUBMIT_FIELDS,
 )
@@ -374,24 +380,75 @@ def _submit_record_path(submit_key: str) -> Path:
 
 
 def _submit_record(submit_key: str) -> dict | None:
+    """Read the durable submit record of a key.
+
+    A missing record means the key was never used. A record that exists but cannot be
+    read or parsed is a different situation: treating it as absent would let a
+    corrupted record become a second upstream POST for one approved render, so it
+    fails closed with an explicit reason instead (Issue #122 P6).
+    """
     path = _submit_record_path(submit_key)
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return None
-    return record if isinstance(record, dict) else None
+    except OSError as error:
+        raise SelfTestFailure(
+            REASON_SUBMIT_RECORD_UNREADABLE,
+            f"submit record {submit_key!r} exists but is unreadable: {error}",
+        ) from error
+    try:
+        record = json.loads(raw)
+    except ValueError as error:
+        raise SelfTestFailure(
+            REASON_SUBMIT_RECORD_UNREADABLE,
+            f"submit record {submit_key!r} is corrupted and cannot be trusted",
+        ) from error
+    if not isinstance(record, dict) or record.get("submit_key") != submit_key:
+        raise SelfTestFailure(
+            REASON_SUBMIT_RECORD_UNREADABLE,
+            f"submit record {submit_key!r} does not describe this submit key",
+        )
+    return record
 
 
-def _remember_submit(submit_key: str, *, task_id: str | None) -> None:
+def _remember_submit(submit_key: str, *, task_id: str | None,
+                     marker: str | None = None, state: str | None = None) -> None:
+    """Persist the durable state of one submit key (§5, §9.8).
+
+    ``state`` distinguishes the four situations the caller has to tell apart:
+
+    ``submitting``  the key is reserved, the upstream task is not confirmed yet;
+    ``submitted``   the upstream task exists, the approved voice is not staged yet;
+    ``staged``      the approved voice is verified inside the pinned task directory;
+    ``refused``     the attempt was aborted and must not be resubmitted under this key.
+    """
     if not submit_key:
         return
     path = _submit_record_path(submit_key)
     path.parent.mkdir(parents=True, exist_ok=True)
+    resolved = state or ("submitted" if task_id else "submitting")
     payload = {"submit_key": submit_key, "task_id": task_id,
-               "state": "submitted" if task_id else "submitting"}
+               "voice_marker": marker, "state": resolved}
     temporary = path.with_suffix(".json.part")
     temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     temporary.replace(path)
+
+
+def _forget_submit(submit_key: str) -> None:
+    """Release a key whose submit the upstream definitively refused.
+
+    Only a refusal that proves no upstream task exists may release a key. An unknown
+    outcome keeps its record, because the upstream may already hold the work (Issue
+    #122 §5). A record that cannot be removed is left in place: the next submit then
+    fails closed instead of risking a second task.
+    """
+    if not submit_key:
+        return
+    try:
+        _submit_record_path(submit_key).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def marker_suffix(marker: str) -> str:
@@ -550,6 +607,192 @@ def _mean_colour(clip, at_seconds: float) -> tuple[float, float, float]:
 
     frame = clip.get_frame(min(max(at_seconds, 0.0), float(clip.duration) - 0.1))
     return tuple(float(value) for value in np.asarray(frame, dtype=float).reshape(-1, 3).mean(axis=0))
+
+
+def _submit_route_payload(material_key: str, marker: str, seconds: float) -> dict:
+    """The fixed §9.4 submit set, built exactly as the bridge builds it.
+
+    Every field that could start an external generation, a narration synthesis or a
+    publication is pinned here, so the self-test submits the same request the factory
+    submits and not a friendlier variant of it.
+    """
+    return {
+        "video_subject": "Vertep runtime self-test",
+        "video_script": "Approved self-test narration.",
+        "video_terms": None,
+        "video_source": "local",
+        "video_materials": [{"provider": "local", "url": material_key, "duration": seconds}],
+        "custom_audio_file": marker,
+        "video_aspect": "9:16",
+        "video_fit_mode": "contain",
+        "video_concat_mode": "sequential",
+        "video_transition_mode": None,
+        "video_clip_duration": max(1, int(math.ceil(seconds))),
+        "video_clip_speed": 1.0,
+        "match_materials_to_script": False,
+        "video_count": 1,
+        "bgm_type": "",
+        "bgm_file": "",
+        "bgm_volume": 0.0,
+        "subtitle_enabled": False,
+        "video_language": "",
+        "n_threads": 2,
+    }
+
+
+def check_submit_route(*, deadline_seconds: float = 900.0,
+                       poll_seconds: float = 3.0) -> dict:
+    """Render one scene through the real submit → status → download route (P3/P4).
+
+    :func:`check_media_pipeline` proves the pinned compose helper in isolation, which
+    is not enough: the attempt the factory makes goes through the wrapper's own
+    multipart upload, submit invariants, durable submit record, voice staging, pinned
+    status mapping and download. This check drives exactly those routes in-process and
+    then verifies the downloaded bytes, so a runtime that would narrate or publish on
+    its own, reorder scenes or ignore the staged voice cannot pass §9.12.
+
+    It also closes the only remaining way the voice could be missing at the audio
+    stage: the approved audio is staged before the submit and re-verified inside the
+    pinned task directory of the accepted task.
+    """
+    try:
+        from moviepy import VideoFileClip
+    except ImportError as error:
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"pinned media decoder is not importable: {error}",
+        ) from error
+
+    label, colour, seconds = "route-1", "red", 2
+    staging = Path(tempfile.mkdtemp(prefix="vertep-submit-self-test-"))
+    submit_key = f"self-test-{int(time.time())}-{os.getpid()}"
+    task_id: str | None = None
+    try:
+        clip_path = staging / f"{label}.mp4"
+        _stage_probe_clip(clip_path, seconds=seconds, colour=colour)
+        with VideoFileClip(str(clip_path)) as source:
+            expected = _mean_colour(source, seconds / 2)
+        voice_path = staging / "voice.wav"
+        _write_silence(voice_path, seconds=seconds)
+        marker = _store_staged_voice(voice_path.name, voice_path.read_bytes())["voice"]
+
+        with httpx.Client(transport=httpx.ASGITransport(app=app),
+                          base_url="http://wrapper") as client:
+            upload = client.post(
+                "/api/v1/video_materials",
+                headers={"x-vertep-filename": clip_path.name},
+                content=clip_path.read_bytes(),
+            )
+            if upload.status_code != 200:
+                raise SelfTestFailure(
+                    REASON_MEDIA_PIPELINE_FAILED,
+                    f"scene upload was refused: HTTP {upload.status_code} {upload.text[:200]}",
+                )
+            stored = (upload.json().get("data") or {}).get("file")
+            if not isinstance(stored, str) or not stored.strip():
+                raise SelfTestFailure(
+                    REASON_SCHEMA_UNSUPPORTED,
+                    "pinned upload returned no storage key",
+                )
+            submitted = client.post(
+                "/api/v1/videos",
+                headers={"x-vertep-submit-key": submit_key},
+                content=json.dumps(_submit_route_payload(stored, marker, seconds)).encode(),
+            )
+        if submitted.status_code != 200:
+            raise SelfTestFailure(
+                REASON_MEDIA_PIPELINE_FAILED,
+                f"submit was refused: HTTP {submitted.status_code} {submitted.text[:300]}",
+            )
+        task_id = ((submitted.json().get("data") or {}).get("task_id")
+                   or submitted.json().get("data", {}).get("task_id"))
+        if not task_id:
+            raise SelfTestFailure(
+                REASON_SCHEMA_UNSUPPORTED, "submit returned no data.task_id")
+
+        record = _submit_record(submit_key) or {}
+        if record.get("state") != "staged":
+            raise SelfTestFailure(
+                REASON_VOICE_STAGING_FAILED,
+                f"approved voice is not staged for the accepted task (state={record.get('state')!r})",
+            )
+
+        final_path: str | None = None
+        last_state: object = None
+        with httpx.Client() as client:
+            deadline = time.monotonic() + deadline_seconds
+            while True:
+                status = client.get(f"{_upstream_url()}/api/v1/tasks/{task_id}",
+                                    headers=headers(read_api_key()), timeout=30)
+                status.raise_for_status()
+                data = status.json().get("data") or {}
+                last_state = data.get("state")
+                if last_state == 1:
+                    videos = data.get("videos") or []
+                    if videos:
+                        final_path = str(videos[0]).lstrip("/")
+                    break
+                if last_state == -1:
+                    raise SelfTestFailure(
+                        REASON_MEDIA_PIPELINE_FAILED,
+                        f"pinned render failed at {data.get('failed_stage')!r}: "
+                        f"{data.get('error')}",
+                    )
+                if time.monotonic() >= deadline:
+                    raise SelfTestFailure(
+                        REASON_MEDIA_PIPELINE_FAILED,
+                        f"pinned render did not finish within {deadline_seconds:.0f}s",
+                    )
+                time.sleep(poll_seconds)
+            if not final_path:
+                raise SelfTestFailure(
+                    REASON_MEDIA_PIPELINE_FAILED, "completed render reported no output file")
+            download = client.get(f"{_upstream_url()}/api/v1/download/{final_path}",
+                                  headers=headers(read_api_key()), timeout=600)
+        data_bytes = download.content
+        if download.status_code != 200 or not data_bytes:
+            raise SelfTestFailure(
+                REASON_MEDIA_PIPELINE_FAILED,
+                f"download returned HTTP {download.status_code} with {len(data_bytes)} bytes",
+            )
+
+        rendered = staging / "rendered.mp4"
+        rendered.write_bytes(data_bytes)
+        with VideoFileClip(str(rendered)) as probe:
+            duration = float(probe.duration or 0.0)
+            width, height = probe.size
+            actual = _mean_colour(probe, min(seconds / 2, max(duration - 0.2, 0.1)))
+        drift = max(abs(a - b) for a, b in zip(actual, expected))
+        if duration <= 0 or int(width) <= 0 or int(height) <= 0:
+            raise SelfTestFailure(
+                REASON_MEDIA_PIPELINE_FAILED, "downloaded render has no usable video stream")
+        if drift > 48:
+            raise SelfTestFailure(
+                REASON_MEDIA_PIPELINE_FAILED,
+                f"downloaded render does not show the uploaded scene: expected {expected}, "
+                f"rendered {actual}",
+            )
+        return {
+            "submit_key": submit_key,
+            "task_id": task_id,
+            "state": last_state,
+            "bytes": len(data_bytes),
+            "duration_seconds": round(duration, 3),
+            "width": int(width),
+            "height": int(height),
+            "mean_colour": [round(value, 1) for value in actual],
+            "expected_colour": [round(value, 1) for value in expected],
+            "voice_staged": True,
+            "output": final_path,
+        }
+    finally:
+        if task_id:
+            try:
+                _upstream("DELETE", f"/api/v1/tasks/{task_id}", api_key=read_api_key(),
+                          timeout=30)
+            except Exception:  # noqa: BLE001 - the self-test must not fail on cleanup
+                pass
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def check_media_pipeline() -> dict:
@@ -719,6 +962,19 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(SelfTestFailure)
+async def _self_test_failure(request: Request, failure: SelfTestFailure) -> JSONResponse:
+    """Report a fail-closed refusal with its stable reason code on every route.
+
+    A durable record that cannot be trusted or a voice that cannot be staged has to
+    reach the caller as a reason, not as an opaque 500 that invites a blind retry.
+    """
+    return JSONResponse(
+        status_code=503,
+        content={"status": 503, "message": failure.message, "reason": failure.code},
+    )
+
+
 def _contract() -> tuple[str, str, str]:
     """Read the pinned upstream reference and bridge versions from the contract.
 
@@ -857,6 +1113,38 @@ def _passthrough(response: httpx.Response) -> Response:
     )
 
 
+def _complete_recorded_staging(record: dict, *, api_key: str) -> None:
+    """Finish staging the approved voice of an already accepted upstream task.
+
+    The wrapper writes the task mapping and the staged voice as two separate steps, so
+    a restart between them used to leave a task that could never be narrated by the
+    approved audio while the record already claimed success. Staging is
+    content-addressed and idempotent, so the repeat submit repairs the attempt before it
+    is answered as accepted — and aborts the upstream task when it cannot (Issue #122
+    P3/P6, §9.6).
+    """
+    submit_key = str(record.get("submit_key") or "")
+    task_id = str(record.get("task_id") or "")
+    marker = str(record.get("voice_marker") or "")
+    if record.get("state") == "staged":
+        return
+    if not task_id or not marker:
+        raise SelfTestFailure(
+            REASON_SUBMIT_RECORD_UNREADABLE,
+            "submit record has neither a task id nor a staged voice to complete",
+        )
+    try:
+        _stage_task_voice(task_id, marker)
+    except SelfTestFailure as failure:
+        _abort_task(task_id, api_key)
+        _remember_submit(submit_key, task_id=None, marker=marker, state="refused")
+        raise SelfTestFailure(
+            REASON_VOICE_STAGING_FAILED,
+            f"approved voice could not be staged for {task_id}: {failure.message}",
+        ) from failure
+    _remember_submit(submit_key, task_id=task_id, marker=marker, state="staged")
+
+
 @app.post("/api/v1/videos")
 async def proxy_submit(request: Request) -> Response:
     """Submit one task and stage the approved voice into its task directory.
@@ -880,10 +1168,21 @@ async def proxy_submit(request: Request) -> Response:
     submit_key = request.headers.get("x-vertep-submit-key", "").strip()
     recorded = _submit_record(submit_key) if submit_key else None
     if recorded:
+        if recorded.get("state") == "refused":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "status": 409,
+                    "message": "this submit key was already refused and must not be reused",
+                    "reason": REASON_VOICE_STAGING_FAILED,
+                },
+            )
         if recorded.get("task_id"):
             # The same attempt is retried after a lost response: the upstream work
             # already exists, so it is answered from the durable record instead of
-            # being created twice (Issue #122 §5, §9.8).
+            # being created twice (Issue #122 §5, §9.8). Staging is completed first,
+            # because the record can outlive the process that staged the voice.
+            _complete_recorded_staging(recorded, api_key=api_key)
             return JSONResponse(
                 status_code=200,
                 content={"status": 200, "message": "reconciled", "data": {"task_id": recorded["task_id"]}},
@@ -898,10 +1197,10 @@ async def proxy_submit(request: Request) -> Response:
                 content={
                     "status": 409,
                     "message": "submit is already in flight for this key",
-                    "reason": "upstream_submit_unknown",
+                    "reason": REASON_SUBMIT_UNKNOWN,
                 },
             )
-    _remember_submit(submit_key, task_id=None)
+    _remember_submit(submit_key, task_id=None, marker=marker)
     try:
         response = _upstream(
             "POST", "/api/v1/videos", api_key=api_key,
@@ -917,20 +1216,32 @@ async def proxy_submit(request: Request) -> Response:
         # so a later reconciliation reports UNKNOWN instead of a false success.
         raise
     if response.status_code >= 400:
+        if response.status_code < 500:
+            # A 4xx is a definitive refusal: the upstream created no task, so the key
+            # describes an attempt that never happened and must stay usable. Leaving it
+            # reserved would turn one rejected submit into a permanently blocked attempt.
+            _forget_submit(submit_key)
+        # A 5xx keeps the key without a task: the upstream may have accepted the work
+        # before it failed to answer, so a later reconciliation reports UNKNOWN rather
+        # than a false success (Issue #122 §5).
         return _passthrough(response)
 
     task_id = _submitted_task_id(response)
-    _remember_submit(submit_key, task_id=task_id)
+    _remember_submit(submit_key, task_id=task_id, marker=marker, state="submitted")
     try:
         _stage_task_voice(task_id, marker)
     except SelfTestFailure as failure:
         # The task exists but cannot be narrated by the approved voice. Leave no
-        # accepted work behind: the attempt is cancelled and CORE is told why.
+        # accepted work behind: the attempt is cancelled, the key is marked refused
+        # and CORE is told why.
         _abort_task(task_id, api_key)
+        _remember_submit(submit_key, task_id=None, marker=marker, state="refused")
         return JSONResponse(
             status_code=503,
-            content={"status": 503, "message": failure.message, "reason": failure.code},
+            content={"status": 503, "message": failure.message,
+                     "reason": REASON_VOICE_STAGING_FAILED, "cause": failure.code},
         )
+    _remember_submit(submit_key, task_id=task_id, marker=marker, state="staged")
     return _passthrough(response)
 
 
@@ -940,7 +1251,15 @@ async def submit_status(submit_key: str) -> Response:
 
     ``submitted`` means the upstream work exists and can be polled; ``unknown``
     means the runtime cannot prove it, so CORE must not treat the attempt as
-    accepted and must not resubmit blindly.
+    accepted and must not resubmit blindly. ``voice_staged`` reports whether the
+    approved audio is already verified inside the pinned task directory, so a caller
+    can tell "accepted" from "accepted but not yet narrated by the approved voice".
+
+    ``runtime_state`` is the real state of the upstream process, because a logical
+    cancel proves nothing about compute: a busy task answers ``409`` to DELETE and
+    keeps rendering until it observes the abort (§9.8). It is resolved from the
+    upstream task rather than assumed, and an unreachable upstream is reported as
+    ``unreachable`` so a caller can never read silence as "stopped".
     """
     _gate()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", submit_key):
@@ -949,31 +1268,70 @@ async def submit_status(submit_key: str) -> Response:
     if not record:
         return JSONResponse(status_code=404, content={"status": 404, "state": "unknown"})
     task_id = record.get("task_id")
+    record_state = str(record.get("state") or "")
     return JSONResponse(
         status_code=200,
         content={
             "status": 200,
+            # ``state`` stays the reconciliation contract the engine reads: only the
+            # presence of an upstream task decides "submitted" vs "unknown".
             "state": "submitted" if task_id else "unknown",
+            "record_state": record_state,
+            "voice_staged": record_state == "staged",
+            "runtime_state": _runtime_state(task_id),
             "data": {"task_id": task_id} if task_id else {},
         },
     )
 
 
-@app.post(VOICE_STAGING_ROUTE)
-async def stage_approved_voice(request: Request) -> Response:
-    """Stage the approved voice bytes for a later submit (Issue #122 §9.3 row 5)."""
-    _gate()
-    name = request.headers.get("x-vertep-filename", "").strip()
+#: Upstream task states of the pinned runtime: 1 finished, 4 running, -1 failed.
+_RUNTIME_STATES = {1: "finished", -1: "failed", 4: "running"}
+
+
+def _runtime_state(task_id: str | None) -> str:
+    """Real upstream state of one task: ``running``/``finished``/``failed``.
+
+    ``absent`` means the upstream no longer knows the task, so nothing of it can be
+    holding compute. ``unreachable`` means exactly that — the state is unknown, never
+    that the process stopped.
+    """
+    if not task_id:
+        return "absent"
+    try:
+        response = _upstream("GET", f"/api/v1/tasks/{task_id}", api_key=_gate(), timeout=30)
+    except httpx.HTTPError:
+        return "unreachable"
+    if response.status_code == 404:
+        return "absent"
+    if response.status_code >= 400:
+        return "unreachable"
+    try:
+        payload = response.json()
+    except ValueError:
+        return "unreachable"
+    data = payload.get("data") if isinstance(payload, dict) else None
+    raw = data.get("state") if isinstance(data, dict) else None
+    try:
+        state = int(raw)
+    except (TypeError, ValueError):
+        return "unreachable"
+    return _RUNTIME_STATES.get(state, "unreachable")
+
+
+def _store_staged_voice(name: str, payload: bytes) -> dict:
+    """Store approved voice bytes content-addressed and return the staging marker.
+
+    Shared by the staging route and the submit-route self-test, so both prove the
+    same contract: the marker is the SHA256 of the bytes, and the same bytes always
+    land on the same path (Issue #122 §9.3 row 5).
+    """
     suffix = Path(name).suffix.lower()
-    # The name becomes a file inside the pinned task directory, so any name that
-    # could escape it or break a header is refused instead of sanitised.
     if (
         not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name)
         or ".." in name
         or suffix not in ALLOWED_VOICE_SUFFIXES
     ):
         raise HTTPException(status_code=400, detail="invalid voice file name")
-    payload = await request.body()
     if not payload:
         raise HTTPException(status_code=400, detail="empty voice file")
     if len(payload) > MAX_VOICE_BYTES:
@@ -986,17 +1344,22 @@ async def stage_approved_voice(request: Request) -> Response:
         temporary = target.with_suffix(target.suffix + ".part")
         temporary.write_bytes(payload)
         temporary.replace(target)
+    return {
+        "voice": f"{VOICE_MARKER_PREFIX}{digest}{suffix}",
+        "sha256": digest,
+        "bytes": len(payload),
+    }
+
+
+@app.post(VOICE_STAGING_ROUTE)
+async def stage_approved_voice(request: Request) -> Response:
+    """Stage the approved voice bytes for a later submit (Issue #122 §9.3 row 5)."""
+    _gate()
+    name = request.headers.get("x-vertep-filename", "").strip()
+    staged = _store_staged_voice(name, await request.body())
     return JSONResponse(
         status_code=200,
-        content={
-            "status": 200,
-            "message": "success",
-            "data": {
-                "voice": f"{VOICE_MARKER_PREFIX}{digest}{suffix}",
-                "sha256": digest,
-                "bytes": len(payload),
-            },
-        },
+        content={"status": 200, "message": "success", "data": staged},
     )
 
 
@@ -1093,6 +1456,7 @@ def self_test() -> JSONResponse:
         checks["submit_schema"] = check_submit_schema()
         checks["ffmpeg"] = {"binary": check_ffmpeg()}
         checks["media_pipeline"] = check_media_pipeline()
+        checks["submit_route"] = check_submit_route()
         checks["voice_staging"] = task_local_voice_capability()
     except SelfTestFailure as failure:
         return JSONResponse(

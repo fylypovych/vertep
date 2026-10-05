@@ -663,6 +663,34 @@ def cancel_video_engine(submit_key: str | None = None, *, task_id: str | None = 
         logger.warning("Assembly cancellation could not be forwarded",
                        extra={"task_id": task_id, "error": str(error)})
 
+
+def claim_video_engine_state() -> dict:
+    """Effective engine configuration and readiness of this node (Issue #122 P5/P7).
+
+    CORE decides an assembly attempt against one exact engine configuration and hands
+    it only to a node that reports the same one with a ready runtime. Reporting the
+    non-secret snapshot fields plus the readiness verdict is what makes that check
+    possible across processes: a CORE-side registry says nothing about what this node
+    can actually run.
+    """
+    try:
+        from core.engine_config import engine_snapshot_fields, verify_effective_engine
+
+        engine = providers.video_engine()
+        report = verify_effective_engine(probe=True, engine=engine)
+        return {
+            **engine_snapshot_fields(engine),
+            "ready": report["ready"],
+            "reason": report["reason"],
+        }
+    except Exception as error:  # noqa: BLE001 - an unreadable state is reported, not hidden
+        return {
+            "engine_id": "unknown",
+            "ready": False,
+            "reason": f"engine_state_error:{type(error).__name__}",
+        }
+
+
 def main() -> None:
     core = os.getenv("CORE_ADDRESS", "http://localhost:8080")
     supported_tasks = [item.strip() for item in os.getenv("SUPPORTED_TASKS", "image").split(",") if item.strip()]
@@ -744,7 +772,10 @@ def main() -> None:
                                                                           "supported_tasks": supported_tasks,
                                                                           "supported_workflows": supported_workflows,
                                                                           "capabilities": capabilities,
-                                                                      "voice_catalog": payload.get("voice_catalog") or {}}).json().get("task")
+                                                                          "video_engine": (claim_video_engine_state()
+                                                                                           if "assembly" in supported_tasks
+                                                                                           else None),
+                                                                          "voice_catalog": payload.get("voice_catalog") or {}}).json().get("task")
                         if task:
                             logger.info("Task claimed", extra={"job_id": task["job_id"], "node_name": payload["node_name"]})
                             payload.update({"current_job": task["job_id"], "current_task": task["task_id"], "status": "BUSY"})

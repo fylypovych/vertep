@@ -625,6 +625,76 @@ def test_settings_video_engine_returns_to_native():
         browser.close()
 
 
+def _external_engine_state(endpoint):
+    """MoneyPrinterTurbo as the effective engine, with one runtime address.
+
+    The read model reports the same inputs both for the effective engine and in the
+    per-engine list Settings renders them from, so the address is written in both places.
+    """
+    state = _video_engine_state("money-printer", True, "ok", endpoint=endpoint)
+    state["required_fields"] = {**VIDEO_ENGINE_NATIVE["required_fields"],
+                                "money-printer": state["fields"]}
+    return state
+
+
+def test_settings_video_engine_repoints_the_runtime_of_the_current_engine():
+    """P8: адресу runtime можна змінити, не перемикаючи сам движок.
+
+    Кнопка «Застосувати» була прив'язана лише до імені движка, тому вже ефективний
+    MoneyPrinterTurbo не мож було перевести на інший адрес runtime узагалі. Тепер Apply
+    стежить і за адресою, і POST несе нову адресу разом із тим самим backend.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        current = {"config": _external_engine_state("http://runtime:8098")}
+        applied: dict = {}
+        page.route("**/api/settings/video-engine*",
+                   lambda route: route.fulfill(json=current["config"]))
+
+        def _switch(route):
+            payload = route.request.post_data_json or {}
+            applied.update(payload)
+            current["config"] = _external_engine_state(payload.get("endpoint"))
+            route.fulfill(json={
+                "slot": "video_engine", "backend": payload.get("backend"), "changed": True,
+                "env": "VERTEP_VIDEO_ENGINE", "matrix": {},
+                "effective_engine": current["config"],
+            })
+
+        page.route("**/api/settings/providers/video_engine", _switch)
+
+        page.goto(f"{BASE_URL}/settings?tab=video-engine")
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text(
+            "MoneyPrinterTurbo")
+        # Нічого не змінено — застосовувати нема чого.
+        expect(page.locator("[data-testid='video-engine-apply']")).to_be_disabled()
+
+        page.fill("[data-testid='video-engine-endpoint']", "http://runtime:9090")
+        expect(page.locator("[data-testid='video-engine-apply']")).to_be_enabled()
+        page.click("[data-testid='video-engine-apply']")
+
+        assert applied["backend"] == "money-printer", "движок не змінюється — змінюється адреса"
+        assert applied["endpoint"] == "http://runtime:9090"
+        expect(page.locator("[data-testid='video-engine-effective']")).to_have_text(
+            "MoneyPrinterTurbo")
+        expect(page.locator("[data-testid='video-engine-endpoint']")).to_have_value(
+            "http://runtime:9090")
+        expect(page.locator("[data-testid='video-engine-apply']")).to_be_disabled(), \
+            "форма знову описує те, що вже ефективно"
+
+        # Повернення попередньої адреси — знову реальна зміна ефективної конфігурації,
+        # тому Apply має лишатися доступним: ефективний runtime тепер 9090.
+        page.fill("[data-testid='video-engine-endpoint']", "http://runtime:8098")
+        expect(page.locator("[data-testid='video-engine-apply']")).to_be_enabled()
+        assert applied["endpoint"] == "http://runtime:9090", \
+            "зміна адреси без застосування нічого не перезаписує"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
 def test_settings_video_engine_is_locked_while_the_system_state_forbids_changes():
     """A state that forbids configuration must not offer the change at all."""
     with sync_playwright() as p:

@@ -6,10 +6,11 @@ cancellations, dead-letter queue and result submission). Extracted from
 """
 import base64
 import binascii
+import hashlib
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..artifacts import register_artifact
 from ..file_validation import validate_media_contract, validate_signature
@@ -25,7 +26,8 @@ from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
                           _job_is_due, _ordered_scene_files, _pending_voice_scenes,
                           _persist_tts_contract,
                           _scene_for_task, _select_worker, _serialize_job_result,
-                          _task_for, _tts_task_for, _validate_tts_contract)
+                          _task_for, _tts_task_for, _validate_tts_contract,
+                          assembly_worker_mismatch, engine_release_hold)
 
 router = APIRouter()
 
@@ -157,6 +159,27 @@ def claim_task(payload: TaskClaim, request: Request):
             if job.assembly_cancel_requested:
                 task_queue.ack(task["task_id"])
                 continue
+            mismatch = assembly_worker_mismatch(
+                payload.video_engine, task.get("engine_snapshot") or job.video_engine_snapshot)
+            if mismatch:
+                # The node cannot prove it runs the exact configuration this attempt was
+                # dispatched with, so the task stays queued instead of being rendered by a
+                # runtime nobody approved (Issue #122 P5/P7).
+                store.event(job, f"ASSEMBLY {task['task_id']} HELD: {payload.node_name} "
+                                 f"cannot run the dispatched engine ({mismatch})")
+                held_tasks.append(task["task_id"])
+                continue
+            hold = engine_release_hold(task.get("engine_snapshot") or job.video_engine_snapshot)
+            if hold:
+                # A cancelled attempt on this very runtime was never proven released: the
+                # pinned runtime keeps rendering until it observes the abort, so the lease
+                # is not handed to another render on the strength of a logical cancel
+                # (Issue #122 P6/§5).
+                store.event(job, f"ASSEMBLY {task['task_id']} HELD: the runtime of "
+                                 f"{hold.get('job_id')} has an unconfirmed release "
+                                 f"({hold.get('submit_key')}: {hold.get('reason')})")
+                held_tasks.append(task["task_id"])
+                continue
             worker = _select_worker([worker_data], job, task_type="assembly", min_vram_mb=0)
             if not worker:
                 held_tasks.append(task["task_id"])
@@ -243,6 +266,84 @@ def task_cancellations(node_name: str, request: Request):
     if not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     return task_queue.pop_cancellations(node_name)
+
+
+def _approved_input_references(snapshot: dict) -> set[str]:
+    """Every Job-relative input the attempt's snapshot approved."""
+    references = set()
+    for entry in snapshot.get("materials") or []:
+        reference = str((entry or {}).get("reference") or "")
+        if reference:
+            references.add(reference)
+    for entry in (snapshot.get("inputs") or {}).values():
+        reference = str((entry or {}).get("reference") or "")
+        if reference:
+            references.add(reference)
+    return references
+
+
+@router.get("/api/tasks/{task_id}/inputs/{reference:path}")
+def task_input(task_id: str, reference: str, request: Request):
+    """Serve one approved input of an assembly attempt to the node rendering it (P3).
+
+    Issue #122 P3 asks for approved inputs to reach a Worker that does not share CORE's
+    storage root. The dispatch carries Job-relative references only, so a node on another
+    host pulls the approved bytes from here instead of reading a path of this filesystem.
+
+    Access is the same worker authentication as claim/renew **plus** ownership of the
+    attempt: only the node currently rendering it may read its inputs, and only the inputs
+    its own approved snapshot pins — an arbitrary path, or another node's Job, is refused.
+    """
+    node_name = request.headers.get("x-vertep-node", "")
+    if not node_name or not _valid_worker_request(node_name, request):
+        raise HTTPException(401, "Token is not valid for this worker")
+    job = next((item for item in store.jobs.values() if task_id in item.assembly_task_ids),
+               None)
+    if job is None:
+        raise HTTPException(404, "Task is not an assembly attempt")
+    if job.assembly_task_id != task_id or job.assembly_cancel_requested:
+        raise HTTPException(409, "Attempt is no longer running")
+    worker = store.workers.get(node_name)
+    if not worker or worker.get("current_task") != task_id or worker.get("current_job") != job.job_id:
+        raise HTTPException(409, "Task is not owned by this worker")
+    snapshot = job.video_engine_snapshot or {}
+    if not _approved_input_references(snapshot):
+        raise HTTPException(409, "Attempt carries no approved inputs")
+    if reference not in _approved_input_references(snapshot):
+        raise HTTPException(403, "Input is not approved for this attempt")
+    job_root = (Path(store.root) / job.job_id).resolve()
+    candidate = (job_root / reference).resolve()
+    if not candidate.is_relative_to(job_root):
+        raise HTTPException(403, "Input escapes the Job directory")
+    if not candidate.is_file():
+        raise HTTPException(404, "Input is not available for delivery")
+    data = candidate.read_bytes()
+    return Response(
+        content=data,
+        media_type=_approved_input_media_type(candidate.suffix),
+        headers={
+            "content-length": str(len(data)),
+            "x-vertep-sha256": hashlib.sha256(data).hexdigest(),
+        },
+    )
+
+
+def _approved_input_media_type(suffix: str) -> str:
+    return {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".wav": "audio/wav",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".srt": "application/x-subrip",
+        ".vtt": "text/vtt",
+        ".ass": "text/x-ssa",
+    }.get(suffix.lower(), "application/octet-stream")
 
 
 @router.get("/api/tasks/dead-letter")
@@ -684,6 +785,21 @@ def task_result(result: TaskResult, request: Request):
         return store.event(job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
     if result.task_id in job.completed_task_ids:
         return job
+    from .job_helpers import cancelled_attempt_release, release_assembly_hold
+    from adapters.providers.base import RELEASE_RELEASED
+    cancelled = cancelled_attempt_release(job, result.task_id)
+    if cancelled:
+        # A cancelled attempt that comes back with a render is the one thing a logical
+        # cancel could not prove: the render ended, so the runtime is free. The result
+        # is still rejected as a late artifact of a cancelled attempt — proving the
+        # release never turns it into a second video version (Issue #122 §5, §9.8).
+        release_assembly_hold(
+            job, cancelled["submit_key"], state=RELEASE_RELEASED,
+            reason="late_result_of_cancelled_attempt_discarded",
+        )
+        store.event(job, f"ASSEMBLY RELEASE {cancelled['submit_key']} RELEASED: the cancelled "
+                         f"attempt {result.task_id} came back with a finished render")
+        raise HTTPException(409, "Assembly result does not match the active attempt lease")
     scene = _scene_for_task(job, result.task_id)
     if not scene:
         raise HTTPException(409, "Result does not match the active task")
