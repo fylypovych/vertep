@@ -546,6 +546,24 @@ def _collects(node_id: str, known: set[str]) -> bool:
     return any(candidate.startswith(f"{node_id}[") for candidate in known)
 
 
+def _module_of(node_id: str) -> str:
+    """The file a declared node id belongs to."""
+    return node_id.split("::", 1)[0]
+
+
+def _module_collectable(node_id: str, known: set[str]) -> bool:
+    """Whether the file of a declared id is collected here at all.
+
+    An optional harness (Playwright, a container client) makes its whole module
+    uncollectable in an environment without it. That is a missing environment, not a
+    declared id that does not exist, and §6 Evidence forbids counting either as a pass —
+    but the two must not be confused, or every consumer without Playwright would see the
+    Browser criterion as a code failure.
+    """
+    module = _module_of(node_id)
+    return any(candidate.startswith(f"{module}::") for candidate in known)
+
+
 def _resolve_outcomes(declared: Iterable[str], outcomes: dict[str, str]) -> dict[str, str]:
     """Worst outcome of every test that answers one declared id."""
     resolved: dict[str, str] = {}
@@ -567,11 +585,14 @@ def _resolve_outcomes(declared: Iterable[str], outcomes: dict[str, str]) -> dict
 
 def evaluate_row(row: dict[str, Any], *, outcomes: dict[str, str],
                  capabilities: dict[str, bool], identity: dict[str, Any],
-                 reasons: dict[str, str] | None = None) -> dict[str, Any]:
+                 reasons: dict[str, str] | None = None,
+                 uncollectable: Iterable[str] = ()) -> dict[str, Any]:
     """Decide one criterion: PASS only with every need met and every test green."""
     resolved = _resolve_outcomes(row["tests"], outcomes)
     missing_needs = [need for need in row["needs"] if not capabilities.get(need, False)]
-    missing_tests = [test for test in row["tests"] if not resolved.get(test)]
+    unavailable = list(uncollectable)
+    missing_tests = [test for test in row["tests"]
+                     if not resolved.get(test) and test not in unavailable]
     failed = [test for test in row["tests"] if resolved.get(test) == "FAILED"]
     skipped = [test for test in row["tests"] if resolved.get(test) == "SKIPPED"]
     causes = [
@@ -584,6 +605,12 @@ def evaluate_row(row: dict[str, Any], *, outcomes: dict[str, str],
         # reporting its tests as failing would blame the code for a missing harness.
         status = NOT_RUN
         detail = "environment cannot provide " + ", ".join(causes)
+    elif unavailable:
+        # The evidence exists, but this environment cannot even collect the file that
+        # holds it. That is an absent case, and an absent case is never a pass (§6).
+        status = NOT_RUN
+        detail = (f"{len(unavailable)} declared tests could not be collected here: "
+                  + ", ".join(sorted({_module_of(test) for test in unavailable})))
     elif failed or missing_tests:
         status = FAIL
         detail = "; ".join(filter(None, [
@@ -614,6 +641,7 @@ def evaluate_row(row: dict[str, Any], *, outcomes: dict[str, str],
         "failed_tests": failed,
         "skipped_tests": skipped,
         "missing_tests": missing_tests,
+        "uncollectable_tests": unavailable,
         "executed": {
             test: outcome for test, outcome in resolved.items() if outcome
         },
@@ -637,6 +665,13 @@ def build_report(*, only: Iterable[str] = ()) -> dict[str, Any]:
                 if all(capabilities.get(need, False) for need in row["needs"])]
     declared = [test for row in runnable for test in row["tests"]]
     unknown = sorted({test for test in declared if not _collects(test, known)})
+    # A declared id whose whole module is uncollectable here (optional harness missing)
+    # is an absent case rather than a code defect, and the row says so.
+    uncollectable = {
+        row["id"]: [test for test in row["tests"]
+                    if not _collects(test, known) and not _module_collectable(test, known)]
+        for row in runnable
+    }
 
     with tempfile.TemporaryDirectory(prefix="vertep-acceptance-") as tmp:
         outcomes = _run_pytest(declared, Path(tmp) / "junit.xml")
@@ -644,7 +679,8 @@ def build_report(*, only: Iterable[str] = ()) -> dict[str, Any]:
     verdicts = []
     for row in rows:
         verdict = evaluate_row(row, outcomes=outcomes, capabilities=capabilities,
-                               identity=identity, reasons=reasons)
+                               identity=identity, reasons=reasons,
+                               uncollectable=uncollectable.get(row["id"], ()))
         verdict["undeclared_tests"] = sorted(
             test for test in row["tests"] if not _collects(test, known)
         )

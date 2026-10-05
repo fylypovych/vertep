@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.34
+- Виправлено `scripts/issue-122-acceptance-report.py`: задекларований тест, чий модуль у цьому середовищі взагалі не збирається (наприклад, Browser E2E без встановленого Playwright), більше не рахується пропущеним тестом критерію й не робить рядок `FAIL`. Такі випадки дають `NOT_RUN` із назвою файлу, який не вдалося зібрати, бо відсутній кейс не є ані PASS, ані дефектом коду (§6 Evidence).
+- `tests/test_issue_122_acceptance_report.py` більше не вимагає, щоб `pytest --collect-only` бачив Browser-тести: коли модуль не збирається, доказом наявності є сам файл — тест має бути оголошений у ньому. Тимчасовий доказ відсутності і `NOT_RUN`/`FAIL` розрізнено окремими тестами.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.33
 - Виправлено звіт про невідомий стан під час читання стану задачі у `adapters/providers/video_engines.py`: відповідь `404` більше не звітується як transient-помилка, а має власну причину `upstream_task_absent`, бо такий runtime нічого не тримає від спроби; транспортний збій (`timeout`/`connect error`) тепер має причину `upstream_unreachable`, а не `upstream_transient_failure` (§5, P6; `test_a_task_the_upstream_no_longer_knows_reports_absent`, `test_an_unreachable_upstream_is_unreachable_and_never_absent`).
 - Додано `scripts/issue-122-acceptance-report.py` — єдиний трасований звіт P10 за матрицею §6: кожен критерій має власного owner-Issue й перелік тестів, `PASS` можливий лише коли середовище надає потрібне (container runtime / живий CORE з harness / авторизований стенд) **і** кожен задекларований тест зібрано, виконано й пройдено; `skipped`, `missing` і `FAIL` не зараховуються як виконання (§6 Evidence). Звіт пише SHA, dirty-відмітку, config revision, pinned upstream і bridge schema та завершується ненульовим кодом при `FAIL`.

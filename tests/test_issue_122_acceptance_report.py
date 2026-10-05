@@ -74,6 +74,22 @@ def test_every_criterion_declares_an_owner_a_title_and_unique_id(report_module):
         assert isinstance(row["tests"], tuple)
 
 
+def _declared_in_source(module, node_id: str) -> bool:
+    """Whether the repository really declares this test, independent of collection.
+
+    ``pytest --collect-only`` cannot list a module whose optional harness is missing, so
+    for those the file itself is the evidence: the test function has to exist in it.
+    """
+    path = REPO_ROOT / node_id.split("::", 1)[0]
+    if not path.is_file():
+        return False
+    name = node_id.split("::", 1)[1].split("[", 1)[0]
+    return any(
+        line.strip().startswith(f"def {name}(") or line.strip().startswith(f"async def {name}(")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    )
+
+
 def test_every_declared_test_exists_in_the_repository(report_module, collected):
     """A criterion may only cite evidence that exists; a typo is not a pass."""
     missing = {
@@ -81,6 +97,8 @@ def test_every_declared_test_exists_in_the_repository(report_module, collected):
         for row in report_module.acceptance_rows()
         for test in row["tests"]
         if not report_module._collects(test, collected)
+        and not (not report_module._module_collectable(test, collected)
+                 and _declared_in_source(report_module, test))
     }
 
     assert not missing, f"criteria cite tests that cannot be collected: {sorted(missing)}"
@@ -102,6 +120,44 @@ def test_a_real_stand_is_never_available_without_an_authorisation(report_module)
 # ---------------------------------------------------------------------------
 # Verdicts: a gap is never a pass
 # ---------------------------------------------------------------------------
+
+
+def test_a_declared_test_in_an_uncollectable_module_is_not_a_code_failure(report_module):
+    """An optional harness may hide a whole module; that is absent evidence, not a defect.
+
+    Without Playwright the Browser file yields no node ids at all. Counting that as a
+    failure would blame the code for a missing dependency, and counting it as green would
+    be worse, so the criterion is NOT_RUN and names the file it could not collect.
+    """
+    verdict = report_module.evaluate_row(
+        _row(report_module, needs=(report_module.BROWSER,),
+             tests=("tests/test_browser_e2e.py::test_a",)),
+        outcomes={}, capabilities={report_module.BROWSER: True},
+        identity=_identity(report_module),
+        uncollectable=("tests/test_browser_e2e.py::test_a",),
+    )
+
+    assert verdict["status"] == report_module.NOT_RUN
+    assert "tests/test_browser_e2e.py" in verdict["detail"]
+    assert verdict["missing_tests"] == []
+
+
+def test_a_declared_test_missing_from_a_collectable_module_is_still_a_failure(report_module):
+    """The exemption is for an uncollectable module, not for a mistyped test name."""
+    verdict = report_module.evaluate_row(
+        _row(report_module, tests=("tests/x.py::test_a",)),
+        outcomes={}, capabilities={}, identity=_identity(report_module),
+    )
+
+    assert verdict["status"] == report_module.FAIL
+    assert verdict["uncollectable_tests"] == []
+
+
+def test_a_module_collectable_is_answered_by_any_collected_node_of_it(report_module):
+    collected = {"tests/test_x.py::test_a", "tests/test_x.py::TestY::test_z"}
+
+    assert report_module._module_collectable("tests/test_x.py::test_q", collected) is True
+    assert report_module._module_collectable("tests/test_y.py::test_a", collected) is False
 
 
 def test_green_tests_and_a_met_environment_make_a_criterion_pass(report_module):
