@@ -674,7 +674,13 @@ def test_settings_video_engine_repoints_the_runtime_of_the_current_engine():
 
         page.fill("[data-testid='video-engine-endpoint']", "http://runtime:9090")
         expect(page.locator("[data-testid='video-engine-apply']")).to_be_enabled()
-        page.click("[data-testid='video-engine-apply']")
+        # Застосування супроводжується повторним читанням конфігурації: дочекатися
+        # цієї відповіді, інакше наступна правка адреси змагалася б із нею.
+        with page.expect_response(
+                lambda response: "/api/settings/video-engine" in response.url
+                and response.request.method == "GET") as reload_response:
+            page.click("[data-testid='video-engine-apply']")
+        assert reload_response.value.status == 200, "повторне читання конфігурації движка"
 
         assert applied["backend"] == "money-printer", "движок не змінюється — змінюється адреса"
         assert applied["endpoint"] == "http://runtime:9090"

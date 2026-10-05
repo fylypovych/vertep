@@ -166,18 +166,27 @@ export class VideoEngineSectionComponent implements OnInit {
   }
 
   private load(probe: boolean): void {
+    const endpointSnapshot = this.endpoint();
     this.settingsApi.videoEngine(probe).subscribe({
       next: (config) => {
         this.config.set(config);
         this.error.set(null);
-        this.choose(config.effective, config);
+        this.choose(config.effective, config, endpointSnapshot);
       },
       error: (err) => this.error.set(err?.error?.detail || err?.message || 'Не вдалося завантажити конфігурацію движка'),
     });
   }
 
-  /** Keep the form in sync with the API answer without overwriting the operator's input. */
-  private choose(effective: string, config: EffectiveEngineConfig): void {
+  /** Keep the form in sync with the API answer without overwriting the operator's input.
+
+      `endpointSnapshot` is the address the form showed when the request was sent. When the
+      address changed while the answer was in flight, the operator has typed something new
+      and the answer must not silently replace it (Issue #122 P8). */
+  private choose(effective: string, config: EffectiveEngineConfig, endpointSnapshot?: string): void {
+    const operatorEdited = endpointSnapshot !== undefined && this.endpoint() !== endpointSnapshot;
+    if (operatorEdited) {
+      return;
+    }
     this.choice.set(effective);
     // The address is read from the same place the input is rendered from, so the form
     // never starts out describing something other than what it displays.
