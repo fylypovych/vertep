@@ -250,16 +250,18 @@ def verify_gate(health: dict) -> None:
         raise CheckFailure("wrapper reported ready without a proven upstream authentication")
     # The expected fields come from the bridge contract, not from a copy made here: a
     # hand-kept subset silently accepted a runtime that had stopped accepting the
-    # script, the staged materials or the approved voice (§9.3).
-    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+    # script, the staged materials or the approved voice (§9.3), and a runtime that
+    # stopped accepting a compose field would apply its own default to the approved
+    # render without failing the submit (§9.4).
+    from adapters.providers.base import FIXED_SUBMIT_FIELDS
 
     proved = checks.get("submit_schema") or ()
     proved_names = set(proved)
-    missing = [field for field in REQUIRED_SUBMIT_FIELDS if field not in proved_names]
+    missing = [field for field in FIXED_SUBMIT_FIELDS if field not in proved_names]
     if missing:
         raise CheckFailure(
             f"upstream submit schema is missing {missing}; the bridge submits "
-            f"{', '.join(REQUIRED_SUBMIT_FIELDS)}"
+            f"{', '.join(FIXED_SUBMIT_FIELDS)}"
         )
 
 

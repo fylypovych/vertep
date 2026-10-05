@@ -214,6 +214,29 @@ REQUIRED_SUBMIT_FIELDS = (
     "video_clip_duration",
 )
 
+# Issue #122 §9.4: the whole fixed submit set, not only the fields that can start a task.
+#
+# The pinned request model ignores unknown keys, so a renamed or dropped compose field —
+# ``video_fit_mode``, ``video_concat_mode``, the clip speed or the thread count — would not
+# fail the submit: the runtime would quietly compose with its own defaults and Vertep would
+# still believe the approved §9.4 contract was honoured. Every field the bridge sends is
+# therefore proved against the pinned schema, and the readiness gate refuses a runtime that
+# cannot prove all of them.
+FIXED_SUBMIT_FIELDS = REQUIRED_SUBMIT_FIELDS + (
+    "video_terms",
+    "video_fit_mode",
+    "video_concat_mode",
+    "video_transition_mode",
+    "video_clip_speed",
+    "match_materials_to_script",
+    "video_count",
+    "bgm_type",
+    "bgm_file",
+    "bgm_volume",
+    "video_language",
+    "n_threads",
+)
+
 # Stable readiness refusal codes (Issue #122 §9.12). They are contract, not log
 # text: the engine, the wrapper and the executor must agree on them so a refused
 # runtime is reported with one reason instead of a generic "unavailable".

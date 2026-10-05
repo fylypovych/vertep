@@ -46,6 +46,7 @@ from adapters.providers.base import (
     REASON_UPSTREAM_UNREACHABLE,
     REASON_VOICE_STAGING_FAILED,
     REASON_VOICE_STAGING_UNSUPPORTED,
+    FIXED_SUBMIT_FIELDS,
     REQUIRED_SUBMIT_FIELDS,
 )
 from adapters.providers.runtime_manifest import (
@@ -68,7 +69,7 @@ INVENTORY_ROOT_ENV = "MONEYPRINTER_RUNTIME_ROOT"
 DEFAULT_UPSTREAM_URL = "http://127.0.0.1:8080"
 DEFAULT_API_KEY_FILE = "/run/secrets/moneyprinter_api_key"
 
-# Reason codes and REQUIRED_SUBMIT_FIELDS come from adapters.providers.base so the
+# Reason codes and the submit-field contract come from adapters.providers.base so the
 # wrapper and the engine classify a refusal identically.
 
 
@@ -227,7 +228,13 @@ def _annotation_name(annotation) -> str:
 
 
 def check_submit_schema() -> dict:
-    """Confirm the pinned upstream still declares the fields we submit."""
+    """Confirm the pinned upstream still declares every field the bridge submits.
+
+    The fixed §9.4 set is verified, not only the fields that can start a task: the pinned
+    request model ignores unknown keys, so a dropped compose field would otherwise be
+    applied with the runtime's own default and the approved contract would be reported as
+    honoured (§9.4, §9.12).
+    """
     try:
         from app.models.schema import TaskVideoRequest
     except ImportError as error:
@@ -243,7 +250,7 @@ def check_submit_schema() -> dict:
             "upstream TaskVideoRequest exposes no model fields",
         )
 
-    missing = [name for name in REQUIRED_SUBMIT_FIELDS if name not in fields]
+    missing = [name for name in FIXED_SUBMIT_FIELDS if name not in fields]
     if missing:
         raise SelfTestFailure(
             REASON_SCHEMA_UNSUPPORTED,
@@ -251,7 +258,7 @@ def check_submit_schema() -> dict:
         )
     return {
         name: _annotation_name(fields[name].annotation)
-        for name in REQUIRED_SUBMIT_FIELDS
+        for name in FIXED_SUBMIT_FIELDS
     }
 
 
@@ -594,15 +601,145 @@ def _write_silence(path: Path, seconds: float = 1.0, rate: int = 24000) -> None:
         handle.writeframes(b"\x00\x00" * int(rate * seconds))
 
 
+#: The approved narration of the submit-route probe is a tone, not silence and not speech.
+#: Silence could not tell an approved voice from a missing one, and a TTS fallback would
+#: still produce "some audio", so the rendered track is measured against this frequency:
+#: a substitution is audible in the spectrum, not only in the volume (§9.6).
+PROBE_VOICE_FREQUENCY = 440.0
+#: Loudness is normalised by the pinned compose (``loudnorm``), so only the pitch of the
+#: approved narration is compared; the level is only required to be audible at all.
+PROBE_VOICE_TONE_AMPLITUDE = 12000
+PROBE_VOICE_FREQUENCY_TOLERANCE = 0.10
+PROBE_VOICE_MINIMUM_RMS = 0.02
+
+
+def _write_voice_tone(path: Path, seconds: float = 1.0, rate: int = 24000,
+                      frequency: float = PROBE_VOICE_FREQUENCY) -> None:
+    """Write the approved narration: lossless PCM s16, exactly as §9.11.4 requires."""
+    frames = int(rate * seconds)
+    samples = bytearray()
+    for index in range(frames):
+        value = int(PROBE_VOICE_TONE_AMPLITUDE
+                    * math.sin(2 * math.pi * frequency * index / rate))
+        samples += value.to_bytes(2, "little", signed=True)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(bytes(samples))
+
+
+def _frequency_and_rms(samples: bytes, rate: int) -> tuple[float, float]:
+    """Dominant frequency and RMS of raw PCM s16 samples, as the render is decoded.
+
+    The pinned compose normalises the loudness of the narration, so the pitch is what
+    identifies the approved voice; the level is only used to prove the track is audible.
+    """
+    import numpy as np
+
+    window = np.frombuffer(samples, dtype="<i2").astype(float)
+    if window.size == 0:
+        return 0.0, 0.0
+    rms = float(np.sqrt(np.mean(np.square(window))) / 32768.0)
+    spectrum = np.abs(np.fft.rfft(window))
+    frequencies = np.fft.rfftfreq(window.size, d=1.0 / rate)
+    return float(frequencies[int(np.argmax(spectrum))]), rms
+
+
+def _pinned_ffmpeg_binary() -> str:
+    """The FFmpeg binary the pinned pipeline itself calls, for decoding the render."""
+    try:
+        from app.utils import utils
+
+        return utils.get_ffmpeg_binary()
+    except Exception as error:  # noqa: BLE001 - any failure must fail closed
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"pinned FFmpeg binary is not resolvable: {type(error).__name__}",
+        ) from error
+
+
+def _rendered_voice_profile(path: Path, binary: str, rate: int = 16000) -> dict:
+    """Decode the rendered narration and measure it, instead of trusting the log."""
+    completed = subprocess.run(
+        [binary, "-nostdin", "-loglevel", "error", "-i", str(path),
+         "-vn", "-f", "s16le", "-ac", "1", "-ar", str(rate), "-"],
+        capture_output=True, timeout=120,
+    )
+    if completed.returncode != 0:
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"rendered narration could not be decoded (ffmpeg exited "
+            f"{completed.returncode})",
+        )
+    frequency, rms = _frequency_and_rms(completed.stdout, rate)
+    return {"frequency_hz": frequency, "rms": rms}
+
+
+def _verify_rendered_voice(profile: dict) -> None:
+    """Refuse a render whose narration is not the approved voice (§9.6)."""
+    frequency = float(profile.get("frequency_hz") or 0.0)
+    rms = float(profile.get("rms") or 0.0)
+    if rms < PROBE_VOICE_MINIMUM_RMS:
+        raise SelfTestFailure(
+            REASON_VOICE_STAGING_FAILED,
+            f"rendered narration is inaudible (rms={rms:.4f}), so the approved voice "
+            f"cannot have been used",
+        )
+    drift = abs(frequency - PROBE_VOICE_FREQUENCY) / PROBE_VOICE_FREQUENCY
+    if drift > PROBE_VOICE_FREQUENCY_TOLERANCE:
+        raise SelfTestFailure(
+            REASON_VOICE_STAGING_FAILED,
+            f"rendered narration is not the approved voice: dominant "
+            f"{frequency:.0f}Hz against the approved {PROBE_VOICE_FREQUENCY:.0f}Hz",
+        )
+
+
+#: The pinned runtime refuses a local material whose edge is smaller than 480px (with a
+#: 10px tolerance) and fails the whole task at the ``materials`` stage with
+#: ``no valid local video materials were found``. A probe smaller than that proves
+#: nothing about the route: it is rejected before anything downstream runs.
+PINNED_MIN_MATERIAL_EDGE = 480
+PINNED_MATERIAL_EDGE_TOLERANCE = 10
+
+#: Portrait 9:16 probe geometry, matching the aspect the factory submits. Both edges
+#: stay at or above the pinned minimum, so the pinned preprocessor accepts the material.
+PROBE_CLIP_WIDTH = 486
+PROBE_CLIP_HEIGHT = 864
+
+
 def _stage_probe_clip(path: Path, seconds: int = 3, colour: str = "black") -> None:
     subprocess.run(
         [
             "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", f"color=c={colour}:s=320x568:r=30:d={seconds}",
+            "-f", "lavfi", "-i",
+            f"color=c={colour}:s={PROBE_CLIP_WIDTH}x{PROBE_CLIP_HEIGHT}:r=30:d={seconds}",
             "-pix_fmt", "yuv420p", str(path),
         ],
         check=True, capture_output=True, timeout=120,
     )
+
+
+def _verify_probe_geometry(path: Path) -> tuple[int, int]:
+    """Refuse a probe the pinned preprocessor would reject, before submitting it.
+
+    The pinned runtime validates local materials itself and fails the whole task at the
+    ``materials`` stage when an edge is below its minimum. A self-test that uploaded such
+    a probe proved nothing about the route it was meant to prove, so the geometry is
+    checked here where the failure can still name its own cause (§9.12).
+    """
+    from moviepy import VideoFileClip
+
+    with VideoFileClip(str(path)) as probe:
+        width, height = (int(value) for value in probe.size)
+    minimum = PINNED_MIN_MATERIAL_EDGE - PINNED_MATERIAL_EDGE_TOLERANCE
+    if width < minimum or height < minimum:
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"probe clip {width}x{height} is below the pinned minimum material edge of "
+            f"{minimum}px, which the pinned runtime refuses at the materials stage",
+        )
+    return width, height
 
 
 #: One probe per approved scene: label, distinct colour and its exact approved duration
@@ -681,7 +818,10 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
 
     It also closes the only remaining way the voice could be missing at the audio
     stage: the submit route proves the approved bytes before it contacts the upstream,
-    and the accepted task directory is verified again once the upstream has named it.
+    the accepted task directory is verified again once the upstream has named it, and
+    the narration of the finished render is decoded and measured against the approved
+    tone. A fallback to the upstream's own TTS therefore fails this check instead of
+    producing a Job that was narrated by something nobody approved (§9.6).
 
     The default deadline is deliberately shorter than the budget the runtime check grants
     this endpoint: a render that never finishes has to be reported here, with the gate
@@ -702,10 +842,11 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
     try:
         clip_path = staging / f"{label}.mp4"
         _stage_probe_clip(clip_path, seconds=seconds, colour=colour)
+        _verify_probe_geometry(clip_path)
         with VideoFileClip(str(clip_path)) as source:
             expected = _mean_colour(source, seconds / 2)
         voice_path = staging / "voice.wav"
-        _write_silence(voice_path, seconds=seconds)
+        _write_voice_tone(voice_path, seconds=seconds)
         marker = _store_staged_voice(voice_path.name, voice_path.read_bytes())["voice"]
 
         with _self_test_client() as client:
@@ -803,6 +944,10 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
                 f"downloaded render does not show the uploaded scene: expected {expected}, "
                 f"rendered {actual}",
             )
+        # The narration is measured, not assumed: a TTS fallback, a missing track or an
+        # ignored staged voice all produce audio, but not the approved one (§9.6).
+        voice_profile = _rendered_voice_profile(rendered, _pinned_ffmpeg_binary())
+        _verify_rendered_voice(voice_profile)
         return {
             "submit_key": submit_key,
             "task_id": task_id,
@@ -814,6 +959,8 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
             "mean_colour": [round(value, 1) for value in actual],
             "expected_colour": [round(value, 1) for value in expected],
             "voice_staged": True,
+            "voice_frequency_hz": round(voice_profile["frequency_hz"], 1),
+            "voice_rms": round(voice_profile["rms"], 4),
             "output": final_path,
         }
     finally:
@@ -855,6 +1002,7 @@ def check_media_pipeline() -> dict:
         for label, colour, seconds in PROBE_SCENES:
             clip_path = staging / f"{label}.mp4"
             _stage_probe_clip(clip_path, seconds=seconds, colour=colour)
+            _verify_probe_geometry(clip_path)
             scenes.append({"label": label, "path": clip_path, "seconds": seconds,
                            "colour": colour})
         total_seconds = sum(scene["seconds"] for scene in scenes)
@@ -1038,7 +1186,7 @@ def health() -> JSONResponse:
             check_upstream_authenticated(client, api_key)
         checks["upstream_auth_enforced"] = True
         checks["submit_schema"] = sorted(check_submit_schema())
-        checks["required_submit_fields"] = list(REQUIRED_SUBMIT_FIELDS)
+        checks["required_submit_fields"] = sorted(FIXED_SUBMIT_FIELDS)
         checks["voice_staging"] = task_local_voice_capability()
     except SelfTestFailure as failure:
         status_code = 503

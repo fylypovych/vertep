@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import wave
 from pathlib import Path
 
 import pytest
@@ -377,7 +378,7 @@ def test_wrapper_health_reports_ready_only_with_auth_and_schema_proof(
     monkeypatch.setattr(wrapper, "check_upstream_authenticated", lambda *a, **k: None)
     monkeypatch.setattr(
         wrapper, "check_submit_schema",
-        lambda: {name: "str" for name in wrapper.REQUIRED_SUBMIT_FIELDS},
+        lambda: {name: "str" for name in wrapper.FIXED_SUBMIT_FIELDS},
     )
 
     response = client.get("/health")
@@ -386,7 +387,7 @@ def test_wrapper_health_reports_ready_only_with_auth_and_schema_proof(
     checks = response.json()["checks"]
     assert response.json()["status"] == "ready"
     assert checks["upstream_auth_enforced"] is True
-    assert set(wrapper.REQUIRED_SUBMIT_FIELDS).issubset(checks["submit_schema"])
+    assert set(wrapper.FIXED_SUBMIT_FIELDS).issubset(checks["submit_schema"])
     assert checks["snapshot"]["image_digest"] == "sha256:" + "a" * 64
 
 
@@ -664,7 +665,7 @@ def test_wrapper_self_test_passes_when_every_gate_is_green(monkeypatch, tmp_path
     monkeypatch.setattr(wrapper, "check_media_pipeline", lambda: {"duration_seconds": 3.0})
     monkeypatch.setattr(wrapper, "check_submit_route", lambda: _route_report())
     monkeypatch.setattr(
-        wrapper, "check_submit_schema", lambda: {name: "str" for name in wrapper.REQUIRED_SUBMIT_FIELDS}
+        wrapper, "check_submit_schema", lambda: {name: "str" for name in wrapper.FIXED_SUBMIT_FIELDS}
     )
 
     response = client.get("/self-test")
@@ -717,20 +718,7 @@ def test_the_submit_route_check_drives_the_upload_and_submit_routes(monkeypatch,
     _pinned_upstream(monkeypatch, tmp_path)
     monkeypatch.setattr(wrapper, "_stage_probe_clip", lambda path, **kwargs: Path(path).write_bytes(b"clip"))
     monkeypatch.setattr(wrapper, "_mean_colour", lambda clip, at: (200.0, 10.0, 10.0))
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "moviepy",
-        type("moviepy", (), {
-            "VideoFileClip": type(
-                "VideoFileClip", (),
-                {
-                    "__init__": lambda self, path: None,
-                    "__enter__": lambda self: self,
-                    "__exit__": lambda self, *exc: False,
-                },
-            ),
-        })(),
-    )
+    _fake_moviepy(monkeypatch, size=(wrapper.PROBE_CLIP_WIDTH, wrapper.PROBE_CLIP_HEIGHT))
     submitted: list[str] = []
 
     def fake_upstream(method, path, *, api_key, **kwargs):
@@ -759,6 +747,213 @@ def test_the_submit_route_check_drives_the_upload_and_submit_routes(monkeypatch,
     body = json.loads(records[0].read_text(encoding="utf-8"))
     assert body["state"] == "staged"
     assert body["task_id"] == "j-route"
+
+
+def _fake_moviepy(monkeypatch, *, size=(480, 854), duration=2.0):
+    """A decoder stand-in that reports a fixed geometry, as the pinned one does."""
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "moviepy",
+        type("moviepy", (), {
+            "VideoFileClip": type(
+                "VideoFileClip", (),
+                {
+                    "__init__": lambda self, path: None,
+                    "__enter__": lambda self: self,
+                    "__exit__": lambda self, *exc: False,
+                    "size": property(lambda self: size),
+                    "duration": property(lambda self: duration),
+                },
+            ),
+        })(),
+    )
+
+
+def test_the_probe_clip_meets_the_minimum_the_pinned_runtime_enforces():
+    """Issue #122 P2: a probe the pinned preprocessor refuses proves no route at all.
+
+    The pinned runtime fails a task whose local material is smaller than 480px per edge
+    (10px tolerance) with ``no valid local video materials were found``. The probe
+    geometry has to satisfy that minimum and the 9:16 aspect the factory submits, or the
+    self-test only proves that the runtime rejects its own probe.
+    """
+    from services import moneyprinter_service as wrapper
+
+    minimum = wrapper.PINNED_MIN_MATERIAL_EDGE - wrapper.PINNED_MATERIAL_EDGE_TOLERANCE
+
+    assert wrapper.PROBE_CLIP_WIDTH >= minimum, "probe width is below the pinned minimum"
+    assert wrapper.PROBE_CLIP_HEIGHT >= minimum, "probe height is below the pinned minimum"
+    # 9:16 is the aspect the fixed §9.4 submit set asks for.
+    assert round(wrapper.PROBE_CLIP_HEIGHT / wrapper.PROBE_CLIP_WIDTH, 3) == round(16 / 9, 3)
+
+
+def test_the_probe_clip_is_encoded_with_the_verified_geometry(monkeypatch, tmp_path):
+    """The rendered probe must carry the geometry the runtime check verified."""
+    from services import moneyprinter_service as wrapper
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(wrapper.subprocess, "run", lambda command, **kwargs:
+                        calls.append(list(command)))
+
+    wrapper._stage_probe_clip(tmp_path / "scene-1.mp4", seconds=2, colour="red")
+
+    assert len(calls) == 1
+    command = calls[0]
+    assert f"s={wrapper.PROBE_CLIP_WIDTH}x{wrapper.PROBE_CLIP_HEIGHT}" in " ".join(command)
+    assert "yuv420p" in command
+
+
+def test_a_probe_below_the_pinned_minimum_is_refused_before_the_upstream(monkeypatch,
+                                                                        tmp_path):
+    """The wrapper names its own defect instead of leaving it to the pinned task."""
+    from services import moneyprinter_service as wrapper
+
+    _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    monkeypatch.setattr(wrapper, "_stage_probe_clip",
+                        lambda path, **kwargs: Path(path).write_bytes(b"clip"))
+    _fake_moviepy(monkeypatch, size=(320, 568))
+    monkeypatch.setattr(wrapper, "_mean_colour", lambda clip, at: (200.0, 10.0, 10.0))
+    upstream: list[tuple] = []
+
+    def fake_upstream(method, path, *, api_key, **kwargs):
+        upstream.append((method, path))
+        raise AssertionError(f"a refused probe must never reach the upstream: {path}")
+
+    monkeypatch.setattr(wrapper, "_upstream", fake_upstream)
+
+    with pytest.raises(wrapper.SelfTestFailure) as failure:
+        wrapper.check_submit_route(deadline_seconds=1, poll_seconds=0.1)
+
+    assert failure.value.code == wrapper.REASON_MEDIA_PIPELINE_FAILED
+    assert "pinned minimum material edge" in failure.value.message
+    assert upstream == []
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not available here")
+def test_a_real_probe_clip_is_encoded_at_the_verified_geometry(tmp_path):
+    """Where FFmpeg exists, the encoded probe is decoded and measured, not assumed."""
+    moviepy = pytest.importorskip("moviepy")
+    from services import moneyprinter_service as wrapper
+
+    clip = tmp_path / "scene-1.mp4"
+    wrapper._stage_probe_clip(clip, seconds=1, colour="green")
+
+    with moviepy.VideoFileClip(str(clip)) as probe:
+        width, height = (int(value) for value in probe.size)
+
+    assert (width, height) == (wrapper.PROBE_CLIP_WIDTH, wrapper.PROBE_CLIP_HEIGHT)
+    assert wrapper._verify_probe_geometry(clip) == (width, height)
+
+
+def _pcm(*frames) -> bytes:
+    return b"".join(int(value).to_bytes(2, "little", signed=True) for value in frames)
+
+
+def test_the_approved_voice_is_a_tone_that_can_be_told_apart_from_a_tts_fallback(tmp_path):
+    """Issue #122 P3/P4: the probe narration has to identify itself in the spectrum.
+
+    Silence would accept a missing voice and speech would accept the upstream's own TTS,
+    so the approved narration is a tone whose pitch no narration engine produces here.
+    """
+    from services import moneyprinter_service as wrapper
+
+    tone = tmp_path / "voice.wav"
+    wrapper._write_voice_tone(tone, seconds=1.0)
+
+    with wave.open(str(tone), "rb") as handle:
+        assert handle.getframerate() == 24000, "the approved voice must stay lossless PCM"
+        assert handle.getsampwidth() == 2
+        frequency, rms = wrapper._frequency_and_rms(handle.readframes(handle.getnframes()),
+                                                    handle.getframerate())
+
+    assert frequency == pytest.approx(wrapper.PROBE_VOICE_FREQUENCY, rel=0.02)
+    assert rms > wrapper.PROBE_VOICE_MINIMUM_RMS
+    wrapper._verify_rendered_voice({"frequency_hz": frequency, "rms": rms})
+
+
+def test_a_narration_that_is_not_the_approved_voice_is_refused():
+    """A TTS fallback, a silent track and a wrong pitch are all refused, not accepted."""
+    from services import moneyprinter_service as wrapper
+
+    speech_like = _pcm(*[int(3000 * ((index * 37) % 11 - 5)) for index in range(24000)])
+
+    with pytest.raises(wrapper.SelfTestFailure) as fallback:
+        frequency, rms = wrapper._frequency_and_rms(speech_like, 24000)
+        wrapper._verify_rendered_voice({"frequency_hz": frequency, "rms": rms})
+    assert fallback.value.code == wrapper.REASON_VOICE_STAGING_FAILED
+    assert "not the approved voice" in fallback.value.message
+
+    with pytest.raises(wrapper.SelfTestFailure) as silent:
+        frequency, rms = wrapper._frequency_and_rms(_pcm(*([0] * 24000)), 24000)
+        wrapper._verify_rendered_voice({"frequency_hz": frequency, "rms": rms})
+    assert silent.value.code == wrapper.REASON_VOICE_STAGING_FAILED
+    assert "inaudible" in silent.value.message
+
+
+def test_the_route_check_refuses_a_render_whose_narration_is_not_the_approved_voice(
+        monkeypatch, tmp_path):
+    """Issue #122 P3: the gate fails on a substituted narration, through the real route."""
+    import numpy as np
+
+    from services import moneyprinter_service as wrapper
+
+    _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    monkeypatch.setattr(wrapper, "_stage_probe_clip",
+                        lambda path, **kwargs: Path(path).write_bytes(b"clip"))
+    monkeypatch.setattr(wrapper, "_mean_colour", lambda clip, at: (200.0, 10.0, 10.0))
+    monkeypatch.setattr(wrapper, "_pinned_ffmpeg_binary", lambda: "/usr/bin/ffmpeg")
+    _fake_moviepy(monkeypatch, size=(wrapper.PROBE_CLIP_WIDTH, wrapper.PROBE_CLIP_HEIGHT),
+                  duration=2.0)
+    # Speech-like audio: audible, and nothing like the approved tone.
+    spoken = (np.sin(2 * np.pi * 180 * np.arange(32000) / 16000)
+              * 9000).astype("<i2").tobytes()
+    monkeypatch.setattr(
+        wrapper.subprocess, "run",
+        lambda command, **kwargs: type("Completed", (), {"returncode": 0,
+                                                         "stdout": spoken})(),
+    )
+    rendered = b"\x00\x00\x00\x18ftypisom" + bytes(64)
+
+    def fake_upstream(method, path, *, api_key, **kwargs):
+        if path == "/api/v1/video_materials":
+            return httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}})
+        if path == "/api/v1/videos":
+            return httpx.Response(200, json={"status": 200, "data": {"task_id": "j-voice"}})
+        if method == "DELETE":
+            return httpx.Response(200, json={"status": 200})
+        raise AssertionError(f"unexpected upstream call: {method} {path}")
+
+    monkeypatch.setattr(wrapper, "_upstream", fake_upstream)
+    monkeypatch.setattr(wrapper, "_upstream_url", lambda: "http://127.0.0.1:1")
+
+    class _PollingClient:
+        """The status/download poll of the route, answered with a completed render."""
+
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            request = httpx.Request("GET", url)
+            if "/api/v1/tasks/" in url:
+                return httpx.Response(200, request=request, json={"status": 200, "data": {
+                    "state": 1, "videos": ["/storage/tasks/j-voice/final.mp4"]}})
+            return httpx.Response(200, request=request, content=rendered)
+
+    monkeypatch.setattr(wrapper.httpx, "Client", _PollingClient)
+
+    with pytest.raises(wrapper.SelfTestFailure) as failure:
+        wrapper.check_submit_route(deadline_seconds=5, poll_seconds=0.1)
+
+    assert failure.value.code == wrapper.REASON_VOICE_STAGING_FAILED
+    assert "not the approved voice" in failure.value.message
 
 
 def test_wrapper_requires_a_non_empty_api_key(monkeypatch, tmp_path):
@@ -1327,12 +1522,12 @@ def _ready_health(**checks) -> dict:
     The submit schema is built from the bridge contract so this report cannot claim to
     be ready while proving less than the engine requires.
     """
-    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+    from adapters.providers.base import FIXED_SUBMIT_FIELDS
 
     payload = {
         "snapshot": {"image_digest": "sha256:" + "a" * 64},
         "upstream_auth_enforced": True,
-        "submit_schema": sorted(REQUIRED_SUBMIT_FIELDS),
+        "submit_schema": sorted(FIXED_SUBMIT_FIELDS),
         "media_pipeline": {"bytes": 4096, "duration_seconds": 3.0},
     }
     payload.update(checks)
@@ -1347,6 +1542,7 @@ def test_the_self_test_submits_the_very_request_the_engine_sends():
     copies would let the gate pass on a request no attempt is ever rendered with, so the
     two are compared field by field.
     """
+    from adapters.providers.base import FIXED_SUBMIT_FIELDS
     from adapters.providers.video_engines import MoneyPrinterEngine
     from services import moneyprinter_service as wrapper
 
@@ -1367,6 +1563,9 @@ def test_the_self_test_submits_the_very_request_the_engine_sends():
     self_test["custom_audio_file"] = "vertep-voice.wav"
 
     assert self_test == factory
+    # And both cover exactly the fields the readiness gate proves against the pinned
+    # schema, so a field added to one of them cannot slip past the contract list.
+    assert set(factory) == set(FIXED_SUBMIT_FIELDS)
 
 
 def test_wrapper_proves_inherited_optional_submit_fields_without_failing():
@@ -1379,7 +1578,7 @@ def test_wrapper_proves_inherited_optional_submit_fields_without_failing():
     """
     import typing
 
-    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+    from adapters.providers.base import FIXED_SUBMIT_FIELDS, REQUIRED_SUBMIT_FIELDS
     from services import moneyprinter_service as wrapper
 
     class _Field:
@@ -1402,6 +1601,10 @@ def test_wrapper_proves_inherited_optional_submit_fields_without_failing():
         "subtitle_enabled": _Field(bool),
         "video_clip_duration": _Field(int),
     }
+    # The rest of the fixed §9.4 set is composed by the runtime as well, so the fake
+    # schema declares it like the pinned one does.
+    for name in FIXED_SUBMIT_FIELDS:
+        fields.setdefault(name, _Field(typing.Optional[typing.Any]))
     request = type("TaskVideoRequest", (), {"model_fields": fields})
     module = type("schema", (), {"TaskVideoRequest": request})
     monkey = pytest.MonkeyPatch()
@@ -1412,8 +1615,38 @@ def test_wrapper_proves_inherited_optional_submit_fields_without_failing():
         monkey.undo()
 
     assert set(REQUIRED_SUBMIT_FIELDS).issubset(fields)
-    assert set(proved) == set(REQUIRED_SUBMIT_FIELDS)
+    assert set(proved) == set(FIXED_SUBMIT_FIELDS)
     assert all(isinstance(value, str) and value for value in proved.values())
+
+
+def test_the_runtime_gate_refuses_a_schema_that_dropped_a_fixed_submit_field():
+    """Issue #122 P4: the whole fixed submit set is proved, not only what starts a task.
+
+    The pinned request model ignores unknown keys, so a runtime that stopped declaring
+    ``video_fit_mode`` would still accept the submit and compose with its own default. The
+    readiness gate has to refuse it instead of reporting the approved contract as honoured.
+    """
+    from adapters.providers.base import FIXED_SUBMIT_FIELDS
+    from services import moneyprinter_service as wrapper
+
+    class _Field:
+        def __init__(self, annotation):
+            self.annotation = annotation
+
+    for dropped in ("video_fit_mode", "video_concat_mode", "video_clip_speed", "n_threads"):
+        fields = {name: _Field(object) for name in FIXED_SUBMIT_FIELDS if name != dropped}
+        request = type("TaskVideoRequest", (), {"model_fields": fields})
+        module = type("schema", (), {"TaskVideoRequest": request})
+        monkey = pytest.MonkeyPatch()
+        monkey.setitem(__import__("sys").modules, "app.models.schema", module)
+        try:
+            with pytest.raises(wrapper.SelfTestFailure) as refusal:
+                wrapper.check_submit_schema()
+        finally:
+            monkey.undo()
+
+        assert refusal.value.code == wrapper.REASON_SCHEMA_UNSUPPORTED
+        assert dropped in refusal.value.message
 
 
 def test_runtime_check_reads_the_contract_when_run_as_a_script():
@@ -1478,7 +1711,7 @@ def test_runtime_check_reads_only_keys_the_wrapper_health_actually_publishes(
     monkeypatch.setattr(
         wrapper,
         "check_submit_schema",
-        lambda: {name: "str" for name in wrapper.REQUIRED_SUBMIT_FIELDS},
+        lambda: {name: "str" for name in wrapper.FIXED_SUBMIT_FIELDS},
     )
     client = _wrapper_client(monkeypatch, tmp_path)
 
@@ -1517,7 +1750,7 @@ def test_runtime_check_requires_a_proven_submit_route(monkeypatch, tmp_path):
     monkeypatch.setattr(wrapper, "check_submit_route", lambda: _route_report())
     monkeypatch.setattr(
         wrapper, "check_submit_schema",
-        lambda: {name: "str" for name in wrapper.REQUIRED_SUBMIT_FIELDS},
+        lambda: {name: "str" for name in wrapper.FIXED_SUBMIT_FIELDS},
     )
     client = _wrapper_client(monkeypatch, tmp_path)
     passing = client.get("/self-test").json()
@@ -1701,13 +1934,14 @@ def test_runtime_check_refuses_a_runtime_that_dropped_a_script_or_voice_field():
     so the gate takes its expected fields from the bridge contract instead of keeping a
     copy of its own.
     """
-    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+    from adapters.providers.base import FIXED_SUBMIT_FIELDS
 
     check = _load_runtime_check()
 
-    for dropped in ("video_script", "video_materials", "custom_audio_file"):
-        assert dropped in REQUIRED_SUBMIT_FIELDS
-        proved = [name for name in REQUIRED_SUBMIT_FIELDS if name != dropped]
+    for dropped in ("video_script", "video_materials", "custom_audio_file",
+                    "video_fit_mode", "n_threads"):
+        assert dropped in FIXED_SUBMIT_FIELDS
+        proved = [name for name in FIXED_SUBMIT_FIELDS if name != dropped]
 
         with pytest.raises(check.CheckFailure) as refusal:
             check.verify_gate(_ready_health(submit_schema=proved))

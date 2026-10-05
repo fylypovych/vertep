@@ -902,6 +902,57 @@ def _run_worker_executor(task: dict, env: dict[str, str]) -> subprocess.Complete
                           cwd=str(REPO_ROOT), env=process_env, timeout=300)
 
 
+_WORKER_READINESS = """
+\"\"\"Report this node's effective engine readiness, as a Worker reports it with a claim.\"\"\"
+
+import json
+
+from worker.service import claim_video_engine_state
+
+json.dump(claim_video_engine_state(), sys.stdout)
+"""
+
+
+def _run_worker_readiness(env: dict[str, str]) -> subprocess.CompletedProcess:
+    process_env = {**os.environ, **env}
+    process_env["PYTHONPATH"] = str(REPO_ROOT)
+    process_env["PYTHONIOENCODING"] = "utf-8"
+    program = "import sys\n" + _WORKER_READINESS
+    return subprocess.run([sys.executable, "-c", program], capture_output=True, text=True,
+                          cwd=str(REPO_ROOT), env=process_env, timeout=300)
+
+
+def test_a_worker_process_reports_an_unreachable_runtime_as_not_ready():
+    """Issue #122 P5/P7: the readiness self-test belongs to the node that renders.
+
+    CORE can only refuse to hand the attempt over to a node that reports a ready runtime,
+    so the probe has to happen in the Worker process against its own endpoint. A runtime
+    that cannot be reached is reported not ready with the pinned reason, and the reported
+    engine stays the selected one: there is no silent fallback to Native (§9.12).
+    """
+    from adapters.providers.video_engines import MoneyPrinterEngine
+
+    completed = _run_worker_readiness({
+        "VERTEP_VIDEO_ENGINE": "money-printer",
+        MoneyPrinterEngine.env_url: "http://127.0.0.1:1",
+        MoneyPrinterEngine.env_token: "worker-token",
+    })
+
+    assert completed.returncode == 0, completed.stderr
+    state = json.loads(completed.stdout)
+    assert state["engine_id"] == "money-printer"
+    assert state["ready"] is False
+    # The reason is the one the engine reports for a runtime that cannot be reached, not
+    # a generic "unavailable": the claim gate and the operator see why.
+    assert state["reason"] == "wrapper_unreachable", state
+    # The claim gate compares the same non-secret facts, so they travel with the verdict.
+    for field in ("bridge_schema_version", "config_revision", "endpoint_reference",
+                  "secret_reference"):
+        assert field in state, f"{field} is missing from the reported engine state"
+    assert state["secret_reference"]["configured"] is True
+    assert "worker-token" not in completed.stdout
+
+
 def _claimed_attempt(assembly_state):
     """A real dispatch and claim, i.e. an attempt a node is allowed to render."""
     store = assembly_state["store"]

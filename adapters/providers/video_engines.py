@@ -47,8 +47,8 @@ from .base import (
     RELEASE_NOT_APPLIED,
     RELEASE_RELEASED,
     RELEASE_UNCONFIRMED,
-    REQUIRED_SUBMIT_FIELDS,
     BridgeContractError,
+    FIXED_SUBMIT_FIELDS,
     VideoEngine,
 )
 from .runtime_manifest import (
@@ -1795,14 +1795,17 @@ class MoneyPrinterEngine(RemoteVideoEngine):
             return result
 
         schema = checks.get("submit_schema")
+        # The whole fixed §9.4 set, not only the fields that can start a task: a runtime
+        # that stopped accepting a compose field would apply its own default to the
+        # approved render while still reporting a compatible schema.
         result["schema_compatible"] = isinstance(schema, (list, dict)) and set(
-            REQUIRED_SUBMIT_FIELDS
+            FIXED_SUBMIT_FIELDS
         ).issubset(schema)
         if not result["schema_compatible"]:
             result["reason"] = REASON_SCHEMA_UNSUPPORTED
             result["error"] = (
                 "wrapper did not prove a submit schema containing "
-                f"{', '.join(REQUIRED_SUBMIT_FIELDS)}"
+                f"{', '.join(FIXED_SUBMIT_FIELDS)}"
             )
             return result
 

@@ -9,7 +9,7 @@ from adapters.providers.base import (
     RELEASE_NOT_APPLIED,
     RELEASE_RELEASED,
     RELEASE_UNCONFIRMED,
-    REQUIRED_SUBMIT_FIELDS,
+    FIXED_SUBMIT_FIELDS,
 )
 from adapters.providers.video_engines import (
     MONEY_PRINTER_CONTRACT,
@@ -1481,7 +1481,7 @@ def _wrapper_ready_body(**overrides):
         "upstream_auth_enforced": True,
         # Built from the contract, so a widened §9.12 field list cannot leave this
         # "ready" report proving less than the engine requires.
-        "submit_schema": sorted(REQUIRED_SUBMIT_FIELDS),
+        "submit_schema": sorted(FIXED_SUBMIT_FIELDS),
     }
     checks.update(overrides)
     return {"service": "moneyprinter", "status": "ready", "checks": checks}
@@ -1570,6 +1570,24 @@ def test_health_check_refuses_a_missing_submit_schema():
 
     assert health["available"] is False
     assert health["reason"] == "upstream_schema_unsupported"
+
+
+def test_health_check_refuses_a_runtime_that_proved_only_the_starting_fields():
+    """Issue #122 P4: proving the fields that start a task is not proving the contract.
+
+    The pinned request model ignores unknown keys, so a runtime that stopped declaring a
+    compose field would accept the submit and build the render with its own default. The
+    engine has to call that incompatible instead of reporting the fixed §9.4 set honoured.
+    """
+    from adapters.providers.base import REQUIRED_SUBMIT_FIELDS
+
+    health = _health_from(_wrapper_ready_body(
+        submit_schema=sorted(REQUIRED_SUBMIT_FIELDS)))
+
+    assert health["available"] is False
+    assert health["schema_compatible"] is False
+    assert health["reason"] == "upstream_schema_unsupported"
+    assert "video_fit_mode" in health["error"]
 
 
 def test_health_check_refuses_runtime_commit_drift():

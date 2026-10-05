@@ -316,14 +316,14 @@ def _runtime_on_loopback(report: dict):
 def _ready_report(*, bridge_schema_version: str | None = None,
                   upstream_commit: str | None = None) -> dict:
     """A readiness report of a runtime that satisfies the pinned contract."""
-    from adapters.providers.base import BRIDGE_SCHEMA_VERSION, REQUIRED_SUBMIT_FIELDS
+    from adapters.providers.base import BRIDGE_SCHEMA_VERSION, FIXED_SUBMIT_FIELDS
     from adapters.providers.video_engines import MONEY_PRINTER_CONTRACT
 
     pinned = MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[-1]
     return {
         "checks": {
             "upstream_auth_enforced": True,
-            "submit_schema": list(REQUIRED_SUBMIT_FIELDS),
+            "submit_schema": list(FIXED_SUBMIT_FIELDS),
             "snapshot": {
                 "upstream_commit": upstream_commit or pinned,
                 "image_digest": "sha256:" + "a" * 64,

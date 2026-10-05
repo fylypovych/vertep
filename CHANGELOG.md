@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.38
+- `adapters/providers/base.py`: додано контракт `FIXED_SUBMIT_FIELDS` — увесь фіксований набір submit полів §9.4, а не лише ті, з яких можна запустити задачу. Pinned request model ігнорує невідомі ключі, тому перейменований або вилучений compose-поле (`video_fit_mode`, `video_concat_mode`, швидкість кліпу, кількість потоків) не ламало б submit: runtime тихо склав би рендер зі своїми дефолтами, а Vertep вважав би затверджений контракт виконаним. Тепер кожне поле, яке надсилає bridge, доводиться проти pinned schema, а readiness gate відмовляє runtime, який не довів їх усі (§9.4, §9.12).
+- `services/moneyprinter_service.py`, `adapters/providers/video_engines.py`, `scripts/moneyprinter-runtime-check.py`: `check_submit_schema()`, `schema_compatible` і gate runtime перевіряють `FIXED_SUBMIT_FIELDS`; відмова називає повний перелік недоведених полів.
+- `services/moneyprinter_service.py`: submit-route self-test більше не довіряє логу про озвучку — готовий рендер декодується штатним FFmpeg самого pinned pipeline, а домінантна частота й RMS натури порівнюються з затвердженим тоном 440 Гц (`PROBE_VOICE_TONE_AMPLITUDE`, допуск 10%, мінімальний RMS). Мовчання не відрізняло б затверджений голос від відсутнього, а TTS fallback все одно дав би «якийсь звук»; підміна тепер чутна в спектрі (§9.6).
+- `services/moneyprinter_service.py`: геометрія probe-кліпу піднята до 486x864 (9:16) і перевіряється перед submit — pinned runtime відмовляє локальний матеріал з ребром меншим за 480px (допуск 10px) і валить задачу на стадії `materials`, тож такий probe не доводив нічого про маршрут (§9.12).
+- `tests/test_assembly_worker_route.py`: маршрут assembly тепер доводиться окремим процесом worker'а і для неготового runtime (`not_ready`), і для спроби зі зміщеною конфігурацією — обидва докази додані до acceptance-звіту `scripts/issue-122-acceptance-report.py` разом із новими runtime-тестами схеми, геометрії probe й озвучки.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.37
 - Виправлено `/self-test` wrapper'а pinned MoneyPrinterTurbo: сумісний клієнт `fastapi.testclient.TestClient` замість `httpx.ASGITransport`, який у зафіксованому `httpx==0.28.1` не піддається синхронному входу (`AttributeError: 'ASGITransport' object has no attribute '__enter__'`) і не обслуговує `async def` маршрути. Gate більше не падає на `media_pipeline_unavailable` і проходить реальні маршрути `upload`/`submit` (§9.12 P2).
 - Бюджет `check_submit_route()` зменшено з 900 до 600 с: рендер, який не завершився, тепер повертає власну причину разом із gate, що виконувався, замість транспортного timeout на боці викликача.
