@@ -678,6 +678,89 @@ def test_wrapper_self_test_passes_when_every_gate_is_green(monkeypatch, tmp_path
     assert body["checks"]["submit_route"]["voice_staged"] is True
 
 
+def test_the_self_test_client_serves_the_wrappers_own_routes(monkeypatch, tmp_path):
+    """Issue #122 P2: the self-test client has to work on the pinned ``httpx``.
+
+    ``httpx.ASGITransport`` is asynchronous. The pinned runtime lock ships
+    ``httpx==0.28.1``, where entering a synchronous ``httpx.Client`` built on it raises
+    ``AttributeError: 'ASGITransport' object has no attribute '__enter__'`` — which is
+    exactly how the runtime self-test died in CI, so no submit route could ever be
+    proven. The client the self-test uses must be able to enter and to serve a route.
+    """
+    from services import moneyprinter_service as wrapper
+
+    _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+
+    with wrapper._self_test_client() as client:
+        staged = client.post(
+            "/api/v1/voice",
+            content=b"approved-voice-bytes",
+            headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice-0001.wav"},
+        )
+
+    assert staged.status_code == 200, staged.text
+    assert staged.json()["data"]["voice"].startswith("vertep-voice:")
+
+
+def test_the_submit_route_check_drives_the_upload_and_submit_routes(monkeypatch, tmp_path):
+    """Issue #122 P2/P4: the route check goes through the wrapper's own HTTP routes.
+
+    Only the pinned media pipeline and the upstream task state are faked here. The upload
+    and the submit are real requests against the real ASGI application, so the check can
+    no longer pass by calling handlers directly — and the durable record it reads back is
+    the one the submit route actually wrote.
+    """
+    from services import moneyprinter_service as wrapper
+
+    _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    monkeypatch.setattr(wrapper, "_stage_probe_clip", lambda path, **kwargs: Path(path).write_bytes(b"clip"))
+    monkeypatch.setattr(wrapper, "_mean_colour", lambda clip, at: (200.0, 10.0, 10.0))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "moviepy",
+        type("moviepy", (), {
+            "VideoFileClip": type(
+                "VideoFileClip", (),
+                {
+                    "__init__": lambda self, path: None,
+                    "__enter__": lambda self: self,
+                    "__exit__": lambda self, *exc: False,
+                },
+            ),
+        })(),
+    )
+    submitted: list[str] = []
+
+    def fake_upstream(method, path, *, api_key, **kwargs):
+        if path == "/api/v1/video_materials":
+            return httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}})
+        if path == "/api/v1/videos":
+            submitted.append(kwargs.get("content", b"").decode())
+            return httpx.Response(200, json={"status": 200, "data": {"task_id": "j-route"}})
+        if path.startswith("/api/v1/tasks/"):
+            return httpx.Response(200, json={"status": 200, "data": {"state": 4}})
+        if method == "DELETE":
+            return httpx.Response(200, json={"status": 200})
+        raise AssertionError(f"unexpected upstream call: {method} {path}")
+
+    monkeypatch.setattr(wrapper, "_upstream", fake_upstream)
+    # The poll after the submit talks to the pinned upstream over a real socket, which
+    # does not exist here; reaching it is the proof that both routes already ran.
+    monkeypatch.setattr(wrapper, "_upstream_url", lambda: "http://127.0.0.1:1")
+
+    with pytest.raises(httpx.TransportError):
+        wrapper.check_submit_route(deadline_seconds=1, poll_seconds=0.1)
+
+    assert len(submitted) == 1
+    records = list((tmp_path / "submits").glob("self-test-*.json"))
+    assert len(records) == 1
+    body = json.loads(records[0].read_text(encoding="utf-8"))
+    assert body["state"] == "staged"
+    assert body["task_id"] == "j-route"
+
+
 def test_wrapper_requires_a_non_empty_api_key(monkeypatch, tmp_path):
     from services import moneyprinter_service as wrapper
 
@@ -1254,6 +1337,36 @@ def _ready_health(**checks) -> dict:
     }
     payload.update(checks)
     return {"status": "ready", "checks": payload}
+
+
+def test_the_self_test_submits_the_very_request_the_engine_sends():
+    """Issue #122 P1/P4: the runtime gate proves the contract the factory really uses.
+
+    The §9.4 submit set is written down twice — once by the engine that dispatches a Job
+    and once by the wrapper self-test that has to prove the route works. Two independent
+    copies would let the gate pass on a request no attempt is ever rendered with, so the
+    two are compared field by field.
+    """
+    from adapters.providers.video_engines import MoneyPrinterEngine
+    from services import moneyprinter_service as wrapper
+
+    seconds = 2.0
+    engine = MoneyPrinterEngine(url="http://engine:8000")
+    factory = engine.build_upstream_request(
+        subject="Vertep runtime self-test",
+        script="Approved self-test narration.",
+        materials=[{"provider": "local", "url": "scene-000.mp4", "duration": seconds}],
+        narration_path="vertep-voice.wav",
+        aspect_ratio="9:16",
+        clip_duration=2,
+    )
+    # The self-test submits the staged marker; the submit route is what turns it into the
+    # task-local file name the pinned resolver accepts.
+    self_test = dict(wrapper._submit_route_payload(
+        "scene-000.mp4", "vertep-voice:" + "a" * 64 + ".wav", seconds))
+    self_test["custom_audio_file"] = "vertep-voice.wav"
+
+    assert self_test == factory
 
 
 def test_wrapper_proves_inherited_optional_submit_fields_without_failing():
@@ -2227,7 +2340,14 @@ def test_wrapper_never_asks_the_pinned_runtime_to_generate_or_publish(
     assert payloads[0]["custom_audio_file"] == "vertep-voice.wav"
 
 
-def test_wrapper_cancels_the_task_when_the_voice_cannot_be_placed(monkeypatch, tmp_path):
+def test_wrapper_refuses_before_the_upstream_ever_sees_an_unstaged_voice(monkeypatch, tmp_path):
+    """Issue #122 P3: a missing approved voice is refused before the submit, not after.
+
+    The pinned task directory only exists once the upstream has named a task, so the
+    staging itself cannot come first. What can come first is the proof that the staged
+    bytes are really there: without it the first submit of an attempt created a render
+    whose audio stage could only fall back to the pinned TTS.
+    """
     client = _wrapper_client(monkeypatch, tmp_path)
     _pinned_upstream(monkeypatch, tmp_path)
     calls: list = []
@@ -2245,6 +2365,74 @@ def test_wrapper_cancels_the_task_when_the_voice_cannot_be_placed(monkeypatch, t
     assert response.status_code == 503
     # The category tells CORE the approved voice was the reason, the cause tells an
     # operator which check failed — the attempt is never reported as merely "failed".
+    assert response.json()["reason"] == "voice_staging_failed"
+    assert response.json()["cause"] == "upstream_voice_staging_unsupported"
+    assert calls == [], "the attempt was refused before the upstream was contacted"
+
+
+def test_a_staged_voice_that_no_longer_matches_its_address_is_refused_before_the_submit(
+    monkeypatch, tmp_path
+):
+    """A staged file that was replaced after staging cannot narrate the attempt."""
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    digest = hashlib.sha256(b"approved-voice-bytes").hexdigest()
+    client.post(
+        "/api/v1/voice",
+        content=b"approved-voice-bytes",
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice-0001.wav"},
+    )
+    calls: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: (
+            calls.append((method, path)),
+            httpx.Response(200, json={"status": 200, "message": "success", "data": {"task_id": "j-44"}}),
+        )[1],
+    )
+    staged = next((tmp_path / "voice").glob("*.wav"))
+    staged.write_bytes(b"tampered-voice-bytes")
+
+    response = _submit(client, custom_audio_file=f"vertep-voice:{digest}.wav")
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "voice_staging_failed"
+    assert response.json()["cause"] == "upstream_voice_staging_unsupported"
+    assert calls == []
+
+
+def test_wrapper_cancels_the_task_when_the_voice_cannot_be_placed(monkeypatch, tmp_path):
+    """A task that was accepted but cannot be narrated is aborted, never left running."""
+    from services.moneyprinter_service import SelfTestFailure
+
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    digest = hashlib.sha256(b"approved-voice-bytes").hexdigest()
+    client.post(
+        "/api/v1/voice",
+        content=b"approved-voice-bytes",
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice-0001.wav"},
+    )
+    calls: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: (
+            calls.append((method, path)),
+            httpx.Response(200, json={"status": 200, "message": "success", "data": {"task_id": "j-43"}}),
+        )[1],
+    )
+    # The task directory is accepted by the pinned runtime but refuses the file, so the
+    # staging fails after the upstream work already exists.
+    monkeypatch.setattr(
+        "services.moneyprinter_service._stage_task_voice",
+        lambda task_id, marker: (_ for _ in ()).throw(
+            SelfTestFailure("upstream_voice_staging_unsupported", "resolver refused the file")
+),
+    )
+
+    response = _submit(client, custom_audio_file=f"vertep-voice:{digest}.wav")
+
+    assert response.status_code == 503
     assert response.json()["reason"] == "voice_staging_failed"
     assert response.json()["cause"] == "upstream_voice_staging_unsupported"
     assert [call[0] for call in calls] == ["POST", "DELETE"]
@@ -2515,6 +2703,12 @@ def test_a_definitively_refused_submit_releases_its_key_for_a_retry(monkeypatch,
     """
     client = _wrapper_client(monkeypatch, tmp_path)
     _pinned_upstream(monkeypatch, tmp_path)
+    digest = hashlib.sha256(b"approved-voice-bytes").hexdigest()
+    client.post(
+        "/api/v1/voice",
+        content=b"approved-voice-bytes",
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice-0001.wav"},
+    )
     calls: list = []
     monkeypatch.setattr(
         "services.moneyprinter_service._upstream",
@@ -2524,12 +2718,14 @@ def test_a_definitively_refused_submit_releases_its_key_for_a_retry(monkeypatch,
         )[1],
     )
 
-    refused = _submit_with_key(client, "job-1-v1-refused")
+    refused = _submit_with_key(client, "job-1-v1-refused",
+                               custom_audio_file=f"vertep-voice:{digest}.wav")
 
     assert refused.status_code == 422
     assert len(calls) == 1
     # The key is free again: a retry reaches the upstream instead of being blocked.
-    retried = _submit_with_key(client, "job-1-v1-refused")
+    retried = _submit_with_key(client, "job-1-v1-refused",
+                               custom_audio_file=f"vertep-voice:{digest}.wav")
     assert retried.status_code == 422
     assert len(calls) == 2
 
@@ -2540,11 +2736,13 @@ def test_a_definitively_refused_submit_releases_its_key_for_a_retry(monkeypatch,
             httpx.Response(503, text="Service Unavailable"),
         )[1],
     )
-    assert _submit_with_key(client, "job-1-v1-ambiguous").status_code == 503
+    assert _submit_with_key(client, "job-1-v1-ambiguous",
+                            custom_audio_file=f"vertep-voice:{digest}.wav").status_code == 503
     # A server-side failure leaves the key reserved, so a retry is reported as unknown
     # instead of risking a second upstream task.
     calls.clear()
-    again = _submit_with_key(client, "job-1-v1-ambiguous")
+    again = _submit_with_key(client, "job-1-v1-ambiguous",
+                             custom_audio_file=f"vertep-voice:{digest}.wav")
     assert again.status_code == 409
     assert again.json()["reason"] == "upstream_submit_unknown"
     assert calls == []

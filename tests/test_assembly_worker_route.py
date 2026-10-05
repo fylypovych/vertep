@@ -19,7 +19,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import struct
+import subprocess
+import sys
 import zlib
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,6 +36,8 @@ from core.models import (Job, JobStatus, StageName, StageStatus, TaskClaim, Task
                          TaskResult, utc_now)
 from core.pipeline import JobStore, finalize_job
 from core.queue import TaskQueue
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 # ---------------------------------------------------------------------------
@@ -586,47 +591,17 @@ def test_worker_refuses_a_voice_that_is_not_the_approved_one(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 
 
-def _delivering_worker(assembly_state, tmp_path_factory, monkeypatch):
-    """A Worker that shares nothing with CORE but the approved references.
+@contextmanager
+def _core_input_server(served: list[str]):
+    """Serve CORE's input route over real HTTP, as a node on another host reaches it.
 
-    Its ``JOB_ROOT`` is a different directory tree, so the only way it can render the
-    attempt is the delivery route — exactly the topology of a Worker on another host.
-    """
-    from worker import role_executor
-
-    node_root = tmp_path_factory.mktemp("worker-host")
-    monkeypatch.setenv("JOB_ROOT", str(node_root / "jobs"))
-    monkeypatch.setattr(role_executor, "providers", type("_P", (), {
-        "video_engine": staticmethod(_WorkerRenderer),
-    }))
-    return role_executor, node_root
-
-
-def test_approved_inputs_reach_a_worker_with_a_different_storage_root(
-    assembly_state, monkeypatch, tmp_path_factory,
-):
-    """Issue #122 P3: delivery is proved across roots, not assumed from a shared volume.
-
-    CORE serves the approved bytes of the attempt to the node that owns it; the Worker
-    writes them into its own Job directory, verifies the approved digests and renders.
-    Nothing in the task carries a path of CORE's filesystem.
+    The handler delegates to the same route function the API exposes, so a node proves
+    itself against the production route instead of a test double of it.
     """
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    import httpx as _httpx
-
     from core.api import tasks as tasks_module
-
-    store = assembly_state["store"]
-    _register_worker(store)
-    finalized = _dispatch(assembly_state)
-    task = assembly_state["queue"].find(finalized.assembly_task_id)
-    _claim()  # the node owns the attempt, which is what authorises the delivery
-    role_executor, node_root = _delivering_worker(assembly_state, tmp_path_factory,
-                                                  monkeypatch)
-
-    served: list[str] = []
 
     class _Handler(BaseHTTPRequestHandler):
         def _dispatch(self, method: str) -> None:
@@ -667,8 +642,50 @@ def test_approved_inputs_reach_a_worker_with_a_different_storage_root(
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    base = f"http://127.0.0.1:{server.server_port}"
     try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _delivering_worker(assembly_state, tmp_path_factory, monkeypatch):
+    """A Worker that shares nothing with CORE but the approved references.
+
+    Its ``JOB_ROOT`` is a different directory tree, so the only way it can render the
+    attempt is the delivery route — exactly the topology of a Worker on another host.
+    """
+    from worker import role_executor
+
+    node_root = tmp_path_factory.mktemp("worker-host")
+    monkeypatch.setenv("JOB_ROOT", str(node_root / "jobs"))
+    monkeypatch.setattr(role_executor, "providers", type("_P", (), {
+        "video_engine": staticmethod(_WorkerRenderer),
+    }))
+    return role_executor, node_root
+
+
+def test_approved_inputs_reach_a_worker_with_a_different_storage_root(
+    assembly_state, monkeypatch, tmp_path_factory,
+):
+    """Issue #122 P3: delivery is proved across roots, not assumed from a shared volume.
+
+    CORE serves the approved bytes of the attempt to the node that owns it; the Worker
+writes them into its own Job directory, verifies the approved digests and renders.
+    Nothing in the task carries a path of CORE's filesystem.
+    """
+    from core.api import tasks as tasks_module
+
+    store = assembly_state["store"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    task = assembly_state["queue"].find(finalized.assembly_task_id)
+    _claim()  # the node owns the attempt, which is what authorises the delivery
+    role_executor, node_root = _delivering_worker(assembly_state, tmp_path_factory,
+                                                  monkeypatch)
+
+    served: list[str] = []
+    with _core_input_server(served) as base:
         monkeypatch.setenv("CORE_URL", base)
         monkeypatch.setenv("NODE_NAME", "gpu-01")
         monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
@@ -676,9 +693,6 @@ def test_approved_inputs_reach_a_worker_with_a_different_storage_root(
                             lambda node_name, request: True)
 
         artifacts = role_executor.execute_assembly(task)
-    finally:
-        server.shutdown()
-        server.server_close()
 
     approved = ([entry["reference"] for entry in finalized.video_engine_snapshot["materials"]]
                 + [entry["reference"] for entry in finalized.video_engine_snapshot["inputs"].values()
@@ -694,6 +708,27 @@ def test_approved_inputs_reach_a_worker_with_a_different_storage_root(
     assert artifacts[0]["contract"]["video_version"] == 1
     # The attempt still carried no path of CORE's filesystem.
     assert not Path(task["materials"][0]).is_absolute()
+
+
+def test_the_delivery_base_is_the_core_address_the_worker_registered_at(monkeypatch):
+    """Issue #122 P3: delivery resolves the variable the stock Worker configuration sets.
+
+    ``worker/service.py`` registers with ``CORE_ADDRESS`` and ``docker-compose.worker.yml``
+    requires it, while the delivery base used to read only ``CORE_URL``/``CORE_API_URL``/
+    ``VERTEP_CORE_URL``. On a stock configuration that resolved to an empty string and the
+    approved inputs could never reach a node with a different ``JOB_ROOT``.
+    """
+    from worker import role_executor
+
+    for name in ("CORE_URL", "CORE_API_URL", "VERTEP_CORE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CORE_ADDRESS", "http://core:8080/")
+
+    assert role_executor._core_base_url() == "http://core:8080"
+
+    monkeypatch.delenv("CORE_ADDRESS")
+    monkeypatch.setenv("VERTEP_CORE_URL", "http://fallback:8080")
+    assert role_executor._core_base_url() == "http://fallback:8080"
 
 
 def test_the_input_route_refuses_anything_but_the_owning_node_and_approved_inputs(
@@ -749,14 +784,14 @@ def test_the_input_route_refuses_anything_but_the_owning_node_and_approved_input
 
 
 def test_a_worker_without_core_delivery_refuses_instead_of_rendering(tmp_path, monkeypatch):
-    """No CORE_URL means no delivery: the attempt is refused, never approximated."""
+    """No CORE_ADDRESS means no delivery: the attempt is refused, never approximated."""
     from worker import role_executor
 
     _worker_job_dir(tmp_path, monkeypatch)
     task = _worker_task(tmp_path)
     # The node's own root does not hold the approved scene, and nothing can fetch it.
     monkeypatch.setenv("JOB_ROOT", str(tmp_path / "worker-jobs"))
-    for name in ("CORE_URL", "CORE_API_URL", "VERTEP_CORE_URL", "NODE_NAME"):
+    for name in ("CORE_ADDRESS", "CORE_URL", "CORE_API_URL", "VERTEP_CORE_URL", "NODE_NAME"):
         monkeypatch.delenv(name, raising=False)
 
     with pytest.raises(RuntimeError, match="not configured for its delivery"):
@@ -807,6 +842,151 @@ def test_worker_renders_the_dispatched_version_and_returns_a_verifiable_contract
     assert seen["output"].name.startswith(".") and seen["output"].name.endswith(".part")
     assert not (tmp_path / "jobs" / "job-122" / "final" / "video-v2.mp4").exists()
     assert seen["submit_key"] == "job-122-v2-abc"
+
+
+# ---------------------------------------------------------------------------
+# P5/P7: the executor in the separate process a Worker node really is
+# ---------------------------------------------------------------------------
+
+
+_WORKER_EXECUTOR = r'''
+"""Run the assembly route the way a Worker node runs it: task in, artifacts out."""
+
+import json
+import sys
+from pathlib import Path
+
+from worker import role_executor
+
+
+class _NodeEngine:
+    """The node's own engine implementation; the render happens where the node is."""
+
+    engine_id = "money-printer"
+    provider = "money-printer"
+    name = "money-printer"
+
+    def render(self, output, **kwargs):
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(
+            b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + bytes(512))
+        return path
+
+    def capabilities(self):
+        return {"can_render": True}
+
+    def cancel(self, job_id=None, *, submit_key=None):
+        return True
+
+
+role_executor.providers = type("_P", (), {"video_engine": staticmethod(_NodeEngine)})
+
+json.dump({"artifacts": role_executor.execute_assembly(json.loads(sys.stdin.read()))},
+          sys.stdout)
+'''
+
+
+def _run_worker_executor(task: dict, env: dict[str, str]) -> subprocess.CompletedProcess:
+    """Execute the assembly route in a separate process, as a node does.
+
+    The process shares nothing with CORE but the environment it registered with, its
+    own ``JOB_ROOT`` and the dispatched task: nothing of CORE's state is importable in
+    it, so a route that only works because CORE's objects are in memory cannot pass.
+    """
+    process_env = {**os.environ, **env}
+    process_env["PYTHONPATH"] = str(REPO_ROOT)
+    process_env["PYTHONIOENCODING"] = "utf-8"
+    return subprocess.run([sys.executable, "-c", _WORKER_EXECUTOR],
+                          input=json.dumps(task), capture_output=True, text=True,
+                          cwd=str(REPO_ROOT), env=process_env, timeout=300)
+
+
+def _claimed_attempt(assembly_state):
+    """A real dispatch and claim, i.e. an attempt a node is allowed to render."""
+    store = assembly_state["store"]
+    _register_worker(store)
+    finalized = _dispatch(assembly_state)
+    task = assembly_state["queue"].find(finalized.assembly_task_id)
+    _claim()
+    return finalized, task
+
+
+def test_a_separate_worker_process_renders_the_dispatched_attempt(
+    assembly_state, monkeypatch, tmp_path_factory
+):
+    """Issue #122 P5: the executor is proved as the separate process it is in production.
+
+    CORE dispatches and hands the attempt over its own queue route; another process
+    pulls the approved bytes over HTTP into its own ``JOB_ROOT``, which shares no
+    filesystem with CORE, and returns the verifiable contract of its render.
+    """
+    finalized, task = _claimed_attempt(assembly_state)
+    node_root = tmp_path_factory.mktemp("node-host")
+    for name in ("CORE_URL", "CORE_API_URL", "VERTEP_CORE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(tasks_api, "_valid_worker_request", lambda node_name, req: True)
+
+    served: list[str] = []
+    with _core_input_server(served) as base:
+        completed = _run_worker_executor(task, {
+            "CORE_ADDRESS": base,
+            "JOB_ROOT": str(node_root / "jobs"),
+            "NODE_NAME": "gpu-01",
+            "NODE_API_TOKEN": "worker-token",
+        })
+
+    assert completed.returncode == 0, completed.stderr
+    artifact = json.loads(completed.stdout)["artifacts"][0]
+    contract = artifact["contract"]
+    snapshot = finalized.video_engine_snapshot
+    approved = ([entry["reference"] for entry in snapshot["materials"]]
+                + [entry["reference"] for entry in snapshot["inputs"].values() if entry])
+    assert sorted(served) == sorted(approved), \
+        "every approved input was pulled over HTTP, and nothing else"
+    core_job_dir = Path(assembly_state["store"].root) / finalized.job_id
+    for reference in approved:
+        delivered = node_root / "jobs" / finalized.job_id / reference
+        assert _sha256(delivered) == _sha256(core_job_dir / reference), \
+            f"{reference} differs from the approved bytes"
+    assert contract["sha256"] == hashlib.sha256(
+        base64.b64decode(artifact["data_base64"])).hexdigest()
+    assert contract["video_version"] == 1
+    assert contract["engine_id"] == "money-printer"
+    assert contract["engine_snapshot"]["submit_key"] == task["submit_key"]
+    # The render stayed on the node: CORE promotes the bytes itself, from the contract.
+    assert not (node_root / "jobs" / finalized.job_id / "final" / "video-v1.mp4").exists()
+
+
+def test_a_separate_worker_process_refuses_an_attempt_whose_engine_drifted(
+    assembly_state, monkeypatch, tmp_path_factory
+):
+    """Issue #122 P7: drift is refused by the node itself, before it pulls anything.
+
+    The refusal is the node's own decision from its own configuration, so it has to
+    happen in the process that renders; an in-process call could be refused by CORE.
+    """
+    finalized, task = _claimed_attempt(assembly_state)
+    node_root = tmp_path_factory.mktemp("node-host")
+    for name in ("CORE_URL", "CORE_API_URL", "VERTEP_CORE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(tasks_api, "_valid_worker_request", lambda node_name, req: True)
+    task["engine_snapshot"] = {**task["engine_snapshot"], "config_revision": "drifted"}
+
+    served: list[str] = []
+    with _core_input_server(served) as base:
+        completed = _run_worker_executor(task, {
+            "CORE_ADDRESS": base,
+            "JOB_ROOT": str(node_root / "jobs"),
+            "NODE_NAME": "gpu-01",
+            "NODE_API_TOKEN": "worker-token",
+        })
+
+    assert completed.returncode != 0
+    assert "engine_snapshot_mismatch" in completed.stderr
+    assert "config_revision" in completed.stderr
+    assert served == [], "a refused attempt must not pull a single approved input"
+    assert not (node_root / "jobs" / finalized.job_id / "final").exists()
 
 
 def test_renew_requires_the_owning_worker(assembly_state):

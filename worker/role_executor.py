@@ -633,8 +633,16 @@ def _job_path(root: Path, job_id: str, relative: str) -> Path | None:
 
 
 def _core_base_url() -> str:
-    """The CORE this node registered at, used to pull approved inputs (Issue #122 P3)."""
-    return (os.getenv("CORE_URL") or os.getenv("CORE_API_URL")
+    """The CORE this node registered at, used to pull approved inputs (Issue #122 P3).
+
+    ``CORE_ADDRESS`` comes first because it is the variable the Worker itself registers
+    with (``worker/service.py``) and the one ``docker-compose.worker.yml`` requires. A
+    delivery base that ignored it would resolve to an empty string on a stock
+    configuration, so approved inputs would never reach a node with a different
+    ``JOB_ROOT``.
+    """
+    return (os.getenv("CORE_ADDRESS") or os.getenv("CORE_URL")
+            or os.getenv("CORE_API_URL")
             or os.getenv("VERTEP_CORE_URL") or "").rstrip("/")
 
 
@@ -660,8 +668,8 @@ def _fetch_approved_input(task: dict, relative: str, destination: Path,
     node_name = str(os.getenv("NODE_NAME") or os.getenv("WORKER_NAME") or "")
     if not base or not node_name:
         raise RuntimeError(
-            f"Assembly input {relative!r} is not available on this node and CORE_URL/"
-            f"NODE_NAME are not configured for its delivery"
+            f"Assembly input {relative!r} is not available on this node and "
+            f"CORE_ADDRESS/NODE_NAME are not configured for its delivery"
         )
     task_id = str(task.get("task_id") or "")
     url = f"{base}/api/tasks/{task_id}/inputs/{relative.lstrip('/')}"

@@ -508,8 +508,15 @@ def _submitted_task_id(response: httpx.Response) -> str:
     return task_id
 
 
-def _stage_task_voice(task_id: str, marker: str) -> Path:
-    """Place the approved voice inside the pinned task directory."""
+def _verified_staged_voice(marker: str) -> bytes:
+    """The approved voice bytes this marker names, proved before anything else happens.
+
+    The pinned runtime resolves ``custom_audio_file`` inside a task directory that only
+    exists after the submit, so the bytes cannot be placed there first. They can still be
+    *proved* first: a missing or tampered staged voice is refused before the upstream is
+    contacted, so no render is ever created that could only be narrated by the pinned TTS
+    (Issue #122 P3, §9.6).
+    """
     digest = marker[len(VOICE_MARKER_PREFIX):-len(marker_suffix(marker))]
     source = _voice_dir() / f"{digest}{marker_suffix(marker)}"
     if not source.is_file():
@@ -523,6 +530,12 @@ def _stage_task_voice(task_id: str, marker: str) -> Path:
             REASON_VOICE_STAGING_UNSUPPORTED,
             "staged voice file does not match its content address",
         )
+    return payload
+
+
+def _stage_task_voice(task_id: str, marker: str) -> Path:
+    """Place the approved voice inside the pinned task directory."""
+    payload = _verified_staged_voice(marker)
 
     from app.utils import utils
 
@@ -640,7 +653,22 @@ def _submit_route_payload(material_key: str, marker: str, seconds: float) -> dic
     }
 
 
-def check_submit_route(*, deadline_seconds: float = 900.0,
+def _self_test_client():
+    """A synchronous client that drives this wrapper's own ASGI app.
+
+    ``httpx.ASGITransport`` is asynchronous: the pinned lock ships ``httpx==0.28.1``,
+    where a synchronous ``httpx.Client`` cannot enter it at all
+    (``AttributeError: 'ASGITransport' object has no attribute '__enter__'``) and could
+    not serve an ``async def`` route anyway. Starlette's test client runs the very same
+    ASGI application the container serves, so the self-test still proves the real
+    upload/submit routes instead of calling the handlers directly.
+    """
+    from fastapi.testclient import TestClient
+
+    return TestClient(app, base_url="http://wrapper")
+
+
+def check_submit_route(*, deadline_seconds: float = 600.0,
                        poll_seconds: float = 3.0) -> dict:
     """Render one scene through the real submit → status → download route (P3/P4).
 
@@ -652,8 +680,12 @@ def check_submit_route(*, deadline_seconds: float = 900.0,
     its own, reorder scenes or ignore the staged voice cannot pass §9.12.
 
     It also closes the only remaining way the voice could be missing at the audio
-    stage: the approved audio is staged before the submit and re-verified inside the
-    pinned task directory of the accepted task.
+    stage: the submit route proves the approved bytes before it contacts the upstream,
+    and the accepted task directory is verified again once the upstream has named it.
+
+    The default deadline is deliberately shorter than the budget the runtime check grants
+    this endpoint: a render that never finishes has to be reported here, with the gate
+    that was running, instead of surfacing as a socket timeout on the caller.
     """
     try:
         from moviepy import VideoFileClip
@@ -676,8 +708,7 @@ def check_submit_route(*, deadline_seconds: float = 900.0,
         _write_silence(voice_path, seconds=seconds)
         marker = _store_staged_voice(voice_path.name, voice_path.read_bytes())["voice"]
 
-        with httpx.Client(transport=httpx.ASGITransport(app=app),
-                          base_url="http://wrapper") as client:
+        with _self_test_client() as client:
             upload = client.post(
                 "/api/v1/video_materials",
                 headers={"x-vertep-filename": clip_path.name},
@@ -1200,6 +1231,19 @@ async def proxy_submit(request: Request) -> Response:
                     "reason": REASON_SUBMIT_UNKNOWN,
                 },
             )
+    try:
+        # The approved audio can only be placed in the task directory once the upstream
+        # has named the task, but its bytes can be proved here. Proving them first closes
+        # the one window in which a submit could create a render that has no approved
+        # narration: nothing is sent upstream unless the voice is really staged
+        # (Issue #122 P3, §9.6).
+        _verified_staged_voice(marker)
+    except SelfTestFailure as failure:
+        return JSONResponse(
+            status_code=503,
+            content={"status": 503, "message": failure.message,
+                     "reason": REASON_VOICE_STAGING_FAILED, "cause": failure.code},
+        )
     _remember_submit(submit_key, task_id=None, marker=marker)
     try:
         response = _upstream(

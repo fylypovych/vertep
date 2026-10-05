@@ -70,6 +70,7 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
         "tests": (
             "tests/test_video_engines.py::test_submit_matches_the_fixed_bridge_contract",
             "tests/test_video_engines.py::test_submit_sends_every_fixed_submission_value",
+            "tests/test_moneyprinter_runtime.py::test_the_self_test_submits_the_very_request_the_engine_sends",
             "tests/test_video_engines.py::test_build_upstream_request_matches_pinned_schema",
             "tests/test_video_engines.py::test_build_upstream_request_requires_pinned_profile",
             "tests/test_video_engines.py::test_remote_engine_contract_negative_cases",
@@ -227,6 +228,7 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
         "needs": (),
         "tests": (
             "tests/test_assembly_worker_route.py::test_approved_inputs_reach_a_worker_with_a_different_storage_root",
+            "tests/test_assembly_worker_route.py::test_the_delivery_base_is_the_core_address_the_worker_registered_at",
             "tests/test_assembly_worker_route.py::test_the_snapshot_records_the_dispatched_engine_and_its_revision",
             "tests/test_assembly_worker_route.py::test_worker_refuses_a_scene_that_is_not_the_approved_one",
             "tests/test_assembly_worker_route.py::test_worker_refuses_a_voice_that_is_not_the_approved_one",
@@ -234,6 +236,8 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
             "tests/test_video_engines.py::test_render_refuses_a_runtime_that_cannot_stage_the_approved_voice",
             "tests/test_moneyprinter_runtime.py::test_wrapper_places_the_staged_voice_in_the_task_directory",
             "tests/test_moneyprinter_runtime.py::test_wrapper_stages_the_approved_voice_by_content_address",
+            "tests/test_moneyprinter_runtime.py::test_wrapper_refuses_before_the_upstream_ever_sees_an_unstaged_voice",
+            "tests/test_moneyprinter_runtime.py::test_a_staged_voice_that_no_longer_matches_its_address_is_refused_before_the_submit",
         ),
     },
     {
@@ -260,6 +264,8 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
             "tests/test_moneyprinter_runtime.py::test_runtime_check_requires_a_proven_submit_route",
             "tests/test_moneyprinter_runtime.py::test_runtime_check_requires_every_readiness_gate",
             "tests/test_moneyprinter_runtime.py::test_wrapper_self_test_passes_when_every_gate_is_green",
+            "tests/test_moneyprinter_runtime.py::test_the_self_test_client_serves_the_wrappers_own_routes",
+            "tests/test_moneyprinter_runtime.py::test_the_submit_route_check_drives_the_upload_and_submit_routes",
         ),
     },
     {
@@ -292,7 +298,10 @@ def _git(*args: str) -> str | None:
         return None
     if completed.returncode != 0:
         return None
-    return completed.stdout.strip()
+    # Only trailing whitespace is dropped: ``git status --porcelain`` lines start with
+    # the two status characters, and stripping the leading one would cut the first
+    # character off the first path.
+    return completed.stdout.rstrip()
 
 
 def _repository_version() -> str:

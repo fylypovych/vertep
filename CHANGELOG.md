@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.37
+- Виправлено `/self-test` wrapper'а pinned MoneyPrinterTurbo: сумісний клієнт `fastapi.testclient.TestClient` замість `httpx.ASGITransport`, який у зафіксованому `httpx==0.28.1` не піддається синхронному входу (`AttributeError: 'ASGITransport' object has no attribute '__enter__'`) і не обслуговує `async def` маршрути. Gate більше не падає на `media_pipeline_unavailable` і проходить реальні маршрути `upload`/`submit` (§9.12 P2).
+- Бюджет `check_submit_route()` зменшено з 900 до 600 с: рендер, який не завершився, тепер повертає власну причину разом із gate, що виконувався, замість транспортного timeout на боці викликача.
+- `proxy_submit()` доводить staged voice за контент-адресою **до** `_remember_submit()` і POST до upstream: відсутній або підмінений голос повертає `503` з `reason=voice_staging_failed` та `cause=upstream_voice_staging_unsupported`, тож рендер без затвердженої озвучки більше не створюється (§9.6 P3).
+- `worker/role_executor.py`: база доставки approved-входів читає `CORE_ADDRESS` першим (саме цю змінну Worker реєструє і вимагає `docker-compose.worker.yml`), далі `CORE_URL`, `CORE_API_URL`, `VERTEP_CORE_URL`; на штатній конфігурації доставка більше не розчиняється в порожній рядок (§6 P3).
+- `tests/test_assembly_worker_route.py`: додано доказ P5/P7 на окремому процесі — `execute_assembly` виконується в реальному дочірньому `python` з власним `JOB_ROOT`, `CORE_ADDRESS`, `NODE_NAME` і `NODE_API_TOKEN`, забирає всі approved-входи з CORE over HTTP, звіряє їхні digests і повертає валіданий контракт рендеру; окремий кейс доводить, що вузол відмовляє спробі зі зміщеною конфігурацією (`engine_snapshot_mismatch`) ще до завантаження будь-якого входу.
+- `scripts/issue-122-acceptance-report.py`: `changed_paths` більше не втрачає перший символ шляху (`git status --porcelain` має два статусні символи, `strip()` зрізав їх разом із першою літерою); додано регресійний тест.
+- `tests/test_full_media_e2e.py`: перший run-тест перейменовано на `test_first_run_to_ready`, а маршрут до `READY` відділено від покриття revision-циклів, яке мають спеціалізовані модулі `test_video_revision_*` і `test_video_regeneration_path`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.36
 - `scripts/moneyprinter-runtime-check.py` більше не звітує лише `HTTP Error 503` про провалений gate pinned MoneyPrinterTurbo: відмова wrapper'а тепер розкриває його власний `reason`, `detail` і перелік уже пройдених перевірок, а лог контейнера друкується разом із причиною.
 - Перевірка `/health` лишається retry-полінгом: fail-closed 503 під час старту runtime не вважається остаточною відмовою, тоді як `/runtime`, `/self-test` і `/sbom` завершуються одразу з розбірливою причиною.

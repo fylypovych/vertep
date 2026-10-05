@@ -254,6 +254,25 @@ def test_the_identity_records_the_tree_the_evidence_belongs_to(report_module):
     assert isinstance(identity["worktree_dirty"], bool)
 
 
+def test_a_changed_path_is_reported_with_every_character(report_module, monkeypatch):
+    """The changed paths name the files of the tree the evidence belongs to.
+
+    ``git status --porcelain`` prefixes every line with its status characters, so
+    dropping leading whitespace before reading them truncates the first path by one
+    character and the report would name a file that does not exist.
+    """
+    monkeypatch.setattr(report_module, "_git", lambda *args: (
+        " M scripts/issue-122-acceptance-report.py\n"
+        "?? worker/role_executor.py\n"
+        if args[:1] == ("status",) else "0" * 40
+    ))
+
+    assert report_module._dirty_paths() == [
+        "scripts/issue-122-acceptance-report.py",
+        "worker/role_executor.py",
+    ]
+
+
 def test_a_dirty_worktree_is_reported_as_not_a_released_sha(report_module):
     identity = _identity(report_module) | {"worktree_dirty": True}
     verdict = report_module.evaluate_row(

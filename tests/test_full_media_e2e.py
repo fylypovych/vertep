@@ -2,7 +2,8 @@
 
 This test provides end-to-end evidence for the complete media acceptance contract:
 - Disposable First Run→CORE/storage/queue→controlled Text/Voice/GPU/Publisher
-- Two video revision loops with approval/revision
+- Video approval to READY; the revision loops are covered by the dedicated
+  ``test_video_revision_*`` and ``test_video_regeneration_path`` modules
 - Telegram topic/character flow
 - Sandbox receipt and Web review through standard boundaries
 - Failure/lease/stale/duplicate/cancel/partial publish/restart checkpoints
@@ -270,18 +271,6 @@ def _approve_video(client, job_id):
     return job
 
 
-def _request_video_revision(client, job_id, text="make it shorter"):
-    resp = client.post(f"/api/jobs/{job_id}/video/revision",
-                      json={"text": text, "actor": "test"})
-    assert resp.status_code == 200
-    for _ in range(200):
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] == "VIDEO_REVISION_REQUESTED":
-            return job
-        time.sleep(0.025)
-    return job
-
-
 def _finalize_video_regenerate(client, job_id):
     resp = client.post(f"/api/jobs/{job_id}/video/regenerate")
     assert resp.status_code == 200
@@ -296,8 +285,8 @@ def _finalize_video_regenerate(client, job_id):
 class TestFullMediaE2E:
     """Full end-to-end media acceptance harness."""
 
-    def test_first_run_to_ready_with_two_revision_loops(self, monkeypatch, tmp_path):
-        """First Run→Text/Voice/GPU/Publisher with approval and ready state."""
+    def test_first_run_to_ready(self, monkeypatch, tmp_path):
+        """First Run→Text/Voice/GPU/Publisher to READY."""
         client = TestClient(app)
         job_id = _new_full_job(client, monkeypatch, tmp_path)
 
@@ -312,16 +301,16 @@ class TestFullMediaE2E:
         _submit_tts(client, job_id, monkeypatch)
         _submit_tts(client, job_id, monkeypatch)
 
-        # Wait for video assembly
+        # Wait for video assembly - v1 pending approval
         job = _wait_for_video(client, job_id)
         assert job["status"] == "VIDEO_PENDING_APPROVAL"
         assert job["active_video_version"] == 1
 
-        # Approve video to READY
+        # Approve v1 to READY
         job = _approve_video(client, job_id)
         assert job["status"] == "READY"
 
-        # Verify version tracking
+        # Verify version tracking - one version
         job = client.get(f"/api/jobs/{job_id}").json()
         assert len(job["video_versions"]) == 1
         assert job["active_video_version"] == 1
