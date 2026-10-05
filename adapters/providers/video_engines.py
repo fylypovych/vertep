@@ -923,6 +923,12 @@ REASON_SUBMIT_UNKNOWN,
         Upstream returns either a task-relative URI (``tasks/final-1.mp4``) or the
         same URI behind a configured endpoint. Anything outside the task
         directory is rejected instead of being fetched.
+
+        The pinned upstream ``_task_file_to_uri`` prefixes the task-relative path
+        with ``tasks/``, but the download endpoint resolves relative to the task
+        directory and expects ``{task_id}/{filename}`` (no ``tasks/`` prefix).
+        This method strips that spurious prefix before returning the path so the
+        wrapper builds a working download URL.
         """
         if not isinstance(reference, str) or not reference.strip():
             raise BridgeContractError(
@@ -942,6 +948,10 @@ REASON_SUBMIT_UNKNOWN,
                 "upstream_output_path_unsafe",
                 f"Upstream output reference is not task-scoped: {reference}",
             )
+        # Strip the upstream's erroneous ``tasks/`` prefix; the download endpoint
+        # resolves relative to the task directory and expects ``{task_id}/{filename}``.
+        if len(parts) > 1 and parts[0] == "tasks":
+            parts = parts[1:]
         return "/".join(parts)
 
     def _pre_cut_materials(

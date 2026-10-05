@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.39
+- `adapters/providers/video_engines.py`: `RemoteVideoEngine.parse_output_reference` тепер стриже erroneous leading `tasks/` prefix, який додає pinned upstream `_task_file_to_uri`; download endpoint очікує `{task_id}/{filename}` (без `tasks/`), тому wrapper будує правильний URL і CI submit/combine route більше не падає на 404 "file does not exist" для real pinned MPT container.
+- `tests/test_video_engines.py`: `test_parse_output_reference_normalises_task_scoped_paths` перевіряє нову нормалізацію `tasks/{task_id}/{filename}` → `{task_id}/{filename}`.
+- `services/moneyprinter_service.py`: вимір домінантної частоти й RMS озвучки більше не імпортує NumPy — PCM s16 декодується через `array`, а спектр рахується власним радикс-2 FFT (`_magnitude_spectrum`), тож gate затвердженого голосу 440 Гц працює там, де NumPy не встановлено (CI, unit-тести), а не лише у pinned runtime; відмова, яка працює тільки з необов'язковою залежністю, не є відмовою.
+- `tests/test_moneyprinter_runtime.py`: тест маршруту озвучки генерує speech-like PCM чистим Python замість NumPy, тож три тести gate озвучки більше не падають із `ModuleNotFoundError` у середовищі без NumPy.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.38
 - `adapters/providers/base.py`: додано контракт `FIXED_SUBMIT_FIELDS` — увесь фіксований набір submit полів §9.4, а не лише ті, з яких можна запустити задачу. Pinned request model ігнорує невідомі ключі, тому перейменований або вилучений compose-поле (`video_fit_mode`, `video_concat_mode`, швидкість кліпу, кількість потоків) не ламало б submit: runtime тихо склав би рендер зі своїми дефолтами, а Vertep вважав би затверджений контракт виконаним. Тепер кожне поле, яке надсилає bridge, доводиться проти pinned schema, а readiness gate відмовляє runtime, який не довів їх усі (§9.4, §9.12).
 - `services/moneyprinter_service.py`, `adapters/providers/video_engines.py`, `scripts/moneyprinter-runtime-check.py`: `check_submit_schema()`, `schema_compatible` і gate runtime перевіряють `FIXED_SUBMIT_FIELDS`; відмова називає повний перелік недоведених полів.

@@ -1305,10 +1305,13 @@ def test_map_upstream_status_rejects_malformed(code, payload):
 def test_parse_output_reference_normalises_task_scoped_paths():
     parse = RemoteVideoEngine.parse_output_reference
 
-    assert parse("tasks/t1/final-1.mp4") == "tasks/t1/final-1.mp4"
-    assert parse("/tasks/t1/final-1.mp4") == "tasks/t1/final-1.mp4"
+    # The upstream ``_task_file_to_uri`` prefixes with ``tasks/``, but the download
+    # endpoint resolves relative to the task directory and expects
+    # ``{task_id}/{filename}`` (no ``tasks/`` prefix). The parser strips it.
+    assert parse("tasks/t1/final-1.mp4") == "t1/final-1.mp4"
+    assert parse("/tasks/t1/final-1.mp4") == "t1/final-1.mp4"
     assert (
-        parse("https://engine:8000/tasks/t1/final-1.mp4") == "tasks/t1/final-1.mp4"
+        parse("https://engine:8000/tasks/t1/final-1.mp4") == "t1/final-1.mp4"
     )
 
     for unsafe in ("", "   ", "../etc/passwd", "/etc/passwd", "final-1.mp4"):
