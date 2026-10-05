@@ -18,11 +18,14 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import io
 import json
 import re
 import shutil
 import sys
 import tempfile
+import time
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -1136,6 +1139,80 @@ def test_runtime_check_refuses_an_unpinned_dependency_inventory():
             },
             "sha256:" + "a" * 64,
         )
+
+
+def _http_refusal(path: str, status: int, payload: dict):
+    """The wrapper's own refusal: a stable reason plus the checks it already completed."""
+    body = json.dumps(payload).encode("utf-8")
+
+    def _raise(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url, status, payload.get("reason", "failed"), None, io.BytesIO(body))
+
+    return _raise
+
+
+class _JsonResponse(io.BytesIO):
+    """The minimal context-manager response ``urlopen`` is used as."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
+
+
+def test_runtime_check_reports_the_wrapper_refusal_instead_of_a_bare_http_error(monkeypatch):
+    """A failed gate has to say which gate refused.
+
+    The wrapper answers 503 with a stable reason code, a detail and the checks it had
+    already completed. Reporting only ``HTTP Error 503`` leaves the CI log without any
+    statement about the runtime, so the refusal itself is the evidence.
+    """
+    check = _load_runtime_check()
+    monkeypatch.setattr(check.urllib.request, "urlopen", _http_refusal("/self-test", 503, {
+        "service": "moneyprinter", "status": "failed",
+        "reason": "media_pipeline_failed",
+        "detail": "pinned combine_videos produced no output",
+        "checks": {"snapshot": {}, "upstream": {}, "submit_schema": [], "ffmpeg": {}},
+    }))
+
+    with pytest.raises(check.CheckFailure) as failure:
+        check.get_json(1234, "/self-test", "key")
+
+    message = str(failure.value)
+    assert "/self-test" in message
+    assert "media_pipeline_failed" in message
+    assert "pinned combine_videos produced no output" in message
+    assert "completed checks=" in message
+    assert "ffmpeg" in message
+
+
+def test_runtime_check_keeps_polling_while_readiness_fails_closed(monkeypatch):
+    """Readiness polling waits: ``/health`` refuses with 503 while the runtime starts.
+
+    Turning a refusal into a failure is right for the evidence gates, but readiness is
+    exactly the place where a refusal only means "not yet".
+    """
+    check = _load_runtime_check()
+    ready = _ready_health()
+    attempts = {"count": 0}
+
+    def _answer(request, timeout=None):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return _http_refusal(
+                "/health", 503, {"status": "failed", "reason": "upstream_unreachable"})(request, timeout)
+        return _JsonResponse(json.dumps(ready).encode("utf-8"))
+
+    monkeypatch.setattr(check.urllib.request, "urlopen", _answer)
+    monkeypatch.setattr(check.time, "sleep", lambda seconds: None)
+
+    health = check.wait_for_wrapper(1234, "key", time.monotonic() + 60)
+
+    assert health == ready
+    assert attempts["count"] == 3, "readiness must not give up on a fail-closed /health"
 
 
 def _route_report(**overrides) -> dict:

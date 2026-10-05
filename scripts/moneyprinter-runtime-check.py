@@ -178,20 +178,53 @@ def mapped_port(name: str) -> int:
     return int(host_part)
 
 
-def get_json(port: int, path: str, api_key: str, timeout: int = 20) -> dict:
+def describe_refusal(path: str, status: int, body: str) -> str:
+    """Turn a wrapper refusal into the reason the runtime itself reported.
+
+    The wrapper answers every failed gate with a stable reason code and the checks it had
+    already completed. Without them a bare ``HTTP Error 503`` hides which gate refused,
+    so the CI log cannot say anything about the runtime.
+    """
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return f"HTTP {status} from {path}: {body.strip()[:400]}"
+    if not isinstance(payload, dict):
+        return f"HTTP {status} from {path}: {body.strip()[:400]}"
+    parts = [f"HTTP {status} from {path}"]
+    for key in ("reason", "detail", "status"):
+        value = payload.get(key)
+        if value:
+            parts.append(f"{key}={value}")
+    completed = sorted(payload.get("checks") or {})
+    if completed:
+        parts.append(f"completed checks={','.join(completed)}")
+    return ": ".join(parts)
+
+
+def get_json(port: int, path: str, api_key: str, timeout: int = 20, *,
+              retry_refusal: bool = False) -> dict:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         headers={"x-api-key": api_key},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", "replace")
+        # Readiness polling treats a refusal as "not yet": /health fails closed with 503
+        # while the runtime is still starting. Every other gate has to explain itself.
+        if retry_refusal:
+            raise
+        raise CheckFailure(describe_refusal(path, error.code, body)) from error
 
 
 def wait_for_wrapper(port: int, api_key: str, deadline: float) -> dict:
     last_error = "wrapper did not answer yet"
     while time.monotonic() < deadline:
         try:
-            return get_json(port, "/health", api_key)
+            return get_json(port, "/health", api_key, retry_refusal=True)
         except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as error:
             last_error = f"{type(error).__name__}: {error}"
         time.sleep(3)
@@ -518,7 +551,12 @@ def main() -> int:
         runtime = get_json(port, "/runtime", api_key)
         verify_runtime(runtime, digest)
 
-        self_test = get_json(port, "/self-test", api_key, timeout=120)
+        # The self-test renders the §9.12 media timeline and drives a real submit → status
+        # → download route, so it is given the requested gate budget instead of a fixed
+        # 120s: cutting the read short would report a transport timeout for a runtime that
+        # is still proving itself, and hide which gate was running.
+        self_test = get_json(port, "/self-test", api_key,
+                             timeout=max(300, arguments.timeout))
         verify_self_test(self_test)
 
         verify_config_auto_upload(name)
