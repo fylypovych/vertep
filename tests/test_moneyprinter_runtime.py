@@ -894,7 +894,7 @@ def test_a_narration_that_is_not_the_approved_voice_is_refused():
 def test_the_route_check_refuses_a_render_whose_narration_is_not_the_approved_voice(
         monkeypatch, tmp_path):
     """Issue #122 P3: the gate fails on a substituted narration, through the real route."""
-    import numpy as np
+    import math
 
     from services import moneyprinter_service as wrapper
 
@@ -907,8 +907,8 @@ def test_the_route_check_refuses_a_render_whose_narration_is_not_the_approved_vo
     _fake_moviepy(monkeypatch, size=(wrapper.PROBE_CLIP_WIDTH, wrapper.PROBE_CLIP_HEIGHT),
                   duration=2.0)
     # Speech-like audio: audible, and nothing like the approved tone.
-    spoken = (np.sin(2 * np.pi * 180 * np.arange(32000) / 16000)
-              * 9000).astype("<i2").tobytes()
+    spoken = _pcm(*[int(9000 * math.sin(2 * math.pi * 180 * index / 16000))
+                    for index in range(32000)])
     monkeypatch.setattr(
         wrapper.subprocess, "run",
         lambda command, **kwargs: type("Completed", (), {"returncode": 0,

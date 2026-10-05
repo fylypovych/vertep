@@ -16,6 +16,7 @@ must be refused, never silently skipped (Issue #122 §9.14).
 
 from __future__ import annotations
 
+import array
 import hashlib
 import inspect
 import json
@@ -611,6 +612,8 @@ PROBE_VOICE_FREQUENCY = 440.0
 PROBE_VOICE_TONE_AMPLITUDE = 12000
 PROBE_VOICE_FREQUENCY_TOLERANCE = 0.10
 PROBE_VOICE_MINIMUM_RMS = 0.02
+#: Full-scale of the PCM s16 narration the gate reads, so the RMS is a plain fraction.
+_SAMPLE_FULL_SCALE = 32768.0
 
 
 def _write_voice_tone(path: Path, seconds: float = 1.0, rate: int = 24000,
@@ -629,21 +632,74 @@ def _write_voice_tone(path: Path, seconds: float = 1.0, rate: int = 24000,
         handle.writeframes(bytes(samples))
 
 
+#: Only the head of the narration is measured: the pinned compose normalises the level, so
+#: the pitch has to be read from a single steady stretch of the track, not from its tail.
+SPECTRUM_WINDOW = 8192
+
+
+def _pcm_window(samples: bytes) -> list[float]:
+    """Decode little-endian PCM s16 into the window the spectrum is measured over."""
+    usable = len(samples) - len(samples) % 2
+    if usable <= 0:
+        return []
+    frames = array.array("h")
+    frames.frombytes(samples[:usable])
+    if sys.byteorder != "little":
+        frames.byteswap()
+    return [float(value) for value in frames[:SPECTRUM_WINDOW]]
+
+
+def _magnitude_spectrum(window: list[float], size: int) -> list[float]:
+    """Magnitude spectrum of a zero-padded window, computed without a numeric stack.
+
+    The wrapper runs inside the pinned runtime, where NumPy is present, but this check must
+    also hold where the measurement is reproduced and where the gate is exercised as a unit:
+    a refusal that only works with an optional dependency is not a refusal.
+    """
+    values = [complex(value, 0.0) for value in window]
+    values.extend([0j] * (size - len(values)))
+    # Iterative radix-2 Cooley-Tucker, in place.
+    mirrored = 0
+    for index in range(1, size):
+        bit = size >> 1
+        while mirrored & bit:
+            mirrored ^= bit
+            bit >>= 1
+        mirrored |= bit
+        if index < mirrored:
+            values[index], values[mirrored] = values[mirrored], values[index]
+    length = 2
+    while length <= size:
+        angle = -2 * math.pi / length
+        step = complex(math.cos(angle), math.sin(angle))
+        for start in range(0, size, length):
+            factor = 1 + 0j
+            half = length >> 1
+            for offset in range(start, start + half):
+                even = values[offset]
+                odd = values[offset + half] * factor
+                values[offset] = even + odd
+                values[offset + half] = even - odd
+                factor *= step
+        length <<= 1
+    return [abs(value) for value in values[: size // 2 + 1]]
+
+
 def _frequency_and_rms(samples: bytes, rate: int) -> tuple[float, float]:
     """Dominant frequency and RMS of raw PCM s16 samples, as the render is decoded.
 
     The pinned compose normalises the loudness of the narration, so the pitch is what
     identifies the approved voice; the level is only used to prove the track is audible.
     """
-    import numpy as np
-
-    window = np.frombuffer(samples, dtype="<i2").astype(float)
-    if window.size == 0:
+    window = _pcm_window(samples)
+    if not window:
         return 0.0, 0.0
-    rms = float(np.sqrt(np.mean(np.square(window))) / 32768.0)
-    spectrum = np.abs(np.fft.rfft(window))
-    frequencies = np.fft.rfftfreq(window.size, d=1.0 / rate)
-    return float(frequencies[int(np.argmax(spectrum))]), rms
+    total = sum(value * value for value in window)
+    rms = math.sqrt(total / len(window)) / _SAMPLE_FULL_SCALE
+    size = 1 << max(0, len(window) - 1).bit_length()
+    spectrum = _magnitude_spectrum(window, size)
+    peak = max(range(len(spectrum)), key=spectrum.__getitem__)
+    return peak * rate / size, rms
 
 
 def _pinned_ffmpeg_binary() -> str:
