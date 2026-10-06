@@ -443,6 +443,7 @@ class WorkerHeartbeat(BaseModel):
     cpu_load: float | None = None
     runtime_version: str | None = None
     self_test: dict[str, Any] = Field(default_factory=dict)
+    cancel_fence_ack: dict[str, Any] = Field(default_factory=dict)
     voice_catalog: dict[str, Any] = Field(default_factory=dict)
     model_catalog: dict[str, Any] = Field(default_factory=dict)
 
@@ -493,6 +494,12 @@ class RollingUpdateRequest(BaseModel):
     order: str = Field(default="workers-first", pattern=r"^(workers-first|core-first|custom)$")
     update_timeout_seconds: int = Field(default=600, ge=60, le=86400)
     canary: bool = Field(default=False)
+
+
+class CoordinatorUpdateRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    updates: dict[str, Any] = Field(default_factory=dict)
+
 
 class TaskRenew(BaseModel):
     node_name: str

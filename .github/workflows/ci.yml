@@ -11,6 +11,18 @@ jobs:
   local-contracts:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      VERTEP_TEST_REDIS_URL: redis://localhost:6379/0
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -19,6 +31,15 @@ jobs:
           cache: pip
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
+      - name: Install redis-server for queue persistence tests
+        run: |
+          if [ -f /usr/sbin/policy-rc.d ]; then sudo cp /usr/sbin/policy-rc.d /usr/sbin/policy-rc.d.bak; fi
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d > /dev/null
+          sudo chmod +x /usr/sbin/policy-rc.d
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq redis-server
+          if [ -f /usr/sbin/policy-rc.d.bak ]; then sudo mv /usr/sbin/policy-rc.d.bak /usr/sbin/policy-rc.d; else sudo rm -f /usr/sbin/policy-rc.d; fi
+          redis-server --version
       - name: Prepare non-secret CI configuration
         run: |
           cp .env.example .env
@@ -107,4 +128,32 @@ jobs:
         with:
           name: media-acceptance
           path: media-evidence
+          if-no-files-found: warn
+
+  infrastructure-qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Prepare non-secret CI configuration
+        run: |
+          cp .env.example .env
+          printf '\nNODE_NAME=ci-worker\nCORE_ADDRESS=http://127.0.0.1:8080\nPOSTGRES_PASSWORD=ci-only\n' >> .env
+          cp .env deploy/.env
+          cp -r monitoring deploy/monitoring
+          printf 'ci-only-secret-store-passphrase' > config/secret-store.passphrase
+      - name: Run infrastructure qualification proof
+        run: python scripts/qualify_infrastructure.py --run --output infrastructure-qualification.json
+      - name: Upload infrastructure qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: infrastructure-qualification
+          path: infrastructure-qualification.json
           if-no-files-found: warn

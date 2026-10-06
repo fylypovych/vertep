@@ -23,6 +23,7 @@ def pytest_configure(config):
     os.environ["UPDATE_STATE_DIR"] = str(_TEST_STATE_ROOT / "update")
     os.environ["SYSTEM_STATE_BACKEND"] = "file"
     os.environ["RATE_LIMIT_PER_MINUTE"] = "10000"
+    os.environ["REDIS_URL"] = "redis://127.0.0.1:1/15"
     # Mark the isolated installation as "configured but auth-open" so the
     # First-Run 503 guard in AdminAuthMiddleware is bypassed for the whole
     # suite, while every on-disk artifact stays hermetic (never /data/config).
@@ -67,7 +68,11 @@ def reset_in_process_api_state():
                     path.unlink(missing_ok=True)
                 except OSError:
                     pass
-        if task_queue.backend == "local":
+        if task_queue.backend == "redis":
+            for key in task_queue._redis.scan_iter(match="vertep:*"):
+                task_queue._redis.delete(key)
+            task_queue._generation = 0
+        else:
             with task_queue._lock:
                 task_queue._local.clear()
                 task_queue._inflight.clear()

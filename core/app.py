@@ -33,7 +33,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .models import (Job, JobCreate, JobUpdate, JobStatus, StageName, StageStatus,
                      WorkerHeartbeat, TaskClaim, TaskRenew, TaskResult, worker_transition_allowed,
                      WorkerLogBatch, NodeAction, IntegrationSecretUpdate, TelegramSetup,
-                     RollingUpdateRequest, utc_now, Channel, ChannelCreate, ChannelUpdate, CHANNEL_TYPES)
+                     RollingUpdateRequest, CoordinatorUpdateRequest, utc_now, Channel, ChannelCreate, ChannelUpdate, CHANNEL_TYPES)
 from .dispatcher import available_worker, can_retry
 from .pipeline import JobStore, prepare_job_safe, finalize_job_safe
 from .queue import TaskQueue
@@ -71,8 +71,9 @@ from .node_registry import (create_node_csr, create_registration_token, enroll_n
 from .version import application_version
 from .runtime_identity import CORE_RUNTIME_INSTANCE_ID
 from .deployment_plan import create_plan
-from .rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
-                             rollout_status, rollback_ready_nodes, start_rollout)
+from .rolling_update import (cancel_rollout, is_core_node, promote_rollout, reconcile_rollout,
+                             rollout_status, rollback_ready_nodes, start_rollout,
+                             update_core_coordinator)
 from worker.role_executor import delete_text_model, list_text_models, list_voices, pull_text_model, synthesize_voice
 from adapters.telegram import TelegramAdapter, TelegramPollingService, _integration_secret
 from adapters.providers import providers, provider_matrix
@@ -2568,7 +2569,8 @@ def promote_canary():
 @app.post("/api/system/update/rolling")
 def begin_rolling_update(payload: RollingUpdateRequest):
     registered = {node["node_id"] for node in registered_nodes() if not node.get("revoked_at")}
-    unknown = sorted(set(payload.node_ids) - registered)
+    unknown = sorted(node for node in set(payload.node_ids) - registered
+                     if not is_core_node(node))
     if unknown:
         raise HTTPException(422, f"Unknown or revoked nodes: {', '.join(unknown)}")
     try:
@@ -2580,6 +2582,17 @@ def begin_rolling_update(payload: RollingUpdateRequest):
         raise HTTPException(409, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/system/update/rolling/coordinator")
+def rolling_update_coordinator(payload: CoordinatorUpdateRequest):
+    try:
+        return update_core_coordinator(payload.node_id, payload.updates)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(409, str(error)) from error
+
 
 @app.get("/api/node/status/{node_name}")
 def node_system_status(node_name: str, request: Request):

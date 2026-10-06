@@ -839,6 +839,18 @@ export interface SecurityIntegrationStatus {
   status: string;
 }
 
+export interface SecurityEffectiveConfig {
+  config_root?: string;
+  admin_password_set?: boolean;
+  node_api_token_set?: boolean;
+  postgres_password_set?: boolean;
+  secret_store_passphrase_set?: boolean;
+  session_secret_set?: boolean;
+  llm_provider?: string;
+  tts_provider?: string;
+  publisher_mock?: boolean;
+}
+
 export interface SecurityCheck {
   ok: boolean;
   weak_or_missing: string[];
@@ -847,6 +859,7 @@ export interface SecurityCheck {
     secrets_store: SecuritySecretStore;
     certificates: Record<string, SecurityCertificateStatus>;
     integrations: SecurityIntegrationStatus[];
+    effective_config?: SecurityEffectiveConfig;
   };
 }
 

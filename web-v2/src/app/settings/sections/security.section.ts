@@ -47,6 +47,19 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
             <li *ngFor="let item of detail.integrations">{{ item.name }}: {{ label(item.status) }}</li>
           </ul>
         </div>
+        <div *ngIf="detail.effective_config as effective" data-testid="security-effective-config">
+          <h4 class="text-sm font-semibold">Ефективна конфігурація</h4>
+          <ul class="text-sm list-disc pl-5">
+            <li>LLM: {{ effective.llm_provider || 'not configured' }}</li>
+            <li>TTS: {{ effective.tts_provider || 'not configured' }}</li>
+            <li>Публікація: {{ effective.publisher_mock ? 'тестовий режим' : 'production' }}</li>
+            <li>Пароль адміністратора: {{ effective.admin_password_set ? 'встановлено' : 'відсутній' }}</li>
+            <li>Токен вузла: {{ effective.node_api_token_set ? 'встановлено' : 'відсутній' }}</li>
+            <li>Пароль PostgreSQL: {{ effective.postgres_password_set ? 'встановлено' : 'відсутній' }}</li>
+            <li>Ключ сховища секретів: {{ effective.secret_store_passphrase_set ? 'встановлено' : 'відсутній' }}</li>
+            <li>Секрет сесії: {{ effective.session_secret_set ? 'встановлено' : 'відсутній' }}</li>
+          </ul>
+        </div>
       </div>
     </div>
     <div class="bg-white rounded-xl border p-5">

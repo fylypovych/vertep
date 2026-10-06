@@ -119,6 +119,20 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
         return {"status": "FAILED", "role": role, "checked_at": datetime.now(timezone.utc).isoformat(),
                 "duration_ms": int((time.monotonic() - started) * 1000), "error": str(error)[:500]}
 
+
+def bind_self_test(test: dict, request: dict | None, version: str | None) -> dict:
+    """Echo the active bound self-test request into a freshly produced result.
+
+    Only a result carrying the nonce/operation/target of the request CORE is
+    waiting for may approve the current rollout phase.
+    """
+    if isinstance(request, dict) and request.get("nonce"):
+        test["nonce"] = request.get("nonce")
+        test["operation_id"] = request.get("operation_id")
+        test["target_version"] = version or request.get("target_version")
+    return test
+
+
 def configured_role() -> str:
     role = os.getenv("NODE_ROLE", "gpu")
     if role != "unassigned":
@@ -598,31 +612,35 @@ def cancel_fence_path() -> Path | None:
     return Path(root).parent / "cancel-fence.json"
 
 
-def sync_cancel_fence(control: dict) -> None:
+def sync_cancel_fence(control: dict) -> dict | None:
     """Persist CORE's cancel verdict on this node so host apply can be fenced.
 
     CORE stamps the token into the worker record during reconciliation and
     returns it here; storing it is this node's acknowledgement of the cancel,
     and it stays authoritative until CORE reports a rollout state other than
-    ``CANCELLED``.
+    ``CANCELLED``.  The returned mapping is the heartbeat ``cancel_fence_ack``
+    CORE requires before this agent may mutate rollout state again.
     """
     path = cancel_fence_path()
-    if path is None:
-        return
     if control.get("rollout_state") != "CANCELLED":
-        path.unlink(missing_ok=True)
-        return
+        if path is not None:
+            path.unlink(missing_ok=True)
+        return None
     token = control.get("cancel_fence_token")
     if not token:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps({
-        "state": "CANCELLED",
-        "operation_id": control.get("rollout_operation_id"),
-        "cancel_fence_token": token,
-        "observed_at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
-    temporary.replace(path)
+        return None
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps({
+            "state": "CANCELLED",
+            "operation_id": control.get("rollout_operation_id"),
+            "cancel_fence_token": token,
+            "observed_at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
+        temporary.replace(path)
+    return {"operation_id": control.get("rollout_operation_id"),
+            "cancel_fence_token": token,
+            "acknowledged_at": datetime.now(timezone.utc).isoformat()}
 
 
 def request_local_update(target_version: str, action: str = "update",
@@ -772,6 +790,7 @@ def main() -> None:
                                "cert": (str(pki / "node.crt"), str(pki / "node.key"))})
     with httpx.Client(**client_options) as client:
         desired_state = None
+        active_self_test_request: dict | None = None
         next_self_test = time.monotonic() + (15 if self_test["status"] != "PASSED"
                                              else float(os.getenv("SELF_TEST_INTERVAL_SECONDS", "300")))
         while True:
@@ -781,7 +800,9 @@ def main() -> None:
                 payload.update(host_metrics())
                 payload["model_catalog"] = text_model_catalog()
                 if future is None and time.monotonic() >= next_self_test:
-                    payload["self_test"] = role_self_test(configured_role(), metrics, adapter)
+                    payload["self_test"] = bind_self_test(
+                        role_self_test(configured_role(), metrics, adapter),
+                        active_self_test_request, payload.get("version"))
                     next_self_test = time.monotonic() + (15 if payload["self_test"]["status"] != "PASSED"
                                                          else float(os.getenv("SELF_TEST_INTERVAL_SECONDS", "300")))
                 if payload.get("self_test", {}).get("status") != "PASSED":
@@ -839,9 +860,27 @@ def main() -> None:
                         else:
                             adapter.cancel()
                 heartbeat_response = client.post(f"{core}/api/workers/heartbeat", json=payload)
+                if heartbeat_response.status_code == 409:
+                    detail = None
+                    try:
+                        detail = heartbeat_response.json().get("detail")
+                    except ValueError:
+                        detail = None
+                    if isinstance(detail, dict) and detail.get("cancel_fence_token"):
+                        payload["cancel_fence_ack"] = {
+                            "operation_id": detail.get("rollout_operation_id"),
+                            "cancel_fence_token": detail.get("cancel_fence_token"),
+                            "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        heartbeat_response = client.post(f"{core}/api/workers/heartbeat", json=payload)
                 heartbeat_response.raise_for_status()
                 control = heartbeat_response.json()
-                sync_cancel_fence(control)
+                fence_ack = sync_cancel_fence(control)
+                if fence_ack:
+                    payload["cancel_fence_ack"] = fence_ack
+                else:
+                    payload.pop("cancel_fence_ack", None)
+                active_self_test_request = control.get("self_test_request")
                 desired_state = control.get("desired_state")
                 update_target = control.get("update_target_version")
                 rollback_target = control.get("rollback_target_version")

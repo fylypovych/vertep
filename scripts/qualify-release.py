@@ -6,8 +6,13 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.release_contract import validate_release_contract
 
 
 FORBIDDEN_BY_ROLE = {
@@ -38,6 +43,158 @@ ARM64_EXEMPT_SERVICES = {"comfyui", "moneyprinter"}
 # a Native install. A role that pulls it in would make the appliance depend on an
 # optional external engine, so the dependency is rejected explicitly.
 FORBIDDEN_IN_ANY_ROLE = {"moneyprinter"}
+
+EXPECTED_CHANNEL = "stable"
+
+CONTRACT_CHECKS = (
+    "manifest_contract_structure",
+    "contract_in_validity_window",
+    "artifact_digests_recomputed",
+    "role_catalog_bound",
+    "sbom_bound",
+    "manifest_signature_verified",
+)
+
+
+def _issued_reference(contract: dict) -> datetime:
+    try:
+        issued = datetime.fromisoformat(str(contract.get("issued_at", "")).replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(timezone.utc)
+    if issued.tzinfo is None:
+        return datetime.now(timezone.utc)
+    return issued.astimezone(timezone.utc)
+
+
+def _classify_contract_failure(error: Exception) -> str:
+    text = str(error)
+    if "validity window" in text:
+        return "contract_in_validity_window"
+    if "digest mismatch" in text or "wrong size" in text:
+        return "artifact_digests_recomputed"
+    if "Role catalog" in text or "role inventory" in text or "role profile" in text:
+        return "role_catalog_bound"
+    if "SBOM" in text:
+        return "sbom_bound"
+    if "signature verification failed" in text:
+        return "manifest_signature_verified"
+    return "manifest_contract_structure"
+
+
+def _expected_release_sequence(version: str | None) -> int | None:
+    if not version:
+        return None
+    parts = version.split(".")
+    if len(parts) != 4 or not all(part.isdigit() for part in parts):
+        return None
+    p0, p1, p2, p3 = (int(part) for part in parts)
+    return ((p0 * 100 + p1) * 100 + p2) * 100 + p3
+
+
+def _record_contract_checks(record, contract: dict, artifact_root: Path,
+                            public_key: Path) -> None:
+    reference = _issued_reference(contract)
+    try:
+        validate_release_contract(contract, now=reference)
+    except (ValueError, RuntimeError) as error:
+        record("manifest_contract_structure", False, str(error))
+        for name in CONTRACT_CHECKS[1:]:
+            record(name, False, f"blocked: {error}")
+        return
+    record("manifest_contract_structure", True)
+    try:
+        validate_release_contract(contract)
+    except RuntimeError as error:
+        record("contract_in_validity_window", False, str(error))
+        for name in CONTRACT_CHECKS[2:]:
+            record(name, False, f"blocked: {error}")
+        return
+    record("contract_in_validity_window", True)
+    try:
+        validate_release_contract(contract, artifact_root=artifact_root, now=reference)
+    except (ValueError, RuntimeError) as error:
+        failed = _classify_contract_failure(error)
+        if failed not in CONTRACT_CHECKS[2:]:
+            record("release_artifact_binding", False, str(error))
+            for name in CONTRACT_CHECKS[2:]:
+                record(name, False, f"blocked: {error}")
+            return
+        index = CONTRACT_CHECKS.index(failed)
+        for name in CONTRACT_CHECKS[2:index]:
+            record(name, True)
+        record(failed, False, str(error))
+        for name in CONTRACT_CHECKS[index + 1:]:
+            record(name, False, f"blocked: {error}")
+        return
+    record("artifact_digests_recomputed", True)
+    record("role_catalog_bound", True)
+    record("sbom_bound", True)
+    try:
+        validate_release_contract(contract, artifact_root=artifact_root,
+                                  public_key=public_key, now=reference)
+    except (ValueError, RuntimeError) as error:
+        record("manifest_signature_verified", False, str(error))
+        return
+    record("manifest_signature_verified", True)
+
+
+def _record_cross_artifact_checks(record, contract: dict, artifact_root: Path,
+                                  root: Path) -> None:
+    try:
+        repo_version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError as error:
+        repo_version = None
+        record("manifest_version_matches_version_file", False, str(error))
+    else:
+        problems = []
+        if contract.get("version") != repo_version:
+            problems.append(f"manifest={contract.get('version')} VERSION={repo_version}")
+        bundle_version = artifact_root / "VERSION"
+        if bundle_version.is_file():
+            try:
+                content = bundle_version.read_text(encoding="utf-8").strip()
+            except OSError as error:
+                problems.append(str(error))
+            else:
+                if content != contract.get("version"):
+                    problems.append(f"bundle={content} manifest={contract.get('version')}")
+        record("manifest_version_matches_version_file", not problems, "; ".join(problems))
+    try:
+        images_lock = json.loads((artifact_root / "images.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        images_lock = None
+        record("manifest_images_match_images_lock", False, str(error))
+        record("image_digests_match_manifest", False, str(error))
+    if isinstance(images_lock, dict):
+        record("manifest_images_match_images_lock", contract.get("images") == images_lock,
+               "" if contract.get("images") == images_lock else "manifest images differ from images.json")
+        manifest_images = contract.get("images") if isinstance(contract.get("images"), dict) else {}
+        mismatched = sorted(
+            service for service, image in images_lock.items()
+            if not isinstance(image, dict) or not isinstance(manifest_images.get(service), dict)
+            or manifest_images[service].get("digest") != image.get("digest"))
+        record("image_digests_match_manifest", not mismatched, ", ".join(mismatched))
+    elif images_lock is not None:
+        record("manifest_images_match_images_lock", False, "images.json is not an object")
+        record("image_digests_match_manifest", False, "images.json is not an object")
+    sbom_meta = contract.get("sbom") if isinstance(contract.get("sbom"), dict) else {}
+    sbom_path = artifact_root / "sbom.cdx.json"
+    if not sbom_path.is_file():
+        record("manifest_sbom_hash_matches_sbom", False, "sbom.cdx.json not found")
+    else:
+        recomputed = hashlib.sha256(sbom_path.read_bytes()).hexdigest()
+        record("manifest_sbom_hash_matches_sbom", sbom_meta.get("sha256") == recomputed,
+               f"manifest={sbom_meta.get('sha256')} actual={recomputed}")
+    record("manifest_channel_is_stable", contract.get("channel") == EXPECTED_CHANNEL,
+           str(contract.get("channel")))
+    expected_sequence = _expected_release_sequence(repo_version)
+    if expected_sequence is None:
+        record("manifest_release_sequence_matches_version", False,
+               f"cannot derive sequence from VERSION {repo_version!r}")
+    else:
+        record("manifest_release_sequence_matches_version",
+               contract.get("release_sequence") == expected_sequence,
+               f"manifest={contract.get('release_sequence')} expected={expected_sequence}")
 
 
 def _compose_service(compose: str, name: str) -> str:
@@ -87,11 +244,13 @@ def _locked_config_values(text: str, section: str) -> dict:
     return values
 
 
-def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = None) -> dict:
+def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = None,
+            public_key: Path | None = None) -> dict:
     # artifact_root must point to a built runtime bundle (release workflow);
     # static repository checks never require release artifacts.
     artifact_checks = artifact_root is not None
     artifact_root = artifact_root or root
+    trust_key = public_key or (root / "installer/update-public.pem")
     checks: list[dict] = []
 
     def record(name: str, passed: bool, detail: str = "") -> None:
@@ -235,6 +394,7 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
 
     # All required images/platforms and immutable digests check (runtime bundle only)
     if artifact_checks:
+        artifact_start = len(checks)
         try:
             images_lock_path = artifact_root / "images.json"
             if images_lock_path.is_file():
@@ -258,22 +418,38 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
             record("all_images_have_required_platforms_and_digests", False, str(error))
 
         # Signed manifest/update manifest checks
+        contract = None
         try:
             manifest_path = artifact_root / "manifest.json"
             if manifest_path.is_file():
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                record("manifest_signed", "signature" in manifest, "manifest missing signature")
-                record("manifest_has_version", "version" in manifest, "manifest missing version")
-                record("manifest_has_release_sequence", "release_sequence" in manifest, "manifest missing release_sequence")
-                record("manifest_has_compatibility", "compatibility" in manifest, "manifest missing compatibility")
-                record("manifest_has_roles", "roles" in manifest, "manifest missing roles")
-                record("manifest_has_sbom", "sbom" in manifest, "manifest missing sbom")
-                record("manifest_has_files", "files" in manifest, "manifest missing files")
-                record("manifest_has_images", "images" in manifest, "manifest missing images")
+                contract = json.loads(manifest_path.read_text(encoding="utf-8"))
             else:
                 record("manifest_signed", False, "manifest.json not found")
         except (OSError, ValueError) as error:
             record("manifest_signed", False, str(error))
+            contract = None
+        if isinstance(contract, dict):
+            record("manifest_signed", "signature" in contract, "manifest missing signature")
+            record("manifest_has_version", "version" in contract, "manifest missing version")
+            record("manifest_has_release_sequence", "release_sequence" in contract, "manifest missing release_sequence")
+            record("manifest_has_compatibility", "compatibility" in contract, "manifest missing compatibility")
+            record("manifest_has_roles", "roles" in contract, "manifest missing roles")
+            record("manifest_has_sbom", "sbom" in contract, "manifest missing sbom")
+            record("manifest_has_files", "files" in contract, "manifest missing files")
+            record("manifest_has_images", "images" in contract, "manifest missing images")
+            try:
+                _record_contract_checks(record, contract, artifact_root, trust_key)
+            except Exception as error:
+                record("release_artifact_contract", False, str(error))
+            try:
+                _record_cross_artifact_checks(record, contract, artifact_root, root)
+            except Exception as error:
+                record("release_artifact_cross_checks", False, str(error))
+        else:
+            if contract is not None:
+                record("manifest_signed", False, "manifest.json is not an object")
+            for name in CONTRACT_CHECKS:
+                record(name, False, "manifest.json unavailable")
 
         # SBOM format check
         try:
@@ -290,7 +466,9 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
             record("sbom_has_spec_version", False, str(error))
 
     if artifact_checks:
-        record("release_artifact_gates", True, "checked")
+        failed = [item for item in checks[artifact_start:] if not item["passed"]]
+        record("release_artifact_gates", not failed,
+               "checked" if not failed else ", ".join(sorted({item["name"] for item in failed})))
     else:
         record("release_artifact_gates", True, "skipped (static repository check)")
 

@@ -3,9 +3,9 @@ import time
 from core.queue import TaskQueue
 
 
-def test_priority_and_lease_requeue(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_priority_and_lease_requeue():
     queue = TaskQueue()
+    assert queue.backend == "local"
     low = queue.enqueue({"job_id": "low", "priority": 1})
     high = queue.enqueue({"job_id": "high", "priority": 10})
     assert queue.claim(lease_seconds=1)["task_id"] == high["task_id"]
@@ -16,17 +16,17 @@ def test_priority_and_lease_requeue(monkeypatch):
     assert queue.inflight_depth() == 0
 
 
-def test_discard_removes_ready_task(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_discard_removes_ready_task():
     queue = TaskQueue()
+    assert queue.backend == "local"
     task = queue.enqueue({"job_id": "cancelled", "priority": 5})
     queue.discard(task["task_id"])
     assert queue.depth() == 0
 
 
-def test_lease_renewal_and_cancellation_channel(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_lease_renewal_and_cancellation_channel():
     queue = TaskQueue()
+    assert queue.backend == "local"
     task = queue.enqueue({"job_id": "leased", "priority": 5})
     claimed = queue.claim(lease_seconds=1)
     assert claimed["task_id"] == task["task_id"]
@@ -37,9 +37,9 @@ def test_lease_renewal_and_cancellation_channel(monkeypatch):
     assert queue.pop_cancellations("gpu-01") == []
 
 
-def test_dead_letter_can_be_requeued(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_dead_letter_can_be_requeued():
     queue = TaskQueue()
+    assert queue.backend == "local"
     task = queue.enqueue({"job_id": "failed", "scene_id": "scene-001", "priority": 5})
     queue.dead_letter(task, "GPU error")
     assert queue.dead_letters()[0]["error"] == "GPU error"
@@ -48,9 +48,9 @@ def test_dead_letter_can_be_requeued(monkeypatch):
     assert queue.dead_letters() == []
 
 
-def test_future_high_priority_task_does_not_block_due_task(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_future_high_priority_task_does_not_block_due_task():
     queue = TaskQueue()
+    assert queue.backend == "local"
     future = queue.enqueue({"job_id": "future", "priority": 10, "not_before": time.time() + 3600})
     due = queue.enqueue({"job_id": "due", "priority": 1})
 

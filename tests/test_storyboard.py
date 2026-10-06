@@ -329,6 +329,73 @@ def test_image_storyboard_gate_blocks_missing_or_mismatched_storyboard(job_store
     assert video_job.status == JobStatus.NEW
 
 
+def test_storyboard_regenerate_from_history(job_store):
+    """Issue #90: Browser/backend history selection, revision/regenerate flow.
+
+    Allows regenerating from any historical version, not just the active one.
+    """
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+
+    # Generate v1
+    service.queue(job)
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, True, [_storyboard_artifact(1)], None)
+
+    # Approve images for v1 (but NOT the storyboard itself)
+    first = job.storyboards[0]
+    for scene in first.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    first.image_status = "ready"
+    service.approve_images(job.job_id, 1, "tester")
+    # v1 is now image_status="approved" but storyboard status="pending_approval"
+
+    # Regenerate v2 from v1 (which is active and pending_approval)
+    service.regenerate(job.job_id, 1, "tester", "Зроби динамічніше")
+    task_id2 = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id2, True, [_storyboard_artifact(2, "Друга версія")], None)
+    second = next(s for s in job.storyboards if s.version == 2)
+    for scene in second.scenes:
+        scene.image_artifact_id = f"artifact2-{scene.index}"
+    second.image_status = "ready"
+    service.approve_images(job.job_id, 2, "tester")
+    service.approve(job.job_id, 2, "tester")
+
+    # Now we have v1 (superseded) and v2 (approved). Active is v2.
+    # Regenerate from history v1 - should create v3 based on v1
+    service.regenerate_from_history(job.job_id, 1, "tester", "Повернись до першої версії")
+    task_id3 = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id3, True, [_storyboard_artifact(3, "Третя версія з історії")], None)
+
+    # v3 should be created, active should be v3
+    assert job.active_storyboard_version == 3
+    third = next(s for s in job.storyboards if s.version == 3)
+    assert third.title == "Третя версія з історії"
+    assert third.status == "pending_approval"
+
+    # v1 should be marked superseded
+    first = next(s for s in job.storyboards if s.version == 1)
+    assert first.status == "superseded"
+
+    # Original v2 should remain approved
+    second = next(s for s in job.storyboards if s.version == 2)
+    assert second.status == "approved"
+
+
+def test_storyboard_regenerate_from_history_rejects_pending(job_store):
+    """Cannot regenerate from a version that is still pending approval."""
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+
+    service.queue(job)
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, True, [_storyboard_artifact(1)], None)
+
+    # v1 is pending_approval (images not approved)
+    with pytest.raises(StoryboardConflict):
+        service.regenerate_from_history(job.job_id, 1, "tester")
+
+
 def test_storyboard_rest_contract_is_registered():
     from core.app import app
 
@@ -339,6 +406,7 @@ def test_storyboard_rest_contract_is_registered():
     assert "/api/jobs/{job_id}/storyboards/approve" in paths
     assert "/api/jobs/{job_id}/storyboards/reject" in paths
     assert "/api/jobs/{job_id}/storyboards/regenerate" in paths
+    assert "/api/jobs/{job_id}/storyboards/regenerate-from-history" in paths
     # Issue #6 image storyboard endpoints
     assert "/api/jobs/{job_id}/storyboards/images/approve" in paths
     assert "/api/jobs/{job_id}/storyboards/images/revision" in paths

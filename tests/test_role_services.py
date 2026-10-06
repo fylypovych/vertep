@@ -103,6 +103,8 @@ def test_backup_receipt_records_real_remote_copy(monkeypatch, tmp_path):
     monkeypatch.setenv("BACKUP_ROOT", str(backups))
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k" * 32).decode("ascii"))
     monkeypatch.setenv("BACKUP_REMOTE_CMD", "true {file}")
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
 
     class Ok:
         returncode = 0
@@ -386,6 +388,8 @@ def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path
     pg_dump_path = tmp_path / "var" / "tmp" / "vertep.dump"
     redis_dump_path = tmp_path / "var" / "lib" / "redis" / "dump.rdb"
     monkeypatch.setenv("BACKUP_PG_DUMP_PATH", str(pg_dump_path))
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_PATH", str(redis_dump_path))
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "redis-cli BGSAVE")
     monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
     monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
     monkeypatch.setenv("BACKUP_ROOT", str(backups))

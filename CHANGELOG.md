@@ -27,6 +27,22 @@
   - `web-v2/src/app/logs/logs.component.ts`, `web-v2/src/app/core/api/logs.api.ts`: Logs UI component.
   - `.github/workflows/ci.yml`, `.github/workflows/release.yml`: CI and release workflow updates.
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.43
+- Issue #90 — Storyboard approval gate & history regeneration:
+  - `core/storyboard.py`, `core/api/storyboards.py`: `expected_image_version` gate блокує missing/mismatched/unapproved storyboard; новий метод `regenerate_from_history()` та endpoint `POST /api/jobs/{job_id}/storyboards/regenerate-from-history` для Browser/backend history selection, revision/regenerate з будь-якої історичної версії.
+  - `tests/test_storyboard.py`: Тести для негативних шляхів approval gate та history-based regeneration flow.
+- Issue #91 — Legacy persistence migration & PostgreSQL backfill:
+  - `scripts/apply-deployment.py`: Інтегровано `ensure_persistent_user_data_legacy_migration()` в restore path та successful apply path.
+  - `db/010_persistent_user_data_backfill.backfill.py`: Disposable backfill jobs з реальними psycopg записами (не mocked).
+  - `tests/test_persistent_user_data.py`, `tests/test_backfill.py`, `tests/test_apply_deployment.py`: Повне тестове покриття.
+- Issue #92 — Backup/restore safety:
+  - `services/backup_service.py`: Mandatory dump inventory (pg_dump/redis-cli returncode=0 без файлу → error); exact snapshot з preservацією empty source root; configurable `BACKUP_REDIS_DUMP_PATH`; safe restore state з concurrent-write exclusion.
+  - `tests/test_backup_read_only.py`, `tests/test_role_services.py`: Backup integration tests оновлено.
+- Issue #95 — Real test runner fixes:
+  - `core/real_tests/scenarios.py`: Zero-argument `core_api` adapter виправлено (повертає "not-applicable" коли CORE_ADDRESS не налаштовано).
+  - `core/real_tests/github.py`, `core/real_tests/runner.py`: Independent deployment identity через `_deployment_sha()`/`_deployment_version()` (без VERSION/unknown fallback); full mandatory check set validation для auto-close в `can_close_issue()`.
+  - `tests/test_real_tests.py`: 8 нових тестів для Issue #95 acceptance.
+
 ## Unreleased
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.41

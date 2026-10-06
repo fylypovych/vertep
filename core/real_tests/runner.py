@@ -114,7 +114,12 @@ class RealTestRunner:
                                      detail=f"check '{name}' not registered", mandatory=True)
             else:
                 passed, detail = _safe_execute_check(check_fn, name)
-                status = CheckStatus.PASS if passed else CheckStatus.FAIL
+                if passed is None:
+                    status = CheckStatus.SKIPPED
+                elif passed:
+                    status = CheckStatus.PASS
+                else:
+                    status = CheckStatus.FAIL
                 result = CheckResult(name=name, status=status, detail=detail, mandatory=True)
             append_check(run.test_run_id, result)
             audit_entry(run.test_run_id, "check", f"{name}: {result.status.value}", "runner")
@@ -122,7 +127,14 @@ class RealTestRunner:
         return run
 
     def finalize(self, run: TestRun) -> TestRun:
-        """Determine final PASS/FAIL based on mandatory checks and scenario policy."""
+        """Determine the final result from mandatory checks and scenario policy.
+
+        The success policy of every scenario is PASS-only, matching the
+        ``GitHubReporter.can_close_issue`` gate: WARNING/SKIPPED/other
+        statuses never produce scenario PASS.  A run whose only
+        non-PASS mandatory checks are not-executed procedures finalizes as
+        ``PROCEDURE`` — an explicit "not proved", never a PASS.
+        """
         scenario = _scenarios_module.find_scenario(rt_id=run.rt_id)
         scenario_id = scenario.get("id", "") if scenario else ""
         success_policy = _scenarios_module.get_scenario_success_policy(scenario_id) if scenario else {CheckStatus.PASS}
@@ -132,8 +144,16 @@ class RealTestRunner:
             run.error_details = "No mandatory checks to evaluate"
         else:
             failures = [c for c in mandatory if c.status not in success_policy]
-            run.final_result = "PASS" if not failures else "FAIL"
-            if failures:
+            if not failures:
+                run.final_result = "PASS"
+                run.error_details = None
+            elif all(c.status == CheckStatus.SKIPPED for c in failures):
+                run.final_result = "PROCEDURE"
+                run.error_details = "; ".join(
+                    f"{c.name}: {c.detail}" for c in failures[:10]
+                )
+            else:
+                run.final_result = "FAIL"
                 run.error_details = "; ".join(f"{c.name}: {c.detail}" for c in failures[:10])
 
         run.status = TestRunStatus.PASS if run.final_result == "PASS" else TestRunStatus.FAIL
@@ -284,21 +304,34 @@ def _redact_secrets(text: str) -> str:
     return text
 
 
-def _safe_execute_check(fn: Callable[[], Any], name: str) -> tuple[bool, str]:
-    """Execute a check, returning (passed, detail). Never raises."""
+def _safe_execute_check(fn: Callable[[], Any], name: str) -> tuple[bool | None, str]:
+    """Execute a check, returning (passed, detail). Never raises.
+
+    ``passed is None`` means not-applicable/not-executed (a real procedure
+    that cannot run in this environment); the runner records SKIPPED for it
+    so it can never be mistaken for a PASS (Issue i.0.0.0.89).  A check that
+    does not return a (passed, detail) tuple is broken and stays a failure.
+    """
     try:
         result = fn()
         if result is None:
             return False, "check returned no result"
         passed, detail = result
-        return bool(passed), _redact_secrets(str(detail)[:500])
+        detail = _redact_secrets(str(detail)[:500])
+        if passed is None:
+            return None, detail
+        return bool(passed), detail
     except Exception as exc:
         return False, _redact_secrets(f"check '{name}' raised: {exc}")
 
 
 def run_rt_check_names(rt_id: str) -> list[str]:
-    """Resolve the check names for a scenario by rt_id."""
+    """Resolve the check names for a scenario by rt_id.
+
+    Unknown scenarios resolve to an empty list — fail-closed, never to a
+    generic docker/core_api probe pair.
+    """
     scenario = _scenarios_module.find_scenario(rt_id=rt_id)
     if scenario is None:
         return []
-    return scenario.get("checks") or ["docker", "core_api"]
+    return list(scenario.get("checks") or [])

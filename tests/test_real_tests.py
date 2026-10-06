@@ -239,9 +239,9 @@ class TestScenarios:
         assert found["rt"].split()[0] == rt_prefix
 
     def test_find_scenario_by_issue_number(self):
-        found = find_scenario(rt_issue_number=40)
+        found = find_scenario(rt_issue_number=35)
         assert found is not None
-        assert found["rt_issue"] == 40
+        assert found["rt_issue"] == 35
 
     def test_find_scenario_not_found(self):
         assert find_scenario(rt_id="rt::NONEXISTENT") is None
@@ -262,6 +262,115 @@ class TestScenarios:
             assert callable(func), f"Check '{func}' must be callable"
 
 
+class TestScenarioSpecificChecks:
+    """Issue i.0.0.0.89 — scenarios must not borrow generic health probes."""
+
+    def test_every_scenario_has_checks(self):
+        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+            from core.real_tests.scenarios import _scenario_checks
+            checks = _scenario_checks(scenario_id)
+            assert checks, f"{scenario_id} must declare scenario-specific checks"
+
+    def test_no_scenario_falls_back_to_generic_probes(self):
+        from core.real_tests.scenarios import _scenario_checks
+        generic = {"docker", "core_api", "health_core", "monitoring",
+                   "ollama_probe", "postgres_tcp", "redis_tcp", "tts",
+                   "publisher", "backup"}
+        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+            checks = set(_scenario_checks(scenario_id))
+            assert not checks & generic, (
+                f"{scenario_id} borrows generic checks: {checks & generic}"
+            )
+
+    def test_unknown_scenario_id_has_no_checks(self):
+        from core.real_tests.scenarios import _scenario_checks
+        assert _scenario_checks("S99") == []
+
+    def test_run_rt_check_names_unknown_is_empty(self):
+        from core.real_tests.runner import run_rt_check_names
+        assert run_rt_check_names("rt::NONEXISTENT") == []
+
+    def test_run_rt_check_names_returns_scenario_checks(self):
+        from core.real_tests.runner import run_rt_check_names
+        assert run_rt_check_names("rt::S04") == ["backup_roundtrip"]
+
+    def test_scenario_checks_are_registered(self):
+        from core.real_tests.scenarios import _scenario_checks
+        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+            for name in _scenario_checks(scenario_id):
+                assert name in CHECK_REGISTRY, f"{scenario_id}: '{name}' not registered"
+
+    def test_success_policy_is_pass_only(self):
+        from core.real_tests.scenarios import get_scenario_success_policy
+        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+            assert get_scenario_success_policy(scenario_id) == {CheckStatus.PASS}
+
+    def test_success_policy_blocks_close_gate_statuses(self):
+        from core.real_tests.scenarios import get_scenario_success_policy
+        blocked = {CheckStatus.WARNING, CheckStatus.SKIPPED,
+                   CheckStatus.FAIL, CheckStatus.NOT_CONFIGURED}
+        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+            policy = get_scenario_success_policy(scenario_id)
+            assert not policy & blocked
+            assert policy <= {CheckStatus.PASS}
+
+
+class TestProcedureChecks:
+    """Procedure checks report not-executed instead of a borrowed PASS."""
+
+    PROCEDURE_NAMES = ["bootstrap_first_run", "backup_roundtrip",
+                       "migration_artifacts", "update_interrupt",
+                       "release_signature", "publisher_receipt"]
+
+    def test_registered_and_return_none(self):
+        for name in self.PROCEDURE_NAMES:
+            fn = CHECK_REGISTRY[name]
+            passed, detail = fn()
+            assert passed is None, f"{name} must be not-executed, got {passed}"
+            assert "procedure not executed" in detail
+
+    def test_runner_records_skipped_for_none(self, runner):
+        run = runner.start("rt::S01", initiator="test")
+        executed = runner.run_checks(run, check_names=[])
+        assert len(executed.checks) == 1
+        check = executed.checks[0]
+        assert check.name == "bootstrap_first_run"
+        assert check.status is CheckStatus.SKIPPED
+
+    def test_finalize_procedure_when_only_skipped_failures(self, runner):
+        run = runner.start("rt::S01", initiator="test")
+        run.checks.append(CheckResult(name="bootstrap_first_run",
+                                      status=CheckStatus.SKIPPED,
+                                      detail="procedure not executed"))
+        run = runner.finalize(run)
+        assert run.final_result == "PROCEDURE"
+        assert run.final_result != "PASS"
+
+    def test_finalize_fail_when_warning_present(self, runner):
+        run = runner.start("rt::S01", initiator="test")
+        run.checks.append(CheckResult(name="a", status=CheckStatus.PASS, detail="ok"))
+        run.checks.append(CheckResult(name="b", status=CheckStatus.WARNING,
+                                      detail="warn"))
+        run = runner.finalize(run)
+        assert run.final_result == "FAIL"
+
+    def test_finalize_fail_when_mixed_failure_and_skipped(self, runner):
+        run = runner.start("rt::S01", initiator="test")
+        run.checks.append(CheckResult(name="a", status=CheckStatus.FAIL,
+                                      detail="broken"))
+        run.checks.append(CheckResult(name="b", status=CheckStatus.SKIPPED,
+                                      detail="procedure not executed"))
+        run = runner.finalize(run)
+        assert run.final_result == "FAIL"
+
+    def test_finalize_pass_requires_every_mandatory_pass(self, runner):
+        run = runner.start("rt::S01", initiator="test")
+        run.checks.append(CheckResult(name="a", status=CheckStatus.PASS, detail="ok"))
+        run.checks.append(CheckResult(name="b", status=CheckStatus.PASS, detail="ok"))
+        run = runner.finalize(run)
+        assert run.final_result == "PASS"
+
+
 class TestQualifyIntegration:
     def test_rt_issue_field_present(self):
         from scripts.qualify_infrastructure import SCENARIOS
@@ -277,9 +386,9 @@ class TestQualifyIntegration:
 
     def test_find_scenario_by_issue_from_qualify(self):
         from scripts.qualify_infrastructure import find_scenario_by_issue
-        result = find_scenario_by_issue(40)
+        result = find_scenario_by_issue(35)
         assert result is not None
-        assert result["rt_issue"] == 40
+        assert result["rt_issue"] == 35
 
     def test_find_scenario_by_issue_not_found(self):
         from scripts.qualify_infrastructure import find_scenario_by_issue
@@ -361,8 +470,15 @@ class TestRunner:
 
     def test_run_full_lifecycle(self, runner, monkeypatch):
         monkeypatch.setitem(CHECK_REGISTRY, "docker", lambda: (True, "docker ok"))
-        monkeypatch.setitem(CHECK_REGISTRY, "core_api", lambda: (True, "core_api ok"))
-        monkeypatch.setitem(CHECK_REGISTRY, "health_core", lambda: (True, "health ok"))
+        monkeypatch.setitem(CHECK_REGISTRY, "bootstrap_first_run",
+                            lambda: (None, "procedure not executed in-process"))
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: False)
+        result = runner.run("rt::S01", initiator="test", check_names=["docker"])
+        assert result.final_result == "PROCEDURE"
+
+    def test_run_full_lifecycle_pass_when_all_checks_pass(self, runner, monkeypatch):
+        monkeypatch.setitem(CHECK_REGISTRY, "docker", lambda: (True, "docker ok"))
+        monkeypatch.setitem(CHECK_REGISTRY, "bootstrap_first_run", lambda: (True, "ok"))
         monkeypatch.setattr(gh_mod, "_is_configured", lambda: False)
         result = runner.run("rt::S01", initiator="test", check_names=["docker"])
         assert result.final_result == "PASS"

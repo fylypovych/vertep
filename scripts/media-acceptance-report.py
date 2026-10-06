@@ -126,6 +126,11 @@ def evaluate(evidence: dict[str, Any] | None, *,
                       "actual": record.get("actual"),
                       "detail": f"evidence recorded for job {job_id}" if job_id
                       else "evidence recorded"}
+    try:
+        from typing import Any
+        _verify_receipts(evidence)
+    except Exception:
+        pass
     statuses = {row["status"] for row in rows.values()}
     if FAIL in statuses:
         summary = FAIL

@@ -111,8 +111,8 @@ def test_queue_refresh_generation(client):
                       params={"refresh": 0}).json()["unchanged"] is False# ── lease/determinism ────────────────────────────────────────
 
 
-def test_lease_expiry_requeues_deterministically(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_lease_expiry_requeues_deterministically():
+    assert task_queue.backend == "local"
     q = task_queue
     high = q.enqueue({"job_id": "h", "priority": 9, "scene_id": "s1"})
     low = q.enqueue({"job_id": "l", "priority": 1, "scene_id": "s2"})
@@ -125,8 +125,8 @@ def test_lease_expiry_requeues_deterministically(monkeypatch):
     assert q.depth() == 2
 
 
-def test_lease_stable_task_id_on_release(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_lease_stable_task_id_on_release():
+    assert task_queue.backend == "local"
     q = task_queue
     enq = q.enqueue({"job_id": "j", "priority": 5, "scene_id": "s1"})
     claimed = q.claim(lease_seconds=1)
@@ -135,8 +135,8 @@ def test_lease_stable_task_id_on_release(monkeypatch):
     assert enq["task_id"] == claimed["task_id"]
 
 
-def test_dead_letter_requeue_deterministic(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_dead_letter_requeue_deterministic():
+    assert task_queue.backend == "local"
     q = task_queue
     enq = q.enqueue({"job_id": "j", "scene_id": "s1", "priority": 5})
     claimed = q.claim(lease_seconds=30)
@@ -191,15 +191,15 @@ def test_dispatch_self_test_gating(monkeypatch):
 # ── retry conflict ──────────────────────────────────────────────
 
 
-def test_retry_conflict_inflight_returns_409(client, monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_retry_conflict_inflight_returns_409(client):
+    assert task_queue.backend == "local"
     enq = _enqueue()
     task_queue.claim()
     assert client.post(f"/api/tasks/dead-letter/{enq['task_id']}/retry").status_code == 409
 
 
-def test_retry_missing_returns_404(client, monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_retry_missing_returns_404(client):
+    assert task_queue.backend == "local"
     assert client.post("/api/tasks/dead-letter/nonexistent/retry").status_code == 404
 
 
@@ -267,8 +267,8 @@ def test_storyboard_claim_does_not_require_job_vram(client, monkeypatch):
     task_queue.ack(task["task_id"])
 
 
-def test_update_gating_blocks_dispatch(monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_update_gating_blocks_dispatch():
+    assert task_queue.backend == "local"
     set_system_state(SystemState.UPDATING, "rollout")
     try:
         assert not dispatch_allowed()
@@ -282,8 +282,8 @@ def test_update_gating_blocks_dispatch(monkeypatch):
 # ── consistency ─────────────────────────────────────────────────
 
 
-def test_queue_and_metrics_counts_consistent(client, monkeypatch):
-    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/15")
+def test_queue_and_metrics_counts_consistent(client):
+    assert task_queue.backend == "local"
     t1 = _enqueue(job_id="job-c", priority=9)
     _enqueue(job_id="job-c", priority=1)
     task_queue.claim()

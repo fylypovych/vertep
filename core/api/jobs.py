@@ -191,6 +191,13 @@ def regenerate_job(job_id: str):
     job = store.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    from ..models import JobStatus
+    mid_render = job.video_regenerating or (
+        bool(getattr(job, 'assembly_task_ids', {})) and
+        job.status in {JobStatus.ASSEMBLY, JobStatus.VIDEO_GENERATION}
+    ) or job.status == JobStatus.PUBLISHING
+    if mid_render:
+        raise HTTPException(409, "Cannot regenerate while render in progress")
     for task_id, scene_id in list(job.active_task_ids.items()):
         scene = next((item for item in job.scenes if item.scene_id == scene_id), None)
         if scene and scene.assigned_worker:
@@ -201,10 +208,10 @@ def regenerate_job(job_id: str):
     for artifact in job.artifacts:
         if artifact.kind == "input":
             retained_artifacts.append(artifact)
-            continue
-        path = (job_root / artifact.path).resolve()
-        if job_root in path.parents and path.is_file():
-            path.unlink()
+        else:
+            path = (job_root / artifact.path).resolve()
+            if job_root in path.parents and path.is_file():
+                path.unlink()
     job.retries = 0
     job.script = None
     job.scenes = []
@@ -218,6 +225,22 @@ def regenerate_job(job_id: str):
     job.approved = False
     job.published_to.clear()
     job.publication_results.clear()
+    if getattr(job, 'assembly_task_ids', None):
+        job.assembly_task_ids.clear()
+    if getattr(job, 'assembly_cancel_requested', False):
+        job.assembly_cancel_requested = False
+    if getattr(job, 'video_regenerating', False):
+        job.video_regenerating = False
+    if getattr(job, 'video_versions', None):
+        for vv in list(job.video_versions):
+            path = vv.path if hasattr(vv, 'path') else None
+            if path:
+                candidate = (job_root / path).resolve()
+                if not candidate.is_file():
+                    try:
+                        job.video_versions.remove(vv)
+                    except ValueError:
+                        pass
     job.version += 1
     write_manifest(job, store.root)
     store.update(job, JobStatus.NEW, "REGENERATION REQUESTED")
@@ -230,6 +253,13 @@ def retry_job(job_id: str):
     job = store.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    from ..models import JobStatus
+    mid_render = job.video_regenerating or (
+        bool(getattr(job, 'assembly_task_ids', {})) and
+        job.status in {JobStatus.ASSEMBLY, JobStatus.VIDEO_GENERATION}
+    ) or job.status == JobStatus.PUBLISHING
+    if mid_render:
+        raise HTTPException(409, "Cannot retry while render in progress")
     if not can_retry(job):
         return store.update(job, JobStatus.FAILED, "MAX RETRIES REACHED")
     job.retries += 1

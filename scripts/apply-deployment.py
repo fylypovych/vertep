@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.deployment_plan import create_plan
+from core.persistent_data import ensure_persistent_user_data_legacy_migration
 
 
 BOOTSTRAP_SERVICES = {"proxy", "core", "license-manager", "dispatcher", "scheduler",
@@ -345,6 +346,14 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
             plan_path.write_text(previous_plan, encoding="utf-8")
         else:
             plan_path.unlink(missing_ok=True)
+        # Migrate legacy ephemeral roots from old container filesystem before
+        # restarting the previous runtime set. This ensures user data created
+        # in /app/{characters,brands,workflows} during a previous version is
+        # copied to persistent storage before the old containers are recreated.
+        try:
+            ensure_persistent_user_data_legacy_migration()
+        except Exception as error:  # noqa: BLE001 - never block restore on migration
+            print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
         # A failed apply may have partially started/stopped the new service set;
         # restore the previously-working runtime so the host is not left half-applied.
         return _restore_runtime(compose_command(), previous_services, new_services, runner)
@@ -415,6 +424,12 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         if unwanted:
             runner([*compose, "stop", *unwanted], check=True, timeout=600)
             runner([*compose, "rm", "-f", *unwanted], check=True, timeout=600)
+        # Migrate legacy ephemeral roots from old container filesystem after
+        # successful apply, so user data from previous versions is preserved.
+        try:
+            ensure_persistent_user_data_legacy_migration()
+        except Exception as error:  # noqa: BLE001
+            print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
         status.update({"state": "SUCCEEDED", "updated_at": datetime.now(timezone.utc).isoformat(),
                        "runtime_set_verified": True, "observed_services": sorted(observed)})
         atomic_json(root / "config/deployment-status.json", status)

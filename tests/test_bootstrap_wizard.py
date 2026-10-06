@@ -1,6 +1,7 @@
 """i.0.0.0.11 — Bootstrap Installer & First Run Wizard: smoke, config, and contract tests."""
 import json
 import os
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -63,6 +64,14 @@ class TestBootstrapManifest:
         bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
         assert "openssl dgst -sha256 -verify" in bs
         assert "BOOTSTRAP_PUBLIC_KEY" in bs
+
+    def test_bootstrap_public_keys_identical_and_match_installer_key(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        blocks = re.findall(r"<<'BOOTSTRAP_PUBLIC_KEY'\n(.*?)\nBOOTSTRAP_PUBLIC_KEY", bs, re.DOTALL)
+        assert len(blocks) == 2
+        assert blocks[0] == blocks[1]
+        expected = (ROOT / "installer/update-public.pem").read_text(encoding="utf-8")
+        assert blocks[0].strip() == expected.strip()
 
     def test_manifest_sha256_checksums(self):
         bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")

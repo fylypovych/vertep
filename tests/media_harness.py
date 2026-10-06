@@ -244,6 +244,41 @@ def create_telegram_job(*, topic: str = "Telegram topic",
     _prepare_and_dispatch(job)
     return job.job_id
 
+def create_telegram_job_via_webhook(*, topic: str = 'Telegram topic',
+                                    character_id: str = 'harnesschar',
+                                    chat_id: str = '424242',
+                                    monkeypatch=None, client=None) -> str:
+    import os
+    os.environ.setdefault('TELEGRAM_WEBHOOK_ENABLED', 'true')
+    if monkeypatch is not None:
+        monkeypatch.setenv('TELEGRAM_WEBHOOK_ENABLED', 'true')
+    payload = {
+        'update_id': 1001,
+        'message': {
+            'message_id': 1,
+            'chat': {'id': int(chat_id)},
+            'text': topic,
+        },
+    }
+    headers = {'x-telegram-bot-api-secret-token': os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')}
+    from fastapi.testclient import TestClient
+    from core.app import app
+    c = client if client is not None else TestClient(app, raise_server_exceptions=False)
+    r = c.post('/api/telegram/webhook', json=payload, headers=headers)
+    if r.status_code != 200:
+        raise AssertionError(f'webhook failed: {r.status_code} {r.text}')
+    data = r.json()
+    job_id = data.get('job_id')
+    if job_id is None:
+        for jid, job in store.jobs.items():
+            if job.source == f'telegram:{chat_id}':
+                job_id = jid
+                break
+    if job_id is None:
+        raise AssertionError(f'webhook did not return job_id: {data}')
+    _JOB_SCENES[job_id] = _SCENE_COUNT['value']
+    return job_id
+
 
 def register_publisher(client, *, node_name: str = PUBLISHER_NODE) -> None:
     heartbeat(client, node_name, role="publisher", vram_mb=0,
@@ -684,3 +719,4 @@ def drain_executor() -> None:
     from core.app import executor
     for _ in range(2):
         executor.submit(lambda: None).result(timeout=30)
+

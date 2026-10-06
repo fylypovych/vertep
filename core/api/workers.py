@@ -14,7 +14,7 @@ from ..health_checks import health_status as _health_status
 from ..models import ModelProgressReport, WorkerHeartbeat, worker_transition_allowed, utc_now
 from ..node_registry import node_roles, registered_nodes
 from ..pull_executor import ingest_model_progress, pending_model_command
-from ..rolling_update import reconcile_rollout
+from ..rolling_update import assert_not_fenced, reconcile_rollout, rollout_status
 from ..security import _valid_worker_request
 from ..state import store
 from ..system_state import get_system_state
@@ -25,7 +25,9 @@ router = APIRouter()
 # Fields CORE owns on a worker record; they are not part of the heartbeat
 # payload and must survive every heartbeat overwrite.
 _MODEL_LIFECYCLE_FIELDS = ("model_command", "model_command_ack",
-                           "model_catalog", "model_catalog_at")
+                           "model_catalog", "model_catalog_at",
+                           "cancel_fence_token", "cancelled_operation_id",
+                           "cancel_fence_ack", "cancel_fence_ack_at")
 
 
 @router.post("/api/workers/heartbeat")
@@ -58,6 +60,19 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
                      if worker.get("node_name") == payload.node_name), None)
     if previous is None:
         previous = store.workers.get(payload.node_name)
+    fence_rollout = rollout_status()
+    fenced = dict(previous or {})
+    if payload.cancel_fence_ack:
+        fenced["cancel_fence_ack"] = payload.cancel_fence_ack
+    try:
+        assert_not_fenced(fenced, fence_rollout)
+    except RuntimeError as error:
+        raise HTTPException(409, {
+            "message": str(error),
+            "rollout_state": fence_rollout.get("state"),
+            "rollout_operation_id": fence_rollout.get("operation_id"),
+            "cancel_fence_token": fence_rollout.get("cancel_fence_token"),
+        }) from error
     desired = (previous or {}).get("desired_state")
     drain_operation_id = (previous or {}).get("drain_operation_id")
     restart_operation_id = (previous or {}).get("restart_operation_id")
@@ -101,6 +116,9 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     for field in _MODEL_LIFECYCLE_FIELDS:
         if previous and previous.get(field) is not None:
             data[field] = previous[field]
+    if payload.cancel_fence_ack:
+        data["cancel_fence_ack"] = payload.cancel_fence_ack
+        data["cancel_fence_ack_at"] = utc_now()
     reported_catalog = payload.model_catalog or {}
     if isinstance(reported_catalog.get("models"), list):
         data["model_catalog"] = [str(name) for name in reported_catalog["models"]]
@@ -116,9 +134,15 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     rollout = reconcile_rollout(store.workers)
     data = store.workers[payload.node_name]
     store.save_worker(data)
+    node_record = next((node for node in rollout.get("nodes", [])
+                        if node.get("node_id") == payload.node_name), None)
+    active_request = None
+    if node_record and node_record.get("phase") in {"SELF_TESTING", "ROLLING_BACK"}:
+        active_request = node_record.get("self_test_request")
     return {"accepted": True, "workers": len(store.workers),
             "desired_state": data.get("desired_state"),
             "self_test_requested_at": data.get("self_test_requested_at"),
+            "self_test_request": active_request,
             "update_target_version": data.get("update_target_version"),
             "rollback_target_version": data.get("rollback_target_version"),
             "restart_operation_id": restart_operation_id,

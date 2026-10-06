@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from ..state import executor, store
 from ..storyboard import StoryboardConflict, StoryboardService
 from .job_helpers import _prepare_and_dispatch
+from ..models import JobStatus
 
 
 router = APIRouter()
@@ -104,3 +105,12 @@ def regenerate_storyboard(job_id: str, body: StoryboardRevision):
     return _translate(lambda: _service().regenerate(
         job_id, body.version, body.actor, body.revision
     ))
+
+
+@router.post("/api/jobs/{job_id}/storyboards/regenerate-from-history")
+def regenerate_from_history(job_id: str, body: StoryboardRevision):
+    job = _translate(lambda: _service().regenerate_from_history(
+        job_id, body.version, body.actor, body.revision
+    ))
+    executor.submit(_prepare_and_dispatch, job)
+    return job

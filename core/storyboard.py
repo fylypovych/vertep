@@ -276,6 +276,36 @@ class StoryboardService:
                           f"STORYBOARD {version} REVISION REQUESTED by {actor}")
         return self.queue(job, revision)
 
+    def regenerate_from_history(self, job_id: str, version: int, actor: str,
+                                revision: str | None = None) -> Job:
+        """Create a new storyboard version based on a historical version.
+
+        Unlike regenerate(), this allows branching from any version in history,
+        not just the currently active one. The new version will have the next
+        sequential version number.
+        """
+        job = self._job(job_id)
+        base_storyboard = self.get(job_id, version)
+        if base_storyboard.status not in {"approved", "superseded", "rejected"}:
+            raise StoryboardConflict(
+                f"Cannot regenerate from storyboard version {version} with status {base_storyboard.status}"
+            )
+
+        # Build revision from base storyboard's content if not provided
+        effective_revision = revision
+        if effective_revision is None and base_storyboard.revision_request:
+            effective_revision = base_storyboard.revision_request
+
+        # Mark the base version as superseded if it was pending or approved
+        if base_storyboard.status in {"pending_approval", "approved"}:
+            base_storyboard.status = "superseded"
+            base_storyboard.decided_at = utc_now()
+            base_storyboard.decided_by = actor
+
+        self.store.update(job, JobStatus.STORYBOARD_REVISION_REQUESTED,
+                          f"STORYBOARD {version} REVISION REQUESTED by {actor} (history branch)")
+        return self.queue(job, effective_revision)
+
     def get(self, job_id: str, version: int | None = None) -> StoryboardVersion:
         job = self._job(job_id)
         selected = version or job.active_storyboard_version

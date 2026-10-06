@@ -11,6 +11,16 @@ Harness лише *керує* виконанням: він збирає ката
 Фактичне виконання на реальному обладнанні/розгортанні винесене в окремий
 `rt.0.0.0.32` Issue; для таких сценаріїв тут реєструється поле "rt" з
 посиланням на формалізовану executable-процедуру.
+
+Режими та коди виходу (Issue i.0.0.0.89):
+- `--run` без помилок: overall="PASS" лише коли ВСІ сценарії мають PASS
+  (passed>0, failed==0, skipped==0 для кожної pytest-цілі); будь-який
+  all-skipped/zero-tests прогін дає NO_TESTS і не вважається доказом;
+- `--run` з PROCEDURE-пунктами: overall="PARTIAL" (код 1), доказом стає
+  PASS лише з явним прапорцем `--allow-procedures`;
+- без `--run`: overall="PLAN" (статичний каталог, не доказ) → код 1;
+  код 0 у PLAN-режимі дає лише явний `--plan-only`;
+- код 0 повертається тільки для overall="PASS".
 """
 
 from __future__ import annotations
@@ -30,6 +40,8 @@ VERSION_FILE = ROOT / "VERSION"
 TOOL = "qualify-infrastructure"
 ISSUE = "i.0.0.0.31"
 
+VALID_RT_ISSUES = {34, 35, 42, 47, 54, 63}
+
 # ---------------------------------------------------------------------------
 # Каталог сценаріїв кваліфікації інфраструктури.
 # Кожен елемент відповідає одній з 8 обов'язкових груп Issue i.0.0.0.31:
@@ -45,7 +57,7 @@ SCENARIOS = [
         "name": "Clean Ubuntu-compatible bootstrap та First Run",
         "automated": ["tests/test_bootstrap_wizard.py", "tests/test_first_run.py"],
         "rt": "rt::S01 clean bootstrap + First Run Wizard",
-        "rt_issue": 40,
+        "rt_issue": 35,
         "description": "Automated/disposable qualification чистого Ubuntu-сумісного "
                        "bootstrap: roles, секрети, контейнери, health check.",
     },
@@ -99,7 +111,7 @@ SCENARIOS = [
         "name": "Release trust automated checks",
         "automated": ["tests/test_key_lifecycle.py", "tests/test_update_security.py", "tests/test_release_qualification.py"],
         "rt": "rt::S07 key ceremony + recovery",
-        "rt_issue": 33,
+        "rt_issue": 54,
         "description": "signed artifacts, tamper/revoke/downgrade, key rotation "
                        "та recovery procedure.",
     },
@@ -112,6 +124,27 @@ SCENARIOS = [
         "description": "Sandbox/fake publisher із перевірюваним receipt публікації.",
     },
 ]
+
+
+def validate_rt_issues(scenarios: list[dict] | None = None) -> list[str]:
+    """Перевіряє, що кожен rt_issue належить до чинного відкритого ir-набору.
+
+    Набір відповідає фізичним/live сценаріям i.0.0.0.89:
+    #34 (медіаконвеєр), #35 (встановлення/міграція/backup/update),
+    #42 (node roles/web/telegram), #47 (publisher), #54 (security/release
+    trust), #63 (Real Test Runner).  Повертає список порушень; порожній
+    список означає, що каталог валідний.
+    """
+    items = SCENARIOS if scenarios is None else scenarios
+    problems: list[str] = []
+    for scenario in items:
+        issue = scenario.get("rt_issue")
+        if issue not in VALID_RT_ISSUES:
+            problems.append(
+                "%s: rt_issue=%r is outside the valid ir set %s"
+                % (scenario.get("id"), issue, sorted(VALID_RT_ISSUES))
+            )
+    return problems
 
 
 def load_version() -> str:
@@ -189,7 +222,7 @@ def _resolve(target: str | Path) -> Path:
 
 
 def parse_pytest_summary(output: str) -> dict:
-    """Витягує лічильники passed/failed/error з короткого звіту pytest -q."""
+    """Витягує лічильники passed/failed/error/skipped з короткого звіту pytest -q."""
     def count(needle: str) -> int:
         match = re.search(r"(\d+)\s+" + re.escape(needle), output)
         return int(match.group(1)) if match else 0
@@ -198,16 +231,22 @@ def parse_pytest_summary(output: str) -> dict:
         "passed": count("passed"),
         "failed": count("failed"),
         "error": count("error"),
+        "skipped": count("skipped"),
     }
 
 
 def _run_pytest(target: Path, python: str) -> dict:
-    """Запускає один automated pytest-ціль; повертає доказ result/error."""
+    """Запускає один automated pytest-ціль; повертає доказ result/error.
+
+    PASS — лише якщо щонайменше один тест пройшов і жоден не пропущений
+    чи не впав: "0 passed, N skipped" та порожні прогони дають NO_TESTS,
+    а наявність skip робить прогін FAIL (skipped ≠ passed, AGENTS.md §21).
+    """
     evidence = {
         "target": str(target),
         "result": "FAIL",
         "error": "",
-        "detail": {"passed": 0, "failed": 0, "error": 0},
+        "detail": {"passed": 0, "failed": 0, "error": 0, "skipped": 0},
     }
     if not target.is_file():
         evidence["result"] = "NOT_RUN"
@@ -221,12 +260,35 @@ def _run_pytest(target: Path, python: str) -> dict:
             cwd=str(ROOT),
             timeout=1800,
         )
-        evidence["detail"] = parse_pytest_summary(
-            result.stdout + "\n" + result.stderr
-        )
-        evidence["result"] = "PASS" if result.returncode == 0 else "FAIL"
-        if result.returncode != 0:
-            evidence["error"] = (result.stderr or result.stdout).strip()[-2000:]
+        detail = parse_pytest_summary(result.stdout + "\n" + result.stderr)
+        evidence["detail"] = detail
+        tail = (result.stderr or result.stdout).strip()[-2000:]
+        if (
+            result.returncode == 0
+            and detail["failed"] == 0
+            and detail["error"] == 0
+            and detail["passed"] > 0
+            and detail["skipped"] == 0
+        ):
+            evidence["result"] = "PASS"
+        elif (
+            detail["failed"] == 0
+            and detail["error"] == 0
+            and detail["passed"] == 0
+            and result.returncode in (0, 5)
+        ):
+            evidence["result"] = "NO_TESTS"
+            evidence["error"] = (
+                f"no tests executed: passed=0, skipped={detail['skipped']} "
+                "(all-skipped or empty run is not qualification proof)"
+            )
+        else:
+            evidence["result"] = "FAIL"
+            evidence["error"] = (
+                f"pytest summary: passed={detail['passed']} failed={detail['failed']} "
+                f"error={detail['error']} skipped={detail['skipped']} "
+                f"returncode={result.returncode}\n{tail}"
+            ).strip()
     except (OSError, subprocess.SubprocessError) as exc:
         evidence["result"] = "FAIL"
         evidence["error"] = str(exc)
@@ -245,7 +307,8 @@ def proof_entry(
 
     - run=False  → результат "NOT_RUN", всі automated цілі "NOT_RUN";
     - run=True і без automated цілей → результат "PROCEDURE" із посиланням на "rt";
-    - run=True і з automated цілями → виконує pytest та збирає PASS/FAIL.
+    - run=True і з automated цілями → виконує pytest: PASS лише коли всі
+      цілі PASS; наявність хоча б однієї NO_TESTS/FAIL/NOT_RUN — не PASS.
     """
     targets = scenario.get("automated", [])
     entry = {
@@ -265,7 +328,12 @@ def proof_entry(
             evidence = _run_pytest(_resolve(target), python)
             entry["evidence"].append(evidence)
         results = {item["result"] for item in entry["evidence"]}
-        entry["result"] = "PASS" if results == {"PASS"} else "FAIL"
+        if results == {"PASS"}:
+            entry["result"] = "PASS"
+        elif results == {"NO_TESTS"}:
+            entry["result"] = "NO_TESTS"
+        else:
+            entry["result"] = "FAIL"
     else:
         entry["evidence"] = [
             {"target": str(_resolve(target)), "result": "NOT_RUN", "error": ""}
@@ -283,12 +351,20 @@ def build_report(
     env: dict,
     run: bool = False,
     python: str = sys.executable,
+    allow_procedures: bool = False,
 ) -> dict:
-    """Збирає єдиний звіт кваліфікації в заданому форматі доказу."""
+    """Збирає єдиний звіт кваліфікації в заданому форматі доказу.
+
+    У режимі `run` overall="PASS" лише коли кожен пункт має PASS.
+    PROCEDURE/NOT_RUN пункти ніколи не дають PASS: без
+    `allow_procedures` результат — "PARTIAL", з ним — "PASS" лише за
+    умови відсутності FAIL/NO_TESTS.  Порожній вибір — FAIL.
+    """
     entries = [proof_entry(scenario, version, commit, env, run=run, python=python)
                for scenario in scenarios]
 
-    summary = {"total": len(entries), "passed": 0, "failed": 0, "not_run": 0, "procedure": 0}
+    summary = {"total": len(entries), "passed": 0, "failed": 0, "not_run": 0,
+               "procedure": 0, "no_tests": 0}
     for entry in entries:
         result = (entry["result"] or "").upper()
         if result == "PASS":
@@ -297,11 +373,25 @@ def build_report(
             summary["failed"] += 1
         elif result == "PROCEDURE":
             summary["procedure"] += 1
+        elif result == "NO_TESTS":
+            summary["no_tests"] += 1
         elif result == "NOT_RUN":
             summary["not_run"] += 1
 
     if run:
-        overall = "PASS" if summary["failed"] == 0 and summary["total"] > 0 else "FAIL"
+        if summary["total"] == 0 or summary["failed"] or summary["no_tests"]:
+            overall = "FAIL"
+        elif summary["passed"] == summary["total"]:
+            overall = "PASS"
+        elif (
+            allow_procedures
+            and summary["passed"] + summary["procedure"] == summary["total"]
+        ):
+            overall = "PASS"
+        elif summary["procedure"] or summary["not_run"]:
+            overall = "PARTIAL"
+        else:
+            overall = "FAIL"
     else:
         overall = "PLAN"
 
@@ -319,7 +409,16 @@ def build_report(
     }
 
 
+def _ensure_utf8_stdout() -> None:
+    """Гарантує UTF-8 виведення JSON на Windows-консолях (cp1251 тощо)."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Vertep automated infrastructure qualification (Issue %s)" % ISSUE
     )
@@ -333,20 +432,45 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, help="Шлях для JSON-звіту.")
     parser.add_argument("--python", default=sys.executable, help="Інтерпретатор Python.")
+    parser.add_argument(
+        "--allow-procedures", action="store_true",
+        help="У режимі --run вважати наявність PROCEDURE-пунктів прийнятною "
+             "частковою кваліфікацією (без прапорця такий прогін — PARTIAL, код 1).",
+    )
+    parser.add_argument(
+        "--plan-only", action="store_true",
+        help="Дозволити код 0 для статичного PLAN-каталогу (не є доказом).",
+    )
     args = parser.parse_args(argv)
+
+    problems = validate_rt_issues()
+    if problems:
+        for problem in problems:
+            print(f"rt_issue validation: {problem}", file=sys.stderr)
+        return 1
 
     version = load_version()
     commit = git_commit()
     env = environment()
     all_scenarios = collect_scenarios()
     scenarios = resolve_selected(all_scenarios, args.selected) if args.selected else all_scenarios
-    report = build_report(scenarios, version, commit, env, run=args.run, python=args.python)
+    if args.selected and not scenarios:
+        print(f"unknown scenario ids: {', '.join(args.selected)}", file=sys.stderr)
+        return 1
+    report = build_report(
+        scenarios, version, commit, env, run=args.run, python=args.python,
+        allow_procedures=args.allow_procedures,
+    )
 
     encoded = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(encoded + "\n", encoding="utf-8")
     print(encoded)
-    return 0 if report["overall"] in ("PASS", "PLAN") else 1
+    if report["overall"] == "PASS":
+        return 0
+    if report["overall"] == "PLAN" and args.plan_only:
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

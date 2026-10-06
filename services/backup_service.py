@@ -216,6 +216,15 @@ def _redis_dump_default() -> str | None:
     return f"redis-cli -u {redis_url} BGSAVE"
 
 
+def _redis_dump_path() -> str:
+    override = os.getenv("BACKUP_REDIS_DUMP_PATH", "").strip()
+    if override:
+        return override
+    if os.name == "nt":
+        return str(_PROJECT_ROOT / "var" / "lib" / "redis" / "dump.rdb")
+    return "/var/lib/redis/dump.rdb"
+
+
 def _command_exists(command: str) -> bool:
     import shutil
     return shutil.which(command.split()[0]) is not None
@@ -241,6 +250,13 @@ def _archive(destination: Path) -> None:
                         seen_dirs.add(arcname_base)
                 elif path.is_file() and not path.is_symlink():
                     archive.add(path, arcname=arcname_base, recursive=False)
+            # Issue #92: if a source root is completely empty, add an empty directory
+            # entry so the snapshot preserves the exact structure.
+            if not seen_dirs:
+                info = tarfile.TarInfo(name=f"{label}/")
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                archive.addfile(info)
         # Issue #60: pg_dump and redis-cli failures must be hard errors — a backup that
         # claims to include database state but silently skipped the dump is misleading.
         pg_cmd = os.getenv("BACKUP_PG_DUMP_CMD", _pg_dump_default() or "").strip()
@@ -255,9 +271,10 @@ def _archive(destination: Path) -> None:
                     f"pg_dump exited {result.returncode}: {stderr or 'no stderr'}"
                 )
             dump_path = Path(_pg_dump_path())
-            if dump_path.exists():
-                archive.add(str(dump_path), arcname="db/postgres.dump", recursive=False)
-                dump_path.unlink(missing_ok=True)
+            if not dump_path.exists():
+                raise RuntimeError("pg_dump succeeded but dump file was not created")
+            archive.add(str(dump_path), arcname="db/postgres.dump", recursive=False)
+            dump_path.unlink(missing_ok=True)
         redis_cmd = os.getenv("BACKUP_REDIS_DUMP_CMD", _redis_dump_default() or "").strip()
         if redis_cmd:
             try:
@@ -269,9 +286,10 @@ def _archive(destination: Path) -> None:
                 raise RuntimeError(
                     f"redis-cli BGSAVE exited {result.returncode}: {stderr or 'no stderr'}"
                 )
-            rdb_path = _PROJECT_ROOT / "var" / "lib" / "redis" / "dump.rdb"
-            if rdb_path.exists():
-                archive.add(str(rdb_path), arcname="db/redis.rdb", recursive=False)
+            rdb_path = Path(_redis_dump_path())
+            if not rdb_path.exists():
+                raise RuntimeError("redis-cli BGSAVE succeeded but RDB file was not created")
+            archive.add(str(rdb_path), arcname="db/redis.rdb", recursive=False)
 
 
 def _encrypt(source: Path, destination: Path, key: bytes) -> str:
@@ -502,7 +520,7 @@ def _execute_restore(snapshot_id: str) -> dict:
                         raise RuntimeError(f"pg_restore failed: {result.stderr.decode()}")
                 redis_rdb = db_root / "redis.rdb"
                 if redis_rdb.exists():
-                    redis_data = Path(os.getenv("REDIS_DATA_DIR", str(_PROJECT_ROOT / "var" / "lib" / "redis")))
+                    redis_data = Path(os.getenv("REDIS_DATA_DIR", str(_redis_dump_path()))).parent
                     redis_data.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(redis_rdb, redis_data / "dump.rdb")
             

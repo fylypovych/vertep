@@ -6,10 +6,14 @@ an ``rt_issue`` GitHub issue number).
 
 The check registry maps check names to callable executors.  Checks reuse
 ``core/health_checks.py`` for infrastructure probes and ``core/node_registry``
-for node/service verification.  Generation-heavy checks are procedure-based
-(PROCEDURE status when not run on real hardware); dispatching a real task
-is delegated to the worker capability dispatch, never to a direct provider
-call in CORE (see AGENTS.md §4.1).
+for node/service verification.  Scenario-specific real procedures (bootstrap,
+backup round-trip, migration, update interruption, release trust, publisher
+receipt) are registered as procedure checks that return ``None`` until they
+are executed on a real stand, so the runner records not-executed instead of
+borrowing a generic health probe (Issue i.0.0.0.89).  Generation-heavy checks
+are procedure-based (PROCEDURE status when not run on real hardware);
+dispatching a real task is delegated to the worker capability dispatch, never
+to a direct provider call in CORE (see AGENTS.md §4.1).
 """
 
 from __future__ import annotations
@@ -146,6 +150,57 @@ def _check_monitoring_probe() -> tuple[bool, str]:
     return check_monitoring()
 
 
+def _procedure(detail: str) -> tuple[None, str]:
+    """A real-test procedure that cannot be executed in-process.
+
+    Returns ``None`` so the runner records SKIPPED/not-executed instead of
+    inventing a PASS from a generic health probe (Issue i.0.0.0.89).
+    """
+    return None, f"procedure not executed in-process: {detail}"
+
+
+def _check_bootstrap_first_run() -> tuple[None, str]:
+    return _procedure(
+        "clean Ubuntu bootstrap + First Run Wizard requires a clean "
+        "installation stand (ir #35)"
+    )
+
+
+def _check_backup_roundtrip() -> tuple[None, str]:
+    return _procedure(
+        "backup → data mutation → restore → health verification requires "
+        "a real deployment storage (ir #35)"
+    )
+
+
+def _check_migration_artifacts() -> tuple[None, str]:
+    return _procedure(
+        "existing-install migration/persistence verification requires a "
+        "real installation being migrated (ir #35)"
+    )
+
+
+def _check_update_interrupt() -> tuple[None, str]:
+    return _procedure(
+        "Safe Update interruption/restart/rollback with fault injection "
+        "requires a real update stand (ir #35)"
+    )
+
+
+def _check_release_signature() -> tuple[None, str]:
+    return _procedure(
+        "signed artifacts, tamper/revoke/downgrade and key ceremony "
+        "recovery require the real release trust chain (ir #54)"
+    )
+
+
+def _check_publisher_receipt() -> tuple[None, str]:
+    return _procedure(
+        "live/sandbox publish receipt requires a real platform account "
+        "(ir #47)"
+    )
+
+
 CHECK_REGISTRY: dict[str, CheckFn] = {
     "docker": check_docker,
     "postgres": check_postgres,
@@ -166,6 +221,12 @@ CHECK_REGISTRY: dict[str, CheckFn] = {
     "certificate_validation": _check_certificate_validation,
     "worker_enrollment": _check_worker_enrollment,
     "health_core": _check_health_core,
+    "bootstrap_first_run": _check_bootstrap_first_run,
+    "backup_roundtrip": _check_backup_roundtrip,
+    "migration_artifacts": _check_migration_artifacts,
+    "update_interrupt": _check_update_interrupt,
+    "release_signature": _check_release_signature,
+    "publisher_receipt": _check_publisher_receipt,
 }
 
 
@@ -189,30 +250,27 @@ def load_scenarios() -> list[dict]:
 
 
 def _scenario_checks(scenario_id: str) -> list[str]:
+    """Scenario-specific check lists (Issue i.0.0.0.89).
+
+    Generic health probes (docker/core_api) must never stand in for a
+    scenario; unknown scenario ids resolve to an empty (fail-closed) list.
+    """
     mapping = {
-        "S01": ["docker", "core_api", "health_core"],
-        "S02": ["docker", "core_api", "node_connectivity",
-                "certificate_validation", "worker_enrollment"],
-        "S03": ["docker", "core_api", "comfyui_probe", "gpu"],
-        "S04": ["docker", "postgres_tcp", "redis_tcp", "core_api"],
-        "S05": ["docker", "core_api", "ollama_probe"],
-        "S06": ["docker", "core_api", "health_core", "monitoring"],
-        "S07": ["docker", "core_api", "tts", "publisher"],
-        "S08": ["docker", "core_api", "backup"],
+        "S01": ["bootstrap_first_run"],
+        "S02": ["node_connectivity", "certificate_validation", "worker_enrollment"],
+        "S03": ["comfyui_probe", "gpu"],
+        "S04": ["backup_roundtrip"],
+        "S05": ["migration_artifacts"],
+        "S06": ["update_interrupt"],
+        "S07": ["release_signature"],
+        "S08": ["publisher_receipt"],
     }
-    return mapping.get(scenario_id, ["docker", "core_api"])
+    return list(mapping.get(scenario_id, []))
 
 
 _SCENARIO_SUCCESS_POLICY: dict[str, set] = {
-    "S01": {CheckStatus.PASS},
-    "S02": {CheckStatus.PASS},
-    "S03": {CheckStatus.PASS, CheckStatus.WARNING},
-    "S04": {CheckStatus.PASS},
-    "S05": {CheckStatus.PASS},
-    "S06": {CheckStatus.PASS, CheckStatus.WARNING},
-    "S07": {CheckStatus.PASS, CheckStatus.WARNING, CheckStatus.SKIPPED},
-    "S08": {CheckStatus.PASS, CheckStatus.WARNING, CheckStatus.SKIPPED,
-            CheckStatus.NOT_CONFIGURED},
+    scenario_id: {CheckStatus.PASS}
+    for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08")
 }
 
 

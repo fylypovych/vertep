@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 
 def safe_extract(archive: Path, destination: Path, maximum_bytes: int) -> None:
     destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
     seen: set[str] = set()
     total = 0
     with tarfile.open(archive, "r:gz") as source:
@@ -26,7 +27,10 @@ def safe_extract(archive: Path, destination: Path, maximum_bytes: int) -> None:
                 raise ValueError("Uncompressed update exceeds configured size limit")
         for member in members:
             relative = PurePosixPath(member.name).as_posix().removeprefix("./")
-            target = destination / relative
+            target = root / relative
+            resolved = target.resolve()
+            if resolved != root and root not in resolved.parents:
+                raise ValueError(f"Unsafe archive member: {member.name}")
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
                 target.chmod(0o755)
