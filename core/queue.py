@@ -132,7 +132,9 @@ return cjson.encode(task)
         if self._redis:
             record = self._redis.hget("vertep:tasks:inflight", task_id)
             if record is not None:
-                return json.loads(record)
+                payload = json.loads(record)
+                task = payload.get("task") if isinstance(payload, dict) else None
+                return task if isinstance(task, dict) else payload
             for raw in self._redis.zrange("vertep:tasks:ready", 0, -1):
                 item = json.loads(raw)
                 if item.get("task_id") == task_id:

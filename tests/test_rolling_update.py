@@ -1,6 +1,18 @@
 from core.rolling_update import cancel_rollout, promote_rollout, reconcile_rollout, rollout_status, start_rollout
 
 
+def _inject_self_test(workers, node_id, *, checked_at, status="PASSED", role="gpu"):
+    node = next(item for item in rollout_status()["nodes"] if item["node_id"] == node_id)
+    request = node.get("self_test_request") or {}
+    test = {"status": status, "role": role, "checked_at": checked_at}
+    if request:
+        test.update({"nonce": request.get("nonce"),
+                     "operation_id": request.get("operation_id"),
+                     "target_version": request.get("target_version")})
+    workers[node_id]["self_test"] = test
+    return test
+
+
 def test_rollout_updates_one_node_at_a_time_and_rolls_back_on_failure(monkeypatch, tmp_path):
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
     workers = {
@@ -18,12 +30,10 @@ def test_rollout_updates_one_node_at_a_time_and_rolls_back_on_failure(monkeypatc
 
     # Use future timestamp so checked_at > phase_started_at when SELF_TESTING starts
     future_checked_at = "2099-12-31T23:59:59+00:00"
-    workers["gpu-1"].update({"version": "1.1.0", "status": "READY",
-                             "self_test": {"status": "PASSED", "checked_at": future_checked_at}})
-    # Advance gpu-1 through SELF_TESTING → READY (3+ reconciles after update)
-    reconcile_rollout(workers)  # DRAINING → UPDATING
+    workers["gpu-1"].update({"version": "1.1.0", "status": "READY"})
     reconcile_rollout(workers)  # UPDATING → SELF_TESTING (phase_started set)
-    reconcile_rollout(workers)  # SELF_TESTING → READY (checked_at > phase_started)
+    _inject_self_test(workers, "gpu-1", checked_at=future_checked_at)
+    reconcile_rollout(workers)  # SELF_TESTING → READY (bound fresh test)
     # Now advance to next node (gpu-2)
     reconcile_rollout(workers)  # PENDING → DRAINING
     reconcile_rollout(workers)  # DRAINING → UPDATING (desired_state set)
@@ -34,8 +44,8 @@ def test_rollout_updates_one_node_at_a_time_and_rolls_back_on_failure(monkeypatc
     assert state["state"] == "ROLLING_BACK"
     assert state["nodes"][1]["phase"] == "FAILED"
     assert workers["gpu-1"]["desired_state"] == "ROLLBACK"
-    workers["gpu-1"].update({"version": "1.0.0", "status": "READY",
-                              "self_test": {"status": "PASSED", "checked_at": future_checked_at}})
+    workers["gpu-1"].update({"version": "1.0.0", "status": "READY"})
+    _inject_self_test(workers, "gpu-1", checked_at=future_checked_at)
     assert reconcile_rollout(workers)["state"] == "ROLLED_BACK"
 
 
@@ -60,8 +70,8 @@ def test_canary_waits_for_explicit_promotion(monkeypatch, tmp_path):
     
     # Use future timestamp so checked_at > phase_started_at
     future_checked_at = "2099-12-31T23:59:59+00:00"
-    workers["gpu-2"].update({"version": "1.1.0", "status": "READY",
-                              "self_test": {"status": "PASSED", "checked_at": future_checked_at}})
+    workers["gpu-2"].update({"version": "1.1.0", "status": "READY"})
+    _inject_self_test(workers, "gpu-2", checked_at=future_checked_at)
     reconcile_rollout(workers)  # SELF_TESTING -> READY
     assert reconcile_rollout(workers)["state"] == "AWAITING_PROMOTION"
     assert "desired_state" not in workers["gpu-1"]
@@ -100,10 +110,7 @@ def test_stale_self_test_does_not_approve_node(monkeypatch, tmp_path):
     assert gpu1_node["phase"] == "SELF_TESTING"
     phase_started = gpu1_node["phase_started_at"]
     # Inject a PASSED test with checked_at BEFORE phase_started (stale)
-    workers["gpu-1"]["self_test"] = {
-        "status": "PASSED", "role": "gpu",
-        "checked_at": "2000-01-01T00:00:00+00:00",  # way before phase_started
-    }
+    _inject_self_test(workers, "gpu-1", checked_at="2000-01-01T00:00:00+00:00")
     reconcile_rollout(workers)
     status = rollout_status()
     gpu1_node = next(n for n in status["nodes"] if n["node_id"] == "gpu-1")
@@ -125,10 +132,7 @@ def test_fresh_self_test_approves_node(monkeypatch, tmp_path):
     status = rollout_status()
     gpu1_node = next(n for n in status["nodes"] if n["node_id"] == "gpu-1")
     # Inject a PASSED test with checked_at AFTER phase_started (fresh)
-    workers["gpu-1"]["self_test"] = {
-        "status": "PASSED", "role": "gpu",
-        "checked_at": "2099-12-31T23:59:59+00:00",
-    }
+    _inject_self_test(workers, "gpu-1", checked_at="2099-12-31T23:59:59+00:00")
     reconcile_rollout(workers)
     status = rollout_status()
     gpu1_node = next(n for n in status["nodes"] if n["node_id"] == "gpu-1")

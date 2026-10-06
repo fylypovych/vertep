@@ -450,7 +450,8 @@ async def _watchdog() -> None:
 
 
 def _json_error(detail: str, status: int, **extra) -> Response:
-    body = {"detail": detail, **extra}
+    from core.logging_config import secret_redact
+    body = {"detail": secret_redact(detail), **extra}
     return Response(content=json.dumps(body, ensure_ascii=False), status_code=status,
                     media_type="application/json")
 
@@ -617,6 +618,8 @@ def _format_operation(operation: dict) -> str:
     progress = operation.get("progress", 0)
     phase = operation.get("current_phase") or "—"
     error = operation.get("error")
+    # Redact secrets from error before formatting
+    error = _redact_secrets(error) if error else None
     lines = [
         f"Операція {op_type} (#{op_id})",
         f"Статус: {status} · прогрес {progress}% · фаза: {phase}",

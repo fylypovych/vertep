@@ -498,7 +498,11 @@ def test_wait_for_drain_polls_readiness(tmp_path, monkeypatch):
         return {"ready": False, "workers_drained": 0}
     monkeypatch.setattr(agent, "core_json", fake_core_json)
     state = {"state": "RUNNING", "phase": "CHECKING", "log": []}
-    agent.wait_for_drain(tmp_path, state)
+
+    class Lease:
+        def assert_current(self):
+            return None
+    agent.wait_for_drain(tmp_path, state, Lease())
     assert call_count[0] >= 3
     assert state["readiness"]["ready"] is True
 
@@ -511,8 +515,69 @@ def test_wait_for_drain_timeout_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("UPDATE_DRAIN_POLL_SECONDS", "0.01")
     monkeypatch.setattr(agent, "core_json", lambda path: {"ready": False})
     state = {"state": "RUNNING", "phase": "CHECKING", "log": []}
+
+    class Lease:
+        def assert_current(self):
+            return None
     with pytest.raises(RuntimeError, match="Timed out"):
-        agent.wait_for_drain(tmp_path, state)
+        agent.wait_for_drain(tmp_path, state, Lease())
+
+
+def test_wait_for_drain_blocks_on_cancel_fence(tmp_path, monkeypatch):
+    """wait_for_drain refuses to continue once a cancel fence appears, before polling CORE."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_DRAIN_TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("UPDATE_DRAIN_POLL_SECONDS", "0.01")
+    (tmp_path / "cancel-fence.json").write_text(
+        json.dumps({"operation_id": "a" * 32}), encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(agent, "core_json", lambda path: calls.append(path) or {"ready": True})
+
+    class Lease:
+        def assert_current(self):
+            return None
+    state = {"state": "RUNNING", "phase": "CHECKING", "log": []}
+    with pytest.raises(RuntimeError, match="Mutation blocked"):
+        agent.wait_for_drain(tmp_path, state, Lease())
+    assert not calls
+
+
+def test_run_fenced_aborts_on_fence_during_apply(tmp_path, monkeypatch):
+    """A cancel fence appearing mid-apply stops run_fenced instead of letting the command finish."""
+    import time as _time
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.01")
+    fence = tmp_path / "cancel-fence.json"
+
+    def slow_run(command, root, extra_env=None):
+        fence.write_text(json.dumps({"operation_id": "a" * 32}), encoding="utf-8")
+        _time.sleep(0.3)
+        return "applied"
+    monkeypatch.setattr(agent, "run", slow_run)
+
+    class Lease:
+        def assert_current(self):
+            return None
+    with pytest.raises(RuntimeError, match="Mutation blocked"):
+        agent.run_fenced(["apply"], tmp_path, tmp_path, Lease())
+
+
+def test_recover_blocks_on_cancel_fence(tmp_path, monkeypatch):
+    """Recovery after an interrupted update must not roll back through a cancel fence."""
+    agent = _load_agent()
+    (tmp_path / "status.json").write_text(
+        json.dumps({"state": "RUNNING", "phase": "UPDATING",
+                    "request_id": "a" * 32, "log": []}), encoding="utf-8")
+    (tmp_path / "cancel-fence.json").write_text(
+        json.dumps({"operation_id": "a" * 32}), encoding="utf-8")
+    attempts: list = []
+    monkeypatch.setattr(agent, "_attempt_rollback",
+                        lambda *args, **kwargs: attempts.append(args))
+    with pytest.raises(RuntimeError, match="Mutation blocked"):
+        agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
+    assert not attempts
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert status["phase"] == "RECOVERING"
 
 
 # ── Fault-injection: signed immutable compatibility ────────────────────────

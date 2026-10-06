@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..real_tests.runner import RealTestRunner
-from ..real_tests.scenarios import available_checks, load_scenarios
+from ..real_tests.scenarios import available_checks, find_scenario, load_scenarios
 from ..real_tests.storage import get_test_run, list_test_runs
 from ..system_state import operation_allowed
 from ..version import application_version
@@ -20,6 +20,19 @@ from ..version import application_version
 
 router = APIRouter()
 _runner: RealTestRunner | None = None
+
+# Checks that mutate state on the deployment and therefore require an explicit
+# pre-execution confirmation before the Web UI may launch them (i.0.0.0.96).
+_DESTRUCTIVE_CHECKS = frozenset({
+    "bootstrap_install",
+    "backup_round_trip",
+    "backup_restore",
+    "migration",
+    "update_interruption",
+    "release_trust",
+    "publisher_receipt",
+    "rollback",
+})
 
 
 class RunRequest(BaseModel):
@@ -96,9 +109,31 @@ def list_runs(limit: int = 50):
         {"test_run_id": r.test_run_id, "rt_id": r.rt_id, "rt_issue_number": r.rt_issue_number,
          "version": r.version, "commit_sha": r.commit_sha, "status": r.status.value,
          "final_result": r.final_result, "started_at": r.started_at,
-         "finished_at": r.finished_at}
+         "finished_at": r.finished_at, "initiator": r.initiator}
         for r in runs
     ]}
+
+
+@router.get("/api/real-tests/scenarios/{rt_id}/prerequisites")
+def scenario_prerequisites(rt_id: str):
+    """i.0.0.0.96: describe what a run will actually execute before the user
+    confirms it, so destructive checks are visible up front."""
+    _check_operation()
+    from ..real_tests.scenarios import find_scenario
+    scenario = find_scenario(rt_id=rt_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="Unknown rt_id")
+    checks = scenario.get("checks", [])
+    destructive = [c for c in checks if c in _DESTRUCTIVE_CHECKS]
+    return {
+        "rt_id": rt_id,
+        "name": scenario.get("name", ""),
+        "description": scenario.get("description", ""),
+        "checks": checks,
+        "mandatory_checks": checks,
+        "destructive_checks": destructive,
+        "requires_confirmation": bool(destructive),
+    }
 
 
 @router.get("/api/real-tests/runs/{test_run_id}")

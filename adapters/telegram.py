@@ -8,7 +8,7 @@ from typing import Callable
 
 import httpx
 
-from core.first_run import config_root
+from core.logging_config import secret_redact as _redact
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class TelegramAdapter:
     def send_message(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict:
         if not self.configured():
             return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+        text = _redact(text)
         last_error = None
         for attempt in range(int(os.getenv("TELEGRAM_RETRIES", "3"))):
             try:
@@ -133,7 +134,7 @@ class TelegramAdapter:
             return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
         with open(video_path, "rb") as video_file:
             response = httpx.post(f"{self.base_url}/sendVideo",
-                                  data={"chat_id": chat_id, "caption": caption[:1024]},
+                                  data={"chat_id": chat_id, "caption": _redact(caption[:1024])},
                                   files={"video": video_file}, timeout=120)
         response.raise_for_status()
         return response.json()
@@ -142,7 +143,7 @@ class TelegramAdapter:
                    reply_markup: dict | None = None) -> dict:
         if not self.configured():
             return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
-        data = {"chat_id": chat_id, "caption": caption[:1024]}
+        data = {"chat_id": chat_id, "caption": _redact(caption[:1024])}
         if reply_markup:
             data["reply_markup"] = reply_markup
         with open(photo_path, "rb") as photo_file:

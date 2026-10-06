@@ -32,6 +32,7 @@ from .storage import (
     record_github_report,
     update_test_run,
 )
+from core.logging_config import secret_redact as _log_secret_redact
 
 
 def _git_commit() -> str:
@@ -297,10 +298,53 @@ _JSON_SECRET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_SECRET_KEY_RE = re.compile(
+    r"(?ix)"
+    r"(?P<prefix>"
+    r"(?:[A-Za-z_][A-Za-z0-9_\-]*|aws_[A-Za-z0-9_\-]*|github_pat|ghp_[A-Za-z0-9_\-]*|gho_[A-Za-z0-9_\-]*)"
+    r"\s*[:=]\s*"
+    r")"
+    r"(?P<value>"
+    r"(?:\"[^\"\\]*(?:\\.[^\"\\]*)*\"|'[^'\\]*(?:\\.[^'\\]*)*'|[A-Za-z0-9_\-\./:=+]{8,})"
+    r")"
+)
+
 
 def _redact_secrets(text: str) -> str:
-    text = _SECRET_PATTERN.sub(r"\1 = ***REDACTED***", text)
-    text = _JSON_SECRET_PATTERN.sub(r'"\1": "***REDACTED***"', text)
+    """Redact long-lived secret-shaped values while leaving short benign values intact."""
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        text = str(text)
+    if not text:
+        return text
+
+    text = re.sub(r"(?i)(Authorization\s*:\s*Basic\s+)([A-Za-z0-9._\-+/=]{8,})",
+                  r"\1***REDACTED***", text)
+
+    def replace_secret(match: re.Match) -> str:
+        value = match.group("value").strip("\"'")
+        if len(value) < 8:
+            return match.group(0)
+        return f"{match.group('prefix')}***REDACTED***"
+
+    text = _SECRET_KEY_RE.sub(replace_secret, text)
+
+    def replace_json_secret(match: re.Match) -> str:
+        key = match.group("key")
+        value = match.group("value").strip("\"'")
+        if len(value) < 8:
+            return match.group(0)
+        return f'{key}: "***REDACTED***"' if match.group("quote") == '"' else f"{key}: '***REDACTED***'"
+
+    text = re.sub(
+        r"(?ix)(?P<prefix>(?:\"|')?(?P<key>api[_-]?key|apikey|token|secret|password|passwd|pwd|private[_-]?key|aws_[a-z_]*|access[_-]?key|client[_-]?secret|session[_-]?secret|jwt[_-]?secret|encryption[_-]?key|internal[_-]?api[_-]?key|authorization|credentials?)(?:\"|')?\s*:\s*)(?P<quote>\"|')?(?P<value>[A-Za-z0-9_\-\./:=+]{8,})(?P=quote)",
+        replace_json_secret,
+        text,
+    )
+
+    text = re.sub(r'(?i)(?P<key>token|password|secret|api[_-]?key|access[_-]?key|client[_-]?secret|credentials?|authorization|session[_-]?secret|jwt[_-]?secret|encryption[_-]?key|internal[_-]?api[_-]?key)\s*[:=]\s*\*\*\*REDACTED\*\*\*',
+                  r'\g<key> = ***REDACTED***', text)
     return text
 
 

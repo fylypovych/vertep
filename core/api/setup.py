@@ -65,32 +65,37 @@ def first_run_status():
 
 @router.get("/api/setup/health")
 def first_run_health():
-    checks = {"core": "OK", "api": "OK", "web_ui": "OK"}
-    try:
-        with socket.create_connection((os.getenv("POSTGRES_HOST", "postgres"), 5432), timeout=1):
-            checks["postgresql"] = "OK"
-    except OSError as e:
-        checks["postgresql"] = f"OFFLINE: {e}"
-    # Redis check is role-aware: only required for core role
-    if task_queue.backend == "redis":
-        checks["redis"] = "OK"
-    else:
-        checks["redis"] = "OPTIONAL"
-    checks["worker"] = "OK" if any(item.get("status") not in {"OFFLINE", "ERROR"}
-                                      for item in store.workers.values()) else "OPTIONAL"
-    hardware = setup_status()["hardware"]
-    gpu = hardware.get("gpu") or {}
-    checks["gpu"] = "OPTIONAL" if gpu.get("vendor") in {None, "none"} else (
-        "OK" if gpu.get("driver") not in {None, "unavailable"} else "DRIVER_REQUIRED")
-    checks["cuda"] = "OPTIONAL" if gpu.get("vendor") != "nvidia" else (
-        "OK" if gpu.get("cuda") not in {None, "unavailable"} else "UNAVAILABLE")
-    # Ollama is CONFIGURED only if URL is set, otherwise OPTIONAL
-    checks["ollama"] = "CONFIGURED" if os.getenv("OLLAMA_URL") else "OPTIONAL"
-    checks["docker"] = "OK" if hardware.get("docker_version") else "UNKNOWN"
-    # ready is true when no OFFLINE/UNAVAILABLE checks; DRIVER_REQUIRED is not blocking for setup
-    non_blocking = {"OPTIONAL", "CONFIGURED", "OK", "DRIVER_REQUIRED", "UNKNOWN"}
-    ready = all(value in non_blocking for value in checks.values())
-    return {"ready": ready, "checks": checks}
+    """Role-aware readiness report for the First Run Wizard.
+
+    Delegates to the shared ``health_checks`` library instead of re-checking
+    services inline.  Redis is probed with a real ``PING`` (not inferred from
+    the configured backend), Ollama is probed over HTTP, and Docker is probed
+    with ``docker info``.  A check that is not applicable for the selected role
+    (e.g. GPU on a core node) is reported as ``OPTIONAL`` and never blocks the
+    wizard; only an explicit failure blocks the "Завершити" button.
+    """
+    from ..health_checks import run_checks, health_status
+
+    role = os.getenv("NODE_ROLE", "core")
+    raw = run_checks(role)
+    checks: dict[str, str] = {}
+    for name, value in raw.items():
+        if name in {"role", "checked_at"}:
+            continue
+        if isinstance(value, tuple):
+            ok, message = value[0], value[1]
+            if ok is True:
+                checks[name] = "OK"
+            elif ok is False:
+                checks[name] = f"OFFLINE: {message}"
+            else:
+                checks[name] = "OPTIONAL"
+        else:
+            checks[name] = str(value)
+    blocking = {"OFFLINE", "UNAVAILABLE", "FAIL", "DRIVER_REQUIRED"}
+    ready = all(not str(value).startswith(tuple(blocking)) for value in checks.values())
+    return {"ready": ready, "checks": checks,
+            "status": health_status(raw), "role": role}
 
 
 @router.post("/api/setup/complete")

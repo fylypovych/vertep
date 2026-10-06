@@ -48,13 +48,26 @@ def _spawn_redis(directory: Path, binary: str, appendonly: str = "no") -> tuple:
         if _ping(url):
             return proc, url
         time.sleep(0.05)
-    _shutdown(proc)
+    _shutdown(proc, url)
     pytest.fail(f"spawned redis-server did not become ready on port {port}")
 
 
-def _shutdown(proc: subprocess.Popen) -> None:
+def _shutdown(proc: subprocess.Popen, url: str | None = None) -> None:
     if proc.poll() is not None:
         return
+    if url:
+        try:
+            import redis
+            redis.Redis.from_url(url, socket_connect_timeout=2).execute_command(
+                "SHUTDOWN", "NOSAVE"
+            )
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
     proc.terminate()
     try:
         proc.wait(timeout=10)
@@ -83,7 +96,7 @@ def redis_url(tmp_path_factory):
     directory = tmp_path_factory.mktemp("redis-contract")
     proc, url = _spawn_redis(directory, binary)
     yield url
-    _shutdown(proc)
+    _shutdown(proc, url)
 
 
 @pytest.fixture
@@ -128,8 +141,8 @@ def test_lease_expiry_requeues(redis_queue):
     queue = redis_queue
     task = queue.enqueue({"job_id": "leased", "priority": 5})
     assert queue.claim(lease_seconds=1)["task_id"] == task["task_id"]
-    assert queue.requeue_expired(now=time.time() + 2) == []
-    expired = queue.requeue_expired(now=time.time() + 1)
+    assert queue.requeue_expired(now=time.time()) == []
+    expired = queue.requeue_expired(now=time.time() + 5)
     assert [item["task_id"] for item in expired] == [task["task_id"]]
     assert queue.inflight_depth() == 0
     assert queue.depth() == 1
@@ -155,7 +168,10 @@ def test_discard_removes_ready_task(redis_queue):
 def test_dead_letter_roundtrip(redis_queue):
     queue = redis_queue
     task = queue.enqueue({"job_id": "failed", "scene_id": "scene-001", "priority": 5})
-    queue.dead_letter(task, "GPU error")
+    claimed = queue.claim(lease_seconds=30)
+    assert claimed["task_id"] == task["task_id"]
+    queue.ack(claimed["task_id"])
+    queue.dead_letter(claimed, "GPU error")
     assert queue.depth() == 0
     assert queue.dead_letters()[0]["error"] == "GPU error"
     retried = queue.requeue_dead_letter(task["task_id"])
@@ -246,7 +262,7 @@ def test_aof_survives_redis_restart(tmp_path, monkeypatch):
     queue = TaskQueue()
     assert queue.backend == "redis"
     task = queue.enqueue({"job_id": "aof-survives", "priority": 5})
-    _shutdown(proc)
+    _shutdown(proc, url)
 
     proc2, url2 = _spawn_redis(directory, binary, appendonly="yes")
     monkeypatch.setenv("REDIS_URL", url2)
@@ -257,7 +273,7 @@ def test_aof_survives_redis_restart(tmp_path, monkeypatch):
         assert restarted.ready_tasks()[0]["task_id"] == task["task_id"]
     finally:
         _flush(restarted)
-        _shutdown(proc2)
+        _shutdown(proc2, url2)
 
 
 def test_rdb_snapshot_survives_redis_restart(tmp_path, monkeypatch):
@@ -270,7 +286,7 @@ def test_rdb_snapshot_survives_redis_restart(tmp_path, monkeypatch):
     assert queue.backend == "redis"
     task = queue.enqueue({"job_id": "rdb-survives", "priority": 5})
     queue._redis.save()
-    _shutdown(proc)
+    _shutdown(proc, url)
 
     proc2, url2 = _spawn_redis(directory, binary)
     monkeypatch.setenv("REDIS_URL", url2)
@@ -281,7 +297,7 @@ def test_rdb_snapshot_survives_redis_restart(tmp_path, monkeypatch):
         assert restarted.ready_tasks()[0]["task_id"] == task["task_id"]
     finally:
         _flush(restarted)
-        _shutdown(proc2)
+        _shutdown(proc2, url2)
 
 
 def test_wiped_data_directory_starts_empty(tmp_path, monkeypatch):
@@ -292,7 +308,7 @@ def test_wiped_data_directory_starts_empty(tmp_path, monkeypatch):
     monkeypatch.setenv("REDIS_URL", url)
     queue = TaskQueue()
     queue.enqueue({"job_id": "wiped", "priority": 5})
-    _shutdown(proc)
+    _shutdown(proc, url)
     for path in directory.iterdir():
         path.unlink()
 
@@ -304,4 +320,4 @@ def test_wiped_data_directory_starts_empty(tmp_path, monkeypatch):
         assert restarted.depth() == 0
     finally:
         _flush(restarted)
-        _shutdown(proc2)
+        _shutdown(proc2, url2)

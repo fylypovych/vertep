@@ -147,7 +147,7 @@ export class LogsComponent implements OnInit {
         this.entries.set(entries);
         this.hasMore.set(entries.length >= this.limit);
       },
-      error: (error) => this.error.set(error.message || 'Не вдалося завантажити логи'),
+      error: (error) => this.error.set(this.errorMessage(error, 'Не вдалося завантажити логи')),
     });
   }
 
@@ -165,8 +165,36 @@ export class LogsComponent implements OnInit {
         this.entries.set([...current, ...appended]);
         this.hasMore.set(older.length >= this.limit && appended.length > 0);
       },
-      error: (error) => this.error.set(error.message || 'Не вдалося завантажити старіші логи'),
+      error: (error) => this.error.set(this.errorMessage(error, 'Не вдалося завантажити старіші логи')),
     });
+  }
+
+  private errorMessage(error: unknown, fallback: string): string {
+    if (typeof error === 'string') {
+      return error || fallback;
+    }
+
+    const payload = (error as { error?: unknown })?.error;
+    if (typeof payload === 'string' && payload.trim()) {
+      return payload;
+    }
+    if (payload && typeof payload === 'object') {
+      const detail = (payload as { detail?: unknown }).detail;
+      if (typeof detail === 'string' && detail.trim()) {
+        return detail;
+      }
+      const message = (payload as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim()) {
+        return message;
+      }
+    }
+
+    const message = (error as { message?: unknown })?.message;
+    if (typeof message === 'string' && message.trim()) {
+      return message;
+    }
+
+    return fallback;
   }
 
   private query(): { limit: number; level?: string; job_id?: string; node_name?: string } {

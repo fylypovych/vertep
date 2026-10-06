@@ -299,7 +299,7 @@ def fail_operation(operation_id: str, error: str) -> dict[str, Any]:
             raise KeyError(f"Operation not found: {operation_id}")
         operation["status"] = OperationStatus.FAILED.value
         operation["finished_at"] = _now()
-        operation["error"] = str(error)[:2000]
+        operation["error"] = _redact(str(error)[:2000])  # Redact secrets in error
         operations[operation_id] = operation
         _write_all(operations)
     _sync_to_database(operation)
@@ -368,7 +368,8 @@ def cancel_operation(operation_id: str, reason: str | None = None) -> dict[str, 
             return operation
         operation["status"] = OperationStatus.CANCELLED.value
         operation["finished_at"] = _now()
-        operation["error"] = (reason or "cancelled by user")[:2000]
+        operation["error"] = (_redact(reason or "cancelled by user")[:2000]  # Redact secrets
+        )
         operations[operation_id] = operation
         _write_all(operations)
     _sync_to_database(operation)

@@ -29,7 +29,7 @@ from .models import CheckStatus, TestRun
 from .storage import audit_entry, record_github_report, update_test_run
 
 _REPORT_MARKER = "REAL-TEST-RUN:"
-_IDEMPOTENCY_RE = re.compile(rf"{_REPORT_MARKER}([0-9a-f]{{32}})")
+_IDEMPOTENCY_RE = re.compile(rf"{re.escape(_REPORT_MARKER)}\s*([0-9a-f]{{32}})")
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
@@ -149,10 +149,30 @@ def _post_comment(issue_number: int, body: str) -> str:
 
 
 def _get_comments(issue_number: int) -> list[dict]:
-    """Fetch all comments for a GitHub issue."""
+    """Fetch all comments for a GitHub issue, paginating until exhausted.
+
+    GitHub caps per_page at 100 and may return a Link header for the next
+    page; a single request can silently miss a marker that lives beyond
+    page 1, breaking idempotency checks.
+    """
     repo = _repo()
-    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments?per_page=100"
-    return _api_request("GET", url)
+    all_comments: list[dict] = []
+    page = 1
+    while True:
+        url = (f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
+               f"?per_page=100&page={page}")
+        response = _api_request("GET", url)
+        if not isinstance(response, list) or not response:
+            break
+        all_comments.extend(response)
+        # GitHub returns fewer than per_page on the last page.
+        if len(response) < 100:
+            break
+        page += 1
+        # Safety cap to avoid runaway loops if the API misbehaves.
+        if page > 10:
+            break
+    return all_comments
 
 
 def _close_issue(issue_number: int) -> None:

@@ -37,6 +37,41 @@ def test_json_quoted_key_value_is_redacted():
     assert '"api_key": [REDACTED]' in redacted
 
 
+def test_json_non_string_key_value_is_redacted():
+    """Issue #84: JSON payloads with non-string values (numbers) must be redacted."""
+    payload = json.dumps({"token": 12345, "api_key": 98765, "private_key": "sk-abc", "ssh_private_key": "sk-xyz", "aws_access_key": "AKIAIOSFODNN7EXAMPLE", "access_key": "ASIAZSAZSAZSA", "credentials": "secret-creds"})
+    redacted = secret_redact(payload)
+    for leaked in ("12345", "98765", "sk-abc", "sk-xyz", "AKIAIOSFODNN7EXAMPLE", "ASIAZSAZSAZSA", "secret-creds"):
+        assert leaked not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_passphrase_is_redacted():
+    """Issue #84: SECRET_STORE_PASSPHRASE must be redacted."""
+    text = "SECRET_STORE_PASSPHRASE=hunter2"
+    redacted = secret_redact(text)
+    assert "hunter2" not in redacted
+    assert redacted == "SECRET_STORE_PASSPHRASE=[REDACTED]"
+
+
+def test_basic_auth_full_masking():
+    """Issue #84: Authorization Basic <base64> full masking - redact the base64 part too."""
+    text = 'Authorization: Basic c2xjc3R1cDE6c2xjc3R1cDE='
+    redacted = secret_redact(text)
+    assert "Basic" in redacted
+    assert "c2xjc3R1cDE=" not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_escaped_json_quotes_not_leak():
+    """Issue #84: escaped JSON quotes must not leak values."""
+    text = '{\\\"token\\\": \\\"abc123\\\", \\\"private_key\\\": \\\"sk-abc\\\"}'
+    redacted = secret_redact(text)
+    assert "abc123" not in redacted
+    assert "sk-abc" not in redacted
+    assert "[REDACTED]" in redacted
+
+
 def test_nested_json_payload_is_redacted():
     payload = json.dumps({"auth": {"refresh_token": "r1tok", "session_id": "sess-1"},
                           "metadata": {"authorization": "Bearer xyz-token-123"}})

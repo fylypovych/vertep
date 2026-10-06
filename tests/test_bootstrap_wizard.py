@@ -223,9 +223,18 @@ class TestSetupAPI:
 
     def test_health_check_structure(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+        monkeypatch.setenv("NODE_ROLE", "core")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks",
+                            lambda role: {"role": role, "checked_at": "x",
+                                          "docker": (True, "ok")})
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
         from core.api.setup import first_run_health
         result = first_run_health()
         assert "ready" in result and "checks" in result
+        assert result["checks"]["docker"] == "OK"
+        assert result["status"] == "HEALTHY"
+        assert result["role"] == "core"
 
     def test_setup_status_when_not_configured(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
@@ -235,22 +244,141 @@ class TestSetupAPI:
         assert result["configured"] is False
         assert "roles" in result
 
+    def test_server_reads_ai_backend_field(self):
+        """i.0.0.0.98: the complete endpoint must read ``ai_backend``."""
+        source = (ROOT / "core" / "api" / "setup.py").read_text(encoding="utf-8")
+        assert 'payload.get("ai_backend", "skip")' in source
 
-class TestHealthCheckAccuracy:
-    def test_run_checks_covers_all_roles(self):
-        from core.health_checks import run_checks
-        for role in ("core", "gpu", "text", "voice", "publisher", "backup", "monitoring"):
-            with patch.dict(os.environ, {"NODE_ROLE": role}, clear=False):
-                checks = run_checks(role)
-                assert checks["role"] == role
+    def test_health_uses_shared_health_checks_for_redis_ollama_docker(self, monkeypatch):
+        """i.0.0.0.98: setup health must actually probe Redis/Ollama/Docker,
+        not infer them from config or a static hardware string."""
+        monkeypatch.setenv("NODE_ROLE", "core")
+        monkeypatch.setenv("REDIS_URL", "redis://probe:6379")
+        monkeypatch.setenv("OLLAMA_URL", "http://ollama-probe:11434")
+        calls = []
+        import core.health_checks as hc
 
-    def test_health_status_healthy(self):
-        from core.health_checks import health_status
-        assert health_status({"docker": (True, "ok")}) == "HEALTHY"
+        def fake_run_checks(role):
+            calls.append(role)
+            return {
+                "role": role,
+                "checked_at": "2026-01-01T00:00:00+00:00",
+                "docker": (True, "ok"),
+                "postgres": (True, "ok"),
+                "redis": (True, "ok"),
+                "core_api": (True, "local"),
+                "ollama": (True, "ok"),
+                "monitoring": (None, "not-applicable"),
+            }
 
-    def test_health_status_unhealthy(self):
-        from core.health_checks import health_status
-        assert health_status({"docker": (False, "err")}) == "UNHEALTHY"
+        monkeypatch.setattr(hc, "run_checks", fake_run_checks)
+        monkeypatch.setattr(hc, "health_status", lambda checks: "HEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert calls == ["core"]
+        assert result["checks"]["redis"] == "OK"
+        assert result["checks"]["ollama"] == "OK"
+        assert result["checks"]["docker"] == "OK"
+        assert result["checks"]["monitoring"] == "OPTIONAL"
+        assert result["status"] == "HEALTHY"
+        assert result["role"] == "core"
+
+    def test_health_blocks_on_real_failure(self, monkeypatch):
+        """i.0.0.0.98: a genuine OFFLINE/UNAVAILABLE check blocks the ready gate."""
+        monkeypatch.setenv("NODE_ROLE", "core")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks", lambda role: {
+            "role": role, "checked_at": "x",
+            "docker": (True, "ok"),
+            "postgres": (False, "connection refused"),
+        })
+        monkeypatch.setattr(hc, "health_status", lambda c: "UNHEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert result["ready"] is False
+        assert result["checks"]["postgres"].startswith("OFFLINE")
+
+    def test_health_is_role_aware(self, monkeypatch):
+        """i.0.0.0.98: a GPU node must not be asked to probe PostgreSQL/Redis."""
+        monkeypatch.setenv("NODE_ROLE", "gpu")
+        seen = []
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks",
+                            lambda role: seen.append(role) or {
+                                "role": role, "checked_at": "x",
+                                "docker": (True, "ok"),
+                                "gpu": (None, "not-applicable"),
+                                "cuda": (None, "not-applicable"),
+                                "comfyui": (None, "not-applicable"),
+                            })
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
+        from core.api.setup import first_run_health
+        first_run_health()
+        assert seen == ["gpu"]
+
+
+class TestSetupBackendFieldAlignment:
+    """i.0.0.0.98: the Angular wizard must send ``ai_backend`` so the server
+    actually persists the backend the user selected instead of defaulting to
+    ``skip``."""
+
+    def test_wizard_sends_ai_backend_not_backend(self):
+        """i.0.0.0.98: the Angular payload key for the AI backend is
+        ``ai_backend`` (the server-side field name), not a bare ``backend``
+        key that the server would otherwise ignore."""
+        source = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.ts").read_text(
+            encoding="utf-8")
+        complete_call = re.search(
+            r"const p: Record<string, unknown> = \{[^}]*\}", source, re.DOTALL)
+        assert complete_call is not None
+        payload = complete_call.group(0)
+        assert "ai_backend:" in payload
+        # The backend *value* source is backend_selected; the bare key must
+        # not be used, only backend_model / backend_api_key.
+        assert re.search(r"\bbackend:\s", payload) is None
+
+    def test_server_reads_ai_backend(self):
+        source = (ROOT / "core" / "api" / "setup.py").read_text(encoding="utf-8")
+        assert 'payload.get("ai_backend", "skip")' in source
+
+    def test_server_reads_ai_backend_field(self):
+        """i.0.0.0.98: the complete endpoint reads ``ai_backend``."""
+        source = (ROOT / "core" / "api" / "setup.py").read_text(encoding="utf-8")
+        assert 'payload.get("ai_backend", "skip")' in source
+
+    def test_backend_selection_is_not_silently_dropped(self, monkeypatch):
+        """i.0.0.0.98: the wizard must send ``ai_backend`` and the server must
+        actually persist the backend the user selected instead of falling
+        back to ``skip``."""
+        import asyncio
+        import core.app as core_app
+        import core.api.setup as setup_mod
+
+        captured = {}
+
+        async def fake_validate(backend, url, model, api_key):
+            captured["backend"] = backend
+
+        def fake_complete(*args, **kwargs):
+            captured["complete_backend"] = args[4]
+            return {"configured": True}
+
+        class Request:
+            base_url = "https://vertep.example/"
+
+            async def json(self):
+                return {"node_role": "core", "installation_name": "Vertep",
+                        "username": "admin", "password": "a-secure-password",
+                        "password_confirmation": "a-secure-password",
+                        "ai_backend": "ollama"}
+
+        monkeypatch.setattr(setup_mod, "_validate_ai_backend", fake_validate)
+        monkeypatch.setattr(setup_mod, "complete_setup", fake_complete)
+        monkeypatch.setattr(setup_mod, "create_registration_token",
+                            lambda *a, **k: {"token": "one-time"})
+        asyncio.run(core_app.first_run_complete(Request()))
+        assert captured["backend"] == "ollama"
+        assert captured["complete_backend"] == "ollama"
 
 
 class TestSetupWizardHTML:

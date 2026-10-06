@@ -855,5 +855,111 @@ class TestIssue95:
         assert reporter.can_close_issue(run) is True
 
 
+# ---------------------------------------------------------------------------
+# Issue #96 — GitHub reporting pagination & exactly-once
+# ---------------------------------------------------------------------------
+
+class TestIssue96:
+    """Regression tests for i.0.0.0.96 (pagination, exactly-once reporting)."""
+
+    def test_get_comments_paginates_beyond_page_1(self, monkeypatch):
+        """_get_comments must follow pagination until the last page."""
+        from core.real_tests import github as gh_mod
+
+        page1 = [{"id": i, "body": f"comment {i}"} for i in range(100)]
+        page2 = [{"id": 100, "body": "marker on page 2"}]
+        calls = []
+
+        def fake_api(method, url, body=None, timeout=30):
+            calls.append(url)
+            # Match on the page= query parameter, not substrings of per_page=
+            if "page=2" in url:
+                return page2
+            return page1
+
+        monkeypatch.setattr(gh_mod, "_api_request", fake_api)
+        monkeypatch.setattr(gh_mod, "_repo", lambda: "fylypovych/vertep")
+        comments = gh_mod._get_comments(40)
+        assert len(comments) == 101
+        assert comments[-1]["body"] == "marker on page 2"
+        assert len(calls) >= 2
+
+    def test_get_comments_stops_on_short_page(self, monkeypatch):
+        """A page with <100 comments is the last page."""
+        from core.real_tests import github as gh_mod
+
+        page1 = [{"id": i, "body": f"c{i}"} for i in range(50)]
+        calls = []
+
+        def fake_api(method, url, body=None, timeout=30):
+            calls.append(url)
+            return page1
+
+        monkeypatch.setattr(gh_mod, "_api_request", fake_api)
+        monkeypatch.setattr(gh_mod, "_repo", lambda: "fylypovych/vertep")
+        comments = gh_mod._get_comments(40)
+        assert len(comments) == 50
+        assert len(calls) == 1
+
+    def test_already_reported_finds_marker_on_second_page(self, monkeypatch):
+        """_already_reported must scan all pages, not just the first."""
+        from core.real_tests import github as gh_mod
+
+        test_run_id = "a" * 32
+        page1 = [{"id": i, "body": f"other {i}"} for i in range(100)]
+        page2 = [{"id": 100, "body": f"REAL-TEST-RUN: {test_run_id} {test_run_id}"}]
+        calls = []
+
+        def fake_api(method, url, body=None, timeout=30):
+            calls.append(url)
+            if "page=2" in url:
+                return page2
+            return page1
+
+        monkeypatch.setattr(gh_mod, "_api_request", fake_api)
+        monkeypatch.setattr(gh_mod, "_repo", lambda: "fylypovych/vertep")
+        reporter = gh_mod.GitHubReporter()
+        assert reporter._already_reported(test_run_id, 40) is True
+        assert len(calls) >= 2
+
+    def test_concurrent_post_is_idempotent(self, monkeypatch):
+        """Two concurrent report() calls for the same run must not double-post."""
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_repo", lambda: "fylypovych/vertep")
+        monkeypatch.setattr(gh_mod, "audit_entry", lambda *a, **kw: None)
+
+        post_count = [0]
+
+        def fake_post(issue_number, body):
+            post_count[0] += 1
+            return f"comment-{post_count[0]}"
+
+        monkeypatch.setattr(gh_mod, "_post_comment", fake_post)
+        monkeypatch.setattr(gh_mod, "record_github_report",
+                            lambda *a, **kw: None)
+
+        run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                      commit_sha="a" * 40, final_result="PASS")
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+
+        reporter = gh_mod.GitHubReporter()
+        # First report: no existing marker → post
+        monkeypatch.setattr(gh_mod, "_get_comments", lambda n: [])
+        r1 = reporter.report(run)
+        assert r1["reported"] is True
+        assert post_count[0] == 1
+
+        # Second concurrent report: marker already present → skip
+        monkeypatch.setattr(gh_mod, "_get_comments",
+                            lambda n: [{"body": f"REAL-TEST-RUN: {run.test_run_id} {run.test_run_id}"}])
+        r2 = reporter.report(run)
+        assert r2["reported"] is True
+        assert post_count[0] == 1, "exactly-once: second concurrent post must be skipped"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

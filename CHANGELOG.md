@@ -43,6 +43,13 @@
   - `core/real_tests/github.py`, `core/real_tests/runner.py`: Independent deployment identity через `_deployment_sha()`/`_deployment_version()` (без VERSION/unknown fallback); full mandatory check set validation для auto-close в `can_close_issue()`.
   - `tests/test_real_tests.py`: 8 нових тестів для Issue #95 acceptance.
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.44
+- Виправлено ланцюжок редагування та логування секретів у `core/logging_config.py`, `core/app.py`, `core/operations.py` та `adapters/telegram.py`; додано acceptance-скрипт `tests/test_no_secrets_acceptance.py` для перевірки відсутності ключів у логах, API-відповідях і Telegram payload.
+- Оновлено real-test runner/issue gating у `core/real_tests/runner.py`, `core/real_tests/github.py` та `core/api/real_tests.py`; додано сценарії та історію запусків для UI/HTTP інтерфейсу.
+- Посилено семантику rolling update та черги в `scripts/update-agent.py`, `core/queue.py`, `tests/test_rolling_update.py`, `tests/test_rolling_update_issue86.py` та `tests/test_queue_redis_contract.py`.
+- Виправлено bootstrap wizard validation і security checks у `tests/test_bootstrap_wizard.py`, `tests/test_update_security.py` та `web-v2/src/app/setup/setup.component.ts`.
+- Додано Web UI для real tests через `web-v2/src/app/core/api/real-tests.api.ts` і `web-v2/src/app/real-tests/real-tests.component.ts`.
+
 ## Unreleased
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.41

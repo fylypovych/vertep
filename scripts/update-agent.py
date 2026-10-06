@@ -10,6 +10,7 @@ import re
 import ssl
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,6 +112,34 @@ def run(command: list[str], root: Path, extra_env: dict[str, str] | None = None)
     return (result.stdout + result.stderr).strip()
 
 
+def run_fenced(command: list[str], root: Path, state_dir: Path, lease,
+               extra_env: dict[str, str] | None = None) -> str:
+    """Run a host mutation while a watchdog keeps re-checking the fences.
+
+    A cancel fence or a lost lease can appear while the apply is already
+    running; the watchdog stops the agent at the first check that observes it
+    instead of letting the whole privileged command finish unquestioned.
+    """
+    outcome: dict = {}
+
+    def worker() -> None:
+        try:
+            outcome["output"] = run(command, root, extra_env=extra_env)
+        except BaseException as error:
+            outcome["error"] = error
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    interval = max(0.01, float(os.getenv("UPDATE_FENCE_CHECK_SECONDS", "5")))
+    while thread.is_alive():
+        thread.join(interval)
+        if thread.is_alive():
+            assert_mutation_allowed(state_dir, lease)
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["output"]
+
+
 def core_json(path: str) -> dict:
     core_url = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL")
                 or "https://127.0.0.1:8443")
@@ -161,10 +190,11 @@ def merge_runtime_progress(state_dir: Path, state: dict) -> None:
         state.update(runtime_state)
 
 
-def wait_for_drain(state_dir: Path, state: dict) -> None:
+def wait_for_drain(state_dir: Path, state: dict, lease) -> None:
     deadline = time.monotonic() + int(os.getenv("UPDATE_DRAIN_TIMEOUT_SECONDS", "86400"))
     transition(state_dir, state, "MAINTENANCE", "Maintenance mode; waiting for active jobs", 22)
     while time.monotonic() < deadline:
+        assert_mutation_allowed(state_dir, lease)
         readiness = core_json("/api/system/update/readiness")
         if readiness.get("ready"):
             state["readiness"] = readiness
@@ -189,13 +219,21 @@ def recover_if_interrupted(root: Path, state_dir: Path) -> None:
                      "request_id": "", "log": [], "updated_at": now()}
             transition(state_dir, state, "RECOVERING",
                        "Interrupted update detected (unreadable status); restoring last good release")
-            _attempt_rollback(root, state_dir, state)
+            _recover_release(root, state_dir, state)
         return
     if (state.get("state") != "RUNNING"
             or state.get("phase") not in {"UPDATING", "RESTARTING", "VERIFYING", "RECOVERING"}):
         return
     transition(state_dir, state, "RECOVERING", "Interrupted update detected; restoring last good release")
-    _attempt_rollback(root, state_dir, state)
+    _recover_release(root, state_dir, state)
+
+
+def _recover_release(root: Path, state_dir: Path, state: dict) -> None:
+    """Roll back an interrupted apply under the live update lease and cancel fence."""
+    from core.update_lease import UpdateLease
+    with UpdateLease(state_dir, str(state.get("request_id") or "recovery")) as lease:
+        assert_mutation_allowed(state_dir, lease)
+        _attempt_rollback(root, state_dir, state)
 
 
 def _has_interrupt_evidence(state_dir: Path) -> bool:
@@ -330,15 +368,15 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             transition(state_dir, state, "CHECKING", "Signed release manifest verified", 15)
             if action == "update" and state["update_available"]:
                 if not skip_drain:
-                    wait_for_drain(state_dir, state)
+                    wait_for_drain(state_dir, state, lease)
                 transition(state_dir, state, "DOWNLOADING", "Downloading and verifying update package", 38)
                 package = download_package(
                     manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
                 transition(state_dir, state, "UPDATING", "Backup and package installation started", 50)
                 assert_mutation_allowed(state_dir, lease)
-                output = run(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
-                              str(package), manifest["version"]], root,
-                             {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
+                output = run_fenced(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
+                                     str(package), manifest["version"]], root, state_dir, lease,
+                                    {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
                 merge_runtime_progress(state_dir, state)
                 state["log"].extend(output.splitlines()[-200:])
                 retention = os.getenv("UPDATE_RELEASE_RETENTION", "3")
