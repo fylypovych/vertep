@@ -113,7 +113,7 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     data["last_seen"] = utc_now()
     store.workers[payload.node_name] = data
     store.save_worker(data)
-    reconcile_rollout(store.workers)
+    rollout = reconcile_rollout(store.workers)
     data = store.workers[payload.node_name]
     store.save_worker(data)
     return {"accepted": True, "workers": len(store.workers),
@@ -122,6 +122,12 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             "update_target_version": data.get("update_target_version"),
             "rollback_target_version": data.get("rollback_target_version"),
             "restart_operation_id": restart_operation_id,
+            # Cancel delivery: cleanup stamps the token into this record, so the
+            # worker learns the rollout is cancelled and can fence its own
+            # pending host-apply request before the agent processes it.
+            "rollout_state": rollout.get("state", "IDLE"),
+            "rollout_operation_id": rollout.get("operation_id"),
+            "cancel_fence_token": data.get("cancel_fence_token"),
             "model_command": pending_model_command(payload.node_name)}
 
 

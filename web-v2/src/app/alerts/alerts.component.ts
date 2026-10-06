@@ -60,9 +60,18 @@ const SEVERITY_LABELS: Record<string, string> = {
                   @if (alert.updated_at) { <span>{{ alert.updated_at | vertepDate }}</span> }
                 </div>
               </div>
-              @if (alert.job_id) {
-                <a [routerLink]="['/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium ml-2">Відкрити</a>
-              }
+              <div class="flex items-center gap-2 shrink-0 ml-2">
+                @if (alert.job_id) {
+                  <a [routerLink]="['/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
+                }
+                @if (alert.state === 'firing') {
+                  <button type="button" (click)="acknowledge(alert)" [disabled]="acknowledging() === alert.id"
+                          [attr.data-testid]="'alert-ack-' + alert.id"
+                          class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                    Підтвердити
+                  </button>
+                }
+              </div>
             </div>
           }
         </div>
@@ -72,6 +81,7 @@ const SEVERITY_LABELS: Record<string, string> = {
 })
 export class AlertsComponent implements OnInit, OnDestroy {
   readonly list = new RemoteState<Alert[]>([]);
+  readonly acknowledging = signal<string | null>(null);
   private pollTimer: Subscription | null = null;
 
   constructor(private ops: OperationsApiService, private toast: ToastService) {}
@@ -85,6 +95,15 @@ export class AlertsComponent implements OnInit, OnDestroy {
 
   loadAlerts(): void {
     this.list.run(() => this.ops.alerts(), 'Не вдалося завантажити алерти');
+  }
+
+  acknowledge(alert: Alert): void {
+    if (!alert.id) { return; }
+    this.acknowledging.set(alert.id);
+    this.ops.acknowledgeAlert(alert.id).subscribe({
+      next: () => { this.acknowledging.set(null); this.loadAlerts(); },
+      error: () => { this.acknowledging.set(null); this.toast.show('Не вдалося підтвердити алерт', 'error'); },
+    });
   }
 
   severityLabel(severity?: string): string { return SEVERITY_LABELS[severity || ''] || severity || '—'; }

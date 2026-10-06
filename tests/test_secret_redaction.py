@@ -104,6 +104,22 @@ def test_json_formatter_redacts_message():
     assert json.loads(line)["job_id"] == "job-1"
 
 
+def test_json_formatter_redacts_extra_fields():
+    """Issue #84: extra fields with secret values must be redacted."""
+    formatter = JsonFormatter()
+    record = type("R", (), {})()
+    record.getMessage = lambda: "normal message"
+    record.levelname = "INFO"
+    record.name = "test"
+    record.exc_info = None
+    record.__dict__.update({"job_id": "job-1", "node_name": "gpu-01", "custom_token": "secret-123"})
+    line = formatter.format(record)
+    data = json.loads(line)
+    assert "secret-123" not in line
+    assert data["custom_token"] == "[REDACTED]"
+    assert data["message"] == "normal message"
+
+
 def test_json_formatter_redacts_exception_traceback():
     formatter = JsonFormatter()
     try:

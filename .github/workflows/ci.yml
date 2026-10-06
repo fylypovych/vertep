@@ -74,3 +74,37 @@ jobs:
           name: appliance-qualification
           path: qualification.json
           if-no-files-found: warn
+
+  media-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Prepare non-secret CI configuration
+        run: |
+          cp .env.example .env
+          printf '\nNODE_NAME=ci-worker\nCORE_ADDRESS=http://127.0.0.1:8080\nPOSTGRES_PASSWORD=ci-only\n' >> .env
+          printf 'ci-only-secret-store-passphrase' > config/secret-store.passphrase
+      - name: Run the media acceptance harness and record evidence
+        env:
+          VERTEP_MEDIA_EVIDENCE: media-evidence/evidence.json
+        run: python -m pytest -q tests/test_full_media_harness.py tests/test_media_acceptance_report.py
+      - name: Render the media acceptance report
+        run: |
+          python scripts/media-acceptance-report.py \
+            --evidence media-evidence/evidence.json \
+            --out media-evidence/media-acceptance \
+            --require-all
+      - name: Upload media acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: media-acceptance
+          path: media-evidence
+          if-no-files-found: warn

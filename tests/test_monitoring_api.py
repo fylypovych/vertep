@@ -118,6 +118,29 @@ def test_check_postgres_redis_mark_not_applicable_when_unconfigured(monkeypatch)
     assert check_redis()[0] is None
 
 
+def test_check_monitoring_not_applicable_when_unconfigured(monkeypatch):
+    """A CORE node without the monitoring role must not fail readiness.
+
+    CORE serves HTTP:8080 and the monitoring stack is a separate role, so an
+    unset PROMETHEUS_URL means "not installed", not "down".
+    """
+    monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+    from core.health_checks import check_monitoring, health_status
+    status, detail = check_monitoring()
+    assert status is None
+    assert "not-applicable" in detail
+    assert health_status({"monitoring": (status, detail), "docker": (True, "ok")}) == "HEALTHY"
+
+
+def test_check_monitoring_uses_configured_url(monkeypatch):
+    monkeypatch.setenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy")
+    from core.health_checks import check_monitoring
+    monkeypatch.setattr("core.health_checks._http_get", lambda url, timeout=5: (True, url))
+    status, detail = check_monitoring()
+    assert status is True
+    assert detail == "http://monitoring:9090/-/healthy"
+
+
 # ── Persistent alert store ─────────────────────────────────────────────
 
 def test_alert_dedup_by_entity_key(tmp_path):
@@ -191,6 +214,52 @@ def test_acknowledge_alert_endpoint(monkeypatch, tmp_path):
     assert resp.json()["state"] == "acknowledged"
     assert resp.json()["acknowledged_by"] == "operator"
     assert client.post("/api/alerts/does-not-exist/acknowledge", json={"actor": "operator"}).status_code == 404
+
+
+# ── Disposable service failure → alert → ack → recovery/resolved ────────
+#
+# Issue #85 (item 3): a disposable node fails, the readiness/listing probe
+# marks it OFFLINE, the reconcile pass records a deduplicated alert tied to the
+# node entity, an operator acknowledges it, and the node's return resolves the
+# same durable alert (history kept).  The real Monitoring Node stays in ir #54.
+
+def _heartbeat_gpu(client, node_name):
+    return client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "role": "gpu", "status": "FREE",
+        "vram_mb": 8192, "capabilities": ["image_generation"],
+    })
+
+
+def test_disposable_worker_failure_alert_ack_and_resolution(monkeypatch, tmp_path):
+    from core.alert_store import reset_alert_store
+    reset_alert_store()
+    client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
+    node = "gpu-disposable"
+
+    assert _heartbeat_gpu(client, node).status_code == 200
+
+    # Heartbeat goes stale -> probe/listing reports OFFLINE and reconcile raises
+    # a firing WORKER_OFFLINE alert bound to the node entity.
+    monkeypatch.setenv("HEARTBEAT_TIMEOUT", "0")
+    alerts = client.get("/api/alerts").json()
+    firing = [a for a in alerts if a["type"] == "WORKER_OFFLINE" and a.get("node_name") == node]
+    assert len(firing) == 1
+    assert firing[0]["state"] == "firing"
+    alert_id = firing[0]["id"]
+
+    # Reconcile is deduplicated: another pass does not spawn a duplicate.
+    assert len([a for a in client.get("/api/alerts").json()
+                if a["type"] == "WORKER_OFFLINE" and a.get("node_name") == node]) == 1
+
+    acked = client.post(f"/api/alerts/{alert_id}/acknowledge", json={"actor": "operator"}).json()
+    assert acked["state"] == "acknowledged"
+    assert acked["acknowledged_by"] == "operator"
+
+    # The node returns -> reconcile resolves the *same* alert and keeps history.
+    monkeypatch.setenv("HEARTBEAT_TIMEOUT", "3600")
+    assert _heartbeat_gpu(client, node).status_code == 200
+    resolved = [a for a in client.get("/api/alerts").json() if a["id"] == alert_id]
+    assert resolved and resolved[0]["state"] == "resolved"
 
 
 # ── Log retrieval (rotated files + filter-before-tail + paging) ─────────
@@ -426,6 +495,22 @@ def test_prometheus_metrics_returns_valid_text(monkeypatch, tmp_path):
     assert "vertep_jobs_total" in text
     assert "vertep_queue_ready" in text
     assert "vertep_workers_online" in text
+    assert "vertep_workers_expected" in text
     for line in text.strip().splitlines():
         parts = line.split(" ")
         assert len(parts) == 2, f"bad Prometheus line: {line!r}"
+
+
+def test_prometheus_metrics_re_exports_worker_availability(monkeypatch, tmp_path):
+    """CORE aggregates outbound-only workers so Prometheus can alert on them."""
+    from core.app import store
+    client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
+    for node, role in (("gpu-1", "gpu"), ("text-1", "text")):
+        resp = client.post("/api/workers/heartbeat", json={
+            "node_name": node, "role": role, "vram_mb": 0,
+            "capabilities": [], "supported_tasks": []})
+        assert resp.status_code == 200, resp.text
+    text = client.get("/metrics").text
+    assert f"vertep_workers_expected {len(store.workers)}" in text
+    assert 'vertep_worker_up{node="gpu-1",role="gpu"} 1' in text
+    assert 'vertep_worker_up{node="text-1",role="text"} 1' in text

@@ -25,6 +25,7 @@ REQUIRED_IMAGES = {
     "proxy", "postgres", "redis", "ollama", "monitoring", "grafana",
     "log-store", "log-collector", "update-agent", "license-manager",
     "dispatcher", "scheduler", "certificate-manager", "moneyprinter",
+    "node-exporter",
 }
 
 REQUIRED_PLATFORMS = {"linux/amd64", "linux/arm64"}
@@ -108,7 +109,7 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
                 "docker/tts/Dockerfile", "docker/publisher/Dockerfile", "docker/backup/Dockerfile",
                 "docker/proxy/Dockerfile", "docker/proxy/entrypoint.sh", "docker/monitoring/Dockerfile",
                 "docker/log-store/Dockerfile", "docker/log-collector/Dockerfile",
-                "docker/grafana/Dockerfile",
+                "docker/grafana/Dockerfile", "docker/node-exporter/Dockerfile",
                 "docker/moneyprinter/Dockerfile", "docker/moneyprinter/entrypoint.sh",
                 "docker/moneyprinter/requirements.lock", "docker/moneyprinter/config.lock.toml",
                 "services/moneyprinter_service.py",

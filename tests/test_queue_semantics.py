@@ -17,6 +17,7 @@ from core.app import app
 from core.dispatcher import available_worker, compute_load_score
 from core.models import Job, JobStatus
 from core.state import store, task_queue
+from core.storyboard import StoryboardService
 from core.system_state import (SystemState, dispatch_allowed, new_job_status,
                                 set_system_state)
 
@@ -221,6 +222,49 @@ def test_maintenance_blocks_claim_and_keeps_job(client, monkeypatch):
         assert store.jobs.get(job.job_id) is not None
     finally:
         set_system_state(SystemState.NORMAL, "restore")
+
+
+# ── storyboard task dispatch (Issue #82) ────────────────────────
+
+
+def test_storyboard_queue_keeps_task_claimable_by_text_worker(client, monkeypatch):
+    """CORE must not consume the storyboard task it just queued.
+
+    ``StoryboardService.queue()`` used to self-claim and ack its own task, so no
+    Text Worker could ever see it and the Job stayed in STORYBOARD_QUEUED forever.
+    """
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    job = store.create("storyboard dispatch", "did_samogon", 5)
+    StoryboardService(store).queue(job)
+
+    assert job.status == JobStatus.STORYBOARD_QUEUED
+    assert job.storyboard_task_id
+    assert task_queue.depth() >= 1
+    assert not task_queue._inflight
+
+
+def test_storyboard_claim_does_not_require_job_vram(client, monkeypatch):
+    """A GPU-less Text Worker must be eligible for the storyboard task.
+
+    Every other non-GPU claim branch passes ``min_vram_mb=0``; the storyboard
+    branch inherited the Job's GPU requirement and never matched a text node.
+    """
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    client.post("/api/workers/heartbeat", json={
+        "node_name": "text-node", "vram_mb": 0, "role": "text",
+        "capabilities": ["text_generation"], "supported_tasks": ["text"],
+    })
+    # A GPU-heavy job: the storyboard task is text work and must ignore this.
+    job = store.create("storyboard vram", "did_samogon", 5, "web", "image", 24576)
+    StoryboardService(store).queue(job)
+
+    task = client.post("/api/tasks/claim",
+                       json={"node_name": "text-node", "vram_mb": 0}).json()["task"]
+    assert task is not None
+    assert task["task"] == "storyboard"
+    assert task["task_id"] == job.storyboard_task_id
+    assert store.jobs[job.job_id].status == JobStatus.STORYBOARD_GENERATING
+    task_queue.ack(task["task_id"])
 
 
 def test_update_gating_blocks_dispatch(monkeypatch):

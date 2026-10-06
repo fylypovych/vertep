@@ -80,6 +80,7 @@ jobs:
           - {name: redis, file: docker/redis/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: ollama, file: docker/ollama/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: monitoring, file: docker/monitoring/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: node-exporter, file: docker/node-exporter/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: log-store, file: docker/log-store/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: log-collector, file: docker/log-collector/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: grafana, file: docker/grafana/Dockerfile, platforms: "linux/amd64,linux/arm64"}

@@ -10,31 +10,18 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
+  # CORE is served by uvicorn over plain HTTP on port 8080 (Dockerfile CMD);
+  # port 8443 belongs to the TLS reverse proxy in front of it, not to the
+  # `core` container.  Worker nodes are outbound-only (Issue #80) and expose no
+  # scrape endpoint, so their state is aggregated by CORE and re-exported here
+  # as vertep_worker_up / vertep_workers_expected.
   - job_name: vertep-core
-    scheme: https
-    tls_config:
-      ca_file: /etc/vertep/tls/node-ca.crt
-      insecure_skip_verify: true
+    scheme: http
     metrics_path: /metrics
     static_configs:
-      - targets: ["core:8443"]
+      - targets: ["core:8080"]
         labels:
           vertep_role: core
-
-  - job_name: vertep-workers
-    scheme: https
-    tls_config:
-      ca_file: /etc/vertep/tls/node-ca.crt
-      insecure_skip_verify: true
-    metrics_path: /metrics
-    dns_sd_configs:
-      - names: ["worker"]
-        type: SRV
-        port: 8443
-    relabel_configs:
-      - source_labels: [__meta_dns_name]
-        regex: (.+)
-        target_label: vertep_node
 
   - job_name: node-exporter
     static_configs:

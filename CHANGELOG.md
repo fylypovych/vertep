@@ -1,5 +1,32 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.42
+- Issue #122 P0-P12 — MoneyPrinterTurbo integration as opt-in VideoEngine (Native default):
+  - `adapters/providers/video_engines.py`: NativeVertepEngine, MoneyPrinterEngine, ShortGPTEngine implementing VideoEngine interface; engine selection persists, survives restart, Worker reports effective engine.
+  - `adapters/providers/runtime_manifest.py`, `scripts/moneyprinter-runtime-check.py`: P2 pinned runtime verification — inventory with dependency digests, SBOM, image digest, bridge/API version constants; gateway refuses drift.
+  - `services/moneyprinter_service.py`: Wrapper around pinned MPT runtime (§9.2) with `/health`, `/runtime`, `/self-test` gates; loopback-only upstream, mandatory non-empty `x-api-key`, voice staging via content-addressed marker before upstream POST (P3 race mitigation), durable submit key with reconciliation (P6), fenced abort on staging failure.
+  - `core/api/job_helpers.py`, `core/pipeline.py`: Assembly task dispatch via Worker; engine/config snapshot in Job/attempt; approved inputs delivered to Worker with ownership/checksum; Publisher remains sole publication boundary.
+  - `tests/test_video_engines.py`, `tests/test_moneyprinter_runtime.py`, `tests/test_assembly_worker_route.py`: Full test matrix for contract, media, integration, recovery, security, configuration, delivery (§6); 387 tests pass.
+  - `scripts/issue-122-acceptance-report.py`, `scripts/issue-122-retirement-trace.py`: P10 traceable §6 acceptance report (JSON+MD) and P12 retirement trace (117 rows, 0 retire, 0 blocked).
+- Monitoring/observability improvements:
+  - `core/logging_config.py`, `core/api/observability.py`: Structured JSON logs, log rotation, OpenTelemetry-ready metrics endpoints.
+  - `monitoring/prometheus.yml`, `monitoring/alerts.yml`: Updated scrape configs, alert rules for job queue, GPU, node health.
+  - `config/node_roles.json`: Monitoring role services/capabilities clarified.
+  - `tests/test_monitoring.py`, `tests/test_monitoring_api.py`: Monitoring role and API tests.
+- Rolling update & lease hardening:
+  - `core/rolling_update.py`, `core/update_lease.py`, `scripts/update-agent.py`: Canary promotion, one-node-at-a-time, lease fencing, automatic rollback on health check failure.
+  - `scripts/qualify-release.py`, `scripts/update-runtime-env.py`: Release qualification gates, runtime env management.
+  - `tests/test_rolling_update_issue86.py`, `tests/test_queue_semantics.py`: Rolling update and queue semantics tests.
+- Media pipeline & acceptance:
+  - `scripts/media-acceptance-report.py`, `tests/test_media_acceptance_report.py`: Media acceptance reporting with decoded fixture validation, scene order/duration/aspect/preset/audio/SRT/BGM/watermark matrix.
+  - `tests/test_full_media_harness.py`, `tests/media_harness.py`: Refactored media harness (removed `test_full_media_e2e.py`).
+  - `tests/test_secret_redaction.py`, `tests/test_security_check.py`: Secret redaction and security validation tests.
+- Worker & infrastructure:
+  - `worker/service.py`: Worker registration flow, heartbeat, capability reporting fixes.
+  - `bootstrap.sh`, `deploy/docker-compose.yml`: Bootstrap installer and compose updates.
+  - `web-v2/src/app/logs/logs.component.ts`, `web-v2/src/app/core/api/logs.api.ts`: Logs UI component.
+  - `.github/workflows/ci.yml`, `.github/workflows/release.yml`: CI and release workflow updates.
+
 ## Unreleased
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.41

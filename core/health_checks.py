@@ -133,10 +133,10 @@ def check_backup(root: str | None = None) -> tuple[bool, str]:
         return False, str(error)[:200]
 
 
-def check_monitoring(prometheus_url: str | None = None) -> tuple[bool, str]:
-    target = prometheus_url or os.getenv("PROMETHEUS_URL", "http://localhost:9090/-/healthy")
+def check_monitoring(prometheus_url: str | None = None) -> tuple[bool | None, str]:
+    target = prometheus_url or os.getenv("PROMETHEUS_URL", "")
     if not target:
-        return True, "skipped"
+        return None, "not-applicable: PROMETHEUS_URL is not configured"
     return _http_get(target, timeout=10)
 
 

@@ -38,12 +38,13 @@ export class LogsApiService {
     return throwError(() => err);
   }
 
-  logs(params?: { limit?: number; level?: string; job_id?: string; node_name?: string }): Observable<LogEntry[]> {
+  logs(params?: { limit?: number; level?: string; job_id?: string; node_name?: string; before?: string }): Observable<LogEntry[]> {
     const query = new URLSearchParams();
     if (params?.limit) query.set('limit', String(params.limit));
     if (params?.level) query.set('level', params.level);
     if (params?.job_id) query.set('job_id', params.job_id);
     if (params?.node_name) query.set('node_name', params.node_name);
+    if (params?.before) query.set('before', params.before);
     const qs = query.toString();
     return this.http.get<LogEntry[]>(`${this.baseUrl}/logs${qs ? `?${qs}` : ''}`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }

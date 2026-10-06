@@ -54,7 +54,7 @@ groups:
           summary: "Усі Vertep worker-и офлайн"
 
       - alert: VertepWorkerPartialOutage
-        expr: vertep_workers_online < 1 and (count(up{job="vertep-workers"} == 1) or vector(1)) > 1
+        expr: vertep_workers_online > 0 and vertep_workers_online < vertep_workers_expected
         for: 5m
         labels:
           severity: warning

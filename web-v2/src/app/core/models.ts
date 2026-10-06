@@ -488,6 +488,7 @@ export interface WorkflowFormSchema {
 }
 
 export interface Alert {
+  id?: string;
   severity: 'error' | 'warning' | 'info';
   type: string;
   message?: string;
@@ -496,6 +497,9 @@ export interface Alert {
   task_id?: string;
   operation_id?: string;
   updated_at?: string;
+  created_at?: string;
+  acknowledged_by?: string;
+  resolved_at?: string;
   state?: string;
   details?: Record<string, unknown>;
 }

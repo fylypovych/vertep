@@ -23,6 +23,7 @@ IMAGE_KEYS = {
     "redis": "VERTEP_REDIS_IMAGE",
     "ollama": "VERTEP_OLLAMA_IMAGE",
     "monitoring": "VERTEP_MONITORING_IMAGE",
+    "node-exporter": "VERTEP_NODE_EXPORTER_IMAGE",
     "grafana": "VERTEP_GRAFANA_IMAGE",
     "log-store": "VERTEP_LOG_STORE_IMAGE",
     "log-collector": "VERTEP_LOG_COLLECTOR_IMAGE",

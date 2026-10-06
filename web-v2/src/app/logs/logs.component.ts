@@ -75,7 +75,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              @for (entry of entries(); track entry.timestamp + '_' + entry.message + '_' + $index) {
+              @for (entry of entries(); track entry.timestamp + '_' + entry.logger + '_' + entry.message) {
                 <tr class="align-top hover:bg-slate-50">
                   <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{{ entry.timestamp | vertepDate }}</td>
                   <td class="px-4 py-3">
@@ -84,7 +84,11 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                     </span>
                   </td>
                   <td class="px-4 py-3 text-xs text-slate-600">
-                    <div>{{ entry.node_name || entry.logger || 'CORE' }}</div>
+                    @if (entry.node_name) {
+                      <a [routerLink]="['/workers', entry.node_name]" class="block text-emerald-700 hover:underline">{{ entry.node_name }}</a>
+                    } @else {
+                      <div>{{ entry.logger || 'CORE' }}</div>
+                    }
                     @if (entry.actor) { <div>Користувач: {{ entry.actor }}</div> }
                   </td>
                   <td class="min-w-80 px-4 py-3 text-slate-800">
@@ -104,6 +108,15 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
             </tbody>
           </table>
         </div>
+        @if (hasMore()) {
+          <div class="flex justify-center">
+            <button type="button" (click)="loadOlder()" [disabled]="loadingOlder()"
+                    data-testid="logs-load-older"
+                    class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              {{ loadingOlder() ? 'Завантаження…' : 'Показати старіші' }}
+            </button>
+          </div>
+        }
       }
     </div>
   `,
@@ -111,6 +124,8 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
 export class LogsComponent implements OnInit {
   readonly entries = signal<LogEntry[]>([]);
   readonly loading = signal(false);
+  readonly loadingOlder = signal(false);
+  readonly hasMore = signal(false);
   readonly error = signal<string | null>(null);
 
   level = '';
@@ -127,15 +142,40 @@ export class LogsComponent implements OnInit {
   loadLogs(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.logsApi.logs({
+    this.logsApi.logs(this.query()).pipe(finalize(() => this.loading.set(false))).subscribe({
+      next: (entries) => {
+        this.entries.set(entries);
+        this.hasMore.set(entries.length >= this.limit);
+      },
+      error: (error) => this.error.set(error.message || 'Не вдалося завантажити логи'),
+    });
+  }
+
+  loadOlder(): void {
+    const current = this.entries();
+    if (current.length === 0 || this.loadingOlder()) {
+      return;
+    }
+    const oldest = current[current.length - 1].timestamp;
+    this.loadingOlder.set(true);
+    this.logsApi.logs({ ...this.query(), before: oldest }).pipe(finalize(() => this.loadingOlder.set(false))).subscribe({
+      next: (older) => {
+        const seen = new Set(current.map((entry) => `${entry.timestamp}_${entry.logger}_${entry.message}`));
+        const appended = older.filter((entry) => !seen.has(`${entry.timestamp}_${entry.logger}_${entry.message}`));
+        this.entries.set([...current, ...appended]);
+        this.hasMore.set(older.length >= this.limit && appended.length > 0);
+      },
+      error: (error) => this.error.set(error.message || 'Не вдалося завантажити старіші логи'),
+    });
+  }
+
+  private query(): { limit: number; level?: string; job_id?: string; node_name?: string } {
+    return {
       limit: this.limit,
       level: this.level || undefined,
       job_id: this.jobId.trim() || undefined,
       node_name: this.nodeName.trim() || undefined,
-    }).pipe(finalize(() => this.loading.set(false))).subscribe({
-      next: (entries) => this.entries.set(entries),
-      error: (error) => this.error.set(error.message || 'Не вдалося завантажити логи'),
-    });
+    };
   }
 
   levelClass(level: string): string {

@@ -29,6 +29,10 @@ export class OperationsApiService {
     return this.http.get<Alert[]>(`${this.base.url}/alerts`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
 
+  acknowledgeAlert(alertId: string, actor = ''): Observable<Alert> {
+    return this.http.post<Alert>(`${this.base.url}/alerts/${this.base.enc(alertId)}/acknowledge`, { actor }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+
   logs(query: LogQuery = {}): Observable<LogEntry[]> {
     const params = new URLSearchParams();
     if (query.limit) params.set('limit', String(query.limit));

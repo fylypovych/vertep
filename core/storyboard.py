@@ -54,31 +54,14 @@ class StoryboardService:
         job.active_task_id = queued["task_id"]
         self.store.repository.record_task(queued, "QUEUED")
         self.store.event(job, f"STORYBOARD TASK {queued['task_id']} QUEUED for version {version}")
-
-        if self.executor is not None:
-            self.executor.submit(self._process_queue, job.job_id)
-        else:
-            self._process_queue(job.job_id)
-
+        # Issue #82: the ready queue is the only correct home for this task. CORE
+        # must never claim it itself: the Text Worker claims a storyboard task
+        # through ``/api/tasks/claim``, and a self-claim here removed the task
+        # from the queue before any Worker could see it, so the Job stayed in
+        # STORYBOARD_QUEUED forever and the image-storyboard approval boundary
+        # was unreachable in a real deployment. This mirrors the lease-expiry
+        # requeue in ``core/app.handle_expired_storyboard_lease``.
         return job
-
-    def _process_queue(self, job_id: str) -> None:
-        from .state import task_queue
-        from .queue import TaskQueue
-        job = self._job(job_id)
-        task_id = job.storyboard_task_id
-        while True:
-            task = task_queue.claim()
-            # No task to claim or not the one we are waiting for
-            if not task or task.get("task_id") != task_id:
-                break
-            # If the claimed task is not a storyboard task, release it
-            if task.get("task") != "storyboard":
-                task_queue.release(task["task_id"])
-                break
-            # Successful claim – acknowledge and stop looping
-            task_queue.ack(task["task_id"])
-            break
 
     def handle_result(self, job_id: str, task_id: str, success: bool, artifacts: list[dict] | None, error: str | None, node_name: str | None = None) -> Job | None:
         """Process a storyboard task result.

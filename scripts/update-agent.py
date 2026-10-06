@@ -25,6 +25,28 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def assert_mutation_allowed(state_dir: Path, lease) -> None:
+    """Fence host mutation behind a live lease and an un-cancelled rollout.
+
+    A lost or superseded distributed lease means another agent now owns the
+    update, and a cancel fence written by the node-local worker means CORE
+    already cancelled this rollout; either condition must stop the mutation
+    before the first privileged command runs.
+    """
+    lease.assert_current()
+    fence_path = state_dir / "cancel-fence.json"
+    if not fence_path.exists():
+        return
+    try:
+        fence = json.loads(fence_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError("Mutation blocked: cancel fence state is unreadable") from error
+    raise RuntimeError(
+        "Mutation blocked: rollout operation "
+        f"{fence.get('operation_id')} was cancelled and this agent must not "
+        "continue the host apply")
+
+
 def atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
@@ -237,6 +259,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
         try:
             if action == "restart":
                 transition(state_dir, state, "RESTARTING", "Restarting active Vertep services", 70)
+                assert_mutation_allowed(state_dir, lease)
                 output = run(["/bin/bash", str(root / "scripts" / "vertep"), "restart-runtime"],
                              root, {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
                 merge_runtime_progress(state_dir, state)
@@ -247,6 +270,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                 return True
             if action == "rollback":
                 transition(state_dir, state, "RECOVERING", "Restoring the previous release", 40)
+                assert_mutation_allowed(state_dir, lease)
                 output = run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root)
                 state["log"].extend(output.splitlines()[-100:])
                 state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
@@ -311,6 +335,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                 package = download_package(
                     manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
                 transition(state_dir, state, "UPDATING", "Backup and package installation started", 50)
+                assert_mutation_allowed(state_dir, lease)
                 output = run(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
                               str(package), manifest["version"]], root,
                              {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
@@ -330,6 +355,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             if state.get("phase") == "UPDATING":
                 try:
                     transition(state_dir, state, "RECOVERING", "Health check failed; rolling back")
+                    assert_mutation_allowed(state_dir, lease)
                     state["log"].extend(run(
                         ["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root
                     ).splitlines()[-100:])

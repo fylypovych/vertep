@@ -101,6 +101,32 @@ class UpdateLease:
             os.fsync(self._file.fileno())
         return self
 
+    def assert_current(self) -> None:
+        """Refuse a mutation once this lease has been lost or superseded.
+
+        A dropped database connection silently releases the advisory lock, so
+        the distributed epoch is re-read immediately before every host
+        mutation; a mismatch means another agent owns the update now.
+        """
+        if self._file is None:
+            raise RuntimeError("Mutation blocked: the update lease is not held")
+        try:
+            metadata = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise RuntimeError("Mutation blocked: the update lease record is unreadable") from error
+        if not isinstance(metadata, dict) or metadata.get("operation_id") != self.operation_id:
+            raise RuntimeError("Mutation blocked: the local update lease was taken over")
+        if self._database is None:
+            return
+        try:
+            row = self._database.execute(
+                "SELECT epoch, operation_id FROM update_fences WHERE name='global'").fetchone()
+        except Exception as error:
+            raise RuntimeError("Mutation blocked: the distributed update fence is unavailable") from error
+        if row is None or int(row[0]) != int(self.fence_epoch or -1) or str(row[1]) != self.operation_id:
+            raise RuntimeError("Mutation blocked: the distributed update fence was lost")
+
+
     def __exit__(self, *_):
         if self._database is not None:
             try:

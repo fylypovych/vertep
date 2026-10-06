@@ -206,3 +206,20 @@ def test_certificate_expiry_parsing_is_fail_closed():
     assert _certificate_expired("not-a-date") is True
     assert _certificate_expired("") is True
     assert _certificate_expired(None) is True
+
+
+def test_effective_config_reports_canonical_tts_provider(client, monkeypatch):
+    """Issue #85: the effective config summary must read the canonical
+    ``TTS_PROVIDER`` env var (§28.3), not a phantom ``VERTEP_TTS_PROVIDER``."""
+    monkeypatch.setenv("TTS_PROVIDER", "kokoro")
+    body = client()
+    assert body["checks"]["effective_config"]["tts_provider"] == "kokoro"
+
+
+def test_effective_config_never_leaks_values(client, monkeypatch):
+    """The summary is presence-only: it must expose booleans, not raw secrets."""
+    monkeypatch.setenv("POSTGRES_PASSWORD", "super-secret-value")
+    body = client()
+    summary = body["checks"]["effective_config"]
+    assert summary["postgres_password_set"] is True
+    assert "super-secret-value" not in json.dumps(body)

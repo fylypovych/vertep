@@ -17,6 +17,11 @@ def test_monitoring_role_has_metrics_logs_alerts_and_provisioning():
     assert (ROOT / "docker/monitoring/Dockerfile").is_file()
     assert (ROOT / "docker/log-collector/Dockerfile").is_file()
     assert (ROOT / "docker/grafana/Dockerfile").is_file()
+    # The node-exporter scrape job must have a real backing service, not a dangling
+    # reference: it is part of the monitoring role catalog and the Compose file.
+    assert "node-exporter" in monitoring["services"]
+    assert (ROOT / "docker/node-exporter/Dockerfile").is_file()
+    assert "VERTEP_NODE_EXPORTER_IMAGE" in compose
 
 
 def test_monitoring_configuration_has_no_default_anonymous_grafana():
@@ -52,21 +57,25 @@ def test_prometheus_scrape_includes_vertep_core():
     assert "vertep-core" in jobs
     core = jobs["vertep-core"]
     assert core.get("metrics_path") == "/metrics"
+    # CORE is served by uvicorn over plain HTTP on 8080 (Dockerfile CMD); 8443 is
+    # the TLS reverse proxy, not the `core` container.
+    assert core.get("scheme", "http") == "http"
+    assert "tls_config" not in core
     targets = []
     for static in core.get("static_configs", []):
         targets.extend(static.get("targets", []))
-    assert any("core" in t for t in targets)
+    assert "core:8080" in targets
 
 
-def test_prometheus_scrape_includes_vertep_workers():
-    """Worker nodes must be scraped for distributed metric collection."""
+def test_prometheus_worker_metrics_come_from_core_aggregation():
+    """Worker nodes are outbound-only (Issue #80) and expose no scrape endpoint.
+
+    CORE aggregates their state and re-exports vertep_worker_up /
+    vertep_workers_expected on /metrics, so no direct worker scrape job exists.
+    """
     config = _load_prometheus_config()
     jobs = {c["job_name"]: c for c in config["scrape_configs"]}
-    assert "vertep-workers" in jobs
-    workers = jobs["vertep-workers"]
-    assert workers.get("metrics_path") == "/metrics"
-    # Workers use DNS SRV discovery for dynamic membership
-    assert workers.get("dns_sd_configs") or workers.get("static_configs")
+    assert "vertep-workers" not in jobs
 
 
 def test_prometheus_scrape_includes_node_exporter():

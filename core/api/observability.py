@@ -107,6 +107,7 @@ def security_check():
     seals = _secret_store_status()
     certificates = _certificate_statuses()
     integrations = _integration_summary()
+    effective_config = _effective_config_summary()
 
     remediation = [f"Set a strong, unique random value for {name}" for name in weak]
     if seals.get("sealed") is False:
@@ -136,7 +137,12 @@ def security_check():
         "ok": ok,
         "weak_or_missing": list(weak),
         "recommendation": (" ; ".join(remediation) or "Environment credentials and certificates are within policy"),
-        "checks": {"secrets_store": seals, "certificates": certificates, "integrations": integrations},
+        "checks": {
+            "secrets_store": seals,
+            "certificates": certificates,
+            "integrations": integrations,
+            "effective_config": effective_config,
+        },
     }
 
 
@@ -235,6 +241,23 @@ def _integration_summary() -> list[dict]:
     return items
 
 
+def _effective_config_summary() -> dict:
+    """Report effective configuration values (key/cert paths, integrations)."""
+    from ..first_run import config_root
+    config_path = config_root()
+    return {
+        "config_root": str(config_path),
+        "admin_password_set": bool(os.getenv("ADMIN_PASSWORD")),
+        "node_api_token_set": bool(os.getenv("NODE_API_TOKEN")),
+        "postgres_password_set": bool(os.getenv("POSTGRES_PASSWORD")),
+        "secret_store_passphrase_set": bool(os.getenv("SECRET_STORE_PASSPHRASE") or os.getenv("SECRET_STORE_PASSPHRASE_FILE")),
+        "session_secret_set": bool(os.getenv("SESSION_SECRET")),
+        "llm_provider": os.getenv("VERTEP_LLM_PROVIDER", "not configured"),
+        "tts_provider": os.getenv("TTS_PROVIDER", "not configured"),
+        "publisher_mock": os.getenv("PUBLISHER_MOCK", "false").lower() == "true",
+    }
+
+
 
 @router.get("/api/logs")
 def logs(limit: int = 200, level: str | None = None, job_id: str | None = None,
@@ -267,6 +290,7 @@ def metrics():
             "queue_dead_letter": len(task_queue.dead_letters()),
             "jobs_scheduled": sum(job.status == JobStatus.NEW and not _job_is_due(job) for job in store.jobs.values()),
             "scenes_by_status": scene_statuses,
+            "workers_expected": len(store.workers),
             "workers_online": sum(worker.get("status") != "OFFLINE" for worker in store.workers.values())}
 
 
@@ -278,10 +302,22 @@ def prometheus_metrics():
              f"vertep_queue_inflight {values['queue_inflight']}",
              f"vertep_queue_dead_letter {values['queue_dead_letter']}",
              f"vertep_jobs_scheduled {values['jobs_scheduled']}",
-             f"vertep_workers_online {values['workers_online']}"]
+             f"vertep_workers_online {values['workers_online']}",
+             f"vertep_workers_expected {values['workers_expected']}"]
     lines.extend(f'vertep_jobs_status{{status="{status}"}} {count}' for status, count in values["jobs_by_status"].items())
     lines.extend(f'vertep_scenes_status{{status="{status}"}} {count}' for status, count in values["scenes_by_status"].items())
+    # Worker nodes are outbound-only (Issue #80): they publish no scrape endpoint,
+    # so CORE re-exports each registered worker's availability for Prometheus.
+    for name, worker in store.workers.items():
+        up = 0 if worker.get("status") == "OFFLINE" else 1
+        node = _prometheus_label(name)
+        role = _prometheus_label(worker.get("role", ""))
+        lines.append(f'vertep_worker_up{{node="{node}",role="{role}"}} {up}')
     return Response("\n".join(lines) + "\n", media_type="text/plain")
+
+
+def _prometheus_label(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 
@@ -353,7 +389,11 @@ def _reconcile_alerts() -> None:
         if alert.get("type") == "JOB_FAILED" and alert.get("job_id") and alert["job_id"] not in failed_jobs:
             alert_svc.resolve({"type": "JOB_FAILED", "job_id": alert["job_id"]}, "job recovered")
 
-    online_names = {w.get("node_name") for w in workers() if w.get("status") in ("ONLINE", "FREE", "BUSY")}
+    # A live node reports READY after a heartbeat (ONLINE/FREE are normalized to
+    # READY on ingest), so a WORKER_OFFLINE alert must clear on READY as well;
+    # otherwise a recovered node stays alerted forever.
+    online_states = {"READY", "BUSY", "DRAINING", "ONLINE", "FREE"}
+    online_names = {w.get("node_name") for w in workers() if w.get("status") in online_states}
     for worker in workers():
         if worker.get("status") in {"OFFLINE", "ERROR"}:
             alert_svc.record({

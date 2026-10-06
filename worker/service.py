@@ -591,6 +591,40 @@ def host_metrics() -> dict:
             "cpu_load": cpu_load, "runtime_version": platform.python_version()}
 
 
+def cancel_fence_path() -> Path | None:
+    root = os.getenv("UPDATE_REQUEST_DIR", "")
+    if not root:
+        return None
+    return Path(root).parent / "cancel-fence.json"
+
+
+def sync_cancel_fence(control: dict) -> None:
+    """Persist CORE's cancel verdict on this node so host apply can be fenced.
+
+    CORE stamps the token into the worker record during reconciliation and
+    returns it here; storing it is this node's acknowledgement of the cancel,
+    and it stays authoritative until CORE reports a rollout state other than
+    ``CANCELLED``.
+    """
+    path = cancel_fence_path()
+    if path is None:
+        return
+    if control.get("rollout_state") != "CANCELLED":
+        path.unlink(missing_ok=True)
+        return
+    token = control.get("cancel_fence_token")
+    if not token:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps({
+        "state": "CANCELLED",
+        "operation_id": control.get("rollout_operation_id"),
+        "cancel_fence_token": token,
+        "observed_at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
+    temporary.replace(path)
+
+
 def request_local_update(target_version: str, action: str = "update",
                          request_id: str | None = None) -> None:
     request_root = os.getenv("UPDATE_REQUEST_DIR", "")
@@ -598,6 +632,16 @@ def request_local_update(target_version: str, action: str = "update",
         raise RuntimeError("UPDATE_REQUEST_DIR is required for coordinated rolling updates")
     root = Path(request_root)
     root.mkdir(parents=True, exist_ok=True)
+    fence_path = root.parent / "cancel-fence.json"
+    if fence_path.exists():
+        try:
+            fence = json.loads(fence_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise RuntimeError("Mutation blocked: cancel fence state is unreadable") from error
+        raise RuntimeError(
+            "Mutation blocked: rollout operation "
+            f"{fence.get('operation_id')} was cancelled and this agent must not "
+            "queue another host apply")
     marker = root.parent / "worker-update-target"
     if request_id and not re.fullmatch(r"[0-9a-f]{32}", request_id):
         raise ValueError("request_id must be 32 lowercase hexadecimal characters")
@@ -797,6 +841,7 @@ def main() -> None:
                 heartbeat_response = client.post(f"{core}/api/workers/heartbeat", json=payload)
                 heartbeat_response.raise_for_status()
                 control = heartbeat_response.json()
+                sync_cancel_fence(control)
                 desired_state = control.get("desired_state")
                 update_target = control.get("update_target_version")
                 rollback_target = control.get("rollback_target_version")

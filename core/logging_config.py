@@ -16,6 +16,17 @@ _SECRET_KEY_VALUE = re.compile(
     r"(?!(?:bearer\b|bearer\s+))"
     r"(?:\"[^\"]*\"|'[^']*'|[A-Za-z0-9._\-+/=:]{4,})",
 )
+# Match quoted JSON keys with secret-like names to redact their values
+_JSON_SECRET_KEY = re.compile(
+    r"(?i)(?:\"|\')(access_token|api[_-]?key|client[_-]?secret|refresh[_-]?token|"
+    r"auth[_-]?token|session[_-]?id|password|passwd|secret|token|authorization|"
+    r"proxy[_-]?password)(?:\"|\')?\s*:\s*(?:\"[^\"]*\"|'[^']*')",
+)
+# Match secret-like keys for extra field redaction
+_SECRET_KEY_NAMES = {"access_token", "api_key", "api-key", "client_secret", "client-secret",
+                   "refresh_token", "refresh-token", "auth_token", "auth-token",
+                   "session_id", "session-id", "password", "passwd", "secret",
+                   "token", "authorization", "proxy_password", "proxy-password"}
 _BEARER_TOKEN = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+/=]{4,}")
 # Credentials embedded in a URL userinfo part (``https://user:pass@host``) are a
 # real leak vector: proxy/registry/Ollama endpoints are routinely built from env
@@ -41,6 +52,8 @@ def secret_redact(text: str) -> str:
     text = _BEARER_TOKEN.sub(lambda m: m.group(1) + "[REDACTED]", text)
     text = _URL_USERINFO.sub(lambda m: m.group(1) + m.group(2) + ":[REDACTED]@", text)
     text = _QUERY_CREDENTIAL.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    # Redact JSON secret key-value pairs first
+    text = _JSON_SECRET_KEY.sub(lambda m: f'"{m.group(1)}": "[REDACTED]"', text)
     text = _SECRET_KEY_VALUE.sub(lambda m: m.group(1) + "[REDACTED]", text)
     return text
 
@@ -51,7 +64,21 @@ class JsonFormatter(logging.Formatter):
                    "logger": record.name, "message": secret_redact(record.getMessage())}
         for key in ("job_id", "node_name", "action", "actor"):
             if hasattr(record, key):
-                payload[key] = getattr(record, key)
+                payload[key] = secret_redact(str(getattr(record, key)))
+        # Only include string extra fields (skip methods/functions)
+        for key, value in record.__dict__.items():
+            if key not in ("name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+                          "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+                          "created", "msecs", "relativeCreated", "thread", "threadName",
+                          "processName", "process", "message", "asctime", "timestamp", "level",
+                          "logger", "job_id", "node_name", "action", "actor"):
+                if isinstance(value, str):
+                    # Redact if key contains secret-like patterns or value contains secret pattern
+                    key_lower = key.lower()
+                    if any(name in key_lower for name in _SECRET_KEY_NAMES) or _SECRET_KEY_VALUE.search(value):
+                        payload[key] = "[REDACTED]"
+                    else:
+                        payload[key] = secret_redact(value)
         if record.exc_info:
             payload["exception"] = secret_redact(self.formatException(record.exc_info))
         return json.dumps(payload, ensure_ascii=False)

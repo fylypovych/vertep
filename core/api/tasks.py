@@ -84,7 +84,7 @@ def claim_task(payload: TaskClaim, request: Request):
             if job.status != JobStatus.STORYBOARD_QUEUED or job.storyboard_task_id != task.get("task_id"):
                 task_queue.ack(task["task_id"])
                 continue
-            worker = _select_worker([worker_data], job, task_type="text") if job else None
+            worker = _select_worker([worker_data], job, task_type="text", min_vram_mb=0) if job else None
             if not worker:
                 held_tasks.append(task["task_id"])
                 continue

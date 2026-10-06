@@ -86,6 +86,45 @@ def _ordered_nodes(node_ids: list[str], order: str) -> list[str]:
     return cores + workers if order == "core-first" else workers + cores if order == "workers-first" else unique
 
 
+def is_core_node(node_id: str) -> bool:
+    """CORE (and its scaled replicas) are rollout targets of their own kind.
+
+    They never appear in the worker heartbeat map, so every phase of a CORE
+    target runs against the durable ``core_coordinators`` record instead of
+    ``workers[node_id]``.  Treating a missing worker as an offline node made a
+    workers-only lookup fail the rollout the moment CORE itself was in scope.
+    """
+    return node_id == "core" or node_id.startswith("core-")
+
+
+def _coordinator(rollout: dict, node_id: str) -> dict:
+    return rollout.setdefault("core_coordinators", {}).setdefault(
+        node_id, {"node_id": node_id, "coordinator_state": "PENDING"})
+
+
+def update_core_coordinator(node_id: str, updates: dict) -> dict:
+    """Canonical write API for the CORE rollout coordinator record.
+
+    The disposable coordinator (CORE-side update agent) reports drain, applied
+    version and self-test results through this call; ``reconcile_rollout``
+    advances the CORE node from the resulting record.
+    """
+    if not is_core_node(node_id):
+        raise ValueError("Only a CORE node has a rollout coordinator")
+    if not isinstance(updates, dict):
+        raise ValueError("Coordinator updates must be a mapping")
+    with _lock, _coordination_lock():
+        rollout = rollout_status()
+        if not rollout.get("nodes"):
+            raise RuntimeError("There is no active rollout for this CORE node")
+        if node_id not in {node.get("node_id") for node in rollout["nodes"]}:
+            raise RuntimeError(f"Node {node_id!r} is not part of the active rollout")
+        coordinator = _coordinator(rollout, node_id)
+        coordinator.update(updates)
+        coordinator["updated_at"] = _now()
+        return _write(rollout)
+
+
 def start_rollout(target_version: str, node_ids: list[str], order: str = "workers-first",
                   update_timeout_seconds: int = 600, canary: bool = False) -> dict:
     if not target_version or len(target_version) > 64:
@@ -127,8 +166,34 @@ def cancel_rollout() -> dict:
                 if node.get("phase") not in {"READY", "FAILED", "ROLLED_BACK"}:
                     node["phase"] = "CANCELLED"
             rollout["state"] = "CANCELLED"
+            # A cancel is not just a state flip: every agent still holding a
+            # pre-cancel snapshot must be fenced out until it acknowledges this
+            # token.  Clearing desired_state alone cannot stop a stale apply.
+            rollout["cancel_fence_token"] = secrets.token_hex(16)
+            rollout["cancelled_at"] = _now()
             return _write(rollout)
         return rollout
+
+
+def assert_not_fenced(worker: dict, rollout: dict) -> None:
+    """Refuse a mutation from an agent that never acknowledged a cancelled rollout.
+
+    The token is delivered through ``_cleanup_cancelled_workers``; an agent that
+    echoes it back proves it has observed the cancel before mutating anything.
+    """
+    if not rollout or rollout.get("state") != "CANCELLED":
+        return
+    token = rollout.get("cancel_fence_token")
+    if not token:
+        return
+    if worker.get("update_operation_id") != rollout.get("operation_id"):
+        return
+    if worker.get("cancel_fence_token") == token:
+        return
+    raise RuntimeError(
+        "Mutation blocked: rollout operation "
+        f"{rollout.get('operation_id')} was cancelled and this agent has not "
+        "acknowledged cancel_fence_token")
 
 
 def _cleanup_cancelled_workers(workers: dict[str, dict], rollout: dict) -> None:
@@ -137,6 +202,7 @@ def _cleanup_cancelled_workers(workers: dict[str, dict], rollout: dict) -> None:
         return
     cancelled_ids = {node["node_id"] for node in rollout.get("nodes", [])
                      if node.get("phase") == "CANCELLED"}
+    token = rollout.get("cancel_fence_token")
     for node_id in cancelled_ids:
         worker = workers.get(node_id)
         if worker is None:
@@ -148,6 +214,9 @@ def _cleanup_cancelled_workers(workers: dict[str, dict], rollout: dict) -> None:
                 dirty = True
         if dirty:
             worker.pop("self_test_requested_at", None)
+        if token:
+            worker["cancel_fence_token"] = token
+            worker["cancelled_operation_id"] = rollout.get("operation_id")
 
 
 def _begin_rollback(rollout: dict, workers: dict[str, dict], error: str) -> dict:
@@ -159,7 +228,12 @@ def _begin_rollback(rollout: dict, workers: dict[str, dict], error: str) -> dict
             worker is not None and worker.get("version") == target)
         if updated:
             node.update({"phase": "ROLLING_BACK", "phase_started_at": _now()})
-            if worker is not None:
+            if is_core_node(node["node_id"]):
+                _coordinator(rollout, node["node_id"]).update({
+                    "coordinator_state": "ROLLBACK",
+                    "rollback_target_version": node.get("previous_version"),
+                    "update_operation_id": rollout["operation_id"]})
+            elif worker is not None:
                 worker.update({"desired_state": "ROLLBACK",
                                "rollback_target_version": node.get("previous_version"),
                                "update_operation_id": rollout["operation_id"]})
@@ -185,6 +259,55 @@ def _timed_out(node: dict, timeout: int) -> bool:
         return False
 
 
+def _rollback_confirmed(rollout: dict, node: dict, record: dict) -> bool:
+    """Accept a rollback only from a fresh, in-operation self-test of the rolled-back version."""
+    test = record.get("self_test") or {}
+    return (record.get("version") == node.get("previous_version")
+            and record.get("update_operation_id") == rollout.get("operation_id")
+            and test.get("status") == "PASSED"
+            and str(test.get("checked_at", "")) > str(node.get("phase_started_at", "")))
+
+
+def _reconcile_core_active(rollout: dict, node: dict) -> dict:
+    """Advance a CORE rollout target from its durable coordinator record.
+
+    CORE has no heartbeat entry, so every phase reads ``core_coordinators``
+    instead of ``workers[node_id]``; a missing worker must not fail the node.
+    """
+    coordinator = _coordinator(rollout, node["node_id"])
+    if _timed_out(node, rollout.get("update_timeout_seconds", 600)):
+        node.update({"phase": "FAILED", "error": f"{node['phase']} timed out"})
+        return _begin_rollback(rollout, {}, node["error"])
+    if node["phase"] == "DRAINING":
+        coordinator.update({"coordinator_state": "DRAINING",
+                            "update_operation_id": rollout["operation_id"]})
+        if coordinator.get("drained"):
+            node.update({"phase": "UPDATING", "phase_started_at": _now(),
+                         "previous_version": coordinator.get("version")})
+            coordinator.update({"coordinator_state": "UPDATING",
+                                "update_target_version": rollout["target_version"]})
+    elif node["phase"] == "UPDATING":
+        coordinator.update({"coordinator_state": "UPDATING",
+                            "update_operation_id": rollout["operation_id"],
+                            "update_target_version": rollout["target_version"]})
+        if coordinator.get("version") == rollout["target_version"]:
+            node.update({"phase": "SELF_TESTING", "phase_started_at": _now()})
+            coordinator.update({"coordinator_state": "SELF_TESTING",
+                                "self_test_requested_at": _now()})
+    elif node["phase"] == "SELF_TESTING":
+        test = coordinator.get("self_test") or {}
+        if test.get("status") == "FAILED":
+            node.update({"phase": "FAILED", "error": test.get("error", "Self-test failed")})
+            return _begin_rollback(rollout, {}, node["error"])
+        if (test.get("status") == "PASSED"
+                and coordinator.get("version") == rollout["target_version"]
+                and str(test.get("checked_at", "")) > str(node.get("phase_started_at", ""))):
+            node["phase"] = "READY"
+            coordinator.update({"coordinator_state": "READY"})
+            coordinator.pop("self_test_requested_at", None)
+    return _write(rollout)
+
+
 def reconcile_rollout(workers: dict[str, dict]) -> dict:
     """Advance durable rollout state. Safe to call after any process restart."""
     with _lock, _coordination_lock():
@@ -193,8 +316,22 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
         # affected workers so they don't continue processing stale directives.
         _cleanup_cancelled_workers(workers, rollout)
         if rollout.get("state") == "ROLLING_BACK":
-            for node in rollout.get("nodes", []):
+            for node in rollout["nodes"]:
                 if node.get("phase") != "ROLLING_BACK":
+                    continue
+                if is_core_node(node["node_id"]):
+                    coordinator = _coordinator(rollout, node["node_id"])
+                    if _timed_out(node, rollout.get("update_timeout_seconds", 600)):
+                        node.update({"phase": "ROLLBACK_FAILED", "error": "Rollback timed out"})
+                        rollout["state"] = "ROLLBACK_FAILED"
+                        return _write(rollout)
+                    coordinator.update({"coordinator_state": "ROLLBACK",
+                                        "rollback_target_version": node.get("previous_version"),
+                                        "update_operation_id": rollout["operation_id"]})
+                    if _rollback_confirmed(rollout, node, coordinator):
+                        node["phase"] = "ROLLED_BACK"
+                        coordinator["coordinator_state"] = "ROLLED_BACK"
+                        coordinator.pop("self_test_requested_at", None)
                     continue
                 worker = workers.get(node["node_id"])
                 if worker is None or _timed_out(node, rollout.get("update_timeout_seconds", 600)):
@@ -204,8 +341,7 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
                 worker.update({"desired_state": "ROLLBACK",
                                "rollback_target_version": node.get("previous_version"),
                                "update_operation_id": rollout["operation_id"]})
-                if (worker.get("version") == node.get("previous_version")
-                        and (worker.get("self_test") or {}).get("status") == "PASSED"):
+                if _rollback_confirmed(rollout, node, worker):
                     node["phase"] = "ROLLED_BACK"
                     worker.pop("desired_state", None)
                     worker.pop("rollback_target_version", None)
@@ -224,7 +360,10 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
                 return _write(rollout)
             active = pending[0]
             active.update({"phase": "DRAINING", "phase_started_at": _now()})
+        if is_core_node(active["node_id"]):
+            return _reconcile_core_active(rollout, active)
         worker = workers.get(active["node_id"])
+
         if worker is None:
             active.update({"phase": "FAILED", "error": "Worker is offline"})
             return _begin_rollback(rollout, workers, active["error"])

@@ -290,6 +290,17 @@ services:
       timeout: 10s
       retries: 20
     restart: unless-stopped
+  node-exporter:
+    image: ${VERTEP_NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.8.2}
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro,rslave
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
   monitoring:
     image: ${VERTEP_MONITORING_IMAGE:-prom/prometheus:v3.5.0}
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus",

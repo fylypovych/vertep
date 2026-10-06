@@ -133,6 +133,7 @@
     "services": [
       "worker",
       "monitoring",
+      "node-exporter",
       "log-store",
       "log-collector",
       "grafana",
