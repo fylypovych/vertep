@@ -310,7 +310,10 @@ def test_wiped_data_directory_starts_empty(tmp_path, monkeypatch):
     queue.enqueue({"job_id": "wiped", "priority": 5})
     _shutdown(proc, url)
     for path in directory.iterdir():
-        path.unlink()
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
     proc2, url2 = _spawn_redis(directory, binary, appendonly="yes")
     monkeypatch.setenv("REDIS_URL", url2)

@@ -52,6 +52,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.46
+- Виправлено `tests/test_queue_redis_contract.py::test_wiped_data_directory_starts_empty`: коректне видалення директорії `appendonlydir` Redis при очищенні тестової директорії даних (`shutil.rmtree` для директорій, `unlink` для файлів).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.45
 - Виправлено маскування секретів у `core/logging_config.py`: прибрано обмежувальний negative lookahead для `bearer`, додано повне маскування `basic_auth` credentials; оновлено `tests/test_no_secrets_acceptance.py` — використання `monkeypatch.setenv` замість прямої зміни `os.environ` для ізоляції тестів.
 - Реалізовано ідемпотентне звітування до GitHub у `core/real_tests/github.py`: `test_run_id` звітується лише один раз, одночасні спроби обробляються як skip; повна пагінація коментарів для виявлення маркерів на будь-якій сторінці.
