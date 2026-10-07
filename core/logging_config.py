@@ -10,7 +10,7 @@ from pathlib import Path
 _SECRET_KEY_VALUE = re.compile(
     r"(?ix)((?:\"|\')?"
     r"(?:access_token|access_key|api[_-]?key|client[_-]?secret|refresh[_-]?token|auth[_-]?token|"
-    r"session[_-]?id|password|passwd|passphrase|secret|token|authorization|proxy[_-]?password|"
+    r"session[_-]?id|password|passwd|passphrase|secret|token|proxy[_-]?password|"
     r"private[_-]?key|ssh[_-]?private[_-]?key|aws[_-]?access[_-]?key|aws[_-]?secret[_-]?key|"
     r"aws_access_key|credentials|basic[_-]?auth|smtp_password|youtube_client_secret|telegram_bot_token|"
     r"external_ai_api_key|license_key|ssh_private_key|secret_store_passphrase)"
@@ -18,7 +18,6 @@ _SECRET_KEY_VALUE = re.compile(
     # A quoted value is consumed whole; an unquoted value may itself contain
     # separators such as the colon in a Telegram bot token (``123456:AAH...``).
     # Space is included for cases like ``basic_auth=Basic <base64>``.
-    r"(?!(?:bearer\b|bearer\s+))"
     r"(?:\"[^\"]*\"|'[^']*'|[A-Za-z0-9._\-+/=:\s]{4,})",
 )
 # Match quoted JSON keys with secret-like names to redact their values.
@@ -72,6 +71,8 @@ def secret_redact(text: str) -> str:
     text = _URL_USERINFO.sub(lambda m: m.group(1) + m.group(2) + ":[REDACTED]@", text)
     text = _QUERY_CREDENTIAL.sub(lambda m: m.group(1) + "[REDACTED]", text)
     text = re.sub(r"(?i)(Authorization\s*:\s*Basic\s+)([A-Za-z0-9._\-+/=]+)",
+                  r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)(basic[_-]?auth\s*[:=]\s*)((?:Basic\s+)?[A-Za-z0-9._\-+/=]+)",
                   r"\1[REDACTED]", text)
     text = _JSON_SECRET_KEY.sub(_redact_json_value, text)
     text = _SECRET_KEY_VALUE.sub(lambda m: m.group(1) + "[REDACTED]", text)

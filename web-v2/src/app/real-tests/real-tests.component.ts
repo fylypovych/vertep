@@ -102,9 +102,18 @@ export class RealTestsComponent {
     });
   }
 
-  retryReport(run: RealTestRunSummary): void {
-    this.api.retryReport(run.test_run_id).subscribe({
-      next: () => this.viewReport(run),
+  retryReport(): void {
+    const runId = this.selectedRunId();
+    if (!runId) {
+      return;
+    }
+    this.api.retryReport(runId).subscribe({
+      next: () => {
+        const run = this.runs().find((r) => r.test_run_id === runId);
+        if (run) {
+          this.viewReport(run);
+        }
+      },
       error: (err) => this.error.set(err?.error?.detail || err?.message || 'Помилка повторної відправки'),
     });
   }

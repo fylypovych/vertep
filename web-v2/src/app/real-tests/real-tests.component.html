@@ -1,0 +1,217 @@
+<div class="space-y-5" data-testid="real-tests-page">
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+    <div>
+      <h3 class="text-lg font-semibold text-slate-900">Реальні тести</h3>
+      <p class="mt-1 text-sm text-slate-500">Сценарії реального стенда та історія прогонів</p>
+    </div>
+    <button
+      type="button"
+      class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+      (click)="load()"
+      [disabled]="loading()"
+    >
+      Оновити
+    </button>
+  </div>
+
+  @if (loading()) {
+    <div class="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500" data-testid="real-tests-loading">
+      Завантаження…
+    </div>
+  }
+
+  @if (error(); as errorMessage) {
+    <div
+      class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800"
+      data-testid="real-tests-error"
+      role="alert"
+    >
+      {{ errorMessage }}
+      <button type="button" class="ml-3 underline" (click)="load()">Повторити</button>
+    </div>
+  }
+
+  @if (!loading()) {
+    <div class="flex gap-2" role="tablist">
+      <button
+        type="button"
+        class="rounded-lg px-3 py-2 text-sm"
+        [class.bg-slate-900]="tab() === 'scenarios'"
+        [class.text-white]="tab() === 'scenarios'"
+        [class.bg-white]="tab() !== 'scenarios'"
+        [class.border]="tab() !== 'scenarios'"
+        [class.border-slate-300]="tab() !== 'scenarios'"
+        data-testid="real-tests-tab-scenarios"
+        (click)="tab.set('scenarios')"
+      >
+        Сценарії ({{ scenarios().length }})
+      </button>
+      <button
+        type="button"
+        class="rounded-lg px-3 py-2 text-sm"
+        [class.bg-slate-900]="tab() === 'history'"
+        [class.text-white]="tab() === 'history'"
+        [class.bg-white]="tab() !== 'history'"
+        [class.border]="tab() !== 'history'"
+        [class.border-slate-300]="tab() !== 'history'"
+        data-testid="real-tests-tab-history"
+        (click)="tab.set('history')"
+      >
+        Історія ({{ runs().length }})
+      </button>
+    </div>
+
+    @if (tab() === 'scenarios') {
+      @if (scenarios().length === 0) {
+        <div class="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500" data-testid="real-tests-scenarios-empty">
+          Сценаріїв не знайдено
+        </div>
+      } @else {
+        <div class="grid gap-3">
+          @for (scenario of scenarios(); track scenario.id) {
+            <div class="rounded-lg border border-slate-200 bg-white p-4" [attr.data-testid]="'real-tests-scenario-' + scenario.id">
+              <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p class="font-medium text-slate-900">{{ scenario.name }}</p>
+                  @if (scenario.rt_id) {
+                    <p class="mt-1 text-xs text-slate-500">{{ scenario.rt_id }}</p>
+                  }
+                  @if (scenario.description) {
+                    <p class="mt-1 text-sm text-slate-600">{{ scenario.description }}</p>
+                  }
+                  @if (scenario.checks.length > 0) {
+                    <p class="mt-1 text-xs text-slate-500">Перевірок: {{ scenario.checks.length }}</p>
+                  }
+                </div>
+                <button
+                  type="button"
+                  class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50"
+                  [disabled]="running()[scenario.rt_id || scenario.id]"
+                  (click)="requestRun(scenario)"
+                >
+                  {{ running()[scenario.rt_id || scenario.id] ? 'Запуск…' : 'Запустити' }}
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    }
+
+    @if (tab() === 'history') {
+      @if (runs().length === 0) {
+        <div class="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500" data-testid="real-tests-history-empty">
+          Прогонів ще не було
+        </div>
+      } @else {
+        <div class="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table class="min-w-full text-sm">
+            <thead class="bg-slate-50 text-left text-xs text-slate-500">
+              <tr>
+                <th class="px-4 py-2">Сценарій</th>
+                <th class="px-4 py-2">Статус</th>
+                <th class="px-4 py-2">Результат</th>
+                <th class="px-4 py-2">Почато</th>
+                <th class="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (run of runs(); track run.test_run_id) {
+                <tr class="border-t border-slate-100" [attr.data-testid]="'real-tests-run-' + run.test_run_id">
+                  <td class="px-4 py-2">{{ run.rt_id }}</td>
+                  <td class="px-4 py-2">{{ run.status }}</td>
+                  <td class="px-4 py-2" [class]="statusClass(run.final_result)">{{ resultLabel(run.final_result) }}</td>
+                  <td class="px-4 py-2 text-slate-500">{{ run.started_at }}</td>
+                  <td class="px-4 py-2 text-right">
+                    <button type="button" class="underline" (click)="viewReport(run)">Звіт</button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    }
+  }
+
+  @if (confirmDialog(); as dialog) {
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40" data-testid="real-tests-confirm">
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+        <h4 class="text-base font-semibold text-slate-900">Запустити сценарій?</h4>
+        <p class="mt-2 text-sm text-slate-600">{{ dialog.name }}</p>
+        @if (dialog.destructive) {
+          <p class="mt-2 text-sm text-amber-700" data-testid="real-tests-confirm-destructive">
+            Сценарій містить деструктивні перевірки — дані стенда можуть бути змінені.
+          </p>
+        }
+        <div class="mt-4 flex justify-end gap-2">
+          <button type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm" (click)="cancelDialog()">
+            Скасувати
+          </button>
+          <button type="button" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white" (click)="confirmRun()">
+            Запустити
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (selectedRunId()) {
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40" data-testid="real-tests-report">
+      <div class="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl">
+        <div class="flex items-start justify-between">
+          <h4 class="text-base font-semibold text-slate-900">Звіт прогону</h4>
+          <button type="button" class="text-sm underline" (click)="closeReport()">Закрити</button>
+        </div>
+
+        @if (!report()) {
+          <p class="mt-3 text-sm text-slate-500">Завантаження звіту…</p>
+        } @else {
+          <div class="mt-3 space-y-2 text-sm">
+            <p><span class="text-slate-500">Сценарій:</span> {{ report()!.rt_id }}</p>
+            <p><span class="text-slate-500">Статус:</span> {{ report()!.status }}</p>
+            <p>
+              <span class="text-slate-500">Результат:</span>
+              <span [class]="statusClass(report()!.final_result)">{{ resultLabel(report()!.final_result) }}</span>
+            </p>
+            <p><span class="text-slate-500">Версія:</span> {{ report()!.version }}</p>
+            <p><span class="text-slate-500">SHA:</span> {{ report()!.commit_sha }}</p>
+
+            @if (report()!.error_details) {
+              <p class="text-amber-700" data-testid="real-tests-report-error">{{ report()!.error_details }}</p>
+            }
+
+            <table class="min-w-full">
+              <thead class="text-left text-xs text-slate-500">
+                <tr>
+                  <th class="py-1 pr-3">Перевірка</th>
+                  <th class="py-1 pr-3">Статус</th>
+                  <th class="py-1">Деталі</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (check of report()!.checks; track check.name) {
+                  <tr class="border-t border-slate-100">
+                    <td class="py-1 pr-3">{{ check.name }}</td>
+                    <td class="py-1 pr-3" [class]="statusClass(check.status)">{{ check.status }}</td>
+                    <td class="py-1 text-slate-600">{{ check.detail }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+
+            @if (!report()!.github_report) {
+              <button
+                type="button"
+                class="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                (click)="retryReport()"
+              >
+                Повторити відправку до GitHub
+              </button>
+            }
+          </div>
+        }
+      </div>
+    </div>
+  }
+</div>

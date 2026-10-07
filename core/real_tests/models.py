@@ -66,6 +66,10 @@ class TestRun(BaseModel):
     error_details: str | None = None
     github_report: dict[str, Any] | None = None
     audit: list[dict[str, str]] = Field(default_factory=list)
+    prerequisites: dict[str, Any] = Field(default_factory=dict)
+    progress: str | None = None
+    destructive_confirmation: bool | None = None
+    confirmation_timestamp: str | None = None
 
     def to_report(self) -> dict[str, Any]:
         return _test_run_to_report(self)
@@ -109,4 +113,8 @@ def _test_run_to_report(run: TestRun) -> dict[str, Any]:
         ],
         "error_details": run.error_details,
         "github_report": run.github_report,
+        "prerequisites": run.prerequisites,
+        "progress": run.progress,
+        "destructive_confirmation": run.destructive_confirmation,
+        "confirmation_timestamp": run.confirmation_timestamp,
     }

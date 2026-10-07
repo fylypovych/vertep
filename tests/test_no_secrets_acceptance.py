@@ -136,7 +136,7 @@ def test_read_logs_redacts_secrets():
                 assert value not in str(record), f"Secret value {value!r} leaked in read_logs"
 
 
-def test_operation_create_and_fail_redacts():
+def test_operation_create_and_fail_redacts(monkeypatch):
     """Operations create/fail must redact secrets in error messages."""
     import core.operations as operations
 
@@ -144,7 +144,7 @@ def test_operation_create_and_fail_redacts():
     import os
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        os.environ["CONFIG_ROOT"] = tmpdir
+        monkeypatch.setenv("CONFIG_ROOT", tmpdir)
         operation = operations.create_operation("update", "node-1")
         operations.fail_operation(operation["operation_id"], "api_key=leaked-key")
         entry = operations.audit_entry(operation["operation_id"], "FAILED", "password=leaked-pass", "operator")

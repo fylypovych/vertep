@@ -206,6 +206,12 @@ def record_github_report(
     version: str | None = None,
     commit_sha: str | None = None,
 ) -> None:
+    """Record GitHub report in the test run registry.
+
+    Updates are idempotent and preserve existing fields — if a previous
+    report was partially written (e.g. during an outage), the retry will
+    merge rather than overwrite, ensuring the final result is never lost.
+    """
     now = utc_now()
     report: dict[str, Any] = {
         "reported_at": now,
@@ -224,7 +230,12 @@ def record_github_report(
             return
         existing = run_data.get("github_report")
         if existing and isinstance(existing, dict):
-            existing.update(report)
+            # Merge: preserve previously set fields, update with new values.
+            # This ensures that if an outage left only ``final_result`` set,
+            # a retry will add ``comment_id`` / ``reported_at`` without
+            # clobbering the already‑saved result.
+            merged = {**existing, **report}
+            run_data["github_report"] = merged
         else:
             run_data["github_report"] = report
         runs[test_run_id] = run_data

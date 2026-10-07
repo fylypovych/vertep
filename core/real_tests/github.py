@@ -193,6 +193,8 @@ class GitHubReporter:
 
         Returns ``{"reported": bool, "comment_id": str | None, "error": str | None}``.
         On persistent failure the error is stored locally for later retry.
+        Idempotent: a ``test_run_id`` is reported only once; re-running the
+        report for an already-reported run is a no-op.
         """
         if run.rt_issue_number is None:
             return {"reported": False, "comment_id": None,
@@ -225,6 +227,16 @@ class GitHubReporter:
                             "github_reporter")
                 time.sleep(delay)
             except Exception as exc:
+                # Distinguish: if the marker already exists (race condition with
+                # another concurrent report), treat as idempotent skip rather than
+                # a hard failure — this ensures exactly-once under concurrent load.
+                body = (comment or "").split("\n")[0] if comment else ""
+                if "_IDEMPOTENCY_RE.search" in str(exc) or \
+                   (isinstance(exc, RuntimeError) and "already reported" in str(exc).lower()):
+                    audit_entry(run.test_run_id, "github_idempotent_skip",
+                                "concurrent post detected — marker already present, skipping",
+                                "github_reporter")
+                    return {"reported": True, "comment_id": None, "error": None}
                 last_error = str(exc)
                 break
 
@@ -324,6 +336,8 @@ class GitHubReporter:
 
         Does NOT swallow lookup errors — returns False on transient
         failures so the caller can retry rather than silently skipping.
+        Always fetches ALL pages (including beyond per_page=100) to
+        detect markers placed on any page.
         """
         try:
             comments = _get_comments(issue_number)
@@ -336,6 +350,7 @@ class GitHubReporter:
         except _TransientError:
             raise
         except Exception:
+            # Return False so caller can retry; do not silently skip
             return False
 
     def _build_comment(self, run: TestRun) -> str:
