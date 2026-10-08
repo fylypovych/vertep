@@ -174,5 +174,12 @@ async def _internal_api(method: str, base_environment: str, path: str,
             response = await client.request(method, f"{base}{path}", json=payload)
             response.raise_for_status()
             return response.json()
+    except httpx.HTTPStatusError as error:
+        status = error.response.status_code
+        raise HTTPException(502, f"Upstream {base_environment} returned HTTP {status}") from error
+    except httpx.ConnectError:
+        raise HTTPException(502, f"{base_environment} is unreachable") from error
+    except httpx.TimeoutException:
+        raise HTTPException(504, f"{base_environment} timed out") from error
     except Exception as error:
-        raise HTTPException(502, str(error)) from error
+        raise HTTPException(503, "Internal service error") from error

@@ -96,6 +96,11 @@ def _repo() -> str:
     return repo
 
 
+def _api_base() -> str:
+    """Base URL for the GitHub REST API (overridable for controlled tests)."""
+    return os.getenv("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
+
+
 def _api_request(
     method: str,
     url: str,
@@ -137,12 +142,14 @@ def _api_request(
         raise _TransientError(f"GitHub API network error: {exc.reason}")
     except TimeoutError:
         raise _TransientError("GitHub API request timed out")
+    except (ConnectionError, OSError) as exc:
+        raise _TransientError(f"GitHub API connection failed: {exc}")
 
 
 def _post_comment(issue_number: int, body: str) -> str:
     """Post a comment to a GitHub issue. Returns the comment ID."""
     repo = _repo()
-    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
+    url = f"{_api_base()}/repos/{repo}/issues/{issue_number}/comments"
     result = _api_request("POST", url, body={"body": body})
     comment_id = str(result.get("id", "unknown"))
     return comment_id
@@ -159,7 +166,7 @@ def _get_comments(issue_number: int) -> list[dict]:
     all_comments: list[dict] = []
     page = 1
     while True:
-        url = (f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
+        url = (f"{_api_base()}/repos/{repo}/issues/{issue_number}/comments"
                f"?per_page=100&page={page}")
         response = _api_request("GET", url)
         if not isinstance(response, list) or not response:
@@ -178,7 +185,7 @@ def _get_comments(issue_number: int) -> list[dict]:
 def _close_issue(issue_number: int) -> None:
     """Close a GitHub issue with 'completed' reason."""
     repo = _repo()
-    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
+    url = f"{_api_base()}/repos/{repo}/issues/{issue_number}"
     _api_request("PATCH", url, body={"state": "closed", "state_reason": "completed"})
 
 
@@ -204,9 +211,16 @@ class GitHubReporter:
             return {"reported": False, "comment_id": None,
                     "error": "github_pat is not configured"}
 
-        if self._already_reported(run.test_run_id, run.rt_issue_number):
-            audit_entry(run.test_run_id, "github_reported", "already reported; skipping", "github_reporter")
-            return {"reported": True, "comment_id": None, "error": None}
+        try:
+            if self._already_reported(run.test_run_id, run.rt_issue_number):
+                audit_entry(run.test_run_id, "github_reported", "already reported; skipping", "github_reporter")
+                return {"reported": True, "comment_id": None, "error": None}
+        except _TransientError:
+            # Outage during pre-check: fail closed into REPORT_PENDING via the
+            # normal retry path — never mask the outage as success.
+            audit_entry(run.test_run_id, "github_precheck_unavailable",
+                        "marker lookup unavailable; proceeding to POST attempt",
+                        "github_reporter")
 
         comment = self._build_comment(run)
         last_error: str | None = None
@@ -220,6 +234,18 @@ class GitHubReporter:
                                      version=run.version, commit_sha=run.commit_sha)
                 return {"reported": True, "comment_id": comment_id, "error": None}
             except _TransientError as exc:
+                # Unknown POST outcome: the comment may have been created
+                # server-side despite the transport error (timeout/reset).
+                # Reconcile via marker lookup before blind retry — otherwise
+                # a retry would double-post (i.0.0.0.96 exactly-once).
+                try:
+                    if self._already_reported(run.test_run_id, run.rt_issue_number):
+                        audit_entry(run.test_run_id, "github_idempotent_skip",
+                                    "unknown POST outcome reconciled — marker present, skipping retry",
+                                    "github_reporter")
+                        return {"reported": True, "comment_id": None, "error": None}
+                except _TransientError:
+                    pass  # lookup itself transient — proceed to normal retry
                 last_error = str(exc)
                 delay = self.BASE_DELAY * (2 ** attempt)
                 audit_entry(run.test_run_id, "github_retry",
@@ -227,16 +253,16 @@ class GitHubReporter:
                             "github_reporter")
                 time.sleep(delay)
             except Exception as exc:
-                # Distinguish: if the marker already exists (race condition with
-                # another concurrent report), treat as idempotent skip rather than
-                # a hard failure — this ensures exactly-once under concurrent load.
-                body = (comment or "").split("\n")[0] if comment else ""
-                if "_IDEMPOTENCY_RE.search" in str(exc) or \
-                   (isinstance(exc, RuntimeError) and "already reported" in str(exc).lower()):
-                    audit_entry(run.test_run_id, "github_idempotent_skip",
-                                "concurrent post detected — marker already present, skipping",
-                                "github_reporter")
-                    return {"reported": True, "comment_id": None, "error": None}
+                # Permanent POST failure: reconcile before giving up — a
+                # concurrent reporter may have posted the marker meanwhile.
+                try:
+                    if self._already_reported(run.test_run_id, run.rt_issue_number):
+                        audit_entry(run.test_run_id, "github_idempotent_skip",
+                                    "concurrent post detected — marker already present, skipping",
+                                    "github_reporter")
+                        return {"reported": True, "comment_id": None, "error": None}
+                except _TransientError:
+                    pass
                 last_error = str(exc)
                 break
 

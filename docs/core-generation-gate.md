@@ -50,21 +50,25 @@ generation calls у `core/`.
 
 ### 2.3 LOCAL_WORKER_FALLBACK (задокументовані винятки)
 
-Для single-node інсталяцій без окремого Worker-процесу існують локальні fallback-шляхи,
-захищені змінною `LOCAL_WORKER_FALLBACK` та перевіркою наявності вузла
-(`_has_text_worker()`, `_has_publisher_worker()`). Вони **тимчасові** і повинні зникнути
-після того, як Worker завжди присутній (див. залежності §4).
+Локальні fallback-шляхи активні лише при `LOCAL_WORKER_FALLBACK=true`
+**і** `VERTEP_DEMO=true` одночасно (`core/local_fallback.py`,
+i.0.0.1.4 #104). Production тримає обидва `false`; production-приймання
+з увімкненим fallback недійсне.
 
 ## 3. Механізм gate
 
-Статичний тест `tests/test_core_generation_gate.py`:
+Статичний тест `tests/test_core_generation_gate.py` парсить справжній
+Python AST (i.0.0.1.4 #104), резолвить аліаси (`engine.render()` →
+`video_engine.render`) та перевіряє кожен виклик проти `ALLOWLIST`.
 
-1. Сканує **всі** `core/*.py` файли рядок за рядком.
-2. Шукає заборонені patterns (§2.1).
-3. Кожне співпадіння, не внесене в `ALLOWLIST`, провалює тест-сьют.
+Native FFmpeg assembly у CORE залишається control-plane операцією (AGENTS.md §20).
+Захист від іншого VideoEngine через той самий CORE шлях (i.0.0.1.4 #104):
+зовнішні рушії диспетчеризуються на Worker, а рушій з чужим `provider`
+відмовляється fail-closed guard'ом `_is_native_engine()` у
+`core/pipeline.py:finalize_job()` до будь-якого render.
 
 `ALLOWLIST` у тесті містить задокументовані винятки (§2.2, §2.3) з прив'язкою
-до конкретного файлу й номера рядка:
+до конкретного файлу й call-site:
 
 - `core/api/job_helpers.py:217` — ScriptAgent local fallback.
 - `core/script_agent.py:21` — місце визначення LLM inference (виконується на Text Worker

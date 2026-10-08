@@ -443,7 +443,8 @@ def publish_job(job_id: str, channels: list[str] | None = None):
     transition_stage(job, StageName.PUBLISH, StageStatus.RUNNING)
     job.publish_attempt = 0
     job.publish_error = None
-    local_fallback = os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true"
+    from ..local_fallback import local_fallback_allowed
+    local_fallback = local_fallback_allowed()
     if not has_publisher and local_fallback:
         results = {}
         for channel in targets:

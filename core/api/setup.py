@@ -175,6 +175,8 @@ async def _validate_ai_backend(backend: str, url: str | None, model: str | None,
         # wizard has committed the selected node role. Deployment validates
         # the container and pulls the model once that service is available.
         return
+    if backend == "external" and not url:
+        raise ValueError("External AI backend requires a URL")
     base_url = url or (os.getenv("OLLAMA_URL", "http://ollama:11434") if backend == "ollama"
                        else "https://api.openai.com/v1")
     if backend != "ollama" and not api_key:

@@ -8,11 +8,16 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 from fastapi.testclient import TestClient
 from core.app import app, store
 from core.dispatcher import available_worker
 from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, WorkerState, utc_now
 from worker import role_executor
+from core.storyboard import StoryboardService
+
+# Store original queue method before autouse fixture patches it
+_original_storyboard_queue = StoryboardService.queue
 
 _tc = TestClient(app)
 
@@ -58,6 +63,7 @@ import pytest
 def _enable_local_fallback(monkeypatch):
     """Enable LOCAL_WORKER_FALLBACK for tests that rely on local script/publish generation."""
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
+    monkeypatch.setenv("VERTEP_DEMO", "true")
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +92,19 @@ def _complete_script_task(client, job_id, node_name="text-worker"):
         "success": True, "artifacts": [artifact]})
     assert response.status_code == 200
     return artifact
+
+
+def _create_job_in_store(topic="Test topic", min_vram_mb=0, character_id="did_samogon", priority=5):
+    """Create a Job directly in the store without triggering the pipeline."""
+    from core.app import store
+    job = store.create(
+        topic=topic,
+        character_id=character_id,
+        priority=priority,
+        source="test",
+        min_vram_mb=min_vram_mb,
+    )
+    return job
 
 
 def _approve_script_and_storyboard(client, job_id):
@@ -700,7 +719,11 @@ def _storyboard_artifact(version: int, title: str = "Тестова історі
 
 def test_storyboard_result_rejected_when_caller_does_not_hold_claim(monkeypatch):
     from core.state import task_queue
+    # Restore the original queue method (stored at module import time before autouse fixture patches it)
+    monkeypatch.setattr(StoryboardService, "queue", _original_storyboard_queue)
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("VERTEP_DEMO", "false")
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
     client = TestClient(app)
     for name in ("text-a", "text-b"):
         client.post("/api/workers/heartbeat", json={
@@ -711,24 +734,41 @@ def test_storyboard_result_rejected_when_caller_does_not_hold_claim(monkeypatch)
     job_id = created["job_id"]
     job = store.jobs[job_id]
     job.min_vram_mb = 0
-    task = task_queue.enqueue({
-        "job_id": job_id, "task": "storyboard", "priority": job.priority,
-        "topic": job.topic, "prompt": "p", "storyboard_version": 1,
-        "image_version": 1, "revision": None, "timeout": 300,
-    })
-    store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
-    job.storyboard_task_id = task["task_id"]
-    job.active_task_id = task["task_id"]
 
-    # text-a claims the task.
+    # Complete script task so storyboard is queued (real queue, not mock)
+    _complete_script_task(client, job_id, "text-a")
+    resp = client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
+    assert resp.status_code == 200
+
+    # Wait for _prepare_and_dispatch executor to run queue_storyboard
+    for _ in range(200):
+        job = store.jobs[job_id]
+        if job.storyboard_task_id is not None:
+            break
+        time.sleep(0.025)
+    assert job.storyboard_task_id is not None
+    task_id = job.storyboard_task_id
+
+    # Verify status is STORYBOARD_QUEUED
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "STORYBOARD_QUEUED":
+            break
+        time.sleep(0.025)
+    assert job["status"] == "STORYBOARD_QUEUED"
+
+    job = store.jobs[job_id]
+    assert job.storyboard_task_id == task_id
+
+    # text-a claims the storyboard task.
     claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
-    assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
+    assert claimed["task"] and claimed["task"]["task_id"] == task_id
     assert job.status == JobStatus.STORYBOARD_GENERATING
 
     # text-b (who never claimed) submits a result — must be rejected.
     artifact = _storyboard_artifact(1)
     response = client.post("/api/tasks/result", json={
-        "job_id": job_id, "task_id": task["task_id"], "node_name": "text-b",
+        "job_id": job_id, "task_id": task_id, "node_name": "text-b",
         "success": True, "artifacts": [artifact],
     })
     assert response.status_code == 200
@@ -736,7 +776,7 @@ def test_storyboard_result_rejected_when_caller_does_not_hold_claim(monkeypatch)
     # legitimate retry can still happen.
     assert store.jobs[job_id].status == JobStatus.STORYBOARD_GENERATING
     assert store.workers["text-b"].get("current_task") is None
-    assert task_queue.inflight_has(task["task_id"])
+    assert task_queue.inflight_has(task_id)
 
 
 def test_storyboard_expired_lease_requeues_within_budget(monkeypatch):
@@ -758,8 +798,8 @@ def test_storyboard_expired_lease_requeues_within_budget(monkeypatch):
         "node_name": "text-a", "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
     })
-    created = client.post("/api/jobs", json={"topic": "Crashed worker", "min_vram_mb": 0}).json()
-    job_id = created["job_id"]
+    job = _create_job_in_store(topic="Crashed worker", min_vram_mb=0)
+    job_id = job.job_id
     job = store.jobs[job_id]
     job.min_vram_mb = 0
     task = task_queue.enqueue({
@@ -804,10 +844,11 @@ def test_storyboard_expired_lease_exhausts_budget(monkeypatch):
         "node_name": "text-a", "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
     })
-    created = client.post("/api/jobs", json={"topic": "Unreliable worker", "min_vram_mb": 0}).json()
-    job_id = created["job_id"]
+    job = _create_job_in_store(topic="Unreliable worker", min_vram_mb=0)
+    job_id = job.job_id
     job = store.jobs[job_id]
     job.min_vram_mb = 0
+
     task = task_queue.enqueue({
         "job_id": job_id, "task": "storyboard", "priority": job.priority,
         "topic": job.topic, "prompt": "p", "storyboard_version": 1,
@@ -884,8 +925,8 @@ def test_storyboard_task_lifecycle_audit_matches_repository_and_queue(monkeypatc
         "node_name": "text-a", "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
     })
-    created = client.post("/api/jobs", json={"topic": "Lifecycle audit", "min_vram_mb": 0}).json()
-    job_id = created["job_id"]
+    job = _create_job_in_store(topic="Lifecycle audit", min_vram_mb=0)
+    job_id = job.job_id
     job = store.jobs[job_id]
     job.min_vram_mb = 0
 
@@ -949,8 +990,8 @@ def test_storyboard_claim_is_exclusive_and_transitions_generating(monkeypatch):
             "node_name": name, "vram_mb": 0,
             "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
         })
-    created = client.post("/api/jobs", json={"topic": "Concurrent storyboard", "min_vram_mb": 0}).json()
-    job_id = created["job_id"]
+    job = _create_job_in_store(topic="Concurrent storyboard", min_vram_mb=0)
+    job_id = job.job_id
     job = store.jobs[job_id]
     # The storyboard claim path uses job.min_vram_mb (no explicit override), so
     # the 0-VRAM text worker must satisfy it.
@@ -1101,6 +1142,78 @@ def test_backup_unconfigured_returns_503(monkeypatch):
     resp = _tc.post("/api/system/backups")
     assert resp.status_code == 503
     assert "BACKUP_URL" in resp.json()["detail"]
+
+
+class _FakeResponse:
+    def __init__(self, status_code, json_data, text=""):
+        self.status_code = status_code
+        self._json = json_data
+        self.text = text
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}", request=None, response=self)
+
+    def json(self):
+        return self._json
+
+
+def test_backup_create_list_progress_through_core_proxy(monkeypatch):
+    """Issue #101: Web UI→CORE→Backup service snapshot→list/progress smoke."""
+    import core.app as core_app
+
+    snapshots = [
+        {"snapshot_id": "snap-1", "file": "snap-1.vtbackup", "created_at": "2026-01-01T00:00:00Z"}
+    ]
+
+    async def fake_request(self, method, url, **kwargs):
+        if url.endswith("/snapshots") and method == "POST":
+            return _FakeResponse(200, {
+                "snapshot_id": "new-snap", "job_id": "job-1",
+                "created_at": "2026-01-02T00:00:00Z", "sha256": "abc123"
+            })
+        if url.endswith("/snapshots") and method == "GET":
+            return _FakeResponse(200, {"snapshots": snapshots})
+        if "/restore/progress" in url:
+            return _FakeResponse(200, {"status": "running", "progress": 50, "message": "restoring"})
+        return _FakeResponse(404, {"detail": "not found"})
+
+    monkeypatch.setenv("BACKUP_URL", "http://backup:8080")
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+
+    resp = _tc.post("/api/system/backups", json={"job_id": "job-1"})
+    assert resp.status_code == 200
+    assert resp.json()["snapshot_id"] == "new-snap"
+
+    resp = _tc.get("/api/system/backups")
+    assert resp.status_code == 200
+    assert len(resp.json()["snapshots"]) == 1
+
+    resp = _tc.get("/api/system/backups/new-snap/restore/progress")
+    assert resp.status_code == 200
+    assert resp.json()["progress"] == 50
+
+
+def test_internal_api_sanitizes_upstream_errors(monkeypatch):
+    """Issue #101: _internal_api must not leak raw upstream response text."""
+    import core.app as core_app
+
+    async def fake_request(self, method, url, **kwargs):
+        response = _FakeResponse(500, {"detail": "internal server error"},
+                                  text="SECRET=leaked-data\nstacktrace-here")
+        raise httpx.HTTPStatusError("HTTP 500", request=None, response=response)
+
+    monkeypatch.setenv("BACKUP_URL", "http://backup:8080")
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+
+    resp = _tc.post("/api/system/backups", json={"job_id": "job-1"})
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "SECRET" not in detail
+    assert "leaked-data" not in detail
+    assert "stacktrace-here" not in detail
+    assert "HTTP 500" in detail or "повернув помилку" in detail
 
 
 def test_workflow_edit_without_force_rejected(monkeypatch, tmp_path):
@@ -1578,3 +1691,123 @@ def test_polling_restart_replays_from_saved_offset(tmp_path):
     service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
     assert service.offset == 3
     assert service.last_update_id == 2
+
+
+def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypatch):
+    """Real Telegram webhook flow creates persisted Job with character's generation workflow.
+
+    This test verifies the complete Telegram topic->brand->character->persisted Job flow
+    without mocking _create_job_from_telegram. It uses the real webhook endpoint
+    and verifies the job is created with the character's configured workflow.
+    """
+    from fastapi.testclient import TestClient
+    from core.app import app
+    import core.app as app_module
+
+    # Setup environment
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
+    monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "brands"))
+    monkeypatch.setenv("WORKFLOWS_ROOT", str(tmp_path / "workflows"))
+
+    # Create character with specific workflow
+    char_root = tmp_path / "characters"
+    char_root.mkdir(parents=True, exist_ok=True)
+    char_dir = char_root / "test-telegram-char"
+    char_dir.mkdir(parents=True, exist_ok=True)
+    (char_dir / "character.json").write_text(json.dumps({
+        "id": "test-telegram-char",
+        "name": "Telegram Test Character",
+        "language": "uk",
+        "enabled": True,
+        "system_prompt": "Test prompt",
+    }), encoding="utf-8")
+    (char_dir / "generation.json").write_text(json.dumps({
+        "workflow": "workflows/image/custom.json",
+        "min_vram_mb": 4096,
+        "max_retries": 3,
+    }), encoding="utf-8")
+    (char_dir / "voice.json").write_text(json.dumps({}), encoding="utf-8")
+    (char_dir / "visual.json").write_text(json.dumps({}), encoding="utf-8")
+    (char_dir / "publishing.json").write_text(json.dumps({}), encoding="utf-8")
+    (char_dir / "system_prompt.txt").write_text("Test prompt", encoding="utf-8")
+
+    # Create the workflow file
+    workflows_root = tmp_path / "workflows"
+    (workflows_root / "image").mkdir(parents=True, exist_ok=True)
+    (workflows_root / "image" / "custom.json").write_text(json.dumps({"nodes": {}}), encoding="utf-8")
+
+    # Create brand
+    brands_root = tmp_path / "brands"
+    brands_root.mkdir(parents=True, exist_ok=True)
+    (brands_root / "brand01").mkdir(parents=True, exist_ok=True)
+    (brands_root / "brand01" / "brand.json").write_text(json.dumps({
+        "id": "brand01", "name": "Test Brand"
+    }), encoding="utf-8")
+
+    # Mock TelegramAdapter to avoid real API calls
+    from unittest.mock import Mock
+    adapter = Mock()
+    adapter.configured.return_value = True
+    adapter.get_me.return_value = {"ok": True, "result": {"username": "testbot"}}
+    monkeypatch.setattr(app_module, 'TelegramAdapter', lambda: adapter)
+
+    # Enable webhook
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "test-secret")
+
+    # Call the webhook endpoint directly
+    client = TestClient(app, raise_server_exceptions=False)
+    chat_id = "424242"
+    headers = {'x-telegram-bot-api-secret-token': 'test-secret'}
+
+    # Step 1: Send topic message - creates pending brand state
+    payload = {
+        'update_id': 1001,
+        'message': {
+            'message_id': 1,
+            'chat': {'id': int(chat_id)},
+            'text': 'Test topic from Telegram',
+        },
+    }
+    r = client.post('/api/telegram/webhook', json=payload, headers=headers)
+    assert r.status_code == 200, f"First webhook call failed: {r.status_code} {r.text}"
+    data = r.json()
+    assert data.get('status') == 'brand_selection', f"Expected brand_selection, got {data}"
+
+    # Step 2: Select brand via callback
+    callback_payload = {
+        'update_id': 1002,
+        'callback_query': {
+            'id': 'cb-1',
+            'message': {'chat': {'id': int(chat_id)}},
+            'data': 'select_brand:brand01',
+        },
+    }
+    r = client.post('/api/telegram/webhook', json=callback_payload, headers=headers)
+    assert r.status_code == 200, f"Brand selection callback failed: {r.status_code} {r.text}"
+    data = r.json()
+    assert data.get('status') == 'character_selection', f"Expected character_selection, got {data}"
+
+    # Step 3: Select character via callback
+    callback_payload = {
+        'update_id': 1003,
+        'callback_query': {
+            'id': 'cb-2',
+            'message': {'chat': {'id': int(chat_id)}},
+            'data': 'select_character:test-telegram-char',
+        },
+    }
+    r = client.post('/api/telegram/webhook', json=callback_payload, headers=headers)
+    assert r.status_code == 200, f"Character selection callback failed: {r.status_code} {r.text}"
+    data = r.json()
+    assert data.get('job_id'), "Job should be created"
+
+    # Verify the job was created with the character's workflow
+    from core.state import store
+    job_id = data['job_id']
+    job = store.jobs.get(job_id)
+    assert job is not None, "Job should exist in store"
+    assert job.topic == "Test topic from Telegram"
+    assert job.character_id == "test-telegram-char"
+    assert job.source == f"telegram:{chat_id}:1", "Job source should include chat_id and message_id"
+    assert job.workflow == "workflows/image/custom.json", "Job should use character's workflow"

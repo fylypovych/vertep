@@ -1,5 +1,15 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.47
+- Issue #103 (i.0.0.1.3) — Text tasks recovery and end-to-end acceptance:
+  - `core/storyboard.py`: Fix storyboard_attempt reset — only on regenerate (existing storyboards), not on retry.
+  - `core/api/job_helpers.py`: Add SCRIPT_QUEUED status update in _enqueue_script_task for proper script task tracking.
+  - `core/api/jobs.py`: Fix local_fallback_allowed() call syntax.
+  - `core/local_fallback.py` (new): Local fallback gate requires BOTH LOCAL_WORKER_FALLBACK=true AND VERTEP_DEMO=true.
+  - `tests/test_api.py`: Fix storyboard retry/regenerate tests, restore original StoryboardService.queue for claim tests, add _create_job_in_store helper.
+  - `tests/test_core_isolation_104.py` (new): Tests for local fallback guard — disabled by default, fallback alone insufficient, demo alone insufficient, explicit dev+demo enables, raises outside demo.
+- Tests: 94 passed across test_api.py, test_storyboard.py, test_features.py; 150 passed in test_assembly_worker_route.py; 19 passed in test_publish_task_helpers.py; 15 passed in test_gpu_http_pipeline.py; 18 passed in test_voice_acceptance.py; 13 passed in test_full_media_harness.py.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.42
 - Issue #122 P0-P12 — MoneyPrinterTurbo integration as opt-in VideoEngine (Native default):
   - `adapters/providers/video_engines.py`: NativeVertepEngine, MoneyPrinterEngine, ShortGPTEngine implementing VideoEngine interface; engine selection persists, survives restart, Worker reports effective engine.

@@ -35,6 +35,22 @@ from .storage import (
 from core.logging_config import secret_redact as _log_secret_redact
 
 
+# Checks that mutate state on the deployment and therefore require an explicit
+# pre-execution confirmation before the Web UI may launch them (i.0.0.0.96).
+# Kept here (not in core.api.real_tests) so both the runner and the API can
+# share it without a circular import.
+DESTRUCTIVE_CHECKS = frozenset({
+    "bootstrap_install",
+    "backup_round_trip",
+    "backup_restore",
+    "migration",
+    "update_interruption",
+    "release_trust",
+    "publisher_receipt",
+    "rollback",
+})
+
+
 def _git_commit() -> str:
     """Return the full commit SHA for deployment identity.
 
@@ -95,6 +111,21 @@ class RealTestRunner:
             core_node_id=_scenarios_module.core_node_id(),
             targets=[node["node_id"] for node in _scenarios_module.nodes_list()],
         )
+        # i.0.0.0.96: persist what the run will execute so the control
+        # surface can show prerequisites before pre-execution confirmation.
+        _checks = list(scenario.get("checks") or [])
+        run.prerequisites = {
+            "checks": _checks,
+            "mandatory_checks": _checks,
+            "destructive_checks": [c for c in _checks if c in DESTRUCTIVE_CHECKS],
+            "requires_confirmation": any(c in DESTRUCTIVE_CHECKS for c in _checks),
+        }
+        run.progress = "started: 0/{} checks".format(len(_checks))
+        update_test_run(run)
+        audit_entry(run.test_run_id, "prerequisites",
+                    "checks={} destructive={}".format(
+                        _checks, run.prerequisites["destructive_checks"]),
+                    initiator)
         return run
 
     def run_checks(self, run: TestRun, check_names: list[str] | None = None) -> TestRun:
@@ -125,6 +156,8 @@ class RealTestRunner:
             append_check(run.test_run_id, result)
             audit_entry(run.test_run_id, "check", f"{name}: {result.status.value}", "runner")
             run.checks.append(result)
+            run.progress = "progress: {}/{} checks".format(len(run.checks), len(names))
+            update_test_run(run)
         return run
 
     def finalize(self, run: TestRun) -> TestRun:

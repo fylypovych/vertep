@@ -73,7 +73,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               </div>
               <div>
                 <label class="block text-sm font-medium text-slate-700 mb-1">Системний ID</label>
-                <input [(ngModel)]="form.id" data-testid="character-id-input" [disabled]="!editingId" placeholder="автоматично згенерований ID" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm disabled:bg-slate-100">
+                <input [(ngModel)]="form.id" data-testid="character-id-input" placeholder="автоматично згенерований ID" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
               <div>
                 <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>

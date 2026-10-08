@@ -135,6 +135,11 @@ def update_test_run(run: TestRun) -> None:
             merged.error_details = run.error_details
             merged.github_report = run.github_report
             merged.audit = run.audit
+            merged.prerequisites = run.prerequisites
+            merged.progress = run.progress
+            merged.destructive_confirmation = run.destructive_confirmation
+            merged.confirmation_timestamp = run.confirmation_timestamp
+            merged.initiator = run.initiator
             runs[run.test_run_id] = _serialize(merged)
         _write_registry(runs)
 

@@ -431,6 +431,28 @@ def retry_dead_letter_task(task_id: str):
     return queued
 
 
+def _text_task_lease(job, task_id: str, node_name: str) -> tuple[bool, str | None]:
+    """Ownership contract for a script/storyboard result (Issue i.0.0.1.2).
+
+    A text-task result is accepted only when the submitting node holds the whole
+    claim lease of this exact task for this exact Job:
+
+    * **owner** — the Worker record is bound to ``task_id`` and ``job.job_id``;
+    * **lease** — the task is still in flight, i.e. its lease has not expired,
+      been re-queued, discarded or acked by CORE.
+
+    Checked BEFORE any cleanup (Worker metadata, ``Job.*_task_id``) or queue ack,
+    so a foreign, expired or stale submission changes nothing.
+    """
+    worker = store.workers.get(node_name)
+    if (worker is None or worker.get("current_task") != task_id
+            or worker.get("current_job") != job.job_id):
+        return False, "owner/lease mismatch"
+    if not task_queue.inflight_has(task_id):
+        return False, "task lease is no longer active"
+    return True, None
+
+
 @router.post("/api/tasks/result")
 @_serialize_job_result
 def task_result(result: TaskResult, request: Request):
@@ -459,8 +481,20 @@ def task_result(result: TaskResult, request: Request):
         return job
     if job.storyboard_task_id == result.task_id:
         from ..storyboard import StoryboardService
+        # Issue i.0.0.1.2: fence the submission before any side effect.  The
+        # storyboard branch used to accept a result from any node whose
+        # ``current_task`` matched, and freed that node afterwards; the lease
+        # must still be live and bound to this Job before anything is cleaned up
+        # or acked.
+        owned, reason = _text_task_lease(job, result.task_id, result.node_name)
+        if not owned:
+            store.event(job, f"STORYBOARD RESULT {result.task_id} REJECTED: "
+                             f"{reason} (node={result.node_name})")
+            return job
         try:
-            accepted = StoryboardService(store).handle_result(job.job_id, result.task_id, result.success, result.artifacts, result.error, result.node_name)
+            accepted = StoryboardService(store).handle_result(job.job_id, result.task_id, result.success,
+                                                              result.artifacts, result.error, result.node_name,
+                                                              cancelled=result.cancelled)
         except (ValueError, RuntimeError) as error:
             raise HTTPException(400, str(error)) from error
         if accepted is None:
@@ -481,6 +515,20 @@ def task_result(result: TaskResult, request: Request):
         return job
     if job.script_task_id == result.task_id:
         from ..api.job_helpers import _handle_script_result
+        # Issue i.0.0.1.2: validate ownership BEFORE any cleanup.  This branch
+        # used to clear the Worker metadata (and ``job.script_task_id`` inside
+        # ``_handle_script_result``) without proving the submitter held the
+        # claim, so a foreign or expired node could complete the task, release
+        # the real claim holder and get the task acked.
+        owned, reason = _text_task_lease(job, result.task_id, result.node_name)
+        if not owned:
+            store.event(job, f"SCRIPT RESULT {result.task_id} REJECTED: "
+                             f"{reason} (node={result.node_name})")
+            return job
+        if result.cancelled:
+            store.event(job, f"SCRIPT RESULT {result.task_id} REJECTED: "
+                             f"cancelled result cannot complete a script (node={result.node_name})")
+            return job
         worker = store.workers.get(result.node_name)
         if worker:
             desired_status = worker.get("desired_state")

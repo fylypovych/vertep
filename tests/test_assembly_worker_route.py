@@ -251,6 +251,41 @@ def test_external_engine_dispatches_to_a_worker_without_rendering_in_core(assemb
     assert store.workers == {}, "no Worker is pre-assigned by CORE"
     assert assembly_state["queue"].find(task_id)["task"] == "assembly"
 
+class _NativeEngine:
+    """A stand-in native engine: renders on the control-plane route."""
+
+    engine_id = "native"
+    provider = "native"
+    name = "native"
+
+    def render(self, output, **kwargs) -> Path:
+        return _mp4(Path(output))
+
+
+class _ForeignEngineWithoutId:
+    """A foreign engine hiding behind a missing engine_id (#104)."""
+
+    engine_id = None
+    provider = "money-printer"
+    name = "money-printer"
+
+    def render(self, *args, **kwargs):  # pragma: no cover - must never be called
+        raise AssertionError("CORE must not execute a non-native engine")
+
+
+def test_foreign_engine_without_id_is_refused_before_render(assembly_state):
+    """i.0.0.1.4 (#104): an unidentifiable foreign engine never renders in CORE."""
+    engine = _ForeignEngineWithoutId()
+
+    finalized = _dispatch(assembly_state, engine)
+
+    assert finalized.status == JobStatus.FAILED
+    assert any("IS NOT NATIVE" in event for event in finalized.events)
+    assert not (Path(assembly_state["tmp_path"]) / "jobs" / assembly_state["job"].job_id
+                / "final" / "video-v1.mp4").exists()
+    assert assembly_state["job"].assembly_task_id is None, "no dispatch for a refused engine"
+
+
 
 def test_dispatched_task_carries_only_job_relative_references(assembly_state):
     finalized = _dispatch(assembly_state)

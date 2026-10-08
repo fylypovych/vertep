@@ -570,6 +570,25 @@ def effective_engine_id(engine) -> str:
     return value if isinstance(value, str) and value else "native"
 
 
+def _is_native_engine(engine) -> bool:
+    """Fail-closed identity check for the CORE render path (i.0.0.1.4 #104).
+
+    Native FFmpeg assembly in CORE is control-plane (AGENTS.md §20), but the
+    same path must never execute another VideoEngine. An engine that declares a
+    foreign provider is refused before any render, even when its ``engine_id``
+    is missing and the effective id would otherwise resolve to ``native``.
+    Engines without a declared provider (control-plane stand-ins) stay on the
+    Native route.
+    """
+    engine_id = getattr(engine, "engine_id", None)
+    if isinstance(engine_id, str) and engine_id and engine_id != "native":
+        return False
+    provider = getattr(engine, "provider", None)
+    if isinstance(provider, str) and provider and provider.strip().lower() != "native":
+        return False
+    return True
+
+
 def _finish_video_version(job: Job, job_store: JobStore, output: Path, version: int) -> None:
     """Record an accepted render as the new current immutable video version.
 
@@ -634,14 +653,29 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
         submit_key = _assembly_submit_key(job, version=next_version, input_digest=digest)
         snapshot = _engine_snapshot(job, version=next_version, submit_key=submit_key,
                                  engine=video_engine)
-        task = _assembly_task_for(job, submit_key=submit_key, snapshot=snapshot, **plan)
+        task = _assembly_task_for(job, submit_key=submit_key, snapshot=snapshot,
+                                  job_store=store, **plan)
         _enqueue_assembly_task(job, task)
         store.event(job, f"ASSEMBLY v{next_version} DISPATCHED TO WORKER "
                          f"(engine={snapshot['engine_id']})")
         return job
+    # i.0.0.1.4 (#104): native FFmpeg assembly in CORE is control-plane
+    # (AGENTS.md §20), but the same CORE path must never execute another
+    # VideoEngine. The guard below fails closed before any render for a
+    # foreign or unidentifiable engine.
+    if not _is_native_engine(video_engine):
+        identity = getattr(video_engine, "engine_id", None) or \
+            getattr(video_engine, "provider", None) or "unknown"
+        store.event(job, f"ASSEMBLY REFUSED: engine '{identity}' is not native; "
+                         f"CORE renders only the native engine (i.0.0.1.4)")
+        transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED,
+                         f"engine '{identity}' is not native")
+        store.update(job, JobStatus.FAILED,
+                     f"ASSEMBLY REFUSED: ENGINE '{identity}' IS NOT NATIVE")
+        return job
     # Use VideoEngine for rendering (per AGENTS.md §4.1/§28, Issue #31).
-    # VideoEngine wraps AssemblyProvider for native engine, or dispatches to
-    # remote engines (MoneyPrinter/ShortGPT) when configured.
+    # VideoEngine wraps AssemblyProvider for the native engine only — external
+    # engines are dispatched to a Worker above.
     video_engine.render(
         output,
         images=None if job.task_type == "video" else plan["materials"],

@@ -263,8 +263,8 @@ def _assembly_task_for(job, *, version: int, output: Path, materials: list[Path]
                        audio: Path | None, music: Path | None, subtitles: Path | None,
                        watermark: Path | None, script: str, submit_key: str,
                        snapshot: dict, durations: list[float], aspect_ratio: str,
-                       preset: str | None, task_type: str) -> dict:
-    job_root = store.root
+                       preset: str | None, task_type: str, job_store=None) -> dict:
+    job_root = (job_store.root if job_store is not None else store.root)
     references = [_stage_input(job_root, job.job_id, path) for path in materials]
     delivered = {
         "audio": _stage_input(job_root, job.job_id, audio),
@@ -806,7 +806,8 @@ def _enqueue_script_task(job_store, job, system_prompt: str = "", character: dic
         "text" in (worker.get("supported_tasks") or []) or worker.get("role") == "text"
         for worker in workers
     )
-    if not has_text_worker and os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
+    from ..local_fallback import local_fallback_allowed
+    if not has_text_worker and local_fallback_allowed():
         _generate_script_local(job_store, job, system_prompt, character)
         return None
     task = _script_task_for(job, system_prompt, character, revision)
@@ -815,6 +816,7 @@ def _enqueue_script_task(job_store, job, system_prompt: str = "", character: dic
     job.active_task_id = queued["task_id"]
     job_store.repository.record_task(queued, "QUEUED")
     job_store.event(job, f"SCRIPT TASK {queued['task_id']} QUEUED")
+    job_store.update(job, JobStatus.SCRIPT_QUEUED, "SCRIPT TASK QUEUED")
     return queued
 
 
@@ -826,6 +828,10 @@ def _load_character_prompt(job) -> tuple[str, dict | None]:
 
 
 def _generate_script_local(job_store, job, system_prompt: str, character: dict | None) -> None:
+    # i.0.0.1.4 (#104): fail-closed even if a caller skips the gate — local
+    # execution is dev/demo only.
+    from ..local_fallback import require_no_local_execution
+    require_no_local_execution("script")
     from ..script_agent import ScriptAgent
     script = ScriptAgent().generate_script(job.topic, system_prompt, character)
     job.script = normalize_script(script, job.topic)
@@ -998,7 +1004,8 @@ def _match_publish_receipt(job, channel: str, receipt: dict) -> tuple[str, str |
 
 def _enqueue_publish_task(job_store, job, channel: str) -> dict | None:
     has_publisher = _has_publisher_worker(job_store)
-    if not has_publisher and os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
+    from ..local_fallback import local_fallback_allowed
+    if not has_publisher and local_fallback_allowed():
         _publish_local(job_store, job, channel)
         return None
     task = _publish_task_for(job, channel)
@@ -1010,6 +1017,10 @@ def _enqueue_publish_task(job_store, job, channel: str) -> dict | None:
 
 
 def _publish_local(job_store, job, channel: str) -> dict:
+    # i.0.0.1.4 (#104): fail-closed even if a caller skips the gate — local
+    # execution is dev/demo only.
+    from ..local_fallback import require_no_local_execution
+    require_no_local_execution("publish")
     from ..pipeline import _do_publish_single
     result = _do_publish_single(job, channel)
     job.publication_results[channel] = result
@@ -1328,7 +1339,8 @@ def _dispatch_assets(store, job) -> None:
         return
     queued_tasks = [(scene, _enqueue_job_task(job, scene))
                     for scene in pending_scenes(job) if not scene.task_id]
-    if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
+    from ..local_fallback import local_fallback_allowed
+    if local_fallback_allowed():
         images = []
         for scene, queued_task in queued_tasks:
             task_id = queued_task["task_id"]
@@ -1423,7 +1435,8 @@ def _image_storyboard_gate(store, job) -> bool:
             from ..image_storyboard import queue_image_storyboard
             if not all(s.image_artifact_id for s in sb.scenes):
                 queue_image_storyboard(store, job, sb.version)
-                if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
+                from ..local_fallback import local_fallback_allowed
+                if local_fallback_allowed():
                     from ..image_storyboard import handle_image_result as _handle
                     import base64
                     demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4
@@ -1475,7 +1488,8 @@ def _prepare_and_dispatch(job) -> None:
             from ..image_storyboard import queue_image_storyboard
             if not all(s.image_artifact_id for s in sb.scenes):
                 queue_image_storyboard(store, job, sb.version)
-                if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
+                from ..local_fallback import local_fallback_allowed
+                if local_fallback_allowed():
                     from ..image_storyboard import handle_image_result as _handle
                     import base64
                     demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4

@@ -21,6 +21,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   'alerts':     { title: 'Алерти',        subtitle: 'Попередження системи' },
   'logs':       { title: 'Журнали',       subtitle: 'Журнали подій' },
   'health':     { title: 'Стан системи',  subtitle: 'Діагностика системи' },
+  'real-tests': { title: 'Реальні тести', subtitle: 'Сценарії реального стенда' },
   'settings':   { title: 'Налаштування',  subtitle: 'Системні налаштування' },
   'profile':    { title: 'Профіль',       subtitle: 'Профіль користувача' },
 };

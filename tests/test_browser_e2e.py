@@ -202,7 +202,7 @@ def test_character_create_and_edit_use_localized_form():
         page.locator("[data-testid='create-character-button']").click()
         expect(page.locator("[data-testid='character-modal']")).to_be_visible()
         expect(page.locator("[data-testid='character-name-input']")).to_have_value("Новий персонаж")
-        expect(page.locator("[data-testid='character-id-input']")).to_be_disabled()
+        expect(page.locator("[data-testid='character-id-input']")).not_to_be_disabled()
 
         page.get_by_role("button", name="Скасувати").click()
         expect(page.locator("[data-testid='character-modal']")).not_to_be_visible()
@@ -1206,8 +1206,11 @@ def _mock_workflow_registry(page, list_items=None, usage=None, versions=None, ca
     versions_payload = versions if versions is not None else [
         {"version": 1, "archived_at": "2026-09-29T10:00:00+00:00", "deleted": False, "size_bytes": 128},
     ]
+    # Mutable state for workflow document to simulate persistence
+    workflow_doc = {**WORKFLOW_DOCUMENT}
 
     def handler(route):
+        nonlocal workflow_doc
         url = route.request.url
         method = route.request.method
         if method == "POST" and "/api/workflows/validate" in url:
@@ -1257,7 +1260,10 @@ def _mock_workflow_registry(page, list_items=None, usage=None, versions=None, ca
                 })
             if put_status != 200:
                 return route.fulfill(status=put_status, json=put_json or {"detail": "Workflow already exists and is valid. Use force=true to overwrite."})
-            return route.fulfill(json=put_json or {"type": "image", "name": "demo.json", "valid": True, "validation": WORKFLOW_DOCUMENT["validation"]})
+            # Update the workflow document with the saved content
+            saved_body = json.loads(route.request.post_data or "{}")
+            workflow_doc["workflow"] = saved_body
+            return route.fulfill(json={"type": "image", "name": "demo.json", "valid": True, "validation": workflow_doc["validation"]})
         if url.endswith("/form"):
             return route.fulfill(json=WORKFLOW_FORM_SCHEMA)
         if url.endswith("/usage"):
@@ -1267,7 +1273,7 @@ def _mock_workflow_registry(page, list_items=None, usage=None, versions=None, ca
         if url.endswith("/versions"):
             return route.fulfill(json=versions_payload)
         if url.rstrip("/").endswith("/api/workflows/image/demo.json"):
-            return route.fulfill(json=WORKFLOW_DOCUMENT)
+            return route.fulfill(json=workflow_doc)
         return route.fulfill(json=items)
 
     page.route("**/api/workflows**", handler)
@@ -1354,6 +1360,58 @@ def test_workflows_form_control_edits_json_and_persists_with_immutable_identity(
         assert captured[0]["url"].endswith("/api/workflows/image/demo.json?force=true")
         assert captured[0]["body"]["n1"]["inputs"]["seed"] == 1234
         assert captured[0]["body"]["n1"]["inputs"]["model"] == "sdxl.json"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_edit_save_reload_persists_changes():
+    """Редагування built-in workflow: Edit -> Save (force) -> Reload показує оновлені дані."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page)  # Uses mutable workflow_doc for persistence
+        page.goto(f"{BASE_URL}/workflows")
+        expect(page.locator("[data-testid='workflows-page']")).to_be_visible()
+
+        # Click Edit button for the first workflow
+        page.get_by_role("button", name="Редагувати").first.click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+
+        # Switch to Form tab and edit a field
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        form_view = page.locator("[data-testid='workflow-form-view']")
+        expect(form_view).to_be_visible()
+        form_view.locator("input").nth(0).fill("9999")
+        form_view.locator("input").nth(1).fill("updated-model.json")
+
+        # Switch back to JSON tab to verify form updated JSON
+        editor.get_by_role("button", name="JSON", exact=True).click()
+        expect(editor.locator("textarea")).to_have_value(re.compile(r'"seed": 9999'))
+        expect(editor.locator("textarea")).to_have_value(re.compile(r'"model": "updated-model.json"'))
+
+        # Save the workflow
+        editor.get_by_role("button", name="Зберегти").click()
+        expect(page.locator("[data-testid='workflow-editor-modal']")).to_be_hidden()
+
+        # Reload the workflow by clicking Edit again
+        page.get_by_role("button", name="Редагувати").first.click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+
+        # Verify the JSON tab shows the persisted changes
+        editor.get_by_role("button", name="JSON", exact=True).click()
+        expect(editor.locator("textarea")).to_have_value(re.compile(r'"seed": 9999'))
+        expect(editor.locator("textarea")).to_have_value(re.compile(r'"model": "updated-model.json"'))
+
+        # Verify the Form tab also shows the persisted changes
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        form_view = page.locator("[data-testid='workflow-form-view']")
+        expect(form_view.locator("input").nth(0)).to_have_value("9999")
+        expect(form_view.locator("input").nth(1)).to_have_value("updated-model.json")
+
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 

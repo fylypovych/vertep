@@ -19,7 +19,7 @@ export class RealTestsComponent {
   loading = signal(true);
   error = signal<string | null>(null);
   running = signal<Record<string, boolean>>({});
-  confirmDialog = signal<{ rtId: string; name: string; destructive: boolean } | null>(null);
+  confirmDialog = signal<{ rtId: string; name: string; destructive: boolean; checks?: string[] } | null>(null);
   report = signal<RealTestReport | null>(null);
   selectedRunId = signal<string | null>(null);
 
@@ -53,15 +53,23 @@ export class RealTestsComponent {
     });
   }
 
-  destructiveFor(rtId: string): boolean {
-    return this.scenarios().some((s) => s.id === rtId && s.checks.length > 0);
-  }
-
   requestRun(scenario: RealTestScenario): void {
-    this.confirmDialog.set({
-      rtId: scenario.rt_id || scenario.id,
-      name: scenario.name,
-      destructive: this.destructiveFor(scenario.rt_id || scenario.id),
+    const rtId = scenario.rt_id || scenario.id;
+    this.running.update((map) => ({ ...map, [rtId]: true }));
+    this.api.prerequisites(rtId).subscribe({
+      next: (prereq) => {
+        this.running.update((map) => ({ ...map, [rtId]: false }));
+        this.confirmDialog.set({
+          rtId,
+          name: scenario.name,
+          destructive: prereq.requires_confirmation,
+          checks: prereq.destructive_checks,
+        });
+      },
+      error: (err) => {
+        this.running.update((map) => ({ ...map, [rtId]: false }));
+        this.error.set(err?.error?.detail || err?.message || 'Помилка перевірки передумов');
+      },
     });
   }
 
@@ -74,18 +82,11 @@ export class RealTestsComponent {
     this.running.update((map) => ({ ...map, [dialog.rtId]: true }));
     this.error.set(null);
     this.api
-      .prerequisites(dialog.rtId)
+      .run(dialog.rtId, null, true)
       .pipe(finalize(() => this.running.update((map) => ({ ...map, [dialog.rtId]: false }))))
       .subscribe({
-        next: (prereq) => {
-          this.api
-            .run(dialog.rtId, null, true)
-            .subscribe({
-              next: () => this.load(),
-              error: (err) => this.error.set(err?.error?.detail || err?.message || 'Помилка запуску'),
-            });
-        },
-        error: (err) => this.error.set(err?.error?.detail || err?.message || 'Помилка перевірки передумов'),
+        next: () => this.load(),
+        error: (err) => this.error.set(err?.error?.detail || err?.message || 'Помилка запуску'),
       });
   }
 

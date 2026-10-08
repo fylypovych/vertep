@@ -2123,10 +2123,12 @@ def _create_job_from_telegram(pending: dict, brand_id: str, character_id: str | 
         if existing.source == source:
             return existing
     try:
-        load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
+        character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
     except Exception as error:
         raise HTTPException(400, f"Unknown character: {character_id}") from error
-    job = store.create(text, character_id, int(os.getenv("TELEGRAM_DEFAULT_PRIORITY", "5")), source)
+    generation = character.generation if hasattr(character, 'generation') else {}
+    workflow = generation.get("workflow") if isinstance(generation, dict) else getattr(character, 'workflow', None)
+    job = store.create(text, character_id, int(os.getenv("TELEGRAM_DEFAULT_PRIORITY", "5")), source, workflow=workflow)
     job.brand_id = brand_id
     job.status = JobStatus.STORYBOARD_QUEUED
     job.approval_status = "pending"
@@ -2621,7 +2623,8 @@ async def _internal_api(method: str, base_environment: str, path: str,
     except httpx.TimeoutException:
         raise HTTPException(504, f"Таймаут з'єднання з {base_environment} ({base}). Сервіс не відповідає.")
     except httpx.HTTPStatusError as error:
-        raise HTTPException(502, f"Помилка від {base_environment}: {error.response.text[:500]}") from error
+        status = error.response.status_code
+        raise HTTPException(502, f"Сервіс {base_environment} повернув помилку (HTTP {status})") from error
     except (httpx.HTTPError, ValueError) as error:
         raise HTTPException(503, f"Недоступний внутрішній сервіс: {error}") from error
 

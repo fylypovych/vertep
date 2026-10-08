@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 
 ROOT = Path(__file__).parents[1]
@@ -336,6 +337,7 @@ class TestSetupBackendFieldAlignment:
         # The backend *value* source is backend_selected; the bare key must
         # not be used, only backend_model / backend_api_key.
         assert re.search(r"\bbackend:\s", payload) is None
+        assert "backend_url:" in payload
 
     def test_server_reads_ai_backend(self):
         source = (ROOT / "core" / "api" / "setup.py").read_text(encoding="utf-8")
@@ -345,6 +347,35 @@ class TestSetupBackendFieldAlignment:
         """i.0.0.0.98: the complete endpoint reads ``ai_backend``."""
         source = (ROOT / "core" / "api" / "setup.py").read_text(encoding="utf-8")
         assert 'payload.get("ai_backend", "skip")' in source
+
+    def test_external_backend_requires_url(self, monkeypatch):
+        """i.0.0.0.98: the ``external`` backend must require ``backend_url``."""
+        import asyncio
+        import core.app as core_app
+        import core.api.setup as setup_mod
+
+        async def fake_validate(backend, url, model, api_key):
+            if backend == "external" and not url:
+                raise ValueError("External AI backend requires a URL")
+
+        def fake_complete(*args, **kwargs):
+            return {"configured": True}
+
+        class Request:
+            base_url = "https://vertep.example/"
+
+            async def json(self):
+                return {"node_role": "core", "installation_name": "Vertep",
+                        "username": "admin", "password": "a-secure-password",
+                        "password_confirmation": "a-secure-password",
+                        "ai_backend": "external", "backend_model": "my-model"}
+
+        monkeypatch.setattr(setup_mod, "_validate_ai_backend", fake_validate)
+        monkeypatch.setattr(setup_mod, "complete_setup", fake_complete)
+        monkeypatch.setattr(setup_mod, "create_registration_token",
+                            lambda *a, **k: {"token": "one-time"})
+        with pytest.raises(HTTPException, match="422"):
+            asyncio.run(core_app.first_run_complete(Request()))
 
     def test_backend_selection_is_not_silently_dropped(self, monkeypatch):
         """i.0.0.0.98: the wizard must send ``ai_backend`` and the server must

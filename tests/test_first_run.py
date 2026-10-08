@@ -29,10 +29,28 @@ def test_first_run_creates_manifest_and_secret_store(monkeypatch, tmp_path):
     deployment_request = json.loads((tmp_path / "deployment-request.json").read_text())
     assert deployment_request["role"] == "core"
     assert deployment_request["ai_backend"] == "ollama"
+    assert deployment_request["backend_url"] is None
     assert deployment_request["additional_roles"] == ["text"]
     assert "ollama" in result["runtime"]["services"]
     assert deployment_request["plan_sha256"] == result["runtime"]["deployment_plan_sha256"]
     assert is_configured()
+
+
+def test_first_run_persists_external_backend_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("VERTEP_VERSION", "1.2.3")
+    (tmp_path / "deployment-plan.json").write_text(json.dumps({
+        "sha256": "b" * 64, "services": ["core", "postgres"], "capabilities": ["scheduling"]}))
+    result = complete_setup("Vertep Production", "operator", "very-secure-password",
+                            "very-secure-password", "openai",
+                            backend_url="https://custom.openai.example/v1",
+                            backend_model="gpt-4o")
+    deployment_request = json.loads((tmp_path / "deployment-request.json").read_text())
+    assert deployment_request["ai_backend"] == "openai"
+    assert deployment_request["backend_url"] == "https://custom.openai.example/v1"
+    assert result["ai_backend"]["type"] == "openai"
+    assert result["ai_backend"]["url"] == "https://custom.openai.example/v1"
+    assert result["ai_backend"]["model"] == "gpt-4o"
     username, record = configured_user()
     assert username == "operator"
     assert "very-secure-password" not in json.dumps(record)

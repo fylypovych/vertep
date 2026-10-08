@@ -25,6 +25,11 @@ class StoryboardService:
 
     def queue(self, job: Job, revision: str | None = None) -> Job:
         job.storyboard_error = None
+        # Reset attempt budget only when creating a new storyboard version (regenerate),
+        # not on retry of the same version. On retry, job.storyboards is empty because
+        # the failed attempt didn't add a storyboard; on regenerate, previous storyboards exist.
+        if job.storyboards:
+            job.storyboard_attempt = 0
         self.store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
 
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
@@ -63,11 +68,12 @@ class StoryboardService:
         # requeue in ``core/app.handle_expired_storyboard_lease``.
         return job
 
-    def handle_result(self, job_id: str, task_id: str, success: bool, artifacts: list[dict] | None, error: str | None, node_name: str | None = None) -> Job | None:
+    def handle_result(self, job_id: str, task_id: str, success: bool, artifacts: list[dict] | None, error: str | None, node_name: str | None = None, *, cancelled: bool = False) -> Job | None:
         """Process a storyboard task result.
 
         Returns the updated ``Job`` when the result was accepted, or ``None``
-        when the result was rejected (wrong claim holder / stale version).
+        when the result was rejected (wrong claim holder / stale version /
+        cancelled result).
         A rejected result must NOT be acked: the task stays in flight so the
         legitimate claim holder can still submit.
         """
@@ -79,12 +85,22 @@ class StoryboardService:
         # Issue #64 T2: reject results that do not belong to the worker that
         # actually claimed the task.  Without this a second worker can submit a
         # result for a task it never won, or a stale worker can finish a task
-        # that was re-queued for a newer storyboard version.
+        # that was re-queued for a newer storyboard version.  Issue i.0.0.1.2
+        # tightens this to the whole claim lease: the node must hold this exact
+        # task for this exact Job, not merely some task with the same id.
         if node_name is not None:
             worker = self.store.workers.get(node_name)
-            if worker is None or worker.get("current_task") != task_id:
+            if (worker is None or worker.get("current_task") != task_id
+                    or worker.get("current_job") != job.job_id):
                 self.store.event(job, f"RESULT REJECTED for {task_id}: {node_name} does not hold the claim")
                 return None
+
+        if cancelled:
+            # A cancelled storyboard result is a terminal late answer of an
+            # abort that could not stop an executing prompt: it may never
+            # complete the task or release somebody else's Worker.
+            self.store.event(job, f"RESULT REJECTED for {task_id}: cancelled result cannot complete a storyboard")
+            return None
 
         # Reject results whose task targets a storyboard version that is no
         # longer the active one (the job was re-queued / regenerated in the
@@ -109,12 +125,31 @@ class StoryboardService:
                               f"STORYBOARD FAILED after {attempts} attempts: {error}")
             raise RuntimeError(job.storyboard_error or "Storyboard generation failed")
 
-        artifact = next((a for a in artifacts if a["kind"] == "storyboard"), None)
+        artifact = next((a for a in (artifacts or []) if (a or {}).get("kind") == "storyboard"), None)
         if not artifact:
             raise RuntimeError("No storyboard artifact in result")
 
-        data = json.loads(base64.b64decode(artifact["data_base64"]).decode("utf-8"))
-        scenes = [StoryboardScene(**scene) for scene in data["scenes"]]
+        # Issue i.0.0.1.2: a malformed payload is a controlled rejection (HTTP 400)
+        # raised BEFORE any Job mutation, so a broken artifact can never leave a
+        # half-written storyboard behind, nor ack the task it answered.
+        try:
+            data = json.loads(base64.b64decode(artifact["data_base64"]).decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("payload is not an object")
+            scenes = [StoryboardScene(**scene) for scene in data["scenes"]]
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Malformed storyboard artifact: {exc}") from exc
+
+        # Issue i.0.0.1.2: ``queue()`` (and the lease-expiry requeue) pin the next
+        # version into the queued task, so the payload may not pick the version it
+        # reports.  A payload whose version is not the queued one is stale or forged
+        # and must be rejected without appending it to the immutable storyboard history.
+        expected_version = job.storyboards[-1].version + 1 if job.storyboards else 1
+        if data.get("version") != expected_version:
+            self.store.event(job, f"RESULT REJECTED for {task_id}: storyboard version "
+                                  f"{data.get('version')!r} does not match queued version {expected_version}")
+            return None
+
         for scene in scenes:
             scene.scene_id = f"sb-{data['version']}-{scene.index}"
             scene.image_prompt = scene.prompt
@@ -150,7 +185,8 @@ class StoryboardService:
         try:
             from .image_storyboard import queue_image_storyboard
             queue_image_storyboard(self.store, job, storyboard.version)
-            if os.getenv("LOCAL_WORKER_FALLBACK", "false").lower() == "true":
+            from .local_fallback import local_fallback_allowed
+            if local_fallback_allowed():
                 from .image_storyboard import handle_image_result as _handle
                 import base64
                 demo_ppm = b"P6\n2 2\n255\n" + bytes((80, 120, 90)) * 4

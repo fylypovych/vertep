@@ -960,6 +960,383 @@ class TestIssue96:
         assert r2["reported"] is True
         assert post_count[0] == 1, "exactly-once: second concurrent post must be skipped"
 
+    def test_unknown_post_outcome_reconciles_before_retry(self, monkeypatch):
+        """Transient POST (unknown outcome) must reconcile via marker lookup."""
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+        monkeypatch.setattr(gh_mod, "audit_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(gh_mod, "record_github_report", lambda *a, **kw: None)
+
+        run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                      commit_sha="a" * 40, final_result="PASS")
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+
+        post_calls = [0]
+
+        def flaky_post(issue_number, body):
+            post_calls[0] += 1
+            raise gh_mod._TransientError("connection reset by peer")
+
+        monkeypatch.setattr(gh_mod, "_post_comment", flaky_post)
+        # Pre-check sees no marker → POST attempted (unknown outcome);
+        # reconcile lookup then finds the server-side comment.
+        _lookups = [0]
+
+        def _fake_comments(n):
+            _lookups[0] += 1
+            if _lookups[0] == 1:
+                return []
+            return [{"body": f"REAL-TEST-RUN: {run.test_run_id}"}]
+
+        monkeypatch.setattr(gh_mod, "_get_comments", _fake_comments)
+        monkeypatch.setattr(gh_mod.time, "sleep", lambda s: None)
+        reporter = gh_mod.GitHubReporter()
+        result = reporter.report(run)
+        assert result["reported"] is True
+        assert post_calls[0] == 1, "must not blind-retry when marker already exists"
+
+    def test_unknown_post_outcome_retries_when_no_marker(self, monkeypatch):
+        """Transient POST with no marker must still retry and eventually post."""
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+        monkeypatch.setattr(gh_mod, "audit_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(gh_mod, "record_github_report", lambda *a, **kw: None)
+
+        run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                      commit_sha="a" * 40, final_result="PASS")
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+
+        post_calls = [0]
+
+        def flaky_then_ok(issue_number, body):
+            post_calls[0] += 1
+            if post_calls[0] == 1:
+                raise gh_mod._TransientError("timeout")
+            return "comment-2"
+
+        monkeypatch.setattr(gh_mod, "_post_comment", flaky_then_ok)
+        monkeypatch.setattr(gh_mod, "_get_comments", lambda n: [])
+        monkeypatch.setattr(gh_mod.time, "sleep", lambda s: None)
+        reporter = gh_mod.GitHubReporter()
+        result = reporter.report(run)
+        assert result["reported"] is True
+        assert result["comment_id"] == "comment-2"
+        assert post_calls[0] == 2
+
+    def test_permanent_failure_reconciles_concurrent_marker(self, monkeypatch):
+        """Permanent POST error with concurrent marker must be idempotent skip."""
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+        monkeypatch.setattr(gh_mod, "audit_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(gh_mod, "record_github_report", lambda *a, **kw: None)
+
+        run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                      commit_sha="a" * 40, final_result="PASS")
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+
+        def bad_post(issue_number, body):
+            raise RuntimeError("GitHub API error 422: Validation Failed")
+
+        monkeypatch.setattr(gh_mod, "_post_comment", bad_post)
+        monkeypatch.setattr(gh_mod, "_get_comments",
+                            lambda n: [{"body": f"REAL-TEST-RUN: {run.test_run_id}"}])
+        reporter = gh_mod.GitHubReporter()
+        result = reporter.report(run)
+        assert result["reported"] is True
+        assert result["error"] is None
+
+    def test_run_endpoint_records_factual_initiator(self, admin_client, monkeypatch):
+        """POST /api/real-tests/run must store the authenticated actor."""
+        from fastapi.testclient import TestClient as _TC
+        from core.app import app as _app
+
+        captured = {}
+
+        def mock_start(self, rt_id, initiator="api", **kwargs):
+            captured["initiator"] = initiator
+            run = TestRun(rt_id="rt::S01", rt_issue_number=40,
+                          version="0.0.1.0", commit_sha="abc",
+                          environment={}, hardware={}, core_node_id="core-1",
+                          targets=[], initiator=initiator)
+            run.checks = []
+            run.final_result = "PASS"
+            run.status = TestRunStatus.PASS
+            return run
+
+        monkeypatch.setattr(RealTestRunner, "start", mock_start)
+        monkeypatch.setattr(RealTestRunner, "run_checks", lambda self, run, check_names=None: run)
+        monkeypatch.setattr(RealTestRunner, "finalize", lambda self, run: run)
+        monkeypatch.setattr(RealTestRunner, "report_to_github",
+                            lambda self, run: {"reported": True, "comment_id": "1", "error": None})
+        monkeypatch.setattr(RealTestRunner, "close_rt_issue",
+                            lambda self, run: {"closed": False, "error": None})
+        resp = admin_client.post("/api/real-tests/run",
+                                 json={"rt_id": "rt::S01", "confirm_destructive": True},
+                                 auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        assert captured.get("initiator") == "admin"
+
+    def test_controlled_http_pagination_and_unknown_outcome(self, monkeypatch):
+        """Real urllib HTTP against a local fake GitHub: pagination + unknown POST.
+
+        No orchestration mocking — only the transport base URL and the secret
+        store are pointed at the controlled server. The first POST drops the
+        connection (unknown outcome, comment persisted server-side); the
+        reporter must reconcile via paginated marker lookup instead of
+        double-posting.
+        """
+        import json as _json
+        import threading as _threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        from core.real_tests import github as gh_mod
+
+        comments: list[dict] = [{"id": i, "body": f"filler {i}"} for i in range(100)]
+        state = {"posts": 0, "drop_first_post": True}
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a, **kw):
+                pass
+
+            def _send(self, code, payload):
+                raw = _json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                from urllib.parse import urlparse, parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                page = int(qs.get("page", ["1"])[0])
+                start = (page - 1) * 100
+                self._send(200, comments[start:start + 100])
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = _json.loads(self.rfile.read(length) or b"{}")
+                state["posts"] += 1
+                comments.append({"id": 1000 + state["posts"],
+                                 "body": payload.get("body", "")})
+                if state["drop_first_post"]:
+                    state["drop_first_post"] = False
+                    # Unknown outcome: comment persisted, connection dies.
+                    self.connection.close()
+                    return
+                self._send(201, {"id": 1000 + state["posts"]})
+
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        port = server.server_address[1]
+        thread = _threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            monkeypatch.setenv("GITHUB_API_BASE_URL", f"http://127.0.0.1:{port}")
+            monkeypatch.setenv("GITHUB_REPOSITORY", "fylypovych/vertep")
+            monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+            monkeypatch.setattr(gh_mod, "_get_token", lambda: "test-token")
+            monkeypatch.setattr(gh_mod, "audit_entry", lambda *a, **kw: None)
+            monkeypatch.setattr(gh_mod, "record_github_report", lambda *a, **kw: None)
+
+            run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                          commit_sha="a" * 40, final_result="PASS")
+            run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+            reporter = gh_mod.GitHubReporter()
+            result = reporter.report(run)
+            assert result["reported"] is True
+            # One dropped POST + one pre-check page + reconcile pages; exactly
+            # one logical comment, no blind duplicate POST.
+            assert state["posts"] == 1
+            markers = [c for c in comments if run.test_run_id in c["body"]]
+            assert len(markers) == 1
+
+            # Retry for the same run is a no-op (persisted idempotency).
+            result2 = reporter.report(run)
+            assert result2["reported"] is True
+            assert state["posts"] == 1
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    def test_outage_restart_retry_no_duplicate(self, tmp_path, monkeypatch):
+        """Outage → REPORT_PENDING → restart recovery → single report.
+
+        Real storage + real urllib transport: while the server is down the
+        run stays REPORT_PENDING with a saved result; after restart the
+        recovery posts exactly once.
+        """
+        import json as _json
+        import threading as _threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        from core.real_tests import github as gh_mod
+        from core.real_tests.runner import RealTestRunner
+        from core.real_tests.storage import get_test_run as _get_run
+
+        monkeypatch.setenv("REAL_TESTS_STORAGE_DIR", str(tmp_path / "rt_store"))
+        comments: list[dict] = []
+        state = {"posts": 0}
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a, **kw):
+                pass
+
+            def _send(self, code, payload):
+                raw = _json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                self._send(200, list(comments))
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = _json.loads(self.rfile.read(length) or b"{}")
+                state["posts"] += 1
+                comments.append({"id": state["posts"], "body": payload.get("body", "")})
+                self._send(201, {"id": state["posts"]})
+
+        # Phase 1 — outage: point transport at a dead port.
+        monkeypatch.setenv("GITHUB_API_BASE_URL", "http://127.0.0.1:1")
+        monkeypatch.setenv("GITHUB_REPOSITORY", "fylypovych/vertep")
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+        monkeypatch.setattr(gh_mod, "_get_token", lambda: "test-token")
+        monkeypatch.setattr(gh_mod.time, "sleep", lambda s: None)
+
+        runner = RealTestRunner()
+        run = runner.start("rt::S01", initiator="pytest-outage")
+        run.final_result = "PASS"
+        result = runner.report_to_github(run)
+        assert result["reported"] is False
+        pending = _get_run(run.test_run_id)
+        assert pending.status.value == "REPORT_PENDING"
+        assert pending.final_result == "PASS"
+
+        # Phase 2 — restart: fresh runner recovers pending reports via HTTP.
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        port = server.server_address[1]
+        thread = _threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            monkeypatch.setenv("GITHUB_API_BASE_URL", f"http://127.0.0.1:{port}")
+            fresh = RealTestRunner()
+            recovered = fresh.recover_pending_reports()
+            assert any(r["test_run_id"] == run.test_run_id and r["reported"] for r in recovered)
+            assert state["posts"] == 1
+            done = _get_run(run.test_run_id)
+            assert done.status.value == "REPORTED"
+            assert done.github_report["final_result"] == "PASS"
+
+            # Second recovery pass posts nothing more.
+            recovered2 = fresh.recover_pending_reports()
+            assert recovered2 == []
+            assert state["posts"] == 1
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    def test_start_persists_prerequisites_and_progress(self, tmp_path, monkeypatch):
+        """start() must persist prerequisites/progress for the control surface."""
+        from core.real_tests.runner import DESTRUCTIVE_CHECKS, RealTestRunner
+        from core.real_tests.storage import get_test_run as _get_run
+
+        monkeypatch.setenv("REAL_TESTS_STORAGE_DIR", str(tmp_path / "rt_store2"))
+        runner = RealTestRunner()
+        run = runner.start("rt::S01", initiator="pytest-prereq")
+        stored = _get_run(run.test_run_id)
+        assert stored.prerequisites["checks"]
+        assert stored.prerequisites["mandatory_checks"] == stored.prerequisites["checks"]
+        assert stored.progress.startswith("started:")
+        # destructive subset is consistent with the shared constant
+        for name in stored.prerequisites["destructive_checks"]:
+            assert name in DESTRUCTIVE_CHECKS
+        assert stored.prerequisites["requires_confirmation"] == bool(
+            stored.prerequisites["destructive_checks"])
+
+    def test_run_checks_updates_progress(self, tmp_path, monkeypatch):
+        """run_checks() must advance the persisted progress string."""
+        from core.real_tests.runner import RealTestRunner
+        from core.real_tests.storage import get_test_run as _get_run
+
+        monkeypatch.setenv("REAL_TESTS_STORAGE_DIR", str(tmp_path / "rt_store3"))
+        monkeypatch.setattr(
+            "core.real_tests.scenarios.check_docker",
+            lambda: (True, "docker ok"),
+        )
+        monkeypatch.setattr(
+            "core.real_tests.scenarios.check_core_api",
+            lambda: (True, "core_api ok"),
+        )
+        monkeypatch.setattr(
+            "core.real_tests.scenarios._check_health_core",
+            lambda: (True, "health ok"),
+        )
+        runner = RealTestRunner()
+        run = runner.start("rt::S01", initiator="pytest-progress")
+        run = runner.run_checks(run)
+        stored = _get_run(run.test_run_id)
+        assert stored.progress.startswith("progress:")
+        assert str(len(stored.checks)) in stored.progress
+
+    def test_run_endpoint_persists_confirmation(self, admin_client, monkeypatch):
+        """POST /api/real-tests/run must persist confirmation + actor."""
+        from core.real_tests.runner import RealTestRunner
+        from core.real_tests.storage import get_test_run as _get_run
+
+        real_start = RealTestRunner.start
+
+        def spy_start(self, rt_id, initiator="api", **kwargs):
+            run = real_start(self, rt_id, initiator=initiator)
+            assert initiator == "admin"
+            return run
+
+        monkeypatch.setattr(RealTestRunner, "start", spy_start)
+        monkeypatch.setattr(RealTestRunner, "run_checks", lambda self, run, check_names=None: run)
+        monkeypatch.setattr(RealTestRunner, "finalize", lambda self, run: run)
+        monkeypatch.setattr(RealTestRunner, "report_to_github",
+                            lambda self, run: {"reported": True, "comment_id": "1", "error": None})
+        monkeypatch.setattr(RealTestRunner, "close_rt_issue",
+                            lambda self, run: {"closed": False, "error": None})
+        resp = admin_client.post("/api/real-tests/run",
+                                 json={"rt_id": "rt::S01", "confirm_destructive": True},
+                                 auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        stored = _get_run(resp.json()["test_run_id"])
+        assert stored.initiator == "admin"
+        assert stored.destructive_confirmation is True
+        assert stored.confirmation_timestamp
+
+    def test_list_runs_exposes_progress_and_initiator(self, admin_client, monkeypatch):
+        """GET /api/real-tests/runs must expose progress/initiator/confirmation."""
+        from core.real_tests.runner import RealTestRunner
+
+        monkeypatch.setattr(RealTestRunner, "run_checks", lambda self, run, check_names=None: run)
+        monkeypatch.setattr(RealTestRunner, "finalize", lambda self, run: run)
+        monkeypatch.setattr(RealTestRunner, "report_to_github",
+                            lambda self, run: {"reported": True, "comment_id": "1", "error": None})
+        monkeypatch.setattr(RealTestRunner, "close_rt_issue",
+                            lambda self, run: {"closed": False, "error": None})
+        created = admin_client.post("/api/real-tests/run",
+                                    json={"rt_id": "rt::S01", "confirm_destructive": True},
+                                    auth=("admin", "secret123"))
+        assert created.status_code == 200
+        listed = admin_client.get("/api/real-tests/runs", auth=("admin", "secret123"))
+        assert listed.status_code == 200
+        rows = [r for r in listed.json()["runs"]
+                if r["test_run_id"] == created.json()["test_run_id"]]
+        assert rows
+        row = rows[0]
+        assert row["initiator"] == "admin"
+        assert row["progress"]
+        assert row["destructive_confirmation"] is True
+        assert row["confirmation_timestamp"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

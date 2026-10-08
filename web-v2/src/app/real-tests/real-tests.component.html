@@ -111,6 +111,8 @@
                 <th class="px-4 py-2">Сценарій</th>
                 <th class="px-4 py-2">Статус</th>
                 <th class="px-4 py-2">Результат</th>
+                <th class="px-4 py-2">Прогрес</th>
+                <th class="px-4 py-2">Ініціатор</th>
                 <th class="px-4 py-2">Почато</th>
                 <th class="px-4 py-2"></th>
               </tr>
@@ -121,6 +123,8 @@
                   <td class="px-4 py-2">{{ run.rt_id }}</td>
                   <td class="px-4 py-2">{{ run.status }}</td>
                   <td class="px-4 py-2" [class]="statusClass(run.final_result)">{{ resultLabel(run.final_result) }}</td>
+                  <td class="px-4 py-2 text-slate-500">{{ run.progress || '—' }}</td>
+                  <td class="px-4 py-2 text-slate-500">{{ run.initiator }}</td>
                   <td class="px-4 py-2 text-slate-500">{{ run.started_at }}</td>
                   <td class="px-4 py-2 text-right">
                     <button type="button" class="underline" (click)="viewReport(run)">Звіт</button>
@@ -143,6 +147,13 @@
           <p class="mt-2 text-sm text-amber-700" data-testid="real-tests-confirm-destructive">
             Сценарій містить деструктивні перевірки — дані стенда можуть бути змінені.
           </p>
+          @if (dialog.checks && dialog.checks.length > 0) {
+            <ul class="mt-1 list-disc pl-5 text-xs text-amber-700" data-testid="real-tests-confirm-destructive-list">
+              @for (check of dialog.checks; track check) {
+                <li>{{ check }}</li>
+              }
+            </ul>
+          }
         }
         <div class="mt-4 flex justify-end gap-2">
           <button type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm" (click)="cancelDialog()">

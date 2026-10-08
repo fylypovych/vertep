@@ -23,7 +23,7 @@ export class SetupComponent {
   completeResult = signal<SetupCompleteResult | null>(null);
   setupToken = "";
   hardwareJson = "";
-  form = { role: "core", core_url: "", core_certificate: "", registration_token: "", installation_name: "", username: "", password: "", password_confirmation: "", backend: "ollama", backend_model: "", backend_api_key: "", backend_options: ["ollama", "openai", "anthropic"], backend_selected: "ollama" };
+  form = { role: "core", core_url: "", core_certificate: "", registration_token: "", installation_name: "", username: "", password: "", password_confirmation: "", backend: "ollama", backend_url: "", backend_model: "", backend_api_key: "", backend_options: ["ollama", "openai", "external", "skip"], backend_selected: "ollama" };
   roleEntries: { id: string; label: string; modules: string[]; capabilities: string[] }[] = [];
 
   constructor(private auth: AuthApiService, private router: Router) {}
@@ -77,7 +77,7 @@ export class SetupComponent {
       this.completing.set(false);
       return;
     }
-    const p: Record<string, unknown> = { node_role: this.form.role, installation_name: this.form.installation_name, username: this.form.username, password: this.form.password, password_confirmation: this.form.password_confirmation, ai_backend: this.form.backend_selected || "ollama", backend_model: this.form.backend_model || null, backend_api_key: this.form.backend_api_key || null };
+    const p: Record<string, unknown> = { node_role: this.form.role, installation_name: this.form.installation_name, username: this.form.username, password: this.form.password, password_confirmation: this.form.password_confirmation, ai_backend: this.form.backend_selected || "ollama", backend_url: this.form.backend_url || null, backend_model: this.form.backend_model || null, backend_api_key: this.form.backend_api_key || null };
     if (this.form.role !== "core") { p["core_url"] = this.form.core_url; p["core_certificate"] = this.form.core_certificate || null; p["registration_token"] = this.form.registration_token; }
     this.auth.completeSetup(this.setupToken, p).subscribe({
       next: (r) => { this.completeResult.set(r); this.completing.set(false); this.step.set(5); },

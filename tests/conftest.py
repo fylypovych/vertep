@@ -24,6 +24,10 @@ def pytest_configure(config):
     os.environ["SYSTEM_STATE_BACKEND"] = "file"
     os.environ["RATE_LIMIT_PER_MINUTE"] = "10000"
     os.environ["REDIS_URL"] = "redis://127.0.0.1:1/15"
+    # i.0.0.1.4 (#104): the unit suite is a dev/demo environment — local
+    # fallback paths are active only when LOCAL_WORKER_FALLBACK=true AND
+    # VERTEP_DEMO=true. Individual tests still gate with the former.
+    os.environ["VERTEP_DEMO"] = "true"
     # Mark the isolated installation as "configured but auth-open" so the
     # First-Run 503 guard in AdminAuthMiddleware is bypassed for the whole
     # suite, while every on-disk artifact stays hermetic (never /data/config).

@@ -139,7 +139,9 @@ def test_publish_result_dead_letter_records_failure_after_max_retries():
     assert job.publish_retry_count["youtube"] == 1
 
 
-def test_publish_local_stores_receipt_and_marks_published():
+def test_publish_local_stores_receipt_and_marks_published(monkeypatch):
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
+    monkeypatch.setenv("VERTEP_DEMO", "true")
     job = _make_job(status=JobStatus.READY)
     store = _make_store()
     receipt = {"channel": "youtube", "status": "PUBLISHED", "id": "vid-1"}
@@ -151,7 +153,9 @@ def test_publish_local_stores_receipt_and_marks_published():
     assert "youtube" in job.published_to
 
 
-def test_publish_local_not_configured_sets_error():
+def test_publish_local_not_configured_sets_error(monkeypatch):
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
+    monkeypatch.setenv("VERTEP_DEMO", "true")
     job = _make_job(status=JobStatus.READY)
     store = _make_store()
     receipt = {"channel": "youtube", "status": "NOT_CONFIGURED", "error": "no token"}

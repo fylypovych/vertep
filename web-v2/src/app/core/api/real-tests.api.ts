@@ -38,6 +38,10 @@ export interface RealTestRunSummary {
   started_at: string;
   finished_at: string | null;
   initiator: string;
+  progress: string | null;
+  prerequisites: Record<string, unknown> | null;
+  destructive_confirmation: boolean | null;
+  confirmation_timestamp: string | null;
 }
 
 export interface RealTestRunsResponse {
