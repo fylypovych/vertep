@@ -47,16 +47,44 @@ def runtime_ready(worker: dict) -> bool:
 
 
 def _voice_ready(worker: dict, requirements: dict | None) -> bool:
+    """Fail-closed readiness check for a voice requirement against a worker catalog.
+
+    Issue i.0.0.1.5: a worker that *declares* a voice catalog must prove it
+    supports the exact voice/model/language the Job requires.  A declared-but-
+    empty catalog is not treated as "accepts anything": an empty ``voices``
+    list means the node has no voices at all, so it is refused instead of
+    silently trusted.  Only a worker that never advertised a catalog at all
+    (backward compatible, pre-catalog workers) is assumed capable, because
+    there is nothing to contradict.
+
+    A requirement is satisfied when the catalog advertises the value, advertises
+    the wildcard ``"*"``, or omits the key entirely (the worker did not claim to
+    gate on that dimension).  Any other combination is unsupported and the node
+    is skipped so the Job is not dispatched to a runtime that cannot honour it.
+    """
     if not requirements:
         return True
-    catalog = worker.get("voice_catalog") or {}
-    plural = {"voice": "voices", "model": "models"}
+    catalog = worker.get("voice_catalog")
+    if catalog is None:
+        # No catalog advertised at all: nothing to contradict, keep the node.
+        return True
+    if not catalog:
+        # A declared-but-empty catalog means the node has no voices at all:
+        # refuse instead of silently trusting it.  Only the absence of the
+        # field (None) stays backward compatible.
+        return False
+    plural = {"voice": "voices", "model": "models", "language": "languages"}
     for key, required in requirements.items():
         if not required:
             continue
-        supported = catalog.get(plural.get(key, key))
+        catalog_key = plural.get(key, key)
+        if catalog_key not in catalog:
+            # The node did not claim to gate on this dimension: assume capable.
+            continue
+        supported = catalog.get(catalog_key)
         if not supported:
-            continue  # no catalog advertised → assume the node can handle it
+            # A declared-but-empty list means the node has none: refuse.
+            return False
         if "*" in supported or required in supported:
             continue
         return False

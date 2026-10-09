@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.48
+- Issue #105 (i.0.0.1.5) — Надійність TTS та voice catalog:
+- `core/api/job_helpers.py`: Окремий per-scene бюджет TTS-спроб (`TTS_MAX_RETRIES`) з обмеженим експоненційним backoff (`TTS_RETRY_BACKOFF_BASE`/`TTS_RETRY_BACKOFF_CAP`) через `not_before`; бюджет фіксується в Job на момент dispatch, витримує restart CORE та скидається при resume/retry; вичерпання бюджету завершує TTS-стадію як FAILED і переводить сцену в dead-letter.
+- `core/dispatcher.py`: Fail-closed перевірка `_voice_ready` — декларований, але порожній voice catalog більше не вважається «приймає будь-що»; враховано вимір language.
+- `services/tts_service.py`: Додано endpoint `/voices` з фактичним переліком встановлених голосів espeak-ng; `/synthesize` відхиляє непідтримуваний голос.
+- `core/api/tasks.py`, `core/models.py`, `worker/service.py`: Збережено `voice_catalog` у claim/heartbeat; додано поля Job `tts_attempts` та `tts_max_retries`.
+- `tests/test_voice_pipeline.py`, `tests/test_tts_service.py`: Розширено тести TTS-бюджету, backoff, втрати worker та voice catalog.
+- Issue #107 (var.0.0.1.7) — Автономна лабораторія розробки:
+- `lab/` (new): Ізольований policy gate, audit trail, бюджет, GPU-lease, workspace, governance та CLI/API лабораторії.
+- `scripts/lab-orchestrator.py`, `deploy/lab/`, `installer/vertep-lab.service`, `installer/vertep-lab.timer`, `docs/lab.md` (new): Оркестратор, deployment та systemd-юніти лабораторії.
+- `tests/test_lab_*.py` (new): Тести policy, бюджету, governor, оркестратора, workspace, lease, deployment, governance та reporter.
+- `scripts/release.py`: Додано `lab` до переліку директорій `compileall` у `prepare_release`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.47
 - Issue #103 (i.0.0.1.3) — Text tasks recovery and end-to-end acceptance:
   - `core/storyboard.py`: Fix storyboard_attempt reset — only on regenerate (existing storyboards), not on retry.

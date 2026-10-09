@@ -1,0 +1,18 @@
+# Scheduled execution of the laboratory control cycle (Issue #107).
+#
+# The lab runs on a separate Ubuntu VM and never writes to production
+# Vertep.  Every fifteen minutes it performs one bounded run cycle: isolation
+# check, budget/quota check, cheap static checks, then the gated work.  The
+# schedule is configurable; a single cycle finishes with the GPU lease
+# released and the state on disk consistent, so a restart never loses work.
+[Unit]
+Description=Run the Vertep autonomous laboratory (Issue #107)
+After=vertep-lab.service
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -783,14 +783,84 @@ def _persist_tts_contract(store, job, scene, result, audio_path, data, contract)
                               node_name=result.node_name)]
 
 
-def _enqueue_tts_task(job, scene) -> dict:
+def _tts_max_retries(job) -> int:
+    """Per-scene TTS attempt budget (Issue i.0.0.1.5).
+
+    A dedicated budget is required because the generic ``job.max_retries`` is
+    shared with image/assembly/publish and counts *additional* attempts after
+    the first failure, while a TTS scene must never loop without bound.  The
+    value is pinned per-Job at dispatch time so a retry cannot silently inherit
+    a budget that was raised for a different stage.
+    """
+    try:
+        return int(getattr(job, "tts_max_retries", 3))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _tts_attempts_used(job, scene) -> int:
+    return int((job.tts_attempts or {}).get(scene.scene_id, 0))
+
+
+def _tts_attempts_remaining(job, scene) -> bool:
+    return _tts_attempts_used(job, scene) < _tts_max_retries(job)
+
+
+def _tts_backoff_seconds(job, scene) -> float:
+    """Bounded exponential backoff for a TTS retry (Issue i.0.0.1.5).
+
+    The delay is computed from the *scene's* own attempt count, not from the
+    Job-level ``retries`` counter, so a second failing scene never inherits the
+    backoff of a first one.  The schedule is capped by ``TTS_RETRY_BACKOFF_CAP``
+    so a slow TTS runtime cannot stall the Job indefinitely.
+    """
+    base = float(os.getenv("TTS_RETRY_BACKOFF_BASE", "2"))
+    cap = float(os.getenv("TTS_RETRY_BACKOFF_CAP", "30"))
+    attempt = _tts_attempts_used(job, scene)
+    return min(cap, base ** max(0, attempt))
+
+
+def _enqueue_tts_task(job, scene, *, delay: float = 0) -> dict:
     task = _tts_task_for(job, scene)
+    if delay:
+        task["not_before"] = time.time() + delay
     queued = task_queue.enqueue(task)
     scene.task_id = queued["task_id"]
     job.tts_active_task_ids[queued["task_id"]] = scene.scene_id
     store.repository.record_task(queued, "QUEUED")
     store.event(job, f"TTS TASK {queued['task_id']} QUEUED FOR {scene.scene_id}")
     return queued
+
+
+def _handle_tts_failure(job, scene, task_id: str, node_name: str, error: str | None) -> None:
+    """Apply the separate TTS attempt budget to a failed voice result (Issue i.0.0.1.5).
+
+    A failed TTS scene is retried only while its own scene-scoped budget is not
+    exhausted.  The retry is scheduled with a bounded exponential backoff derived
+    from the scene's own attempt count, and the delay is carried into the queue
+    as ``not_before`` so the dispatcher never hands the same scene to a worker
+    before the backoff has elapsed.  Once the budget is spent the TTS stage is
+    failed and the scene is dead-lettered; there is no unbounded or instant
+    retry path.
+    """
+    used = _tts_attempts_used(job, scene) + 1
+    job.tts_attempts[scene.scene_id] = used
+    task_queue.ack(task_id)
+    job.tts_active_task_ids.pop(task_id, None)
+    scene.assigned_worker = None
+    store.repository.record_task(_tts_task_for(job, scene) | {"task_id": task_id},
+                                 "FAILED", node_name, error)
+    if used < _tts_max_retries(job):
+        delay = _tts_backoff_seconds(job, scene)
+        store.event(job, f"{scene.scene_id} TTS FAILED, RETRY {used}/{_tts_max_retries(job)} "
+                          f"(backoff {delay:.1f}s): {error or 'unknown error'}")
+        _enqueue_tts_task(job, scene, delay=delay)
+        return
+    transition_stage(job, StageName.TTS, StageStatus.FAILED, error or "unknown error")
+    task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "voice",
+                            "scene_id": scene.scene_id}, error)
+    store.update(job, JobStatus.FAILED,
+                 f"TTS FAILED: {error or 'unknown error'} (budget {_tts_max_retries(job)} exhausted)")
 
 
 def _script_task_for(job, system_prompt: str, character: dict | None, revision: str | None = None) -> dict:
@@ -1220,13 +1290,18 @@ def _recover_stale_workers() -> None:
         elif job and current_task in job.tts_active_task_ids and job.status == JobStatus.TTS_GENERATING:
             # Deterministic worker-loss recovery for Voice tasks: release the
             # lease, mark the scene lost and re-dispatch the remaining TTS so
-            # the Job is never silently dropped.
+            # the Job is never silently dropped.  The scene's own TTS attempt
+            # budget is charged for the lost lease too (Issue i.0.0.1.5): a node
+            # that keeps dropping its lease cannot re-dispatch the same scene
+            # forever, and once the budget is spent the scene fails the TTS
+            # stage instead of looping.
             scene = next((s for s in job.scenes if s.scene_id == job.tts_active_task_ids.get(current_task)), None)
             task_queue.release(current_task)
             job.tts_active_task_ids.pop(current_task, None)
             job.assigned_worker = None
             if scene:
                 scene.assigned_worker = None
+                job.tts_attempts[scene.scene_id] = _tts_attempts_used(job, scene) + 1
                 interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
             _dispatch_tts(store, job)
             store.event(job, f"{worker.get('node_name')} OFFLINE; TTS TASK {current_task} REQUEUED")
@@ -1393,6 +1468,14 @@ def _dispatch_tts(store, job) -> None:
     initialize_plan(job)
     if job.stages[StageName.TTS.value].status == StageStatus.PENDING:
         transition_stage(job, StageName.TTS, StageStatus.RUNNING)
+    # Issue i.0.0.1.5: pin the per-scene TTS attempt budget on the Job at
+    # dispatch time so a retry cannot inherit a budget that was raised for a
+    # different stage, and so the budget survives a CORE restart (it is part of
+    # the persisted Job record).
+    try:
+        job.tts_max_retries = max(0, int(os.getenv("TTS_MAX_RETRIES", "3")))
+    except (TypeError, ValueError):
+        job.tts_max_retries = 3
     if _pending_voice_scenes(job) and not _character_voice_enabled(job):
         transition_stage(job, StageName.TTS, StageStatus.READY)
         if job.task_type in {"image", "video"}:
@@ -1404,7 +1487,23 @@ def _dispatch_tts(store, job) -> None:
             store.transition(job, JobStatus.ASSETS_READY, "TTS SKIPPED; NO VOICEOVER")
         return
     queued = [_enqueue_tts_task(job, scene)
-              for scene in _pending_voice_scenes(job)]
+              for scene in _pending_voice_scenes(job)
+              if _tts_attempts_remaining(job, scene)]
+    # Issue i.0.0.1.5: a scene whose separate TTS budget is already spent is
+    # never silently re-dispatched.  It fails the TTS stage and is dead-lettered
+    # instead of looping on an exhausted budget, so worker loss or a lost ack
+    # cannot restart an unbounded retry.
+    exhausted = [scene for scene in _pending_voice_scenes(job)
+                 if not _tts_attempts_remaining(job, scene)]
+    for scene in exhausted:
+        job.tts_attempts[scene.scene_id] = _tts_max_retries(job)
+        transition_stage(job, StageName.TTS, StageStatus.FAILED,
+                         f"TTS budget exhausted for {scene.scene_id}")
+        task_queue.dead_letter({"job_id": job.job_id, "task": "voice",
+                                "scene_id": scene.scene_id},
+                               f"TTS budget {_tts_max_retries(job)} exhausted")
+        store.update(job, JobStatus.FAILED,
+                     f"TTS FAILED: budget exhausted for {scene.scene_id}")
 
 
 def _image_storyboard_gate(store, job) -> bool:
@@ -1623,6 +1722,11 @@ def _job_action(job_id: str, status: JobStatus, event: str):
         for scene in job.scenes:
             if scene.status == StageStatus.PAUSED:
                 scene.status = StageStatus.PENDING
+        # Issue i.0.0.1.5: a resumed/retried Job re-dispatches its TTS scenes
+        # from scratch, so the per-scene attempt budget is reset with it.  A
+        # budget spent before the pause must not keep a legitimately resumed Job
+        # permanently blocked.
+        job.tts_attempts = {}
         if job.stages:
             if job.stages[StageName.ASSETS.value].status == StageStatus.PAUSED:
                 transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)

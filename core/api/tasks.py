@@ -23,7 +23,8 @@ from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state
 from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
                           _character_voice_enabled, _dispatch_tts, _has_voice_worker,
-                          _job_is_due, _ordered_scene_files, _pending_voice_scenes,
+                          _handle_tts_failure, _job_is_due, _ordered_scene_files,
+                          _pending_voice_scenes,
                           _persist_tts_contract,
                           _scene_for_task, _select_worker, _serialize_job_result,
                           _task_for, _tts_task_for, _validate_tts_contract,
@@ -44,6 +45,10 @@ def claim_task(payload: TaskClaim, request: Request):
     worker_data = dict(registered_worker)
     claim_metrics = payload.model_dump(exclude={"node_name", "capabilities"})
     worker_data.update(claim_metrics)
+    # A claim that does not restate the voice catalog must not erase the one
+    # the heartbeat declared: ``None`` means "not stated by this claim".
+    if payload.voice_catalog is None:
+        worker_data["voice_catalog"] = registered_worker.get("voice_catalog")
     # T6: readiness/model routing — a Text Worker must be idle and not in a
     # transitional/desired state before it can accept a new text task (script,
     # storyboard, TTS).  A busy or draining/quarantined worker is skipped so the
@@ -710,17 +715,8 @@ def task_result(result: TaskResult, request: Request):
         if job.status in {JobStatus.CANCELLED, JobStatus.PAUSED}:
             raise HTTPException(409, f"Job is {job.status.value}")
         if not result.success:
-            task_queue.ack(result.task_id)
-            store.repository.record_task(_tts_task_for(job, scene) | {"task_id": result.task_id}, "FAILED", result.node_name, result.error)
-            job.tts_active_task_ids.pop(result.task_id, None)
-            scene.assigned_worker = None
-            if len(scene.attempts) < job.max_retries:
-                store.event(job, f"{scene.scene_id} TTS FAILED, RETRY {len(scene.attempts)}/{job.max_retries}: {result.error or 'unknown error'}")
-                delay = float(os.getenv("RETRY_BACKOFF_BASE", "2")) * (2 ** max(0, job.retries - 1))
-                _enqueue_tts_task(job, scene)
-                return job
-            transition_stage(job, StageName.TTS, StageStatus.FAILED, result.error or "unknown error")
-            return store.update(job, JobStatus.FAILED, f"TTS FAILED: {result.error or 'unknown error'}")
+            _handle_tts_failure(job, scene, result.task_id, result.node_name, result.error)
+            return store.event(job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
         artifacts = result.artifacts or []
         if not artifacts:
             raise HTTPException(400, "Successful TTS result has no artifact")

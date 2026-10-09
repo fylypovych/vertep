@@ -1,0 +1,19 @@
+# Laboratory control stack for the isolated Ubuntu VM (Issue #107).
+# The laboratory never mounts the production Docker socket and never touches
+# production volumes, secrets or databases; the only GPU access is the narrow
+# idle-lease contract below.
+[Unit]
+Description=Vertep autonomous laboratory (Issue #107)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vertep-lab
+EnvironmentFile=-/opt/vertep-lab/lab.env
+ExecStart=/usr/bin/docker compose -f /opt/vertep-lab/docker-compose.yml up lab-control
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

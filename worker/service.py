@@ -161,11 +161,11 @@ def voice_catalog() -> dict:
     """Advertise which voices/models this node can synthesize.
 
     Driven by ``TTS_VOICES`` / ``TTS_MODELS`` (comma-separated) or the live TTS
-    runtime's ``/voices`` catalog when available.  An empty result means the
-    node accepts any voice request (backward compatible with existing workers);
-    a non-empty ``voices`` / ``models`` list lets CORE pick ready nodes and
-    refuse to dispatch a voice to a node that cannot honour the character's
-    voice/model requirements.
+    runtime's ``/voices`` catalog when available.  ``{}`` means the node could
+    not prove any voice and CORE refuses to dispatch voice work to it
+    (fail-closed); a non-empty ``voices`` / ``models`` list lets CORE pick ready
+    nodes and refuse to dispatch a voice to a node that cannot honour the
+    character's voice/model requirements.
     """
     voices = [item.strip() for item in os.getenv("TTS_VOICES", "").split(",") if item.strip()]
     models = [item.strip() for item in os.getenv("TTS_MODELS", "").split(",") if item.strip()]
@@ -840,7 +840,7 @@ def main() -> None:
                                                                           "video_engine": (claim_video_engine_state()
                                                                                            if "assembly" in supported_tasks
                                                                                            else None),
-                                                                          "voice_catalog": payload.get("voice_catalog") or {}}).json().get("task")
+                                                                           "voice_catalog": payload.get("voice_catalog")}).json().get("task")
                         if task:
                             logger.info("Task claimed", extra={"job_id": task["job_id"], "node_name": payload["node_name"]})
                             payload.update({"current_job": task["job_id"], "current_task": task["task_id"], "status": "BUSY"})

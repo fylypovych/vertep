@@ -1,0 +1,18 @@
+# Sandbox image used for untrusted laboratory work (Issue #107).
+#
+# The sandbox runs inside a fresh container with no Docker socket, no
+# production volumes, no secrets and no network outside the laboratory
+# bridge.  Capabilities are dropped, the filesystem is read-only, and a
+# fresh tmpfs is mounted for writable space.  Nothing on the host or in the
+# repository is writable by this image: the only volume is the laboratory's
+# own isolated state, mounted read-only from the host.
+FROM python:3.10-slim
+
+ENV VERTEP_LAB_HOME=/srv/vertep-lab
+WORKDIR $VERTEP_LAB_HOME
+
+# The sandbox is self-contained: no host checkout, no network of the host's.
+# The only writable space the task ever sees is its private tmpfs.
+RUN mkdir -p $VERTEP_LAB_HOME/repo && chmod 1777 $VERTEP_LAB_HOME/repo
+
+CMD ["python", "-m", "lab.cli", "status"]

@@ -33,7 +33,8 @@ from fastapi.testclient import TestClient
 from adapters.ffmpeg import FFmpegAdapter
 from core.app import app, store
 from core.dispatcher import available_worker
-from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, utc_now
+from core.models import (Job, JobStatus, StageName, StageStatus, StoryboardScene,
+                         StoryboardVersion, utc_now)
 from core.script_agent import ScriptAgent
 from core.storyboard import StoryboardService
 
@@ -195,10 +196,22 @@ def test_dispatcher_selects_voice_worker_by_catalog():
                             voice_requirements={"voice": "de", "model": "de_female"}) is None
     assert available_worker([wildcard], job, task_type="voice",
                             voice_requirements={"voice": "de"})["node_name"] == "any-voice"
+    # Issue i.0.0.1.5: a worker that *declares* an empty catalog has no voices
+    # at all, so it is refused instead of being silently trusted.  Only a
+    # worker that never advertised a catalog at all stays backward compatible.
     bare = _voice_worker("bare-voice", {})
-    chosen = available_worker([bare], job, task_type="voice",
-                              voice_requirements={"voice": "uk"})
-    assert chosen and chosen["node_name"] == "bare-voice"
+    assert available_worker([bare], job, task_type="voice",
+                            voice_requirements={"voice": "uk"}) is None
+    undeclared = _voice_worker("undeclared-voice", None)
+    assert available_worker([undeclared], job, task_type="voice",
+                            voice_requirements={"voice": "uk"})["node_name"] == "undeclared-voice"
+    # A catalog that declares the required language is honoured.
+    lang = _voice_worker("lang-voice", {"voices": ["uk"], "languages": ["uk"]})
+    assert available_worker([lang], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "language": "uk"})["node_name"] == "lang-voice"
+    wrong_lang = _voice_worker("wrong-lang-voice", {"voices": ["uk"], "languages": ["en"]})
+    assert available_worker([wrong_lang], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "language": "uk"}) is None
 
 
 def _make_wav(duration: float = 0.5, rate: int = 22050) -> bytes:
@@ -390,3 +403,107 @@ def test_full_voice_dispatch_end_to_end(monkeypatch, tmp_path):
     contract_path = audio_path.with_suffix(".contract.json")
     assert contract_path.exists()
     assert json.loads(contract_path.read_text(encoding="utf-8"))["sha256"] == hashlib.sha256(wav).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Issue i.0.0.1.5: separate TTS attempt budget, bounded backoff, exhaustion
+# ---------------------------------------------------------------------------
+
+def _voice_job_with_budget(monkeypatch, tmp_path, character_id="voicechar",
+                           tts_max_retries=3, tts_backoff_base="2", tts_backoff_cap="30"):
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("DEMO_MODE", "true")
+    monkeypatch.setenv("TTS_MAX_RETRIES", str(tts_max_retries))
+    monkeypatch.setenv("TTS_RETRY_BACKOFF_BASE", tts_backoff_base)
+    monkeypatch.setenv("TTS_RETRY_BACKOFF_CAP", tts_backoff_cap)
+    _write_character(tmp_path, character_id)
+    job = store.create(topic="budget", character_id=character_id, priority=1)
+    job.script = {"title": "b", "scenes": [
+        {"prompt": "кадр", "voiceover": "озвучка", "duration": 1}]}
+    from core.orchestration import initialize_plan
+    initialize_plan(job)
+    scene = job.scenes[0]
+    return job, scene
+
+
+def test_tts_budget_is_scene_scoped_and_persisted(monkeypatch, tmp_path):
+    job, scene = _voice_job_with_budget(monkeypatch, tmp_path, tts_max_retries=2)
+    from core.api.job_helpers import _dispatch_tts
+    from core.state import task_queue
+    _dispatch_tts(store, job)
+    assert job.tts_max_retries == 2
+    assert scene.scene_id in job.tts_active_task_ids.values()
+    # The dispatched task must not be re-schedulable before the backoff elapsed.
+    task = next(iter(job.tts_active_task_ids))
+    queued = task_queue.find(task)
+    assert queued is not None
+    assert "not_before" not in queued
+
+
+def test_tts_backoff_delay_is_carried_into_enqueue(monkeypatch, tmp_path):
+    job, scene = _voice_job_with_budget(monkeypatch, tmp_path, tts_max_retries=5)
+    job.tts_attempts[scene.scene_id] = 1
+    from core.api.job_helpers import _enqueue_tts_task, _tts_backoff_seconds
+    expected = _tts_backoff_seconds(job, scene)
+    assert expected > 0
+    queued = _enqueue_tts_task(job, scene, delay=expected)
+    assert "not_before" in queued
+    assert queued["not_before"] >= time.time() + expected - 1
+
+
+def test_tts_budget_exhaustion_fails_the_job(monkeypatch, tmp_path):
+    job, scene = _voice_job_with_budget(monkeypatch, tmp_path, tts_max_retries=1)
+    job.tts_attempts[scene.scene_id] = 1  # already spent its only allowed attempt
+    from core.api.job_helpers import _dispatch_tts
+    from core.state import task_queue
+    _dispatch_tts(store, job)
+    assert job.status == JobStatus.FAILED
+    assert job.stages["TTS"].status == StageStatus.FAILED
+    assert scene.scene_id not in job.tts_active_task_ids.values()
+    assert any(item.get("scene_id") == scene.scene_id for item in task_queue.dead_letters())
+
+
+def test_tts_retry_uses_bounded_backoff_and_caps(monkeypatch, tmp_path):
+    job, scene = _voice_job_with_budget(monkeypatch, tmp_path, tts_max_retries=5,
+                                        tts_backoff_base="2", tts_backoff_cap="4")
+    from core.api.job_helpers import _tts_backoff_seconds, _tts_attempts_used
+    delays = []
+    for _ in range(5):
+        delays.append(_tts_backoff_seconds(job, scene))
+        job.tts_attempts[scene.scene_id] = _tts_attempts_used(job, scene) + 1
+    # Bounded exponential: 1, 2, 4, 4, 4 (cap applies).
+    assert delays == [1.0, 2.0, 4.0, 4.0, 4.0]
+
+
+def test_tts_worker_loss_charges_the_scene_budget(monkeypatch, tmp_path):
+    job, scene = _voice_job_with_budget(monkeypatch, tmp_path, tts_max_retries=1)
+    from core.api.job_helpers import _dispatch_tts
+    _dispatch_tts(store, job)
+    job = store.jobs[job.job_id]
+    job.status = JobStatus.TTS_GENERATING
+    task_id = next(iter(job.tts_active_task_ids))
+    worker = {"node_name": "voice-worker", "status": "BUSY", "current_job": job.job_id,
+              "current_task": task_id, "last_seen": "2000-01-01T00:00:00+00:00"}
+    store.save_worker(worker)
+    store.workers[worker["node_name"]] = worker
+    from core.api.job_helpers import _recover_stale_workers
+    _recover_stale_workers()
+    # The lost lease charged the scene's only attempt: the budget is now spent
+    # and the scene is not re-dispatched.
+    assert job.tts_attempts[scene.scene_id] == 1
+    assert scene.scene_id not in job.tts_active_task_ids.values()
+    assert job.status == JobStatus.FAILED
+
+
+def test_tts_resume_resets_the_scene_budget(monkeypatch, tmp_path):
+    job, scene = _voice_job_with_budget(monkeypatch, tmp_path, tts_max_retries=2)
+    job.tts_attempts[scene.scene_id] = 2  # spent
+    job.status = JobStatus.TTS_GENERATING
+    from core.orchestration import transition_stage
+    transition_stage(job, StageName.TTS, StageStatus.RUNNING)
+    transition_stage(job, StageName.TTS, StageStatus.PAUSED)
+    job.status = JobStatus.NEW
+    from core.api.job_helpers import _job_action
+    _job_action(job.job_id, JobStatus.NEW, "RESUMED")
+    assert job.tts_attempts == {}

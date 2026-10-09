@@ -186,7 +186,7 @@ def prepare_release(root: Path, *, skip_tests: bool) -> str:
     require_ukrainian("\n".join(notes), "Опис змін у CHANGELOG.md")
     if not skip_tests:
         run(root, [sys.executable, "-m", "compileall", "-q", "core", "adapters",
-                   "worker", "scripts", "installer", "tests"], capture=False)
+                   "worker", "scripts", "installer", "tests", "lab"], capture=False)
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", "--ignore=tests/test_browser_e2e.py"],
             cwd=root, text=True, encoding="utf-8", errors="replace",

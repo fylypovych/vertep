@@ -413,6 +413,13 @@ class Job(BaseModel):
     # instead of being assumed free. Each entry records the engine identity the
     # release belongs to, so repointing the engine does not silently release it.
     assembly_releases: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Issue i.0.0.1.5 (#105): a separate TTS attempt budget, independent of the
+    # generic ``max_retries`` used by image/assembly/publish.  Keyed by scene_id,
+    # so a scene that already burned its budget is never silently re-dispatched
+    # the moment another scene of the same Job fails.  Exhausted scenes fail the
+    # TTS stage and are dead-lettered instead of looping forever.
+    tts_attempts: dict[str, int] = Field(default_factory=dict)
+    tts_max_retries: int = 3
 
 class WorkerHeartbeat(BaseModel):
     node_name: str
@@ -444,7 +451,10 @@ class WorkerHeartbeat(BaseModel):
     runtime_version: str | None = None
     self_test: dict[str, Any] = Field(default_factory=dict)
     cancel_fence_ack: dict[str, Any] = Field(default_factory=dict)
-    voice_catalog: dict[str, Any] = Field(default_factory=dict)
+    # ``None`` means the node never advertised a voice catalog (pre-catalog
+    # worker); an explicitly declared ``{}`` means the node has no voices at
+    # all.  The dispatcher treats only the former as backward compatible.
+    voice_catalog: dict[str, Any] | None = None
     model_catalog: dict[str, Any] = Field(default_factory=dict)
 
 class ModelProgressReport(BaseModel):
@@ -464,7 +474,7 @@ class TaskClaim(BaseModel):
     supported_tasks: list[str] = Field(default_factory=lambda: ["image"])
     supported_workflows: list[str] = Field(default_factory=lambda: ["*"])
     capabilities: list[str] = Field(default_factory=lambda: ["image_generation"])
-    voice_catalog: dict[str, Any] = Field(default_factory=dict)
+    voice_catalog: dict[str, Any] | None = None
     # Effective video-engine configuration and readiness of the claiming node
     # (Issue #122 P5/P7). Only non-secret snapshot fields are reported, so CORE can
     # refuse an attempt on a node whose engine, endpoint, revision or pinned upstream
