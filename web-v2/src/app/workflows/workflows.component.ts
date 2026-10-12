@@ -11,6 +11,14 @@ import { Workflow, WorkflowValidation, WorkflowVersion, WorkflowUsage, WorkflowF
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 
+type WorkflowEditableInput = {
+  node_id: string;
+  class_type: string;
+  input_name: string;
+  current_value: unknown;
+  type?: 'str' | 'int' | 'float' | 'bool';
+};
+
 function coerceInputValue(value: unknown, type?: string): unknown {
   if (type === 'str') return String(value);
   if (type === 'bool') {
@@ -100,7 +108,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
             <h3 class="text-lg font-semibold text-slate-900">{{ editingWf ? 'Редагувати' : 'Новий' }} сценарій</h3>
             <div class="flex items-center gap-2">
               <button (click)="activeTab.set('json')" [class.bg-emerald-600]="activeTab() === 'json'" [class.text-white]="activeTab() === 'json'" [class.bg-slate-100]="activeTab() !== 'json'" class="px-3 py-1.5 rounded-lg text-xs font-medium">JSON</button>
-              <button (click)="activeTab.set('form')" [class.bg-emerald-600]="activeTab() === 'form'" [class.text-white]="activeTab() === 'form'" [class.bg-slate-100]="activeTab() !== 'form'" class="px-3 py-1.5 rounded-lg text-xs font-medium">Форма</button>
+              <button (click)="openFormTab()" [class.bg-emerald-600]="activeTab() === 'form'" [class.text-white]="activeTab() === 'form'" [class.bg-slate-100]="activeTab() !== 'form'" class="px-3 py-1.5 rounded-lg text-xs font-medium">Форма</button>
               <button (click)="activeTab.set('report')" [class.bg-emerald-600]="activeTab() === 'report'" [class.text-white]="activeTab() === 'report'" [class.bg-slate-100]="activeTab() !== 'report'" class="px-3 py-1.5 rounded-lg text-xs font-medium">Звіт валідації</button>
             </div>
           </div>
@@ -134,7 +142,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                     @for (item of formSchema()!.schema.editable_inputs; track item.node_id + '_' + item.input_name) {
                       <div class="p-3 border border-slate-200 rounded-lg bg-slate-50 text-xs">
                         <div class="font-semibold text-slate-700">Нода {{ item.node_id }} ({{ item.class_type }}) — {{ item.input_name }}</div>
-                        <input [(ngModel)]="item.current_value" (change)="updateJsonFromForm()" class="mt-1 w-full px-2 py-1 border border-slate-300 rounded text-xs">
+                        <input [(ngModel)]="item.current_value" (change)="updateJsonFromForm(item)" class="mt-1 w-full px-2 py-1 border border-slate-300 rounded text-xs">
                       </div>
                     }
                   </div>
@@ -360,14 +368,21 @@ export class WorkflowsComponent implements OnInit {
 
   loadFormSchema(kind: string, name: string): void {
     this.resources.workflowForm(kind, name).subscribe({
-      next: (schema) => this.formSchema.set(schema),
+      next: (schema) => this.formSchema.set(this.syncFormFromContent(schema) ?? schema),
       error: () => this.formSchema.set(null),
     });
+  }
+
+  openFormTab(): void {
+    this.activeTab.set('form');
+    this.formSchema.set(this.syncFormFromContent(this.formSchema()));
   }
 
   onJsonChange(): void {
     if (this.validateTimer) clearTimeout(this.validateTimer);
     this.validateTimer = setTimeout(() => this.runValidation(), 250);
+    const schema = this.formSchema();
+    if (schema) this.formSchema.set(this.syncFormFromContent(schema) ?? schema);
   }
 
   private runValidation(): void {
@@ -394,15 +409,16 @@ export class WorkflowsComponent implements OnInit {
     });
   }
 
-  updateJsonFromForm(): void {
+  updateJsonFromForm(item?: WorkflowEditableInput): void {
     const schema = this.formSchema();
     if (!schema) return;
+    const targets = item ? [item] : (schema.schema.editable_inputs || []);
     try {
       const parsed = JSON.parse(this.editorForm.content);
-      for (const item of schema.schema.editable_inputs || []) {
-        if (parsed[item.node_id] && parsed[item.node_id].inputs) {
-          parsed[item.node_id].inputs[item.input_name] = coerceInputValue(item.current_value, item.type);
-          item.current_value = parsed[item.node_id].inputs[item.input_name];
+      for (const target of targets) {
+        if (parsed[target.node_id] && parsed[target.node_id].inputs) {
+          parsed[target.node_id].inputs[target.input_name] = coerceInputValue(target.current_value, target.type);
+          target.current_value = parsed[target.node_id].inputs[target.input_name];
         }
       }
       this.editorForm.content = JSON.stringify(parsed, null, 2);
@@ -411,6 +427,68 @@ export class WorkflowsComponent implements OnInit {
       return;
     }
     this.runValidation();
+  }
+
+  private syncFormFromContent(schema: WorkflowFormSchema | null): WorkflowFormSchema | null {
+    let parsed: Record<string, unknown> | null = null;
+    const raw = this.editorForm.content.trim();
+    if (raw) {
+      try {
+        const value: unknown = JSON.parse(raw);
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          parsed = value as Record<string, unknown>;
+        }
+      } catch {
+        return schema;
+      }
+    }
+    const existing = schema?.schema.editable_inputs;
+    const editable: WorkflowEditableInput[] = existing
+      ? existing.map((item) => {
+          const value = this.inputValueFromJson(parsed, item.node_id, item.input_name);
+          return value === undefined ? { ...item } : { ...item, current_value: value };
+        })
+      : this.deriveEditableInputs(parsed);
+    if (!schema) {
+      return {
+        kind: this.editorForm.kind,
+        name: this.editorForm.name,
+        schema: { placeholders: [], node_types: [], editable_inputs: editable },
+      };
+    }
+    return { ...schema, schema: { ...schema.schema, editable_inputs: editable } };
+  }
+
+  private inputValueFromJson(parsed: Record<string, unknown> | null, nodeId: string, inputName: string): unknown {
+    const node = parsed?.[nodeId];
+    if (!node || typeof node !== 'object') return undefined;
+    const inputs = (node as Record<string, unknown>)['inputs'];
+    if (!inputs || typeof inputs !== 'object') return undefined;
+    const inputsMap = inputs as Record<string, unknown>;
+    return inputName in inputsMap ? inputsMap[inputName] : undefined;
+  }
+
+  private deriveEditableInputs(parsed: Record<string, unknown> | null): WorkflowEditableInput[] {
+    if (!parsed) return [];
+    const items: WorkflowEditableInput[] = [];
+    for (const [nodeId, node] of Object.entries(parsed)) {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+      const nodeMap = node as Record<string, unknown>;
+      const inputs = nodeMap['inputs'];
+      if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue;
+      for (const [inputName, value] of Object.entries(inputs as Record<string, unknown>)) {
+        const kind = typeof value;
+        if (kind !== 'string' && kind !== 'number' && kind !== 'boolean') continue;
+        items.push({
+          node_id: nodeId,
+          class_type: typeof nodeMap['class_type'] === 'string' ? nodeMap['class_type'] : '',
+          input_name: inputName,
+          current_value: value,
+          type: kind === 'boolean' ? 'bool' : kind === 'string' ? 'str' : (Number.isInteger(value) ? 'int' : 'float'),
+        });
+      }
+    }
+    return items;
   }
 
   viewVersions(wf: Workflow): void {

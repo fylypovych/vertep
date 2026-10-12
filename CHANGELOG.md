@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.49
+- Issue #115 (i.0.0.1.15) — Синхронізація Form і JSON у редакторі workflow:
+- `web-v2/src/app/workflows/workflows.component.ts`: Вкладка «Форма» тепер показує значення з поточного JSON (`syncFormFromContent`) — при відкритті редактора, зміні JSON і переході на вкладку Form `current_value` береться з `editorForm.content`, а не зі застарілої серверної схеми; для нового workflow форма будується з JSON (`deriveEditableInputs`).
+- `web-v2/src/app/workflows/workflows.component.ts`: `updateJsonFromForm` оновлює лише змінене поле (`(change)` передає конкретний елемент), тож редагування одного поля не повертає старі значення інших; невалідний JSON не скидає форму.
+- Усунуто блокер release gate: Browser E2E `test_workflows_edit_save_reload_persists_changes` знову проходить; усі 9 workflow-тестів Browser E2E — pass.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.48
 - Issue #105 (i.0.0.1.5) — Надійність TTS та voice catalog:
 - `core/api/job_helpers.py`: Окремий per-scene бюджет TTS-спроб (`TTS_MAX_RETRIES`) з обмеженим експоненційним backoff (`TTS_RETRY_BACKOFF_BASE`/`TTS_RETRY_BACKOFF_CAP`) через `not_before`; бюджет фіксується в Job на момент dispatch, витримує restart CORE та скидається при resume/retry; вичерпання бюджету завершує TTS-стадію як FAILED і переводить сцену в dead-letter.
