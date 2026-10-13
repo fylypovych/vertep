@@ -35,6 +35,10 @@ from .state import executor
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED"}
 _MODEL_OPERATION_TYPES = {"model_pull", "model_delete"}
 
+# Track error state per operation for node-placed pulls
+_OPERATION_ERROR_STATE: dict[str, bool] = {}
+_ERROR_STATE_LOCK = threading.Lock()
+
 
 class PlacementError(Exception):
     """Raised when a model operation cannot be placed on the requested node."""
@@ -73,8 +77,9 @@ def _pull_model(operation_id: str, model: str) -> None:
         return
     cancel_event = threading.Event()
     _CANCEL_EVENTS[operation_id] = cancel_event
+    error_received = False
     try:
-        with httpx.Client(timeout=None) as client:
+        with httpx.Client(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             with client.stream("POST", f"{base}/api/pull",
                                json={"name": model, "stream": True}) as response:
                 if response.status_code != 200:
@@ -83,6 +88,7 @@ def _pull_model(operation_id: str, model: str) -> None:
                     return
                 for line in response.iter_lines():
                     if cancel_event.is_set():
+                        cancel_operation(operation_id, "cancelled by user")
                         audit_entry(operation_id, "pull_canceled", f"model={model}")
                         return
                     if not line:
@@ -91,12 +97,16 @@ def _pull_model(operation_id: str, model: str) -> None:
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if event.get("error"):
+                        error_received = True
+                        fail_operation(operation_id, str(event["error"])[:500])
+                        audit_entry(operation_id, "pull_failed", f"model={model} error={event['error']}")
+                        return
                     completed = event.get("completed")
                     total = event.get("total")
                     if completed is not None and total:
                         progress = max(0, min(100, int(completed * 100 // total)))
-                        advance_operation(operation_id, "pull", progress,
-                                          event.get("error") or None)
+                        advance_operation(operation_id, "pull", progress, None)
                     status = event.get("status")
                     if status:
                         current = get_operation(operation_id)
@@ -105,8 +115,12 @@ def _pull_model(operation_id: str, model: str) -> None:
                                           status)
         op = get_operation(operation_id)
         if op and op.get("status") == "RUNNING":
-            complete_operation(operation_id, {"model": model, "node_name": None, "pulled": True})
-            audit_entry(operation_id, "pull_completed", f"model={model}")
+            if error_received:
+                fail_operation(operation_id, "pull ended with error event")
+                audit_entry(operation_id, "pull_failed", f"model={model} error=premature EOF after error")
+            else:
+                complete_operation(operation_id, {"model": model, "node_name": None, "pulled": True})
+                audit_entry(operation_id, "pull_completed", f"model={model}")
     except Exception as error:  # noqa: BLE001 - surface any transport failure durably
         fail_operation(operation_id, f"pull failed: {error}")
     finally:
@@ -255,6 +269,8 @@ def ingest_model_progress(node_name: str, report: dict[str, Any]) -> dict[str, A
         store.save_worker(worker)
 
     if operation.get("status") in _TERMINAL:
+        with _ERROR_STATE_LOCK:
+            _OPERATION_ERROR_STATE.pop(operation_id, None)
         return {"cancel_requested": reported_status == "RUNNING",
                 "operation": operation}
 
@@ -265,19 +281,33 @@ def ingest_model_progress(node_name: str, report: dict[str, Any]) -> dict[str, A
     if operation.get("status") == "QUEUED":
         begin_operation(operation_id, phase)
     if reported_status == "COMPLETED":
-        _, model = split_target(operation.get("target"))
-        complete_operation(operation_id, {"model": model, "node_name": node_name,
-                                          "pulled": operation.get("type") == "model_pull"})
-        audit_entry(operation_id, f"{operation.get('type')}_completed",
-                    f"node={node_name} model={model}")
+        with _ERROR_STATE_LOCK:
+            had_error = _OPERATION_ERROR_STATE.pop(operation_id, False)
+        if had_error:
+            fail_operation(operation_id, "pull ended with prior error event")
+            audit_entry(operation_id, f"{operation.get('type')}_failed",
+                        f"node={node_name} error=completed after error")
+        else:
+            _, model = split_target(operation.get("target"))
+            complete_operation(operation_id, {"model": model, "node_name": node_name,
+                                              "pulled": operation.get("type") == "model_pull"})
+            audit_entry(operation_id, f"{operation.get('type')}_completed",
+                        f"node={node_name} model={model}")
     elif reported_status == "FAILED":
+        with _ERROR_STATE_LOCK:
+            _OPERATION_ERROR_STATE[operation_id] = True
         fail_operation(operation_id, str(error or "node reported failure"))
         audit_entry(operation_id, f"{operation.get('type')}_failed",
                     f"node={node_name} error={error}")
     elif reported_status == "CANCELLED":
+        with _ERROR_STATE_LOCK:
+            _OPERATION_ERROR_STATE.pop(operation_id, None)
         cancel_operation(operation_id, reason=str(error or "cancelled on node"))
         audit_entry(operation_id, f"{operation.get('type')}_canceled", f"node={node_name}")
     else:
+        if error:
+            with _ERROR_STATE_LOCK:
+                _OPERATION_ERROR_STATE[operation_id] = True
         advance_operation(operation_id, phase, progress, str(error) if error else None)
 
     operation = get_operation(operation_id) or operation

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.50
+- Issue #116 (i.0.0.1.16) — Models: виправити terminal status і cancellation model pull:
+- `core/pull_executor.py`: Локальний pull (`_pull_model`) — додано timeout (300s total, 10s connect), NDJSON error event негайно викликає `fail_operation` замість `advance_operation`; cancellation викликає `cancel_operation` для durable CANCELLED; після EOF перевіряється `error_received` — якщо error був, операція стає FAILED.
+- `core/pull_executor.py`: Node pull path (`ingest_model_progress`) — додано thread-safe `_OPERATION_ERROR_STATE` для відстеження error стану на операцію; COMPLETED від node перевіряє prior error і стає FAILED, якщо error був; FAILED/error в progress позначає error state; CANCELLED очищує error state.
+- `worker/service.py`: Worker-side pull (`_run_model_command`) — додано timeout (300s total, 10s connect) для запобігання stalled streams.
+- `tests/test_model_lifecycle.py`, `tests/test_worker_model_commands.py`: Перевірено stream error event FAILED, cancellation зупиняє pull, reconciliation orphaned local pull.
+- `tests/test_core_generation_gate.py`: Усі тести проходять (CORE Generation Gate).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.49
 - Issue #115 (i.0.0.1.15) — Синхронізація Form і JSON у редакторі workflow:
 - `web-v2/src/app/workflows/workflows.component.ts`: Вкладка «Форма» тепер показує значення з поточного JSON (`syncFormFromContent`) — при відкритті редактора, зміні JSON і переході на вкладку Form `current_value` береться з `editorForm.content`, а не зі застарілої серверної схеми; для нового workflow форма будується з JSON (`deriveEditableInputs`).

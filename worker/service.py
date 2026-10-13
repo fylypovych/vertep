@@ -159,30 +159,113 @@ def node_capabilities() -> list[str]:
 
 def voice_catalog() -> dict:
     """Advertise which voices/models this node can synthesize.
-
-    Driven by ``TTS_VOICES`` / ``TTS_MODELS`` (comma-separated) or the live TTS
-    runtime's ``/voices`` catalog when available.  ``{}`` means the node could
-    not prove any voice and CORE refuses to dispatch voice work to it
-    (fail-closed); a non-empty ``voices`` / ``models`` list lets CORE pick ready
-    nodes and refuse to dispatch a voice to a node that cannot honour the
-    character's voice/model requirements.
+    Driven by ``TTS_VOICES`` / ``TTS_MODELS`` / ``TTS_LANGUAGES`` /
+    ``TTS_PROVIDERS`` (comma-separated) or the live TTS runtime's ``/voices``
+    catalog when available.  ``{}`` means the node could not prove any voice
+    and CORE refuses to dispatch voice work to it (fail-closed); a non-empty
+    ``voices`` / ``models`` list lets CORE pick ready nodes and refuse to
+    dispatch a voice to a node that cannot honour the character's
+    voice/provider/model/language/speed requirements (Issue i.0.0.1.5).
     """
     voices = [item.strip() for item in os.getenv("TTS_VOICES", "").split(",") if item.strip()]
     models = [item.strip() for item in os.getenv("TTS_MODELS", "").split(",") if item.strip()]
-    if not voices and not models:
+    languages = [item.strip().lower() for item in os.getenv("TTS_LANGUAGES", "").split(",") if item.strip()]
+    providers = [item.strip().lower() for item in os.getenv("TTS_PROVIDERS", "").split(",") if item.strip()]
+    speed_range: dict | None = None
+    if not voices and not models and not languages:
         url = os.getenv("TTS_URL", "http://tts:8090").rstrip("/")
         try:
             catalog = httpx.get(f"{url}/voices", timeout=10).json()
             if isinstance(catalog, dict):
                 voices = [str(item.get("id", item)) for item in catalog.get("voices", [])]
+                fetched_models = catalog.get("models", [])
+                if isinstance(fetched_models, list):
+                    models = [str(item) for item in fetched_models if str(item).strip()]
+                fetched_languages = catalog.get("languages", [])
+                if isinstance(fetched_languages, list):
+                    languages = [str(item).strip().lower() for item in fetched_languages if str(item).strip()]
+                fetched_providers = catalog.get("providers", [])
+                if isinstance(fetched_providers, list):
+                    providers = [str(item).strip().lower() for item in fetched_providers if str(item).strip()]
+                fetched_range = catalog.get("speed_range")
+                if isinstance(fetched_range, dict):
+                    speed_range = {"min": fetched_range.get("min", 80),
+                                   "max": fetched_range.get("max", 450)}
         except (httpx.HTTPError, ValueError):
             voices = []
-    result: dict[str, list[str]] = {}
+    if not languages and voices:
+        # The espeak runtime has no separate language table: derive language
+        # tags from the installed voice identifiers (``en-us`` → ``en``) so
+        # CORE can gate on language without a new provider integration.
+        seen: set[str] = set()
+        for voice in voices:
+            tag = str(voice).strip().lower().split("_")[0].split("-")[0]
+            if tag:
+                seen.add(tag)
+        languages = sorted(seen)
+    if not providers:
+        # The stock espeak runtime behind this worker synthesizes any voice it
+        # advertises regardless of the logical provider label, so the node
+        # accepts the providers the runtime catalog declares (or the espeak
+        # default) instead of inventing a new provider integration.
+        providers = ["espeak-ng", "mock", "none"]
+    result: dict[str, object] = {}
     if voices:
         result["voices"] = sorted(set(voices))
     if models:
         result["models"] = sorted(set(models))
+    if languages:
+        result["languages"] = sorted(set(languages))
+    if providers:
+        result["providers"] = sorted(set(providers))
+    if speed_range:
+        result["speed_range"] = speed_range
     return result
+
+
+def apply_provider_config(config: dict | None) -> dict[str, str]:
+    """Apply the non-secret provider selection delivered by CORE (Issue i.0.0.1.17).
+
+    The stock heartbeat response carries the allowlisted subset of the persisted
+    ``provider-overrides.json``.  This worker-side apply mirrors the CORE-side
+    ``apply_provider_overrides()``: allowlisted keys are written into this
+    process environment so the executors that actually run text/voice/compute
+    tasks observe the switched backend, and the provider registry cache is
+    dropped so factories re-read the environment.  Returns the applied mapping
+    so heartbeats can report the effective executor configuration back.
+    """
+    applied: dict[str, str] = {}
+    if not isinstance(config, dict):
+        return applied
+    from core.provider_switch import _PROVIDER_EXECUTOR_ENV_ALLOWLIST
+
+    for key, value in config.items():
+        if key not in _PROVIDER_EXECUTOR_ENV_ALLOWLIST or not isinstance(value, str):
+            continue
+        if os.environ.get(key) != value:
+            os.environ[key] = value
+        applied[key] = value
+    if applied:
+        try:
+            from adapters import providers as providers_module
+
+            providers_module._providers = None
+        except Exception:  # noqa: BLE001 - a stale cache must not break the loop
+            pass
+    return applied
+
+
+def executor_provider_config() -> dict[str, str]:
+    """Effective non-secret provider selection of this executor (Issue i.0.0.1.17).
+
+    Reports what the executors in this process actually observe, so CORE can
+    confirm the switch reached the node that runs the task and a failed
+    activation never reports success.
+    """
+    from core.provider_switch import _PROVIDER_EXECUTOR_ENV_ALLOWLIST
+
+    return {key: os.environ[key] for key in sorted(_PROVIDER_EXECUTOR_ENV_ALLOWLIST)
+            if os.environ.get(key)}
 
 
 _MODEL_CATALOG_CACHE: dict = {"value": {}, "loaded": False, "checked_at": 0.0}
@@ -297,7 +380,7 @@ def _run_model_command(core: str, node_name: str, command: dict,
             return
         with client.stream("POST", f"{base}/api/pull",
                            json={"name": model, "stream": True},
-                           timeout=None) as response:
+                           timeout=httpx.Timeout(300.0, connect=10.0)) as response:
             if response.status_code != 200:
                 body = response.read()[:500].decode("utf-8", "replace")
                 report("FAILED", "pull", state["last_progress"],
@@ -799,6 +882,7 @@ def main() -> None:
                 payload.update(metrics)
                 payload.update(host_metrics())
                 payload["model_catalog"] = text_model_catalog()
+                payload["provider_config"] = executor_provider_config()
                 if future is None and time.monotonic() >= next_self_test:
                     payload["self_test"] = bind_self_test(
                         role_self_test(configured_role(), metrics, adapter),
@@ -885,6 +969,12 @@ def main() -> None:
                 update_target = control.get("update_target_version")
                 rollback_target = control.get("rollback_target_version")
                 restart_operation_id = control.get("restart_operation_id")
+                if isinstance(control.get("provider_config"), dict):
+                    # Issue i.0.0.1.17: the persisted switch reaches the executor
+                    # that actually runs the task through the stock heartbeat
+                    # channel — no new provider integration, no secret travels.
+                    apply_provider_config(control.get("provider_config"))
+                    payload["provider_config"] = executor_provider_config()
                 if control.get("model_command"):
                     handle_model_command(control.get("model_command"), core,
                                          payload["node_name"], client_options)
