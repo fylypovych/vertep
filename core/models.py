@@ -456,6 +456,10 @@ class WorkerHeartbeat(BaseModel):
     # all.  The dispatcher treats only the former as backward compatible.
     voice_catalog: dict[str, Any] | None = None
     model_catalog: dict[str, Any] = Field(default_factory=dict)
+    # Effective non-secret provider selection the executor observes
+    # (Issue i.0.0.1.17): reported by the Worker so CORE can confirm the switch
+    # reached the node that actually runs the task.
+    provider_config: dict[str, str] = Field(default_factory=dict)
 
 class ModelProgressReport(BaseModel):
     """Progress/cancel channel for a node-local model pull or delete."""

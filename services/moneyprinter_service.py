@@ -759,25 +759,28 @@ def _mean_colour(clip, at_seconds: float) -> tuple[float, float, float]:
     return tuple(float(value) for value in np.asarray(frame, dtype=float).reshape(-1, 3).mean(axis=0))
 
 
-def _submit_route_payload(material_key: str, marker: str, seconds: float) -> dict:
+def _submit_route_payload(materials: list[dict], marker: str) -> dict:
     """The fixed §9.4 submit set, built exactly as the bridge builds it.
 
     Every field that could start an external generation, a narration synthesis or a
     publication is pinned here, so the self-test submits the same request the factory
-    submits and not a friendlier variant of it.
+    submits and not a friendlier variant of it. ``materials`` is the ordered list of
+    uploaded scenes — each one carrying its own approved duration, because the runtime
+    has no per-item duration and the executor pre-cut is what encodes it (§9.3 row 4).
     """
     return {
         "video_subject": "Vertep runtime self-test",
         "video_script": "Approved self-test narration.",
         "video_terms": None,
         "video_source": "local",
-        "video_materials": [{"provider": "local", "url": material_key, "duration": seconds}],
+        "video_materials": list(materials),
         "custom_audio_file": marker,
         "video_aspect": "9:16",
         "video_fit_mode": "contain",
         "video_concat_mode": "sequential",
         "video_transition_mode": None,
-        "video_clip_duration": max(1, int(math.ceil(seconds))),
+        "video_clip_duration": max(1, int(math.ceil(
+            max(float(item["duration"]) for item in materials)))),
         "video_clip_speed": 1.0,
         "match_materials_to_script": False,
         "video_count": 1,
@@ -805,9 +808,60 @@ def _self_test_client():
     return TestClient(app, base_url="http://wrapper")
 
 
+#: Tolerance between the composed render and the approved scene total. The pinned compose
+#: adds its own margin, so an exact match is not promised — but a render that dropped or
+#: duplicated a scene moves far beyond this.
+ROUTE_DURATION_TOLERANCE = 0.5
+
+
+def _verify_route_timeline(timeline: list[dict], scenes: list[dict], duration: float,
+                           width: int, height: int) -> None:
+    """Fail closed unless the submitted scene matrix came back, in order, at its length.
+
+    The submit route is the place where a runtime that reorders, re-times or drops a
+    scene would otherwise go unnoticed: the file decodes, the download succeeds and the
+    single-scene check that used to run here only ever saw one timestamp. Every approved
+    scene is sampled at its own midpoint and compared with the clip it came from, and the
+    frame has to keep the submitted aspect (§9.3 rows 2–4 and 8).
+    """
+    if len(timeline) != len(scenes):
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"submit route rendered {len(timeline)} of {len(scenes)} approved scenes",
+        )
+    if [entry["label"] for entry in timeline] != [scene["label"] for scene in scenes]:
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            "submit route rendered scenes out of their approved order: "
+            f"{[entry['label'] for entry in timeline]} != "
+            f"{[scene['label'] for scene in scenes]}",
+        )
+    for entry in timeline:
+        drift = max(abs(actual - expected) for actual, expected
+                    in zip(entry["mean_colour"], entry["expected_colour"]))
+        if drift > 48:
+            raise SelfTestFailure(
+                REASON_MEDIA_PIPELINE_FAILED,
+                f"submit route did not render {entry['label']} at "
+                f"{entry['at_seconds']}s: expected {entry['expected_colour']}, "
+                f"rendered {entry['mean_colour']}",
+            )
+        if entry["at_seconds"] >= duration:
+            raise SelfTestFailure(
+                REASON_MEDIA_PIPELINE_FAILED,
+                f"{entry['label']} lies outside the submitted render timeline: "
+                f"{entry['at_seconds']}s of {duration:.2f}s",
+            )
+    if not 1.6 <= height / width <= 1.95:
+        raise SelfTestFailure(
+            REASON_MEDIA_PIPELINE_FAILED,
+            f"submit route rendered outside the submitted 9:16 aspect: {width}x{height}",
+        )
+
+
 def check_submit_route(*, deadline_seconds: float = 600.0,
                        poll_seconds: float = 3.0) -> dict:
-    """Render one scene through the real submit → status → download route (P3/P4).
+    """Render the agreed §9.3 scene matrix through submit → status → download (P3/P4).
 
     :func:`check_media_pipeline` proves the pinned compose helper in isolation, which
     is not enough: the attempt the factory makes goes through the wrapper's own
@@ -815,6 +869,11 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
     status mapping and download. This check drives exactly those routes in-process and
     then verifies the downloaded bytes, so a runtime that would narrate or publish on
     its own, reorder scenes or ignore the staged voice cannot pass §9.12.
+
+    Every approved scene travels its own probe — its own colour and its own duration —
+    and the render is decoded scene by scene, so the proof covers the whole agreed matrix
+    (Issue #124) rather than a single timestamp: scene order, each approved duration and
+    the submitted aspect are all measured on the artifact that came back.
 
     It also closes the only remaining way the voice could be missing at the audio
     stage: the submit route proves the approved bytes before it contacts the upstream,
@@ -835,41 +894,52 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
             f"pinned media decoder is not importable: {error}",
         ) from error
 
-    label, colour, seconds = "route-1", "red", 2
     staging = Path(tempfile.mkdtemp(prefix="vertep-submit-self-test-"))
     submit_key = f"self-test-{int(time.time())}-{os.getpid()}"
     task_id: str | None = None
     try:
-        clip_path = staging / f"{label}.mp4"
-        _stage_probe_clip(clip_path, seconds=seconds, colour=colour)
-        _verify_probe_geometry(clip_path)
-        with VideoFileClip(str(clip_path)) as source:
-            expected = _mean_colour(source, seconds / 2)
+        # The whole agreed §9.3 scene matrix travels the route, not a single scene: each
+        # probe keeps its own colour and its own approved duration, so a compose that
+        # reordered or re-timed the scenes cannot produce this timeline.
+        scenes = []
+        materials = []
+        for label, colour, seconds in PROBE_SCENES:
+            clip_path = staging / f"{label}.mp4"
+            _stage_probe_clip(clip_path, seconds=seconds, colour=colour)
+            _verify_probe_geometry(clip_path)
+            scenes.append({"label": label, "path": clip_path, "seconds": seconds,
+                           "colour": colour})
+        total_seconds = sum(scene["seconds"] for scene in scenes)
         voice_path = staging / "voice.wav"
-        _write_voice_tone(voice_path, seconds=seconds)
+        _write_voice_tone(voice_path, seconds=total_seconds)
         marker = _store_staged_voice(voice_path.name, voice_path.read_bytes())["voice"]
 
         with _self_test_client() as client:
-            upload = client.post(
-                "/api/v1/video_materials",
-                headers={"x-vertep-filename": clip_path.name},
-                content=clip_path.read_bytes(),
-            )
-            if upload.status_code != 200:
-                raise SelfTestFailure(
-                    REASON_MEDIA_PIPELINE_FAILED,
-                    f"scene upload was refused: HTTP {upload.status_code} {upload.text[:200]}",
+            for scene in scenes:
+                upload = client.post(
+                    "/api/v1/video_materials",
+                    headers={"x-vertep-filename": scene["path"].name},
+                    content=scene["path"].read_bytes(),
                 )
-            stored = (upload.json().get("data") or {}).get("file")
-            if not isinstance(stored, str) or not stored.strip():
-                raise SelfTestFailure(
-                    REASON_SCHEMA_UNSUPPORTED,
-                    "pinned upload returned no storage key",
+                if upload.status_code != 200:
+                    raise SelfTestFailure(
+                        REASON_MEDIA_PIPELINE_FAILED,
+                        f"scene upload was refused: HTTP {upload.status_code} {upload.text[:200]}",
+                    )
+                stored = (upload.json().get("data") or {}).get("file")
+                if not isinstance(stored, str) or not stored.strip():
+                    raise SelfTestFailure(
+                        REASON_SCHEMA_UNSUPPORTED,
+                        "pinned upload returned no storage key",
+                    )
+                materials.append(
+                    {"provider": "local", "url": stored,
+                     "duration": scene["seconds"]},
                 )
             submitted = client.post(
                 "/api/v1/videos",
                 headers={"x-vertep-submit-key": submit_key},
-                content=json.dumps(_submit_route_payload(stored, marker, seconds)).encode(),
+                content=json.dumps(_submit_route_payload(materials, marker)).encode(),
             )
         if submitted.status_code != 200:
             raise SelfTestFailure(
@@ -933,17 +1003,17 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
         with VideoFileClip(str(rendered)) as probe:
             duration = float(probe.duration or 0.0)
             width, height = probe.size
-            actual = _mean_colour(probe, min(seconds / 2, max(duration - 0.2, 0.1)))
-        drift = max(abs(a - b) for a, b in zip(actual, expected))
+            timeline = _probe_scene_timeline(probe, scenes, VideoFileClip, {})
         if duration <= 0 or int(width) <= 0 or int(height) <= 0:
             raise SelfTestFailure(
                 REASON_MEDIA_PIPELINE_FAILED, "downloaded render has no usable video stream")
-        if drift > 48:
+        if abs(duration - total_seconds) > ROUTE_DURATION_TOLERANCE:
             raise SelfTestFailure(
                 REASON_MEDIA_PIPELINE_FAILED,
-                f"downloaded render does not show the uploaded scene: expected {expected}, "
-                f"rendered {actual}",
+                f"downloaded render runs {duration:.2f}s for {total_seconds:.2f}s of "
+                f"approved scenes",
             )
+        _verify_route_timeline(timeline, scenes, duration, width, height)
         # The narration is measured, not assumed: a TTS fallback, a missing track or an
         # ignored staged voice all produce audio, but not the approved one (§9.6).
         voice_profile = _rendered_voice_profile(rendered, _pinned_ffmpeg_binary())
@@ -954,10 +1024,17 @@ def check_submit_route(*, deadline_seconds: float = 600.0,
             "state": last_state,
             "bytes": len(data_bytes),
             "duration_seconds": round(duration, 3),
+            "expected_duration_seconds": total_seconds,
             "width": int(width),
             "height": int(height),
-            "mean_colour": [round(value, 1) for value in actual],
-            "expected_colour": [round(value, 1) for value in expected],
+            "mean_colour": [round(value, 1) for value in timeline[0]["mean_colour"]],
+            "expected_colour": [round(value, 1) for value in timeline[0]["expected_colour"]],
+            "scenes": timeline,
+            "scene_order": [entry["label"] for entry in timeline],
+            "expected_scene_order": [scene["label"] for scene in scenes],
+            "aspect": "9:16",
+            "fit_mode": "contain",
+            "concat_mode": "sequential",
             "voice_staged": True,
             "voice_frequency_hz": round(voice_profile["frequency_hz"], 1),
             "voice_rms": round(voice_profile["rms"], 4),

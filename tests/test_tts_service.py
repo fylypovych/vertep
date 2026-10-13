@@ -47,6 +47,11 @@ def test_voices_endpoint_lists_installed_voices():
     ids = {item["id"] for item in body["voices"]}
     assert ids == {"uk", "en", "en-us"}
     assert all(item["engine"] == "espeak-ng" for item in body["voices"])
+    # Issue i.0.0.1.5: the catalog must reconcile voice/provider/model/
+    # language/speed readiness with the stock espeak runtime.
+    assert set(body["languages"]) == {"uk", "en"}
+    assert "espeak-ng" in body["providers"]
+    assert body["speed_range"] == {"min": 80, "max": 450}
 
 
 def test_voices_endpoint_is_empty_when_no_voice_table():
@@ -70,7 +75,28 @@ def test_synthesize_rejects_malformed_voice_identifier():
     assert response.status_code == 422
 
 
-def test_synthesize_accepts_supported_voice(monkeypatch):
+def test_synthesize_rejects_unsupported_language():
+    client = _client_with_voices(["uk", "en"])
+    response = client.post("/synthesize", json={"text": "привіт", "voice": "uk", "language": "de"})
+    assert response.status_code == 422
+    assert "de" in response.json()["detail"]
+
+
+def test_synthesize_accepts_supported_language(monkeypatch):
+    client = _client_with_voices(["uk", "en-us"])
+    monkeypatch.setattr(tts_service.shutil, "which", lambda name: "/usr/bin/espeak-ng")
+
+    class _Result:
+        stdout = b"RIFF\x04\x00\x00\x00WAVE"
+        returncode = 0
+
+    monkeypatch.setattr(tts_service.subprocess, "run",
+                         lambda *args, **kwargs: _Result())
+    response = client.post("/synthesize", json={"text": "hi", "voice": "en-us", "language": "en"})
+    assert response.status_code == 200
+
+
+def test_synthesize_accepts_extra_provider_model_fields(monkeypatch):
     client = _client_with_voices(["uk"])
     monkeypatch.setattr(tts_service.shutil, "which", lambda name: "/usr/bin/espeak-ng")
 

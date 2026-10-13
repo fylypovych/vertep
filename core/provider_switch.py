@@ -52,6 +52,45 @@ def load_provider_overrides() -> dict[str, str]:
     return {str(key): str(value) for key, value in overrides.items()}
 
 
+#: Non-secret provider env vars that a Worker executor reads from its own
+#: process environment (Issue i.0.0.1.17).  Delivered to the Worker through the
+#: stock heartbeat response so a switch reaches the process that actually runs
+#: the task.  Secrets are never included here: only the bare, non-secret
+#: selection/endpoint values travel; credentials stay in the integration secret
+#: store and node-local env.
+_PROVIDER_EXECUTOR_ENV_ALLOWLIST = frozenset({
+    "VERTEP_LLM_PROVIDER",
+    "TTS_PROVIDER",
+    "TTS_VOICE",
+    "TTS_MODEL",
+    "TTS_LANGUAGE",
+    "TTS_SPEED",
+    "TTS_URL",
+    "OLLAMA_URL",
+    "OLLAMA_MODEL",
+    "VERTEP_COMPUTE_PROVIDER",
+    "COMFYUI_URL",
+    "COMFYUI_DISTRIBUTED_URL",
+    "VERTEP_VIDEO_ENGINE",
+    "MONEY_PRINTER_URL",
+    "SHORTGPT_URL",
+})
+
+
+def provider_executor_config() -> dict[str, str]:
+    """Non-secret provider selection for the Worker executor (Issue i.0.0.1.17).
+
+    A provider switch writes ``provider-overrides.json`` and applies it to the
+    CORE process, but text/voice/compute tasks execute in a separate Worker
+    process that never sees the CORE env.  This read model exposes exactly the
+    allowlisted, non-secret subset of the persisted overrides so the stock
+    heartbeat response can carry it to the node that actually runs the task.
+    """
+    overrides = load_provider_overrides()
+    return {key: overrides[key] for key in sorted(overrides)
+            if key in _PROVIDER_EXECUTOR_ENV_ALLOWLIST}
+
+
 def _write_overrides(overrides: dict[str, str], actor: str | None = None,
                      slot: str | None = None) -> None:
     payload = {
@@ -163,7 +202,42 @@ def switch_provider(slot: str, backend: str, actor: str = "web",
         raise error
 
     return {"slot": slot, "backend": requested, "changed": True,
-            "env": env_name, "matrix": provider_matrix(), **effective}
+            "env": env_name, "matrix": provider_matrix(),
+            "effective_config": effective_provider_config(slot),
+            "executor_config": provider_executor_config(), **effective}
+
+
+def effective_provider_config(slot: str | None = None) -> dict[str, Any]:
+    """Effective configuration after a switch and after a restart (Issue i.0.0.1.17).
+
+    Combines the live ``provider_matrix()`` entry with the persisted
+    ``provider-overrides.json`` selection and the allowlisted executor subset
+    that the Worker observes through the heartbeat channel.  A caller (Settings
+    read model, preview gate, regression test) can prove that the persisted
+    choice, the live CORE matrix and the delivered Worker config agree — a
+    failed activation never reports success because any mismatch raises before
+    a success payload is produced.
+    """
+    from adapters.providers import provider_matrix
+
+    matrix = provider_matrix()
+    overrides = load_provider_overrides()
+    executor = provider_executor_config()
+    if slot is None:
+        return {"matrix": matrix, "overrides": overrides, "executor_config": executor}
+    entry = matrix.get(slot, {})
+    env_name = str(entry.get("env") or "")
+    persisted = overrides.get(env_name) if env_name else None
+    effective = {"slot": slot, "backend": entry.get("backend"),
+                 "configured": entry.get("configured"),
+                 "env": env_name or None, "persisted": persisted,
+                 "executor_config": executor,
+                 "matrix": {slot: entry}}
+    if persisted is not None and entry.get("backend") != persisted:
+        raise ProviderSwitchError(
+            409, f"Backend '{entry.get('backend')}' has not reached the executor yet "
+            f"(persisted '{persisted}' for slot '{slot}')")
+    return effective
 
 
 def _validate_endpoint(slot: str, requested: str, endpoint: str) -> None:

@@ -26,6 +26,7 @@ from core.app import app
 from core.provider_switch import (
     ProviderSwitchError,
     apply_provider_overrides,
+    effective_provider_config,
     load_provider_overrides,
     reset_provider_registry,
     switch_provider,
@@ -94,6 +95,72 @@ def test_overrides_are_reapplied_after_restart(isolated_config):
     assert applied == {"TTS_PROVIDER": "mock"}
     reset_provider_registry()
     assert provider_matrix()["tts"]["backend"] == "mock"
+    # Issue i.0.0.1.17: the persisted switch is also the effective config after
+    # a restart — matrix, overrides file and the executor subset delivered to
+    # the Worker agree, and a failed activation never reports success.
+    effective = effective_provider_config("tts")
+    assert effective["backend"] == "mock"
+    assert effective["persisted"] == "mock"
+    assert effective["executor_config"] == {"TTS_PROVIDER": "mock"}
+    assert effective["configured"] is True
+
+
+def test_provider_executor_config_carries_only_allowlisted_non_secrets(isolated_config):
+    from core.provider_switch import provider_executor_config
+
+    switch_provider("tts", "mock", actor="tester")
+    # A secret-looking extra override must never travel to the executor.
+    config = isolated_config / "provider-overrides.json"
+    stored = json.loads(config.read_text(encoding="utf-8"))
+    stored["overrides"]["KOKORO_API_KEY"] = "super-secret"
+    stored["overrides"]["MONEY_PRINTER_TOKEN"] = "super-secret"
+    config.write_text(json.dumps(stored), encoding="utf-8")
+    executor = provider_executor_config()
+    assert executor == {"TTS_PROVIDER": "mock"}
+    assert "KOKORO_API_KEY" not in executor
+    assert "MONEY_PRINTER_TOKEN" not in executor
+
+
+def test_heartbeat_delivers_provider_config_to_the_worker(isolated_config, monkeypatch):
+    switch_provider("tts", "mock", actor="tester")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    response = client.post("/api/workers/heartbeat", json={"node_name": "voice-01"},
+                           headers={"X-Vertep-Token": "worker-token"})
+    assert response.status_code == 200
+    assert response.json()["provider_config"] == {"TTS_PROVIDER": "mock"}
+
+
+def test_worker_applies_heartbeat_provider_config(monkeypatch):
+    from worker import service as worker_service
+
+    monkeypatch.delenv("TTS_PROVIDER", raising=False)
+    applied = worker_service.apply_provider_config({"TTS_PROVIDER": "mock"})
+    assert applied == {"TTS_PROVIDER": "mock"}
+    assert os.environ["TTS_PROVIDER"] == "mock"
+    assert worker_service.executor_provider_config() == {"TTS_PROVIDER": "mock"}
+    # Non-allowlisted keys (in particular secrets) are never applied.
+    assert worker_service.apply_provider_config({"KOKORO_API_KEY": "shh"}) == {}
+    assert "KOKORO_API_KEY" not in os.environ
+
+
+def test_preview_refuses_a_switch_that_missed_the_executor(isolated_config, monkeypatch):
+    import core.api.models as models_api
+    import core.provider_switch as provider_switch
+
+    switch_provider("tts", "mock", actor="tester")
+    # CORE persisted the switch, but the live process still runs the previous
+    # backend (a Worker/CORE that has not re-applied yet): preview must refuse
+    # instead of reporting success for an unobserved backend.
+    monkeypatch.setenv("TTS_PROVIDER", "none")
+    monkeypatch.setattr(provider_switch, "load_provider_overrides",
+                         lambda: {"TTS_PROVIDER": "mock"})
+    monkeypatch.setattr(models_api, "list_voices", lambda: [{"name": "uk"}])
+    monkeypatch.setattr(models_api, "synthesize_voice",
+                         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no synthesis")))
+    response = client.post("/api/models/voices/preview", json={"text": "hi"})
+    assert response.status_code == 409
+    assert "executor" in response.json()["detail"]
+    monkeypatch.setenv("TTS_PROVIDER", "mock")
 
 
 def test_unconfigured_backend_rolls_back(isolated_config):
@@ -171,7 +238,110 @@ def test_provider_switch_endpoint_success(isolated_config):
     assert body["backend"] == "mock"
     assert body["changed"] is True
     assert body["matrix"]["tts"]["backend"] == "mock"
+    assert body["effective_config"]["backend"] == "mock"
+    assert body["effective_config"]["persisted"] == "mock"
+    assert body["executor_config"] == {"TTS_PROVIDER": "mock"}
     assert _overrides_file(isolated_config)["overrides"]["TTS_PROVIDER"] == "mock"
+
+
+def test_switch_reaches_the_executor_and_drives_preview_and_restart(isolated_config, monkeypatch):
+    """Issue i.0.0.1.17: switch through the stock config/deployment flow.
+
+    CORE → persisted ``provider-overrides.json`` → heartbeat ``provider_config``
+    → Worker executor env → voice preview + effective config after restart.
+    The switch/orchestration itself is real; only the external TTS transport is
+    controlled (a loopback ``/synthesize`` + ``/voices`` runtime), never the
+    config propagation under test.
+    """
+    import core.api.models as models_api
+    from worker import role_executor, service as worker_service
+
+    # A loopback TTS runtime standing in for the stock espeak service: the HTTP
+    # transport is controlled, the CORE → Worker config flow is not.
+    seen: dict = {}
+
+    class _VoicesHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            if self.path == "/voices":
+                body = json.dumps({"voices": [{"id": "uk", "name": "uk", "engine": "espeak-ng"}],
+                                   "models": ["espeak-ng"], "languages": ["uk"],
+                                   "providers": ["espeak-ng", "mock", "none"],
+                                   "speed_range": {"min": 80, "max": 450},
+                                   "engine": "espeak-ng"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_POST(self):
+            if self.path != "/synthesize":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            seen["request"] = json.loads(self.rfile.read(length) or b"{}")
+            import base64 as _b64
+
+            audio = b"RIFF\x04\x00\x00\x00WAVE-test"
+            body = json.dumps({"audio_base64": _b64.b64encode(audio).decode(),
+                               "mime_type": "audio/wav", "engine": "espeak-ng",
+                               "voice": seen["request"].get("voice", "uk")}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _VoicesHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        runtime_url = f"http://127.0.0.1:{server.server_address[1]}"
+        monkeypatch.setenv("TTS_URL", runtime_url)
+        # The worker-side executor reads the same TTS_URL env as production.
+        monkeypatch.setattr(role_executor.os, "environ", os.environ)
+
+        switched = switch_provider("tts", "mock", actor="tester")
+        assert switched["executor_config"] == {"TTS_PROVIDER": "mock"}
+
+        monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+        heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "voice-01"},
+                                headers={"X-Vertep-Token": "worker-token"}).json()
+        assert heartbeat["provider_config"]["TTS_PROVIDER"] == "mock"
+
+        # The Worker applies the heartbeat delivery to its own executor env.
+        monkeypatch.delenv("TTS_PROVIDER", raising=False)
+        applied = worker_service.apply_provider_config(heartbeat["provider_config"])
+        assert applied["TTS_PROVIDER"] == "mock"
+        assert worker_service.executor_provider_config()["TTS_PROVIDER"] == "mock"
+
+        # Preview now proves the effective configuration end-to-end through the
+        # real Worker executor path (role_executor → loopback runtime).
+        preview = client.post("/api/models/voices/preview",
+                              json={"text": "привіт", "voice": "uk"})
+        assert preview.status_code == 200, preview.text
+        assert preview.headers["content-type"].startswith("audio/")
+        assert seen["request"]["voice"] == "uk"
+
+        # The applied choice is reproduced after a restart of the CORE.
+        os.environ.pop("TTS_PROVIDER", None)
+        reset_provider_registry()
+        apply_provider_overrides()
+        reset_provider_registry()
+        effective = effective_provider_config("tts")
+        assert effective["backend"] == "mock"
+        assert effective["persisted"] == "mock"
+        assert effective["executor_config"]["TTS_PROVIDER"] == "mock"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_provider_switch_endpoint_unknown_slot(isolated_config):

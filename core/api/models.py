@@ -78,7 +78,18 @@ def voice_preview_endpoint(payload: dict):
 
     Negative paths are explicit: disabled/incomplete backend (409), invalid
     request (422), unreachable runtime or unreadable catalog (502).
+
+    Issue i.0.0.1.17: the preview proves the *effective* configuration — the
+    persisted switch, the live matrix entry and the executor subset delivered
+    to the Worker must agree, otherwise the preview is refused instead of
+    reporting success for a backend the executor never observed.
     """
+    from ..provider_switch import ProviderSwitchError, effective_provider_config
+
+    try:
+        effective = effective_provider_config("tts")
+    except ProviderSwitchError as error:
+        raise HTTPException(error.status_code, error.message) from error
     text = str(payload.get("text") or "").strip()
     if not text:
         raise HTTPException(422, "text is required")
@@ -96,6 +107,12 @@ def voice_preview_endpoint(payload: dict):
         raise HTTPException(409, "TTS backend is disabled — enable a provider first")
     if tts.get("configured") is False:
         raise HTTPException(409, "TTS backend is not fully configured")
+    executor_backend = str((effective.get("executor_config") or {}).get("TTS_PROVIDER", "")).strip().lower()
+    if executor_backend and executor_backend != str(tts.get("backend") or "").strip().lower():
+        # The switch was persisted in CORE but the executor subset delivered to
+        # the Worker still names the previous backend: refuse instead of
+        # previewing through a backend the executor never observed.
+        raise HTTPException(409, "TTS backend switch has not reached the executor yet")
 
     voice = str(payload.get("voice") or "default").strip() or "default"
     try:

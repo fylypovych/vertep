@@ -382,6 +382,52 @@ def verify_self_test(self_test: dict) -> None:
             f"the submit route rendered outside the submitted 9:16 aspect: "
             f"{width}x{height}"
         )
+    # Issue #124: the whole agreed §9.3 matrix has to travel the route, not one scene. A
+    # route report without the decoded timeline proves only that *something* came back, so
+    # the order, the approved durations and the compose mode are required here exactly as
+    # they are required of the isolated compose helper above.
+    route_scenes = route.get("scenes") or []
+    route_order = route.get("expected_scene_order") or []
+    if not route_scenes or not route_order:
+        raise CheckFailure(
+            f"self-test passed without a proven scene timeline on the submit route: {route!r}"
+        )
+    if [scene.get("label") for scene in route_scenes] != route_order:
+        raise CheckFailure(
+            f"the submit route timeline disagrees with the scenes it measured: "
+            f"{[scene.get('label') for scene in route_scenes]} != {route_order!r}"
+        )
+    if route.get("scene_order") != route_order:
+        raise CheckFailure(
+            f"the submit route rendered scenes out of order: "
+            f"{route.get('scene_order')!r} != {route_order!r}"
+        )
+    if route.get("expected_duration_seconds") and route.get("duration_seconds"):
+        if abs(route["duration_seconds"] - route["expected_duration_seconds"]) > 1.0:
+            raise CheckFailure(
+                f"the submit route rendered {route['duration_seconds']}s for "
+                f"{route['expected_duration_seconds']}s of approved scenes: {route!r}"
+            )
+    for scene in route_scenes:
+        if not scene.get("seconds") or scene.get("at_seconds") is None:
+            raise CheckFailure(f"submit route scene has no duration: {scene!r}")
+        if scene["at_seconds"] >= route["duration_seconds"]:
+            raise CheckFailure(
+                f"submit route scene {scene.get('label')!r} lies outside the rendered "
+                f"timeline: {scene!r}"
+            )
+        drift = max(
+            abs(actual - expected)
+            for actual, expected in zip(scene.get("mean_colour") or [],
+                                       scene.get("expected_colour") or [])
+        ) if scene.get("mean_colour") and scene.get("expected_colour") else None
+        if drift is None or drift > 48:
+            raise CheckFailure(
+                f"submit route scene {scene.get('label')!r} does not match its approved "
+                f"clip: {scene!r}"
+            )
+    if not route.get("aspect") or not route.get("fit_mode") or not route.get("concat_mode"):
+        raise CheckFailure(f"the submit route did not report its compose contract: {route!r}")
     drift = max(
         abs(actual - expected)
         for actual, expected in zip(route.get("mean_colour") or [],

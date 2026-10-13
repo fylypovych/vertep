@@ -205,7 +205,19 @@ def claim_task(payload: TaskClaim, request: Request):
         is_tts = job.status == JobStatus.TTS_GENERATING and task.get("task") == "voice"
         effective_task_type = task.get("task") if is_tts else job.task_type
         effective_min_vram = task.get("min_vram_mb") if is_tts else None
-        voice_requirements = {"voice": task.get("voice"), "model": task.get("model")} if is_tts else None
+        voice_requirements = None
+        if is_tts:
+            # Issue i.0.0.1.5: readiness must be reconciled end-to-end on the
+            # full character voice config (voice/provider/model/language), not
+            # just voice+model, so an unsupported combination is refused at
+            # dispatch time instead of failing at synthesis time.
+            voice_requirements = {
+                "voice": task.get("voice"),
+                "model": task.get("model"),
+                "provider": task.get("provider"),
+                "language": task.get("language"),
+                "speed": task.get("speed"),
+            }
         worker = _select_worker([worker_data], job, task_type=effective_task_type, min_vram_mb=effective_min_vram,
                                 voice_requirements=voice_requirements) if job else None
         if job and worker:

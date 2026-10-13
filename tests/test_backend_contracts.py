@@ -563,6 +563,30 @@ class TestSessionIdentityContract:
         assert "www-authenticate" not in resp.headers
         assert "vertep_session" not in resp.cookies
 
+    def test_unset_admin_password_never_mints_a_session(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+        monkeypatch.setenv("ADMIN_USER", "admin")
+        monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+        (tmp_path / "installation.json").write_text(
+            json.dumps({"installation_id": "test", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            encoding="utf-8")
+        monkeypatch.setenv("USERS_JSON", "{}")
+        import base64
+        credentials = base64.b64encode(b"admin:").decode()
+        resp = client.post("/api/session", headers={"Authorization": f"Basic {credentials}"})
+        assert resp.status_code == 401
+        assert "vertep_session" not in resp.cookies
+
+    def test_unset_session_secret_rejects_forged_session(self, monkeypatch, tmp_path):
+        from core.security import _valid_session
+        monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+        monkeypatch.delenv("CONFIG_ROOT", raising=False)
+        monkeypatch.setenv("ADMIN_USER", "admin")
+        import hashlib, hmac, time
+        payload = f"{int(time.time()) + 300}:admin:admin"
+        forged = f"{payload}.{hmac.new('__unset_session_secret__'.encode(), payload.encode(), hashlib.sha256).hexdigest()}"
+        assert _valid_session(forged) is None
+
     def test_utf8_basic_credentials_open_a_session(self, monkeypatch, tmp_path):
         # Issue #75 S1: Basic credentials are decoded as UTF-8 on both sides, so
         # a Cyrillic login/password must authenticate exactly as configured.

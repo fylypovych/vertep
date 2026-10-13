@@ -73,9 +73,30 @@ def _voice_ready(worker: dict, requirements: dict | None) -> bool:
         # refuse instead of silently trusting it.  Only the absence of the
         # field (None) stays backward compatible.
         return False
-    plural = {"voice": "voices", "model": "models", "language": "languages"}
+    plural = {"voice": "voices", "model": "models", "language": "languages",
+              "provider": "providers", "engine": "engines"}
     for key, required in requirements.items():
         if not required:
+            continue
+        if key == "speed":
+            # Speed is bounded by the espeak runtime (80..450); a catalog may
+            # advertise its own ``speed_range`` — an out-of-range request is
+            # unsupported and refused at dispatch time.
+            try:
+                wanted = int(required)
+            except (TypeError, ValueError):
+                return False
+            speed_range = catalog.get("speed_range") if isinstance(catalog, dict) else None
+            minimum = 80
+            maximum = 450
+            if isinstance(speed_range, dict):
+                try:
+                    minimum = int(speed_range.get("min", minimum))
+                    maximum = int(speed_range.get("max", maximum))
+                except (TypeError, ValueError):
+                    return False
+            if wanted < minimum or wanted > maximum:
+                return False
             continue
         catalog_key = plural.get(key, key)
         if catalog_key not in catalog:

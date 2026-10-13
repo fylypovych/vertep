@@ -77,8 +77,12 @@ def _valid_worker_token(node_name: str, supplied: str, client_dn: str = "",
             node, encoded = item.split(":", 1)
             if node.strip() == node_name:
                 return _verify_hash(supplied, encoded.strip())
-    expected = _worker_tokens().get(node_name) or os.getenv("NODE_API_TOKEN", "")
-    return not expected or _constant_time_equals(supplied, expected)
+    expected = _worker_tokens().get(node_name)
+    if expected is None:
+        expected = os.getenv("NODE_API_TOKEN", "") or None
+    if expected is None or expected == "":
+        return False
+    return _constant_time_equals(supplied, expected)
 
 
 def _valid_worker_request(node_name: str, request) -> bool:
@@ -88,11 +92,14 @@ def _valid_worker_request(node_name: str, request) -> bool:
 
 
 def _session_token(user: str = "admin", role: str = "admin") -> str:
+    secret = session_secret()
+    if not secret:
+        raise ValueError("Session secret is not configured")
     expiry = str(int(time.time()) + int(os.getenv("SESSION_TTL", "28800")))
     # The token travels in a cookie, so the payload must stay ASCII-safe and must
     # not contain the ':' delimiter: a configured username may be non-ASCII.
     payload = f"{expiry}:{quote(user, safe='')}:{quote(role, safe='')}"
-    signature = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{signature}"
 
 
@@ -105,7 +112,9 @@ def _account_role(user: str, stored_role: str) -> str:
     configured = configured_user()
     if configured and user == configured[0]:
         return "admin"
-    if os.getenv("ADMIN_PASSWORD", "") and user == os.getenv("ADMIN_USER", "admin"):
+    admin_user = os.getenv("ADMIN_USER", "admin")
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if admin_password and user == admin_user:
         return "admin"
     return _normalize_role(stored_role) or "viewer"
 
@@ -113,9 +122,12 @@ def _account_role(user: str, stored_role: str) -> str:
 
 def _valid_session(token: str) -> tuple[str, str] | None:
     try:
+        secret = session_secret()
+        if not secret:
+            return None
         payload, signature = token.rsplit(".", 1)
         expiry, encoded_user, encoded_role = payload.split(":", 2)
-        expected = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+        expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if int(expiry) > time.time() and _constant_time_equals(signature, expected):
             user = unquote(encoded_user)
             return user, _account_role(user, unquote(encoded_role))
@@ -273,6 +285,8 @@ def _authenticate_user(user: str, password: str) -> str | None:
     record = users.get(user)
     if isinstance(record, dict) and _verify_hash(password, str(record.get("password_hash", ""))):
         return _account_role(user, str(record.get("role", "viewer")))
-    if _constant_time_equals(user, os.getenv("ADMIN_USER", "admin")) and _constant_time_equals(password, os.getenv("ADMIN_PASSWORD", "")):
+    admin_user = os.getenv("ADMIN_USER", "admin")
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if admin_password and _constant_time_equals(user, admin_user) and _constant_time_equals(password, admin_password):
         return "admin"
     return None

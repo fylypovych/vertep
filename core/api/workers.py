@@ -13,6 +13,7 @@ from ..first_run import config_root
 from ..health_checks import health_status as _health_status
 from ..models import ModelProgressReport, WorkerHeartbeat, worker_transition_allowed, utc_now
 from ..node_registry import node_roles, registered_nodes
+from ..provider_switch import provider_executor_config
 from ..pull_executor import ingest_model_progress, pending_model_command
 from ..rolling_update import assert_not_fenced, reconcile_rollout, rollout_status
 from ..security import _valid_worker_request
@@ -152,7 +153,12 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             "rollout_state": rollout.get("state", "IDLE"),
             "rollout_operation_id": rollout.get("operation_id"),
             "cancel_fence_token": data.get("cancel_fence_token"),
-            "model_command": pending_model_command(payload.node_name)}
+            "model_command": pending_model_command(payload.node_name),
+            # Issue i.0.0.1.17: the persisted provider selection travels on the
+            # stock heartbeat response so the Worker executor that actually runs
+            # text/voice/compute tasks observes the same non-secret config the
+            # switch applied in CORE.  Secrets are never included.
+            "provider_config": provider_executor_config()}
 
 
 @router.post("/api/workers/model-progress")

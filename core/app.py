@@ -244,6 +244,14 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 operation = "restore"
             elif path.startswith("/api/system/models/pull") and request.method == "POST":
                 operation = "model_pull"
+            elif path.startswith("/api/characters"):
+                operation = "resource_management"
+            elif path.startswith("/api/brands"):
+                operation = "resource_management"
+            elif path.startswith("/api/workflows"):
+                operation = "resource_management"
+            elif path.startswith("/api/channels"):
+                operation = "resource_management"
             if operation and not operation_allowed(operation):
                 return Response(f"Operation {operation} is blocked by system state", 423)
         client = request.client.host if request.client else "unknown"

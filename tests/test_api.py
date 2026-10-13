@@ -72,15 +72,17 @@ def _mock_storyboard_for_api(monkeypatch):
     monkeypatch.setattr(_StoryboardServiceOrig, "queue", _mock_storyboard_queue)
 
 
-def _complete_script_task(client, job_id, node_name="text-worker"):
+def _complete_script_task(client, job_id, node_name="text-worker", headers=None):
     """Register a text worker, claim/execute the script task, and submit the result."""
+    if headers is None:
+        headers = {}
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
-    })
+    }, headers=headers)
     task = None
     for _ in range(100):
-        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0}, headers=headers)
         task = resp.json().get("task")
         if task and task.get("task") == "script" and task.get("job_id") == job_id:
             break
@@ -89,7 +91,7 @@ def _complete_script_task(client, job_id, node_name="text-worker"):
     [artifact] = role_executor.execute_role_task("text", task)
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
-        "success": True, "artifacts": [artifact]})
+        "success": True, "artifacts": [artifact]}, headers=headers)
     assert response.status_code == 200
     return artifact
 
@@ -259,6 +261,7 @@ def test_telegram_webhook_is_disabled_by_default(monkeypatch, tmp_path):
 def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "999")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     brand_root = tmp_path / "brands"
     brand_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
@@ -299,7 +302,8 @@ def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
         assert job_id
         fourth = client.post("/api/telegram/webhook", json=update).json()
         assert fourth.get("status") == "brand_selection"
-    heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "gpu-test", "gpu_name": "stub"})
+    heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "gpu-test", "gpu_name": "stub"},
+                            headers={"X-Vertep-Token": "worker-token"})
     assert heartbeat.status_code == 200
     assert any(worker["node_name"] == "gpu-test" for worker in client.get("/api/workers").json())
 
@@ -609,17 +613,19 @@ def test_dispatcher_respects_worker_workflow_capability():
 
 def test_distributed_worker_result(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat = client.post("/api/workers/heartbeat", json={
         "node_name": "gpu-real", "gpu_name": "GTX 1060", "vram_mb": 6144,
-    })
+    }, headers=headers)
     assert heartbeat.status_code == 200
     created = client.post("/api/jobs", json={"topic": "Distributed topic", "min_vram_mb": 128}).json()
     job_id = created["job_id"]
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "SCRIPT_QUEUED":
-            _complete_script_task(client, job_id)
+            _complete_script_task(client, job_id, headers=headers)
         if job["status"] == "SCRIPT_PENDING_APPROVAL":
             break
         time.sleep(0.025)
@@ -629,7 +635,7 @@ def test_distributed_worker_result(monkeypatch):
     task = None
     for _ in range(100):
         response = client.post("/api/tasks/claim", json={"node_name": "gpu-real", "gpu_name": "GTX 1060",
-                                                          "vram_mb": 6144})
+                                                         "vram_mb": 6144}, headers=headers)
         task = response.json().get("task")
         if task and task["job_id"] == job_id:
             break
@@ -639,7 +645,7 @@ def test_distributed_worker_result(monkeypatch):
     response = client.post("/api/tasks/result", json={"job_id": job_id, "node_name": "gpu-real",
                                                        "task_id": task["task_id"],
                                                        "success": True, "filename": "scene.ppm",
-                                                       "image_base64": base64.b64encode(ppm).decode()})
+                                                       "image_base64": base64.b64encode(ppm).decode()}, headers=headers)
     assert response.status_code == 200
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
@@ -724,19 +730,21 @@ def test_storyboard_result_rejected_when_caller_does_not_hold_claim(monkeypatch)
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("VERTEP_DEMO", "false")
     monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     for name in ("text-a", "text-b"):
         client.post("/api/workers/heartbeat", json={
             "node_name": name, "vram_mb": 0,
             "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
-        })
+        }, headers=headers)
     created = client.post("/api/jobs", json={"topic": "Stolen result", "min_vram_mb": 0}).json()
     job_id = created["job_id"]
     job = store.jobs[job_id]
     job.min_vram_mb = 0
 
     # Complete script task so storyboard is queued (real queue, not mock)
-    _complete_script_task(client, job_id, "text-a")
+    _complete_script_task(client, job_id, "text-a", headers=headers)
     resp = client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
     assert resp.status_code == 200
 
@@ -761,7 +769,7 @@ def test_storyboard_result_rejected_when_caller_does_not_hold_claim(monkeypatch)
     assert job.storyboard_task_id == task_id
 
     # text-a claims the storyboard task.
-    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}, headers=headers).json()
     assert claimed["task"] and claimed["task"]["task_id"] == task_id
     assert job.status == JobStatus.STORYBOARD_GENERATING
 
@@ -770,7 +778,7 @@ def test_storyboard_result_rejected_when_caller_does_not_hold_claim(monkeypatch)
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task_id, "node_name": "text-b",
         "success": True, "artifacts": [artifact],
-    })
+    }, headers=headers)
     assert response.status_code == 200
     # Job must not advance past GENERATING; the task stays un-acked so a
     # legitimate retry can still happen.
@@ -793,11 +801,13 @@ def test_storyboard_expired_lease_requeues_within_budget(monkeypatch):
     monkeypatch.undo()
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     client.post("/api/workers/heartbeat", json={
         "node_name": "text-a", "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
-    })
+    }, headers=headers)
     job = _create_job_in_store(topic="Crashed worker", min_vram_mb=0)
     job_id = job.job_id
     job = store.jobs[job_id]
@@ -812,7 +822,7 @@ def test_storyboard_expired_lease_requeues_within_budget(monkeypatch):
     job.active_task_id = task["task_id"]
 
     # text-a claims the task and then vanishes (its lease expires).
-    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}, headers=headers).json()
     assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
     assert job.status == JobStatus.STORYBOARD_GENERATING
     assert task_queue.inflight_has(task["task_id"])
@@ -839,11 +849,13 @@ def test_storyboard_expired_lease_exhausts_budget(monkeypatch):
     monkeypatch.undo()
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "2")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     client.post("/api/workers/heartbeat", json={
         "node_name": "text-a", "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
-    })
+    }, headers=headers)
     job = _create_job_in_store(topic="Unreliable worker", min_vram_mb=0)
     job_id = job.job_id
     job = store.jobs[job_id]
@@ -858,7 +870,7 @@ def test_storyboard_expired_lease_exhausts_budget(monkeypatch):
     job.storyboard_task_id = task["task_id"]
     job.active_task_id = task["task_id"]
 
-    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}, headers=headers).json()
     assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
 
     # First expired lease -> requeue (attempt 1 < 2).
@@ -873,9 +885,9 @@ def test_storyboard_expired_lease_exhausts_budget(monkeypatch):
     client.post("/api/workers/heartbeat", json={
         "node_name": "text-a", "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
-    })
+    }, headers=headers)
     new_task_id = store.jobs[job_id].storyboard_task_id
-    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}, headers=headers).json()
     assert claimed["task"] and claimed["task"]["task_id"] == new_task_id, (
         f"expected {new_task_id}, got {claimed}"
     )
@@ -920,11 +932,13 @@ def test_storyboard_task_lifecycle_audit_matches_repository_and_queue(monkeypatc
     two sources of truth can never drift apart."""
     from core.state import task_queue
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     client.post("/api/workers/heartbeat", json={
         "node_name": "text-a", "vram_mb": 0,
         "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
-    })
+    }, headers=headers)
     job = _create_job_in_store(topic="Lifecycle audit", min_vram_mb=0)
     job_id = job.job_id
     job = store.jobs[job_id]
@@ -947,7 +961,7 @@ def test_storyboard_task_lifecycle_audit_matches_repository_and_queue(monkeypatc
 
     # CLAIMED / GENERATING: task leaves the ready queue, enters inflight, the
     # job transitions, and the repository records CLAIMED.
-    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}).json()
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0}, headers=headers).json()
     assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
     assert job.status == JobStatus.STORYBOARD_GENERATING
     # The storyboard task must have left the ready queue (the job's auto-queued
@@ -966,7 +980,7 @@ def test_storyboard_task_lifecycle_audit_matches_repository_and_queue(monkeypatc
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": "text-a",
         "success": True, "artifacts": [artifact],
-    })
+    }, headers=headers)
     assert response.status_code == 200
     assert store.jobs[job_id].status == JobStatus.STORYBOARD_PENDING_APPROVAL
     assert not task_queue.inflight_has(task["task_id"])
@@ -984,12 +998,14 @@ def test_storyboard_claim_is_exclusive_and_transitions_generating(monkeypatch):
     workers racing for it."""
     from core.state import task_queue
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     for name in ("text-a", "text-b"):
         client.post("/api/workers/heartbeat", json={
             "node_name": name, "vram_mb": 0,
             "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
-        })
+        }, headers=headers)
     job = _create_job_in_store(topic="Concurrent storyboard", min_vram_mb=0)
     job_id = job.job_id
     job = store.jobs[job_id]
@@ -1015,7 +1031,7 @@ def test_storyboard_claim_is_exclusive_and_transitions_generating(monkeypatch):
 
     claimed = []
     for name in ("text-a", "text-b"):
-        resp = client.post("/api/tasks/claim", json={"node_name": name, "vram_mb": 0})
+        resp = client.post("/api/tasks/claim", json={"node_name": name, "vram_mb": 0}, headers=headers)
         claimed_task = resp.json().get("task")
         if claimed_task and claimed_task.get("task") == "storyboard" and claimed_task.get("job_id") == job_id:
             claimed.append((name, claimed_task["task_id"]))

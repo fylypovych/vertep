@@ -905,7 +905,7 @@ def test_the_route_check_refuses_a_render_whose_narration_is_not_the_approved_vo
     monkeypatch.setattr(wrapper, "_mean_colour", lambda clip, at: (200.0, 10.0, 10.0))
     monkeypatch.setattr(wrapper, "_pinned_ffmpeg_binary", lambda: "/usr/bin/ffmpeg")
     _fake_moviepy(monkeypatch, size=(wrapper.PROBE_CLIP_WIDTH, wrapper.PROBE_CLIP_HEIGHT),
-                  duration=2.0)
+                  duration=9.0)
     # Speech-like audio: audible, and nothing like the approved tone.
     spoken = (np.sin(2 * np.pi * 180 * np.arange(32000) / 16000)
               * 9000).astype("<i2").tobytes()
@@ -1498,18 +1498,35 @@ def _route_report(**overrides) -> dict:
     """A completed submit → status → download proof through the real route (P4).
 
     The shape mirrors :func:`check_submit_route`: ``state`` is the pinned runtime's own
-    finished marker, and the colours prove the download shows the submitted scene.
+    finished marker, and the colours prove the download shows the submitted scene. The
+    timeline carries the whole §9.3 matrix, because Issue #124 requires the gate to read
+    the scene order and the approved durations off the artifact rather than off a single
+    sampled timestamp.
     """
     report = {
         "submit_key": "self-test-1-1",
         "task_id": "j-self-test",
         "state": 1,
         "bytes": 4096,
-        "duration_seconds": 2.0,
+        "duration_seconds": 9.0,
+        "expected_duration_seconds": 9.0,
         "width": 1080,
         "height": 1920,
         "mean_colour": [200.0, 10.0, 10.0],
         "expected_colour": [200.0, 10.0, 10.0],
+        "scenes": [
+            {"label": "scene-1", "seconds": 2, "at_seconds": 1.0,
+             "mean_colour": [200.0, 10.0, 10.0], "expected_colour": [200.0, 10.0, 10.0]},
+            {"label": "scene-2", "seconds": 3, "at_seconds": 3.5,
+             "mean_colour": [10.0, 200.0, 10.0], "expected_colour": [10.0, 200.0, 10.0]},
+            {"label": "scene-3", "seconds": 4, "at_seconds": 7.0,
+             "mean_colour": [10.0, 10.0, 200.0], "expected_colour": [10.0, 10.0, 200.0]},
+        ],
+        "scene_order": ["scene-1", "scene-2", "scene-3"],
+        "expected_scene_order": ["scene-1", "scene-2", "scene-3"],
+        "aspect": "9:16",
+        "fit_mode": "contain",
+        "concat_mode": "sequential",
         "voice_staged": True,
         "output": "final/video-20260101-000000.mp4",
     }
@@ -1560,7 +1577,8 @@ def test_the_self_test_submits_the_very_request_the_engine_sends():
     # The self-test submits the staged marker; the submit route is what turns it into the
     # task-local file name the pinned resolver accepts.
     self_test = dict(wrapper._submit_route_payload(
-        "scene-000.mp4", "vertep-voice:" + "a" * 64 + ".wav", seconds))
+        [{"provider": "local", "url": "scene-000.mp4", "duration": seconds}],
+        "vertep-voice:" + "a" * 64 + ".wav"))
     self_test["custom_audio_file"] = "vertep-voice.wav"
 
     assert self_test == factory
@@ -1772,6 +1790,51 @@ def test_runtime_check_requires_a_proven_submit_route(monkeypatch, tmp_path):
         failing = client.get("/self-test").json()
         with pytest.raises(check.CheckFailure, match=expected):
             check.verify_self_test(failing)
+
+    # Issue #124: the route has to carry the whole agreed scene matrix, so a report that
+    # only proves one timestamp, one order or one length is refused as surely as a report
+    # without the route at all.
+    def without(*keys):
+        report = _route_report()
+        for key in keys:
+            report.pop(key, None)
+        return report
+
+    # A timeline whose scenes do not match the agreed order is refused, whether the
+    # labels moved or only the reported order did.
+    reordered = _route_report()
+    reordered["scenes"] = list(reversed(reordered["scenes"]))
+    for report, expected in (
+        (without("scenes", "scene_order", "expected_scene_order"),
+         "without a proven scene timeline on the submit route"),
+        (dict(_route_report(), scenes=[], scene_order=[], expected_scene_order=[]),
+         "without a proven scene timeline on the submit route"),
+        (reordered, "timeline disagrees with the scenes it measured"),
+        (dict(_route_report(), scene_order=["scene-3", "scene-2", "scene-1"]),
+         "rendered scenes out of order"),
+        (dict(_route_report(), expected_scene_order=["scene-1", "scene-3"]),
+         "timeline disagrees with the scenes it measured"),
+        (dict(_route_report(), duration_seconds=3.0, expected_duration_seconds=9.0),
+         "s of approved scenes"),
+        (dict(_route_report(), fit_mode=None), "did not report its compose contract"),
+        (dict(_route_report(), concat_mode=None), "did not report its compose contract"),
+    ):
+        monkeypatch.setattr(wrapper, "check_submit_route", lambda report=report: report)
+        with pytest.raises(check.CheckFailure, match=expected):
+            check.verify_self_test(client.get("/self-test").json())
+
+    # A timeline whose scenes do not match their approved clips is refused scene by scene.
+    lying = _route_report()
+    lying["scenes"][1]["mean_colour"] = [10.0, 10.0, 200.0]
+    monkeypatch.setattr(wrapper, "check_submit_route", lambda report=lying: report)
+    with pytest.raises(check.CheckFailure, match="does not match its approved clip"):
+        check.verify_self_test(client.get("/self-test").json())
+
+    outside = _route_report()
+    outside["scenes"][2]["at_seconds"] = 30.0
+    monkeypatch.setattr(wrapper, "check_submit_route", lambda report=outside: report)
+    with pytest.raises(check.CheckFailure, match="lies outside the rendered timeline"):
+        check.verify_self_test(client.get("/self-test").json())
 
     # A runtime that reports no submit route at all is refused as well.
     monkeypatch.setattr(wrapper, "check_submit_route", lambda: {})

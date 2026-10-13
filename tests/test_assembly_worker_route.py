@@ -119,7 +119,7 @@ class _Request:
     """Minimal request stand-in; no worker token is configured in the tests."""
 
     def __init__(self) -> None:
-        self.headers: dict[str, str] = {}
+        self.headers: dict[str, str] = {"x-vertep-token": "worker-token"}
         self.client = None
         self.url = type("U", (), {"path": "/api/tasks"})()
 
@@ -138,6 +138,7 @@ def _job(job_id: str = "job-122", status: JobStatus = JobStatus.VIDEO_GENERATION
 @pytest.fixture
 def assembly_state(tmp_path, monkeypatch):
     """Isolate CORE state: a local queue and a JobStore whose Job has one scene."""
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     job = _job()
     job_dir = tmp_path / "jobs" / job.job_id
     for name in ("references", "images", "video", "audio", "subtitles", "final", "frames",

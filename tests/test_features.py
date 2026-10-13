@@ -19,10 +19,12 @@ def _complete_script_task(client, job_id, node_name="text-worker"):
     """Simulate a Text Worker claiming, executing, and submitting a script task."""
     client.post("/api/workers/heartbeat", json={"node_name": node_name, "vram_mb": 0,
                  "role": "text",
-                 "capabilities": ["text_generation"], "supported_tasks": ["text"]})
+                 "capabilities": ["text_generation"], "supported_tasks": ["text"]},
+                headers={"X-Vertep-Token": "worker-token"})
     task = None
     for _ in range(100):
-        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0},
+                           headers={"X-Vertep-Token": "worker-token"})
         task = resp.json().get("task")
         if task and task.get("task") == "script" and task.get("job_id") == job_id:
             break
@@ -31,7 +33,7 @@ def _complete_script_task(client, job_id, node_name="text-worker"):
     [artifact] = role_executor.execute_role_task("text", task)
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
-        "success": True, "artifacts": [artifact]})
+        "success": True, "artifacts": [artifact]}, headers={"X-Vertep-Token": "worker-token"})
     assert response.status_code == 200
     return artifact
 
@@ -41,7 +43,8 @@ def _complete_storyboard_task(client, job_id, node_name="text-worker"):
     import base64 as _b64
     task = None
     for _ in range(100):
-        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0},
+                           headers={"X-Vertep-Token": "worker-token"})
         task = resp.json().get("task")
         if task and task.get("task") == "storyboard" and task.get("job_id") == job_id:
             break
@@ -164,7 +167,8 @@ def approve_script(client, job_id):
 def heartbeat(client, node_name, **overrides):
     payload = {"node_name": node_name, "vram_mb": 4096}
     payload.update(overrides)
-    response = client.post("/api/workers/heartbeat", json=payload)
+    response = client.post("/api/workers/heartbeat", json=payload,
+                           headers={"X-Vertep-Token": "worker-token"})
     assert response.status_code == 200
 
 
@@ -217,12 +221,14 @@ def test_publisher_never_fakes_success(monkeypatch):
 def _heartbeat_publisher(client, node_name="pub-worker"):
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 0, "role": "publisher",
-        "capabilities": ["publishing"], "supported_tasks": ["publish"]})
+        "capabilities": ["publishing"], "supported_tasks": ["publish"]},
+        headers={"X-Vertep-Token": "worker-token"})
 
 
 def _claim_publish_task(client, job_id, node_name="pub-worker"):
     for _ in range(100):
-        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0})
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0},
+                           headers={"X-Vertep-Token": "worker-token"})
         task = resp.json().get("task")
         if task and task.get("task") == "publish" and task.get("job_id") == job_id:
             return task
@@ -233,6 +239,7 @@ def _claim_publish_task(client, job_id, node_name="pub-worker"):
 def test_publish_via_publisher_worker_returns_receipt(monkeypatch):
     """Full publish flow: dispatch → claim → execute → result → receipt."""
     monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Publish via worker"}).json()["job_id"]
     approve_script(client, job_id)
@@ -245,7 +252,7 @@ def test_publish_via_publisher_worker_returns_receipt(monkeypatch):
     [artifact] = role_executor.execute_role_task("publisher", task)
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
-        "success": True, "artifacts": [artifact]})
+        "success": True, "artifacts": [artifact]}, headers={"X-Vertep-Token": "worker-token"})
     assert response.status_code == 200
     job = client.get(f"/api/jobs/{job_id}").json()
     assert job["status"] == "PUBLISHED"
@@ -259,6 +266,7 @@ def test_publish_via_publisher_worker_returns_receipt(monkeypatch):
 def test_publish_partial_failure_mixed_channels(monkeypatch):
     """Publishing two channels: mock succeeds for youtube, worker fails for tiktok."""
     monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Partial publish"}).json()["job_id"]
     approve_script(client, job_id)
@@ -266,6 +274,7 @@ def test_publish_partial_failure_mixed_channels(monkeypatch):
     _heartbeat_publisher(client)
     published = client.post(f"/api/jobs/{job_id}/publish", json=["youtube", "tiktok"]).json()
     assert published["status"] == "PUBLISHING"
+    headers = {"X-Vertep-Token": "worker-token"}
     for _ in range(200):
         task = _claim_publish_task(client, job_id)
         if task is None:
@@ -277,12 +286,12 @@ def test_publish_partial_failure_mixed_channels(monkeypatch):
         if task["channel"] == "tiktok":
             client.post("/api/tasks/result", json={
                 "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
-                "success": False, "artifacts": [], "error": "TikTok API error"})
+                "success": False, "artifacts": [], "error": "TikTok API error"}, headers=headers)
         else:
             [artifact] = role_executor.execute_role_task("publisher", task)
             client.post("/api/tasks/result", json={
                 "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
-                "success": True, "artifacts": [artifact]})
+                "success": True, "artifacts": [artifact]}, headers=headers)
     job = client.get(f"/api/jobs/{job_id}").json()
     assert job["publication_results"]["youtube"]["status"] == "PUBLISHED"
     assert "youtube" in job["published_to"]
@@ -292,6 +301,7 @@ def test_publish_partial_failure_mixed_channels(monkeypatch):
 def test_publish_retry_on_worker_failure(monkeypatch):
     """Publish task failure triggers retry; succeeds on second attempt."""
     monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Retry publish"}).json()["job_id"]
     approve_script(client, job_id)
@@ -299,6 +309,7 @@ def test_publish_retry_on_worker_failure(monkeypatch):
     _heartbeat_publisher(client)
     client.post(f"/api/jobs/{job_id}/publish", json=["youtube"])
     attempts = 0
+    headers = {"X-Vertep-Token": "worker-token"}
     for _ in range(300):
         task = _claim_publish_task(client, job_id)
         if task is None:
@@ -311,12 +322,12 @@ def test_publish_retry_on_worker_failure(monkeypatch):
         if attempts == 1:
             client.post("/api/tasks/result", json={
                 "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
-                "success": False, "artifacts": [], "error": "transient network error"})
+                "success": False, "artifacts": [], "error": "transient network error"}, headers=headers)
         else:
             [artifact] = role_executor.execute_role_task("publisher", task)
             client.post("/api/tasks/result", json={
                 "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
-                "success": True, "artifacts": [artifact]})
+                "success": True, "artifacts": [artifact]}, headers=headers)
     job = client.get(f"/api/jobs/{job_id}").json()
     assert job["status"] == "PUBLISHED"
     assert job["publication_results"]["youtube"]["status"] == "PUBLISHED"
@@ -326,6 +337,7 @@ def test_publish_retry_on_worker_failure(monkeypatch):
 def test_publish_cancels_pending_tasks_on_job_cancel(monkeypatch):
     """Cancelling a job in PUBLISHING discards publish tasks."""
     monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Cancel publish"}).json()["job_id"]
     approve_script(client, job_id)
@@ -333,12 +345,13 @@ def test_publish_cancels_pending_tasks_on_job_cancel(monkeypatch):
     _heartbeat_publisher(client)
     published = client.post(f"/api/jobs/{job_id}/publish", json=["youtube"]).json()
     assert published["status"] == "PUBLISHING"
+    headers = {"X-Vertep-Token": "worker-token"}
     task = _claim_publish_task(client, job_id)
     if task:
         [artifact] = role_executor.execute_role_task("publisher", task)
         client.post("/api/tasks/result", json={
             "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
-            "success": True, "artifacts": [artifact]})
+            "success": True, "artifacts": [artifact]}, headers=headers)
     else:
         client.post(f"/api/jobs/{job_id}/cancel")
         job = client.get(f"/api/jobs/{job_id}").json()
@@ -351,13 +364,15 @@ def test_publish_cancels_pending_tasks_on_job_cancel(monkeypatch):
 def _heartbeat_text_worker(client, node_name="text-worker"):
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 0, "role": "text",
-        "capabilities": ["text_generation"], "supported_tasks": ["text"]})
+        "capabilities": ["text_generation"], "supported_tasks": ["text"]},
+        headers={"X-Vertep-Token": "worker-token"})
 
 
 def test_script_generation_via_text_worker(monkeypatch):
     """CORE → Text Worker → result → SCRIPT_PENDING_APPROVAL (no LLM in CORE)."""
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("DEMO_MODE", "true")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     from core.script_agent import ScriptAgent
     monkeypatch.setattr(ScriptAgent, "generate_script",
                         lambda self, topic, sp="", ch=None: {
@@ -465,25 +480,28 @@ def test_job_rejects_workflow_outside_registry(monkeypatch):
 
 def test_duplicate_worker_result_is_idempotent(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "idem-worker")
     job_id = client.post("/api/jobs", json={"topic": "Idempotency", "min_vram_mb": 1}).json()["job_id"]
     approve_script(client, job_id)
     task = None
     for _ in range(100):
-        task = client.post("/api/tasks/claim", json={"node_name": "idem-worker", "vram_mb": 4096}).json().get("task")
+        task = client.post("/api/tasks/claim", json={"node_name": "idem-worker", "vram_mb": 4096}, headers=headers).json().get("task")
         if task and task["job_id"] == job_id:
             break
         time.sleep(0.01)
     ppm = b"P6\n2 2\n255\n" + bytes((0, 0, 255)) * 4
     payload = {"job_id": job_id, "task_id": task["task_id"], "node_name": "idem-worker", "success": True,
                "filename": "scene.ppm", "image_base64": base64.b64encode(ppm).decode()}
-    assert client.post("/api/tasks/result", json=payload).status_code == 200
-    assert client.post("/api/tasks/result", json=payload).status_code == 200
+    assert client.post("/api/tasks/result", json=payload, headers=headers).status_code == 200
+    assert client.post("/api/tasks/result", json=payload, headers=headers).status_code == 200
 
 
 def test_multiscene_job_fans_out_to_distinct_tasks(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
         "title": topic, "scenes": [
             {"prompt": "first", "voiceover": "one", "duration": 1},
@@ -503,33 +521,37 @@ def test_multiscene_job_fans_out_to_distinct_tasks(monkeypatch):
 
 def test_worker_cannot_submit_another_workers_task(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "owner")
     job_id = client.post("/api/jobs", json={"topic": "Lease owner"}).json()["job_id"]
     approve_script(client, job_id)
     task = None
     for _ in range(100):
-        task = client.post("/api/tasks/claim", json={"node_name": "owner", "vram_mb": 4096}).json().get("task")
+        task = client.post("/api/tasks/claim", json={"node_name": "owner", "vram_mb": 4096}, headers=headers).json().get("task")
         if task and task["job_id"] == job_id:
             break
         time.sleep(0.01)
     ppm = b"P6\n2 2\n255\n" + bytes((10, 20, 30)) * 4
     response = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": task["task_id"],
                            "node_name": "intruder", "success": True, "filename": "scene.ppm",
-                           "image_base64": base64.b64encode(ppm).decode()})
+                           "image_base64": base64.b64encode(ppm).decode()}, headers=headers)
     assert response.status_code == 409
     client.post(f"/api/jobs/{job_id}/cancel")
 
 
 def test_invalid_artifact_batch_is_not_partially_written(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "atomic-worker")
     job_id = client.post("/api/jobs", json={"topic": "Atomic artifacts"}).json()["job_id"]
     approve_script(client, job_id)
     task = None
     for _ in range(100):
-        task = client.post("/api/tasks/claim", json={"node_name": "atomic-worker", "vram_mb": 4096}).json().get("task")
+        task = client.post("/api/tasks/claim", json={"node_name": "atomic-worker", "vram_mb": 4096}, headers=headers).json().get("task")
         if task and task["job_id"] == job_id:
             break
         time.sleep(0.01)
@@ -537,7 +559,7 @@ def test_invalid_artifact_batch_is_not_partially_written(monkeypatch):
     response = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": task["task_id"],
                            "node_name": "atomic-worker", "success": True,
                            "images": [{"filename": "one.ppm", "image_base64": base64.b64encode(ppm).decode()},
-                                      {"filename": "two.png", "image_base64": base64.b64encode(b"not-png").decode()}]})
+                                      {"filename": "two.png", "image_base64": base64.b64encode(b"not-png").decode()}]}, headers=headers)
     assert response.status_code == 400
     assert not list((store.root / job_id / "images").glob("scene-001*"))
     client.post(f"/api/jobs/{job_id}/cancel")
@@ -546,10 +568,12 @@ def test_invalid_artifact_batch_is_not_partially_written(monkeypatch):
 def test_exhausted_scene_cancels_parallel_sibling(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("MAX_RETRIES", "1")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
         "title": topic, "scenes": [{"prompt": "first", "duration": 1},
                                      {"prompt": "second", "duration": 1}]})
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "fatal-worker")
     heartbeat(client, "sibling-worker")
     job_id = client.post("/api/jobs", json={"topic": "Sibling cancellation"}).json()["job_id"]
@@ -557,7 +581,7 @@ def test_exhausted_scene_cancels_parallel_sibling(monkeypatch):
     claimed = []
     for worker in ("fatal-worker", "sibling-worker"):
         for _ in range(100):
-            task = client.post("/api/tasks/claim", json={"node_name": worker, "vram_mb": 4096}).json().get("task")
+            task = client.post("/api/tasks/claim", json={"node_name": worker, "vram_mb": 4096}, headers=headers).json().get("task")
             if task and task["job_id"] == job_id:
                 claimed.append((worker, task))
                 break
@@ -565,19 +589,21 @@ def test_exhausted_scene_cancels_parallel_sibling(monkeypatch):
     assert len(claimed) == 2
     worker, failed_task = claimed[0]
     failed = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": failed_task["task_id"],
-                                                    "node_name": worker, "success": False, "error": "fatal"})
+                                                    "node_name": worker, "success": False, "error": "fatal"}, headers=headers)
     assert failed.json()["status"] == "FAILED"
     sibling_worker, sibling_task = claimed[1]
-    cancellations = client.get(f"/api/tasks/cancellations/{sibling_worker}").json()
+    cancellations = client.get(f"/api/tasks/cancellations/{sibling_worker}", headers=headers).json()
     assert any(item["task_id"] == sibling_task["task_id"] for item in cancellations)
 
 
 def test_parallel_results_trigger_single_assembly(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
         "title": topic, "scenes": [{"prompt": "first", "duration": .2},
                                      {"prompt": "second", "duration": .2}]})
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "parallel-a")
     heartbeat(client, "parallel-b")
     job_id = client.post("/api/jobs", json={"topic": "Parallel fan-in"}).json()["job_id"]
@@ -585,7 +611,7 @@ def test_parallel_results_trigger_single_assembly(monkeypatch):
     claimed = []
     for worker in ("parallel-a", "parallel-b"):
         for _ in range(100):
-            task = client.post("/api/tasks/claim", json={"node_name": worker, "vram_mb": 4096}).json().get("task")
+            task = client.post("/api/tasks/claim", json={"node_name": worker, "vram_mb": 4096}, headers=headers).json().get("task")
             if task and task["job_id"] == job_id:
                 claimed.append((worker, task))
                 break
@@ -597,7 +623,7 @@ def test_parallel_results_trigger_single_assembly(monkeypatch):
         worker, task = item
         return client.post("/api/tasks/result", json={"job_id": job_id, "task_id": task["task_id"],
                            "node_name": worker, "success": True, "filename": "scene.ppm",
-                           "image_base64": base64.b64encode(ppm).decode()}).status_code
+                           "image_base64": base64.b64encode(ppm).decode()}, headers=headers).status_code
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert list(pool.map(submit, claimed)) == [200, 200]
@@ -608,21 +634,23 @@ def test_parallel_results_trigger_single_assembly(monkeypatch):
 
 def test_pause_requests_worker_cancellation(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "cancel-worker")
     job_id = client.post("/api/jobs", json={"topic": "Cancel active", "min_vram_mb": 1}).json()["job_id"]
     approve_script(client, job_id)
     task = None
     for _ in range(100):
-        task = client.post("/api/tasks/claim", json={"node_name": "cancel-worker", "vram_mb": 4096}).json().get("task")
+        task = client.post("/api/tasks/claim", json={"node_name": "cancel-worker", "vram_mb": 4096}, headers=headers).json().get("task")
         if task and task["job_id"] == job_id:
             break
         time.sleep(0.01)
     assert task
-    renewed = client.post("/api/tasks/renew", json={"node_name": "cancel-worker", "task_id": task["task_id"]})
+    renewed = client.post("/api/tasks/renew", json={"node_name": "cancel-worker", "task_id": task["task_id"]}, headers=headers)
     assert renewed.json()["renewed"] is True
     assert client.post(f"/api/jobs/{job_id}/pause").json()["status"] == "PAUSED"
-    cancellations = client.get("/api/tasks/cancellations/cancel-worker").json()
+    cancellations = client.get("/api/tasks/cancellations/cancel-worker", headers=headers).json()
     assert cancellations[0]["task_id"] == task["task_id"]
 
 
@@ -641,10 +669,12 @@ def test_cookie_session_requires_csrf(monkeypatch):
 
 def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     image = tmp_path / "video-source.ppm"
     image.write_bytes(b"P6\n4 4\n255\n" + bytes((20, 40, 80)) * 16)
     clip = FFmpegAdapter().assemble(tmp_path / "worker-clip.mp4", images=[image], durations=[0.25])
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "text-worker", capabilities=[], supported_tasks=["script", "storyboard"],
               supported_workflows=["*"])
     heartbeat(client, "video-worker", capabilities=[], supported_tasks=["video"],
@@ -657,7 +687,7 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
     task = None
     for _ in range(100):
         task = client.post("/api/tasks/claim", json={"node_name": "video-worker", "vram_mb": 4096,
-                           "supported_tasks": ["video"], "supported_workflows": ["*"]}).json().get("task")
+                           "supported_tasks": ["video"], "supported_workflows": ["*"]}, headers=headers).json().get("task")
         if task and task["job_id"] == job_id:
             break
         time.sleep(0.01)
@@ -665,7 +695,7 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
     result = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": task["task_id"],
                          "node_name": "video-worker", "success": True,
                          "artifacts": [{"filename": "scene.mp4", "kind": "video",
-                                        "data_base64": base64.b64encode(clip.read_bytes()).decode()}]})
+                                        "data_base64": base64.b64encode(clip.read_bytes()).decode()}]}, headers=headers)
     assert result.status_code == 200
     completed = wait_for(client, job_id)
     assert completed["status"] == "READY"
@@ -676,6 +706,7 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
 def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("DEMO_MODE", "true")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
 
     def _fake_assemble(self, output, **kwargs):
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -688,6 +719,7 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     monkeypatch.setattr(FFmpegAdapter, "assemble", _fake_assemble)
     monkeypatch.setattr(FFmpegAdapter, "probe", _fake_probe)
     client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "image-worker", supported_tasks=["image"], capabilities=["image_generation"])
     heartbeat(client, "voice-worker", supported_tasks=["voice"], capabilities=["speech_synthesis"], role="voice")
     job_id = client.post("/api/jobs", json={"topic": "TTS pipeline test",
@@ -695,7 +727,7 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     approve_script(client, job_id)
     image_task = None
     for _ in range(100):
-        resp = client.post("/api/tasks/claim", json={"node_name": "image-worker", "vram_mb": 4096})
+        resp = client.post("/api/tasks/claim", json={"node_name": "image-worker", "vram_mb": 4096}, headers=headers)
         body = resp.json()
         image_task = body.get("task")
         print(f"CLAIM iteration={_}, status={resp.status_code}, task_job={image_task.get('job_id') if image_task else None}, task_type={image_task.get('task') if image_task else None}")
@@ -707,11 +739,11 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     ppm = b"P6\n2 2\n255\n" + bytes((0, 0, 255)) * 4
     image_result = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": image_task["task_id"],
                                "node_name": "image-worker", "success": True,
-                               "filename": "scene.ppm", "image_base64": base64.b64encode(ppm).decode()})
+                               "filename": "scene.ppm", "image_base64": base64.b64encode(ppm).decode()}, headers=headers)
     assert image_result.status_code == 200
     tts_task = None
     for _ in range(100):
-        tts_task = client.post("/api/tasks/claim", json={"node_name": "voice-worker", "vram_mb": 0}).json().get("task")
+        tts_task = client.post("/api/tasks/claim", json={"node_name": "voice-worker", "vram_mb": 0}, headers=headers).json().get("task")
         if tts_task and tts_task["job_id"] == job_id:
             break
         time.sleep(0.01)
@@ -738,7 +770,7 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     tts_result = client.post("/api/tasks/result", json={"job_id": job_id, "task_id": tts_task["task_id"],
                                  "node_name": "voice-worker", "success": True,
                                  "artifacts": [{"filename": "speech.wav", "data_base64": base64.b64encode(wav).decode(),
-                                                "contract": contract}]})
+                                                "contract": contract}]}, headers=headers)
     assert tts_result.status_code == 200
     completed = wait_for(client, job_id)
     assert completed["status"] == "READY"

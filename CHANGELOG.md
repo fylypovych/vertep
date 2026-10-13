@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.51
+- Issue i.0.0.1.17 — Provider switch end-to-end: CORE → persisted overrides → Worker heartbeat → executor env → voice preview + effective config after restart; loopback TTS runtime proves the full config propagation path; executor config carries only allowlisted non-secrets; preview refuses switch that missed the executor.
+- Issue i.0.0.1.5 — TTS voice/language/provider/model/speed catalog reconciliation: `/voices` endpoint returns languages, providers, speed range; `_available_languages()` derives supported languages from installed voice table; `_validate_language()` rejects unsupported pinned languages at synthesis time; SynthesisRequest accepts extra provider/model/language fields; dispatcher selects voice workers by full catalog readiness.
+- Issue #124 — MoneyPrinterTurbo submit route self-test proves the whole §9.3 scene matrix (scene order, each approved duration, compose contract) on the downloaded artifact, not a single timestamp; route report carries full timeline with colours, order, aspect/fit/concat modes; gate refuses reorder/dropped/retimed scenes, mismatched clips, and missing compose fields.
+- Security hardening: session secret validation (rejects forged sessions when secret unset), admin password guard (never mints session when ADMIN_PASSWORD unset), constant-time admin credential comparison.
+- System state: added `UNAVAILABLE` mode; `resource_management` operation added to NORMAL/MAINTENANCE; policy service maps unknown states to UNAVAILABLE and handles API errors as UNAVAILABLE.
+- Web UI: PolicyService adds UNAVAILABLE system mode, expanded mutation blocks for UNAVAILABLE, new resource operations (create/delete workflow/channel/brand/character, backup/restore, secret ops).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.50
 - Issue #116 (i.0.0.1.16) — Models: виправити terminal status і cancellation model pull:
 - `core/pull_executor.py`: Локальний pull (`_pull_model`) — додано timeout (300s total, 10s connect), NDJSON error event негайно викликає `fail_operation` замість `advance_operation`; cancellation викликає `cancel_operation` для durable CANCELLED; після EOF перевіряється `error_received` — якщо error був, операція стає FAILED.

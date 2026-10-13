@@ -212,6 +212,19 @@ def test_dispatcher_selects_voice_worker_by_catalog():
     wrong_lang = _voice_worker("wrong-lang-voice", {"voices": ["uk"], "languages": ["en"]})
     assert available_worker([wrong_lang], job, task_type="voice",
                             voice_requirements={"voice": "uk", "language": "uk"}) is None
+    # Issue i.0.0.1.5: provider/model/language/speed readiness is reconciled
+    # end-to-end — only supported combinations pass, unsupported are refused.
+    full = _voice_worker("full-voice", {"voices": ["uk"], "models": ["uk_male"],
+                                         "languages": ["uk"], "providers": ["mock"]})
+    assert available_worker([full], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "model": "uk_male",
+                                                "provider": "mock", "language": "uk"})["node_name"] == "full-voice"
+    assert available_worker([full], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "provider": "other"}) is None
+    assert available_worker([full], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "speed": 500}) is None
+    assert available_worker([full], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "speed": 160})["node_name"] == "full-voice"
 
 
 def _make_wav(duration: float = 0.5, rate: int = 22050) -> bytes:
