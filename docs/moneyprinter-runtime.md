@@ -109,11 +109,27 @@ download, обмежені retry), different-root приймання.
 
 Approved voice (§9.3 рядок 5) доставляється wrapper-ом через
 `POST /api/v1/voice`: байти зберігаються content-addressed (SHA-256 у назві) і
-`_stage_task_voice()` кладе їх у task-каталог pinned-резолвера перед submit, після
+`_stage_task_voice()` кладе їх у task-каталог pinned-резолвера після відповіді POST, після
 чого `resolve_custom_audio_file` приймає шлях у task-каталозі. Підміна TTS
 заборонена §9.6, тому `task_local_voice_capability()` перевіряє саме цей маршрут
 і fail-closed відхиляє render з `upstream_voice_staging_unsupported`, якщо staging
 не довів файл до pinned-резолвера. `POST /api/v1/audio` не використовується.
+
+Залишок #123: pinned `create_task()` генерує task_id і викликає
+`task_manager.add_task(tm.start, ...)` до повернення відповіді POST. Audio stage
+може прочитати файл до `_stage_task_voice()` і завершити task помилкою; пізнє
+staging та повтор submit key не відновлюють уже failed task. Non-empty
+`custom_audio_file` забороняє TTS fallback, але не усуває гонку.
+`test_first_submit_can_reach_audio_before_task_local_staging` детерміновано
+відтворює цей порядок на wrapper з підставленими upstream helpers; це не доказ
+проходження disposable pinned runtime.
+
+Блокер у межі погодженого API/bridge §9: HTTP API не приймає task_id від клієнта,
+не має paused submit або resume і дозволяє custom audio лише всередині
+згенерованого task-каталогу. Усунення гонки потребує погодження зміни design
+(наприклад, staging hook до запуску upstream task). До цього гарантія валідного
+першого submit та restart у цьому вікні не підтверджена; `task_local_voice: true`
+означає можливість доставки, а не відсутність гонки.
 
 ## Конфігурація
 

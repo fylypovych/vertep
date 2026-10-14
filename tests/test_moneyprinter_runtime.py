@@ -2540,6 +2540,46 @@ def _submit(client, *, submit_key: str | None = None, **overrides):
     return client.post("/api/v1/videos", json=payload, headers=headers)
 
 
+def test_first_submit_can_reach_audio_before_task_local_staging(monkeypatch, tmp_path):
+    """#123: reproduce the pinned scheduler's legal POST → audio → response order.
+
+    This is a defect reproduction, not acceptance of a race-free runtime. The
+    pinned create_task queues tm.start before returning its generated task_id;
+    generate_audio refuses a missing custom file instead of using TTS.
+    """
+    client = _wrapper_client(monkeypatch, tmp_path)
+    task_root = _pinned_upstream(monkeypatch, tmp_path)
+    approved = b"approved-voice-bytes"
+    staged = client.post(
+        "/api/v1/voice", content=approved,
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice.wav"},
+    ).json()["data"]["voice"]
+    events = []
+
+    def early_audio(method, path, *, api_key, **kwargs):
+        assert (method, path) == ("POST", "/api/v1/videos")
+        file_name = json.loads(kwargs["content"])["custom_audio_file"]
+        assert file_name, "an empty custom file would permit TTS fallback"
+        from app.services.task import resolve_custom_audio_file
+        with pytest.raises(FileNotFoundError):
+            resolve_custom_audio_file("early-task", file_name)
+        events.append("audio failed before POST response")
+        return httpx.Response(200, json={"status": 200, "data": {"task_id": "early-task"}})
+
+    monkeypatch.setattr("services.moneyprinter_service._upstream", early_audio)
+    first = _submit(client, submit_key="early-submit", custom_audio_file=staged)
+    assert first.status_code == 200
+    assert events == ["audio failed before POST response"]
+    assert (task_root / "early-task" / "vertep-voice.wav").read_bytes() == approved
+    # Reconciliation cannot undo an audio-stage failure that already happened.
+    repeated = _submit(client, submit_key="early-submit", custom_audio_file=staged)
+    assert repeated.status_code == 200
+    assert repeated.json()["data"]["task_id"] == "early-task"
+    assert len(events) == 1
+    from services.moneyprinter_service import _verified_staged_voice
+    assert _verified_staged_voice(staged) == approved
+
+
 def test_wrapper_places_the_staged_voice_in_the_task_directory(monkeypatch, tmp_path):
     """The approved voice becomes a task-local file before the pipeline runs."""
     client = _wrapper_client(monkeypatch, tmp_path)
@@ -2780,6 +2820,63 @@ def test_a_repeat_submit_after_a_restart_completes_the_voice_staging(monkeypatch
 
     assert reconciled.status_code == 409, "a refused key is terminal, not retried"
     assert reconciled.json()["reason"] == "voice_staging_failed"
+
+
+def test_a_repeat_submit_after_restart_with_voice_staged_completes_successfully(
+        monkeypatch, tmp_path):
+    """Issue #123: happy-path restart recovery when approved voice was already staged.
+
+    A valid first submit stages the voice via POST /api/v1/voice BEFORE submit.
+    If a restart occurs after the upstream accepts the task but before the wrapper
+    stages the voice in the task directory, the record has state="submitted" with
+    a task_id. The repeat submit must find the voice in the voice directory,
+    complete the staging, update the record to "staged", and return "reconciled".
+    This guarantees no TTS fallback and no race for a valid first submit.
+    """
+    client = _wrapper_client(monkeypatch, tmp_path)
+    _pinned_upstream(monkeypatch, tmp_path)
+    digest = hashlib.sha256(b"approved-voice-bytes").hexdigest()
+    marker = f"vertep-voice:{digest}.wav"
+
+    # Stage the approved voice FIRST (valid first submit prerequisite)
+    client.post(
+        "/api/v1/voice",
+        content=b"approved-voice-bytes",
+        headers={"x-api-key": "runtime-key", "x-vertep-filename": "voice-0001.wav"},
+    )
+
+    wrapper_module = __import__("services.moneyprinter_service", fromlist=["_remember_submit"])
+    calls: list = []
+    monkeypatch.setattr(
+        "services.moneyprinter_service._upstream",
+        lambda method, path, *, api_key, **kwargs: (
+            calls.append((method, path)),
+            httpx.Response(200, json={"status": 200, "data": {"task_id": "j-80"}}),
+        )[1],
+    )
+    # Record simulating a restart after upstream acceptance but before task-local staging
+    wrapper_module._remember_submit("job-1-v1-restart-happy", task_id="j-80", marker=marker,
+                                    state="submitted")
+
+    # Repeat submit should complete staging and return reconciled
+    reconciled = _submit_with_key(client, "job-1-v1-restart-happy", custom_audio_file=marker)
+
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json()["message"] == "reconciled"
+    assert reconciled.json()["data"]["task_id"] == "j-80"
+    # No upstream call should be made for a repeat submit with existing task_id
+    assert calls == [], "repeat submit with existing task_id must not call upstream again"
+
+    # Verify the record is now staged and voice_staged is true
+    status = client.get("/api/v1/videos/job-1-v1-restart-happy",
+                        headers={"x-api-key": "runtime-key"})
+    assert status.json()["record_state"] == "staged"
+    assert status.json()["voice_staged"] is True
+
+    # The approved voice file in the voice directory must NOT be deleted
+    voice_dir = Path(__import__("services.moneyprinter_service", fromlist=["_voice_dir"])._voice_dir())
+    voice_file = voice_dir / f"{digest}.wav"
+    assert voice_file.is_file(), "approved voice file must not be deleted during cleanup"
 
 
 def test_a_corrupted_submit_record_is_never_treated_as_a_new_submit(monkeypatch, tmp_path):

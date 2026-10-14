@@ -36,6 +36,37 @@ def test_worker_accepts_video_signature_after_box_size(suffix):
         verify_media(b"ftypmp42", suffix)
 
 
+@pytest.mark.parametrize("suffix", [".png", ".jpg", ".jpeg", ".ppm"])
+def test_worker_rejects_signature_only_image_payload(suffix):
+    """Issue #121: a signature-only image must not pass as a verified artifact.
+
+    The old check accepted any payload that merely *started* with the magic
+    bytes, so an 8-byte PNG signature (or a truncated JPEG/PPM header) shipped
+    to CORE as a valid artifact. A real image is longer than its own signature,
+    so a payload that is nothing but the signature is refused.
+    """
+    from worker.role_executor import verify_media
+
+    signature = {
+        ".png": b"\x89PNG\r\n\x1a\n",
+        ".jpg": b"\xff\xd8\xff",
+        ".jpeg": b"\xff\xd8\xff",
+        ".ppm": b"P6",
+    }[suffix]
+    with pytest.raises(RuntimeError, match="media signature|too short"):
+        verify_media(signature, suffix)
+
+
+def test_worker_rejects_a_truncated_video_payload():
+    """Issue #121: a video shorter than its own box header is not a video."""
+    from worker.role_executor import verify_media
+
+    # ftyp sits at bytes 4..8, so a payload without those bytes cannot claim to
+    # be an MP4/MOV; the old check rejected it, but only via the signature test.
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(b"\x00\x00\x00", ".mp4")
+
+
 class FakeComfyUI:
     """Minimal ComfyUI HTTP surface over a real socket."""
 
@@ -48,6 +79,11 @@ class FakeComfyUI:
         self.view_status = 200
         self.history_override = None
         self.never_finishes = False
+        # The declared output kind the worker asked for: an image workflow reports
+        # ``images``/``.png``, a video workflow reports ``videos``/``.mp4`` (Issue #121).
+        self.output_key = "images"
+        self.output_suffix = ".png"
+        self.view_content_type = "image/png"
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -94,13 +130,14 @@ class FakeComfyUI:
                     if outer.never_finishes or prompt_id not in outer.prompts:
                         return self._send(200, {})
                     return self._send(200, {prompt_id: {"outputs": {"9": {
-                        key: [{"filename": f"scene-{prompt_id}.png", "subfolder": "", "type": "output"}]
-                        for key in ("images",)}}}})
+                        key: [{"filename": f"scene-{prompt_id}{outer.output_suffix}",
+                               "subfolder": "", "type": "output"}]
+                        for key in (outer.output_key,)}}}})
                 if self.path.startswith("/view"):
                     if outer.view_status != 200:
                         return self._send(outer.view_status, raw=b"<html>error</html>",
                                           content_type="text/html")
-                    return self._send(200, raw=outer.view_body, content_type="image/png")
+                    return self._send(200, raw=outer.view_body, content_type=outer.view_content_type)
                 if self.path == "/system_stats":
                     return self._send(200, {"system": {"comfyui_version": "0.34.0"}})
                 return self._send(404, {})
@@ -246,9 +283,11 @@ def _core_client():
 
 
 def _claim_image_storyboard_task(client, node_name="gpu-http"):
+    auth_headers = {"x-vertep-token": "worker-token"}
     for _ in range(200):
         claimed = client.post("/api/tasks/claim",
-                              json={"node_name": node_name, "vram_mb": 16384}).json().get("task")
+                              json={"node_name": node_name, "vram_mb": 16384},
+                              headers=auth_headers).json().get("task")
         if claimed and claimed.get("kind") == "image_storyboard":
             return claimed
         time.sleep(0.01)
@@ -257,11 +296,12 @@ def _claim_image_storyboard_task(client, node_name="gpu-http"):
 
 def _dispatched_image_task(monkeypatch):
     """Drive CORE to the point where a real GPU image task is claimable."""
-    from core.script_agent import ScriptAgent
     from core.models import JobStatus, StoryboardScene, StoryboardVersion
     from core.app import store
 
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    monkeypatch.setattr("core.security._valid_worker_request", lambda node_name, request: True)
     client = _core_client()
 
     def _queue_storyboard(self, job, revision=None):
@@ -291,23 +331,28 @@ def _dispatched_image_task(monkeypatch):
         return board
 
     monkeypatch.setattr("core.storyboard.StoryboardService.queue", _queue_storyboard)
-    monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {
-        "title": topic, "scenes": [{"prompt": topic, "voiceover": "", "duration": 1}]})
+    auth_headers = {"x-vertep-token": "worker-token"}
     client.post("/api/workers/heartbeat", json={"node_name": "text-worker", "vram_mb": 0, "role": "text",
-                                                "capabilities": ["text_generation"], "supported_tasks": ["text"]})
+                                                "capabilities": ["text_generation"], "supported_tasks": ["text"]},
+                headers=auth_headers)
     client.post("/api/workers/heartbeat", json={"node_name": "gpu-http", "vram_mb": 16384, "role": "gpu",
-                                                "capabilities": ["image_generation"], "supported_tasks": ["image"]})
+                                                "capabilities": ["image_generation"], "supported_tasks": ["image"]},
+                headers=auth_headers)
     job_id = client.post("/api/jobs",
                          json={"topic": "HTTP render", "character_id": "did_samogon"}).json()["job_id"]
+    # Wait for script task to be queued
     for _ in range(300):
         state = client.get(f"/api/jobs/{job_id}").json()
-        if state["status"] == "SCRIPT_PENDING_APPROVAL":
+        if state["status"] == "SCRIPT_QUEUED":
             break
+        time.sleep(0.01)
+    assert state["status"] == "SCRIPT_QUEUED"
+    # Claim and complete the script task
+    for _ in range(300):
         claimed = client.post("/api/tasks/claim",
-                              json={"node_name": "text-worker", "vram_mb": 0}).json().get("task")
+                              json={"node_name": "text-worker", "vram_mb": 0},
+                              headers=auth_headers).json().get("task")
         if claimed and claimed.get("task") == "script":
-            # The GPU transport is what this test proves; the text side is fed a
-            # ready script so the pipeline reaches the image stage.
             script = {"title": "HTTP render", "scenes": [{"prompt": "HTTP render",
                                                            "voiceover": "", "duration": 1}]}
             payload = json.dumps(script, ensure_ascii=False).encode("utf-8")
@@ -315,10 +360,19 @@ def _dispatched_image_task(monkeypatch):
                 "job_id": job_id, "task_id": claimed["task_id"], "node_name": "text-worker",
                 "success": True,
                 "artifacts": [{"filename": "script.json", "kind": "script",
-                               "data_base64": base64.b64encode(payload).decode("ascii")}]})
+                               "data_base64": base64.b64encode(payload).decode("ascii")}]},
+                headers=auth_headers)
+            break
+        time.sleep(0.01)
+    # Wait for script pending approval
+    for _ in range(300):
+        state = client.get(f"/api/jobs/{job_id}").json()
+        if state["status"] == "SCRIPT_PENDING_APPROVAL":
+            break
         time.sleep(0.01)
     assert state["status"] == "SCRIPT_PENDING_APPROVAL"
     client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
+    # Wait for storyboard pending approval (mocked queue_storyboard transitions directly)
     for _ in range(300):
         state = client.get(f"/api/jobs/{job_id}").json()
         if state["status"] == "STORYBOARD_PENDING_APPROVAL":
@@ -344,9 +398,10 @@ def test_core_accepts_a_verified_image_artifact_from_a_real_http_render(comfyui,
     assert contract["mime_type"] == "image/png"
     assert base64.b64decode(artifacts[0]["data_base64"]) == PNG
 
+    auth_headers = {"x-vertep-token": "worker-token"}
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": "gpu-http",
-        "success": True, "artifacts": artifacts})
+        "success": True, "artifacts": artifacts}, headers=auth_headers)
     assert response.status_code == 200, response.text
     board = client.get(f"/api/jobs/{job_id}/storyboards").json()[0]
     for scene in board["scenes"]:
@@ -363,9 +418,10 @@ def test_core_rejects_a_tampered_artifact_contract(comfyui, monkeypatch):
     client, job_id, task = _dispatched_image_task(monkeypatch)
     artifact = _media_artifact("scene-001.png", "image", PNG)
     artifact["contract"]["sha256"] = "0" * 64
+    auth_headers = {"x-vertep-token": "worker-token"}
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": "gpu-http",
-        "success": True, "artifacts": [artifact]})
+        "success": True, "artifacts": [artifact]}, headers=auth_headers)
     assert response.status_code == 400
     assert "checksum" in response.text
 
@@ -376,9 +432,10 @@ def test_core_rejects_a_contract_declaring_the_wrong_media_kind(comfyui, monkeyp
     client, job_id, task = _dispatched_image_task(monkeypatch)
     artifact = _media_artifact("scene-001.png", "image", PNG)
     artifact["contract"]["mime_type"] = "video/mp4"
+    auth_headers = {"x-vertep-token": "worker-token"}
     response = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": "gpu-http",
-        "success": True, "artifacts": [artifact]})
+        "success": True, "artifacts": [artifact]}, headers=auth_headers)
     assert response.status_code == 400
     assert "non-image" in response.text
 
@@ -390,3 +447,57 @@ def test_media_contract_helper_refuses_tampered_media():
     tampered[1:4] = b"XXX"
     with pytest.raises(RuntimeError, match="declared media signature"):
         _media_artifact("scene.png", "image", bytes(tampered))
+
+
+def test_worker_renders_a_verified_video_artifact_over_http(comfyui, monkeypatch):
+    """Issue #121: the same real GPU HTTP boundary yields a verified video artifact.
+
+    An image workflow reports an ``images``/``.png`` output and is proven
+    end-to-end through CORE above.  A video workflow reports a ``videos``/``.mp4``
+    output, and the worker must download it over the real ``/view`` endpoint,
+    validate its signature and publish a truthful ``media_contract/v1`` that CORE
+    accepts — the video fixture over the same socket (``prompt`` → ``history`` →
+    ``view``).
+    """
+    from worker.role_executor import execute_role_task
+    from core.file_validation import validate_media_contract, validate_signature
+
+    comfyui.view_body = MP4
+    comfyui.view_status = 200
+    comfyui.output_key = "videos"
+    comfyui.output_suffix = ".mp4"
+    comfyui.view_content_type = "video/mp4"
+
+    task = {"task": "video", "task_id": "video-task-1",
+            "workflow": "image/demo.json", "topic": "HTTP video render"}
+    artifacts = execute_role_task("gpu", task)
+
+    assert artifacts and artifacts[0]["kind"] == "video"
+    artifact = artifacts[0]
+    data = base64.b64decode(artifact["data_base64"])
+    assert data == MP4
+    contract = artifact["contract"]
+    assert contract["format"] == "media_contract/v1"
+    assert contract["sha256"] == hashlib.sha256(MP4).hexdigest()
+    assert contract["size"] == len(MP4)
+    assert contract["mime_type"] == "video/mp4"
+    # The real endpoints were used in order.
+    paths = [path for _method, path in comfyui.requests]
+    assert any(path == "/prompt" for path in paths)
+    assert any(path.startswith("/history/") for path in paths)
+    assert any(path.startswith("/view") for path in paths)
+    # CORE re-derives the contract on receipt: the video payload is accepted and
+    # its declaration is honoured, exactly as the image artifact path does.
+    validate_media_contract(artifact, data, expected="video")
+    validate_signature(data, ".mp4")
+
+
+def test_core_rejects_a_video_contract_declaring_an_image_payload():
+    """Issue #121: a video result can never masquerade as an accepted image."""
+    from core.file_validation import validate_media_contract
+
+    artifact = {"contract": {"format": "media_contract/v1",
+                             "sha256": hashlib.sha256(MP4).hexdigest(),
+                             "size": len(MP4), "mime_type": "image/png"}}
+    with pytest.raises(ValueError, match="non-video"):
+        validate_media_contract(artifact, MP4, expected="video")

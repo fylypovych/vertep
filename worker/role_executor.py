@@ -56,13 +56,31 @@ def verify_media(data: bytes, suffix: str) -> str:
         raise RuntimeError(f"Unsupported media artifact type: {suffix}")
     if not data:
         raise RuntimeError(f"Empty {suffix} payload from the compute runtime")
-    matches = (len(data) >= 12 and data[4:8] == b"ftyp"
-               if suffix.lower() in {".mp4", ".mov"}
-               else any(data.startswith(marker) for marker in signatures[0]))
+
+    is_video = suffix.lower() in {".mp4", ".mov"}
+    min_video_len = 12
+    min_other_len = 12
+
+    if is_video:
+        matches = len(data) >= min_video_len and data[4:8] == b"ftyp"
+    else:
+        matches = len(data) >= min_other_len and any(
+            data.startswith(marker) for marker in signatures[0]
+        )
+
     if not matches:
         raise RuntimeError(f"{suffix} payload does not match its declared media signature")
-    if suffix.lower() == ".webp" and data[8:12] != b"WEBP":
+
+    if suffix.lower() == ".webp" and len(data) >= 12 and data[8:12] != b"WEBP":
         raise RuntimeError("WebP payload does not match its declared media signature")
+
+    if suffix.lower() in {".jpg", ".jpeg", ".png", ".ppm"}:
+        # PNG requires at least 8 bytes for IHDR, WebP/RIFF-based need 12
+        if suffix.lower() == ".png" and len(data) < 8:
+            raise RuntimeError("PNG payload too short for IHDR chunk")
+        if suffix.lower() == ".ppm" and len(data) < 12:
+            raise RuntimeError("PPM payload too short for header")
+
     return signatures[1]
 
 

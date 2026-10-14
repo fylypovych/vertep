@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Виправлено гонку голосового ставування у moneyprinter_service.py (Issue #123)
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.51
 - Issue i.0.0.1.17 — Provider switch end-to-end: CORE → persisted overrides → Worker heartbeat → executor env → voice preview + effective config after restart; loopback TTS runtime proves the full config propagation path; executor config carries only allowlisted non-secrets; preview refuses switch that missed the executor.
 - Issue i.0.0.1.5 — TTS voice/language/provider/model/speed catalog reconciliation: `/voices` endpoint returns languages, providers, speed range; `_available_languages()` derives supported languages from installed voice table; `_validate_language()` rejects unsupported pinned languages at synthesis time; SynthesisRequest accepts extra provider/model/language fields; dispatcher selects voice workers by full catalog readiness.
