@@ -1837,12 +1837,20 @@ def _notify_video_regeneration(job, prefix: str) -> None:
 
 
 def _collect_reassembly_inputs(job) -> list:
-    """Ordered render inputs for a video re-assembly (Issue #81 R2).
+    """Ordered render inputs for a video re-assembly (Issue #81 R2, #119).
 
-    Registered scene artifacts are the only source: ordered by scene index,
-    deduplicated to the newest artifact per scene and integrity-checked with
-    SHA256.  The collection is extension-agnostic, so non-PNG frames and
-    ``video_scene`` clips for ``task_type == "video"`` are covered.
+    Registered scene artifacts are the only source: ordered by scene index and
+    integrity-checked with SHA256.  For each scene the *current* registered
+    artifact (the last one appended by ``finish_scene``) is selected **before**
+    the integrity check: a corrupted or missing current artifact must never be
+    silently replaced by an older, historical one (Issue #119).  The collection
+    is extension-agnostic, so non-PNG frames and ``video_scene`` clips for
+    ``task_type == "video"`` are covered.
+
+    If any scene's current artifact is missing or fails its checksum, the set of
+    current artifacts is insufficient: re-assembly is explicitly blocked by
+    returning an empty list (the caller keeps the previous immutable video
+    versions and fails the render) instead of proceeding with a partial slide.
 
     No globbing of ``images/``, ``storyboard/`` or ``frames/`` is performed:
     those directories hold historical versions, and lexicographic filename
@@ -1855,26 +1863,25 @@ def _collect_reassembly_inputs(job) -> list:
     inputs: dict[int, object] = {}
     rejected: list[str] = []
     for scene in sorted(job.scenes, key=lambda value: value.index):
-        candidates = []
-        for artifact_id in scene.artifact_ids:
-            artifact = by_id.get(artifact_id)
-            if artifact is None or artifact.kind not in accepted:
-                continue
-            path = root / artifact.path
-            if not path.is_file():
-                rejected.append(f"{artifact.artifact_id} (missing)")
-                continue
-            if artifact.sha256 and _digest(path) != artifact.sha256:
-                rejected.append(f"{artifact.filename} (integrity)")
-                continue
-            candidates.append(path)
-        if candidates:
-            # finish_scene appends new artifacts, so the last one is current.
-            inputs[scene.index] = candidates[-1]
-        elif scene.artifact_ids:
-            rejected.append(f"{scene.scene_id} (no valid artifact)")
+        registered = [by_id[artifact_id] for artifact_id in scene.artifact_ids
+                      if artifact_id in by_id and by_id[artifact_id].kind in accepted]
+        if not registered:
+            # A scene without a registered accepted artifact is not part of the
+            # required set (e.g. an image clip under a ``video`` task).
+            continue
+        # finish_scene appends new artifacts, so the last one is current.
+        current = registered[-1]
+        path = root / current.path
+        if not path.is_file():
+            rejected.append(f"{current.artifact_id} (missing)")
+            continue
+        if current.sha256 and _digest(path) != current.sha256:
+            rejected.append(f"{current.filename} (integrity)")
+            continue
+        inputs[scene.index] = path
     if rejected:
         store.event(job, f"RE-ASSEMBLY ARTIFACTS REJECTED: {', '.join(rejected)}")
+        return []
     return [inputs[index] for index in sorted(inputs)]
 
 

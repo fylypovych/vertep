@@ -146,6 +146,12 @@ services:
       MODELS_ROOT: /data/models
       COMFYUI_URL: http://comfyui:8188
       COMFYUI_HEALTH_URL: http://comfyui:8188/system_stats
+      # Issue #120: the pinned expected inventory is delivered through ./config;
+      # the observed build report is published by the ComfyUI entrypoint onto the
+      # same volume. A production GPU node blocks readiness when either is
+      # missing, drifted or checksum-mismatched.
+      COMFYUI_RUNTIME_INVENTORY: /data/config/comfyui-runtime-inventory.json
+      COMFYUI_ROOT: /data/config/comfyui-runtime
       OLLAMA_URL: http://ollama:11434
       OLLAMA_HEALTH_URL: http://ollama:11434/api/tags
       TTS_HEALTH_URL: http://tts:8090/health
@@ -164,8 +170,10 @@ services:
     image: ${VERTEP_COMFYUI_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/comfyui:${VERTEP_VERSION}}
     # The pinned runtime inventory is mounted so the node can verify the ComfyUI
     # build and its custom nodes against the workflow/model checksums it serves.
+    # Issue #120: ./config/comfyui-runtime is the shared report volume the
+    # entrypoint writes and the Worker observes (COMFYUI_ROOT).
     volumes: ["./models:/data/models", "./storage:/data/output", "./storage:/data/workflows:ro",
-              "./config:/data/config:ro"]
+              "./config:/data/config:ro", "./config/comfyui-runtime:/data/runtime-report"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8188/system_stats"]
       interval: 20s

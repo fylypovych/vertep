@@ -33,11 +33,15 @@ def verify_gpu_runtime_inventory() -> dict | None:
     Fail-closed: a missing inventory, a component that drifted from its pin or a
     workflow/model whose checksum no longer matches must keep the node out of
     dispatch, because an unpinned GPU runtime silently changes what Vertep
-    produces.  Returns ``None`` when no inventory is configured, which keeps a
-    bare development checkout working.
+    produces.  On a production GPU node (``DEMO_MODE`` off) a missing inventory
+    is itself a readiness failure (Issue #120); a bare development checkout in
+    demo mode keeps working.
     """
-    if not comfyui_runtime.inventory_path():
-        return None
+    if comfyui_runtime.inventory_path() is None:
+        if os.getenv("DEMO_MODE", "true").lower() == "true":
+            return None
+        raise comfyui_runtime.RuntimeInventoryError(
+            "COMFYUI_RUNTIME_INVENTORY is required for production GPU readiness")
     return comfyui_runtime.verify_runtime(comfyui_runtime.installed_components())
 
 

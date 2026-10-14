@@ -7,6 +7,7 @@ must fail closed instead of silently running whatever is on disk.
 """
 
 import json
+import re
 
 import pytest
 
@@ -226,3 +227,65 @@ def test_compose_pins_a_persistent_workflows_root():
     # The GPU worker must resolve workflows through the mounted, persistent volume.
     assert "WORKFLOWS_ROOT: /data/storage/workflows" in worker
     assert '"./storage:/data/storage"' in worker
+
+
+# ---------------------------------------------------------------------------
+# Issue #120 — immutable identity and production readiness wiring
+# ---------------------------------------------------------------------------
+
+
+def test_nvidia_dockerfile_pins_immutable_commits():
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).parents[1] / "docker" / "comfyui-nvidia" / "Dockerfile").read_text(encoding="utf-8")
+    # A floating branch/tag is forbidden: the build input must be a full commit.
+    assert "VHS_VERSION=main" not in dockerfile
+    comfyui = re.search(r"^ARG COMFYUI_COMMIT=([0-9a-f]{40})$", dockerfile, re.MULTILINE)
+    vhs = re.search(r"^ARG VHS_COMMIT=([0-9a-f]{40})$", dockerfile, re.MULTILINE)
+    assert comfyui and vhs, "both ComfyUI and the custom node must be pinned by commit"
+    assert 'fetch --depth 1 origin "$COMFYUI_COMMIT"' in dockerfile
+    assert 'fetch --depth 1 origin "$VHS_COMMIT"' in dockerfile
+
+
+def test_nvidia_dockerfile_proves_the_pin_matches_the_recorded_commit():
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).parents[1] / "docker" / "comfyui-nvidia" / "Dockerfile").read_text(encoding="utf-8")
+    # The recorded commit must be proven equal to the pin, never a substitute for it.
+    assert "runtime build pin mismatch" in dockerfile
+    assert "raise SystemExit" in dockerfile
+
+
+def test_compose_delivers_the_runtime_inventory_and_observed_report():
+    from pathlib import Path
+
+    compose = (Path(__file__).parents[1] / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+    worker = compose.split("  worker:", 1)[1].split("  comfyui:", 1)[0]
+    comfyui = compose.split("  comfyui:", 1)[1].split("  tts:", 1)[0]
+    # Expected inventory and the observed build report reach the Worker by config.
+    assert "COMFYUI_RUNTIME_INVENTORY: /data/config/comfyui-runtime-inventory.json" in worker
+    assert "COMFYUI_ROOT: /data/config/comfyui-runtime" in worker
+    assert '"./config/comfyui-runtime:/data/runtime-report"' in comfyui
+
+
+def test_production_gpu_readiness_blocks_when_inventory_is_missing(monkeypatch):
+    from worker.service import role_self_test
+
+    monkeypatch.delenv("COMFYUI_RUNTIME_INVENTORY", raising=False)
+    monkeypatch.setenv("DEMO_MODE", "false")
+    result = role_self_test("gpu", {"gpu_available": True})
+    assert result["status"] == "FAILED"
+    assert "COMFYUI_RUNTIME_INVENTORY" in result["error"]
+
+
+def test_demo_gpu_readiness_does_not_require_inventory(monkeypatch):
+    from worker.service import role_self_test
+
+    monkeypatch.delenv("COMFYUI_RUNTIME_INVENTORY", raising=False)
+    monkeypatch.setenv("DEMO_MODE", "true")
+
+    class _Adapter:
+        def generate_output(self, workflow, topic, task_type="image"):
+            return b"P6\n2 2\n255\n" + b"\x22\x36\x30" * 4, "scene-001.ppm", "image"
+
+    assert role_self_test("gpu", {}, _Adapter())["status"] == "PASSED"

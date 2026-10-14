@@ -61,6 +61,25 @@ def _register_scene(store: JobStore, job, index: int, filename: str,
     return path
 
 
+def _add_scene_artifact(store: JobStore, job, index: int, filename: str,
+                        kind: str = "image", content: bytes = b"scene-bytes") -> Path:
+    """Register an *additional* artifact for an existing scene (Issue #119).
+
+    Mirrors ``finish_scene``: a second artifact for the same scene is appended
+    to the same ``SceneRecord`` so the newest registered one is the current
+    version and the earlier one becomes immutable history.
+    """
+    path = _write(store.root / job.job_id / "images" / filename, content)
+    record = register_artifact(job, store.root, path, kind, scene_id=f"scene-{index}")
+    scene = next((item for item in job.scenes if item.index == index), None)
+    if scene is None:
+        scene = SceneRecord(scene_id=f"scene-{index}", index=index, prompt="Kadr",
+                            artifact_ids=[])
+        job.scenes.append(scene)
+    scene.artifact_ids.append(record.artifact_id)
+    return path
+
+
 # ---------------------------------------------------------------------------
 # R1 — free-text video revision drives generation
 # ---------------------------------------------------------------------------
@@ -181,7 +200,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         store._save(job)
         assert [p.name for p in _collect_reassembly_inputs(job)] == ["clip.mp4"]
 
-    def test_corrupted_artifact_is_reported_and_skipped(self, tmp_path, monkeypatch):
+    def test_corrupted_scene_among_healthy_ones_blocks_reassembly(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.app.store", store)
@@ -189,8 +208,33 @@ class TestR2RegisteredOrderedIntegrityInputs:
         corrupted = _register_scene(store, job, 2, "bad.png")
         corrupted.write_bytes(b"tampered")
         store._save(job)
-        inputs = _collect_reassembly_inputs(job)
-        assert [p.name for p in inputs] == ["good.png"]
+        # Issue #119: one corrupted current scene makes the set insufficient, so
+        # re-assembly is blocked instead of rendering a partial slide.
+        assert _collect_reassembly_inputs(job) == []
+        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
+
+    def test_corrupted_current_is_not_substituted_by_a_historical_artifact(self, tmp_path, monkeypatch):
+        from core.app import _collect_reassembly_inputs
+        store, job = _build_store(tmp_path)
+        monkeypatch.setattr("core.app.store", store)
+        _add_scene_artifact(store, job, 1, "old.png")
+        current = _add_scene_artifact(store, job, 1, "current.png")
+        current.write_bytes(b"tampered")  # the current file is corrupt on disk
+        store._save(job)
+        # The historical ``old.png`` is intact, but it must never replace the
+        # corrupted current artifact: re-assembly is blocked.
+        assert _collect_reassembly_inputs(job) == []
+        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
+
+    def test_missing_current_is_not_substituted_by_a_historical_artifact(self, tmp_path, monkeypatch):
+        from core.app import _collect_reassembly_inputs
+        store, job = _build_store(tmp_path)
+        monkeypatch.setattr("core.app.store", store)
+        _add_scene_artifact(store, job, 1, "old.png")
+        current = _add_scene_artifact(store, job, 1, "current.png")
+        current.unlink()  # the current file is gone
+        store._save(job)
+        assert _collect_reassembly_inputs(job) == []
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
     def test_no_valid_artifacts_fails_video_explicitly(self, tmp_path):
@@ -206,6 +250,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         current = store.jobs[job.job_id]
         assert current.status == JobStatus.VIDEO_FAILED
         assert current.active_video_version == 1
+        assert current.video_versions[-1].approved is False
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in current.events)
 
     def test_missing_artifact_file_is_reported(self, tmp_path, monkeypatch):

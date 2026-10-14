@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-- Виправлено гонку голосового ставування у moneyprinter_service.py (Issue #123)
+- Оновлено конфігурацію Docker Compose та Dockerfile для ComfyUI
+- Додано入口точка для ComfyUI образ
+- Оновлено core/app.py та worker/service.py
+- Додано тести для video revision
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.51
 - Issue i.0.0.1.17 — Provider switch end-to-end: CORE → persisted overrides → Worker heartbeat → executor env → voice preview + effective config after restart; loopback TTS runtime proves the full config propagation path; executor config carries only allowlisted non-secrets; preview refuses switch that missed the executor.
 - Issue i.0.0.1.5 — TTS voice/language/provider/model/speed catalog reconciliation: `/voices` endpoint returns languages, providers, speed range; `_available_languages()` derives supported languages from installed voice table; `_validate_language()` rejects unsupported pinned languages at synthesis time; SynthesisRequest accepts extra provider/model/language fields; dispatcher selects voice workers by full catalog readiness.
@@ -1591,3 +1595,4 @@
 - Додано GitHub Actions перевірки для Python, тестів, синтаксису shell та конфігурацій Compose.
 - Додано профіль воркера GTX 1660 6 GB/Turing з закріпленими колесами PyTorch CUDA 12.4, режимом ComfyUI low-VRAM, перевіркою CUDA та метаданими heartbeat.
 - Додано перевірки оновлень GitHub тільки для адміністраторів та встановлення з Web UI через постійний systemd агент хоста без відкриття Docker сокета.
+
