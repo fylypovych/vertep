@@ -584,12 +584,13 @@ class TestContractBeforeSideEffects:
                        for a in store.jobs[job_id].artifacts)
         assert not any(a.kind == "audio_contract" and a.task_id == tts_task["task_id"]
                        for a in store.jobs[job_id].artifacts)
-        # The Worker must be released back to READY and the task must still be
-        # inflight (not acked) so the job can retry or fail loudly.
+        # The Worker must stay BUSY on the task (ownership not changed) and the
+        # task must still be inflight (not acked) so the job can retry or fail
+        # loudly.
         worker = store.workers.get("voice-worker")
-        assert worker["status"] == "READY"
-        assert worker["current_job"] is None
-        assert worker["current_task"] is None
+        assert worker["status"] == "BUSY"
+        assert worker["current_job"] == job_id
+        assert worker["current_task"] == tts_task["task_id"]
         assert task_queue.inflight_has(tts_task["task_id"])
 
     def test_reject_missing_field_before_file_write(self, monkeypatch, tmp_path):

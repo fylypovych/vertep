@@ -263,6 +263,61 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert _collect_reassembly_inputs(job) == []
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
+    def test_scene_without_registered_artifact_blocks_reassembly(self, tmp_path, monkeypatch):
+        from core.app import _collect_reassembly_inputs
+        store, job = _build_store(tmp_path)
+        monkeypatch.setattr("core.app.store", store)
+        _register_scene(store, job, 1, "good.png")
+        job.scenes.append(SceneRecord(scene_id="scene-2", index=2, prompt="Kadr",
+                                      artifact_ids=[]))
+        store._save(job)
+        # Issue #177: scene 2 has an empty artifact_ids list, so the set of
+        # current registered artifacts is insufficient: re-assembly is blocked
+        # instead of returning the single valid input (partial render).
+        assert _collect_reassembly_inputs(job) == []
+        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
+        assert any("scene 2 (no registered artifact)" in line for line in job.events)
+
+    def test_unresolved_artifact_id_blocks_reassembly(self, tmp_path, monkeypatch):
+        from core.app import _collect_reassembly_inputs
+        store, job = _build_store(tmp_path)
+        monkeypatch.setattr("core.app.store", store)
+        _register_scene(store, job, 1, "good.png")
+        job.scenes.append(SceneRecord(scene_id="scene-2", index=2, prompt="Kadr",
+                                      artifact_ids=["does-not-exist"]))
+        store._save(job)
+        # An unresolved artifact_id means no registration resolves for the
+        # scene, so the required set is incomplete and re-assembly is blocked.
+        assert _collect_reassembly_inputs(job) == []
+        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
+
+    def test_complete_registered_set_renders_every_scene(self, tmp_path, monkeypatch):
+        from core.app import _collect_reassembly_inputs
+        store, job = _build_store(tmp_path)
+        monkeypatch.setattr("core.app.store", store)
+        _register_scene(store, job, 1, "a.png")
+        _register_scene(store, job, 2, "b.png")
+        store._save(job)
+        assert [p.name for p in _collect_reassembly_inputs(job)] == ["a.png", "b.png"]
+        assert not any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
+
+    def test_incomplete_registered_set_fails_video_and_keeps_previous_version(self, tmp_path, monkeypatch):
+        import core.app as app_module
+        store, job = _build_store(tmp_path)
+        _render_v1(store, job)
+        _register_scene(store, job, 1, "good.png")
+        job.scenes.append(SceneRecord(scene_id="scene-2", index=2, prompt="Kadr",
+                                      artifact_ids=[]))
+        store._save(job)
+        monkeypatch.setattr(app_module, "store", store)
+        with patch("core.pipeline.providers"):
+            app_module._finalize_video_regenerate(job)
+        current = store.jobs[job.job_id]
+        assert current.status == JobStatus.VIDEO_FAILED
+        assert current.active_video_version == 1
+        assert current.video_versions[-1].approved is False
+        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in current.events)
+
 
 # ---------------------------------------------------------------------------
 # R3 — approval bound to reviewed version and hash

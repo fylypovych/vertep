@@ -33,13 +33,27 @@ def _read() -> dict[str, dict[str, Any]]:
 
 def claim_callback(callback_id: str, *, actor: str, action: str,
                    target: str | None = None) -> tuple[dict[str, Any], bool]:
-    """Persist a callback claim before executing its side effect."""
+    """Persist a callback claim before executing its side effect.
+
+    A record whose status is still ``CLAIMED`` means the process died after
+    persisting the claim but before the side effect completed: replaying the
+    callback is therefore safe and must be allowed so the effect is not lost
+    (Issue #174).  A terminal record (``COMPLETED``/``FAILED``) must never run
+    again, so its caller sees ``claimed=False`` and skips the side effect.
+    """
     if not callback_id:
         return {}, True
     with _lock:
         records = _read()
-        if callback_id in records:
-            return records[callback_id], False
+        existing = records.get(callback_id)
+        if existing is not None:
+            if existing.get("status") != "CLAIMED":
+                return existing, False
+            # Resume an unfinished claim: keep the original actor/action for the
+            # audit trail and record the replay attempt.
+            existing["replayed_at"] = _now()
+            atomic_write_json(_path(), records)
+            return existing, True
         record = {
             "callback_id": callback_id,
             "actor": actor,

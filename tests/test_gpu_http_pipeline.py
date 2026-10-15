@@ -23,8 +23,8 @@ from fastapi.testclient import TestClient
 
 from adapters.comfyui import ComfyUIAdapter, PromptCancelledError
 
-PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 9)
-MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 8
+PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 13 + b"\x00\x00\x00\x00")
+MP4 = b"\x00\x00\x00\x14ftypmp42" + b"\x00" * 8
 
 
 @pytest.mark.parametrize("suffix", [".mp4", ".mov"])
@@ -65,6 +65,49 @@ def test_worker_rejects_a_truncated_video_payload():
     # be an MP4/MOV; the old check rejected it, but only via the signature test.
     with pytest.raises(RuntimeError, match="media signature"):
         verify_media(b"\x00\x00\x00", ".mp4")
+
+
+def test_worker_rejects_png_signature_plus_junk():
+    """Issue #178/#121: signature + junk must not pass as a PNG."""
+    from worker.role_executor import verify_media
+
+    junk_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 12  # 20 bytes, no IHDR header
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(junk_png, ".png")
+    # A structurally present IHDR header but a truncated body is still refused.
+    truncated = PNG[:-1]
+    assert len(truncated) < 33
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(truncated, ".png")
+
+
+def test_worker_rejects_video_without_a_complete_ftyp_box():
+    """Issue #178/#121: a 12-byte ftyp stub or an oversized box is not a video."""
+    from worker.role_executor import verify_media
+
+    # Bare 12-byte ftyp header: no major brand / minor version.
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(b"\x00\x00\x00\x0cftypmp42", ".mp4")
+    # ftyp box declares 24 bytes but only 16 were delivered.
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00", ".mov")
+
+
+def test_worker_rejects_jpeg_without_eoi_marker():
+    from worker.role_executor import verify_media
+
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(b"\xff\xd8\xff\xe0junk-without-eoi", ".jpg")
+
+
+def test_worker_accepts_structurally_valid_png_and_mp4():
+    from tests.media_harness import make_png
+    from worker.role_executor import verify_media
+
+    assert verify_media(make_png(), ".png") == "image/png"
+    assert verify_media(PNG, ".png") == "image/png"
+    assert verify_media(MP4, ".mp4") == "video/mp4"
+    assert verify_media(MP4, ".mov") == "video/quicktime"
 
 
 class FakeComfyUI:

@@ -768,16 +768,10 @@ def task_result(result: TaskResult, request: Request):
                 _validate_tts_contract(_tts_task_for(job, scene), data,
                                        artifact.get("contract"))
             except ValueError as error:
-                # A rejected result must not leave the Worker BUSY: release it
-                # back to READY so it can claim other work, but do NOT ack the
-                # task — the lease stays in flight so the Job can retry or fail.
-                worker = store.workers.get(result.node_name)
-                if worker:
-                    desired_status = worker.get("desired_state")
-                    next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-                    worker.update({"status": next_status, "current_job": None,
-                                   "current_task": None, "last_seen": utc_now()})
-                    store.save_worker(worker)
+                # A rejected result must leave no accepted artifact and must not
+                # change Worker ownership. Keep the worker BUSY with this
+                # current_job/current_task so the Job can retry or fail loudly.
+                # The lease stays in flight (no ack) and the worker is NOT released.
                 raise HTTPException(400, f"Invalid audio contract: {error}") from error
             prepared_images.append((audio_path, data, artifact.get("contract")))
         temporary_images = []
@@ -791,13 +785,9 @@ def task_result(result: TaskResult, request: Request):
         except OSError as error:
             for temporary, _ in temporary_images:
                 temporary.unlink(missing_ok=True)
-            worker = store.workers.get(result.node_name)
-            if worker:
-                desired_status = worker.get("desired_state")
-                next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-                worker.update({"status": next_status, "current_job": None,
-                               "current_task": None, "last_seen": utc_now()})
-                store.save_worker(worker)
+            # A persistence failure must not change Worker ownership. Keep the
+            # worker BUSY with this current_job/current_task so the Job can retry
+            # or fail loudly. The lease stays in flight (no ack).
             raise HTTPException(500, "Could not persist audio artifacts") from error
         for audio_path, data, contract in prepared_images:
             saved_artifacts.append(register_artifact(job, store.root, audio_path, "audio",
@@ -807,13 +797,10 @@ def task_result(result: TaskResult, request: Request):
                 saved_artifacts.extend(_persist_tts_contract(store, job, scene, result,
                                                              audio_path, data, contract))
             except (ValueError, OSError) as error:
-                worker = store.workers.get(result.node_name)
-                if worker:
-                    desired_status = worker.get("desired_state")
-                    next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-                    worker.update({"status": next_status, "current_job": None,
-                                   "current_task": None, "last_seen": utc_now()})
-                    store.save_worker(worker)
+                # A rejected result must leave no accepted artifact and must not
+                # change Worker ownership. Keep the worker BUSY with this
+                # current_job/current_task so the Job can retry or fail loudly.
+                # The lease stays in flight (no ack) and the worker is NOT released.
                 raise HTTPException(400, f"Invalid audio contract: {error}") from error
         # Release the Worker only AFTER every artifact has been validated and
         # persisted, so a rejected result does not free the worker or ack the

@@ -45,11 +45,17 @@ def media_signature(suffix: str) -> str:
     return signatures[1]
 
 
+def _invalid_media(suffix: str) -> RuntimeError:
+    return RuntimeError(f"{suffix} payload does not match its declared media signature")
+
+
 def verify_media(data: bytes, suffix: str) -> str:
     """Validate that ``data`` really is the media its filename claims.
 
-    Raises ``RuntimeError`` on an empty, truncated or mismatched payload so a
-    broken runtime response can never become a stored artifact.
+    Validation is structural, not just a magic-byte prefix check: a runtime that
+    answers with an HTML error page, a signature-only stub, a signature followed
+    by junk, a truncated download or an empty body must be rejected on the
+    worker instead of being shipped to CORE as an artifact (Issue #121/#178).
     """
     signatures = _MEDIA_SIGNATURES.get(suffix.lower())
     if not signatures:
@@ -57,30 +63,55 @@ def verify_media(data: bytes, suffix: str) -> str:
     if not data:
         raise RuntimeError(f"Empty {suffix} payload from the compute runtime")
 
-    is_video = suffix.lower() in {".mp4", ".mov"}
-    min_video_len = 12
-    min_other_len = 12
+    lowered = suffix.lower()
 
-    if is_video:
-        matches = len(data) >= min_video_len and data[4:8] == b"ftyp"
-    else:
-        matches = len(data) >= min_other_len and any(
-            data.startswith(marker) for marker in signatures[0]
-        )
+    if lowered in {".mp4", ".mov"}:
+        # ISO base media file format: 4-byte box size + ``ftyp`` box type +
+        # 4-byte major brand + 4-byte minor version => at least 16 bytes.  The
+        # declared box size must also fit inside the payload, so a bare header
+        # (or a header claiming more bytes than were delivered) is refused.
+        if len(data) < 16 or data[4:8] != b"ftyp":
+            raise _invalid_media(suffix)
+        box_size = int.from_bytes(data[0:4], "big")
+        if box_size < 16 or box_size > len(data):
+            raise _invalid_media(suffix)
+        return signatures[1]
 
-    if not matches:
-        raise RuntimeError(f"{suffix} payload does not match its declared media signature")
+    if lowered == ".webp":
+        if (len(data) < 12 or not data.startswith(b"RIFF")
+                or data[8:12] != b"WEBP"):
+            raise _invalid_media(suffix)
+        return signatures[1]
 
-    if suffix.lower() == ".webp" and len(data) >= 12 and data[8:12] != b"WEBP":
-        raise RuntimeError("WebP payload does not match its declared media signature")
+    if lowered == ".png":
+        # PNG: 8-byte signature followed by a complete IHDR chunk header
+        # (length 13 + ``IHDR``).  ``signature + junk`` cannot fake this.
+        if (len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n"
+                or data[8:12] != b"\x00\x00\x00\r" or data[12:16] != b"IHDR"):
+            raise _invalid_media(suffix)
+        return signatures[1]
 
-    if suffix.lower() in {".jpg", ".jpeg", ".png", ".ppm"}:
-        # PNG requires at least 8 bytes for IHDR, WebP/RIFF-based need 12
-        if suffix.lower() == ".png" and len(data) < 8:
-            raise RuntimeError("PNG payload too short for IHDR chunk")
-        if suffix.lower() == ".ppm" and len(data) < 12:
-            raise RuntimeError("PPM payload too short for header")
+    if lowered in {".jpg", ".jpeg"}:
+        # JPEG: SOI marker, a segment marker, and the EOI marker that a real
+        # encoded image always ends with.
+        if (len(data) < 4 or not data.startswith(b"\xff\xd8\xff")
+                or not data.endswith(b"\xff\xd9")):
+            raise _invalid_media(suffix)
+        return signatures[1]
 
+    if lowered == ".ppm":
+        # Netpbm: the magic (P1..P6) must be followed by a size header line.
+        if len(data) < 15 or not data.startswith(signatures[0]):
+            raise _invalid_media(suffix)
+        header_end = data.find(b"\n", 2)
+        if header_end < 3 or not data[2:header_end].split():
+            raise _invalid_media(suffix)
+        return signatures[1]
+
+    # Fallback for any other declared type: signature plus a minimum length.
+    if len(data) < 12 or not any(
+            data.startswith(marker) for marker in signatures[0]):
+        raise _invalid_media(suffix)
     return signatures[1]
 
 

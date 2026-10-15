@@ -967,6 +967,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             return TelegramAdapter().answer_callback(callback_id, f"❌ Перевірка не запущена: {error}")
 
     if action == "sys_update_confirm":
+        op = None
         try:
             op, created = get_or_create_operation("update", f"telegram:{chat_id}", target="apply")
             if not created:
@@ -983,6 +984,14 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 callback_id, f"Оновлення заплановано. ID операції: {op['operation_id'][:8]}"
             )
         except Exception as error:
+            # The operation may already exist: never leave it running on a
+            # failed confirms — mark it failed so a hung operation cannot block
+            # future updates (Issue #174).
+            if op is not None:
+                try:
+                    fail_operation(op["operation_id"], str(error))
+                except Exception:
+                    pass
             return TelegramAdapter().answer_callback(callback_id, f"❌ Оновлення не запущено: {error}")
 
     if action == "sys_update_cancel":
@@ -1887,10 +1896,12 @@ def _collect_reassembly_inputs(job) -> list:
     is extension-agnostic, so non-PNG frames and ``video_scene`` clips for
     ``task_type == "video"`` are covered.
 
-    If any scene's current artifact is missing or fails its checksum, the set of
-    current artifacts is insufficient: re-assembly is explicitly blocked by
-    returning an empty list (the caller keeps the previous immutable video
-    versions and fails the render) instead of proceeding with a partial slide.
+    If any scene has no registered accepted artifact at all (empty or
+    unresolved ``artifact_ids``) or its current artifact is missing/fails its
+    checksum, the set of current artifacts is insufficient: re-assembly is
+    explicitly blocked by returning an empty list (the caller keeps the previous
+    immutable video versions and fails the render) instead of proceeding with a
+    partial slide.
 
     No globbing of ``images/``, ``storyboard/`` or ``frames/`` is performed:
     those directories hold historical versions, and lexicographic filename
@@ -1903,11 +1914,18 @@ def _collect_reassembly_inputs(job) -> list:
     inputs: dict[int, object] = {}
     rejected: list[str] = []
     for scene in sorted(job.scenes, key=lambda value: value.index):
-        registered = [by_id[artifact_id] for artifact_id in scene.artifact_ids
-                      if artifact_id in by_id and by_id[artifact_id].kind in accepted]
+        resolved = [by_id[artifact_id] for artifact_id in scene.artifact_ids
+                    if artifact_id in by_id]
+        registered = [artifact for artifact in resolved if artifact.kind in accepted]
         if not registered:
-            # A scene without a registered accepted artifact is not part of the
-            # required set (e.g. an image clip under a ``video`` task).
+            if not resolved:
+                # A scene with empty or unresolved ``artifact_ids`` has no
+                # registration at all: the required set is incomplete, so
+                # re-assembly is blocked instead of rendering a partial slide.
+                rejected.append(f"scene {scene.index} (no registered artifact)")
+                continue
+            # Resolved but of a non-required kind: not part of the required set
+            # (e.g. an image clip under a ``video`` task).
             continue
         # finish_scene appends new artifacts, so the last one is current.
         current = registered[-1]

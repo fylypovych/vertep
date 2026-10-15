@@ -879,3 +879,76 @@ class TestCallbackRouting:
         cb = {"id": "cb-unk", "data": "unknown_action", "message": {"chat": {"id": "42"}}}
         module._handle_telegram_callback(cb)
         assert adapter.answer_callback.called
+
+
+class TestDurableCallbackCrashRecovery:
+    """Issue #174: a claim left CLAIMED by a crash must be resumable on replay."""
+
+    def test_claim_allows_resume_after_crash_before_effect(self):
+        from core import telegram_callbacks as tc
+        tc.claim_callback("cb-crash-1", actor="telegram:42", action="sys_cancel")
+        # Crash after persisting the claim, before the side effect: replays must
+        # be able to run the effect instead of being told it is already done.
+        record, reclaimed = tc.claim_callback(
+            "cb-crash-1", actor="telegram:42", action="sys_cancel")
+        assert reclaimed is True
+        assert record["status"] == "CLAIMED"
+        # Completing the effect is terminal: a later replay must not re-run it.
+        tc.complete_callback("cb-crash-1")
+        done, reclaimed_after = tc.claim_callback(
+            "cb-crash-1", actor="telegram:42", action="sys_cancel")
+        assert reclaimed_after is False
+        assert done["status"] == "COMPLETED"
+
+    def test_failed_callback_is_terminal_and_not_replayed(self):
+        from core import telegram_callbacks as tc
+        tc.claim_callback("cb-fail-term", actor="telegram:42", action="sys_cancel")
+        tc.complete_callback("cb-fail-term", status="FAILED")
+        record, claimed = tc.claim_callback(
+            "cb-fail-term", actor="telegram:42", action="sys_cancel")
+        assert claimed is False
+        assert record["status"] == "FAILED"
+
+    def test_handler_resumes_claimed_callback_after_process_restart(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        module._telegram_system_callbacks.clear()
+        from core.telegram_callbacks import claim_callback, DurableCallbackSet
+        # Crash after the claim and before the effect: the record stays CLAIMED.
+        claim_callback("cb-crash-handler", actor="telegram:42", action="sys_cancel")
+        module._telegram_system_callbacks = DurableCallbackSet()  # fresh process
+        cb = {"id": "cb-crash-handler", "data": "sys_cancel",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert adapter.answer_callback.called
+        # The effect actually ran (the callback was not treated as done).
+        assert "скасовано" in adapter.answer_callback.call_args[0][1].lower()
+        module._telegram_system_callbacks.clear()
+
+    def test_update_confirm_exception_fails_the_created_operation(self, monkeypatch):
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        failed: dict = {}
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "get_or_create_operation",
+                            lambda *a, **kw: ({"operation_id": "u" * 32, "type": "update"}, True))
+        monkeypatch.setattr(module, "audit_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: None)
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("host agent unreachable")
+
+        monkeypatch.setattr(module, "request_update", boom)
+        monkeypatch.setattr(module, "fail_operation",
+                            lambda op_id, msg: failed.update(op_id=op_id, msg=msg))
+        cb = {"id": "cb-upd-conf-fail", "data": "sys_update_confirm",
+              "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        # A failed confirm must not leave the created operation RUNNING forever.
+        assert failed.get("op_id") == "u" * 32
+        assert "host agent unreachable" in failed.get("msg", "")
+        assert adapter.answer_callback.called
+        assert "не запущено" in adapter.answer_callback.call_args[0][1]
