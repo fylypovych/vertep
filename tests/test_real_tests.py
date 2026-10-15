@@ -607,6 +607,17 @@ class TestRealTestsAPI:
             auth=("admin", "secret123"))
         assert resp.status_code == 404
 
+    def test_prerequisites_endpoint_marks_s04_destructive(self, admin_client):
+        """i.0.0.1.50: prerequisites surface the factual destructive name
+        (not a stale alias), so the Web confirmation actually triggers."""
+        resp = admin_client.get("/api/real-tests/scenarios/rt::S04/prerequisites",
+                                auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["checks"] == ["backup_roundtrip"]
+        assert data["destructive_checks"] == ["backup_roundtrip"]
+        assert data["requires_confirmation"] is True
+
 
 # ---------------------------------------------------------------------------
 # Generation gate compliance
@@ -770,20 +781,24 @@ class TestIssue95:
         assert CHECK_REGISTRY["core_api"]() == (True, "ok")
         assert called["url"] == "http://core:8080"
 
-    def test_git_commit_has_no_version_or_unknown_fallback(self, monkeypatch):
+    def test_git_commit_has_no_version_or_unknown_fallback(self, monkeypatch, tmp_path):
         from core.real_tests import runner as runner_mod
+        from core import release_identity
         monkeypatch.delenv("GITHUB_SHA", raising=False)
+        # No baked release identity in this environment.
+        monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
+                           str(tmp_path / "absent.json"))
 
         def boom(*args, **kwargs):
             raise OSError("no git")
 
-        monkeypatch.setattr(runner_mod.subprocess, "run", boom)
+        monkeypatch.setattr(release_identity.subprocess, "run", boom)
         assert runner_mod._git_commit() == "", "identity must fail closed, not fall back"
 
     def test_run_without_identity_cannot_close_issue(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
             commit_sha="unknown", final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -797,7 +812,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
             commit_sha=sha, final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -812,7 +827,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"docker", "core_api"})
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
             commit_sha=sha, final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -827,7 +842,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names", lambda rt_id: set())
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
             commit_sha="d" * 40, final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -843,7 +858,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"docker", "core_api"})
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
             commit_sha=sha, final_result="PASS",
         )
         run.checks = [
@@ -1047,6 +1062,195 @@ class TestIssue96:
         result = reporter.report(run)
         assert result["reported"] is True
         assert result["error"] is None
+
+    def test_concurrent_report_of_same_run_posts_once(self, monkeypatch):
+        """Issue #149: two concurrent reporters of one run must yield one comment.
+
+        A barrier before every POST forces both reporters to actually overlap
+        at the transport; the per-run lock plus persisted/marker reconciliation
+        must let exactly one logical GitHub report through, both threads seeing
+        ``reported=True``.
+        """
+        import json as _json
+        import threading as _threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        from core.real_tests import github as gh_mod
+        from core.real_tests.storage import create_test_run, update_test_run
+
+        monkeypatch.setenv("REAL_TESTS_STORAGE_DIR", __import__("tempfile").mkdtemp())
+        comments: list[dict] = []
+        state = {"posts": 0}
+        start = _threading.Barrier(2, timeout=10)
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a, **kw):
+                pass
+
+            def _send(self, code, payload):
+                raw = _json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                self._send(200, list(comments))
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = _json.loads(self.rfile.read(length) or b"{}")
+                state["posts"] += 1
+                comments.append({"id": state["posts"], "body": payload.get("body", "")})
+                self._send(201, {"id": state["posts"]})
+
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        port = server.server_address[1]
+        thread = _threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            monkeypatch.setenv("GITHUB_API_BASE_URL", f"http://127.0.0.1:{port}")
+            monkeypatch.setenv("GITHUB_REPOSITORY", "fylypovych/vertep")
+            monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+            monkeypatch.setattr(gh_mod, "_get_token", lambda: "test-token")
+
+            run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                          commit_sha="a" * 40, final_result="PASS")
+            run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+            run.github_report = None
+            update_test_run(run)
+
+            reporter = gh_mod.GitHubReporter()
+            results: list[dict] = [None, None]
+
+            def _report(index):
+                # Both reporters enter report() together so their pre-checks
+                # genuinely race before the per-run lock serializes the POST.
+                start.wait()
+                results[index] = reporter.report(run)
+
+            first = _threading.Thread(target=_report, args=(0,))
+            second = _threading.Thread(target=_report, args=(1,))
+            first.start()
+            second.start()
+            first.join(timeout=15)
+            second.join(timeout=15)
+
+            assert results[0] is not None and results[1] is not None
+            assert results[0]["reported"] is True and results[1]["reported"] is True
+            # Exactly one logical comment reached GitHub, no duplicate POST.
+            assert state["posts"] == 1
+            markers = [c for c in comments if run.test_run_id in c["body"]]
+            assert len(markers) == 1
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    def test_unknown_post_with_unavailable_marker_lookup_defers(self, monkeypatch):
+        """Issue #149: if the reconcile lookup is down we must not blind-retry.
+
+        The pre-check sees no marker (lookup up), the POST outcome is unknown
+        (transient), and the reconcile lookup is itself unavailable — so the
+        reporter cannot prove the POST did not land and must fail closed with
+        exactly one POST attempt instead of re-creating a possible duplicate.
+        """
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+        monkeypatch.setattr(gh_mod, "audit_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(gh_mod, "record_github_report", lambda *a, **kw: None)
+        monkeypatch.setattr(gh_mod.time, "sleep", lambda s: None)
+
+        run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                      commit_sha="a" * 40, final_result="PASS")
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+
+        post_calls = [0]
+
+        def flaky_post(issue_number, body):
+            post_calls[0] += 1
+            raise gh_mod._TransientError("connection reset")
+
+        lookups = [0]
+
+        def fake_comments(n):
+            lookups[0] += 1
+            if lookups[0] == 1:
+                return []  # pre-check: no marker yet
+            raise gh_mod._TransientError("marker lookup down")
+
+        monkeypatch.setattr(gh_mod, "_post_comment", flaky_post)
+        monkeypatch.setattr(gh_mod, "_get_comments", fake_comments)
+
+        result = gh_mod.GitHubReporter().report(run)
+        assert result["reported"] is False
+        assert result["error"] is not None
+        assert post_calls[0] == 1, "must not blind-retry when the lookup is unavailable"
+
+    def test_precheck_unavailable_after_prior_attempt_defers(self, monkeypatch):
+        """Issue #149: a prior POST plus an unavailable pre-check must not re-POST."""
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: True)
+        monkeypatch.setattr(gh_mod, "audit_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(gh_mod.time, "sleep", lambda s: None)
+
+        run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                      commit_sha="a" * 40, final_result="PASS")
+        run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+
+        post_calls = [0]
+
+        def counting_post(n, b):
+            post_calls[0] += 1
+            return "x"
+
+        monkeypatch.setattr(gh_mod, "_post_comment", counting_post)
+        monkeypatch.setattr(gh_mod, "_get_comments",
+                            lambda n: (_ for _ in ()).throw(gh_mod._TransientError("down")))
+
+        # A previous reporter recorded an unresolved attempt; the durable
+        # ``attempted`` flag is what tells us a POST may have already landed.
+        run.github_report = {"attempted": True}
+        monkeypatch.setattr(gh_mod, "get_test_run", lambda rid: run)
+
+        result = gh_mod.GitHubReporter().report(run)
+        assert result["reported"] is False
+        assert post_calls[0] == 0, "must not POST when a prior attempt cannot be verified"
+
+    def test_comment_scan_past_cap_fails_closed(self, monkeypatch):
+        """Issue #149: exceeding the page cap must fail closed, not 'not found'.
+
+        A full page at every request would otherwise return a partial list and
+        let ``_already_reported`` conclude a marker is absent, risking a
+        duplicate POST.
+        """
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_repo", lambda: "fylypovych/vertep")
+        full_page = [{"id": i, "body": f"c{i}"} for i in range(100)]
+        monkeypatch.setattr(gh_mod, "_api_request",
+                            lambda method, url, body=None, timeout=30: full_page)
+
+        with pytest.raises(gh_mod._TransientError):
+            gh_mod._get_comments(40)
+
+    def test_report_fails_closed_without_pat(self, monkeypatch):
+        """Issue #149: without github_pat the report must fail closed, no POST."""
+        from core.real_tests import github as gh_mod
+
+        monkeypatch.setattr(gh_mod, "_is_configured", lambda: False)
+        posted = []
+        monkeypatch.setattr(gh_mod, "_post_comment",
+                            lambda n, b: posted.append(n) or "x")
+
+        run = TestRun(rt_id="rt::S01", rt_issue_number=40, version="test-ver",
+                      commit_sha="a" * 40, final_result="PASS")
+        result = gh_mod.GitHubReporter().report(run)
+        assert result["reported"] is False
+        assert "github_pat" in result["error"]
+        assert posted == []
 
     def test_run_endpoint_records_factual_initiator(self, admin_client, monkeypatch):
         """POST /api/real-tests/run must store the authenticated actor."""
@@ -1259,6 +1463,27 @@ class TestIssue96:
         assert stored.prerequisites["requires_confirmation"] == bool(
             stored.prerequisites["destructive_checks"])
 
+    def test_destructive_checks_match_actual_catalog_ids(self):
+        """i.0.0.1.50: DESTRUCTIVE_CHECKS must use the factual CHECK_REGISTRY
+        IDs — legacy aliases never appear in any scenario and hid the Web
+        confirmation, so factual IDs become the destructive contract."""
+        from core.real_tests.runner import DESTRUCTIVE_CHECKS
+        from core.real_tests.scenarios import CHECK_REGISTRY
+        for name in DESTRUCTIVE_CHECKS:
+            assert name in CHECK_REGISTRY, f"{name} is not a real check ID"
+
+    def test_destructive_subset_requires_confirmation_for_s04(self, tmp_path, monkeypatch):
+        """i.0.0.1.50: S04 (backup_roundtrip) requires the destructive confirmation."""
+        from core.real_tests.runner import DESTRUCTIVE_CHECKS, RealTestRunner
+        from core.real_tests.scenarios import find_scenario
+        monkeypatch.setenv("REAL_TESTS_STORAGE_DIR", str(tmp_path / "rt_store_dc"))
+        assert "backup_roundtrip" in DESTRUCTIVE_CHECKS
+        assert set(find_scenario(rt_id="rt::S04")["checks"]) == {"backup_roundtrip"}
+        runner = RealTestRunner()
+        run = runner.start("rt::S04", initiator="pytest-destructive")
+        assert run.prerequisites["requires_confirmation"] is True
+        assert run.prerequisites["destructive_checks"] == ["backup_roundtrip"]
+
     def test_run_checks_updates_progress(self, tmp_path, monkeypatch):
         """run_checks() must advance the persisted progress string."""
         from core.real_tests.runner import RealTestRunner
@@ -1336,6 +1561,245 @@ class TestIssue96:
         assert row["progress"]
         assert row["destructive_confirmation"] is True
         assert row["confirmation_timestamp"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #138 — deliver the verified release SHA/version/environment into the
+# built runtime (i.0.0.1.38)
+# ---------------------------------------------------------------------------
+
+def _write_identity(tmp_path, *, sha, version="9.9.9.9", environment="production"):
+    path = tmp_path / "RELEASE_IDENTITY.json"
+    path.write_text(json.dumps({
+        "version": version, "commit_sha": sha, "environment": environment,
+    }), encoding="utf-8")
+    return str(path)
+
+
+class TestIssue138:
+    """Baked release identity delivered into a runtime without .git."""
+
+    def test_baked_identity_used_without_git(self, tmp_path, monkeypatch):
+        from core import release_identity
+        sha = "a" * 40
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
+                           _write_identity(tmp_path, sha=sha, environment="production"))
+        monkeypatch.setattr(release_identity.subprocess, "run",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("no git")))
+
+        assert release_identity.resolve_release_sha() == sha
+        assert release_identity.resolve_release_version() == "9.9.9.9"
+        assert release_identity.resolve_release_environment() == "production"
+        assert gh_mod._deployment_sha() == sha
+        assert gh_mod._deployment_version() == "9.9.9.9"
+
+    def test_environment_carries_release_identity(self, tmp_path, monkeypatch):
+        from core.real_tests import runner as runner_mod
+        sha = "b" * 40
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
+                           _write_identity(tmp_path, sha=sha, environment="staging"))
+        env = runner_mod._environment()
+        assert env["release_sha"] == sha
+        assert env["release_environment"] == "staging"
+
+    def test_missing_identity_fails_closed_without_git(self, tmp_path, monkeypatch):
+        from core import release_identity
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
+                           str(tmp_path / "absent.json"))
+        monkeypatch.setattr(release_identity.subprocess, "run",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("no git")))
+        assert release_identity.resolve_release_sha() == ""
+        assert gh_mod._deployment_sha() == ""
+
+    def test_truncated_identity_blocks_acceptance(self, tmp_path, monkeypatch):
+        from core.real_tests import runner as runner_mod
+        truncated = "c" * 39
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
+                           _write_identity(tmp_path, sha=truncated))
+        assert runner_mod._git_commit() == truncated
+        reporter = GitHubReporter()
+        run = TestRun(rt_id="rt::S01", rt_issue_number=35, version="9.9.9.9",
+                      commit_sha=truncated, final_result="PASS")
+        run.checks = [CheckResult(name="bootstrap_first_run", status=CheckStatus.PASS)]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "9.9.9.9", "commit_sha": truncated}
+        assert reporter.can_close_issue(run) is False
+
+    def test_mismatched_identity_blocks_acceptance(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
+                           _write_identity(tmp_path, sha="d" * 40))
+        reporter = GitHubReporter()
+        other = "e" * 40
+        run = TestRun(rt_id="rt::S01", rt_issue_number=35, version="9.9.9.9",
+                      commit_sha=other, final_result="PASS")
+        run.checks = [CheckResult(name="bootstrap_first_run", status=CheckStatus.PASS)]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "9.9.9.9", "commit_sha": other}
+        assert reporter.can_close_issue(run) is False
+
+    def test_valid_baked_identity_can_close_issue(self, tmp_path, monkeypatch):
+        sha = "f" * 40
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
+                           _write_identity(tmp_path, sha=sha))
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
+                            lambda rt_id: {"bootstrap_first_run"})
+        reporter = GitHubReporter()
+        run = TestRun(rt_id="rt::S01", rt_issue_number=35, version="9.9.9.9",
+                      commit_sha=sha, final_result="PASS")
+        run.checks = [CheckResult(name="bootstrap_first_run", status=CheckStatus.PASS)]
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "9.9.9.9", "commit_sha": sha}
+        assert reporter.can_close_issue(run) is True
+
+    def test_dockerfile_bakes_release_identity(self):
+        text = Path("Dockerfile").read_text(encoding="utf-8")
+        assert "ARG VERTEP_RELEASE_SHA" in text
+        assert "ARG VERTEP_ENVIRONMENT" in text
+        assert "RELEASE_IDENTITY.json" in text
+
+    def test_release_workflow_passes_release_sha(self):
+        text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        assert "VERTEP_RELEASE_SHA=${{ github.sha }}" in text
+        assert "VERTEP_ENVIRONMENT=production" in text
+
+
+# ---------------------------------------------------------------------------
+# Issue #139 — fail-closed auto-close against the full Issue acceptance set
+# (i.0.0.1.39)
+# ---------------------------------------------------------------------------
+
+class TestIssue139:
+    """Fail-closed auto-close: unknown/mismatched/partial acceptance rejected."""
+
+    def _run(self, **over):
+        sha = over.pop("commit_sha", "a" * 40)
+        run = TestRun(rt_id=over.pop("rt_id", "rt::S01"),
+                      rt_issue_number=over.pop("rt_issue_number", 35),
+                      version="test-ver", commit_sha=sha, final_result="PASS")
+        run.checks = over.pop("checks", [
+            CheckResult(name="docker", status=CheckStatus.PASS)])
+        run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                             "version": "test-ver", "commit_sha": sha}
+        return run
+
+    def test_unknown_scenario_cannot_close_issue(self, monkeypatch):
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        run = self._run(rt_id="rt::S99")
+        assert GitHubReporter().can_close_issue(run) is False
+
+    def test_empty_acceptance_set_cannot_close_issue(self, monkeypatch):
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names", lambda rt_id: set())
+        run = self._run()
+        assert GitHubReporter().can_close_issue(run) is False
+
+    def test_mismatched_issue_mapping_cannot_close_issue(self, monkeypatch):
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        run = self._run(rt_issue_number=99)
+        assert GitHubReporter().can_close_issue(run) is False
+
+    def test_broad_issue_requires_all_scenario_checks(self, monkeypatch):
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        expected = gh_mod._expected_mandatory_names("rt::S01")
+        assert expected == {
+            "bootstrap_first_run", "backup_roundtrip",
+            "migration_artifacts", "update_interrupt",
+        }, "issue #35 must aggregate every owning scenario"
+
+        only_s01 = self._run(checks=[
+            CheckResult(name="bootstrap_first_run", status=CheckStatus.PASS)])
+        assert GitHubReporter().can_close_issue(only_s01) is False, (
+            "one S01 run must not close the broad ir #35")
+
+        full = self._run(checks=[
+            CheckResult(name=name, status=CheckStatus.PASS) for name in expected])
+        assert GitHubReporter().can_close_issue(full) is True
+
+    def test_skipped_or_warning_mandatory_does_not_close(self, monkeypatch):
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
+                            lambda rt_id: {"docker", "core_api"})
+        for status in (CheckStatus.SKIPPED, CheckStatus.WARNING):
+            run = self._run(checks=[
+                CheckResult(name="docker", status=CheckStatus.PASS),
+                CheckResult(name="core_api", status=status),
+            ])
+            assert GitHubReporter().can_close_issue(run) is False
+
+    def test_acceptance_single_use_survives_restart(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("REAL_TESTS_STORAGE_DIR", str(tmp_path / "rt139"))
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
+                            lambda rt_id: {"docker"})
+        created = create_test_run(
+            rt_id="rt::S01", rt_issue_number=35, initiator="pytest",
+            version="test-ver", commit_sha="a" * 40, environment={},
+            hardware={}, core_node_id=None, targets=[])
+        created.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
+        created.github_report = {"reported_at": "2026-01-01T00:00:00Z",
+                                 "version": "test-ver", "commit_sha": "a" * 40,
+                                 "already_accepted": True}
+        update_test_run(created)
+
+        fresh = get_test_run(created.test_run_id)  # simulates a restart
+        assert fresh is not None
+        assert GitHubReporter().can_close_issue(fresh) is False
+
+    def test_concurrent_close_accepts_once(self, tmp_path, monkeypatch):
+        import threading
+        monkeypatch.setenv("REAL_TESTS_STORAGE_DIR", str(tmp_path / "rt139c"))
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
+                            lambda rt_id: {"docker"})
+        closes = {"count": 0}
+
+        def fake_close(issue_number):
+            closes["count"] += 1
+            time.sleep(0.05)
+
+        monkeypatch.setattr(gh_mod, "_close_issue", fake_close)
+        reporter = GitHubReporter()
+        run = self._run()
+        results = []
+
+        def worker():
+            results.append(reporter.close_issue(run))
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert closes["count"] == 1, "acceptance must be single-use under concurrency"
+        assert sum(1 for r in results if r["closed"]) == 1
+
+    def test_controlled_boundary_does_not_close_unknown_issue(self, monkeypatch):
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        calls = {"n": 0}
+
+        def fake_close(issue_number):
+            calls["n"] += 1
+
+        monkeypatch.setattr(gh_mod, "_close_issue", fake_close)
+        run = self._run(rt_id="rt::S99")
+        result = GitHubReporter().close_issue(run)
+        assert result["closed"] is False
+        assert calls["n"] == 0, "unknown scenario must not touch the GitHub boundary"
 
 
 if __name__ == "__main__":

@@ -139,7 +139,7 @@ def _record_contract_checks(record, contract: dict, artifact_root: Path,
 
 
 def _record_cross_artifact_checks(record, contract: dict, artifact_root: Path,
-                                  root: Path) -> None:
+                                  root: Path, expected_source_sha: str | None = None) -> None:
     try:
         repo_version = (root / "VERSION").read_text(encoding="utf-8").strip()
     except OSError as error:
@@ -195,6 +195,15 @@ def _record_cross_artifact_checks(record, contract: dict, artifact_root: Path,
         record("manifest_release_sequence_matches_version",
                contract.get("release_sequence") == expected_sequence,
                f"manifest={contract.get('release_sequence')} expected={expected_sequence}")
+    source_sha = contract.get("source_commit_sha")
+    if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        record("manifest_source_commit_sha_bound", False,
+               f"source_commit_sha missing or not a full SHA: {source_sha!r}")
+    elif expected_source_sha is not None:
+        record("manifest_source_commit_sha_bound", source_sha == expected_source_sha,
+               f"manifest={source_sha} expected={expected_source_sha}")
+    else:
+        record("manifest_source_commit_sha_bound", True, "present; no expected SHA supplied")
 
 
 def _compose_service(compose: str, name: str) -> str:
@@ -245,7 +254,8 @@ def _locked_config_values(text: str, section: str) -> dict:
 
 
 def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = None,
-            public_key: Path | None = None) -> dict:
+            public_key: Path | None = None,
+            expected_source_sha: str | None = None) -> dict:
     # artifact_root must point to a built runtime bundle (release workflow);
     # static repository checks never require release artifacts.
     artifact_checks = artifact_root is not None
@@ -442,7 +452,8 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
             except Exception as error:
                 record("release_artifact_contract", False, str(error))
             try:
-                _record_cross_artifact_checks(record, contract, artifact_root, root)
+                _record_cross_artifact_checks(record, contract, artifact_root, root,
+                                              expected_source_sha)
             except Exception as error:
                 record("release_artifact_cross_checks", False, str(error))
         else:
@@ -482,8 +493,11 @@ def main() -> None:
     parser.add_argument("--docker", action="store_true", help="also run Docker Compose validation")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--artifact-root", type=Path, help="Directory containing the built runtime artifacts")
+    parser.add_argument("--expected-source-sha",
+                        help="Full 40-char source commit SHA the bundle must be bound to")
     args = parser.parse_args()
-    report = qualify(args.root.resolve(), args.docker, args.artifact_root)
+    report = qualify(args.root.resolve(), args.docker, args.artifact_root,
+                     expected_source_sha=args.expected_source_sha)
     encoded = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(encoded + "\n", encoding="utf-8")

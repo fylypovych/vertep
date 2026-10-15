@@ -44,6 +44,9 @@ from core.state import store, task_queue
 from tests import media_harness as harness
 
 
+_WORKER_TOKEN = "media-harness-worker-token"
+
+
 def test_review_goes_through_the_web_review_boundaries():
     """Issue #82 requires Web review through the standard boundaries.
 
@@ -65,8 +68,12 @@ def test_review_goes_through_the_web_review_boundaries():
 
 
 @pytest.fixture
-def client():
-    return TestClient(app, raise_server_exceptions=False)
+def client(monkeypatch):
+    # Worker machine routes deny by default when no token is configured (since
+    # 0.0.2.51); every harness request is authenticated as this worker token.
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+    return TestClient(app, raise_server_exceptions=False,
+                      headers={"x-vertep-token": _WORKER_TOKEN})
 
 
 @pytest.fixture

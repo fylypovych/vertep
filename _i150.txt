@@ -1,0 +1,35 @@
+## Р”Р¶РµСЂРµР»Рѕ С‚Р° СЂРµР·СѓР»СЊС‚Р°С‚
+
+Р—Р°Р»РёС€РѕРє #96, РїРµСЂРµРЅРµСЃРµРЅРёР№ Р·Р° РїСЂСЏРјРёРј РґРѕСЂСѓС‡РµРЅРЅСЏРј РІР»Р°СЃРЅРёРєР° 08.10.2026. РћС‡С–РєСѓРІР°РЅРёР№ СЂРµР·СѓР»СЊС‚Р°С‚: Runner: Р·Р°РІРµСЂС€РёС‚Рё Web control surface С– progress acceptance. РќРѕРІРёС… РїСЂРѕРґСѓРєС‚РѕРІРёС… РІРёРјРѕРі РЅРµ РґРѕРґР°РЅРѕ.
+
+## Р¤Р°РєС‚РёС‡РЅРёР№ СЃС‚Р°РЅ
+
+РђСѓРґРёС‚ [main 0.0.2.46 / 53a7a41b](https://github.com/fylypovych/vertep/commit/53a7a41b2baa9316d887c4cc54a3c1db1b552008).
+
+REST API С– РєРѕРјРїРѕРЅРµРЅС‚Рё С–СЃРЅСѓСЋС‚СЊ. Route/sidebar, factual actor, prerequisites/progress persistence С‚Р° UI confirmation С” РІ РЅРµР·Р°РєРѕРјС–С‡РµРЅРёС… Р·РјС–РЅР°С…. РЈ Р»РѕРєР°Р»СЊРЅРѕРјСѓ UI load РІРёРєРѕРЅСѓС”С‚СЊСЃСЏ РїС–СЃР»СЏ Р·Р°РІРµСЂС€РµРЅРЅСЏ СЃРёРЅС…СЂРѕРЅРЅРѕРіРѕ run, live progress РЅРµ РґРѕРІРµРґРµРЅРѕ. DESTRUCTIVE_CHECKS РЅРµ Р·Р±С–РіР°С”С‚СЊСЃСЏ Р· catalog bootstrap_first_run/backup_roundtrip/migration_artifacts/update_interrupt/release_signature; Р·Р°РіР°Р»СЊРЅРёР№ API confirmation gate С”, РѕР±С…С–Рґ РІРёРєРѕРЅР°РЅРЅСЏ С†РёРј Р°СѓРґРёС‚РѕРј РЅРµ Р·Р°СЏРІР»СЏС”С‚СЊСЃСЏ.
+
+РљРѕРґ С– С‚РµСЃС‚Рё:
+
+- [core/api/real_tests.py](https://github.com/fylypovych/vertep/blob/53a7a41b2baa9316d887c4cc54a3c1db1b552008/core/api/real_tests.py)
+- [core/real_tests/runner.py](https://github.com/fylypovych/vertep/blob/53a7a41b2baa9316d887c4cc54a3c1db1b552008/core/real_tests/runner.py)
+- [web-v2/src/app/real-tests/real-tests.component.ts](https://github.com/fylypovych/vertep/blob/53a7a41b2baa9316d887c4cc54a3c1db1b552008/web-v2/src/app/real-tests/real-tests.component.ts)
+
+## РџСЂРёР№РјР°РЅРЅСЏ
+
+- [ ] Р—Р°РІРµСЂС€РёС‚Рё С€С‚Р°С‚РЅРёР№ Web listв†’prerequisitesв†’confirmationв†’runв†’progressв†’report/history Р±РµР· РїРѕРІС‚РѕСЂРЅРѕС— СЂРµР°Р»С–Р·Р°С†С–С— РіРѕС‚РѕРІРёС… РєРѕРјРїРѕРЅРµРЅС‚С–РІ.
+- [ ] РЈР·РіРѕРґРёС‚Рё destructive metadata Р· С„Р°РєС‚РёС‡РЅРёРјРё catalog IDs С– РїРѕРєР°Р·Р°С‚Рё РЅРµРѕР±С…С–РґРЅРµ РїС–РґС‚РІРµСЂРґР¶РµРЅРЅСЏ РґРѕ РІРёРєРѕРЅР°РЅРЅСЏ; Р·Р±РµСЂРµРіС‚Рё СЃРµСЂРІРµСЂРЅРёР№ gate.
+- [ ] Browserв†’actual API С‚РµСЃС‚РѕРј РїС–РґС‚РІРµСЂРґРёС‚Рё progress РїС–Рґ С‡Р°СЃ РІРёРєРѕРЅР°РЅРЅСЏ, factual authenticated initiator, persisted history РїС–СЃР»СЏ reload/restart С– report/retry; orchestration РЅРµ РїС–РґРјС–РЅСЏС‚Рё.
+
+## Р—Р°Р»РµР¶РЅРѕСЃС‚С– С‚Р° РјРµР¶С–
+
+Reporting вЂ” #149; #138/#139/#141 РЅРµ РґСѓР±Р»СЋРІР°С‚Рё; С„С–Р·РёС‡РЅС– СЃС†РµРЅР°СЂС–С— вЂ” #63.
+
+Р¦Рµ implementation (`i`): automated disposable integration/E2E, Р±РµР· РѕР±РѕРІвЂ™СЏР·РєРѕРІРѕРіРѕ С„С–Р·РёС‡РЅРѕРіРѕ СЃРµСЂРІРµСЂР°. РќР°СЏРІРЅС– ir #34/#35/#42/#47/#54/#63 Р·Р°Р»РёС€Р°СЋС‚СЊСЃСЏ РІР»Р°СЃРЅРёРєР°РјРё С„С–Р·РёС‡РЅРёС…/live РґРѕРєР°Р·С–РІ. РЎРїС–Р»СЊРЅС– РґРѕРєР°Р·Рё РІРёРєРѕСЂРёСЃС‚РѕРІСѓРІР°С‚Рё РѕРґРёРЅ СЂР°Р·; СЃС‚Р°С‚СѓСЃ СѓСЃСЊРѕРіРѕ СЃСѓРјС–Р¶РЅРѕРіРѕ Issue РЅРµ С” Р°РІС‚РѕРјР°С‚РёС‡РЅРёРј gate.
+
+## РџРµСЂРµРІС–СЂРєРё Р°СѓРґРёС‚Сѓ
+
+- [CI С‚РѕС‡РЅРѕРіРѕ SHA](https://github.com/fylypovych/vertep/actions/runs/37610825111): 1832 passed, 2 skipped; [Browser](https://github.com/fylypovych/vertep/actions/runs/37610825198): 76 passed. Р¦Рµ Р·Р°РіР°Р»СЊРЅРёР№ regression, РЅРµ Р°РІС‚РѕРјР°С‚РёС‡РЅРµ РІРёРєРѕРЅР°РЅРЅСЏ Р·Р°Р»РёС€РєРѕРІРѕРіРѕ РєСЂРёС‚РµСЂС–СЋ.
+- Targeted pytest: С‡РёСЃС‚РёР№ snapshot main вЂ” 226 passed, 1 skipped; РЅР°СЏРІРЅРµ РЅРµР·Р°РєРѕРјС–С‡РµРЅРµ РґРµСЂРµРІРѕ вЂ” 241 passed, 1 skipped. РќР°Р±С–СЂ: test_real_tests, test_bootstrap_wizard, test_first_run, test_telegram_creation_feedback, test_api, test_backup_read_only. Skip РЅРµ Р·Р°СЂР°С…РѕРІР°РЅРѕ СЏРє PASS.
+- РќРµР·Р°РєРѕРјС–С‡РµРЅС– РІРёРїСЂР°РІР»РµРЅРЅСЏ Р·Р±РµСЂРµР¶РµРЅРѕ; С—С… РЅРµ Р·Р°СЂР°С…РѕРІР°РЅРѕ СЏРє main. РќРµ РїРѕРІС‚РѕСЂСЋРІР°С‚Рё РіРѕС‚РѕРІСѓ СЂРѕР±РѕС‚Сѓ, Р·Р°РІРµСЂС€РёС‚Рё Р»РёС€Рµ Р·Р°Р·РЅР°С‡РµРЅРёР№ Р·Р°Р»РёС€РѕРє.
+
+Р—Р°РєСЂРёС‚С‚СЏ С†СЊРѕРіРѕ РЅРѕРІРѕРіРѕ i вЂ” РїС–СЃР»СЏ РІРёРєРѕРЅР°РЅРЅСЏ РєСЂРёС‚РµСЂС–С—РІ, Р°РІС‚РѕРјР°С‚РёР·РѕРІР°РЅРёС… РґРѕРєР°Р·С–РІ С– РІС…РѕРґР¶РµРЅРЅСЏ СЂРµР°Р»С–Р·Р°С†С–С— РІ main. РџРµСЂРµРЅРµСЃРµРЅРЅСЏ РЅРµ РѕР·РЅР°С‡Р°С” РІРёРєРѕРЅР°РЅРЅСЏ. РђСѓРґРёС‚ РЅРµ РґРѕР·РІРѕР»СЏС” push/release С‡Рё СЂРµР°Р»СЊРЅС– СЃС‚РµРЅРґРѕРІС– РґС–С—.

@@ -1996,3 +1996,45 @@ def test_a_malformed_status_body_is_a_clear_terminal_failure(tmp_path):
     assert refusal.value.code == REASON_SCHEMA_UNSUPPORTED
     assert not (tmp_path / "final" / "garbage.mp4").exists(), \
         "an unmappable status must never be registered as a finished render"
+
+
+def test_a_poll_timeout_is_retried_within_a_bound_and_ends_terminally(tmp_path):
+    """§5: a status read that times out is retried a bounded number of times.
+
+    A timeout is a fault of its own in the §5 matrix: the runtime answered nothing,
+    which proves neither an absent task nor a freed runtime. The read is retried
+    exactly within the configured bound and the attempt ends terminally, registering
+    no artifact — it is never read as a busy upstream or a finished render.
+    """
+    assets = _job_assets(tmp_path)
+
+    class _Timing(FakeTransport):
+        """A runtime that accepts the submit but never answers a status read in time."""
+
+        def get(self, url, **kwargs):
+            if "/api/v1/tasks/j-timeout" in url:
+                self.requests.append(("GET", url, dict(kwargs)))
+                raise httpx.ReadTimeout("runtime did not answer in time")
+            return super().get(url, **kwargs)
+
+    fake = _Timing([
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(200, json={"status": 200, "data": {"file": "scene-000.mp4"}}),
+        _staged_voice(assets["audio"]),
+        httpx.Response(200, json={"status": 200, "data": {"task_id": "j-timeout"}}),
+    ])
+    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake,
+                                poll_interval=0.0, read_backoff=0.0,
+                                max_read_attempts=2)
+    output = tmp_path / "final" / "timeout.mp4"
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(output, submit_key="job-1-v1-timeout", **assets)
+
+    assert refusal.value.code == REASON_UPSTREAM_UNREACHABLE
+    assert "did not answer" in str(refusal.value), \
+        "відмова має назвати те, чим закінчилось читання"
+    assert not output.exists(), "той, хто не відповів, не реєструє артефакт"
+    status_calls = [request for request in fake.requests if request[0] == "GET"
+                    and "/api/v1/tasks/j-timeout" in request[1]]
+    assert len(status_calls) == 2, "опитування обмежене, а не нескінченне"

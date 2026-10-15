@@ -97,47 +97,122 @@ def append_audit(state_dir: Path, event: dict) -> None:
         os.fsync(output.fileno())
 
 
-def run(command: list[str], root: Path, extra_env: dict[str, str] | None = None) -> str:
+def _spawn(command: list[str], root: Path, extra_env: dict[str, str] | None = None):
+    """Start a privileged command as its own process group/tree.
+
+    A dedicated group is required so the fence watchdog can terminate the
+    command *and its children* — a real update apply runs a shell process that
+    itself starts docker/DB work (i.0.0.1.45).
+    """
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        start_new_session = False
+    else:
+        creationflags = 0
+        start_new_session = True
+    return subprocess.Popen(
+        command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, **(extra_env or {})}, start_new_session=start_new_session,
+        creationflags=creationflags)
+
+
+def _terminate_process(process) -> None:
+    """Kill a running privileged mutation tree and confirm it has exited.
+
+    Raising in the caller alone is not enough: the host apply would keep running
+    and its delayed filesystem/DB side effects would still land after the fence
+    was lost.  Kill the whole process group/tree and wait for it to die so a
+    later ack/recovery never races an unfenced old apply (i.0.0.1.45).
+    """
+    if process is None or process.poll() is not None:
+        return
+    timeout = float(os.getenv("UPDATE_FENCE_KILL_TIMEOUT", "10"))
     try:
-        result = subprocess.run(command, cwd=root, check=True, capture_output=True, text=True,
-                                timeout=int(os.getenv("UPDATE_TIMEOUT_SECONDS", "3600")),
-                                env={**os.environ, **(extra_env or {})})
-    except subprocess.CalledProcessError as error:
-        detail = html.unescape(
-            ((error.stdout or "") + (error.stderr or "")).strip()[-4000:]
-        )
-        raise RuntimeError(detail or f"Command failed with exit code {error.returncode}") from error
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                           capture_output=True, text=True)
+        else:
+            import signal
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                process.terminate()
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def _collect(process, timeout: float) -> str:
+    """Drain a spawned command, enforcing the update timeout and exit status."""
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"Command timed out after {error.timeout} seconds") from error
-    return (result.stdout + result.stderr).strip()
+        _terminate_process(process)
+        raise RuntimeError(f"Command timed out after {timeout} seconds") from error
+    if process.returncode != 0:
+        detail = html.unescape(
+            ((stdout or "") + (stderr or "")).strip()[-4000:]
+        )
+        raise RuntimeError(detail or f"Command failed with exit code {process.returncode}")
+    return ((stdout or "") + (stderr or "")).strip()
+
+
+def run(command: list[str], root: Path, extra_env: dict[str, str] | None = None) -> str:
+    process = _spawn(command, root, extra_env=extra_env)
+    return _collect(process, float(os.getenv("UPDATE_TIMEOUT_SECONDS", "3600")))
 
 
 def run_fenced(command: list[str], root: Path, state_dir: Path, lease,
                extra_env: dict[str, str] | None = None) -> str:
-    """Run a host mutation while a watchdog keeps re-checking the fences.
+    """Run a host mutation that is actually stopped when the fence is lost.
 
-    A cancel fence or a lost lease can appear while the apply is already
-    running; the watchdog stops the agent at the first check that observes it
-    instead of letting the whole privileged command finish unquestioned.
+    The mutation runs as a child process tree; while it is alive a watchdog
+    re-checks the lease and cancel fence and, at the first violation, kills the
+    process tree (children included) and waits for it to exit before the caller
+    sees the failure.  A caller-side exception that left the privileged command
+    running would let its delayed side effects land after cancel/lease loss
+    (i.0.0.1.45).
     """
-    outcome: dict = {}
+    # Pre-mutation guard: never even start the privileged command if the fence
+    # is already gone (persisted fence kept).
+    assert_mutation_allowed(state_dir, lease)
+    process = _spawn(command, root, extra_env=extra_env)
+    collected: dict = {}
 
-    def worker() -> None:
+    def drain() -> None:
         try:
-            outcome["output"] = run(command, root, extra_env=extra_env)
-        except BaseException as error:
-            outcome["error"] = error
+            collected["output"] = _collect(
+                process, float(os.getenv("UPDATE_TIMEOUT_SECONDS", "3600")))
+        except BaseException as error:  # noqa: BLE001 - surfaced to the caller below
+            collected["error"] = error
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
     interval = max(0.01, float(os.getenv("UPDATE_FENCE_CHECK_SECONDS", "5")))
-    while thread.is_alive():
-        thread.join(interval)
-        if thread.is_alive():
-            assert_mutation_allowed(state_dir, lease)
-    if "error" in outcome:
-        raise outcome["error"]
-    return outcome["output"]
+    try:
+        while reader.is_alive():
+            reader.join(interval)
+            if reader.is_alive():
+                assert_mutation_allowed(state_dir, lease)
+    except BaseException:
+        # Stop the privileged mutation and its children before propagating, so
+        # the "cancelled" ack means the mutation is genuinely no longer running.
+        _terminate_process(process)
+        reader.join(timeout=float(os.getenv("UPDATE_FENCE_KILL_TIMEOUT", "10")) + 5)
+        raise
+    if "error" in collected:
+        raise collected["error"]
+    return collected["output"]
 
 
 def core_json(path: str) -> dict:

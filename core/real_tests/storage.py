@@ -210,12 +210,18 @@ def record_github_report(
     error: str | None = None,
     version: str | None = None,
     commit_sha: str | None = None,
+    posted: bool | None = None,
+    attempted: bool | None = None,
 ) -> None:
     """Record GitHub report in the test run registry.
 
     Updates are idempotent and preserve existing fields — if a previous
     report was partially written (e.g. during an outage), the retry will
     merge rather than overwrite, ensuring the final result is never lost.
+
+    ``posted`` marks a *confirmed* server-side comment; ``attempted`` marks a
+    POST whose outcome is unknown.  They let a later retry reconcile instead of
+    blindly re-posting the same run (i.0.0.1.49).
     """
     now = utc_now()
     report: dict[str, Any] = {
@@ -228,6 +234,10 @@ def record_github_report(
         report["version"] = version
     if commit_sha is not None:
         report["commit_sha"] = commit_sha
+    if posted is not None:
+        report["posted"] = posted
+    if attempted is not None:
+        report["attempted"] = attempted
     with _lock:
         runs = _read_registry()
         run_data = runs.get(test_run_id)

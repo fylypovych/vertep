@@ -324,3 +324,53 @@ def test_wiped_data_directory_starts_empty(tmp_path, monkeypatch):
     finally:
         _flush(restarted)
         _shutdown(proc2, url2)
+
+
+def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monkeypatch):
+    """Issue #148: Queue counts/state stay consistent through worker loss and restart.
+
+    Real Redis only — no fallback backend: a lost worker's leases requeue, a
+    dead-letter persists, and a fresh client observes the same counts, so the
+    Dashboard/Jobs/Queue counters cannot drift from the durable state.
+    """
+    monkeypatch.setenv("REDIS_URL", redis_url)
+    queue = TaskQueue()
+    assert queue.backend == "redis"
+    _flush(queue)
+
+    ready = queue.enqueue({"job_id": "ready", "priority": 1})
+    leased = queue.enqueue({"job_id": "leased", "priority": 2})
+    failed = queue.enqueue({"job_id": "failed", "priority": 3})
+    assert queue.depth() == 3
+
+    # A worker claims two tasks, then is lost (its lease is never renewed).
+    claimed_one = queue.claim(lease_seconds=1)
+    claimed_two = queue.claim(lease_seconds=1)
+    assert {claimed_one["task_id"], claimed_two["task_id"]} == {
+        leased["task_id"], failed["task_id"],
+    }
+    assert queue.depth() == 1
+    assert queue.inflight_depth() == 2
+
+    # One claim is dead-lettered; the other's lease expires and requeues.
+    queue.dead_letter(claimed_one, "GPU error")
+    requeued = queue.requeue_expired(now=time.time() + 5)
+    assert [item["task_id"] for item in requeued] == [claimed_two["task_id"]]
+    assert queue.inflight_depth() == 0
+    assert queue.depth() == 2
+    assert len(queue.dead_letters()) == 1
+
+    # "Restart": a brand-new client sees the same durable counts/state.
+    restarted = TaskQueue()
+    assert restarted.backend == "redis"
+    try:
+        assert restarted.depth() == 2
+        assert restarted.inflight_depth() == 0
+        assert len(restarted.dead_letters()) == 1
+        assert {task["job_id"] for task in restarted.ready_tasks()} == {"ready", "failed"}
+    finally:
+        # "Loss": wiping the durable keys clears counts and state together.
+        _flush(restarted)
+        assert restarted.depth() == 0
+        assert restarted.inflight_depth() == 0
+        assert restarted.dead_letters() == []

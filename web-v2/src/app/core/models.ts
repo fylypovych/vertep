@@ -910,6 +910,16 @@ export interface OperationAck {
   message?: string;
   operation_id?: string;
   error?: string;
+  status?: string;
+  confirmation_token?: string;
+  snapshot_id?: string;
+  sha256?: string;
+}
+
+export interface RestoreProgress {
+  status: string;
+  progress: number;
+  message: string;
 }
 
 export interface LogQuery {

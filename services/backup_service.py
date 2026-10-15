@@ -29,11 +29,19 @@ app = FastAPI(title="Vertep Backup", version="1")
 _lock = threading.RLock()
 MAGIC = b"VERTEP-BACKUP-v1\0"
 
+# Issue #136: confirmations/progress/operation state must survive a service
+# restart. The in-memory dicts remain as a fast cache, but the durable files
+# under BACKUP_RESTORE_STATE_DIR are the source of truth.
 _restore_progress: dict[str, dict] = {}
 _restore_lock = threading.RLock()
 
 _restore_confirmations: dict[str, dict] = {}
 _confirm_lock = threading.RLock()
+
+_RESTORE_GUARD_NAME = "restore.guard"
+_RESTORE_GUARD_TTL = 3600
+_RESTORE_OPERATIONS_NAME = "operations.json"
+_RESTORE_CONFIRMATIONS_NAME = "confirmations.json"
 
 
 
@@ -44,6 +52,103 @@ class SnapshotRequest(BaseModel):
 
 def _backup_root() -> Path:
     return Path(os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups")))
+
+
+def _restore_state_dir() -> Path:
+    override = os.getenv("BACKUP_RESTORE_STATE_DIR", "").strip()
+    return Path(override) if override else _backup_root() / ".restore-state"
+
+
+def _read_json_file(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def _atomic_write_json(path: Path, payload) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+
+
+def _load_operations() -> dict[str, dict]:
+    data = _read_json_file(_restore_state_dir() / _RESTORE_OPERATIONS_NAME, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _load_confirmations() -> dict[str, dict]:
+    data = _read_json_file(_restore_state_dir() / _RESTORE_CONFIRMATIONS_NAME, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _write_operation(snapshot_id: str, entry: dict) -> None:
+    with _restore_lock:
+        operations = _load_operations()
+        operations[snapshot_id] = entry
+        _atomic_write_json(_restore_state_dir() / _RESTORE_OPERATIONS_NAME, operations)
+        _restore_progress[snapshot_id] = entry
+
+
+def _acquire_restore_guard(snapshot_id: str) -> str | None:
+    """Cross-process exclusion of competing restores until the mutation ends."""
+    path = _restore_state_dir() / _RESTORE_GUARD_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"snapshot_id": snapshot_id, "pid": os.getpid(),
+                          "started_at": time.time()})
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        info = _read_json_file(path, {})
+        age = time.time() - float(info.get("started_at", 0) or 0)
+        if age <= _RESTORE_GUARD_TTL:
+            return None
+        try:
+            path.unlink()
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except OSError:
+            return None
+    except OSError:
+        return None
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return str(path)
+
+
+def _release_restore_guard(guard: str | None) -> None:
+    if not guard:
+        return
+    try:
+        Path(guard).unlink()
+    except OSError:
+        pass
+
+
+def _finalize_restore_failure(snapshot_id: str, message: str, emergency_reason: str) -> None:
+    """Persist an explicit failure result, recording whether EMERGENCY was confirmed."""
+    emergency_confirmed = False
+    emergency_error = None
+    try:
+        _set_emergency(emergency_reason)
+        emergency_confirmed = True
+    except Exception as error:  # noqa: BLE001 - must not hide the original failure
+        emergency_error = str(error)[:500]
+    previous = _restore_progress.get(snapshot_id) or _load_operations().get(snapshot_id, {})
+    _write_operation(snapshot_id, {
+        "status": "error",
+        "progress": 0,
+        "message": message,
+        "started_at": previous.get("started_at"),
+        "finished_at": time.time(),
+        "emergency_confirmed": emergency_confirmed,
+        "emergency_error": emergency_error,
+    })
 
 
 def _sources() -> list[tuple[str, Path]]:
@@ -397,6 +502,8 @@ def get_restore_progress(snapshot_id: str) -> dict:
         raise HTTPException(422, "Некоректний ідентифікатор snapshot")
     entry = _restore_progress.get(snapshot_id)
     if entry is None:
+        entry = _load_operations().get(snapshot_id)
+    if entry is None:
         return {"status": "unknown", "progress": 0, "message": ""}
     return {"status": entry.get("status", "unknown"), "progress": entry.get("progress", 0), "message": entry.get("message", "")}
 
@@ -415,12 +522,16 @@ def restore_snapshot(snapshot_id: str) -> dict:
         raise HTTPException(404, "Snapshot не знайдено")
     
     token = secrets.token_hex(16)
+    now = time.time()
     with _confirm_lock:
-        _restore_confirmations[token] = {
-            "snapshot_id": snapshot_id,
-            "expires_at": time.time() + 300
-        }
-        
+        # Prune expired/consumed tokens so the durable store does not grow forever.
+        confirmations = {t: entry for t, entry in _load_confirmations().items()
+                         if entry.get("status") == "pending" and entry.get("expires_at", 0) > now}
+        confirmations[token] = {"snapshot_id": snapshot_id, "created_at": now,
+                                "expires_at": now + 300, "status": "pending"}
+        _atomic_write_json(_restore_state_dir() / _RESTORE_CONFIRMATIONS_NAME, confirmations)
+        _restore_confirmations[token] = confirmations[token]
+
     return {
         "status": "confirmation_required",
         "confirmation_token": token,
@@ -430,19 +541,36 @@ def restore_snapshot(snapshot_id: str) -> dict:
 
 @app.post("/snapshots/{snapshot_id}/restore/confirm")
 def confirm_restore(snapshot_id: str, token: str) -> dict:
-    if not token or token not in _restore_confirmations:
+    if not token:
         raise HTTPException(401, "Невірний або відсутній токен підтвердження")
-    
-    conf = _restore_confirmations[token]
-    if conf["snapshot_id"] != snapshot_id or time.time() > conf["expires_at"]:
-        raise HTTPException(401, "Токен підтвердження застарів або не відповідає snapshot")
-    
+    now = time.time()
     with _confirm_lock:
-        del _restore_confirmations[token]
-    
-    return _execute_restore(snapshot_id)
+        confirmations = _load_confirmations()
+        conf = confirmations.get(token) or _restore_confirmations.get(token)
+        if not conf or conf.get("snapshot_id") != snapshot_id or now > conf.get("expires_at", 0):
+            raise HTTPException(401, "Токен підтвердження застарів або не відповідає snapshot")
+        if conf.get("status") != "pending":
+            # Issue #136: single-use token; a repeat must not start a second restore.
+            raise HTTPException(401, "Токен підтвердження вже використано")
 
-def _execute_restore(snapshot_id: str) -> dict:
+    return _execute_restore(snapshot_id, token)
+
+
+def _consume_confirmation(token: str | None) -> None:
+    """Durably mark a confirmation token used, once a restore is actually starting."""
+    if not token:
+        return
+    with _confirm_lock:
+        confirmations = _load_confirmations()
+        conf = confirmations.get(token) or _restore_confirmations.get(token)
+        if not conf:
+            return
+        conf = {**conf, "status": "consumed", "consumed_at": time.time()}
+        confirmations[token] = conf
+        _atomic_write_json(_restore_state_dir() / _RESTORE_CONFIRMATIONS_NAME, confirmations)
+        _restore_confirmations[token] = conf
+
+def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
     key = _key()
     root = _backup_root()
     source = root / f"{snapshot_id}.vtbackup"
@@ -456,9 +584,20 @@ def _execute_restore(snapshot_id: str) -> dict:
     encrypted_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     if not secrets.compare_digest(encrypted_digest, str(receipt.get("sha256", ""))):
         raise HTTPException(409, "Checksum snapshot не збігається")
-        
-    with _restore_lock:
-        _restore_progress[snapshot_id] = {"status": "running", "progress": 5, "message": "Перевірка цілісності...", "started_at": time.time()}
+
+    # Issue #136: exclude a competing restore (process or thread) before any mutation.
+    guard = _acquire_restore_guard(snapshot_id)
+    if guard is None:
+        raise HTTPException(409, "Відновлення вже виконується іншим процесом")
+    # Issue #136: consume the single-use token only once the restore really starts.
+    _consume_confirmation(token)
+
+    started_at = time.time()
+    _write_operation(snapshot_id, {"status": "running", "progress": 5,
+                                   "message": "Перевірка цілісності...",
+                                   "started_at": started_at,
+                                   "operation_id": secrets.token_hex(8),
+                                   "snapshot_id": snapshot_id})
         
     try:
         # Issue #60: System must be in MAINTENANCE/RECOVERY during restore
@@ -526,35 +665,31 @@ def _execute_restore(snapshot_id: str) -> dict:
             
             _set_restore_progress(snapshot_id, 85, "Перевірка після відновлення...")
             _post_restore_health_check(destinations)
-            
-        _set_restore_progress(snapshot_id, 100, "Відновлення завершено", status="done")
+
+        # Issue #136: NORMAL is restored only after health verification passed.
         _set_system_state("NORMAL", f"System restored from {snapshot_id}")
+        _set_restore_progress(snapshot_id, 100, "Відновлення завершено", status="done")
         return {"snapshot_id": snapshot_id, "restored": [], "sha256": encrypted_digest, "status": "done"}
         
     except HTTPException:
-        try:
-            _set_emergency("Restore failed")
-        except Exception:
-            pass
-        with _restore_lock:
-            _restore_progress[snapshot_id] = {"status": "error", "progress": 0, "message": "Помилка відновлення", "started_at": _restore_progress.get(snapshot_id, {}).get("started_at")}
+        _finalize_restore_failure(snapshot_id, "Помилка відновлення", "Restore failed")
         raise
     except Exception as error:
-        try:
-            _set_emergency(f"Restore failed: {error}")
-        except Exception:
-            pass
-        with _restore_lock:
-            _restore_progress[snapshot_id] = {"status": "error", "progress": 0, "message": str(error)[:500], "started_at": _restore_progress.get(snapshot_id, {}).get("started_at")}
+        _finalize_restore_failure(snapshot_id, str(error)[:500], f"Restore failed: {error}")
         raise HTTPException(500, f"Restore failed: {error}") from error
+    finally:
+        _release_restore_guard(guard)
 
 
 def _set_restore_progress(snapshot_id: str, progress: int, message: str, status: str = "running") -> None:
     with _restore_lock:
-        entry = _restore_progress.get(snapshot_id, {})
+        entry = dict(_restore_progress.get(snapshot_id) or _load_operations().get(snapshot_id, {}))
         entry.update({"status": status, "progress": progress, "message": message})
         if status in ("done", "error"):
             entry["finished_at"] = time.time()
+        operations = _load_operations()
+        operations[snapshot_id] = entry
+        _atomic_write_json(_restore_state_dir() / _RESTORE_OPERATIONS_NAME, operations)
         _restore_progress[snapshot_id] = entry
 
 

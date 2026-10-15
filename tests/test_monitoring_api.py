@@ -13,8 +13,15 @@ from fastapi.testclient import TestClient
 from core.app import app
 
 
+# Worker endpoints require an authenticated worker token (deny-by-default since
+# 0.0.2.51).  Tests use a fixed token and send it as x-vertep-token, matching
+# tests/test_api.py.
+_WORKER_TOKEN = "monitoring-worker-token"
+
+
 def _client(monkeypatch, tmp_path, **env):
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("NODE_API_TOKEN", env.pop("NODE_API_TOKEN", None) or _WORKER_TOKEN)
     for key, value in env.items():
         if value is None:
             monkeypatch.delenv(key, raising=False)
@@ -24,7 +31,7 @@ def _client(monkeypatch, tmp_path, **env):
 
 
 def _worker_headers(node_name: str = "test-node") -> dict:
-    return {"x-vertep-node-name": node_name}
+    return {"x-vertep-node-name": node_name, "x-vertep-token": _WORKER_TOKEN}
 
 
 # ── /api/watchdog/report ────────────────────────────────────────────────
@@ -227,7 +234,7 @@ def _heartbeat_gpu(client, node_name):
     return client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "role": "gpu", "status": "FREE",
         "vram_mb": 8192, "capabilities": ["image_generation"],
-    })
+    }, headers=_worker_headers(node_name))
 
 
 def test_disposable_worker_failure_alert_ack_and_resolution(monkeypatch, tmp_path):
@@ -343,7 +350,7 @@ def test_ingest_logs_redacts_worker_text(monkeypatch, tmp_path):
         "node_name": "text-1",
         "entries": [{"level": "ERROR", "message": "worker blew up refresh_token=synthetic-audit-secret",
                      "job_id": "j-9"}],
-    }, headers={"x-vertep-node-name": "text-1"})
+    }, headers=_worker_headers("text-1"))
     assert resp.status_code == 200
     assert len(recorded) == 1
     assert "synthetic-audit-secret" not in recorded[0]
@@ -358,7 +365,7 @@ def test_ingest_logs_redaction_persists_to_file(monkeypatch, tmp_path):
     log_root.mkdir()
     monkeypatch.setenv("LOG_ROOT", str(log_root))
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
-    monkeypatch.delenv("NODE_API_TOKEN", raising=False)
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
     client = TestClient(app, raise_server_exceptions=False)
     from core.logging_config import configure_logging
     import core.api.observability as obs
@@ -368,7 +375,7 @@ def test_ingest_logs_redaction_persists_to_file(monkeypatch, tmp_path):
     resp = client.post("/api/logs/ingest", json={
         "node_name": "text-1",
         "entries": [{"level": "INFO", "message": f"task done {secret_payload}", "job_id": "j-1"}],
-    }, headers={"x-vertep-node-name": "text-1"})
+    }, headers=_worker_headers("text-1"))
     assert resp.status_code == 200
     for handler in real_logger.handlers:
         handler.flush()
@@ -508,7 +515,8 @@ def test_prometheus_metrics_re_exports_worker_availability(monkeypatch, tmp_path
     for node, role in (("gpu-1", "gpu"), ("text-1", "text")):
         resp = client.post("/api/workers/heartbeat", json={
             "node_name": node, "role": role, "vram_mb": 0,
-            "capabilities": [], "supported_tasks": []})
+            "capabilities": [], "supported_tasks": []},
+            headers=_worker_headers(node))
         assert resp.status_code == 200, resp.text
     text = client.get("/metrics").text
     assert f"vertep_workers_expected {len(store.workers)}" in text

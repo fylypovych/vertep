@@ -3327,3 +3327,94 @@ def test_a_submit_without_an_upstream_task_reports_absent(monkeypatch, tmp_path)
     assert body["state"] == "unknown"
     assert body["runtime_state"] == "absent"
     assert calls == [], "an attempt without an upstream task needs no upstream call"
+
+
+# ---------------------------------------------------------------------------
+# Issue #129 — MPT lifecycle: a disposable backup/restore round trip must keep
+# the engine selection, endpoint, secret *reference*, mappings, artifacts/hashes,
+# history and approvals. Real container install/update/rollback stays on the
+# runtime-gated row; this covers the part that does not need the container.
+# ---------------------------------------------------------------------------
+
+
+def _restore_via_api(client, snapshot_id: str):
+    first = client.post(f"/snapshots/{snapshot_id}/restore")
+    assert first.status_code == 200, first.text
+    return client.post(f"/snapshots/{snapshot_id}/restore/confirm",
+                       params={"token": first.json()["confirmation_token"]})
+
+
+def test_a_backup_restore_round_trip_preserves_the_moneyprinter_engine_state(
+        monkeypatch, tmp_path):
+    """Criterion 3: backup → controlled change → restore through the stock service.
+
+    The state that matters for MPT is not only the artifact bytes: the persisted engine
+    selection, its endpoint and its secret *reference* live in the config root, and the
+    task mappings, revision history and approvals live next to the artifact in storage.
+    A restore that brought back only the video would silently lose all of that.
+    """
+    import base64
+
+    from services import backup_service
+
+    config = tmp_path / "config"
+    storage = tmp_path / "storage"
+    backups = tmp_path / "backups"
+    job_dir = storage / "jobs" / "job-1"
+    job_dir.mkdir(parents=True)
+    config.mkdir()
+
+    overrides = {
+        "overrides": {
+            "VERTEP_VIDEO_ENGINE": "money-printer",
+            "MONEY_PRINTER_URL": "http://127.0.0.1:8098",
+        },
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "actor": "web",
+        "slot": "video_engine",
+    }
+    (config / "provider-overrides.json").write_text(
+        json.dumps(overrides, indent=2), encoding="utf-8")
+    artifact = job_dir / "final-video.mp4"
+    artifact.write_bytes(b"MPT-verified-artifact" * 64)
+    artifact_sha = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    mappings = {"job-1": {"submit_key": "job-1-v1", "task_id": "mpt-1",
+                          "artifact": "final-video.mp4", "sha256": artifact_sha}}
+    (job_dir / "mpt-mappings.json").write_text(json.dumps(mappings), encoding="utf-8")
+    history = [{"version": 1, "revision": "rev-1", "approved": True}]
+    (job_dir / "revisions.json").write_text(json.dumps(history), encoding="utf-8")
+    approval = {"job_id": "job-1", "version": 1, "state": "READY",
+                "approved_at": "2026-01-01T00:05:00+00:00"}
+    (job_dir / "approval.json").write_text(json.dumps(approval), encoding="utf-8")
+
+    monkeypatch.setenv("BACKUP_CONFIG_ROOT", str(config))
+    monkeypatch.setenv("BACKUP_STORAGE_ROOT", str(storage))
+    monkeypatch.setenv("BACKUP_ROOT", str(backups))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"k" * 32).decode())
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+
+    client = TestClient(backup_service.app)
+    created = client.post("/snapshots", json={"job_id": "job-1", "request": {}})
+    assert created.status_code == 200, created.text
+    snapshot_id = created.json()["snapshot_id"]
+
+    # Controlled change: the selection, the artifact, the mappings and the history all drift.
+    (job_dir / "final-video.mp4").write_bytes(b"corrupted")
+    (config / "provider-overrides.json").write_text(
+        json.dumps({"overrides": {"VERTEP_VIDEO_ENGINE": "native"}}), encoding="utf-8")
+    (job_dir / "mpt-mappings.json").write_text("{}", encoding="utf-8")
+    (job_dir / "revisions.json").write_text("[]", encoding="utf-8")
+
+    restored = _restore_via_api(client, snapshot_id)
+    assert restored.status_code == 200, restored.text
+
+    restored_artifact = job_dir / "final-video.mp4"
+    assert hashlib.sha256(restored_artifact.read_bytes()).hexdigest() == artifact_sha
+    assert json.loads((config / "provider-overrides.json").read_text(encoding="utf-8")) == overrides
+    assert json.loads((job_dir / "mpt-mappings.json").read_text(encoding="utf-8")) == mappings
+    assert json.loads((job_dir / "revisions.json").read_text(encoding="utf-8")) == history
+    assert json.loads((job_dir / "approval.json").read_text(encoding="utf-8")) == approval
+    # The secret travelled as a reference only: no token value is anywhere in the state.
+    assert "MONEY_PRINTER_TOKEN" not in (config / "provider-overrides.json").read_text(encoding="utf-8")

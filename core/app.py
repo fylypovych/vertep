@@ -1245,6 +1245,27 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Відновлення не вдався: {result['_error'][:200]}"
                 )
+            # Issue #137: finish the two-phase restore by executing with the
+            # single-use confirmation token instead of treating the challenge as success.
+            if isinstance(result, dict) and result.get("status") == "confirmation_required":
+                token = str(result.get("confirmation_token") or "")
+                if not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+                    fail_operation(op["operation_id"], "Backup Service не надав токен підтвердження")
+                    return TelegramAdapter().answer_callback(
+                        callback_id, "❌ Backup Service не надав токен підтвердження відновлення."
+                    )
+                advance_operation(op["operation_id"], "confirm", 25, "Підтвердження відновлення")
+                audit_entry(op["operation_id"], "INTERNAL_CALL",
+                            f"POST /api/system/backups/{snapshot_id}/restore/confirm", f"telegram:{chat_id}")
+                result = _call_core_api(
+                    "POST", f"/api/system/backups/{snapshot_id}/restore/confirm?token={token}",
+                    {}, timeout=300)
+                if result and "_error" in result:
+                    fail_operation(op["operation_id"], result["_error"])
+                    audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
+                    return TelegramAdapter().answer_callback(
+                        callback_id, f"❌ Відновлення не вдався: {result['_error'][:200]}"
+                    )
             if result and "status" in result:
                 status = result.get("status")
                 if status == "done":
@@ -1512,6 +1533,25 @@ def _send_character_selection(chat_id: str, brand_id: str) -> dict:
     return {"status": "character_selection", "brand_id": brand_id, "characters": [c["id"] for c in characters]}
 
 
+# Absolute filesystem paths (POSIX ``/x/...`` or Windows ``C:\...``) that may
+# appear inside error text; URLs (``scheme://host``) are intentionally kept.
+_ABS_PATH_RE = re.compile(r"(?<![:/])(?<!\w)(?:[A-Za-z]:[\\/]|/)[^\s'\";)]*")
+
+
+def _sanitize_creation_error(error: Exception) -> str:
+    """Surface a Job-creation failure without leaking internals (i.0.0.1.57).
+
+    Absolute filesystem paths and secrets must never reach the Telegram user or
+    the webhook response. Secrets are masked with ``secret_redact`` and absolute
+    POSIX/Windows paths are replaced with ``[path]``; URLs are preserved.
+    """
+    from core.logging_config import secret_redact
+    text = str(error) or "невідома помилка"
+    text = secret_redact(text)
+    text = _ABS_PATH_RE.sub("[path]", text)
+    return text[:200]
+
+
 def _handle_character_selection(callback: dict, chat_id: str, character_id: str) -> dict:
     callback_id = str(callback.get("id", ""))
     pending_data = _telegram_pending_character.get(chat_id)
@@ -1530,7 +1570,7 @@ def _handle_character_selection(callback: dict, chat_id: str, character_id: str)
         job = _create_job_from_telegram(pending, brand_id, character_id)
     except Exception as error:
         logger.exception("Telegram Job creation failed", extra={"character_id": character_id})
-        error_detail = str(error)[:200] if str(error) else "невідома помилка"
+        error_detail = _sanitize_creation_error(error)
         adapter.send_message(chat_id, f"❌ Не вдалося завершити створення завдання: {error_detail}\nПеревірте конфігурацію персонажа та сховище. Вибір збережено — можна повторити спробу.")
         return {"status": "creation_failed", "error": error_detail}
     _telegram_pending_character.pop(chat_id, None)
@@ -2624,13 +2664,13 @@ def node_system_status(node_name: str, request: Request):
 
 
 async def _internal_api(method: str, base_environment: str, path: str,
-                        payload: dict | None = None) -> dict:
+                        payload: dict | None = None, params: dict | None = None) -> dict:
     base = os.getenv(base_environment, "").rstrip("/")
     if not base:
         raise HTTPException(503, f"Сервіс не налаштований: {base_environment} не встановлено")
     try:
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.request(method, f"{base}{path}", json=payload)
+            response = await client.request(method, f"{base}{path}", json=payload, params=params)
             response.raise_for_status()
             return response.json()
     except httpx.ConnectError:
@@ -2705,6 +2745,23 @@ async def restore_system_backup(snapshot_id: str):
     if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
         raise HTTPException(422, "Invalid snapshot identifier")
     return await _internal_api("POST", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore")
+
+
+@app.post("/api/system/backups/{snapshot_id}/restore/confirm")
+async def confirm_system_backup(snapshot_id: str, token: str):
+    """Issue #137: complete the two-phase restore started by /restore.
+
+    The Backup Service returns a single-use confirmation token from /restore;
+    CORE forwards it here so Web/Telegram can execute the destructive restore
+    only after an explicit second acknowledgement.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(422, "Invalid snapshot identifier")
+    if not token or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+        raise HTTPException(422, "Invalid confirmation token")
+    return await _internal_api("POST", "BACKUP_URL",
+                               f"/snapshots/{snapshot_id}/restore/confirm",
+                               params={"token": token})
 
 
 @app.get("/api/system/models")

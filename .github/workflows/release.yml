@@ -103,7 +103,10 @@ jobs:
           file: ${{ matrix.file }}
           platforms: ${{ matrix.platforms }}
           push: true
-          build-args: VERTEP_VERSION=${{ needs.prepare.outputs.version }}
+          build-args: |
+            VERTEP_VERSION=${{ needs.prepare.outputs.version }}
+            VERTEP_RELEASE_SHA=${{ github.sha }}
+            VERTEP_ENVIRONMENT=production
           tags: |
             ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:${{ needs.prepare.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:latest
@@ -150,9 +153,11 @@ jobs:
         env:
           RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.RUNTIME_SIGNING_PRIVATE_KEY }}
           EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_COMMIT_SHA: ${{ github.sha }}
         run: |
           version="$(tr -d '\r\n' < VERSION)"
           test "$version" = "$EXPECTED_VERSION"
+          test "$SOURCE_COMMIT_SHA" != ""
           python scripts/assemble-image-lock.py "${{ runner.temp }}/image-metadata" "${{ runner.temp }}/images.json"
           printf '%s' "$RUNTIME_SIGNING_PRIVATE_KEY" > "${{ runner.temp }}/runtime-signing.pem"
           chmod 600 "${{ runner.temp }}/runtime-signing.pem"
@@ -163,7 +168,8 @@ jobs:
             --version "$version" \
             --sequence "$sequence" \
             --image-lock "${{ runner.temp }}/images.json" \
-            --private-key "${{ runner.temp }}/runtime-signing.pem"
+            --private-key "${{ runner.temp }}/runtime-signing.pem" \
+            --source-commit-sha "$SOURCE_COMMIT_SHA"
           python scripts/runtime-contract.py validate \
             "${{ runner.temp }}/runtime/manifest.json" \
             --artifact-root "${{ runner.temp }}/runtime" \
@@ -191,7 +197,9 @@ jobs:
             "update-manifest-$version.json" > "SHA256SUMS-$version"
       - name: Appliance release qualification
         shell: bash
-        run: python scripts/qualify-release.py --root . --artifact-root "${{ runner.temp }}/runtime" --output qualification.json
+        env:
+          SOURCE_COMMIT_SHA: ${{ github.sha }}
+        run: python scripts/qualify-release.py --root . --artifact-root "${{ runner.temp }}/runtime" --expected-source-sha "$SOURCE_COMMIT_SHA" --output qualification.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:

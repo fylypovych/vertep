@@ -538,6 +538,14 @@ def test_a_runtime_that_cannot_prove_its_inventory_keeps_the_previous_engine(iso
     read_model = client.get("/api/settings/video-engine").json()
     assert read_model["effective"] == "native"
     assert read_model["selected"] == "native"
+    # Issue #127: the failed activation is not delivered to the executor either —
+    # the Worker keeps the previous effective engine, and the API never reported
+    # a success for the refused switch.
+    from core.provider_switch import provider_executor_config
+
+    delivered = provider_executor_config()
+    assert "VERTEP_VIDEO_ENGINE" not in delivered
+    assert "MONEY_PRINTER_URL" not in delivered
 
 
 def test_the_applied_choice_is_reproduced_after_a_restart_of_the_core(isolated_config):
@@ -566,3 +574,84 @@ def test_the_applied_choice_is_reproduced_after_a_restart_of_the_core(isolated_c
         # choice is verified on the actual executor rather than assumed.
         assert read_model["probed"] is False
         assert client.get("/api/settings/video-engine?probe=true").json()["ready"] is True
+
+
+# ---------------------------------------------------------------------------
+# P9: the switch reaches a *separate* Worker process and survives its restart
+# (Issue #127)
+# ---------------------------------------------------------------------------
+
+
+#: Runs in a fresh interpreter: it stands in for a Worker process on another
+#: host that only receives the persisted, non-secret selection through the
+#: stock heartbeat channel and must make the real executor observe it.
+_WORKER_APPLY_EXECUTOR = r"""
+import json, os
+from pathlib import Path
+from worker import service as worker_service
+from adapters.providers import providers as registry
+
+config = json.loads(Path(os.environ["PROVIDER_CONFIG_PATH"]).read_text(encoding="utf-8"))
+applied = worker_service.apply_provider_config(config)
+engine = registry.video_engine()
+Path(os.environ["REPORT_PATH"]).write_text(json.dumps({
+    "applied": applied,
+    "observed": worker_service.executor_provider_config(),
+    "video_engine_env": os.environ.get("VERTEP_VIDEO_ENGINE"),
+    "money_printer_url": os.environ.get("MONEY_PRINTER_URL"),
+    "engine_class": type(engine).__name__,
+}), encoding="utf-8")
+"""
+
+
+def _run_worker_apply(config: dict, run_dir: Path) -> dict:
+    """Apply the delivered config in a separate process that starts clean.
+
+    The subprocess inherits no engine selection of its own, so whatever it ends
+    up resolving must have come from the heartbeat-delivered ``provider_config``.
+    """
+    import subprocess
+    import sys
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    config_path = run_dir / "provider_config.json"
+    report_path = run_dir / "report.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    env = dict(os.environ)
+    env["PROVIDER_CONFIG_PATH"] = str(config_path)
+    env["REPORT_PATH"] = str(report_path)
+    for key in ("VERTEP_VIDEO_ENGINE", "MONEY_PRINTER_URL"):
+        env.pop(key, None)
+    subprocess.run([sys.executable, "-c", _WORKER_APPLY_EXECUTOR],
+                   cwd=str(Path(__file__).resolve().parents[1]),
+                   env=env, check=True, capture_output=True, text=True)
+    return json.loads(report_path.read_text(encoding="utf-8"))
+
+
+def test_a_separate_worker_process_applies_and_reapplies_the_switched_engine(
+        isolated_config, tmp_path):
+    from core.provider_switch import provider_executor_config
+
+    with _runtime_on_loopback(_ready_report()) as endpoint:
+        response = client.post("/api/settings/providers/video_engine", json={
+            "backend": "money-printer", "endpoint": endpoint,
+        })
+    assert response.status_code == 200, response.text
+
+    delivered = provider_executor_config()
+    assert delivered["VERTEP_VIDEO_ENGINE"] == "money-printer"
+    assert delivered["MONEY_PRINTER_URL"] == endpoint
+    # Only bare selection/endpoint values travel to the executor: no secret.
+    assert "MONEY_PRINTER_TOKEN" not in delivered
+
+    first = _run_worker_apply(delivered, tmp_path / "run1")
+    assert first["applied"] == delivered
+    assert first["engine_class"] == "MoneyPrinterEngine"
+    assert first["video_engine_env"] == "money-printer"
+    assert first["observed"]["VERTEP_VIDEO_ENGINE"] == "money-printer"
+    assert first["observed"]["MONEY_PRINTER_URL"] == endpoint
+
+    # A restarted Worker process, started clean again, re-applies the same
+    # persisted selection and resolves the same engine — the switch is not lost.
+    second = _run_worker_apply(delivered, tmp_path / "run2")
+    assert second == first

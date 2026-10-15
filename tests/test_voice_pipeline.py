@@ -43,6 +43,20 @@ from core.api.job_helpers import _persist_tts_contract, _tts_task_for
 from core.orchestration import initialize_plan
 
 
+# Worker-facing machine routes authenticate the worker token themselves and
+# deny by default when no token is configured (since 0.0.2.51).
+_WORKER_TOKEN = "voice-pipeline-worker-token"
+
+
+@pytest.fixture(autouse=True)
+def _worker_token(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+
+
+def _worker_headers():
+    return {"x-vertep-token": _WORKER_TOKEN}
+
+
 def _complete_script_task(client, job_id, node_name="text-worker"):
     """Simulate a Text Worker claiming, executing, and submitting a script task."""
     client.post("/api/workers/heartbeat", json={"node_name": node_name, "vram_mb": 0,
@@ -348,7 +362,7 @@ def test_full_voice_dispatch_end_to_end(monkeypatch, tmp_path):
     from adapters.providers.video_engines import NativeVertepEngine
     get_providers().replace("video_engine", NativeVertepEngine())
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_worker_headers())
     _heartbeat(client, "image-worker", supported_tasks=["image"],
                capabilities=["image_generation"])
     _heartbeat(client, "voice-worker", supported_tasks=["voice"], role="voice",

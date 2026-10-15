@@ -17,6 +17,7 @@ CHANNEL_RE = re.compile(r"[a-z0-9-]{1,32}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
 def canonical_contract(contract: dict) -> bytes:
@@ -60,6 +61,9 @@ def validate_release_contract(contract: dict, artifact_root: Path | None = None,
     sequence = contract.get("release_sequence")
     if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
         raise ValueError("Release sequence must be a positive integer")
+    source_commit_sha = contract.get("source_commit_sha")
+    if not isinstance(source_commit_sha, str) or not FULL_SHA_RE.fullmatch(source_commit_sha):
+        raise ValueError("Release source_commit_sha must be a full 40-char commit SHA")
     channel = contract.get("channel")
     if not isinstance(channel, str) or not CHANNEL_RE.fullmatch(channel):
         raise ValueError("Release channel is invalid")

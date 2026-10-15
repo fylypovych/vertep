@@ -32,6 +32,25 @@ from worker import role_executor
 from core.state import task_queue
 
 
+# Worker-facing machine routes authenticate the worker token themselves and
+# deny by default when no token is configured (since 0.0.2.51). Attach the
+# token to every request so heartbeat/claim/result calls are authenticated.
+_WORKER_TOKEN = "voice-acceptance-worker-token"
+
+
+@pytest.fixture(autouse=True)
+def _worker_token(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+
+
+def _worker_headers():
+    return {"x-vertep-token": _WORKER_TOKEN}
+
+
+def _make_client():
+    return TestClient(app, headers=_worker_headers())
+
+
 def _make_wav(duration=0.5, rate=22050):
     buf = io.BytesIO()
     w = wave.open(buf, "wb")
@@ -63,7 +82,7 @@ def _write_character(root, character_id, voice=None):
 def _heartbeat(client, node_name, **overrides):
     payload = {"node_name": node_name, "vram_mb": 4096}
     payload.update(overrides)
-    return client.post("/api/workers/heartbeat", json=payload)
+    return client.post("/api/workers/heartbeat", json=payload, headers=_worker_headers())
 
 
 class _Response:
@@ -240,7 +259,7 @@ def _wait_for(client, job_id, statuses=("READY", "FAILED")):
 class TestContractMandatory:
 
     def test_reject_tts_result_without_contract(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -257,7 +276,7 @@ class TestContractMandatory:
         assert "contract" in resp.json()["detail"].lower()
 
     def test_reject_tts_result_with_empty_contract(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -273,7 +292,7 @@ class TestContractMandatory:
         assert resp.status_code == 400
 
     def test_reject_tts_result_with_tampered_sha256(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -297,7 +316,7 @@ class TestContractMandatory:
         assert "sha256" in resp.json()["detail"].lower()
 
     def test_reject_tts_result_without_provider_voice(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -382,7 +401,7 @@ class TestContractMandatory:
 class TestTTSCancelPause:
 
     def test_cancel_job_during_tts(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -396,7 +415,7 @@ class TestTTSCancelPause:
         assert job["status"] == "CANCELLED"
 
     def test_pause_job_during_tts(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -411,7 +430,7 @@ class TestTTSCancelPause:
 class TestTTSDuplicateResult:
 
     def test_duplicate_tts_result_ignored(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -438,7 +457,7 @@ class TestTTSWorkerLossRecovery:
 
     def test_stale_voice_worker_requeues_tts(self, monkeypatch, tmp_path):
         from core.api.job_helpers import _recover_stale_workers
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -535,7 +554,7 @@ class TestContractBeforeSideEffects:
         return _claim_tts(client, job_id)
 
     def test_reject_contract_mismatch_before_file_write(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)
@@ -574,7 +593,7 @@ class TestContractBeforeSideEffects:
         assert task_queue.inflight_has(tts_task["task_id"])
 
     def test_reject_missing_field_before_file_write(self, monkeypatch, tmp_path):
-        client = TestClient(app)
+        client = _make_client()
         job_id = _new_voice_job(client, monkeypatch, tmp_path)
         _approve_script(client, job_id)
         _submit_image(client, job_id)

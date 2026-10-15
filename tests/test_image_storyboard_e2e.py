@@ -1,9 +1,20 @@
 import base64, time
+import pytest
 from fastapi.testclient import TestClient
 from core.app import app, store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from worker import role_executor
 from core.script_agent import ScriptAgent
+
+
+# Worker machine routes deny by default when no token is configured (since
+# 0.0.2.51); authenticate every request as this worker token.
+_WORKER_TOKEN = "image-storyboard-e2e-worker-token"
+
+
+@pytest.fixture(autouse=True)
+def _worker_token(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
 
 def _mock_queue(self, job, revision=None):
     tgt = getattr(self, "store", store)
@@ -23,7 +34,7 @@ def test_image_storyboard_e2e(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK","false")
     from core.storyboard import StoryboardService as Svc
     monkeypatch.setattr(Svc, "queue", _mock_queue)
-    client=TestClient(app)
+    client=TestClient(app, headers={"x-vertep-token": _WORKER_TOKEN})
     client.post("/api/workers/heartbeat", json={"node_name":"gpu-worker","vram_mb":8192,"capabilities":["image_generation"],"supported_tasks":["image"]})
     client.post("/api/workers/heartbeat", json={"node_name":"text-worker","vram_mb":0,"role":"text","capabilities":["text_generation"],"supported_tasks":["text"]})
     monkeypatch.setattr(ScriptAgent, "generate_script", lambda self, topic, system_prompt="", character=None: {

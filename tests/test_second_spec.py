@@ -82,6 +82,15 @@ def test_managed_ollama_validation_is_deferred_until_deployment(monkeypatch):
     asyncio.run(core_app._validate_ai_backend("ollama", None, "llama3.2", ""))
 
 
+def test_ai_backend_rejects_empty_backend_value():
+    """i.0.0.1.51: with the UI fallback removed, an empty selection must fail
+    closed server-side instead of provisioning "ollama" silently."""
+    with pytest.raises(ValueError, match="Unsupported AI backend"):
+        asyncio.run(core_app._validate_ai_backend("", None, "llama3.2", ""))
+    with pytest.raises(ValueError, match="Unsupported AI backend"):
+        asyncio.run(core_app._validate_ai_backend("anthropic", None, "claude", ""))
+
+
 def test_first_run_creates_registration_token_before_committing_setup(monkeypatch):
     events = []
 

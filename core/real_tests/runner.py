@@ -13,9 +13,7 @@ Lifecycle:
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
 import threading
 from typing import Any, Callable
 
@@ -39,46 +37,45 @@ from core.logging_config import secret_redact as _log_secret_redact
 # pre-execution confirmation before the Web UI may launch them (i.0.0.0.96).
 # Kept here (not in core.api.real_tests) so both the runner and the API can
 # share it without a circular import.
+# Names must match the factual catalog IDs in CHECK_REGISTRY (i.0.0.1.50);
+# legacy aliases never appear in the registry and hid the confirmation.
 DESTRUCTIVE_CHECKS = frozenset({
-    "bootstrap_install",
-    "backup_round_trip",
-    "backup_restore",
-    "migration",
-    "update_interruption",
-    "release_trust",
+    "bootstrap_first_run",
+    "backup_roundtrip",
+    "migration_artifacts",
+    "update_interrupt",
+    "release_signature",
     "publisher_receipt",
-    "rollback",
 })
 
 
 def _git_commit() -> str:
     """Return the full commit SHA for deployment identity.
 
-    Priority: GITHUB_SHA env → git rev-parse.  Returns an empty string when
-    neither source yields a SHA (Issue #95): a ``VERSION`` value or the literal
-    ``unknown`` is not a commit identity and must never reach acceptance.
-    ``can_close_issue`` treats an empty/unknown SHA as fail-closed, so an
-    unresolved identity cannot auto-close an rt Issue.
+    Priority: baked release identity (built runtime) → GITHUB_SHA env →
+    git rev-parse.  Returns an empty string when no source yields a SHA
+    (Issue #95): a ``VERSION`` value or the literal ``unknown`` is not a commit
+    identity and must never reach acceptance.  ``can_close_issue`` treats an
+    empty/unknown SHA as fail-closed, so an unresolved identity cannot
+    auto-close an rt Issue.
     """
-    github_sha = os.getenv("GITHUB_SHA", "").strip()
-    if github_sha:
-        return github_sha
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10,
-            cwd=os.getcwd(),
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return ""
+    from core.release_identity import resolve_release_sha
+    return resolve_release_sha()
 
 
 def _environment() -> dict[str, Any]:
     from scripts.qualify_infrastructure import environment
-    return environment()
+    from core.release_identity import (
+        resolve_release_environment, resolve_release_sha,
+    )
+    env = environment()
+    release_sha = resolve_release_sha()
+    if release_sha:
+        env["release_sha"] = release_sha
+    release_environment = resolve_release_environment()
+    if release_environment:
+        env["release_environment"] = release_environment
+    return env
 
 
 class RealTestRunner:
@@ -199,17 +196,25 @@ class RealTestRunner:
     def report_to_github(self, run: TestRun) -> dict[str, Any]:
         """Post the result to the corresponding GitHub rt Issue."""
         result = self._reporter.report(run)
+        persisted = get_test_run(run.test_run_id)
+        base = dict(persisted.github_report or {}) if persisted else {}
         if result["reported"]:
             run.status = TestRunStatus.REPORTED
-            run.github_report = {"reported_at": utc_now(),
-                                 "comment_id": result["comment_id"],
+            run.github_report = {**base,
+                                 "reported_at": utc_now(),
+                                 "comment_id": result["comment_id"] or base.get("comment_id"),
+                                 "final_result": run.final_result,
+                                 "version": run.version,
+                                 "commit_sha": run.commit_sha,
+                                 "posted": True,
+                                 "attempted": False}
+        else:
+            run.status = TestRunStatus.REPORT_PENDING
+            run.github_report = {**base,
+                                 "error": result["error"],
                                  "final_result": run.final_result,
                                  "version": run.version,
                                  "commit_sha": run.commit_sha}
-        else:
-            run.status = TestRunStatus.REPORT_PENDING
-            run.github_report = {"error": result["error"],
-                                 "final_result": run.final_result}
         update_test_run(run)
         audit_entry(run.test_run_id, "github_status",
                     f"status={run.status.value} reported={result['reported']}", "runner")
@@ -244,16 +249,20 @@ class RealTestRunner:
         run = get_test_run(test_run_id)
         if run is None:
             return None
+        base = dict(run.github_report or {})
         result = self._reporter.retry_pending(run)
         if result["reported"]:
             run.status = TestRunStatus.REPORTED
-            run.github_report = {"reported_at": utc_now(),
-                                 "comment_id": result["comment_id"],
+            run.github_report = {**base,
+                                 "reported_at": utc_now(),
+                                 "comment_id": result["comment_id"] or base.get("comment_id"),
                                  "final_result": run.final_result,
                                  "version": run.version,
-                                 "commit_sha": run.commit_sha}
+                                 "commit_sha": run.commit_sha,
+                                 "posted": True,
+                                 "attempted": False}
         else:
-            run.github_report = {**(run.github_report or {}),
+            run.github_report = {**base,
                                  "error": result.get("error"),
                                  "final_result": run.final_result,
                                  "version": run.version,
@@ -299,8 +308,8 @@ class RealTestRunner:
             "commit": run.commit_sha,
             "result": run.final_result,
             "status": run.status.value,
-            "environment": {k: _redact_secrets(str(v)) for k, v in (run.environment or {}).items()},
-            "hardware": run.hardware,
+            "environment": _redact_mapping(run.environment),
+            "hardware": _redact_mapping(run.hardware),
             "core_node_id": run.core_node_id,
             "targets": run.targets,
             "checks": checks,
@@ -379,6 +388,32 @@ def _redact_secrets(text: str) -> str:
     text = re.sub(r'(?i)(?P<key>token|password|secret|api[_-]?key|access[_-]?key|client[_-]?secret|credentials?|authorization|session[_-]?secret|jwt[_-]?secret|encryption[_-]?key|internal[_-]?api[_-]?key)\s*[:=]\s*\*\*\*REDACTED\*\*\*',
                   r'\g<key> = ***REDACTED***', text)
     return text
+
+
+_SECRET_KEY_NAME_RE = re.compile(
+    r"(?i)(api[_-]?key|apikey|token|secret|password|passwd|pwd|passphrase|"
+    r"private[_-]?key|aws_[a-z_]*|access[_-]?key|client[_-]?secret|credentials?|"
+    r"authorization|session[_-]?id|session[_-]?secret|proxy[_-]?password|"
+    r"encryption[_-]?key|internal[_-]?api[_-]?key|telegram_bot_token|"
+    r"youtube_client_secret|smtp_password|license[_-]?key)")
+
+
+def _redact_mapping(mapping: dict | None) -> dict:
+    """Redact a metadata mapping for an operator-visible surface (Issue #141).
+
+    A value stored under a secret-named key is masked whole, because a raw
+    secret such as ``PROXY_PASSWORD=hunter2`` has no ``key=value`` shape for the
+    textual redactor to recognise.  Every other value is still passed through
+    the textual redactor so a secret embedded in a URL or message stays masked.
+    """
+    if not mapping:
+        return {}
+    return {
+        str(key): ("***REDACTED***" if _SECRET_KEY_NAME_RE.search(str(key))
+                   else _redact_secrets(str(value)))
+        for key, value in mapping.items()
+    }
+
 
 
 def _safe_execute_check(fn: Callable[[], Any], name: str) -> tuple[bool | None, str]:

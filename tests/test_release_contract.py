@@ -58,6 +58,7 @@ def test_release_contract_binds_roles_images_files_and_sbom(tmp_path):
         {"core_api": 1, "worker_api": 1, "database_schema": 7,
          "database_strategy": "expand", "rollback_safe": True,
          "minimum_version": "0.0.0.5"},
+        "a" * 40,
     )
     signed = sign_release_contract(contract, private_key)
     assert validate_release_contract(signed, bundle, public_key)["release_sequence"] == 12
@@ -86,4 +87,5 @@ def test_release_contract_rejects_unpinned_role_service(tmp_path):
             {"core_api": 1, "worker_api": 1, "database_schema": 7,
              "database_strategy": "none", "rollback_safe": True,
              "minimum_version": "0.0.0.5"},
+            "b" * 40,
         )

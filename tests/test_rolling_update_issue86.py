@@ -22,6 +22,15 @@ def _node_request(node_id):
     return node.get("self_test_request") or {}
 
 
+# Worker heartbeat requires an authenticated worker token (deny-by-default since
+# 0.0.2.51), matching tests/test_api.py.
+_WORKER_TOKEN = "rolling-update-worker-token"
+
+
+def _worker_headers(node_name: str) -> dict:
+    return {"x-vertep-node-name": node_name, "x-vertep-token": _WORKER_TOKEN}
+
+
 def _bound_test(node_id, *, checked_at, status="PASSED"):
     request = _node_request(node_id)
     test = {"status": status, "checked_at": checked_at}
@@ -428,11 +437,13 @@ def test_heartbeat_delivers_cancel_fence_and_worker_blocks_host_apply(monkeypatc
     from worker.service import request_local_update, sync_cancel_fence
 
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
     start_rollout("2.0.0", ["gpu-hb"])
     cancel_rollout()
 
     response = TestClient(app).post(
-        "/api/workers/heartbeat", json={"node_name": "gpu-hb", "gpu_name": "stub"})
+        "/api/workers/heartbeat", json={"node_name": "gpu-hb", "gpu_name": "stub"},
+        headers=_worker_headers("gpu-hb"))
     assert response.status_code == 200
     control = response.json()
     assert control["rollout_state"] == "CANCELLED"
@@ -698,6 +709,7 @@ def test_coordinator_endpoint_updates_and_fences(monkeypatch, tmp_path):
 def test_heartbeat_cancel_fence_ack_flow(monkeypatch, tmp_path):
     """Heartbeat 409 delivers the fence token; resending with cancel_fence_ack succeeds."""
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
     from fastapi.testclient import TestClient
     from core.app import app
     from core.state import store
@@ -705,14 +717,16 @@ def test_heartbeat_cancel_fence_ack_flow(monkeypatch, tmp_path):
     client = TestClient(app)
     start_rollout("2.0.0", ["gpu-fence"])
     response = client.post("/api/workers/heartbeat",
-                           json={"node_name": "gpu-fence", "gpu_name": "stub"})
+                           json={"node_name": "gpu-fence", "gpu_name": "stub"},
+                           headers=_worker_headers("gpu-fence"))
     assert response.status_code == 200, response.text
 
     token = cancel_rollout()["cancel_fence_token"]
 
     # without the ack the worker is fenced out and the detail carries the token
     response = client.post("/api/workers/heartbeat",
-                           json={"node_name": "gpu-fence", "gpu_name": "stub"})
+                           json={"node_name": "gpu-fence", "gpu_name": "stub"},
+                           headers=_worker_headers("gpu-fence"))
     assert response.status_code == 409
     detail = response.json()["detail"]
     assert detail["cancel_fence_token"] == token
@@ -722,7 +736,8 @@ def test_heartbeat_cancel_fence_ack_flow(monkeypatch, tmp_path):
            "cancel_fence_token": token}
     response = client.post("/api/workers/heartbeat",
                            json={"node_name": "gpu-fence", "gpu_name": "stub",
-                                 "cancel_fence_ack": ack})
+                                 "cancel_fence_ack": ack},
+                           headers=_worker_headers("gpu-fence"))
     assert response.status_code == 200, response.text
     assert response.json()["cancel_fence_token"] == token
     record = store.workers["gpu-fence"]
@@ -733,6 +748,7 @@ def test_heartbeat_cancel_fence_ack_flow(monkeypatch, tmp_path):
 def test_heartbeat_delivers_bound_self_test_request(monkeypatch, tmp_path):
     """Heartbeat response carries the bound request; only a bound result approves the node."""
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
     from fastapi.testclient import TestClient
     from core.app import app
 
@@ -740,13 +756,15 @@ def test_heartbeat_delivers_bound_self_test_request(monkeypatch, tmp_path):
     start_rollout("2.0.0", ["gpu-req"])
     response = client.post("/api/workers/heartbeat",
                            json={"node_name": "gpu-req", "gpu_name": "stub",
-                                 "version": "1.0.0"})
+                                 "version": "1.0.0"},
+                           headers=_worker_headers("gpu-req"))
     assert response.status_code == 200, response.text
     assert response.json().get("self_test_request") is None
 
     response = client.post("/api/workers/heartbeat",
                            json={"node_name": "gpu-req", "gpu_name": "stub",
-                                 "version": "2.0.0"})
+                                 "version": "2.0.0"},
+                           headers=_worker_headers("gpu-req"))
     assert response.status_code == 200, response.text
     control = response.json()
     request = control.get("self_test_request")
@@ -760,7 +778,8 @@ def test_heartbeat_delivers_bound_self_test_request(monkeypatch, tmp_path):
     response = client.post("/api/workers/heartbeat", json={
         "node_name": "gpu-req", "gpu_name": "stub", "version": "2.0.0",
         "self_test": {"status": "PASSED", "role": "gpu",
-                      "checked_at": "2099-12-31T23:59:59+00:00"}})
+                      "checked_at": "2099-12-31T23:59:59+00:00"}},
+        headers=_worker_headers("gpu-req"))
     assert response.status_code == 200, response.text
     assert rollout_status()["nodes"][0]["phase"] == "SELF_TESTING"
 
@@ -771,7 +790,7 @@ def test_heartbeat_delivers_bound_self_test_request(monkeypatch, tmp_path):
              "target_version": request["target_version"]}
     response = client.post("/api/workers/heartbeat", json={
         "node_name": "gpu-req", "gpu_name": "stub", "version": "2.0.0",
-        "self_test": bound})
+        "self_test": bound}, headers=_worker_headers("gpu-req"))
     assert response.status_code == 200, response.text
     assert rollout_status()["nodes"][0]["phase"] == "READY"
     assert response.json().get("self_test_request") is None

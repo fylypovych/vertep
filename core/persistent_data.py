@@ -87,6 +87,40 @@ def ensure_persistent_user_data(*, seed_overwrite: bool = False) -> dict:
     return {"characters_root":str(c_root),"brands_root":str(b_root),"workflows_root":str(w_root),"seeded":seeded if not should_seed else {},"migrated":migrated,"seed_skipped": not should_seed}
 
 
+LEGACY_EPHEMERAL_ROOTS = ("characters", "brands", "workflows")
+
+
+def persistent_roots() -> dict[str, Path]:
+    """The persistent destination root for each legacy ephemeral label."""
+    return {
+        "characters": persistent_characters_root(),
+        "brands": persistent_brands_root(),
+        "workflows": workflows_persistent_root(),
+    }
+
+
+def migrate_staged_legacy_roots(staging_root) -> dict[str, int]:
+    """Merge roots rescued from an old container into persistent storage.
+
+    ``staging_root/<label>/<container_id>`` holds the copy rescued *before* the
+    container was recreated (i.0.0.1.34).  Copies are non-overwriting and
+    idempotent, so a retried apply/interruption never loses or duplicates data.
+    Staging is left in place so a retry can still recover the only copy.
+    """
+    migrated: dict[str, int] = {}
+    staging_root = Path(staging_root)
+    for label, destination in persistent_roots().items():
+        label_dir = staging_root / label
+        if not label_dir.is_dir():
+            continue
+        count = 0
+        for container_dir in sorted(p for p in label_dir.iterdir() if p.is_dir()):
+            count += _copy_missing(container_dir, destination, overwrite=False)
+        if count:
+            migrated[label] = count
+    return migrated
+
+
 def ensure_persistent_user_data_legacy_migration() -> dict:
     """Migrate legacy ephemeral roots from /app/{characters,brands,workflows}.
 

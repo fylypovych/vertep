@@ -72,6 +72,43 @@ def _mp4(path: Path, size: int = 512) -> Path:
     return path
 
 
+def _wav(path: Path, seconds: float = 3.0, rate: int = 16000) -> Path:
+    """A real, decodable PCM WAV so an approved voice is genuine media.
+
+    The MPT engine hands the approved voice to the runtime and mixes it in the
+    post-step, so a stand-in that only looks like audio would not survive the route.
+    """
+    import math
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tone = b"".join(
+        struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * index / rate)))
+        for index in range(int(rate * seconds))
+    )
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(tone)
+    return path
+
+
+def _real_mp4(path: Path, seconds: float = 3.0) -> Path:
+    """A real, decodable MP4 so the MPT pre-cut and post-step FFmpeg stages run."""
+    from adapters.providers import NativeVertepEngine
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    NativeVertepEngine().render(
+        path,
+        images=[_png(path.with_suffix(".png"))],
+        durations=[seconds],
+        audio=_wav(path.with_suffix(".wav"), seconds=seconds),
+        aspect_ratio="16:9",
+    )
+    return path
+
+
 class _ExternalEngine:
     """A stand-in external engine: identifiable, and never rendering in CORE."""
 
@@ -1042,6 +1079,144 @@ def test_a_separate_worker_process_renders_the_dispatched_attempt(
     assert contract["engine_id"] == "money-printer"
     assert contract["engine_snapshot"]["submit_key"] == task["submit_key"]
     # The render stayed on the node: CORE promotes the bytes itself, from the contract.
+    assert not (node_root / "jobs" / finalized.job_id / "final" / "video-v1.mp4").exists()
+
+
+_WORKER_MPT_EXECUTOR = r'''
+"""Run the assembly route on the *real* MoneyPrinterEngine, as a node does.
+
+Only the upstream HTTP transport is stubbed (the node's own pinned runtime is a
+service the test cannot host); every other byte of the route is the engine's own
+code: task-local voice probe, material upload, approved-voice staging, submit,
+poll and verified import.
+"""
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+import httpx
+
+from adapters.providers import MoneyPrinterEngine
+from adapters.providers.base import BRIDGE_SCHEMA_VERSION
+from adapters.providers.video_engines import MONEY_PRINTER_CONTRACT
+from publishers.transport import FakeTransport
+from worker import role_executor
+
+
+def _staged_voice(digest):
+    """The wrapper's content-addressed answer to the approved-voice staging call.
+
+    The digest is the one of the approved voice CORE holds; delivery is
+    byte-identical, so the node's own bytes carry the same digest.
+    """
+    return httpx.Response(200, json={
+        "status": 200, "message": "success",
+        "data": {"voice": f"vertep-voice:{digest}.wav", "sha256": digest},
+    })
+
+
+task = json.loads(sys.stdin.read())
+digest = os.environ["MPT_VOICE_DIGEST"]
+result = Path(os.environ["MPT_RESULT_PATH"]).read_bytes()
+
+runtime_body = {
+    "service": "vertep-moneyprinter",
+    "upstream_commit": MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[1],
+    "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
+    "capabilities": {"task_local_voice": True, "reason": None},
+}
+
+engine = MoneyPrinterEngine(transport=FakeTransport([
+    httpx.Response(200, json=runtime_body),
+    httpx.Response(200, json={"status": 200, "data": {"file": "uploaded-scene.mp4"}}),
+    _staged_voice(digest),
+    httpx.Response(200, json={"status": 200, "data": {"task_id": "mpt-1"}}),
+    httpx.Response(200, json={"data": {"state": 1,
+                                      "videos": ["tasks/mpt-1/final-1.mp4"]}}),
+    httpx.Response(200, content=result),
+]))
+
+role_executor.providers = type("_P", (), {"video_engine": staticmethod(lambda: engine)})
+
+json.dump({"artifacts": role_executor.execute_assembly(task)}, sys.stdout)
+'''
+
+
+def test_a_separate_worker_process_renders_through_the_real_moneyprinter_engine(
+    assembly_state, monkeypatch, tmp_path_factory,
+):
+    """Issue #125: the separate Worker process runs the *real* MoneyPrinterEngine.
+
+    The route tests already prove the separate process with a node stand-in engine,
+    and the bridge tests prove the real engine in-process: neither proves the two
+    together. Here CORE dispatches an attempt whose snapshot names the real
+    ``MoneyPrinterEngine``, another process pulls the approved inputs over HTTP into
+    its own root, and *that* process renders through the engine's own code against
+    the pinned contract, returning the verifiable contract of its render. The
+    approved inputs are genuine media, because the engine's pre-cut and post-step
+    are real FFmpeg stages the route must survive.
+    """
+    from adapters.providers import MoneyPrinterEngine
+    from core.engine_config import engine_snapshot_fields
+
+    state = assembly_state
+    store = state["store"]
+    job_dir = Path(store.root) / state["job"].job_id
+
+    # Replace the fixture's signature-only clip and add the approved voice: the real
+    # engine's FFmpeg stages need media that actually decodes.
+    _real_mp4(state["materials"][0], seconds=3.0)
+    _wav(job_dir / "audio" / "voice.wav", seconds=3.0)
+
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
+    monkeypatch.setenv(MoneyPrinterEngine.env_url, "http://127.0.0.1:8199")
+    monkeypatch.setenv(MoneyPrinterEngine.env_token, "worker-token")
+    monkeypatch.setattr(tasks_api, "_valid_worker_request", lambda node_name, req: True)
+
+    engine = MoneyPrinterEngine()
+    _register_worker(store)
+    finalized = _dispatch(state, engine)
+    task = state["queue"].find(finalized.assembly_task_id)
+    _claim(video_engine={**engine_snapshot_fields(engine), "ready": True, "reason": None})
+
+    result = tmp_path_factory.mktemp("mpt") / "result.mp4"
+    _real_mp4(result, seconds=3.0)
+    node_root = tmp_path_factory.mktemp("node-host")
+    for name in ("CORE_URL", "CORE_API_URL", "VERTEP_CORE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    voice_digest = hashlib.sha256((job_dir / "audio" / "voice.wav").read_bytes()).hexdigest()
+
+    served: list[str] = []
+    with _core_input_server(served) as base:
+        completed = subprocess.run(
+            [sys.executable, "-c", _WORKER_MPT_EXECUTOR],
+            input=json.dumps(task), capture_output=True, text=True, cwd=str(REPO_ROOT),
+            env={**os.environ,
+                 "PYTHONPATH": str(REPO_ROOT), "PYTHONIOENCODING": "utf-8",
+                 "CORE_ADDRESS": base, "JOB_ROOT": str(node_root / "jobs"),
+                 "NODE_NAME": "gpu-01", "NODE_API_TOKEN": "worker-token",
+                 "MPT_RESULT_PATH": str(result), "MPT_VOICE_DIGEST": voice_digest},
+            timeout=300,
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    artifact = json.loads(completed.stdout)["artifacts"][0]
+    contract = artifact["contract"]
+    # The engine that rendered is the pinned one, and its contract is verifiable.
+    assert contract["engine_id"] == "money-printer"
+    assert contract["sha256"] == hashlib.sha256(
+        base64.b64decode(artifact["data_base64"])).hexdigest()
+    assert contract["video_version"] == 1
+    assert contract["engine_snapshot"]["submit_key"] == task["submit_key"]
+    # Every approved input reached the node, and nothing else was fetched.
+    approved = ([entry["reference"] for entry in finalized.video_engine_snapshot["materials"]]
+                + [entry["reference"] for entry in finalized.video_engine_snapshot["inputs"].values()
+                   if entry])
+    assert sorted(served) == sorted(approved)
+    # The render stayed on the node: CORE promotes the bytes from the contract.
     assert not (node_root / "jobs" / finalized.job_id / "final" / "video-v1.mp4").exists()
 
 

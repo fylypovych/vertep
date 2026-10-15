@@ -10,6 +10,7 @@ every verdict is derived from the evidence rather than from the intention.
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,49 @@ def test_every_criterion_cites_at_least_one_test_or_names_a_missing_environment(
 def test_a_real_stand_is_never_available_without_an_authorisation(report_module):
     assert report_module.available_capabilities()[report_module.STAND] is False
     assert report_module.STAND in report_module.capability_reasons()
+
+
+def _function_source(path: Path, name: str) -> str:
+    """The source of a top-level function, up to the next top-level definition."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith((f"def {name}(", f"async def {name}("))
+    )
+    body: list[str] = []
+    for line in lines[start:]:
+        if body and line.startswith(("def ", "async def ", "class ", "@")):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def test_declared_browser_evidence_does_not_mock_the_tested_settings_mutation(report_module):
+    """#128 §4: a declared Browser test may not substitute ``page.route`` for the
+    Settings mutation it is supposed to prove.
+
+    The engine screen is proven against the running CORE (``page.request`` to the real
+    API); a route handler that fulfils ``/api/settings/providers`` would make the test
+    green against a browser-only fake and prove nothing about persistence or the Worker.
+    The repoint-runtime behaviour is proven without a browser in the ``configuration``
+    row, so it must not reappear here as mocked evidence.
+    """
+    forbidden = re.compile(r"page\.route\(\s*[\"'][^\"']*api/settings")
+    offenders: list[str] = []
+
+    for row in report_module.acceptance_rows():
+        if report_module.BROWSER not in row["needs"]:
+            continue
+        for node_id in row["tests"]:
+            path = REPO_ROOT / node_id.split("::", 1)[0]
+            name = node_id.split("::", 1)[1].split("[", 1)[0]
+            if path.is_file() and forbidden.search(_function_source(path, name)):
+                offenders.append(node_id)
+
+    assert not offenders, (
+        f"Browser evidence mocks the tested Settings mutation: {sorted(offenders)}"
+    )
 
 
 # ---------------------------------------------------------------------------

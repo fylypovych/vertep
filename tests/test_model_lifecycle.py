@@ -26,18 +26,31 @@ from core.pull_executor import (
 client = TestClient(app)
 
 
+# Worker endpoints require an authenticated worker token (deny-by-default since
+# 0.0.2.51), matching tests/test_api.py.
+_WORKER_TOKEN = "model-lifecycle-worker-token"
+
+
+@pytest.fixture(autouse=True)
+def _worker_token(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+
+
 def _heartbeat(node_name, **overrides):
     payload = {"node_name": node_name, "role": "text", "vram_mb": 0,
                "capabilities": ["text_generation"], "supported_tasks": ["text"]}
     payload.update(overrides)
-    response = client.post("/api/workers/heartbeat", json=payload)
+    response = client.post("/api/workers/heartbeat", json=payload,
+                           headers={"x-vertep-node-name": node_name,
+                                    "x-vertep-token": _WORKER_TOKEN})
     assert response.status_code == 200, response.text
     return response.json()
 
 
 def _progress(node_name, operation_id, status="RUNNING", progress=0,
               phase="pull", error=None, token=None):
-    headers = {"x-vertep-token": token} if token else {}
+    headers = {"x-vertep-node-name": node_name,
+               "x-vertep-token": _WORKER_TOKEN if token is None else token}
     return client.post("/api/workers/model-progress", headers=headers, json={
         "node_name": node_name, "operation_id": operation_id,
         "status": status, "phase": phase, "progress": progress, "error": error,

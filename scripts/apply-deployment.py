@@ -15,7 +15,11 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.deployment_plan import create_plan
-from core.persistent_data import ensure_persistent_user_data_legacy_migration
+from core.persistent_data import (
+    LEGACY_EPHEMERAL_ROOTS,
+    ensure_persistent_user_data_legacy_migration,
+    migrate_staged_legacy_roots,
+)
 
 
 BOOTSTRAP_SERVICES = {"proxy", "core", "license-manager", "dispatcher", "scheduler",
@@ -117,6 +121,49 @@ def compose_rows(compose: list[str], selected: set[str], runner=subprocess.run) 
         if item.get("Service") in selected:
             rows.append(item)
     return rows
+
+
+def _running_container_ids(compose: list[str], selected: set[str], runner=subprocess.run) -> list[str]:
+    rows = compose_rows(compose, selected, runner)
+    return [row.get("ID") for row in rows
+            if row.get("ID") and row.get("State") == "running"]
+
+
+def _container_path_exists(container_id: str, path: str, runner=subprocess.run) -> bool:
+    probe = runner(["docker", "exec", container_id, "test", "-e", path],
+                   check=False, timeout=60, capture_output=True, text=True)
+    return getattr(probe, "returncode", 1) == 0
+
+
+def rescue_legacy_ephemeral_roots(compose: list[str], selected: set[str], staging_root: Path,
+                                  runner=subprocess.run) -> dict:
+    """Copy legacy ephemeral roots out of the live containers into staging.
+
+    Must run *before* ``compose up`` recreates/removes the containers: the old
+    container filesystem is otherwise lost and only the new image's ``/app``
+    remains (i.0.0.1.34).  The copy is staged (never in-place) and fail-closed:
+    if a root exists in a container but cannot be copied, the apply aborts
+    before touching the container so the only copy is never destroyed.
+
+    Returns ``{"<container_id>": ["characters", ...]}``.
+    """
+    staging_root.mkdir(parents=True, exist_ok=True)
+    rescued: dict[str, list[str]] = {}
+    for container_id in _running_container_ids(compose, selected, runner):
+        for label in LEGACY_EPHEMERAL_ROOTS:
+            source = f"/app/{label}"
+            if not _container_path_exists(container_id, source, runner):
+                continue
+            destination = staging_root / label / container_id
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            result = runner(["docker", "cp", f"{container_id}:{source}", str(destination)],
+                            check=False, timeout=600, capture_output=True, text=True)
+            if getattr(result, "returncode", 1) != 0:
+                raise RuntimeError(
+                    f"Не вдалося врятувати legacy root {source} з контейнера {container_id}: "
+                    f"{getattr(result, 'stderr', '') or 'docker cp failed'}")
+            rescued.setdefault(container_id, []).append(label)
+    return rescued
 
 
 def assert_migrate_evidence(rows: list[dict]) -> None:
@@ -337,6 +384,8 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
             command.extend(["-f", str(root / "docker-compose.nvidia.yml")])
         return command
 
+    rescue_staging = root / "config/legacy-rescue"
+
     def restore() -> dict:
         if previous_env:
             env_path.write_text(previous_env, encoding="utf-8")
@@ -354,6 +403,12 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
             ensure_persistent_user_data_legacy_migration()
         except Exception as error:  # noqa: BLE001 - never block restore on migration
             print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
+        # Merge the roots rescued before the containers were recreated so a
+        # failed apply does not lose the only copy of legacy user data.
+        try:
+            migrate_staged_legacy_roots(rescue_staging)
+        except Exception as error:  # noqa: BLE001
+            print(f"WARNING: staged legacy migration failed: {error}", file=sys.stderr)
         # A failed apply may have partially started/stopped the new service set;
         # restore the previously-working runtime so the host is not left half-applied.
         return _restore_runtime(compose_command(), previous_services, new_services, runner)
@@ -379,6 +434,22 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
                                         if isinstance(definition, dict)
                                         for service in definition["services"]}
     unwanted = sorted(all_services - selected)
+    # Rescue legacy ephemeral roots from the live containers before any
+    # recreate (i.0.0.1.34).  Non-destructive and fail-closed: on failure the
+    # config is restored and the apply aborts before any container is touched,
+    # so the only copy of legacy user data is never destroyed.
+    try:
+        rescue_legacy_ephemeral_roots(compose, selected, rescue_staging, runner)
+    except Exception:
+        if previous_env:
+            env_path.write_text(previous_env, encoding="utf-8")
+        else:
+            env_path.unlink(missing_ok=True)
+        if previous_plan:
+            plan_path.write_text(previous_plan, encoding="utf-8")
+        else:
+            plan_path.unlink(missing_ok=True)
+        raise
     status = {"state": "APPLYING", "role": role,
               "additional_roles": plan.get("additional_roles", []), "services": sorted(selected),
               "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -430,6 +501,11 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
             ensure_persistent_user_data_legacy_migration()
         except Exception as error:  # noqa: BLE001
             print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
+        # Merge the roots rescued from the pre-recreate containers.
+        try:
+            migrate_staged_legacy_roots(rescue_staging)
+        except Exception as error:  # noqa: BLE001
+            print(f"WARNING: staged legacy migration failed: {error}", file=sys.stderr)
         status.update({"state": "SUCCEEDED", "updated_at": datetime.now(timezone.utc).isoformat(),
                        "runtime_set_verified": True, "observed_services": sorted(observed)})
         atomic_json(root / "config/deployment-status.json", status)

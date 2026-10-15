@@ -199,10 +199,21 @@ def install_generator_stubs(monkeypatch, *, scenes: int = 2, on_render=None) -> 
 # ---------------------------------------------------------------------------
 
 
+def worker_token() -> str:
+    """Worker token expected by the CORE machine routes (deny-by-default)."""
+    return os.getenv("NODE_API_TOKEN", "")
+
+
+def worker_headers() -> dict:
+    token = worker_token()
+    return {"x-vertep-token": token} if token else {}
+
+
 def heartbeat(client, node_name: str, **overrides):
     payload = {"node_name": node_name, "vram_mb": 4096}
     payload.update(overrides)
-    return client.post("/api/workers/heartbeat", json=payload)
+    return client.post("/api/workers/heartbeat", json=payload,
+                       headers=worker_headers())
 
 
 def register_fleet(client, *, characters_root, character_id: str,
@@ -263,7 +274,8 @@ def create_telegram_job_via_webhook(*, topic: str = 'Telegram topic',
     headers = {'x-telegram-bot-api-secret-token': os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')}
     from fastapi.testclient import TestClient
     from core.app import app
-    c = client if client is not None else TestClient(app, raise_server_exceptions=False)
+    c = client if client is not None else TestClient(
+        app, raise_server_exceptions=False, headers=worker_headers())
     r = c.post('/api/telegram/webhook', json=payload, headers=headers)
     if r.status_code != 200:
         raise AssertionError(f'webhook failed: {r.status_code} {r.text}')

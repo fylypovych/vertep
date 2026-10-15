@@ -28,9 +28,20 @@ from core.system_state import (SystemState, dispatch_allowed, new_job_status,
                                 set_system_state)
 
 
+# Worker machine routes deny by default when no token is configured (since
+# 0.0.2.51); authenticate every request as this worker token.
+_WORKER_TOKEN = "queue-semantics-worker-token"
+
+
+@pytest.fixture(autouse=True)
+def _worker_token(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+
+
 @pytest.fixture
 def client():
-    return TestClient(app, raise_server_exceptions=False)
+    return TestClient(app, raise_server_exceptions=False,
+                      headers={"x-vertep-token": _WORKER_TOKEN})
 
 
 def _now_iso():
@@ -67,7 +78,8 @@ def _job(**overrides) -> Job:
 
 
 def _client():
-    return TestClient(app, raise_server_exceptions=False)
+    return TestClient(app, raise_server_exceptions=False,
+                      headers={"x-vertep-token": _WORKER_TOKEN})
 
 
 # ── contract ────────────────────────────────────────────────────

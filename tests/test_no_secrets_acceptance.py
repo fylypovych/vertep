@@ -8,10 +8,34 @@ Assert no secret value appears anywhere in the cycle.
 
 import json
 import base64
+import os
 
 import pytest
 
 from core.logging_config import secret_redact, JsonFormatter
+
+
+@pytest.fixture(autouse=True)
+def _isolate_surface_env():
+    """Issue #141: never leak CONFIG_ROOT/LOG_ROOT between suites.
+
+    The no-secrets surfaces resolve their roots from ``os.environ``.  A direct
+    assignment that is not undone makes every later API test read a deleted
+    temp root and answer 503, so the shared API regression used to depend on the
+    order of this module.  Snapshot and restore the exact prior environment
+    after every test in this module.
+    """
+    names = ("CONFIG_ROOT", "LOG_ROOT", "UPDATE_STATE_DIR")
+    saved = {name: os.environ.get(name) for name in names}
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
 
 
 SECRET_CORPUS = {
@@ -116,7 +140,7 @@ def test_json_formatter_redacts_extras():
     assert data["custom_list"][0] == "[REDACTED]"
 
 
-def test_read_logs_redacts_secrets():
+def test_read_logs_redacts_secrets(monkeypatch):
     """read_logs must redact secrets from each log line before returning."""
     from core.logging_config import read_logs
 
@@ -129,7 +153,7 @@ def test_read_logs_redacts_secrets():
             f.write(json.dumps({"msg": "api_key=leaked", "level": "INFO", "name": "test", "timestamp": "2026-01-01T00:00:00+00:00", "job_id": "j1", "node_name": "gpu-01"}) + "\n")
             f.write(json.dumps({"msg": "password=hunter2", "level": "ERROR", "name": "test", "timestamp": "2026-01-01T00:00:00+00:00", "job_id": "j1", "node_name": "gpu-01"}) + "\n")
 
-        os.environ["LOG_ROOT"] = tmpdir
+        monkeypatch.setenv("LOG_ROOT", tmpdir)
         records = read_logs(limit=10)
         for record in records:
             for value in SECRET_CORPUS.values():
@@ -169,7 +193,7 @@ def test_telegram_message_redacts():
     assert "[REDACTED]" in redacted
 
 
-def test_api_logs_endpoint_redacts():
+def test_api_logs_endpoint_redacts(monkeypatch):
     """The /api/logs endpoint must redact secrets via read_logs which calls secret_redact."""
     from core.api.observability import logs
 
@@ -177,7 +201,7 @@ def test_api_logs_endpoint_redacts():
     import os
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        os.environ["LOG_ROOT"] = tmpdir
+        monkeypatch.setenv("LOG_ROOT", tmpdir)
         log_path = os.path.join(tmpdir, "test.jsonl")
         with open(log_path, "w") as f:
             f.write(json.dumps({"msg": "api_key=leaked", "level": "INFO", "name": "test", "timestamp": "2026-01-01T00:00:00+00:00", "job_id": "j1", "node_name": "gpu-01"}) + "\n")
@@ -196,3 +220,82 @@ def test_error_api_responses_redact():
     body = json.loads(result.body)
     assert "leaked-value" not in body["detail"]
     assert "[REDACTED]" in body["detail"]
+
+
+def test_secret_corpus_never_crosses_real_surfaces(monkeypatch, tmp_path):
+    """Issue #141: drive one synthetic corpus through the *actual* log, API,
+    audit, Telegram and Runner-report boundaries and assert the secret values
+    never appear — proving the surface contract, not just ``secret_redact``."""
+    import uuid
+
+    import httpx
+
+    from core.logging_config import configure_logging, read_logs
+    from core.api.observability import logs as api_logs
+    from core import operations
+    from core.app import _json_error
+    from core.real_tests.runner import RealTestRunner
+    from core.real_tests.models import TestRun, CheckResult, CheckStatus
+    from adapters.telegram import TelegramAdapter
+
+    values = list(SECRET_CORPUS.values())
+    corpus_text = " ".join(f"{key}={value}" for key, value in SECRET_CORPUS.items())
+
+    def assert_clean(*artifacts):
+        for artifact in artifacts:
+            blob = artifact if isinstance(artifact, str) else json.dumps(
+                artifact, ensure_ascii=False, default=str)
+            for value in values:
+                assert value not in blob, f"secret {value!r} leaked: {blob[:300]}"
+
+    # log-write -> read_logs -> /api/logs
+    monkeypatch.setenv("LOG_ROOT", str(tmp_path / "logs"))
+    logger = configure_logging(f"no-secrets-{uuid.uuid4().hex}")
+    logger.info(corpus_text)
+    for handler in logger.handlers:
+        handler.flush()
+    assert_clean(read_logs(limit=50))
+    assert_clean(api_logs(limit=50))
+
+    # operations: error + audit (operator-visible surfaces)
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path / "config"))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "update"))
+    operation = operations.create_operation("update", "node-1")
+    operations.fail_operation(operation["operation_id"],
+                              f"api_key={SECRET_CORPUS['api_key']}")
+    entry = operations.audit_entry(operation["operation_id"], "FAILED",
+                                   f"token={SECRET_CORPUS['auth_token']}")
+    audit_file = operations._state_dir() / f"{operation['operation_id']}.audit.jsonl"
+    assert_clean(entry, audit_file.read_text(encoding="utf-8"))
+
+    # Telegram: the adapter's real send path, with the transport mocked out
+    sent = {}
+
+    def fake_post(url, json=None, **kwargs):
+        sent["payload"] = json
+        return httpx.Response(200, json={"ok": True}, request=httpx.Request("POST", url))
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:FAKE")
+    monkeypatch.setattr("adapters.telegram.httpx.post", fake_post)
+    TelegramAdapter().send_message("42", corpus_text)
+    assert_clean(sent["payload"])
+
+    # Runner report: the dict served by /api/real-tests/runs/<id>
+    run = TestRun(
+        rt_id="rt-1", rt_issue_number=9999, final_result="PASS",
+        environment={"proxy_password": SECRET_CORPUS["proxy_password"],
+                     "session_id": SECRET_CORPUS["session_id"],
+                     "note": "benign"},
+        hardware={"gpu": "NVIDIA", "proxy_password": SECRET_CORPUS["proxy_password"]},
+        checks=[CheckResult(name="check", status=CheckStatus.PASS,
+                            detail=f"auth_token={SECRET_CORPUS['auth_token']}")],
+        error_details=f"api_key={SECRET_CORPUS['api_key']}",
+    )
+    report = RealTestRunner()._format_report(run)
+    # benign values must be preserved, not blanket-redacted
+    assert report["environment"]["note"] == "benign"
+    assert report["hardware"]["gpu"] == "NVIDIA"
+    assert_clean(report)
+
+    # error API response
+    assert_clean(_json_error(f"api_key={SECRET_CORPUS['api_key']}", status=400).body.decode())

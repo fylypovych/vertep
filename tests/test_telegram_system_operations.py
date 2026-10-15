@@ -472,6 +472,56 @@ class TestRestoreOperation:
         assert adapter.answer_callback.called
         assert "завершено" in adapter.answer_callback.call_args[0][1].lower() or "completed" in adapter.answer_callback.call_args[0][1].lower()
 
+    def test_restore_execute_completes_two_phase_confirmation(self, monkeypatch):
+        """Issue #137: a confirmation_required challenge is executed with its token."""
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "d" * 32}, True))
+        monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "advance_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "complete_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "audit_entry", lambda *a, **kw: None)
+        calls = []
+
+        def fake_call_api(method, path, payload=None, **kwargs):
+            calls.append(path)
+            if path.endswith("/restore"):
+                return {"status": "confirmation_required", "confirmation_token": "tok-abc"}
+            if "/restore/confirm" in path:
+                return {"status": "done"}
+            return {"_error": "unexpected"}
+
+        monkeypatch.setattr(module, "_call_core_api", fake_call_api)
+        cb = {"id": "cb-rest-exec2", "data": "sys_restore_execute:snap1", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert any("/restore/confirm?token=tok-abc" in c for c in calls)
+        assert "завершено" in adapter.answer_callback.call_args[0][1].lower()
+
+    def test_restore_execute_fails_when_challenge_has_no_token(self, monkeypatch):
+        """Issue #137: a tokenless challenge must not be reported as success."""
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+        monkeypatch.setattr(module, "is_operation_in_progress", lambda t: None)
+        monkeypatch.setattr(module, "get_or_create_operation", lambda *a, **kw: ({"operation_id": "e" * 32}, True))
+        monkeypatch.setattr(module, "begin_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "advance_operation", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "complete_operation", lambda *a, **kw: None)
+        failed = {"called": False}
+        monkeypatch.setattr(module, "fail_operation", lambda *a, **kw: failed.update(called=True))
+        monkeypatch.setattr(module, "audit_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(module, "_call_core_api",
+                            lambda *a, **kw: {"status": "confirmation_required"})
+        cb = {"id": "cb-rest-exec3", "data": "sys_restore_execute:snap1", "message": {"chat": {"id": "42"}}}
+        module._handle_telegram_callback(cb)
+        assert failed["called"] is True
+        assert "не надав токен" in adapter.answer_callback.call_args[0][1].lower()
+
 
 class TestTestOperation:
     def test_test_menu_shows_options(self, monkeypatch):

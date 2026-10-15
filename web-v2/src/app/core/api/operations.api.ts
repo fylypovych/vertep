@@ -13,6 +13,7 @@ import {
   SecurityCheck,
   BackupListResponse,
   OperationAck,
+  RestoreProgress,
   SystemState,
 } from '../models';
 
@@ -67,8 +68,19 @@ export class OperationsApiService {
     return this.http.post<OperationAck>(`${this.base.url}/system/backups`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
 
+  /** Phase 1: request the two-phase restore; returns a confirmation challenge. */
   restoreBackup(snapshotId: string): Observable<OperationAck> {
     return this.http.post<OperationAck>(`${this.base.url}/system/backups/${this.base.enc(snapshotId)}/restore`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+
+  /** Phase 2: execute the destructive restore with the single-use confirmation token. */
+  confirmRestore(snapshotId: string, token: string): Observable<OperationAck> {
+    const query = `?token=${encodeURIComponent(token)}`;
+    return this.http.post<OperationAck>(`${this.base.url}/system/backups/${this.base.enc(snapshotId)}/restore/confirm${query}`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  }
+
+  restoreProgress(snapshotId: string): Observable<RestoreProgress> {
+    return this.http.get<RestoreProgress>(`${this.base.url}/system/backups/${this.base.enc(snapshotId)}/restore/progress`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
 
   recoverToNormal(): Observable<SystemState> {

@@ -2,13 +2,28 @@
 used by the Angular frontend match expected TypeScript models."""
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
 from core.app import app
 
 
+# Worker endpoints require an authenticated worker token (deny-by-default since
+# 0.0.2.51), matching tests/test_api.py.
+_WORKER_TOKEN = "web-ui-contract-token"
+
+
+@pytest.fixture(autouse=True)
+def _worker_token(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+
+
 def _client():
     return TestClient(app, raise_server_exceptions=False)
+
+
+def _worker_headers(node_name: str) -> dict:
+    return {"x-vertep-node-name": node_name, "x-vertep-token": _WORKER_TOKEN}
 
 
 def _auth():
@@ -54,14 +69,16 @@ def test_job_list_returns_array():
 def test_worker_heartbeat_returns_ok():
     client = _client()
     resp = client.post("/api/workers/heartbeat", json={
-        "node_name": "contract-worker", "vram_mb": 8192})
+        "node_name": "contract-worker", "vram_mb": 8192},
+        headers=_worker_headers("contract-worker"))
     assert resp.status_code == 200
 
 
 def test_worker_list_shape():
     client = _client()
     client.post("/api/workers/heartbeat", json={
-        "node_name": "wl-worker", "vram_mb": 4096})
+        "node_name": "wl-worker", "vram_mb": 4096},
+        headers=_worker_headers("wl-worker"))
     resp = client.get("/api/workers")
     assert resp.status_code == 200
     workers = resp.json()
@@ -619,7 +636,7 @@ def test_node_detail_has_typed_fields():
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 4096,
         "gpu_name": "RTX 4090", "role": "gpu",
-    })
+    }, headers=_worker_headers(node_name))
     resp = client.get(f"/api/nodes/{node_name}", auth=_auth())
     assert resp.status_code == 200
     detail = resp.json()
@@ -637,7 +654,7 @@ def test_worker_action_drain_accepted():
     node_name = "action-worker"
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 2048, "role": "gpu",
-    })
+    }, headers=_worker_headers(node_name))
     resp = client.post(f"/api/nodes/{node_name}/actions", json={"action": "drain"}, auth=_auth())
     assert resp.status_code == 200
     data = resp.json()
@@ -649,7 +666,7 @@ def test_worker_action_logs_accepted():
     node_name = "logs-worker"
     client.post("/api/workers/heartbeat", json={
         "node_name": node_name, "vram_mb": 1024, "role": "text",
-    })
+    }, headers=_worker_headers(node_name))
     resp = client.post(f"/api/nodes/{node_name}/actions", json={"action": "logs"}, auth=_auth())
     assert resp.status_code == 200
 

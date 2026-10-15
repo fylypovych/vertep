@@ -110,7 +110,8 @@ def test_apply_deployment_uses_only_catalog_services_and_erases_token(tmp_path):
     assert "NODE_ROLE=gpu" in environment
     assert "CORE_URL=https://core.example" in environment
     assert "REGISTRATION_TOKEN=\n" in environment
-    assert commands[0][-3:] == ["comfyui", "update-agent", "worker"]
+    pull = next(c for c in commands if c[:2] == ["docker", "compose"] and "pull" in c)
+    assert pull[-3:] == ["comfyui", "update-agent", "worker"]
     assert "core" in commands[-1]
 
 
@@ -632,3 +633,74 @@ def test_apply_refreshes_inventory_after_rollback(tmp_path):
     status = json.loads((root / "config/deployment-status.json").read_text(encoding="utf-8"))
     assert status["rollback"]["runtime_set_verified"] is True
     assert status["rollback"]["inventory_refreshed"] is True
+
+
+def test_apply_rescues_legacy_roots_before_recreate(tmp_path, monkeypatch):
+    """i.0.0.1.34: roots are copied out of the old container before `up`."""
+    from types import SimpleNamespace
+
+    root = fixture(tmp_path, "core")
+    characters = tmp_path / "persist" / "characters"
+    monkeypatch.setenv("CHARACTERS_ROOT", str(characters))
+    monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "persist" / "brands"))
+    monkeypatch.setenv("WORKFLOWS_ROOT", str(tmp_path / "persist" / "workflows"))
+    selected = {"proxy", "core", "postgres", "ollama"}
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["docker", "compose"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+            rows = [json.dumps({"Service": s, "ID": f"old-{s}", "State": "running",
+                                "Health": "healthy"}) for s in sorted(selected)]
+            return SimpleNamespace(stdout="\n".join(rows) + "\n", returncode=0, stderr="")
+        if command[:2] == ["docker", "exec"]:
+            exists = command[-1] == "/app/characters"
+            return SimpleNamespace(returncode=0 if exists else 1, stdout="", stderr="")
+        if command[:2] == ["docker", "cp"]:
+            destination = Path(command[3])
+            destination.mkdir(parents=True, exist_ok=True)
+            if command[2] == "old-core:/app/characters":
+                (destination / "mage.json").write_text("legacy", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = module().apply(root, runner=runner)
+    assert result["state"] == "SUCCEEDED"
+    # The rescued record is merged into the persistent root.
+    assert (characters / "mage.json").read_text(encoding="utf-8") == "legacy"
+    cp_index = next(i for i, c in enumerate(calls) if c[:2] == ["docker", "cp"])
+    up_index = next(i for i, c in enumerate(calls)
+                    if c[:2] == ["docker", "compose"] and "up" in c)
+    assert cp_index < up_index, "legacy roots must be rescued before recreate"
+
+
+def test_apply_aborts_before_recreate_when_rescue_fails(tmp_path, monkeypatch):
+    """i.0.0.1.34: a failed rescue must not destroy the only copy."""
+    from types import SimpleNamespace
+
+    root = fixture(tmp_path, "core")
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "persist" / "characters"))
+    selected = {"proxy", "core", "postgres", "ollama"}
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["docker", "compose"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+            rows = [json.dumps({"Service": s, "ID": f"old-{s}", "State": "running"})
+                    for s in sorted(selected)]
+            return SimpleNamespace(stdout="\n".join(rows) + "\n", returncode=0, stderr="")
+        if command[:2] == ["docker", "exec"]:
+            return SimpleNamespace(returncode=0 if command[-1] == "/app/characters" else 1,
+                                   stdout="", stderr="")
+        if command[:2] == ["docker", "cp"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="copy failed")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(RuntimeError, match="Врятувати|врятувати"):
+        module().apply(root, runner=runner)
+    # No container was recreated or removed on a failed rescue.
+    destructive = [c for c in calls if c[:2] == ["docker", "compose"]
+                   and any(verb in c for verb in ("up", "rm", "stop"))]
+    assert destructive == []
+    # Config is rolled back to the previous values instead of left half-applied.
+    assert "NODE_ROLE=unassigned" in (root / ".env").read_text(encoding="utf-8")

@@ -317,6 +317,114 @@ class TestSetupAPI:
         first_run_health()
         assert seen == ["gpu"]
 
+    def test_required_service_not_configured_blocks_ready(self, monkeypatch):
+        """i.0.0.1.52: core with PG/Redis unconfigured (None) must NOT be ready.
+
+        The audit's control case: docker/core_api/ollama OK but PostgreSQL and
+        Redis readiness is ``None`` previously mapped to OPTIONAL and reported
+        ready=True.  Required services must fail the gate when unconfigured.
+        """
+        monkeypatch.setenv("NODE_ROLE", "core")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks", lambda role: {
+            "role": role, "checked_at": "x",
+            "docker": (True, "ok"),
+            "core_api": (True, "local"),
+            "ollama": (True, "ok"),
+            "postgres": (None, "not-applicable: DATABASE_URL is not configured"),
+            "redis": (None, "not-applicable: REDIS_URL is not configured"),
+        })
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert result["ready"] is False
+        assert result["checks"]["postgres"].startswith("UNKNOWN")
+        assert result["checks"]["redis"].startswith("UNKNOWN")
+        # Optional Ollama stays OPTIONAL and does not itself block.
+        assert result["checks"]["ollama"] == "OK"
+
+    def test_core_ready_when_required_ok_and_optional_absent(self, monkeypatch):
+        """i.0.0.1.52: external/skip backend means Ollama is optional on core."""
+        monkeypatch.setenv("NODE_ROLE", "core")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks", lambda role: {
+            "role": role, "checked_at": "x",
+            "docker": (True, "ok"),
+            "core_api": (True, "local"),
+            "postgres": (True, "ok"),
+            "redis": (True, "ok"),
+            "ollama": (None, "not-applicable"),
+            "monitoring": (None, "not-applicable"),
+        })
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert result["ready"] is True
+        assert result["checks"]["ollama"] == "OPTIONAL"
+        assert result["checks"]["monitoring"] == "OPTIONAL"
+
+    def test_gpu_role_missing_gpu_blocks_ready(self, monkeypatch):
+        """i.0.0.1.52: a GPU node without a detected GPU is not ready."""
+        monkeypatch.setenv("NODE_ROLE", "gpu")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks", lambda role: {
+            "role": role, "checked_at": "x",
+            "docker": (True, "ok"),
+            "gpu": (None, "not-applicable: no GPU detected"),
+            "cuda": (True, "ok"),
+            "comfyui": (True, "ok"),
+        })
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert result["ready"] is False
+        assert result["checks"]["gpu"].startswith("UNKNOWN")
+
+    def test_text_role_requires_ollama(self, monkeypatch):
+        """i.0.0.1.52: Ollama is required on a text node, not optional."""
+        monkeypatch.setenv("NODE_ROLE", "text")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks", lambda role: {
+            "role": role, "checked_at": "x",
+            "docker": (True, "ok"),
+            "ollama": (None, "not-applicable"),
+        })
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert result["ready"] is False
+        assert result["checks"]["ollama"].startswith("UNKNOWN")
+
+    def test_unknown_non_tuple_required_status_blocks_ready(self, monkeypatch):
+        """i.0.0.1.52: an UNKNOWN required status never reads as ready."""
+        monkeypatch.setenv("NODE_ROLE", "core")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks", lambda role: {
+            "role": role, "checked_at": "x",
+            "docker": "UNKNOWN",
+            "postgres": (True, "ok"),
+            "redis": (True, "ok"),
+            "core_api": (True, "local"),
+        })
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert result["ready"] is False
+
+    def test_absent_required_check_blocks_ready(self, monkeypatch):
+        """i.0.0.1.52: a required service missing entirely fails the gate."""
+        monkeypatch.setenv("NODE_ROLE", "core")
+        import core.health_checks as hc
+        monkeypatch.setattr(hc, "run_checks", lambda role: {
+            "role": role, "checked_at": "x",
+            "docker": (True, "ok"),
+            # postgres/redis/core_api absent from the report entirely.
+        })
+        monkeypatch.setattr(hc, "health_status", lambda c: "HEALTHY")
+        from core.api.setup import first_run_health
+        result = first_run_health()
+        assert result["ready"] is False
+
 
 class TestSetupBackendFieldAlignment:
     """i.0.0.0.98: the Angular wizard must send ``ai_backend`` so the server
@@ -410,6 +518,19 @@ class TestSetupBackendFieldAlignment:
         asyncio.run(core_app.first_run_complete(Request()))
         assert captured["backend"] == "ollama"
         assert captured["complete_backend"] == "ollama"
+
+    def test_wizard_fallback_never_masks_invalid_backend(self):
+        """i.0.0.1.51: the UI must hand the selected backend to ``ai_backend``
+        without an ``|| "ollama"`` fallback, so the server sees an invalid or
+        empty selection and fails closed instead of provisioning "ollama"."""
+        source = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.ts").read_text(
+            encoding="utf-8")
+        complete_call = re.search(
+            r"const p: Record<string, unknown> = \{[^}]*\}", source, re.DOTALL)
+        assert complete_call is not None
+        payload = complete_call.group(0)
+        assert "ai_backend: this.form.backend_selected" in payload
+        assert '|| "ollama"' not in payload
 
 
 class TestSetupWizardHTML:

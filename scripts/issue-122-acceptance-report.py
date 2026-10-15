@@ -162,19 +162,31 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "lifecycle_state",
+        "title": "Disposable lifecycle state: optional runtime install, backup/restore of "
+                 "engine selection/endpoint/secret references, mappings, artifacts/hashes, "
+                 "history and approvals without a container",
+        "owner": "#122 §6 Lifecycle, #129 (#34/#35/#42)",
+        "needs": (),
+        "tests": (
+            "tests/test_moneyprinter_runtime.py::test_a_backup_restore_round_trip_preserves_the_moneyprinter_engine_state",
+            "tests/test_moneyprinter_runtime.py::test_compose_keeps_the_runtime_opt_in",
+            "tests/test_moneyprinter_runtime.py::test_moneyprinter_is_not_part_of_any_node_role",
+            "tests/test_moneyprinter_runtime.py::test_configuration_lock_keeps_auto_upload_disabled",
+            "tests/test_moneyprinter_runtime.py::test_pinned_reference_has_a_single_source",
+        ),
+    },
+    {
         "id": "lifecycle",
         "title": "Optional runtime install/update/rollback, сумісність bridge/config "
-                 "snapshot, backup/restore config/secret references/mapping/artifacts",
+                 "snapshot (container-gated)",
         "owner": "#122 §6 Lifecycle, #34/#35/#42",
         "needs": (RUNTIME,),
         "tests": (
-            "tests/test_moneyprinter_runtime.py::test_compose_keeps_the_runtime_opt_in",
             "tests/test_moneyprinter_runtime.py::test_release_builds_the_moneyprinter_image",
             "tests/test_moneyprinter_runtime.py::test_runtime_check_builds_the_pinned_image_without_redeclaring_pins",
             "tests/test_moneyprinter_runtime.py::test_ci_runs_the_disposable_runtime_verification",
             "tests/test_moneyprinter_runtime.py::test_entrypoint_verifies_both_bridge_versions_independently",
-            "tests/test_moneyprinter_runtime.py::test_configuration_lock_keeps_auto_upload_disabled",
-            "tests/test_moneyprinter_runtime.py::test_pinned_reference_has_a_single_source",
         ),
     },
     {
@@ -250,15 +262,22 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
     {
         "id": "browser",
         "title": "Browser: Native default, MPT configure/apply/error/rollback, "
-                 "reload/restart, активний Job при switch, admin/viewer, system-state lock",
+                 "явне повернення Native, reload/restart, активний Job при switch, "
+                 "admin/viewer, system-state lock",
         "owner": "#122 §6 Browser, #82/#99",
         "needs": (BROWSER,),
+        # §6 Browser evidence must not substitute a mocked Settings mutation for the
+        # behaviour under test (#128 §4). The repoint-runtime behaviour is proven without
+        # a browser in the ``configuration`` row; the presentational ``page.route``
+        # variant stays in the file but is deliberately not declared as acceptance
+        # evidence. ``test_declared_browser_evidence_does_not_mock_the_tested_settings_mutation``
+        # keeps this honest.
         "tests": (
             "tests/test_browser_e2e.py::test_real_backend_video_engine_shows_the_effective_executor",
             "tests/test_browser_e2e.py::test_real_backend_video_engine_refuses_a_runtime_it_cannot_prove",
+            "tests/test_browser_e2e.py::test_real_backend_video_engine_applies_a_runtime_and_returns_to_native",
             "tests/test_browser_e2e.py::test_real_backend_viewer_cannot_change_the_video_engine",
             "tests/test_browser_e2e.py::test_real_backend_system_state_locks_the_video_engine",
-            "tests/test_browser_e2e.py::test_settings_video_engine_repoints_the_runtime_of_the_current_engine",
         ),
     },
     {

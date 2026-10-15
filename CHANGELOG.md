@@ -1,11 +1,20 @@
 # Changelog
 
-## Unreleased
+## ПРАВИЛЬНА НАЗВА: 0.0.2.54
+- Issue #150-153 — Core rollout coordinator та release contract validation:
+- `scripts/core-rollout-coordinator.py` (new): Orchestrates one-node-at-a-time rolling updates with canary promotion, health gates, automatic rollback on timeout or failure; supports workers-first, core-first, custom order.
+- `core/release_identity.py` (new): Release identity & contract validation — deterministic VERSION/CHANGELOG/releases/<ver>.md/git tag consistency checks; used by CI gate and release qualification.
+- `scripts/runtime-contract.py`, `scripts/qualify-release.py`, `scripts/build-runtime-bundle.py`: Hardened runtime bundle build, manifest, checksums, SBOM, digital signature; release gate waits for CI + Browser E2E green on exact SHA.
+- `core/real_tests/`: Real-test runner with GitHub integration — runner, storage, github modules; artifact download, report upload, run monitoring; skip/allowlist logic for offline contexts.
+- `tests/test_core_rollout_coordinator.py`, `tests/test_backfill_postgres.py`, `tests/test_backup_restore_durable.py`, `tests/test_apply_deployment_docker.py`: New acceptance tests for rollout coordinator, Postgres backfill, durable backup/restore, apply-deployment docker mode.
+- `tests/test_real_tests.py`, `tests/test_issue_122_acceptance_report.py`: Real-test runner integration tests; issue-122 acceptance report script.
+- `services/backup_service.py`: Enhanced backup/restore with durability guarantees, manifest tracking, S3-compatible support.
+- `core/api/setup.py`, `core/app.py`, `core/persistent_data.py`: Setup wizard hardening, persistent data integrity, idempotent migrations.
+- `web-v2/`: Setup wizard fixes, characters component updates, backup section enhancements, toast notifications.
+- CI/CD: `.github/workflows/ci.yml`, `.github/workflows/release.yml` — release gate, contract validation, real-test runner integration.
+- Dockerfile, config schemas, update-agent, apply-deployment, issue-122 report: Hardened deployment artifacts and validation scripts.
 
-- Оновлено конфігурацію Docker Compose та Dockerfile для ComfyUI
-- Додано入口точка для ComfyUI образ
-- Оновлено core/app.py та worker/service.py
-- Додано тести для video revision
+## Unreleased
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.51
 - Issue i.0.0.1.17 — Provider switch end-to-end: CORE → persisted overrides → Worker heartbeat → executor env → voice preview + effective config after restart; loopback TTS runtime proves the full config propagation path; executor config carries only allowlisted non-secrets; preview refuses switch that missed the executor.

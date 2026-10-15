@@ -1211,6 +1211,38 @@ def test_backup_create_list_progress_through_core_proxy(monkeypatch):
     assert resp.json()["progress"] == 50
 
 
+def test_backup_restore_confirmation_through_core_proxy(monkeypatch):
+    """Issue #137: CORE forwards the single-use confirmation token to Backup Service."""
+    calls = []
+
+    async def fake_request(self, method, url, **kwargs):
+        calls.append((method, url, kwargs.get("params")))
+        if "/restore/confirm" in url:
+            return _FakeResponse(200, {"snapshot_id": "snap-1", "status": "done"})
+        if url.endswith("/restore"):
+            return _FakeResponse(200, {"status": "confirmation_required",
+                                       "confirmation_token": "tok123"})
+        return _FakeResponse(404, {"detail": "not found"})
+
+    monkeypatch.setenv("BACKUP_URL", "http://backup:8080")
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+
+    challenge = _tc.post("/api/system/backups/snap-1/restore", json={})
+    assert challenge.status_code == 200
+    assert challenge.json()["status"] == "confirmation_required"
+    assert challenge.json()["confirmation_token"] == "tok123"
+
+    confirm = _tc.post("/api/system/backups/snap-1/restore/confirm?token=tok123")
+    assert confirm.status_code == 200
+    assert confirm.json()["status"] == "done"
+    assert calls[-1] == ("POST", "http://backup:8080/snapshots/snap-1/restore/confirm",
+                         {"token": "tok123"})
+
+    # A missing/invalid token must be rejected before reaching the Backup Service.
+    bad = _tc.post("/api/system/backups/snap-1/restore/confirm")
+    assert bad.status_code == 422
+
+
 def test_internal_api_sanitizes_upstream_errors(monkeypatch):
     """Issue #101: _internal_api must not leak raw upstream response text."""
     import core.app as core_app
@@ -1827,3 +1859,16 @@ def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypa
     assert job.character_id == "test-telegram-char"
     assert job.source == f"telegram:{chat_id}:1", "Job source should include chat_id and message_id"
     assert job.workflow == "workflows/image/custom.json", "Job should use character's workflow"
+
+    # i.0.0.1.57: the created Job must survive a storage reload, not only the
+    # in-process store. A fresh JobStore over the same root re-reads job.json
+    # from disk, proving the webhook-created Job is durably persisted.
+    from core.pipeline import JobStore
+    from core.repository import FileRepository
+    reloaded = JobStore(root=str(store.root), repository=FileRepository(store.root))
+    persisted = reloaded.jobs.get(job_id)
+    assert persisted is not None, "Job must persist after storage reload"
+    assert persisted.topic == "Test topic from Telegram"
+    assert persisted.character_id == "test-telegram-char"
+    assert persisted.workflow == "workflows/image/custom.json"
+    assert persisted.source == f"telegram:{chat_id}:1"

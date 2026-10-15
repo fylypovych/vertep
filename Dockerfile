@@ -3,7 +3,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl openssl jq && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 ARG VERTEP_VERSION=dev
-RUN printf '%s\n' "$VERTEP_VERSION" > VERSION
+ARG VERTEP_RELEASE_SHA=
+ARG VERTEP_ENVIRONMENT=production
+RUN printf '%s\n' "$VERTEP_VERSION" > VERSION \
+ && jq -n --arg v "$VERTEP_VERSION" --arg s "$VERTEP_RELEASE_SHA" --arg e "$VERTEP_ENVIRONMENT" \
+      '{version:$v, commit_sha:$s, environment:$e}' > RELEASE_IDENTITY.json
 RUN pip install --no-cache-dir -r requirements.txt
 
 FROM node:24-slim AS web-v2

@@ -20,7 +20,7 @@ def _metadata(path: Path) -> dict:
 def build_contract(artifact_root: Path, version: str, sequence: int, channel: str,
                    role_catalog: str, image_lock: Path, sbom: str,
                    issued_at: datetime, validity_days: int,
-                   compatibility: dict) -> dict:
+                   compatibility: dict, source_commit_sha: str) -> dict:
     catalog_path = artifact_root / role_catalog
     sbom_path = artifact_root / sbom
     roles = json.loads(catalog_path.read_text(encoding="utf-8"))
@@ -45,6 +45,7 @@ def build_contract(artifact_root: Path, version: str, sequence: int, channel: st
         "product": "vertep",
         "version": version,
         "release_sequence": sequence,
+        "source_commit_sha": source_commit_sha,
         "channel": channel,
         "issued_at": issued_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "expires_at": (issued_at + timedelta(days=validity_days)).astimezone(
@@ -83,6 +84,8 @@ def main() -> None:
     build.add_argument("--private-key", type=Path, required=True)
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--validity-days", type=int, default=30)
+    build.add_argument("--source-commit-sha", required=True,
+                       help="Full 40-char source commit SHA this release was built from")
     build.add_argument("--core-api", type=int, default=1)
     build.add_argument("--worker-api", type=int, default=1)
     build.add_argument("--database-schema", type=int, default=1)
@@ -109,7 +112,7 @@ def main() -> None:
         contract = build_contract(root, args.version, args.sequence, args.channel,
                                   args.roles, args.image_lock, args.sbom,
                                   datetime.now(timezone.utc), args.validity_days,
-                                  compatibility)
+                                  compatibility, args.source_commit_sha)
         signed = sign_release_contract(contract, args.private_key)
         args.output.write_text(json.dumps(signed, ensure_ascii=False, indent=2) + "\n",
                                encoding="utf-8")

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Browser E2E smoke tests for Vertep Web UI V2."""
+import contextlib
 import json
 import os
 import re
@@ -639,6 +640,12 @@ def _external_engine_state(endpoint):
 
 def test_settings_video_engine_repoints_the_runtime_of_the_current_engine():
     """P8: адресу runtime можна змінити, не перемикаючи сам движок.
+
+    Presentational only: this test mocks ``/api/settings/providers/video_engine`` with
+    ``page.route``, so per #128 §4 it is deliberately NOT declared as acceptance evidence.
+    The repoint behaviour is proven without a browser in the ``configuration`` row, and a
+    real-backend browser proof cannot exist without the pinned runtime. It stays here to
+    keep the screen's local behaviour covered.
 
     Кнопка «Застосувати» була прив'язана лише до імені движка, тому вже ефективний
     MoneyPrinterTurbo не мож було перевести на інший адрес runtime узагалі. Тепер Apply
@@ -2798,3 +2805,175 @@ def test_real_backend_system_state_locks_the_video_engine():
         finally:
             _write_system_state("NORMAL", "Browser E2E teardown")
             browser.close()
+
+
+def _ready_runtime_report() -> dict:
+    """A readiness report that satisfies the pinned MoneyPrinter contract."""
+    from adapters.providers.base import BRIDGE_SCHEMA_VERSION, FIXED_SUBMIT_FIELDS
+    from adapters.providers.video_engines import MONEY_PRINTER_CONTRACT
+
+    pinned = MONEY_PRINTER_CONTRACT.upstream_reference.split("@")[-1]
+    return {
+        "checks": {
+            "upstream_auth_enforced": True,
+            "submit_schema": list(FIXED_SUBMIT_FIELDS),
+            "snapshot": {
+                "upstream_commit": pinned,
+                "image_digest": "sha256:" + "a" * 64,
+                "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
+            },
+        },
+    }
+
+
+@contextlib.contextmanager
+def _ready_runtime():
+    """A real listener that proves the pinned inventory over a socket.
+
+    CORE and the browser test share the host, so the CORE verifies the switch by
+    talking to this endpoint over HTTP. That is a real runtime address, not a
+    ``page.route`` handler: the persisted override and the effective engine both
+    depend on the CORE reaching it.
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - name imposed by the base class
+            report = getattr(self.server, "report", None)
+            if self.path.rstrip("/") != "/health" or not isinstance(report, dict):
+                self.send_error(404)
+                return
+            body = json.dumps(report).encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # noqa: A003 - name imposed by the base class
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server.report = _ready_runtime_report()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_real_backend_video_engine_applies_a_runtime_and_returns_to_native():
+    """P8/#128: apply an external engine through the UI and explicitly return to Native.
+
+    The runtime is a real listener the CORE verifies over HTTP, so the apply proves the
+    same persistence path the Worker depends on; the explicit return proves the operator
+    can always come back to the built-in engine without a shell.
+    """
+    with _ready_runtime() as endpoint:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page_errors, console_errors = _attach_error_collector(page)
+            try:
+                _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+                page.goto(f"{BASE_URL}/settings?tab=video-engine")
+                expect(page.get_by_test_id("video-engine-panel")).to_be_visible(timeout=20000)
+
+                page.select_option("[data-testid='video-engine-select']", "money-printer")
+                page.fill("[data-testid='video-engine-endpoint']", endpoint)
+                with page.expect_response(
+                        lambda response: "/api/settings/providers/video_engine" in response.url
+                        and response.request.method == "POST") as applied:
+                    page.click("[data-testid='video-engine-apply']")
+                assert applied.value.status == 200, applied.value.text()
+                expect(page.get_by_test_id("video-engine-effective")).to_have_text(
+                    "MoneyPrinterTurbo", timeout=20000)
+                assert _engine_state(page)["effective"] == "money-printer", \
+                    "the apply must be effective on the running CORE, not only on screen"
+
+                page.select_option("[data-testid='video-engine-select']", "native")
+                with page.expect_response(
+                        lambda response: "/api/settings/providers/video_engine" in response.url
+                        and response.request.method == "POST") as reverted:
+                    page.click("[data-testid='video-engine-apply']")
+                assert reverted.value.status == 200, reverted.value.text()
+                expect(page.get_by_test_id("video-engine-effective")).to_have_text(
+                    "Vertep Native", timeout=20000)
+                assert _engine_state(page)["effective"] == "native", \
+                    "an explicit return to Native must reach the running CORE"
+                _assert_no_js_errors(page_errors, console_errors)
+            finally:
+                # A failed assertion must not leave the CORE on an external engine for
+                # the rest of the run.
+                try:
+                    page.request.post(
+                        f"{BASE_URL}/api/settings/providers/video_engine",
+                        data={"backend": "native"}, headers=_csrf_headers(page.context),
+                    )
+                except Exception:  # noqa: BLE001 - best-effort teardown
+                    pass
+                browser.close()
+
+
+def test_backup_restore_runs_the_two_phase_flow_through_the_ui():
+    """i.0.0.1.37: the backup screen must confirm, execute with the token, poll progress.
+
+    The mock reproduces the CORE contract: the first restore request is answered with a
+    ``confirmation_required`` challenge carrying a single-use token; only the follow-up
+    ``/restore/confirm?token=`` may start the destructive work. The screen must never
+    report the challenge itself as a completed restore.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
+        _mock_session(page)
+        _mock_status(page)
+
+        confirm_urls: list[str] = []
+        progress_urls: list[str] = []
+
+        page.route("**/api/system/backups", lambda route: (
+            route.fulfill(json={"snapshots": [
+                {"snapshot_id": "snap-1", "created_at": "2026-09-08T10:00:00Z"},
+            ]}) if route.request.method == "GET" else route.fulfill(json={"status": "done"})
+        ))
+        page.route("**/api/system/backups/snap-1/restore", lambda route: route.fulfill(json={
+            "status": "confirmation_required", "confirmation_token": "tok-abc",
+            "snapshot_id": "snap-1",
+        }))
+
+        def handle_confirm(route):
+            confirm_urls.append(route.request.url)
+            route.fulfill(json={"status": "running", "snapshot_id": "snap-1"})
+
+        def handle_progress(route):
+            progress_urls.append(route.request.url)
+            route.fulfill(json={"status": "done", "progress": 100, "message": "Готово"})
+
+        page.route("**/api/system/backups/snap-1/restore/progress", handle_progress)
+        page.route("**/api/system/backups/snap-1/restore/confirm**", handle_confirm)
+
+        page.goto(f"{BASE_URL}/settings?tab=backup")
+        expect(page.locator("[data-testid='settings-backup']")).to_be_visible()
+        expect(page.locator("[data-testid='backup-restore-button']")).to_be_visible()
+
+        page.click("[data-testid='backup-restore-button']")
+        # The local confirmation gates phase 2 — nothing destructive happens yet.
+        expect(page.get_by_role("dialog", name="Відновити резервну копію")).to_be_visible()
+        expect(page.get_by_role("status")).not_to_contain_text("Відновлення завершено")
+        page.get_by_role("button", name="Підтвердити").click()
+
+        # Phase 2 executes with the single-use token and is followed to a terminal state.
+        expect(page.get_by_role("status")).to_contain_text("Відновлення завершено")
+        assert confirm_urls, "phase 2 (/restore/confirm) must be called after confirmation"
+        assert "token=tok-abc" in confirm_urls[0], confirm_urls[0]
+        assert progress_urls, "the UI must poll the restore progress endpoint"
+        assert page_errors == [], f"pageerror: {page_errors}"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()

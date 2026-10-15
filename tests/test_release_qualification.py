@@ -70,13 +70,14 @@ def artifact_fixture(tmp_path):
 
 
 def build_manifest(bundle, private_path, version, sequence, image_lock,
-                   issued_at=None, validity_days=30):
+                   issued_at=None, validity_days=30, source_commit_sha="c" * 40):
     contract = contract_builder().build_contract(
         bundle, version, sequence, "stable", "config/node_roles.json", image_lock,
         "sbom.cdx.json", issued_at or datetime.now(timezone.utc), validity_days,
         {"core_api": 1, "worker_api": 1, "database_schema": 9,
          "database_strategy": "expand", "rollback_safe": True,
          "minimum_version": "0.0.0.1"},
+        source_commit_sha,
     )
     signed = sign_release_contract(contract, private_path)
     (bundle / "manifest.json").write_text(
@@ -90,8 +91,9 @@ def rewrite_manifest(bundle, contract, private_path):
         json.dumps(signed, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def qualify_artifact(bundle, public_path):
-    report = module().qualify(ROOT, artifact_root=bundle, public_key=public_path)
+def qualify_artifact(bundle, public_path, expected_source_sha=None):
+    report = module().qualify(ROOT, artifact_root=bundle, public_key=public_path,
+                              expected_source_sha=expected_source_sha)
     return report, {check["name"]: check for check in report["checks"]}
 
 
@@ -143,7 +145,8 @@ def test_valid_artifact_root_passes_release_gates(tmp_path):
                  "role_catalog_bound", "sbom_bound", "manifest_signature_verified",
                  "manifest_version_matches_version_file", "manifest_images_match_images_lock",
                  "image_digests_match_manifest", "manifest_sbom_hash_matches_sbom",
-                 "manifest_channel_is_stable", "manifest_release_sequence_matches_version"):
+                  "manifest_channel_is_stable", "manifest_release_sequence_matches_version",
+                  "manifest_source_commit_sha_bound"):
         assert gates[name]["passed"], gates[name]
 
 
@@ -155,6 +158,25 @@ def test_tampered_artifact_fails_digest_recomputation(tmp_path):
     assert not report["passed"]
     assert not gates["artifact_digests_recomputed"]["passed"]
     assert not gates["release_artifact_gates"]["passed"]
+
+
+def test_foreign_source_sha_fails_binding(tmp_path):
+    """Issue #146: a manifest bound to another commit must not qualify.
+
+    The bundle is otherwise fully valid; only its ``source_commit_sha`` points
+    at a different commit, so the qualification must reject it against the
+    expected release SHA rather than trusting the field's mere presence.
+    """
+    bundle, private, public, version, sequence, _ = artifact_fixture(tmp_path)
+    build_manifest(bundle, private, version, sequence, bundle / "images.json",
+                   source_commit_sha="d" * 40)
+    report, gates = qualify_artifact(bundle, public, expected_source_sha="e" * 40)
+    assert not report["passed"]
+    assert not gates["manifest_source_commit_sha_bound"]["passed"]
+    assert not gates["release_artifact_gates"]["passed"]
+    # The same bundle qualifies when the expected SHA matches.
+    report_ok, gates_ok = qualify_artifact(bundle, public, expected_source_sha="d" * 40)
+    assert gates_ok["manifest_source_commit_sha_bound"]["passed"]
 
 
 def test_signature_from_wrong_key_is_rejected(tmp_path):

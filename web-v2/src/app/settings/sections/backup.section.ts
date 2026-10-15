@@ -1,10 +1,11 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { map, Observable } from 'rxjs';
+import { map, Observable, of, throwError, timer } from 'rxjs';
+import { switchMap, takeWhile } from 'rxjs/operators';
 import { OperationsApiService } from '../../core/api/operations.api';
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
-import { BackupInfo, BackupListResponse } from '../../core/models';
+import { BackupInfo, BackupListResponse, OperationAck } from '../../core/models';
 import { RemoteState, RemoteMutation } from '../../core/state/remote-state';
 import { VertepDatePipe } from '../../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../../shared/loading-state.component';
@@ -79,10 +80,57 @@ export class BackupSectionComponent implements OnInit {
       if (!ok) return;
       this.restore
         .then(() => { this.toast.show('Відновлення завершено', 'success'); this.loadBackups(); })
-        .run(() => this.ops.restoreBackup(snapshotId), {
+        .run(() => this.ops.restoreBackup(snapshotId).pipe(
+          switchMap((ack) => this.executeConfirmed(snapshotId, ack)),
+        ), {
           fallbackMessage: 'Не вдалося відновити резервну копію',
           onProgress: (p) => { this.restore.progress.set(p); },
         });
     });
+  }
+
+  /**
+   * Issue #137: after the confirmation challenge, execute the destructive restore
+   * with the single-use token and follow its live progress to a terminal state.
+   * A `confirmation_required` acknowledgement is never reported as a success.
+   */
+  private executeConfirmed(snapshotId: string, ack: OperationAck): Observable<OperationAck> {
+    if (ack?.status === 'confirmation_required') {
+      if (!ack.confirmation_token) {
+        return throwError(() => new Error('Backend не надав токен підтвердження відновлення'));
+      }
+      this.restore.progress.set(0);
+      this.restore.message.set('Виконую відновлення...');
+      return this.ops.confirmRestore(snapshotId, ack.confirmation_token).pipe(
+        switchMap((result) => this.awaitTerminal(snapshotId, result)),
+      );
+    }
+    return this.awaitTerminal(snapshotId, ack);
+  }
+
+  private awaitTerminal(snapshotId: string, ack: OperationAck): Observable<OperationAck> {
+    if (ack?.status === 'done') return of(ack);
+    if (ack?.status === 'error' || ack?.error) {
+      return throwError(() => new Error(ack?.message || ack?.error || 'Відновлення завершилось з помилкою'));
+    }
+    let attempts = 0;
+    return timer(1000, 1000).pipe(
+      takeWhile((tick) => tick < 600),
+      switchMap(() => this.ops.restoreProgress(snapshotId)),
+      map((progress) => {
+        attempts += 1;
+        this.restore.progress.set(progress?.progress ?? null);
+        this.restore.message.set(progress?.message ?? null);
+        return progress;
+      }),
+      takeWhile((progress) => progress?.status !== 'done' && progress?.status !== 'error', true),
+      switchMap((progress) => {
+        if (progress?.status === 'done') return of<OperationAck>({ status: 'done', snapshot_id: snapshotId });
+        if (progress?.status === 'error' || attempts >= 600) {
+          return throwError(() => new Error(progress?.message || 'Відновлення не завершилось'));
+        }
+        return throwError(() => new Error('Відновлення перевищило час очікування'));
+      }),
+    );
   }
 }

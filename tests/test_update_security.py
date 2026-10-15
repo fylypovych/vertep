@@ -542,24 +542,133 @@ def test_wait_for_drain_blocks_on_cancel_fence(tmp_path, monkeypatch):
     assert not calls
 
 
-def test_run_fenced_aborts_on_fence_during_apply(tmp_path, monkeypatch):
-    """A cancel fence appearing mid-apply stops run_fenced instead of letting the command finish."""
-    import time as _time
+class _LiveLease:
+    def __init__(self):
+        self.calls = 0
+
+    def assert_current(self):
+        self.calls += 1
+        return None
+
+
+def test_run_fenced_stops_apply_and_delayed_side_effect_on_cancel_fence(tmp_path, monkeypatch):
+    """A cancel fence appearing mid-apply must abort the privileged command, not
+    merely raise in the caller: the delayed host side effect must never land."""
     agent = _load_agent()
     monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.01")
+    monkeypatch.setenv("UPDATE_FENCE_KILL_TIMEOUT", "5")
+    marker = tmp_path / "side-effect.txt"
     fence = tmp_path / "cancel-fence.json"
-
-    def slow_run(command, root, extra_env=None):
-        fence.write_text(json.dumps({"operation_id": "a" * 32}), encoding="utf-8")
-        _time.sleep(0.3)
-        return "applied"
-    monkeypatch.setattr(agent, "run", slow_run)
-
-    class Lease:
-        def assert_current(self):
-            return None
+    # The command writes the cancel fence, then (if still alive) applies its
+    # privileged side effect 0.4s later.  The watchdog must kill it first.
+    script = (
+        "import json, sys, time\n"
+        "open(sys.argv[1], 'w').write(json.dumps({'operation_id': 'a' * 32}))\n"
+        "time.sleep(3.0)\n"
+        "open(sys.argv[2], 'w').write('applied')\n"
+    )
     with pytest.raises(RuntimeError, match="Mutation blocked"):
-        agent.run_fenced(["apply"], tmp_path, tmp_path, Lease())
+        agent.run_fenced([sys.executable, "-c", script, str(fence), str(marker)],
+                         tmp_path, tmp_path, _LiveLease())
+    assert not marker.exists(), "killed mutation still produced its delayed side effect"
+
+
+def test_run_fenced_stops_apply_on_lost_lease(tmp_path, monkeypatch):
+    """A lost/superseded distributed lease must stop a running apply, not just
+    surface an exception while the privileged command keeps mutating the host."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.01")
+    monkeypatch.setenv("UPDATE_FENCE_KILL_TIMEOUT", "5")
+    marker = tmp_path / "side-effect.txt"
+    script = (
+        "import sys, time\n"
+        "time.sleep(3.0)\n"
+        "open(sys.argv[1], 'w').write('applied')\n"
+    )
+
+    class LostLease:
+        def assert_current(self):
+            raise RuntimeError(
+                "Mutation blocked: the distributed update fence was lost")
+    with pytest.raises(RuntimeError, match="fence was lost"):
+        agent.run_fenced([sys.executable, "-c", script, str(marker)],
+                         tmp_path, tmp_path, LostLease())
+    assert not marker.exists(), "apply survived lease loss"
+
+
+def test_run_fenced_stops_apply_when_fence_check_unavailable(tmp_path, monkeypatch):
+    """If the fence store is unavailable mid-apply the mutation must fail closed
+    and be killed rather than left running unfenced."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.01")
+    monkeypatch.setenv("UPDATE_FENCE_KILL_TIMEOUT", "5")
+    marker = tmp_path / "side-effect.txt"
+    script = (
+        "import sys, time\n"
+        "time.sleep(3.0)\n"
+        "open(sys.argv[1], 'w').write('applied')\n"
+    )
+
+    class UnavailableLease:
+        def assert_current(self):
+            raise RuntimeError("Mutation blocked: update fence store is unavailable")
+    with pytest.raises(RuntimeError, match="fence store is unavailable"):
+        agent.run_fenced([sys.executable, "-c", script, str(marker)],
+                         tmp_path, tmp_path, UnavailableLease())
+    assert not marker.exists(), "apply ran on while its fence was unavailable"
+
+
+def test_run_fenced_kills_child_processes_of_apply(tmp_path, monkeypatch):
+    """The privileged apply starts children (docker/DB work); a fence must kill
+    the whole tree, so a grandchild's delayed side effect cannot land."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.01")
+    monkeypatch.setenv("UPDATE_FENCE_KILL_TIMEOUT", "5")
+    marker = tmp_path / "child-side-effect.txt"
+    fence = tmp_path / "cancel-fence.json"
+    child = (
+        "import sys, time\n"
+        "time.sleep(3.0)\n"
+        "open(sys.argv[1], 'w').write('child-applied')\n"
+    )
+    parent = (
+        "import json, subprocess, sys, time\n"
+        "open(sys.argv[1], 'w').write(json.dumps({'operation_id': 'a' * 32}))\n"
+        "subprocess.Popen([sys.executable, '-c', sys.argv[3], sys.argv[2]])\n"
+        "time.sleep(3.5)\n"
+    )
+    with pytest.raises(RuntimeError, match="Mutation blocked"):
+        agent.run_fenced(
+            [sys.executable, "-c", parent, str(fence), str(marker), child],
+            tmp_path, tmp_path, _LiveLease())
+    # Give any surviving orphan time to write its delayed side effect.
+    import time as _time
+    _time.sleep(3.5)
+    assert not marker.exists(), "child of killed apply survived the fence"
+
+
+def test_run_fenced_pre_mutation_guard_blocks_before_spawning(tmp_path, monkeypatch):
+    """A fence already present before apply must prevent the privileged command
+    from starting at all (pre-mutation guard)."""
+    agent = _load_agent()
+    marker = tmp_path / "started.txt"
+    fence = tmp_path / "cancel-fence.json"
+    fence.write_text(json.dumps({"operation_id": "a" * 32}), encoding="utf-8")
+    script = "import sys\nopen(sys.argv[1], 'w').write('started')\n"
+    with pytest.raises(RuntimeError, match="Mutation blocked"):
+        agent.run_fenced([sys.executable, "-c", script, str(marker)],
+                         tmp_path, tmp_path, _LiveLease())
+    assert not marker.exists(), "guarded command was still spawned"
+
+
+def test_run_fenced_returns_output_on_success(tmp_path, monkeypatch):
+    """The fenced happy path still returns the command output."""
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.01")
+    script = "print('applied-ok')\n"
+    output = agent.run_fenced([sys.executable, "-c", script],
+                              tmp_path, tmp_path, _LiveLease())
+    assert "applied-ok" in output
 
 
 def test_recover_blocks_on_cancel_fence(tmp_path, monkeypatch):

@@ -68,7 +68,7 @@ def _copy(source: Path, destination: Path) -> None:
 
 
 def build(root: Path, output: Path, version: str, sequence: int,
-          image_lock: Path, private_key: Path) -> Path:
+          image_lock: Path, private_key: Path, source_commit_sha: str) -> Path:
     if output.exists():
         raise FileExistsError(output)
     output.mkdir(parents=True)
@@ -97,6 +97,7 @@ def build(root: Path, output: Path, version: str, sequence: int,
         {"core_api": 1, "worker_api": 1, "database_schema": 9,
          "database_strategy": "expand", "rollback_safe": True,
          "minimum_version": "0.0.0.1"},
+        source_commit_sha,
     )
     signed = sign_release_contract(contract, private_key)
     (output / "manifest.json").write_text(
@@ -112,9 +113,12 @@ def main() -> None:
     parser.add_argument("--sequence", type=int, required=True)
     parser.add_argument("--image-lock", type=Path, required=True)
     parser.add_argument("--private-key", type=Path, required=True)
+    parser.add_argument("--source-commit-sha", required=True,
+                        help="Full 40-char source commit SHA this release was built from")
     args = parser.parse_args()
     print(build(args.root.resolve(), args.output.resolve(), args.version, args.sequence,
-                args.image_lock.resolve(), args.private_key.resolve()))
+                args.image_lock.resolve(), args.private_key.resolve(),
+                args.source_commit_sha))
 
 
 if __name__ == "__main__":

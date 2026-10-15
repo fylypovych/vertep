@@ -16,6 +16,24 @@ from ..version import application_version
 
 router = APIRouter()
 
+# Readiness services that are mandatory for each node role.  A required service
+# is ready only when its check reports exactly ``OK``; a ``None`` (not-applicable
+# / not configured) or ``UNKNOWN`` readiness never substitutes readiness for a
+# required service, so it blocks the wizard's ready gate (i.0.0.1.52).
+REQUIRED_HEALTH_CHECKS: dict[str, frozenset[str]] = {
+    "core": frozenset({"docker", "postgres", "redis", "core_api"}),
+    "gpu": frozenset({"docker", "gpu", "cuda", "comfyui"}),
+    "text": frozenset({"docker", "ollama"}),
+    "voice": frozenset({"docker", "tts"}),
+    "publisher": frozenset({"docker", "publisher"}),
+    "backup": frozenset({"docker", "backup"}),
+    "monitoring": frozenset({"docker", "monitoring"}),
+}
+
+# Status prefixes that block ready regardless of whether the service is
+# required (an explicit failure must never read as ready).
+_BLOCKING_PREFIXES = ("OFFLINE", "UNAVAILABLE", "FAIL", "DRIVER_REQUIRED", "UNKNOWN")
+
 
 def _ensure_enrollment_id(pki: Path) -> str:
     """Return a stable local enrollment id used as the lost-response retry key."""
@@ -77,6 +95,7 @@ def first_run_health():
     from ..health_checks import run_checks, health_status
 
     role = os.getenv("NODE_ROLE", "core")
+    required = REQUIRED_HEALTH_CHECKS.get(role, frozenset())
     raw = run_checks(role)
     checks: dict[str, str] = {}
     for name, value in raw.items():
@@ -88,12 +107,19 @@ def first_run_health():
                 checks[name] = "OK"
             elif ok is False:
                 checks[name] = f"OFFLINE: {message}"
+            elif name in required:
+                # A required service that is absent/unconfigured/unknown must
+                # not be downgraded to OPTIONAL — it fails the ready gate.
+                checks[name] = f"UNKNOWN: {message}"
             else:
                 checks[name] = "OPTIONAL"
         else:
             checks[name] = str(value)
-    blocking = {"OFFLINE", "UNAVAILABLE", "FAIL", "DRIVER_REQUIRED"}
-    ready = all(not str(value).startswith(tuple(blocking)) for value in checks.values())
+    ready = all(
+        (checks[name] == "OK") if name in required
+        else not str(checks[name]).startswith(_BLOCKING_PREFIXES)
+        for name in checks
+    ) and required.issubset(checks)
     return {"ready": ready, "checks": checks,
             "status": health_status(raw), "role": role}
 
