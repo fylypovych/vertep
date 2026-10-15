@@ -157,6 +157,35 @@ def test_renew_keeps_the_lease(redis_queue):
     assert queue.inflight_depth() == 1
 
 
+def test_inflight_active_tracks_deadline_before_the_sweep(redis_queue):
+    """Issue i.0.0.1.61: lease liveness, not membership, gates a submission.
+
+    An expired lease stays in the inflight hash until ``requeue_expired`` runs;
+    ``inflight_active`` must already report False during that window on the
+    real Redis backend, and True again after a renewal.
+    """
+    queue = redis_queue
+    task = queue.enqueue({"job_id": "deadline", "priority": 5})
+    queue.claim(lease_seconds=60)
+    assert queue.inflight_has(task["task_id"]) is True
+    assert queue.inflight_active(task["task_id"]) is True
+
+    # deadline passes pre-sweep: membership survives, liveness does not.
+    assert queue.renew(task["task_id"], lease_seconds=-1) is True
+    assert queue.inflight_has(task["task_id"]) is True
+    assert queue.inflight_active(task["task_id"]) is False
+
+    # renewal restores liveness while the record stays inflight.
+    assert queue.renew(task["task_id"], lease_seconds=60) is True
+    assert queue.inflight_active(task["task_id"]) is True
+    assert queue.requeue_expired(now=time.time()) == []
+
+    # absent task: neither membership nor liveness.
+    queue.ack(task["task_id"])
+    assert queue.inflight_has(task["task_id"]) is False
+    assert queue.inflight_active(task["task_id"]) is False
+
+
 def test_discard_removes_ready_task(redis_queue):
     queue = redis_queue
     task = queue.enqueue({"job_id": "cancelled", "priority": 5})

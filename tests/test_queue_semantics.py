@@ -500,6 +500,147 @@ def test_script_result_after_lease_expiry_is_rejected(client, monkeypatch):
     assert task_queue.has_task(task_id)
 
 
+def test_script_result_after_deadline_before_watchdog_sweep_is_rejected(client, monkeypatch):
+    """Issue i.0.0.1.61: the actual lease deadline fences a script result even
+    before the watchdog has swept the expired record out of the inflight map.
+
+    ``inflight_has`` only proves membership; the acceptance gap is the window
+    between the deadline passing and ``requeue_expired`` running.  During that
+    window the owner's own submission must be rejected without cleanup, Job or
+    Worker changes and without an ack.
+    """
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("VERTEP_DEMO", "false")
+    _text_worker(client, "text-a")
+
+    job = store.create("script deadline", "did_samogon", 5)
+    task_id = _queue_script_task(job)
+    _claim_text_task(client, "text-a", job.job_id, "script")
+    assert task_queue.inflight_active(task_id)
+
+    # The deadline passes while the record is still in flight (no sweep yet).
+    assert task_queue.renew(task_id, lease_seconds=-1) is True
+    assert task_queue.inflight_has(task_id)
+    assert not task_queue.inflight_active(task_id)
+
+    from core.api.job_helpers import _script_task_for
+    from worker import role_executor
+    claimed = dict(_script_task_for(job, "", None), task_id=task_id)
+    [artifact] = role_executor.execute_role_task("text", claimed)
+    response = client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": task_id, "node_name": "text-a",
+        "success": True, "artifacts": [artifact],
+    })
+    assert response.status_code == 200
+    # rejected: no Job mutation, no Worker cleanup, no ack — before watchdog.
+    assert job.status == JobStatus.SCRIPT_GENERATING
+    assert job.script is None
+    assert job.script_task_id == task_id
+    assert store.workers["text-a"]["current_task"] == task_id
+    assert store.workers["text-a"]["current_job"] == job.job_id
+    assert store.workers["text-a"]["status"] == "BUSY"
+    assert task_queue.inflight_has(task_id)
+
+
+def test_late_storyboard_result_after_reclaim_is_rejected(client, monkeypatch):
+    """Issue i.0.0.1.61: after an expired lease is requeued for a new attempt and
+    re-claimed, the previous holder's late result never completes the new attempt.
+
+    The reclaim is the real watchdog path (``requeue_expired`` +
+    ``handle_expired_storyboard_lease``), which supersedes the task id, so the
+    old holder's result must be fenced while the new holder stays intact.
+    """
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("VERTEP_DEMO", "false")
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    for name in ("text-a", "text-b"):
+        _text_worker(client, name)
+
+    job = store.create("storyboard reclaim", "did_samogon", 5)
+    StoryboardService(store).queue(job)
+    first = _claim_text_task(client, "text-a", job.job_id, "storyboard")
+    assert task_queue.inflight_active(first["task_id"])
+
+    # text-a dies: the watchdog requeues the expired lease within budget.
+    assert task_queue.renew(first["task_id"], lease_seconds=-1) is True
+    expired = task_queue.requeue_expired(now=time.time() - 1)
+    requeued = [task for task in expired if task.get("job_id") == job.job_id]
+    assert len(requeued) == 1
+    from core.app import handle_expired_storyboard_lease
+    assert handle_expired_storyboard_lease(store, requeued[0]) is True
+    replacement = job.storyboard_task_id
+    assert replacement and replacement != first["task_id"]
+    assert job.status == JobStatus.STORYBOARD_QUEUED
+
+    # text-b takes the requeued attempt.
+    second = _claim_text_task(client, "text-b", job.job_id, "storyboard")
+    assert second["task_id"] == replacement
+    assert task_queue.inflight_active(replacement)
+
+    # the previous holder's late result for the superseded task is fenced.
+    late = client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": first["task_id"], "node_name": "text-a",
+        "success": True, "artifacts": [_storyboard_payload(1)],
+    })
+    assert late.status_code == 409
+    assert job.storyboards == []
+    assert job.storyboard_task_id == replacement
+    assert store.workers["text-b"]["current_task"] == replacement
+    assert task_queue.inflight_has(replacement)
+
+    # the new holder completes the storyboard.
+    assert client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": replacement, "node_name": "text-b",
+        "success": True, "artifacts": [_storyboard_payload(1)],
+    }).status_code == 200
+    assert job.status == JobStatus.STORYBOARD_PENDING_APPROVAL
+    assert [board.version for board in job.storyboards] == [1]
+    assert not task_queue.inflight_has(replacement)
+
+
+def test_storyboard_result_after_deadline_before_watchdog_sweep_is_rejected(client, monkeypatch):
+    """Issue i.0.0.1.61: the storyboard branch uses the same deadline fence —
+    an expired lease rejects the owner before the sweep, and the same owner is
+    accepted again only while a valid lease is held.
+    """
+    from worker import role_executor
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("VERTEP_DEMO", "false")
+    _text_worker(client, "text-a")
+
+    job = store.create("storyboard deadline", "did_samogon", 5)
+    StoryboardService(store).queue(job)
+    task_id = job.storyboard_task_id
+    _claim_text_task(client, "text-a", job.job_id, "storyboard")
+    assert task_queue.inflight_active(task_id)
+
+    def submit():
+        return client.post("/api/tasks/result", json={
+            "job_id": job.job_id, "task_id": task_id, "node_name": "text-a",
+            "success": True, "artifacts": [_storyboard_payload(1)],
+        })
+
+    # deadline passes pre-sweep: rejected, nothing cleaned up or acked.
+    assert task_queue.renew(task_id, lease_seconds=-1) is True
+    assert task_queue.inflight_has(task_id)
+    assert not task_queue.inflight_active(task_id)
+    assert submit().status_code == 200
+    assert job.status == JobStatus.STORYBOARD_GENERATING
+    assert job.storyboards == []
+    assert job.storyboard_task_id == task_id
+    assert store.workers["text-a"]["current_task"] == task_id
+    assert task_queue.inflight_has(task_id)
+
+    # a valid current lease from the same holder is accepted.
+    assert task_queue.renew(task_id, lease_seconds=60) is True
+    assert task_queue.inflight_active(task_id)
+    assert submit().status_code == 200
+    assert job.status == JobStatus.STORYBOARD_PENDING_APPROVAL
+    assert [board.version for board in job.storyboards] == [1]
+    assert not task_queue.inflight_has(task_id)
+    assert store.workers["text-a"].get("current_task") is None
+
+
 def test_storyboard_result_is_fenced_on_owner_version_and_payload(client, monkeypatch):
     """Issue i.0.0.1.2 (2): a storyboard result is accepted only from the lease
     holder, only for the queued version, only with a parseable payload, and never

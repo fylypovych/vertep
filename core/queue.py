@@ -123,6 +123,30 @@ return cjson.encode(task)
         with self._lock:
             return task_id in self._inflight
 
+    def inflight_active(self, task_id: str, now: float | None = None) -> bool:
+        """Lease liveness across ready/inflight, read-only (Issue i.0.0.1.61).
+
+        True only while the task is in flight AND its lease deadline has not
+        passed.  An expired lease stays in the inflight map until the watchdog
+        sweeps it; the acceptance gap is exactly that window, so membership
+        (``inflight_has``) is not a valid lease for result acceptance.
+        """
+        current = time.time() if now is None else now
+        if self._redis:
+            raw = self._redis.hget("vertep:tasks:inflight", task_id)
+            if raw is None:
+                return False
+            try:
+                lease_until = float(json.loads(raw).get("lease_until", 0))
+            except (ValueError, TypeError):
+                return False
+            return lease_until > current
+        with self._lock:
+            record = self._inflight.get(task_id)
+            if record is None:
+                return False
+            return float(record[0]) > current
+
     def find(self, task_id: str) -> dict | None:
         """Read-only lookup of a queued or in-flight task by id.
 

@@ -670,7 +670,7 @@ def _sync_internal_api(method: str, base_environment: str, path: str,
         with httpx.Client(timeout=timeout) as client:
             response = client.request(method, f"{base}{path}", json=payload)
             if response.status_code >= 400:
-                return {"_error": f"HTTP {response.status_code}: {response.text[:200]}"}
+                return {"_error": f"HTTP {response.status_code}"}
             return response.json()
     except (httpx.HTTPError, ValueError):
         return None
@@ -912,7 +912,7 @@ def _sync_internal_api(method: str, base_environment: str, path: str,
         with httpx.Client(timeout=timeout) as client:
             response = client.request(method, f"{base}{path}", json=payload, headers=headers)
             if response.status_code >= 400:
-                return {"_error": f"HTTP {response.status_code}: {response.text[:200]}"}
+                return {"_error": f"HTTP {response.status_code}"}
             return response.json()
     except (httpx.HTTPError, ValueError):
         return None

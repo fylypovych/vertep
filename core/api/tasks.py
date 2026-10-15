@@ -460,12 +460,16 @@ def _text_task_lease(job, task_id: str, node_name: str) -> tuple[bool, str | Non
 
     Checked BEFORE any cleanup (Worker metadata, ``Job.*_task_id``) or queue ack,
     so a foreign, expired or stale submission changes nothing.
+
+    ``inflight_active`` (not ``inflight_has``) proves the lease: a record whose
+    deadline already passed must be rejected during the window before the
+    watchdog re-queues it (Issue i.0.0.1.61).
     """
     worker = store.workers.get(node_name)
     if (worker is None or worker.get("current_task") != task_id
             or worker.get("current_job") != job.job_id):
         return False, "owner/lease mismatch"
-    if not task_queue.inflight_has(task_id):
+    if not task_queue.inflight_active(task_id):
         return False, "task lease is no longer active"
     return True, None
 

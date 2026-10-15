@@ -98,19 +98,37 @@ def node_system_status(node_name: str, request: Request):
 
 @router.get("/api/system/backups")
 async def system_backups():
-    return {"backups": "available via _internal_api with BACKUP_URL"}
+    return await _internal_api("GET", "BACKUP_URL", "/snapshots")
 
 
 @router.post("/api/system/backups")
-async def create_system_backup():
-    return {"job": "system backup created", "detail": "requires BACKUP_URL config"}
+async def create_system_backup(request: Request):
+    body = await request.json()
+    job_id = body.get("job_id", "manual")
+    return await _internal_api("POST", "BACKUP_URL", "/snapshots", {"job_id": job_id})
 
 
 @router.post("/api/system/backups/{snapshot_id}/restore")
 async def restore_system_backup(snapshot_id: str):
     if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
         raise HTTPException(422, "Invalid snapshot identifier")
-    return {"snapshot_id": snapshot_id, "status": "restore queued"}
+    return await _internal_api("POST", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore")
+
+
+@router.get("/api/system/backups/{snapshot_id}/restore/progress")
+async def restore_progress(snapshot_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(422, "Invalid snapshot identifier")
+    return await _internal_api("GET", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore/progress")
+
+
+@router.post("/api/system/backups/{snapshot_id}/restore/confirm")
+async def confirm_restore(snapshot_id: str, token: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(422, "Invalid snapshot identifier")
+    if not token:
+        raise HTTPException(401, "Confirmation token required")
+    return await _internal_api("POST", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore/confirm", {"token": token})
 
 
 @router.get("/api/system/license")
@@ -166,9 +184,10 @@ def _read_optional_json(path) -> dict:
 async def _internal_api(method: str, base_environment: str, path: str,
                         payload: dict | None = None) -> dict:
     import httpx
+    from ..logging_config import secret_redact
     base = os.getenv(base_environment, "").rstrip("/")
     if not base:
-        raise HTTPException(503, f"{base_environment} is not configured")
+        raise HTTPException(503, f"Service {base_environment} is not configured")
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.request(method, f"{base}{path}", json=payload)
@@ -176,10 +195,14 @@ async def _internal_api(method: str, base_environment: str, path: str,
             return response.json()
     except httpx.HTTPStatusError as error:
         status = error.response.status_code
-        raise HTTPException(502, f"Upstream {base_environment} returned HTTP {status}") from error
+        # Sanitize: no upstream URL, no raw response body
+        raise HTTPException(502, f"Upstream service returned HTTP {status}") from error
     except httpx.ConnectError:
-        raise HTTPException(502, f"{base_environment} is unreachable") from error
+        # Sanitize: no upstream URL
+        raise HTTPException(502, "Upstream service is unreachable") from error
     except httpx.TimeoutException:
-        raise HTTPException(504, f"{base_environment} timed out") from error
+        # Sanitize: no upstream URL
+        raise HTTPException(504, "Upstream service timed out") from error
     except Exception as error:
+        # Sanitize: no internal details
         raise HTTPException(503, "Internal service error") from error
