@@ -48,7 +48,7 @@ jobs:
           cp -r monitoring deploy/monitoring
           printf 'ci-only-secret-store-passphrase' > config/secret-store.passphrase
       - name: Compile Python sources
-        run: python -m compileall -q core adapters worker telegram publishers scripts tests
+        run: python -m compileall -q core adapters worker telegram publishers scripts lab tests
       - name: Run test suite
         run: python -m pytest -q
       - name: Validate shell syntax

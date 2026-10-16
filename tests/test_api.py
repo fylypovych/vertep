@@ -1264,6 +1264,53 @@ def test_internal_api_sanitizes_upstream_errors(monkeypatch):
     assert "HTTP 500" in detail or "повернув помилку" in detail
 
 
+def test_backup_unavailable_is_sanitized_without_internal_url(monkeypatch):
+    """Issue #160: a dead Backup service gives sanitized 502 diagnostics.
+
+    A real connection refusal against an unused local port proves the actual
+    production helper never embeds the resolved internal URL in the response.
+    """
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+    monkeypatch.setenv("BACKUP_URL", f"http://127.0.0.1:{dead_port}")
+
+    resp = _tc.post("/api/system/backups", json={"job_id": "job-1"})
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "BACKUP_URL" in detail
+    assert "127.0.0.1" not in detail
+    assert str(dead_port) not in detail
+    assert "http://" not in detail
+    assert "Connect" not in detail
+
+
+def test_backup_timeout_is_sanitized_without_internal_url(monkeypatch):
+    """Issue #160: an upstream timeout gives sanitized 504 diagnostics.
+
+    The real httpx timeout exception (carrying an internal URL in its text)
+    is raised through the production /api/system/backups route.
+    """
+    async def timeout_request(self, method, url, **kwargs):
+        raise httpx.ReadTimeout(
+            "Read timed out to http://127.0.0.1:9090/snapshots",
+            request=httpx.Request(method, url))
+
+    monkeypatch.setenv("BACKUP_URL", "http://127.0.0.1:9090")
+    monkeypatch.setattr(httpx.AsyncClient, "request", timeout_request)
+
+    resp = _tc.post("/api/system/backups", json={"job_id": "job-1"})
+    assert resp.status_code == 504
+    detail = resp.json()["detail"]
+    assert "BACKUP_URL" in detail
+    assert "127.0.0.1" not in detail
+    assert "9090" not in detail
+    assert "http://" not in detail
+    assert "Read timed out" not in detail
+
+
 def test_workflow_edit_without_force_rejected(monkeypatch, tmp_path):
     """Regression #67 sub-issue 5: editing built-in workflow without force returns 400."""
     from core.state import workflow_registry as global_registry

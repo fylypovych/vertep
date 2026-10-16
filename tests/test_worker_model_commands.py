@@ -65,6 +65,9 @@ class _FakeStream:
     def iter_lines(self):
         return iter(self._lines)
 
+    def close(self):
+        return None
+
 
 class _FakeClient:
     lines: list[str] = []
@@ -288,6 +291,7 @@ class TestRunModelCommand:
             json.dumps({"status": "pulling manifest"}),
             json.dumps({"completed": 50, "total": 100}),
             json.dumps({"completed": 100, "total": 100}),
+            json.dumps({"status": "success"}),
             "not-json",
         ]
         _run_model_command("http://core", "node",
@@ -299,6 +303,79 @@ class TestRunModelCommand:
         assert statuses[-1] == "COMPLETED"
         assert any(c["progress"] == 100 for c in calls)
         assert all(c["error"] is None for c in calls if c["status"] != "FAILED")
+
+    def test_eof_without_terminal_success_reports_failure(self, monkeypatch):
+        """Issue i.0.0.1.69: EOF without the explicit Ollama ``success`` event
+        is a broken stream, never a COMPLETED pull."""
+        calls = self._capture(monkeypatch)
+        monkeypatch.setattr(worker_service.httpx, "Client", _FakeClient)
+        _FakeClient.lines = [
+            json.dumps({"status": "pulling manifest"}),
+            json.dumps({"completed": 100, "total": 100}),
+        ]
+        _run_model_command("http://core", "node",
+                           {"operation_id": _op_id("e"), "action": "pull"},
+                           {}, threading.Event())
+        assert calls[-1]["status"] == "FAILED"
+        assert "terminal success" in calls[-1]["error"]
+        assert "COMPLETED" not in [c["status"] for c in calls]
+
+    def test_cancel_interrupts_stalled_pull_stream(self, monkeypatch):
+        """Issue i.0.0.1.69: cancellation closes the active transport instead
+        of waiting for the next line from a stalled stream."""
+        calls = self._capture(monkeypatch)
+
+        class _StalledStream:
+            status_code = 200
+
+            def __init__(self):
+                self.started = threading.Event()
+                self.closed = threading.Event()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def iter_lines(self):
+                yield json.dumps({"status": "pulling manifest"})
+                self.started.set()
+                if not self.closed.wait(timeout=5):
+                    raise httpx.ReadError("stream stalled")
+                raise httpx.ReadError("stream closed by cancellation")
+
+            def close(self):
+                self.closed.set()
+
+        stream = _StalledStream()
+
+        class _StalledClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def stream(self, *_args, **_kwargs):
+                return stream
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(worker_service.httpx, "Client", _StalledClient)
+        cancel = threading.Event()
+        thread = threading.Thread(
+            target=_run_model_command,
+            args=("http://core", "node",
+                  {"operation_id": _op_id("s"), "action": "pull"}, {}, cancel))
+        thread.start()
+        assert stream.started.wait(timeout=2)
+        cancel.set()
+        thread.join(timeout=2)
+        # The stalled transport was aborted promptly, not after the read timeout.
+        assert not thread.is_alive()
+        statuses = [c["status"] for c in calls]
+        assert statuses[-1] == "CANCELLED"
+        assert "COMPLETED" not in statuses
+        assert "FAILED" not in statuses
 
     def test_core_cancel_requested_stops_pull(self, monkeypatch):
         calls = self._capture(monkeypatch, cancel_results=[True])

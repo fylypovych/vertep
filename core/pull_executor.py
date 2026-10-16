@@ -65,6 +65,24 @@ def _heartbeat_timeout() -> int:
 # ---------------------------------------------------------------------------
 
 
+def _close_on_cancel(cancel_event: threading.Event, done_event: threading.Event,
+                     response: Any) -> None:
+    """Abort the active pull transport the moment cancellation is signalled.
+
+    The NDJSON reader only wakes when Ollama writes a line, so a stalled
+    transport would keep the pull thread blocked until the read timeout.
+    Closing the response unblocks the reader immediately and frees the
+    connection (Issue i.0.0.1.69).
+    """
+    while not done_event.is_set():
+        if cancel_event.wait(0.05):
+            try:
+                response.close()
+            except Exception:  # noqa: BLE001 - the transport is going away anyway
+                pass
+            return
+
+
 def _pull_model(operation_id: str, model: str) -> None:
     """Background worker: stream Ollama pull events into the operation record."""
     import httpx
@@ -76,8 +94,9 @@ def _pull_model(operation_id: str, model: str) -> None:
         fail_operation(operation_id, "OLLAMA_URL is not configured")
         return
     cancel_event = threading.Event()
+    done_event = threading.Event()
     _CANCEL_EVENTS[operation_id] = cancel_event
-    error_received = False
+    saw_success = False
     try:
         with httpx.Client(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             with client.stream("POST", f"{base}/api/pull",
@@ -86,6 +105,9 @@ def _pull_model(operation_id: str, model: str) -> None:
                     body = response.text[:500]
                     fail_operation(operation_id, f"Ollama returned {response.status_code}: {body}")
                     return
+                threading.Thread(target=_close_on_cancel,
+                                 args=(cancel_event, done_event, response),
+                                 daemon=True, name=f"pull-cancel-{operation_id[:8]}").start()
                 for line in response.iter_lines():
                     if cancel_event.is_set():
                         cancel_operation(operation_id, "cancelled by user")
@@ -98,10 +120,13 @@ def _pull_model(operation_id: str, model: str) -> None:
                     except json.JSONDecodeError:
                         continue
                     if event.get("error"):
-                        error_received = True
                         fail_operation(operation_id, str(event["error"])[:500])
                         audit_entry(operation_id, "pull_failed", f"model={model} error={event['error']}")
                         return
+                    # The explicit Ollama ``success`` status is the only event
+                    # that proves the pull actually finished.
+                    if str(event.get("status") or "").lower() == "success":
+                        saw_success = True
                     completed = event.get("completed")
                     total = event.get("total")
                     if completed is not None and total:
@@ -113,17 +138,35 @@ def _pull_model(operation_id: str, model: str) -> None:
                         advance_operation(operation_id, status,
                                           current.get("progress", 0) if current else 0,
                                           status)
+        if cancel_event.is_set():
+            # Cancellation arrived with (or after) the last line: the terminal
+            # CANCELLED state already recorded by cancel_pull must stand.
+            operation = cancel_operation(operation_id, "cancelled by user")
+            if operation is not None and operation.get("status") == "CANCELLED":
+                audit_entry(operation_id, "pull_canceled", f"model={model}")
+            return
         op = get_operation(operation_id)
         if op and op.get("status") == "RUNNING":
-            if error_received:
-                fail_operation(operation_id, "pull ended with error event")
-                audit_entry(operation_id, "pull_failed", f"model={model} error=premature EOF after error")
-            else:
+            if saw_success:
                 complete_operation(operation_id, {"model": model, "node_name": None, "pulled": True})
                 audit_entry(operation_id, "pull_completed", f"model={model}")
+            else:
+                # EOF without an explicit terminal success is a broken stream,
+                # not a completed pull (Issue i.0.0.1.69).
+                fail_operation(operation_id, "pull ended without terminal success event")
+                audit_entry(operation_id, "pull_failed",
+                            f"model={model} error=EOF without terminal success")
     except Exception as error:  # noqa: BLE001 - surface any transport failure durably
+        if cancel_event.is_set():
+            # A cancelled pull may raise because the transport was closed on
+            # purpose; the late error must not rewrite the terminal state.
+            operation = get_operation(operation_id)
+            if operation is not None:
+                audit_entry(operation_id, "pull_canceled", f"model={model}")
+                return
         fail_operation(operation_id, f"pull failed: {error}")
     finally:
+        done_event.set()
         _CANCEL_EVENTS.pop(operation_id, None)
 
 

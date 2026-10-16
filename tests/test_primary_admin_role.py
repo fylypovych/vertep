@@ -54,3 +54,28 @@ def test_name_admin_alone_does_not_grant_privileges(accounts, monkeypatch):
 def test_expired_primary_admin_session_is_rejected(accounts, monkeypatch):
     monkeypatch.setenv("SESSION_TTL", "-1")
     assert security._valid_session(security._session_token("admin", "viewer")) is None
+
+
+def test_empty_admin_password_is_rejected_for_default_admin(accounts, monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    assert security._authenticate_user("admin", "") is None
+    assert security._authenticate_user("admin", "not-empty") is None
+
+
+def test_worker_token_without_config_is_fail_closed(monkeypatch):
+    monkeypatch.delenv("NODE_API_TOKEN", raising=False)
+    monkeypatch.delenv("WORKER_TOKEN_HASHES", raising=False)
+    monkeypatch.delenv("REVOKED_TOKEN_HASHES", raising=False)
+    assert security._valid_worker_token("gpu-1", "anything") is False
+
+
+def test_unconfigured_backend_requires_setup_routes_only(monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("CONFIG_ROOT", raising=False)
+    monkeypatch.delenv("USERS_JSON", raising=False)
+    from fastapi.testclient import TestClient
+    from core.app import app
+    client = TestClient(app, raise_server_exceptions=False)
+    assert client.get("/api/setup").status_code == 200
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/jobs").status_code == 401

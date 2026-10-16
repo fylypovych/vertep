@@ -145,14 +145,15 @@ def _decode_key(encoded: str) -> bytes:
 def _secret_key() -> bytes:
     """Load or create the installation-local data encryption key."""
     path = config_root() / "secret-store.key"
-    try:
-        encoded = path.read_text(encoding="ascii").strip()
-        key = _decode_key(encoded)
-        if len(key) != 32:
-            raise ValueError("invalid secret-store key length")
-        return key
-    except FileNotFoundError:
-        pass
+    if path.exists():
+        try:
+            encoded = path.read_text(encoding="ascii").strip()
+            key = _decode_key(encoded)
+            if len(key) != 32:
+                raise ValueError("invalid secret-store key length")
+            return key
+        except (RuntimeError, ValueError, OSError, UnicodeDecodeError) as exc:
+            raise ValueError("secret-store key is unreadable or unusable") from exc
 
     root = config_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -165,6 +166,11 @@ def _secret_key() -> bytes:
         temporary.unlink()
     except FileExistsError:
         temporary.unlink(missing_ok=True)
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
         return _secret_key()
     return key
 
@@ -260,9 +266,19 @@ def password_hash(value: str) -> str:
 
 def ensure_secret_store() -> dict:
     with _secret_lock:
-        stored = _read_encrypted_secrets()
-        if stored:
-            return stored
+        path = config_root() / "secrets.enc.json"
+        if path.exists():
+            stored = _read_encrypted_secrets()
+            if stored:
+                return stored
+        else:
+            # A missing encrypted store is the bootstrap baseline: create a fresh
+            # one and migrate any legacy plaintext values into it.
+            stored = {}
+        # A real store that is present but unreadable or fails authentication
+        # must fail closed; silently replacing it would discard secrets.
+        if path.exists() and not stored:
+            raise ValueError("encrypted secret store is unreadable or invalid")
         # Transparently migrate both early appliance formats, then erase their files.
         stored = {**_read("secrets.json"), **_read("bootstrap-secrets.json")}
         generated = {name: secrets.token_urlsafe(size) for name, size in {
@@ -439,9 +455,18 @@ def configured_user() -> tuple[str, dict] | None:
 
 
 def session_secret() -> str:
-    if "CONFIG_ROOT" not in os.environ:
-        return os.getenv("ADMIN_PASSWORD", "")
-    return str(ensure_secret_store().get("session_secret", ""))
+    configured = os.getenv("SESSION_SECRET", "").strip()
+    if configured:
+        return configured
+    if "CONFIG_ROOT" in os.environ:
+        secret = str(ensure_secret_store().get("session_secret", "")).strip()
+        if secret:
+            return secret
+    # Without CONFIG_ROOT there is no secret store to read from. Fall back to the
+    # configured admin password so sessions stay verifiable in test/dev installs;
+    # a process without CONFIG_ROOT and without ADMIN_PASSWORD cannot mint or
+    # verify any session either way (Issue #168).
+    return os.getenv("ADMIN_PASSWORD", "")
 
 
 def rotate_data_key() -> dict:

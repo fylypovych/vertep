@@ -28,6 +28,7 @@ from adapters.telegram import TelegramAdapter
 
 from ..artifacts import register_artifact
 from ..configuration import load_character
+from ..logging_config import secret_redact
 from ..dispatcher import available_worker, can_retry
 from ..models import (JobStatus, SceneRecord, StageName, StageStatus, TaskResult,
                       VideoVersion, utc_now)
@@ -848,19 +849,25 @@ def _handle_tts_failure(job, scene, task_id: str, node_name: str, error: str | N
     task_queue.ack(task_id)
     job.tts_active_task_ids.pop(task_id, None)
     scene.assigned_worker = None
+    # Clear worker state to match voice task worker loss recovery pattern
+    worker = store.workers.get(node_name)
+    if worker:
+        worker.update({"current_job": None, "current_task": None,
+                       "last_seen": utc_now()})
+        store.save_worker(worker)
     store.repository.record_task(_tts_task_for(job, scene) | {"task_id": task_id},
                                  "FAILED", node_name, error)
     if used < _tts_max_retries(job):
         delay = _tts_backoff_seconds(job, scene)
         store.event(job, f"{scene.scene_id} TTS FAILED, RETRY {used}/{_tts_max_retries(job)} "
-                          f"(backoff {delay:.1f}s): {error or 'unknown error'}")
+                           f"(backoff {delay:.1f}s): {error or 'unknown error'}")
         _enqueue_tts_task(job, scene, delay=delay)
         return
     transition_stage(job, StageName.TTS, StageStatus.FAILED, error or "unknown error")
     task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "voice",
                             "scene_id": scene.scene_id}, error)
     store.update(job, JobStatus.FAILED,
-                 f"TTS FAILED: {error or 'unknown error'} (budget {_tts_max_retries(job)} exhausted)")
+                  f"TTS FAILED: {error or 'unknown error'} (budget {_tts_max_retries(job)} exhausted)")
 
 
 def _script_task_for(job, system_prompt: str, character: dict | None, revision: str | None = None) -> dict:
@@ -1072,13 +1079,15 @@ def _match_publish_receipt(job, channel: str, receipt: dict) -> tuple[str, str |
     return "accept", None
 
 
-def _enqueue_publish_task(job_store, job, channel: str) -> dict | None:
+def _enqueue_publish_task(job_store, job, channel: str, delay: float = 0) -> dict | None:
     has_publisher = _has_publisher_worker(job_store)
     from ..local_fallback import local_fallback_allowed
     if not has_publisher and local_fallback_allowed():
         _publish_local(job_store, job, channel)
         return None
     task = _publish_task_for(job, channel)
+    if delay:
+        task["not_before"] = time.time() + delay
     queued = task_queue.enqueue(task)
     job.publish_task_ids[queued["task_id"]] = channel
     job_store.repository.record_task(queued, "QUEUED")
@@ -1135,11 +1144,26 @@ def _validate_publication_receipt(receipt: dict, expected_channel: str) -> tuple
     return True, None
 
 
+def _redact_payload(value):
+    """Recursively redact secret-shaped values in an operator-visible payload.
+
+    Receipts and worker errors cross from an external runtime into CORE state
+    that is served by ``/api/jobs`` and rendered in the Web UI.  A secret that a
+    publisher or transport put into ``error``/``url``/metadata must be masked at
+    this boundary, not only when a log line is written (Issue #190).
+    """
+    if isinstance(value, str):
+        return secret_redact(value)
+    if isinstance(value, dict):
+        return {key: _redact_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_payload(item) for item in value]
+    return value
+
+
 def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> None:
     success = result.get("success", False)
     task_id = result.get("task_id")
-    if task_id and job.publish_task_ids.get(task_id) == channel:
-        job.publish_task_ids.pop(task_id, None)
     if job.active_task_id == task_id:
         job.active_task_id = None
 
@@ -1167,19 +1191,25 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
         retries (three total attempts).  The counter is incremented only when a
         retry is actually scheduled, so a lost ack does not burn a retry slot.
         """
+        # The current task is resolved here: a retry replaces it with a new
+        # task_id and an exhausted budget fails the channel for good.  Its id
+        # must leave the pending map either way, otherwise the publish stage
+        # never sees an empty map and the job cannot reach PUBLISHED/FAILED.
+        if task_id and job.publish_task_ids.get(task_id) == channel:
+            job.publish_task_ids.pop(task_id, None)
         attempt = job.publish_retry_count.get(channel, 0) + 1
         if attempt <= job.max_retries:
             delay = _backoff_seconds(attempt)
             job.publish_retry_count[channel] = attempt
             job_store.event(job, f"PUBLISH {channel}: RETRY {attempt}/{job.max_retries} "
-                                  f"(backoff {delay:.1f}s): {reason}")
+                               f"(backoff {delay:.1f}s): {reason}")
             job_store.update(job, JobStatus.PUBLISHING,
                              f"PUBLISH RETRY {attempt}/{job.max_retries}: {channel} ({reason})")
-            _enqueue_publish_task(job_store, job, channel)
+            _enqueue_publish_task(job_store, job, channel, delay=delay)
         else:
             job.publish_retry_count[channel] = attempt
             job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED",
-                                                          "error": f"{reason} AFTER RETRIES"})
+                                                       "error": f"{reason} AFTER RETRIES"})
             job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: {reason} AFTER RETRIES")
 
     if success:
@@ -1195,10 +1225,15 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
             data = _b64.b64decode(receipt_artifact["data_base64"])
             receipt = json.loads(data.decode("utf-8"))
         except (KeyError, ValueError, UnicodeDecodeError) as exc:
-            job_store.event(job, f"PUBLISH {channel}: MALFORMED RECEIPT: {exc}")
-            job.publish_error = f"MALFORMED RECEIPT: {exc}"
-            _enqueue_with_backoff(f"malformed receipt: {exc}")
+            detail = secret_redact(str(exc))
+            job_store.event(job, f"PUBLISH {channel}: MALFORMED RECEIPT: {detail}")
+            job.publish_error = f"MALFORMED RECEIPT: {detail}"
+            _enqueue_with_backoff(f"malformed receipt: {detail}")
             return
+
+        # Receipts are produced by an external publisher runtime; redact any
+        # secret-shaped value before it becomes operator-visible CORE state.
+        receipt = _redact_payload(receipt)
 
         # Validate receipt schema
         valid, error = _validate_publication_receipt(receipt, channel)
@@ -1214,11 +1249,16 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
             job_store.event(job, f"PUBLISH {channel}: RECEIPT REJECTED: {reason}")
             job.publish_error = f"RECEIPT REJECTED: {reason}"
             job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED",
-                                                          "error": f"RECEIPT REJECTED: {reason}"})
+                                                       "error": f"RECEIPT REJECTED: {reason}"})
+            if task_id and job.publish_task_ids.get(task_id) == channel:
+                job.publish_task_ids.pop(task_id, None)
             job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: RECEIPT REJECTED")
             return
         if decision == "skip":
             job_store.event(job, f"PUBLISH {channel}: ALREADY PUBLISHED (idempotent skip)")
+            # Only pop the task_id after successful validation and processing
+            if task_id and job.publish_task_ids.get(task_id) == channel:
+                job.publish_task_ids.pop(task_id, None)
             return
 
         receipt_status = receipt.get("status")
@@ -1230,18 +1270,27 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
                 job.published_to.append(channel)
             job.publish_retry_count[channel] = 0
             job.publish_intent.pop(channel, None)
+            # Only pop the task_id after successful validation and processing
+            if task_id and job.publish_task_ids.get(task_id) == channel:
+                job.publish_task_ids.pop(task_id, None)
             job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH TASK {task_id} COMPLETED FOR {channel}")
         elif receipt_status == "NOT_CONFIGURED":
             job.publish_error = receipt.get("error", "NOT_CONFIGURED")
             job.publish_retry_count[channel] = 0
             job.publish_intent.pop(channel, None)
+            # Only pop the task_id after successful validation and processing
+            if task_id and job.publish_task_ids.get(task_id) == channel:
+                job.publish_task_ids.pop(task_id, None)
             job_store.event(job, f"PUBLISH {channel} NOT CONFIGURED; NO RETRY")
             return
         else:  # FAILED — permanent or transient; retry with bounded backoff
             job.publish_error = receipt.get("error", "UNKNOWN")
+            # Only pop the task_id after successful validation and processing
+            if task_id and job.publish_task_ids.get(task_id) == channel:
+                job.publish_task_ids.pop(task_id, None)
             _enqueue_with_backoff(f"FAILED: {job.publish_error}")
     else:
-        error = result.get("error") or "UNKNOWN PUBLISH ERROR"
+        error = secret_redact(str(result.get("error") or "UNKNOWN PUBLISH ERROR"))
         job.publish_error = error
         job_store.event(job, f"PUBLISH TASK FAILED for {channel}: {error}")
         _enqueue_with_backoff(error)

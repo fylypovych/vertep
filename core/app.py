@@ -284,11 +284,29 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 and secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), internal_key)):
             response = await call_next(request)
             return self._secure(response)
-        public = ("/api/health", "/api/telegram/webhook")
-        if ((not configured_user() and not password and not os.getenv("USERS_JSON", "").strip(" {}"))
-                or request.url.path.startswith(public) or request.url.path == "/api/nodes/register"):
+        public = ("/api/health", "/api/telegram/webhook", "/api/nodes/register")
+        setup_routes = ("/api/setup",)
+        if request.url.path.startswith(public) or request.url.path.startswith(setup_routes) or request.url.path == "/api/nodes/register":
             response = await call_next(request)
             return self._secure(response)
+        demo_mode = os.getenv("DEMO_MODE", "true").lower() == "true"
+        demo_paths = {"/api/health", "/api/setup", "/api/setup/health"}
+        if (
+            demo_mode
+            and not os.getenv("ADMIN_PASSWORD", "").strip()
+            and not os.getenv("CONFIG_ROOT", "").strip()
+            and request.url.path in demo_paths
+        ):
+            response = await call_next(request)
+            return self._secure(response)
+        if not configured_user() and not password and not os.getenv("USERS_JSON", "").strip(" {}"):
+            # An installation that has not completed setup still answers the
+            # session probe: the login page needs ``authenticated: false`` with a
+            # 200, never a 401 that would trigger a native browser dialog (§75 S1).
+            if request.method == "GET" and request.url.path == "/api/session":
+                response = await call_next(request)
+                return self._secure(response)
+            return self._secure(Response("Authentication required", 401))
         if request.method in {"GET", "HEAD"} and not request.url.path.startswith("/api/"):
             # Issue #75 S1: the Web UI is a static bundle. An unauthenticated
             # visitor must be able to load /login, otherwise the guard redirect
@@ -2692,14 +2710,17 @@ async def _internal_api(method: str, base_environment: str, path: str,
             response.raise_for_status()
             return response.json()
     except httpx.ConnectError:
-        raise HTTPException(502, f"Сервіс {base_environment} недоступний на {base}. Перевірте, чи запущений backup-сервіс.")
+        # Sanitized diagnostics: never expose the resolved internal URL.
+        raise HTTPException(502, f"Сервіс {base_environment} недоступний. Перевірте, чи запущений відповідний сервіс.")
     except httpx.TimeoutException:
-        raise HTTPException(504, f"Таймаут з'єднання з {base_environment} ({base}). Сервіс не відповідає.")
+        raise HTTPException(504, f"Таймаут з'єднання з {base_environment}. Сервіс не відповідає.")
     except httpx.HTTPStatusError as error:
         status = error.response.status_code
-        raise HTTPException(502, f"Сервіс {base_environment} повернув помилку (HTTP {status})") from error
-    except (httpx.HTTPError, ValueError) as error:
-        raise HTTPException(503, f"Недоступний внутрішній сервіс: {error}") from error
+        # Sanitized: no raw upstream response body or URL.
+        raise HTTPException(502, f"Сервіс {base_environment} повернув помилку (HTTP {status})")
+    except (httpx.HTTPError, ValueError):
+        # Sanitized: no raw transport error text (may embed the internal URL).
+        raise HTTPException(503, f"Недоступний внутрішній сервіс: {base_environment}")
 
 
 @app.get("/api/system/backups")

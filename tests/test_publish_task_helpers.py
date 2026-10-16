@@ -104,7 +104,7 @@ def test_publish_result_failure_retries_up_to_max():
     store = _make_store()
     enqueued = []
 
-    def fake_enqueue(js, jb, ch):
+    def fake_enqueue(js, jb, ch, delay=0):
         enqueued.append(ch)
         return {"task_id": "retry-1"}
 
@@ -337,7 +337,7 @@ def test_publish_retry_uses_bounded_backoff(monkeypatch):
     monkeypatch.setenv("PUBLISH_RETRY_BACKOFF_CAP", "4")
     enqueued = []
 
-    def fake_enqueue(js, jb, ch):
+    def fake_enqueue(js, jb, ch, delay=0):
         enqueued.append(ch)
         return {"task_id": f"retry-{len(enqueued)}"}
 

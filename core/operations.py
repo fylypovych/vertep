@@ -242,12 +242,19 @@ def advance_operation(operation_id: str, phase: str, progress: int,
     ``message`` is informational progress text; it is stored in its own field so
     that routine progress never masquerades as an error in the Web UI or
     Telegram.  Failures are reported through :func:`fail_operation`.
+
+    Issue i.0.0.1.69: a late progress sample must never rewrite a terminal
+    record — a cancelled pull that emits one more line keeps its state.
     """
     with _lock:
         operations = _read_all()
         operation = operations.get(operation_id)
         if operation is None:
             raise KeyError(f"Operation not found: {operation_id}")
+        if operation["status"] in {OperationStatus.COMPLETED.value,
+                                   OperationStatus.FAILED.value,
+                                   OperationStatus.CANCELLED.value}:
+            return operation
         operation["current_phase"] = phase
         operation["progress"] = max(0, min(100, progress))
         if message:
@@ -274,12 +281,21 @@ def set_operation_fields(operation_id: str, **fields: Any) -> dict[str, Any]:
 
 
 def complete_operation(operation_id: str, result: Any = None) -> dict[str, Any]:
-    """Mark an operation as COMPLETED."""
+    """Mark an operation as COMPLETED.
+
+    A terminal state (COMPLETED/FAILED/CANCELLED) is final: a late success
+    arriving after cancellation or failure is ignored instead of rewriting it
+    (Issue i.0.0.1.69).
+    """
     with _lock:
         operations = _read_all()
         operation = operations.get(operation_id)
         if operation is None:
             raise KeyError(f"Operation not found: {operation_id}")
+        if operation["status"] in {OperationStatus.COMPLETED.value,
+                                   OperationStatus.FAILED.value,
+                                   OperationStatus.CANCELLED.value}:
+            return operation
         operation["status"] = OperationStatus.COMPLETED.value
         operation["finished_at"] = _now()
         operation["progress"] = 100
@@ -291,12 +307,21 @@ def complete_operation(operation_id: str, result: Any = None) -> dict[str, Any]:
 
 
 def fail_operation(operation_id: str, error: str) -> dict[str, Any]:
-    """Mark an operation as FAILED."""
+    """Mark an operation as FAILED.
+
+    A terminal state (COMPLETED/FAILED/CANCELLED) is final: a late transport
+    error after cancellation must not turn CANCELLED into FAILED
+    (Issue i.0.0.1.69).
+    """
     with _lock:
         operations = _read_all()
         operation = operations.get(operation_id)
         if operation is None:
             raise KeyError(f"Operation not found: {operation_id}")
+        if operation["status"] in {OperationStatus.COMPLETED.value,
+                                   OperationStatus.FAILED.value,
+                                   OperationStatus.CANCELLED.value}:
+            return operation
         operation["status"] = OperationStatus.FAILED.value
         operation["finished_at"] = _now()
         operation["error"] = _redact(str(error)[:2000])  # Redact secrets in error

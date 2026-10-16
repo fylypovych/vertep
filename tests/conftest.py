@@ -1,5 +1,6 @@
 """Shared isolation rules for the in-process API test suite."""
 
+import base64
 import json
 import os
 import shutil
@@ -7,6 +8,32 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+# Issue i.0.0.1.68 (#109/#114): AdminAuthMiddleware is fail-closed — a backend
+# with no configured admin user serves only the pre-setup allowlist, and every
+# other route needs real credentials per request.  The suite therefore runs
+# with a known admin password and its TestClient instances carry a default
+# ``Authorization: Basic`` header, so ordinary API tests authenticate exactly
+# like a real client.  Tests that assert missing/invalid credentials simply
+# override the header (or monkeypatch ADMIN_PASSWORD, which invalidates this
+# fixed credential for the duration of that test).
+_TEST_ADMIN_PASSWORD = "vertep-test-admin-secret"
+_TEST_AUTH_HEADER = "Basic " + base64.b64encode(
+    f"admin:{_TEST_ADMIN_PASSWORD}".encode("utf-8")).decode("ascii")
+
+from fastapi.testclient import TestClient as _TestClient  # noqa: E402
+
+_orig_test_client_init = _TestClient.__init__
+
+
+def _test_client_init_with_auth(self, app, **kwargs):
+    headers = dict(kwargs.pop("headers", None) or {})
+    headers.setdefault("Authorization", _TEST_AUTH_HEADER)
+    kwargs["headers"] = headers
+    _orig_test_client_init(self, app, **kwargs)
+
+
+_TestClient.__init__ = _test_client_init_with_auth
 
 
 _TEST_STATE_ROOT: Path | None = None
@@ -24,6 +51,11 @@ def pytest_configure(config):
     os.environ["SYSTEM_STATE_BACKEND"] = "file"
     os.environ["RATE_LIMIT_PER_MINUTE"] = "10000"
     os.environ["REDIS_URL"] = "redis://127.0.0.1:1/15"
+    # Fail-closed middleware needs a non-empty admin password before it will
+    # evaluate session/Basic credentials at all; pair it with the default
+    # Authorization header installed on TestClient above.
+    os.environ["ADMIN_PASSWORD"] = _TEST_ADMIN_PASSWORD
+    os.environ.pop("USERS_JSON", None)
     # i.0.0.1.4 (#104): the unit suite is a dev/demo environment — local
     # fallback paths are active only when LOCAL_WORKER_FALLBACK=true AND
     # VERTEP_DEMO=true. Individual tests still gate with the former.

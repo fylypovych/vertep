@@ -321,6 +321,25 @@ def _report_model_progress(client: httpx.Client, core: str, node_name: str,
         return False
 
 
+def _close_on_cancel(cancel_event: threading.Event, done_event: threading.Event,
+                     response) -> None:
+    """Abort the active pull transport the moment cancellation is signalled.
+
+    The NDJSON reader only wakes when Ollama writes a line, so a stalled
+    transport would otherwise keep the command thread blocked until the read
+    timeout; closing the response unblocks it immediately and lets the
+    ``finally`` block free the client and command registry entry
+    (Issue i.0.0.1.69).
+    """
+    while not done_event.is_set():
+        if cancel_event.wait(0.05):
+            try:
+                response.close()
+            except Exception:  # noqa: BLE001 - the transport is going away anyway
+                pass
+            return
+
+
 def _run_model_command(core: str, node_name: str, command: dict,
                        client_options: dict, cancel_event: threading.Event) -> None:
     """Execute a node-local Ollama pull/delete and stream progress to CORE."""
@@ -358,6 +377,8 @@ def _run_model_command(core: str, node_name: str, command: dict,
         return False
 
     client: httpx.Client | None = None
+    done_event = threading.Event()
+    saw_success = False
     try:
         client = httpx.Client(**client_options)
         if action == "cancel":
@@ -390,6 +411,9 @@ def _run_model_command(core: str, node_name: str, command: dict,
                 report("FAILED", "pull", state["last_progress"],
                        f"Ollama returned {response.status_code}: {body}", force=True)
                 return
+            threading.Thread(target=_close_on_cancel,
+                             args=(cancel_event, done_event, response),
+                             daemon=True, name=f"pull-cancel-{operation_id[:8]}").start()
             for line in response.iter_lines():
                 if cancel_event.is_set():
                     report("CANCELLED", "pull", state["last_progress"],
@@ -405,6 +429,10 @@ def _run_model_command(core: str, node_name: str, command: dict,
                     report("FAILED", "pull", state["last_progress"],
                            str(event["error"])[:500], force=True)
                     return
+                # The explicit Ollama ``success`` status is the only event that
+                # proves the pull actually finished.
+                if str(event.get("status") or "").lower() == "success":
+                    saw_success = True
                 completed, total = event.get("completed"), event.get("total")
                 if completed is not None and total:
                     percent = max(0, min(100, int(completed * 100 // total)))
@@ -414,10 +442,29 @@ def _run_model_command(core: str, node_name: str, command: dict,
                 elif event.get("status"):
                     if stop_requested("RUNNING", str(event["status"])[:120]):
                         return
-        report("COMPLETED", "pull", 100, force=True)
+        if cancel_event.is_set():
+            # Cancellation raced the last line: report it instead of a success
+            # the stream never actually produced.
+            report("CANCELLED", "pull", state["last_progress"],
+                   "cancelled by CORE", force=True)
+            return
+        if saw_success:
+            report("COMPLETED", "pull", 100, force=True)
+        else:
+            # EOF without an explicit terminal success is a broken stream,
+            # not a completed pull (Issue i.0.0.1.69).
+            report("FAILED", "pull", state["last_progress"],
+                   "pull ended without terminal success event", force=True)
     except Exception as error:  # noqa: BLE001 - a transport failure must surface durably
-        report("FAILED", action or "pull", state["last_progress"], str(error)[:500], force=True)
+        if cancel_event.is_set():
+            # The transport was closed on purpose by the cancellation watcher;
+            # report the cancellation instead of a late failure.
+            report("CANCELLED", "pull", state["last_progress"],
+                   "cancelled by CORE", force=True)
+        else:
+            report("FAILED", action or "pull", state["last_progress"], str(error)[:500], force=True)
     finally:
+        done_event.set()
         if client is not None:
             client.close()
         with _MODEL_COMMANDS_LOCK:

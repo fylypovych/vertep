@@ -135,3 +135,77 @@ def test_health_returns_503_for_unwritable_storage(monkeypatch, backup_storage, 
     response = TestClient(backup_service.app).get("/health")
     assert response.status_code == 503
     assert "недоступний для запису" in response.json()["detail"]
+
+
+def test_core_proxy_smoke_with_real_backup_service(monkeypatch, tmp_path, backup_storage):
+    """Issue #160: Web UI→CORE /api/system/backups→separate Backup service→
+    snapshot→list/progress/result over real HTTP, without mock orchestration.
+
+    The CORE production route proxies to an actually running Backup service
+    instance on a local socket: no patched httpx transport in the chain.
+    """
+    import socket
+    import threading
+    import time
+
+    import httpx
+    import uvicorn
+
+    from core.app import app as core_app
+
+    source = tmp_path / "config"
+    source.mkdir()
+    (source / "persistent.txt").write_text("persistent data", encoding="utf-8")
+    monkeypatch.setenv("BACKUP_SOURCES", f"config:{source}")
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_CMD", "")
+    monkeypatch.delenv("BACKUP_REMOTE_CMD", raising=False)
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    server = uvicorn.Server(uvicorn.Config(
+        backup_service.app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 15
+        healthy = False
+        while time.monotonic() < deadline:
+            try:
+                healthy = httpx.get(f"{base}/health", timeout=1).status_code == 200
+                if healthy:
+                    break
+            except httpx.HTTPError:
+                time.sleep(0.2)
+        assert healthy, "separate Backup service did not become healthy"
+
+        monkeypatch.setenv("BACKUP_URL", base)
+        core = TestClient(core_app)
+        created = core.post("/api/system/backups", json={"job_id": "smoke-160"})
+        assert created.status_code == 200, created.text
+        receipt = created.json()
+        assert receipt["snapshot_id"]
+        assert len(receipt["sha256"]) == 64
+        assert receipt["size_bytes"] > 0
+        # The encrypted artifact really exists in the service storage.
+        artifact = backup_storage / receipt["file"]
+        assert artifact.is_file()
+        assert artifact.read_bytes().startswith(backup_service.MAGIC)
+
+        listed = core.get("/api/system/backups")
+        assert listed.status_code == 200, listed.text
+        assert [s["snapshot_id"] for s in listed.json()["snapshots"]] == [receipt["snapshot_id"]]
+
+        # Progress is a real read of the running service; no restore is started here
+        # (restore evidence lives in #136/#137).
+        progress = core.get(f"/api/system/backups/{receipt['snapshot_id']}/restore/progress")
+        assert progress.status_code == 200, progress.text
+        body = progress.json()
+        assert body["status"] == "unknown"
+        assert body["progress"] == 0
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)

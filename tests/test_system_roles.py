@@ -24,7 +24,6 @@ def test_core_roles_api_exposes_and_queues_composite_plan(tmp_path, monkeypatch)
                                                              "node_role": "core"}), encoding="utf-8")
     monkeypatch.setenv("CONFIG_ROOT", str(config))
     monkeypatch.setenv("NODE_ROLES_FILE", str(roles_path))
-    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("USERS_JSON", raising=False)
 
     client = TestClient(app)
@@ -51,7 +50,6 @@ def test_core_roles_api_rejects_unknown_role(tmp_path, monkeypatch):
                                                              "node_role": "core"}), encoding="utf-8")
     monkeypatch.setenv("CONFIG_ROOT", str(config))
     monkeypatch.setenv("NODE_ROLES_FILE", str(roles_path))
-    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("USERS_JSON", raising=False)
     response = TestClient(app).post("/api/system/roles", json={"roles": ["unknown"]})
     assert response.status_code == 422

@@ -64,6 +64,28 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vertep-config" "$RUNNER_TEMP/vertep-storage" "$RUNNER_TEMP/vertep-update"
           printf '{}' > "$RUNNER_TEMP/vertep-config/users.json"
           printf '{"completed_at": "2024-01-01T00:00:00Z"}' > "$RUNNER_TEMP/vertep-config/installation.json"
+      - name: Start Backup service for the real backup chain
+        run: |
+          export BACKUP_ROOT="$RUNNER_TEMP/vertep-backups"
+          export BACKUP_SOURCES="config:$RUNNER_TEMP/vertep-config"
+          export BACKUP_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          export BACKUP_PG_DUMP_CMD=""
+          export BACKUP_REDIS_DUMP_CMD=""
+          mkdir -p "$BACKUP_ROOT"
+          nohup python -m uvicorn services.backup_service:app --host 127.0.0.1 --port 8090 \
+            > "$RUNNER_TEMP/vertep-backup.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/health >/dev/null 2>&1; then
+              echo "Backup service is up"
+              echo "BACKUP_URL=http://127.0.0.1:8090" >> "$GITHUB_ENV"
+              echo "VERTEP_E2E_BACKUP_SMOKE=1" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backup service did not start" >&2
+          cat "$RUNNER_TEMP/vertep-backup.log" >&2
+          exit 1
       - name: Start CORE for smoke tests
         env:
           RATE_LIMIT_PER_MINUTE: "100000"

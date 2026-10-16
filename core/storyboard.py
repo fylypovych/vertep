@@ -155,23 +155,39 @@ class StoryboardService:
             scene.image_prompt = scene.prompt
             scene.image_version = data.get("image_version", 1)
 
+        # Issue i.0.0.1.62: validate the WHOLE artifact — every required
+        # top-level field, its type and the full StoryboardVersion schema —
+        # BEFORE any history/Job mutation, cleanup or ack.  A payload missing
+        # title/description/hashtags/prompt_version/model, carrying wrong
+        # types or an invalid scene list must be a controlled refusal that
+        # leaves the previous pending/approved history, the task/lease and the
+        # Worker exactly as they were.
+        required_fields = ("title", "description", "hashtags", "prompt_version", "model")
+        missing = [field for field in required_fields if field not in data]
+        if missing:
+            raise ValueError("Malformed storyboard artifact: missing "
+                             + ", ".join(missing))
+        try:
+            storyboard = StoryboardVersion(
+                version=data["version"],
+                title=data["title"],
+                description=data["description"],
+                hashtags=data["hashtags"],
+                scenes=scenes,
+                prompt_version=data["prompt_version"],
+                model=data["model"],
+                status="pending_approval",
+                revision_request=data.get("revision_request"),
+                image_version=data.get("image_version", 1),
+                image_status=data.get("image_status", "pending"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Malformed storyboard artifact: {exc}") from exc
+
+        # History is mutated only after the artifact passed full validation.
         for previous in job.storyboards:
             if previous.status == "pending_approval":
                 previous.status = "superseded"
-
-        storyboard = StoryboardVersion(
-            version=data["version"],
-            title=data["title"],
-            description=data["description"],
-            hashtags=data["hashtags"],
-            scenes=scenes,
-            prompt_version=data["prompt_version"],
-            model=data["model"],
-            status="pending_approval",
-            revision_request=data.get("revision_request"),
-            image_version=data.get("image_version", 1),
-            image_status=data.get("image_status", "pending"),
-        )
 
         job.storyboards.append(storyboard)
         job.active_storyboard_version = storyboard.version

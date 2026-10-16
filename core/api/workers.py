@@ -124,6 +124,15 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     if isinstance(reported_catalog.get("models"), list):
         data["model_catalog"] = [str(name) for name in reported_catalog["models"]]
         data["model_catalog_at"] = utc_now()
+    # Issue i.0.0.1.70: the executor-observed provider selection the Worker
+    # reports back is the CORE-side proof the switch reached the node that
+    # actually runs the task.  Stamp when it was observed so a stale ack can be
+    # told apart from a fresh one; an empty mapping means the node observes no
+    # override.
+    if isinstance(data.get("provider_config"), dict):
+        data["provider_config"] = {str(key): str(value)
+                                   for key, value in data["provider_config"].items()}
+        data["provider_config_at"] = utc_now()
     if data.get("desired_state") in {"DISABLED", "REVOKED"}:
         # Cache lifecycle: a disabled or revoked node keeps no model cache.
         for field in ("model_catalog", "model_catalog_at", "model_command"):

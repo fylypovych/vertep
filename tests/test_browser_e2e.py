@@ -2977,3 +2977,53 @@ def test_backup_restore_runs_the_two_phase_flow_through_the_ui():
         assert page_errors == [], f"pageerror: {page_errors}"
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
+
+
+def test_backup_create_smoke_through_real_backend_without_route_mocks():
+    """i.0.0.1.60: Web UI→CORE /api/system/backups→separate Backup service.
+
+    The disposable deployment must expose a verified Backup service behind CORE
+    (``VERTEP_E2E_BACKUP_SMOKE=1``). No ``page.route`` interception may cover
+    ``/api/system/backups``: the snapshot has to travel the real chain —
+    UI create click → CORE proxy → separate service → receipt, then the list
+    and progress are read back through the same unmocked route.
+    """
+    if os.getenv("VERTEP_E2E_BACKUP_SMOKE") != "1":
+        pytest.skip("VERTEP_E2E_BACKUP_SMOKE is not set: no verified Backup "
+                    "service behind CORE for the real-chain smoke")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+
+            def snapshot_count() -> int:
+                response = page.request.get(f"{BASE_URL}/api/system/backups")
+                assert response.ok, response.text()
+                return len(response.json().get("snapshots", []))
+
+            baseline = snapshot_count()
+
+            page.goto(f"{BASE_URL}/settings?tab=backup")
+            expect(page.locator("[data-testid='settings-backup']")).to_be_visible(timeout=20000)
+            page.locator("[data-testid='backup-create-button']").click()
+
+            # The real service produced a snapshot and the UI re-read the list.
+            expect(page.locator("[data-testid='backup-restore-button']")).to_have_count(
+                baseline + 1, timeout=60000)
+
+            # Result + progress are read back through the same real chain.
+            listed = page.request.get(f"{BASE_URL}/api/system/backups").json()["snapshots"]
+            assert len(listed) == baseline + 1, [s["snapshot_id"] for s in listed]
+            newest = listed[0]
+            assert newest.get("sha256")
+            assert int(newest.get("size_bytes") or 0) > 0
+            progress = page.request.get(
+                f"{BASE_URL}/api/system/backups/{newest['snapshot_id']}/restore/progress")
+            assert progress.ok, progress.text()
+            assert "status" in progress.json()
+            assert page_errors == [], f"pageerror: {page_errors}"
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            browser.close()

@@ -1,5 +1,17 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.57
+- Issue i.0.0.1.69 — Model pull lifecycle: локальний та node pull досягає COMPLETED лише за явною термінальною подією `success`; EOF без неї — FAILED, а не COMPLETED; cancel закриває застряглий transport одразу; пізній результат/помилка не переписує термінальний стан (COMPLETED/FAILED/CANCELLED фінальні).
+- Issue i.0.0.1.62 — Storyboard results: повний payload (усі обов'язкові поля, типи, схема StoryboardVersion) перевіряється до будь-якої мутації history/Job/cleanup/ack; missing title/description/hashtags/prompt_version/model, неправильні типи чи invalid scene list дають контрольовану відмову, що зберігає попередню pending/approved history, task/lease і стан Worker.
+- Issue #160 — Backup diagnostics: proxy-шляхи CORE дають санітизовані 502/504/503 без внутрішнього URL чи raw body; browser E2E запускає реальний Backup service для наскрізного smoke через справжній backend.
+- Issue #167 — OAuth scopes: `_record_scopes` зберігає scopes з токен-refresh відповіді (str/list) і не очищає відомі scopes, коли відповідь їх не містить; revoke подає refresh або cached access token і ніколи не порожній token.
+- Issue #168/#109/#114 — Auth fail-closed: AdminAuthMiddleware для незаконфігурованого бекенду відкриває лише setup/health/webhook/register і повертає 401 на решту (крім session-probe); порожній ADMIN_PASSWORD відхиляється; worker token без конфігурації fail-closed; session_secret враховує `SESSION_SECRET`; тестовий клієнт автентифікується Basic.
+- Issue #190 — Publish receipts: секрето-подібні значення у receipts, error та url рекурсивно редагуються перед збереженням у CORE-state; publish task_id вилучається з pending-мапи лише після успішної валідації/обробки; retry використовує bounded backoff з `not_before`.
+- Issue i.0.0.1.70 — Provider switch proof: heartbeat Worker зберігає executor-observed `provider_config` та `provider_config_at` як CORE-side доказ, що override дійшов до вузла.
+- TTS failure recovery: `_handle_tts_failure` скидає `current_job`/`current_task`/`last_seen` Worker, як у voice worker loss recovery.
+- `core/first_run.py`: `_secret_key` fail-closed на нечитабельний ключ; `ensure_secret_store` не підмінює нечитабельний encrypted store і мігрує legacy plaintext.
+- `.github/workflows/ci.yml`: compileall включає директорію `lab`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.55
 - Issue i.0.0.1.60 — Create Backup: наскрізний Web→CORE /api/system/backups→Backup service smoke і sanitized errors; повні proxy endpoints для create/list/progress/restore/confirm; _internal_api та _sync_internal_api повертають безпечні помилки без URL/raw body/secrets.
 - Issue i.0.0.1.61 — Text results: перевіряти deadline lease до приймання; `inflight_active` (не `inflight_has`) доводить lease liveness; відхиляємо result після deadline до watchdog sweep; збережені foreign/current-task/cancel/version guards; автоматизовані тести для expired-before-sweep, valid lease, late result after reclaim.

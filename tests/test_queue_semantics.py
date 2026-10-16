@@ -724,3 +724,138 @@ def test_storyboard_result_is_fenced_on_owner_version_and_payload(client, monkey
     assert job.script == approved_script
     assert job.approved is True
     assert job.status == JobStatus.STORYBOARD_APPROVED
+
+
+def test_storyboard_result_validates_full_artifact_before_history_mutation(client, monkeypatch):
+    """Issue i.0.0.1.62: the whole storyboard artifact is validated BEFORE any
+    history/Job mutation, cleanup or ack.  A payload missing
+    title/description/hashtags/prompt_version/model, carrying wrong types or an
+    invalid scene list is a controlled 400 that leaves the pending AND the
+    approved previous history, the Job status, the task/lease and the Worker
+    exactly as they were — submitted through the real result orchestration.
+    """
+    from worker import role_executor
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("VERTEP_DEMO", "false")
+    _text_worker(client, "text-a")
+
+    valid_v2 = {
+        "version": 2, "title": "Історія 2", "description": "Опис 2",
+        "hashtags": ["#vertep"],
+        "scenes": [{"index": 1, "prompt": "Кадр", "video_prompt": "Кадр",
+                    "voiceover": "Текст", "duration": 5}],
+        "prompt_version": "1.0", "model": "test",
+        "image_version": 1, "image_status": "pending",
+    }
+
+    def submit(job, task_id, data: dict):
+        artifact = {"filename": "storyboard.json", "kind": "storyboard",
+                    "data_base64": base64.b64encode(
+                        json.dumps(data, ensure_ascii=False).encode("utf-8")).decode("ascii")}
+        return client.post("/api/tasks/result", json={
+            "job_id": job.job_id, "task_id": task_id, "node_name": "text-a",
+            "success": True, "artifacts": [artifact],
+        })
+
+    # ── pending history ────────────────────────────────────────────────
+    job = store.create("storyboard full validation", "did_samogon", 5)
+    StoryboardService(store).queue(job)
+    first = _claim_text_task(client, "text-a", job.job_id, "storyboard")
+    assert client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": first["task_id"], "node_name": "text-a",
+        "success": True, "artifacts": [_storyboard_payload(1)],
+    }).status_code == 200
+    assert job.status == JobStatus.STORYBOARD_PENDING_APPROVAL
+    assert [board.version for board in job.storyboards] == [1]
+
+    StoryboardService(store).queue(job)
+    task_id = job.storyboard_task_id
+    assert task_id
+    _claim_text_task(client, "text-a", job.job_id, "storyboard")
+
+    def assert_pending_untouched():
+        assert job.status == JobStatus.STORYBOARD_GENERATING
+        assert [board.version for board in job.storyboards] == [1]
+        assert job.storyboards[0].status == "pending_approval"
+        assert job.storyboard_task_id == task_id
+        assert task_queue.inflight_has(task_id)
+        assert store.workers["text-a"]["current_task"] == task_id
+
+    # missing required field: controlled 400, nothing mutated.
+    for field in ("title", "description", "hashtags", "prompt_version", "model"):
+        broken = dict(valid_v2)
+        broken.pop(field)
+        response = submit(job, task_id, broken)
+        assert response.status_code == 400, (field, response.text)
+        assert "Malformed storyboard artifact" in response.json()["detail"]
+        assert_pending_untouched()
+
+    # wrong types: controlled 400, nothing mutated.
+    for field, wrong in (("title", 42), ("description", ["list"]),
+                         ("hashtags", "#str"), ("prompt_version", 1.5),
+                         ("model", 7)):
+        broken = dict(valid_v2)
+        broken[field] = wrong
+        response = submit(job, task_id, broken)
+        assert response.status_code == 400, (field, response.text)
+        assert_pending_untouched()
+
+    # invalid payload (empty scene list): controlled 400, nothing mutated.
+    broken = dict(valid_v2)
+    broken["scenes"] = []
+    assert submit(job, task_id, broken).status_code == 400
+    assert_pending_untouched()
+
+    # the valid artifact is still accepted after the refusals.
+    assert submit(job, task_id, dict(valid_v2)).status_code == 200
+    assert [board.version for board in job.storyboards] == [1, 2]
+    assert job.storyboards[0].status == "superseded"
+    assert job.storyboards[1].status == "pending_approval"
+    assert job.status == JobStatus.STORYBOARD_PENDING_APPROVAL
+    assert not task_queue.inflight_has(task_id)
+    assert store.workers["text-a"].get("current_task") is None
+
+    # ── approved history ───────────────────────────────────────────────
+    job2 = store.create("storyboard approved validation", "did_samogon", 5)
+    StoryboardService(store).queue(job2)
+    first2 = _claim_text_task(client, "text-a", job2.job_id, "storyboard")
+    assert client.post("/api/tasks/result", json={
+        "job_id": job2.job_id, "task_id": first2["task_id"], "node_name": "text-a",
+        "success": True, "artifacts": [_storyboard_payload(1)],
+    }).status_code == 200
+    service = StoryboardService(store)
+    board = job2.storyboards[0]
+    for scene in board.scenes:
+        scene.image_artifact_id = f"art-{scene.index}"
+    board.image_status = "ready"
+    service.approve_images(job2.job_id, board.version, "tester")
+    service.approve(job2.job_id, board.version, "tester")
+    assert job2.approved is True
+    approved_script = job2.script
+
+    StoryboardService(store).queue(job2)
+    task2 = job2.storyboard_task_id
+    assert task2
+    _claim_text_task(client, "text-a", job2.job_id, "storyboard")
+
+    def assert_approved_untouched():
+        assert job2.status == JobStatus.STORYBOARD_GENERATING
+        assert [board.version for board in job2.storyboards] == [1]
+        assert job2.storyboards[0].status == "approved"
+        assert job2.script == approved_script
+        assert job2.approved is True
+        assert job2.storyboard_task_id == task2
+        assert task_queue.inflight_has(task2)
+        assert store.workers["text-a"]["current_task"] == task2
+
+    broken = dict(valid_v2)
+    broken.pop("title")
+    response = submit(job2, task2, broken)
+    assert response.status_code == 400
+    assert "Malformed storyboard artifact" in response.json()["detail"]
+    assert_approved_untouched()
+
+    broken = dict(valid_v2)
+    broken["scenes"] = []
+    assert submit(job2, task2, broken).status_code == 400
+    assert_approved_untouched()

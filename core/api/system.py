@@ -196,13 +196,13 @@ async def _internal_api(method: str, base_environment: str, path: str,
     except httpx.HTTPStatusError as error:
         status = error.response.status_code
         # Sanitize: no upstream URL, no raw response body
-        raise HTTPException(502, f"Upstream service returned HTTP {status}") from error
+        raise HTTPException(502, f"Upstream service returned HTTP {status}")
     except httpx.ConnectError:
         # Sanitize: no upstream URL
-        raise HTTPException(502, "Upstream service is unreachable") from error
+        raise HTTPException(502, "Upstream service is unreachable")
     except httpx.TimeoutException:
         # Sanitize: no upstream URL
-        raise HTTPException(504, "Upstream service timed out") from error
-    except Exception as error:
+        raise HTTPException(504, "Upstream service timed out")
+    except Exception:
         # Sanitize: no internal details
-        raise HTTPException(503, "Internal service error") from error
+        raise HTTPException(503, "Internal service error")

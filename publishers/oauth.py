@@ -63,6 +63,7 @@ class BaseTokenProvider:
         self._transport = transport
         self._cached_token: Optional[str] = None
         self._token_expires_at: float = 0.0
+        self._cached_scopes: list[str] = []
 
     # ---------------------------------------------------------------------
     def access_token(self) -> str:
@@ -89,8 +90,8 @@ class BaseTokenProvider:
         Returns an empty list when the token has expired or scopes are not
         available (e.g. static tokens without an introspection endpoint).
         """
-        if self._cached_token and time.time() < self._token_expires_at and getattr(self, '_token_scopes', None):
-            return list(self._cached_token_scopes)
+        if self._cached_token and time.time() < self._token_expires_at and self._token_scopes:
+            return list(self._token_scopes)
         return []
 
     @property
@@ -136,7 +137,24 @@ class BaseTokenProvider:
             self._cached_token = new_token
             expires_in = body.get("expires_in", 3600)
             self._token_expires_at = time.time() + int(expires_in) - 60
+            self._record_scopes(body.get("scope"))
         return new_token
+
+    def _record_scopes(self, scope) -> None:
+        """Persist the scopes a token refresh response reports (Issue #167).
+
+        ``scope`` is a space-separated string on most platforms and may be a
+        list on others; an absent value leaves the previous scopes untouched so
+        a refresh response without scope information does not silently clear a
+        known scope set.
+        """
+        if isinstance(scope, str):
+            scopes = scope.split()
+        elif isinstance(scope, (list, tuple)):
+            scopes = [str(item) for item in scope]
+        else:
+            return
+        self._token_scopes = scopes
 
     # ---------------------------------------------------------------------
     def revoke(self) -> bool:
@@ -146,15 +164,22 @@ class BaseTokenProvider:
         if no refresh_token / revocation endpoint is configured or the request
         failed.  Clearing the locally cached token is always performed.
         """
+        cached_access = self._cached_token
         self._cached_token = None
         self._token_expires_at = 0.0
+        self._cached_scopes = []
         if not getattr(self, 'revoke_url', ''):
             return False
         refresh = self.refresh_token()
         client_id = _get_secret(self.client_id_env) or "" if self.client_id_env else ""
         client_secret = _get_secret(self.client_secret_env) or "" if self.client_secret_env else ""
+        token = refresh or cached_access
+        if not token:
+            # Never POST an empty ``token``: RFC 7009 rejects it and it would
+            # tell the provider nothing about what to revoke.
+            return False
         data = {
-            "token": refresh or "",
+            "token": token,
             "token_type_hint": "refresh_token" if refresh else "access_token",
         }
         if client_id:
@@ -177,6 +202,7 @@ class BaseTokenProvider:
         """
         self._cached_token = None
         self._token_expires_at = 0.0
+        self._cached_scopes = []
         token = _get_secret(self.credential_env) or ""
         if token:
             self._cached_token = token
@@ -226,6 +252,7 @@ class YouTubeTokenProvider(BaseTokenProvider):
             self._cached_token = new_token
             expires_in = body.get("expires_in", 3600)
             self._token_expires_at = time.time() + int(expires_in) - 60
+            self._record_scopes(body.get("scope"))
         return new_token
 
 

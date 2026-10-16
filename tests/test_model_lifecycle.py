@@ -5,15 +5,28 @@ lifecycle acceptance criteria that can be proven without a real Ollama node:
 placement rejection paths, heartbeat catalog ingestion, command delivery/ack,
 worker-authenticated progress reporting, cache invalidation and restart
 reconciliation.
+
+Issue i.0.0.1.69: the local pull stream must reach COMPLETED only through the
+explicit terminal success event, EOF without it is a failure, cancellation
+aborts a stalled transport promptly and a late result never rewrites a
+terminal state.
 """
 
+import json
+import threading
+import time
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from core.app import app, store
-from core.operations import advance_operation, begin_operation, create_operation, get_operation
+from core.operations import (advance_operation, begin_operation, cancel_operation,
+                             complete_operation, create_operation,
+                             fail_operation, get_operation)
 from core.pull_executor import (
     PlacementError,
+    _CANCEL_EVENTS,
     cancel_pull,
     model_placement,
     pending_model_command,
@@ -365,3 +378,144 @@ def test_model_pull_endpoint_is_idempotent_for_active_operation():
     assert second.status_code == 200
     assert first.json()["operation_id"] == second.json()["operation_id"]
     cancel_pull(first.json()["operation_id"], "cleanup")
+
+
+# ---------------------------------------------------------------------------
+# Local pull stream contract (Issue i.0.0.1.69)
+# ---------------------------------------------------------------------------
+
+
+class _PullStream:
+    status_code = 200
+
+    def __init__(self, lines, *, stall=False):
+        self._lines = lines
+        self._stall = stall
+        self.started = threading.Event()
+        self.closed = threading.Event()
+
+    @property
+    def text(self):
+        return ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def iter_lines(self):
+        self.started.set()
+        for line in self._lines:
+            yield line
+        if self._stall:
+            # A stalled transport never yields another line: only closing the
+            # response (the cancellation watcher) can release it.
+            if not self.closed.wait(timeout=5):
+                raise httpx.ReadError("stream stalled")
+            raise httpx.ReadError("stream closed by cancellation")
+
+    def close(self):
+        self.closed.set()
+
+
+class _PullClient:
+    stream_obj = None
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    def stream(self, *_args, **_kwargs):
+        return _PullClient.stream_obj
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def _start_local_pull(monkeypatch, lines, *, model, stall=False):
+    stream = _PullStream(lines, stall=stall)
+    _PullClient.stream_obj = stream
+    monkeypatch.setattr(httpx, "Client", _PullClient)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434")
+    operation = start_pull(model)
+    assert operation["node_name"] is None
+    return operation, stream
+
+
+def _wait_terminal(operation_id, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    stored = get_operation(operation_id)
+    while time.monotonic() < deadline:
+        stored = get_operation(operation_id)
+        if stored and stored["status"] in {"COMPLETED", "FAILED", "CANCELLED"}:
+            break
+        time.sleep(0.02)
+    return stored
+
+
+def test_local_pull_requires_terminal_success_event(monkeypatch):
+    operation, _stream = _start_local_pull(monkeypatch, [
+        json.dumps({"status": "pulling manifest"}),
+        json.dumps({"completed": 50, "total": 100}),
+        json.dumps({"completed": 100, "total": 100}),
+    ], model="local-eof-model")
+    stored = _wait_terminal(operation["operation_id"])
+    assert stored["status"] == "FAILED"
+    assert "terminal success" in stored["error"]
+    # the persisted progress of the interrupted pull is preserved.
+    assert stored["progress"] == 100
+
+
+def test_local_pull_eof_after_success_completes(monkeypatch):
+    operation, _stream = _start_local_pull(monkeypatch, [
+        json.dumps({"completed": 100, "total": 100}),
+        json.dumps({"status": "success"}),
+    ], model="local-success-model")
+    stored = _wait_terminal(operation["operation_id"])
+    assert stored["status"] == "COMPLETED"
+    assert stored["result"]["pulled"] is True
+    assert stored["progress"] == 100
+
+
+def test_local_pull_error_event_fails(monkeypatch):
+    operation, _stream = _start_local_pull(monkeypatch, [
+        json.dumps({"error": "model not found"}),
+    ], model="local-error-model")
+    stored = _wait_terminal(operation["operation_id"])
+    assert stored["status"] == "FAILED"
+    assert "model not found" in stored["error"]
+
+
+def test_local_pull_cancel_interrupts_stalled_transport(monkeypatch):
+    operation, stream = _start_local_pull(monkeypatch, [
+        json.dumps({"status": "pulling manifest"}),
+    ], model="local-stalled-model", stall=True)
+    assert stream.started.wait(timeout=2)
+    cancel_pull(operation["operation_id"], "user cancelled")
+    # The cancellation watcher closes the stalled transport, so the pull
+    # thread finishes promptly instead of blocking until the read timeout.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and operation["operation_id"] in _CANCEL_EVENTS:
+        time.sleep(0.02)
+    assert operation["operation_id"] not in _CANCEL_EVENTS
+    time.sleep(0.1)
+    stored = get_operation(operation["operation_id"])
+    # The late transport error must not rewrite the terminal CANCELLED state.
+    assert stored["status"] == "CANCELLED"
+
+
+def test_terminal_operation_state_is_final_for_late_results():
+    operation = create_operation("model_pull", "test", target="terminal-final")
+    begin_operation(operation["operation_id"], "pull")
+    advance_operation(operation["operation_id"], "pull", 40, "downloading")
+    cancel_operation(operation["operation_id"], "user cancelled")
+    complete_operation(operation["operation_id"], {"pulled": True})
+    fail_operation(operation["operation_id"], "late transport error")
+    advance_operation(operation["operation_id"], "pull", 77, "late progress")
+    stored = get_operation(operation["operation_id"])
+    assert stored["status"] == "CANCELLED"
+    assert stored["progress"] == 40
+    assert stored["message"] == "downloading"
