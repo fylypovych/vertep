@@ -770,18 +770,47 @@ def _persist_tts_contract(store, job, scene, result, audio_path, data, contract)
     """Validate and persist a verifiable audio contract for a Voice Worker artifact.
 
     The contract is produced by the Voice Worker and declares which character
-    voice config (provider/voice/...) actually drove the synthesis plus a sha256
-    of the audio bytes.  We re-check the digest against what CORE received and
-    store the contract as a sidecar artifact so the audio is verifiable after the
-    fact.  Validation is performed by :func:`_validate_tts_contract` before any
-    file is written here.
+    voice config (provider/voice/...) actually drove the synthesis plus a
+    sha256 of the audio bytes.  We re-check the digest against what CORE
+    received and store the contract as a sidecar artifact so the audio is
+    verifiable after the fact.  Validation is performed by
+    :func:`_validate_tts_contract` before any file is written here.
+
+    Issue #197/#165.2: the task requirements are read from the snapshot taken
+    at enqueue time (``job.voice_task_snapshot[result.task_id]``), never
+    rebuilt from the live Character config.  A config change between claim
+    and result must not silently validate an artifact against a different
+    voice requirement than the one the Worker was dispatched with.
     """
-    _validate_tts_contract(_tts_task_for(job, scene), data, contract)
+    _validate_tts_contract(_voice_task_for(job, result.task_id, scene), data, contract)
     contract_path = audio_path.with_suffix(".contract.json")
     contract_path.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
     return [register_artifact(job, store.root, contract_path, "audio_contract",
                               scene_id=scene.scene_id, task_id=result.task_id,
                               node_name=result.node_name)]
+
+
+def _voice_task_for(job, task_id, scene) -> dict:
+    """Return the voice-task requirements for a result.
+
+    Issue #197/#165.2: when the Job carries a ``voice_task_snapshot`` the
+    requirements are read from the exact snapshot that was issued at enqueue
+    time, never rebuilt from the live Character config.  A config change
+    between claim and result must be a controlled rejection, not a silent
+    re-derivation.  When no snapshot tracking is active (tests that bypass
+    the enqueue/claim flow) the task is rebuilt as before.
+    """
+    snapshot = (job.voice_task_snapshot or {}).get(task_id)
+    if snapshot is not None:
+        return snapshot
+    if job.voice_task_snapshot:
+        # Snapshot tracking is active for this Job but no snapshot was issued
+        # for this task_id: the result is for a task that was never dispatched
+        # to a Worker (or for a task whose claim was lost).  Reject rather
+        # than silently rebuild from the live Character config.
+        raise ValueError("No issued voice-task snapshot for this result; "
+                         "the task was never dispatched or the config changed")
+    return _tts_task_for(job, scene)
 
 
 def _tts_max_retries(job) -> int:
@@ -828,6 +857,13 @@ def _enqueue_tts_task(job, scene, *, delay: float = 0) -> dict:
     queued = task_queue.enqueue(task)
     scene.task_id = queued["task_id"]
     job.tts_active_task_ids[queued["task_id"]] = scene.scene_id
+    # Issue #197/#165.2: snapshot the exact voice requirements that were
+    # issued to the Worker at enqueue time.  Validation later compares the
+    # Worker's contract against this snapshot instead of rebuilding the task
+    # from the live Character config, so a config change between claim and
+    # result cannot silently validate an artifact against different
+    # requirements than the ones the Worker was dispatched with.
+    job.voice_task_snapshot[queued["task_id"]] = dict(task)
     store.repository.record_task(queued, "QUEUED")
     store.event(job, f"TTS TASK {queued['task_id']} QUEUED FOR {scene.scene_id}")
     return queued
@@ -1323,6 +1359,21 @@ def _recover_stale_workers() -> None:
             task_queue.release(current_task)
             job.script_task_id = None
             job.assigned_worker = None
+            # Issue #197/#163.3: charge the script attempt budget for the lost
+            # lease, exactly like ``_handle_script_result`` does for a failed
+            # result.  Without this a node that keeps dropping its heartbeat
+            # re-dispatches forever without ever exhausting ``max_retries``.
+            job.script_attempt = getattr(job, "script_attempt", 0) + 1
+            # Issue #197/#163.3: charge the script attempt budget for the lost
+            # lease, exactly like ``_handle_script_result`` does for a failed
+            # result.  Without this a node that keeps dropping its heartbeat
+            # re-dispatches forever without ever exhausting ``max_retries``.
+            # The task is re-enqueued (not dead-lettered): the Job stays on the
+            # lifecycle path and a healthy Worker re-claims it.  Only terminal
+            # exhaustion dead-letters.
+            store.repository.record_task({"task_id": current_task, "task": "script",
+                                          "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
+                                         error="script worker heartbeat timed out")
             system_prompt, character = _load_character_prompt(job)
             _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
             store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
@@ -1347,11 +1398,23 @@ def _recover_stale_workers() -> None:
             scene = next((s for s in job.scenes if s.scene_id == job.tts_active_task_ids.get(current_task)), None)
             task_queue.release(current_task)
             job.tts_active_task_ids.pop(current_task, None)
+            # Issue #197/#165.2: drop the issued voice-task snapshot for the lost
+            # lease so a late result cannot validate against a stale snapshot and
+            # the per-worker-loss dict does not grow without bound.
+            job.voice_task_snapshot.pop(current_task, None)
             job.assigned_worker = None
             if scene:
                 scene.assigned_worker = None
                 job.tts_attempts[scene.scene_id] = _tts_attempts_used(job, scene) + 1
                 interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
+            # Issue #197/#163.3: record the lost lease in the repository so the
+            # audit trail shows the task was released, not silently dropped.
+            # The task is re-enqueued (not dead-lettered): the Job stays on the
+            # lifecycle path and a healthy Worker re-claims it.  Only terminal
+            # exhaustion dead-letters.
+            store.repository.record_task({"task_id": current_task, "task": "voice",
+                                          "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
+                                         error="voice worker heartbeat timed out")
             _dispatch_tts(store, job)
             store.event(job, f"{worker.get('node_name')} OFFLINE; TTS TASK {current_task} REQUEUED")
             worker["current_job"] = None
@@ -1360,11 +1423,30 @@ def _recover_stale_workers() -> None:
                                                                                JobStatus.STORYBOARD_GENERATING}:
             # Worker loss during storyboard generation: release the lease and
             # re-queue the storyboard so the Job stays on the lifecycle path.
+            # Issue #197/#163.3: this branch must agree with
+            # ``handle_expired_storyboard_lease`` (core/app.py) about the
+            # budget and the revision.  Both paths now burn the same
+            # version-scoped budget and reuse the pinned revision, so a node
+            # that keeps dropping its heartbeat cannot re-dispatch the same
+            # version forever; once the budget is spent the Job reaches
+            # STORYBOARD_FAILED instead of looping.
             task_queue.release(current_task)
             job.storyboard_task_id = None
             job.assigned_worker = None
+            job.storyboard_attempt = getattr(job, "storyboard_attempt", 0) + 1
+            job.storyboard_attempt_version = (
+                job.storyboards[-1].version + 1 if job.storyboards else 1)
+            store.repository.record_task({"task_id": current_task, "task": "storyboard",
+                                          "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
+                                         error="storyboard worker heartbeat timed out")
+            task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task,
+                                    "task": "storyboard"},
+                                   "storyboard worker heartbeat timed out")
+            pinned_revision = getattr(job, "storyboard_active_revision", None) or (
+                job.storyboards[-1].revision_request if job.storyboards else None)
+            job.storyboard_active_revision = pinned_revision
             from ..pipeline import queue_storyboard as _queue_storyboard
-            _queue_storyboard(store, job, revision=job.video_revision_upstream)
+            _queue_storyboard(store, job, revision=pinned_revision)
             store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None

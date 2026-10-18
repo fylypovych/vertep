@@ -359,6 +359,17 @@ class Job(BaseModel):
     active_storyboard_version: int | None = None
     active_image_version: int | None = None
     storyboard_attempt: int = 0
+    # Issue #197/#163.1: the storyboard attempt budget belongs to a specific
+    # version.  ``storyboard_attempt_version`` records which version the current
+    # budget was reset for, so a retry of the same version keeps burning the same
+    # budget while a regenerate/history-branch (a new version) starts fresh.
+    storyboard_attempt_version: int | None = None
+    # Issue #197/#163.2: the revision that is actively driving the current
+    # version's attempt budget.  A regenerate/history-branch pins the revision
+    # the actor supplied; a retry of the same version reuses exactly that
+    # revision instead of falling back to a stale ``job.revision`` or the
+    # previous version's ``revision_request``.
+    storyboard_active_revision: str | None = None
     storyboard_error: str | None = None
     storyboard_revision_chat_id: str | None = None
     storyboard_revision_version: int | None = None
@@ -420,6 +431,14 @@ class Job(BaseModel):
     # TTS stage and are dead-lettered instead of looping forever.
     tts_attempts: dict[str, int] = Field(default_factory=dict)
     tts_max_retries: int = 3
+    # Issue #197/#165.2: the exact voice-task snapshot that was issued to the
+    # Worker, keyed by task_id.  ``_persist_tts_contract`` used to rebuild the
+    # task from the live Character config, so a config change between claim and
+    # result could silently validate an artifact against a different voice
+    # requirement than the one the Worker was dispatched with.  The snapshot is
+    # taken at enqueue and compared at validation, so a mismatch is a controlled
+    # rejection that leaves no artifact, no ack and no Worker release.
+    voice_task_snapshot: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class WorkerHeartbeat(BaseModel):
     node_name: str

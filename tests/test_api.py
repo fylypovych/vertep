@@ -1531,6 +1531,58 @@ def test_system_test_full_healthy_when_all_ok(monkeypatch):
         import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_system_test_full_unhealthy_on_unconfigured_publisher_slot(monkeypatch):
+    """#172.3: an all-unconfigured publisher backend must not pass as a silent zero.
+
+    The publisher slot reports a top-level ``configured`` flag; when no platform
+    is configured the full self-test is UNHEALTHY instead of reporting success.
+    """
+    import sys
+    from types import ModuleType as _Mod
+    from core.app import store
+    from core.models import Job, SceneRecord, StageStatus, utc_now
+    store.jobs.clear()
+    store.jobs["job-1"] = Job(
+        job_id="job-1", topic="test", character_id="char-1",
+        priority=1, status=JobStatus.READY,
+        scenes=[SceneRecord(scene_id="s1", index=1, prompt="p1", status=StageStatus.READY)],
+        created_at=utc_now())
+    monkeypatch.setenv("NODE_ROLE", "core")
+    import core.health_checks as _hc
+    monkeypatch.setattr(_hc, "run_checks", lambda **kw: {"docker": (True, "ok")})
+    monkeypatch.setattr(_hc, "health_status", lambda c: "HEALTHY")
+    import adapters.providers as _prov
+    matrix = {
+        "tts": {"available": True},
+        "publisher": {
+            "backend": "vertep-official",
+            "configured": False,
+            "platforms": {"telegram": {"configured": False}},
+        },
+    }
+    monkeypatch.setattr(_prov, "provider_matrix", lambda: matrix)
+    _cm = _Mod("core.certificates")
+    _cm.list_certificates = lambda: [{"cert_id": "c1", "expires_in_days": 999}]
+    sys.modules["core.certificates"] = _cm
+    import tempfile
+    tmpdir = tempfile.mkdtemp()
+    monkeypatch.setenv("STORAGE_ROOT", tmpdir)
+    os.chmod(tmpdir, 0o755)
+    import core.queue as _qq
+    monkeypatch.setattr(_qq, "TaskQueue", lambda: None)
+    try:
+        resp = _tc.post("/api/system/test", json={"scope": "full"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["result"] == "UNHEALTHY"
+        assert any("providers(unavailable: publisher)" in f
+                   for f in data.get("full_test_failures", []))
+    finally:
+        store.jobs.clear()
+        sys.modules.pop("core.certificates", None)
+        import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def test_system_test_full_counts_ready_and_running_stage_statuses(monkeypatch, tmp_path):
     """READY is completed and RUNNING is pending in the actual StageStatus model."""
     import sys
@@ -1919,3 +1971,125 @@ def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypa
     assert persisted.character_id == "test-telegram-char"
     assert persisted.workflow == "workflows/image/custom.json"
     assert persisted.source == f"telegram:{chat_id}:1"
+
+
+def test_storyboard_lease_loss_releases_worker_and_records_repository(monkeypatch):
+    """Issue #197/#163.3: a storyboard lease-loss must keep Job/Worker/
+    repository/queue metadata consistent.
+
+    The expired lease releases the Worker's ownership record, records a
+    RELEASED repository entry for the lost task and re-enqueues a fresh task
+    whose QUEUED record is also present.  No task is left in flight, no Worker
+    stays BUSY on a phantom task, and the audit trail shows the release.
+    """
+    from core.app import handle_expired_storyboard_lease
+    from core.state import task_queue
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    client = TestClient(app)
+    headers = {"X-Vertep-Token": "worker-token"}
+    client.post("/api/workers/heartbeat", json={
+        "node_name": "text-a", "vram_mb": 0,
+        "capabilities": ["text_generation"], "supported_tasks": ["text"], "role": "text",
+    }, headers=headers)
+    job = _create_job_in_store(topic="Lease loss audit", min_vram_mb=0)
+    job_id = job.job_id
+    job = store.jobs[job_id]
+    job.min_vram_mb = 0
+    task = task_queue.enqueue({
+        "job_id": job_id, "task": "storyboard", "priority": job.priority,
+        "topic": job.topic, "prompt": "p", "storyboard_version": 1,
+        "image_version": 1, "revision": None, "timeout": 300,
+    })
+    store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    job.storyboard_task_id = task["task_id"]
+    job.active_task_id = task["task_id"]
+    job.storyboard_attempt_version = 1
+    job.storyboard_active_revision = None
+    store.repository.record_task(task, "QUEUED")
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-a", "vram_mb": 0},
+                          headers=headers).json()
+    assert claimed["task"] and claimed["task"]["task_id"] == task["task_id"]
+    lost_task_id = task["task_id"]
+
+    expired = task_queue.requeue_expired(now=task_queue._inflight[lost_task_id][0] + 1
+                                         if not task_queue._redis else 0.0)
+    for t in expired:
+        handle_expired_storyboard_lease(store, t)
+
+    # The Worker must be released, not left BUSY on a phantom task.
+    worker = store.workers.get("text-a")
+    assert worker["current_job"] is None
+    assert worker["current_task"] is None
+    # The lost task is no longer in flight and the fresh one is in the queue.
+    assert not task_queue.inflight_has(lost_task_id)
+    assert task_queue.depth() >= 1
+    # Repository records both the release of the lost task and the enqueue of
+    # the fresh one.
+    lost_record = _repo_task_record(store, lost_task_id)
+    assert lost_record is not None and lost_record["status"] == "RELEASED", lost_record
+    new_task_id = store.jobs[job_id].storyboard_task_id
+    assert new_task_id != lost_task_id
+    new_record = _repo_task_record(store, new_task_id)
+    assert new_record is not None and new_record["status"] == "QUEUED", new_record
+    # The budget stays pinned to the version and the revision is preserved.
+    assert store.jobs[job_id].storyboard_attempt_version == 1
+    assert store.jobs[job_id].storyboard_attempt == 1
+
+
+def test_enrollment_production_handler_lost_response_retry_and_revoke(monkeypatch, tmp_path):
+    """#172.1: the real ``POST /api/nodes/register`` handler drives enrollment.
+
+    A committed enrollment whose HTTP response is lost is retried with the same
+    enrollment id against the actual FastAPI handler; Core re-issues fresh
+    credentials for the same node without duplicating it, rejects a burned token
+    for a different node, and revoke invalidates what was issued.
+    """
+    from core.node_registry import (create_node_csr, registered_nodes,
+                                    verify_node_certificate, verify_node_token)
+    import shutil
+    if shutil.which("openssl") is None:
+        import pytest as _pytest
+        _pytest.skip("node PKI integration requires openssl")
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    (tmp_path / "installation.json").write_text(
+        json.dumps({"installation_id": "e2e", "installation_name": "e2e",
+                    "completed_at": "2024-01-01T00:00:00+00:00"}), encoding="utf-8")
+
+    issued = _tc.post("/api/nodes/registration-tokens", json={"role": "gpu"})
+    assert issued.status_code == 200, issued.text
+    token = issued.json()["token"]
+    csr = create_node_csr("gpu-http-01", tmp_path / "client-pki")
+    payload = {"registration_token": token, "node_id": "gpu-http-01",
+               "enrollment_id": "enroll-real-01", "capabilities": ["image_generation"],
+               "hardware": {"gpu": "RTX 4090"}, "version": "1.5.0", "csr": csr}
+
+    first = _tc.post("/api/nodes/register", json=payload)
+    assert first.status_code == 200, first.text
+    credentials = first.json()
+    assert credentials["worker_id"] == "gpu-http-01"
+    assert credentials["runtime_status"] == "PENDING_SELF_TEST"
+    assert verify_node_token(credentials["worker_secret"], "gpu-http-01")
+
+    # Lost-response retry: the token is already burned, the same enrollment id
+    # re-issues usable credentials for the identical node.
+    retry = _tc.post("/api/nodes/register", json=payload)
+    assert retry.status_code == 200, retry.text
+    reissued = retry.json()
+    assert reissued["worker_id"] == "gpu-http-01"
+    assert verify_node_token(reissued["worker_secret"], "gpu-http-01")
+    assert [n["node_id"] for n in registered_nodes()].count("gpu-http-01") == 1
+
+    # A different node id with the burned token must not become a bypass.
+    forged = _tc.post("/api/nodes/register", json={
+        **payload, "node_id": "gpu-http-02",
+        "csr": create_node_csr("gpu-http-02", tmp_path / "client-pki2")})
+    assert forged.status_code == 401
+
+    # Revoke through the admin API invalidates the issued credentials.
+    revoked = _tc.post("/api/nodes/gpu-http-01/revoke")
+    assert revoked.status_code == 200, revoked.text
+    assert not verify_node_token(reissued["worker_secret"], "gpu-http-01")
+    assert not verify_node_certificate("gpu-http-01", reissued["certificate_serial"])

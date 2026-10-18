@@ -238,11 +238,13 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 operation = "restart"
             elif path.startswith("/api/system/test"):
                 operation = "test"
-            elif path.startswith("/api/system/backups") and request.method == "POST":
-                operation = "backup"
             elif path.startswith("/api/system/backups/") and "/restore" in path and request.method == "POST":
                 operation = "restore"
-            elif path.startswith("/api/system/models/pull") and request.method == "POST":
+            elif path.startswith("/api/system/backups") and request.method == "POST":
+                operation = "backup"
+            elif path.startswith("/api/system/models") and request.method in {"POST", "DELETE"}:
+                operation = "model_pull"
+            elif path.startswith("/api/models/text") and request.method in {"POST", "DELETE"}:
                 operation = "model_pull"
             elif path.startswith("/api/characters"):
                 operation = "resource_management"
@@ -396,6 +398,30 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
     current = getattr(job, "storyboard_attempt", 0) + 1
     job.storyboard_attempt = current
     job.assigned_worker = None
+    # Issue #197/#163.3: the lease that expired belonged to a specific Worker.
+    # The task payload does not always carry ``node_name`` (the claim route
+    # keeps it on the Worker record), so resolve the owning node from the
+    # record that still holds this task.  Release its ownership record so the
+    # node is not left BUSY on a phantom task while the Job re-queues for
+    # another node; otherwise a stale heartbeat/listing keeps reporting a
+    # worker bound to a task that is no longer the Job's active storyboard
+    # task.
+    stale_node = task.get("node_name")
+    if stale_node is None:
+        stale_node = next(
+            (name for name, w in store.workers.items()
+             if w.get("current_task") == task.get("task_id")), None)
+    stale_worker = store.workers.get(stale_node) if stale_node else None
+    if stale_worker:
+        stale_worker["current_job"] = None
+        stale_worker["current_task"] = None
+        stale_worker["last_seen"] = utc_now()
+        store.save_worker(stale_worker)
+    # Record the lost lease in the repository so the audit trail shows the
+    # task was released, not silently dropped.
+    store.repository.record_task({"task_id": task["task_id"], "task": "storyboard",
+                                            "job_id": job.job_id}, "RELEASED", stale_node,
+                                         error="storyboard task lease expired")
     if current < attempts:
         job.storyboard_task_id = None
         job.active_task_id = None
@@ -407,24 +433,32 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
         # claim the very task we just requeued and strand it in flight.  The
         # ready queue is the right home here; a live worker claims it through
         # the normal /api/tasks/claim.
+        # Issue #197/#163.1: the budget and the revision belong to the version
+        # that was active when the lease expired, so a lease-loss retry keeps
+        # burning the same budget and reuses the pinned revision instead of a
+        # stale ``revision_request`` from a superseded version.
         from .storyboard import build_storyboard_prompt
         from .configuration import load_character, read_json
         import os as _os
         from pathlib import Path as _Path
         character = load_character(_Path(_os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
         brand = read_json(_Path(_os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
-        prompt = build_storyboard_prompt(job, character, brand, job.storyboards[-1].revision_request if job.storyboards else None)
+        active_revision = getattr(job, "storyboard_active_revision", None) or (
+            job.storyboards[-1].revision_request if job.storyboards else None)
+        prompt = build_storyboard_prompt(job, character, brand, active_revision)
         version = (job.storyboards[-1].version + 1 if job.storyboards else 1)
         image_version = job.storyboards[-1].image_version if job.storyboards else 1
         new_task = task_queue.enqueue({
             "job_id": job.job_id, "task": "storyboard", "priority": job.priority,
             "topic": job.topic, "prompt": prompt, "storyboard_version": version,
             "image_version": image_version,
-            "revision": job.storyboards[-1].revision_request if job.storyboards else None,
+            "revision": active_revision,
             "timeout": int(_os.getenv("OLLAMA_STORYBOARD_TIMEOUT", "300")),
         })
         job.storyboard_task_id = new_task["task_id"]
         job.active_task_id = new_task["task_id"]
+        job.storyboard_attempt_version = version
+        job.storyboard_active_revision = active_revision
         store.repository.record_task(new_task, "QUEUED")
         store.event(job, f"STORYBOARD TASK {new_task['task_id']} QUEUED for version {version}")
     else:

@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -1206,15 +1207,17 @@ WORKFLOW_USAGE = {
 }
 
 
-def _mock_workflow_registry(page, list_items=None, usage=None, versions=None, capture=None, put_status=200, put_json=None):
+def _mock_workflow_registry(page, list_items=None, usage=None, versions=None, capture=None, put_status=200, put_json=None,
+                            document=None, form_schema=None):
     """Мокує workflow registry реальними формами payload від WorkflowRegistry."""
     items = list_items if list_items is not None else [WORKFLOW_LIST_ITEM]
     usage_payload = usage if usage is not None else WORKFLOW_USAGE
     versions_payload = versions if versions is not None else [
         {"version": 1, "archived_at": "2026-09-29T10:00:00+00:00", "deleted": False, "size_bytes": 128},
     ]
+    form_payload = form_schema if form_schema is not None else WORKFLOW_FORM_SCHEMA
     # Mutable state for workflow document to simulate persistence
-    workflow_doc = {**WORKFLOW_DOCUMENT}
+    workflow_doc = {**(document if document is not None else WORKFLOW_DOCUMENT)}
 
     def handler(route):
         nonlocal workflow_doc
@@ -1272,7 +1275,7 @@ def _mock_workflow_registry(page, list_items=None, usage=None, versions=None, ca
             workflow_doc["workflow"] = saved_body
             return route.fulfill(json={"type": "image", "name": "demo.json", "valid": True, "validation": workflow_doc["validation"]})
         if url.endswith("/form"):
-            return route.fulfill(json=WORKFLOW_FORM_SCHEMA)
+            return route.fulfill(json=form_payload)
         if url.endswith("/usage"):
             return route.fulfill(json=usage_payload)
         if "/versions/" in url:
@@ -1470,6 +1473,138 @@ def test_workflows_editor_validation_updates_from_server():
         report = page.locator("[data-testid='workflow-validation-report']")
         expect(report).to_contain_text("Сценарій містить помилки")
         expect(report).to_contain_text("no class_type")
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_form_single_field_edit_preserves_other_fields_and_nodes():
+    """JSON→Form→зміна одного поля→JSON/save існуючого workflow не повертає інші поля/ноди."""
+    captured = []
+    document = {
+        "workflow": {
+            "n1": {"class_type": "KSampler", "inputs": {"seed": 42, "model": "sd.json"}},
+            "n2": {"class_type": "CLIPTextEncode", "inputs": {"text": "keep-me"}},
+        },
+        "validation": WORKFLOW_DOCUMENT["validation"],
+    }
+    form_schema = {
+        "kind": "image",
+        "name": "demo.json",
+        "schema": {
+            "placeholders": [],
+            "node_types": ["KSampler", "CLIPTextEncode"],
+            "editable_inputs": [
+                {"node_id": "n1", "class_type": "KSampler", "input_name": "seed", "current_value": 42, "type": "int"},
+                {"node_id": "n1", "class_type": "KSampler", "input_name": "model", "current_value": "sd.json", "type": "str"},
+            ],
+        },
+    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page, capture=captured, document=document, form_schema=form_schema)
+        page.goto(f"{BASE_URL}/workflows")
+        page.get_by_role("button", name="Редагувати").first.click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+        expect(editor.locator("textarea")).to_have_value(re.compile("CLIPTextEncode"))
+
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        form_view = page.locator("[data-testid='workflow-form-view']")
+        expect(form_view).to_be_visible()
+        expect(form_view.locator("input")).to_have_count(2)
+        # Змінюємо лише одне поле; решта має залишитися без змін.
+        form_view.locator("input").nth(0).fill("1234")
+
+        editor.get_by_role("button", name="JSON", exact=True).click()
+        draft = json.loads(editor.locator("textarea").input_value())
+        assert draft["n1"]["inputs"]["seed"] == 1234
+        assert draft["n1"]["inputs"]["model"] == "sd.json", draft
+        assert draft["n2"] == {"class_type": "CLIPTextEncode", "inputs": {"text": "keep-me"}}, draft
+
+        editor.get_by_role("button", name="Зберегти").click()
+        expect(page.locator("[data-testid='workflow-editor-modal']")).to_be_hidden()
+        assert len(captured) == 1, f"expected exactly one PUT, got {captured}"
+        assert captured[0]["url"].endswith("/api/workflows/image/demo.json?force=true")
+        assert captured[0]["body"] == draft, captured[0]["body"]
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_create_form_derives_inputs_and_preserves_other_fields():
+    """Новий workflow: JSON→Form (derived inputs)→зміна одного поля→JSON/save зберігає решту."""
+    captured = []
+    draft_in = {
+        "5": {"class_type": "NodeC", "inputs": {"seed": 7, "label": "x"}},
+        "6": {"class_type": "NodeD", "inputs": {"ratio": 1.5}},
+    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page, capture=captured)
+        page.goto(f"{BASE_URL}/workflows")
+        page.locator("[data-testid='create-workflow-button']").click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+        editor.locator("[data-testid='workflow-name-input']").fill("fresh.json")
+        editor.locator("textarea").fill(json.dumps(draft_in))
+
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        form_view = page.locator("[data-testid='workflow-form-view']")
+        expect(form_view).to_be_visible()
+        expect(form_view.locator("input")).to_have_count(3)
+        expect(form_view).to_contain_text("NodeC")
+        expect(form_view).to_contain_text("NodeD")
+        form_view.locator("input").nth(1).fill("y")
+
+        editor.get_by_role("button", name="JSON", exact=True).click()
+        draft = json.loads(editor.locator("textarea").input_value())
+        assert draft == {
+            "5": {"class_type": "NodeC", "inputs": {"seed": 7, "label": "y"}},
+            "6": {"class_type": "NodeD", "inputs": {"ratio": 1.5}},
+        }, draft
+
+        editor.get_by_role("button", name="Зберегти").click()
+        expect(page.locator("[data-testid='workflow-editor-modal']")).to_be_hidden()
+        assert len(captured) == 1, f"expected exactly one PUT, got {captured}"
+        assert captured[0]["url"].endswith("/api/workflows/image/fresh.json"), captured[0]["url"]
+        assert "force=true" not in captured[0]["url"], "create must not send force"
+        assert captured[0]["body"] == draft, captured[0]["body"]
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
+def test_workflows_invalid_json_reports_error_and_keeps_form_values():
+    """Невалідний JSON показує помилку у звіті, а Form не втрачає актуальні значення."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        _mock_session(page)
+        _mock_workflow_registry(page)
+        page.goto(f"{BASE_URL}/workflows")
+        page.get_by_role("button", name="Редагувати").first.click()
+        editor = page.locator("[data-testid='workflow-editor-modal']")
+        expect(editor).to_be_visible()
+
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        form_view = page.locator("[data-testid='workflow-form-view']")
+        expect(form_view.locator("input").nth(0)).to_have_value("42")
+
+        editor.get_by_role("button", name="JSON", exact=True).click()
+        editor.locator("textarea").fill('{ "n1": { "class_type": ')
+        editor.get_by_role("button", name="Звіт валідації", exact=True).click()
+        expect(page.locator("[data-testid='workflow-validation-report']")).to_contain_text(
+            "Невалідний формат JSON", timeout=5000)
+
+        # Form не підміняє значення зі зламаного draft: тримає останній валідний стан.
+        editor.get_by_role("button", name="Форма", exact=True).click()
+        expect(form_view.locator("input").nth(0)).to_have_value("42")
+        expect(form_view.locator("input").nth(1)).to_have_value("sd.json")
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -2616,9 +2751,13 @@ def test_real_backend_system_state_blocks_mutations():
                 # UI читає системний стан під час ініціалізації застосунку,
                 # тому перезавантаження робить перевірку детермінованою.
                 page.reload()
+                expect(page.get_by_test_id("jobs-page")).to_be_visible(timeout=20000)
                 create_button = page.get_by_test_id("create-job-button")
                 expect(create_button).to_be_disabled(timeout=20000)
-                assert "READ_ONLY" in (create_button.get_attribute("title") or "")
+                # Issue #168.3/#114: the UI starts fail-closed (the system state
+                # is unknown until /api/status answers), so wait for the
+                # authoritative READ_ONLY reason instead of reading it eagerly.
+                expect(create_button).to_have_attribute("title", re.compile(r"READ_ONLY"), timeout=20000)
             finally:
                 _write_system_state("NORMAL", "Browser E2E restored")
             page.wait_for_timeout(500)
@@ -3026,4 +3165,190 @@ def test_backup_create_smoke_through_real_backend_without_route_mocks():
             assert page_errors == [], f"pageerror: {page_errors}"
             _assert_no_js_errors(page_errors, console_errors)
         finally:
+            browser.close()
+
+
+# ── i.0.0.2.3 (#196.1–#196.4): Character/Workflow через реальний CORE API ──
+# Ці тести не мокують /api/characters* і /api/workflows*: вони доводять справжній
+# save/reload, uniqueness, validation і force-контракт на запущеному CORE. Штатні
+# UI-кнопки («Новий персонаж», «Редагувати», «Зберегти») надсилають реальні
+# мутації через API; ручний JSON не є обов'язковим для створення персонажа.
+
+
+def _real_character_ids(page):
+    response = page.request.get(f"{BASE_URL}/api/characters")
+    assert response.ok, response.text()
+    return {item["id"] for item in response.json()}
+
+
+def test_real_backend_character_create_reload_uniqueness_and_validation():
+    """#196.1/#196.2: create typed controls → real API, reload persistence, uniqueness, validation."""
+    suffix = uuid.uuid4().hex[:8]
+    character_id = f"e2e-char-{suffix}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+            page.goto(f"{BASE_URL}/characters")
+            expect(page.locator("[data-testid='characters-page']")).to_be_visible(timeout=20000)
+
+            page.locator("[data-testid='create-character-button']").click()
+            modal = page.locator("[data-testid='character-modal']")
+            expect(modal).to_be_visible()
+            page.locator("[data-testid='character-id-input']").fill(character_id)
+            page.locator("[data-testid='character-name-input']").fill("E2E Персонаж")
+            page.get_by_placeholder("4096").fill("2560")
+            page.get_by_role("button", name="Зберегти").click()
+            expect(modal).to_be_hidden()
+
+            # Reload persistence: the created character is served by the real API.
+            assert character_id in _real_character_ids(page)
+            created = page.request.get(f"{BASE_URL}/api/characters/{character_id}").json()
+            assert created["name"] == "E2E Персонаж"
+            assert created["generation"]["min_vram_mb"] == 2560
+
+            page.reload()
+            expect(page.locator("[data-testid='characters-page']")).to_be_visible(timeout=20000)
+            page.locator("[data-testid='characters-search']").fill(character_id)
+            expect(page.locator("[data-testid='characters-page']").get_by_text(
+                character_id, exact=True)).to_be_visible()
+
+            # Editing keeps the immutable backend ID (PUT rejects id change).
+            page.get_by_role("button", name="Редагувати").first.click()
+            modal = page.locator("[data-testid='character-modal']")
+            expect(modal).to_be_visible()
+            assert page.locator("[data-testid='character-id-input']").is_disabled()
+            page.locator("[data-testid='character-name-input']").fill("E2E Персонаж оновлений")
+            page.get_by_role("button", name="Зберегти").click()
+            expect(modal).not_to_be_visible()
+            assert page.request.get(f"{BASE_URL}/api/characters/{character_id}").json()["name"] == "E2E Персонаж оновлений"
+
+            # Uniqueness: the same ID is refused by the real API (409) and the editor stays open.
+            page.locator("[data-testid='create-character-button']").click()
+            modal = page.locator("[data-testid='character-modal']")
+            expect(modal).to_be_visible()
+            page.locator("[data-testid='character-id-input']").fill(character_id)
+            page.locator("[data-testid='character-name-input']").fill("Дубль")
+            page.get_by_role("button", name="Зберегти").click()
+            expect(modal).to_be_visible()
+
+            # Validation: an invalid ID is refused by the real API (400) and keeps the editor open.
+            page.locator("[data-testid='character-id-input']").fill("bad id!")
+            page.get_by_role("button", name="Зберегти").click()
+            expect(modal).to_be_visible()
+            assert character_id in _real_character_ids(page)
+
+            page.get_by_role("button", name="Скасувати").click()
+            expect(modal).not_to_be_visible()
+
+            # Cleanup through the real delete contract.
+            deleted = page.request.delete(
+                f"{BASE_URL}/api/characters/{character_id}", headers=_csrf_headers(page.context))
+            assert deleted.ok, deleted.text()
+            assert character_id not in _real_character_ids(page)
+
+            assert page_errors == [], f"pageerror: {page_errors}"
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            browser.close()
+
+
+def test_real_backend_workflow_edit_save_reload_and_force_contract():
+    """#196.3/#196.4: built-in workflow edit → real API save → reload persists; force contract."""
+    suffix = uuid.uuid4().hex[:8]
+    new_value = f"e2e-{suffix}.safetensors"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        original_content = None
+        try:
+            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
+
+            document = page.request.get(f"{BASE_URL}/api/workflows/image/demo.json")
+            assert document.ok, document.text()
+            original = document.json()["workflow"]
+            nodes_before = len(original)
+            reference = "image/demo.json"
+
+            form = page.request.get(f"{BASE_URL}/api/workflows/image/demo.json/form")
+            assert form.ok, form.text()
+            form_fields = form.json()["form_fields"]
+            string_fields = [f for f in form_fields if f["type"] == "str"]
+            assert string_fields, "demo.json has no editable string field"
+            target = string_fields[0]
+            target_index = form_fields.index(target)
+            original_content = json.dumps(original, ensure_ascii=False)
+
+            page.goto(f"{BASE_URL}/workflows")
+            table = page.locator("[data-testid='workflows-table']")
+            expect(table).to_be_visible(timeout=20000)
+            table.locator("tbody tr", has_text="demo.json").first.get_by_role(
+                "button", name="Редагувати").click()
+            editor = page.locator("[data-testid='workflow-editor-modal']")
+            expect(editor).to_be_visible()
+            expect(editor.locator("textarea")).to_have_value(re.compile(re.escape(target["input_name"])))
+
+            editor.get_by_role("button", name="Форма", exact=True).click()
+            form_view = page.locator("[data-testid='workflow-form-view']")
+            expect(form_view).to_be_visible()
+            assert form_view.locator("input").count() == len(form_fields), \
+                "Form inputs must come from the server schema"
+
+            form_view.locator("input").nth(target_index).fill(new_value)
+            editor.get_by_role("button", name="JSON", exact=True).click()
+            draft = json.loads(editor.locator("textarea").input_value())
+            assert draft[target["node_id"]]["inputs"][target["input_name"]] == new_value
+            assert len(draft) == nodes_before, "editing one field must not drop other nodes"
+
+            editor.get_by_role("button", name="Зберегти").click()
+            expect(page.locator("[data-testid='workflow-editor-modal']")).to_be_hidden()
+
+            # The real API serves the persisted change and preserved the other nodes.
+            served = page.request.get(f"{BASE_URL}/api/workflows/{reference}").json()["workflow"]
+            assert served[target["node_id"]]["inputs"][target["input_name"]] == new_value
+            assert len(served) == nodes_before
+            versions = page.request.get(f"{BASE_URL}/api/workflows/{reference}/versions")
+            assert versions.ok and len(versions.json()) >= 1, "overwrite must archive a version"
+
+            # Reload persistence through the standard editor.
+            page.reload()
+            expect(page.locator("[data-testid='workflows-table']")).to_be_visible(timeout=20000)
+            page.locator("[data-testid='workflows-table']").locator(
+                "tbody tr", has_text="demo.json").first.get_by_role("button", name="Редагувати").click()
+            editor = page.locator("[data-testid='workflow-editor-modal']")
+            expect(editor).to_be_visible()
+            expect(editor.locator("textarea")).to_have_value(
+                re.compile(re.escape(new_value)), timeout=20000)
+
+            # Force-save contract: creating over an existing valid workflow without force is
+            # refused and must not silently overwrite the file.
+            page.get_by_role("button", name="Скасувати").click()
+            before = page.request.get(f"{BASE_URL}/api/workflows/{reference}").json()["workflow"]
+            page.locator("[data-testid='create-workflow-button']").click()
+            modal = page.locator("[data-testid='workflow-editor-modal']")
+            expect(modal).to_be_visible()
+            modal.locator("[data-testid='workflow-name-input']").fill("demo.json")
+            conflict = json.loads(original_content)
+            conflict[target["node_id"]]["inputs"][target["input_name"]] = "should-not-persist"
+            modal.locator("textarea").fill(json.dumps(conflict))
+            modal.get_by_role("button", name="Зберегти").click()
+            expect(modal).to_be_visible()
+            after = page.request.get(f"{BASE_URL}/api/workflows/{reference}").json()["workflow"]
+            assert after == before, "create without force must not overwrite the existing workflow"
+            modal.get_by_role("button", name="Скасувати").click()
+
+            assert page_errors == [], f"pageerror: {page_errors}"
+            _assert_no_js_errors(page_errors, console_errors)
+        finally:
+            if original_content:
+                try:
+                    page.request.put(
+                        f"{BASE_URL}/api/workflows/image/demo.json?force=true",
+                        data=original_content,
+                        headers={**_csrf_headers(page.context), "Content-Type": "application/json"})
+                except Exception:
+                    pass
             browser.close()

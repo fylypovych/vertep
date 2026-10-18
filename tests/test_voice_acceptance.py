@@ -651,3 +651,101 @@ class TestContractBeforeSideEffects:
         bad = dict(good, sha256=hashlib.sha256(b"wrong").hexdigest())
         with pytest.raises(ValueError, match="sha256"):
             _validate_tts_contract(task, wav, bad)
+
+
+class TestVoiceTaskSnapshot:
+    """Issue #197/#165.2: validation compares the Worker's contract against the
+    exact voice-task snapshot that was issued at enqueue time, never against a
+    task rebuilt from the live Character config.  A config change between claim
+    and result must be a controlled rejection that leaves no artifact, no ack
+    and no Worker release.
+    """
+
+    def test_persist_uses_issued_snapshot(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path))
+        _write_character(tmp_path, "vc")
+        job = store.create(topic="t", character_id="vc", priority=1)
+        job.script = {"title": "t", "scenes": [{"prompt": "p", "voiceover": "v", "duration": 1}]}
+        from core.orchestration import initialize_plan
+        initialize_plan(job)
+        scene = store.jobs[job.job_id].scenes[0]
+        audio_path = store.root / job.job_id / "audio" / "test.wav"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        wav = b"RIFF\x04\x00\x00\x00WAVE"
+        audio_path.write_bytes(wav)
+        result = SimpleNamespace(task_id="t1", node_name="vw")
+        task = _tts_task_for(job, scene)
+        job.voice_task_snapshot = {"t1": dict(task)}
+        contract = {"format": "audio_contract/v1", "provider": task["provider"],
+                    "voice": task["voice"], "language": task["language"],
+                    "model": task["model"], "speed": task["speed"],
+                    "sha256": hashlib.sha256(wav).hexdigest(),
+                    "engine": "espeak-ng", "mime_type": "audio/wav",
+                    "size": len(wav), "scene_id": scene.scene_id,
+                    "character_id": job.character_id}
+        artifacts = _persist_tts_contract(store, job, scene, result,
+                                          audio_path, wav, contract)
+        assert artifacts and artifacts[0].kind == "audio_contract"
+
+    def test_persist_rejects_config_drift_between_claim_and_result(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path))
+        _write_character(tmp_path, "vc")
+        job = store.create(topic="t", character_id="vc", priority=1)
+        job.script = {"title": "t", "scenes": [{"prompt": "p", "voiceover": "v", "duration": 1}]}
+        from core.orchestration import initialize_plan
+        initialize_plan(job)
+        scene = store.jobs[job.job_id].scenes[0]
+        audio_path = store.root / job.job_id / "audio" / "test.wav"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        wav = b"RIFF\x04\x00\x00\x00WAVE"
+        audio_path.write_bytes(wav)
+        result = SimpleNamespace(task_id="t1", node_name="vw")
+        task = _tts_task_for(job, scene)
+        # The snapshot records the voice the Worker was dispatched with.
+        job.voice_task_snapshot = {"t1": dict(task, speed=160)}
+        # The Worker answers against the same speed -> accepted.
+        good = {"format": "audio_contract/v1", "provider": task["provider"],
+                "voice": task["voice"], "language": task["language"],
+                "model": task["model"], "speed": 160,
+                "sha256": hashlib.sha256(wav).hexdigest(),
+                "engine": "espeak-ng", "mime_type": "audio/wav",
+                "size": len(wav), "scene_id": scene.scene_id,
+                "character_id": job.character_id}
+        _persist_tts_contract(store, job, scene, result, audio_path, wav, good)
+        # A later result that answers against a drifted config must be rejected
+        # against the snapshot, not silently re-derived from the live config.
+        # The rejection must not add a second contract artifact: the first
+        # accepted one stays, the drifted one is refused before any side effect.
+        drifted = dict(good, speed=999)
+        before = sum(1 for a in store.jobs[job.job_id].artifacts
+                     if a.kind == "audio_contract")
+        with pytest.raises(ValueError, match="speed"):
+            _persist_tts_contract(store, job, scene, result,
+                                  audio_path, wav, drifted)
+        after = sum(1 for a in store.jobs[job.job_id].artifacts
+                    if a.kind == "audio_contract")
+        assert after == before
+
+    def test_snapshot_rejects_foreign_task_id(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path))
+        _write_character(tmp_path, "vc")
+        job = store.create(topic="t", character_id="vc", priority=1)
+        job.script = {"title": "t", "scenes": [{"prompt": "p", "voiceover": "v", "duration": 1}]}
+        from core.orchestration import initialize_plan
+        initialize_plan(job)
+        scene = store.jobs[job.job_id].scenes[0]
+        audio_path = store.root / job.job_id / "audio" / "test.wav"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        wav = b"RIFF\x04\x00\x00\x00WAVE"
+        audio_path.write_bytes(wav)
+        result = SimpleNamespace(task_id="t1", node_name="vw")
+        task = _tts_task_for(job, scene)
+        job.voice_task_snapshot = {"t1": dict(task)}
+        # A result for a task that was never issued a snapshot is rejected.
+        foreign = SimpleNamespace(task_id="foreign", node_name="vw")
+        with pytest.raises(ValueError, match="snapshot"):
+            _persist_tts_contract(store, job, scene, foreign,
+                                  audio_path, wav, {"format": "audio_contract/v1",
+                                                    "provider": task["provider"],
+                                                    "voice": task["voice"],
+                                                    "sha256": hashlib.sha256(wav).hexdigest()})

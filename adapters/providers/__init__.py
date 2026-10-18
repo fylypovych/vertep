@@ -494,6 +494,7 @@ def provider_matrix() -> dict[str, dict]:
         publisher_options[channel] = entry
     matrix["publisher"] = {
         "backend": "vertep-official",
+        "configured": any(entry["configured"] for entry in publisher_options.values()),
         "options": list(publisher_options),
         "env": "PUBLISHER_MOCK / platform credentials",
         "platforms": publisher_options,

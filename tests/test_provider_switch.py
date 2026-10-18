@@ -591,12 +591,32 @@ from pathlib import Path
 from worker import service as worker_service
 from adapters.providers import providers as registry
 
-config = json.loads(Path(os.environ["PROVIDER_CONFIG_PATH"]).read_text(encoding="utf-8"))
+# Fetch configuration from the CORE heartbeat endpoint (no prebuilt JSON file)
+import httpx
+core = os.environ["CORE_URL"]
+token = os.environ["NODE_TOKEN"]
+node = os.environ.get("WORKER_NODE", "voice-01")
+try:
+    r = httpx.post(f"{core}/api/workers/heartbeat", json={"node_name": node},
+                   headers={"X-Vertep-Token": token}, timeout=10)
+    r.raise_for_status()
+    control = r.json()
+except Exception as e:
+    Path(os.environ["REPORT_PATH"]).write_text(json.dumps({"error": str(e)}), encoding="utf-8")
+    raise
+config = control.get("provider_config") or {}
 applied = worker_service.apply_provider_config(config)
+observed = worker_service.executor_provider_config()
+# Mirror the real Worker loop (worker/service.py): after applying the delivered
+# config it reports the effective executor config back on the next heartbeat.
+ack = httpx.post(f"{core}/api/workers/heartbeat",
+                 json={"node_name": node, "provider_config": observed},
+                 headers={"X-Vertep-Token": token}, timeout=10)
+ack.raise_for_status()
 engine = registry.video_engine()
 Path(os.environ["REPORT_PATH"]).write_text(json.dumps({
     "applied": applied,
-    "observed": worker_service.executor_provider_config(),
+    "observed": observed,
     "video_engine_env": os.environ.get("VERTEP_VIDEO_ENGINE"),
     "money_printer_url": os.environ.get("MONEY_PRINTER_URL"),
     "engine_class": type(engine).__name__,
@@ -604,21 +624,23 @@ Path(os.environ["REPORT_PATH"]).write_text(json.dumps({
 """
 
 
-def _run_worker_apply(config: dict, run_dir: Path) -> dict:
-    """Apply the delivered config in a separate process that starts clean.
+def _run_worker_apply(core_url: str, node_name: str, run_dir: Path) -> dict:
+    """Run a separate Worker process that fetches its config from CORE.
 
     The subprocess inherits no engine selection of its own, so whatever it ends
-    up resolving must have come from the heartbeat-delivered ``provider_config``.
+    up resolving must have come from the ``provider_config`` CORE served on the
+    stock heartbeat response — the delivery channel the real Worker loop uses,
+    not a locally written JSON fixture (Issue #170.3 / #181.2).
     """
     import subprocess
     import sys
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    config_path = run_dir / "provider_config.json"
     report_path = run_dir / "report.json"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
     env = dict(os.environ)
-    env["PROVIDER_CONFIG_PATH"] = str(config_path)
+    env["CORE_URL"] = core_url
+    env["NODE_TOKEN"] = os.getenv("NODE_API_TOKEN", "")
+    env["WORKER_NODE"] = node_name
     env["REPORT_PATH"] = str(report_path)
     for key in ("VERTEP_VIDEO_ENGINE", "MONEY_PRINTER_URL"):
         env.pop(key, None)
@@ -628,30 +650,139 @@ def _run_worker_apply(config: dict, run_dir: Path) -> dict:
     return json.loads(report_path.read_text(encoding="utf-8"))
 
 
+@contextlib.contextmanager
+def _live_core():
+    """Serve the real CORE app over a loopback socket with uvicorn.
+
+    A separate Worker process cannot talk to an in-process ``TestClient``; it
+    needs a real socket.  Served in this process, the uvicorn CORE shares the
+    same node store, so CORE-side reads observe exactly what the out-of-process
+    Worker reported back (Issue #181.2).
+    """
+    import base64
+    import socket
+    import time
+
+    import httpx
+    import uvicorn
+
+    from core.app import app as core_app
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(core_app, host="127.0.0.1", port=port,
+                                           log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}"
+    password = os.getenv("ADMIN_PASSWORD", "")
+    auth = "Basic " + base64.b64encode(f"admin:{password}".encode("utf-8")).decode("ascii")
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                if httpx.get(f"{base}/api/health", timeout=2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.2)
+        yield base, auth
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
 def test_a_separate_worker_process_applies_and_reapplies_the_switched_engine(
-        isolated_config, tmp_path):
+        isolated_config, tmp_path, monkeypatch):
+    import httpx
+
+    from core.provider_switch import (
+        effective_provider_config,
+        executor_backend_mismatches,
+        provider_executor_config,
+    )
+
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    with _live_core() as (base, auth), _runtime_on_loopback(_ready_report()) as endpoint:
+        response = httpx.post(f"{base}/api/settings/providers/video_engine",
+                              json={"backend": "money-printer", "endpoint": endpoint},
+                              headers={"Authorization": auth}, timeout=30)
+        assert response.status_code == 200, response.text
+        assert provider_executor_config()["VERTEP_VIDEO_ENGINE"] == "money-printer"
+        # Only bare selection/endpoint values travel to the executor: no secret.
+        assert "MONEY_PRINTER_TOKEN" not in provider_executor_config()
+
+        first = _run_worker_apply(base, "gpu-01", tmp_path / "run1")
+        assert first["engine_class"] == "MoneyPrinterEngine"
+        assert first["video_engine_env"] == "money-printer"
+        assert first["observed"]["VERTEP_VIDEO_ENGINE"] == "money-printer"
+        assert first["observed"]["MONEY_PRINTER_URL"] == endpoint
+        # The out-of-process Worker ack reaches CORE and verifies the effective
+        # configuration: no mismatch, and the ack-aware read model agrees.
+        assert executor_backend_mismatches("video_engine") == []
+        effective = effective_provider_config("video_engine", node_name="gpu-01")
+        assert effective["backend"] == "money-printer"
+        assert effective["worker_acks"]["gpu-01"]["VERTEP_VIDEO_ENGINE"] == "money-printer"
+
+        # A restarted Worker process, started clean again, re-applies the same
+        # persisted selection and resolves the same engine — the switch is not lost.
+        second = _run_worker_apply(base, "gpu-01", tmp_path / "run2")
+        assert second == first
+
+
+def test_preview_refuses_a_worker_that_never_confirmed_the_switch(isolated_config):
+    """A stale Worker ack is a failed activation: preview must not claim success."""
+    from core.api.workers import store
+    from core.provider_switch import effective_provider_config, executor_backend_mismatches
+
+    switch_provider("tts", "mock", actor="tester")
+    # A voice Worker has reported back, but still names the previous backend.
+    store.workers["voice-01"] = {
+        "node_name": "voice-01", "role": "voice",
+        "provider_config": {"TTS_PROVIDER": "none"},
+    }
+    try:
+        assert executor_backend_mismatches("tts") == [
+            {"node_name": "voice-01", "observed": "none", "expected": "mock"}]
+        assert effective_provider_config("tts")["worker_acks"]["voice-01"]["TTS_PROVIDER"] == "none"
+        with pytest.raises(ProviderSwitchError):
+            effective_provider_config("tts", node_name="voice-01")
+
+        # The preview gate refuses: it must not synthesize through a backend this
+        # Worker never observed.
+        response = client.post("/api/models/voices/preview", json={"text": "hi"})
+        assert response.status_code == 409
+        assert "voice-01" in response.json()["detail"]
+
+        # Once the Worker reports the switched backend, the gate clears.
+        store.workers["voice-01"]["provider_config"] = {"TTS_PROVIDER": "mock"}
+        assert executor_backend_mismatches("tts") == []
+        assert effective_provider_config("tts", node_name="voice-01")["backend"] == "mock"
+    finally:
+        store.workers.pop("voice-01", None)
+
+
+def test_a_refused_engine_switch_keeps_the_previous_engine_on_the_worker_too(
+        isolated_config, tmp_path, monkeypatch):
+    """Failed activation rolls back on both ends — CORE and the separate Worker."""
+    import httpx
+
     from core.provider_switch import provider_executor_config
 
-    with _runtime_on_loopback(_ready_report()) as endpoint:
-        response = client.post("/api/settings/providers/video_engine", json={
-            "backend": "money-printer", "endpoint": endpoint,
-        })
-    assert response.status_code == 200, response.text
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    with _live_core() as (base, auth), \
+            _runtime_on_loopback(_ready_report(bridge_schema_version="0.0.0-drift")) as endpoint:
+        response = httpx.post(f"{base}/api/settings/providers/video_engine",
+                              json={"backend": "money-printer", "endpoint": endpoint},
+                              headers={"Authorization": auth}, timeout=30)
+        assert response.status_code == 409, response.text
+        # CORE rolled back: nothing about the failed engine is delivered.
+        delivered = provider_executor_config()
+        assert "VERTEP_VIDEO_ENGINE" not in delivered
+        assert "MONEY_PRINTER_URL" not in delivered
 
-    delivered = provider_executor_config()
-    assert delivered["VERTEP_VIDEO_ENGINE"] == "money-printer"
-    assert delivered["MONEY_PRINTER_URL"] == endpoint
-    # Only bare selection/endpoint values travel to the executor: no secret.
-    assert "MONEY_PRINTER_TOKEN" not in delivered
-
-    first = _run_worker_apply(delivered, tmp_path / "run1")
-    assert first["applied"] == delivered
-    assert first["engine_class"] == "MoneyPrinterEngine"
-    assert first["video_engine_env"] == "money-printer"
-    assert first["observed"]["VERTEP_VIDEO_ENGINE"] == "money-printer"
-    assert first["observed"]["MONEY_PRINTER_URL"] == endpoint
-
-    # A restarted Worker process, started clean again, re-applies the same
-    # persisted selection and resolves the same engine — the switch is not lost.
-    second = _run_worker_apply(delivered, tmp_path / "run2")
-    assert second == first
+        # The separate Worker, started clean, observes the same previous engine.
+        report = _run_worker_apply(base, "gpu-01", tmp_path / "run")
+        assert report["observed"].get("VERTEP_VIDEO_ENGINE") is None
+        assert report["engine_class"] != "MoneyPrinterEngine"

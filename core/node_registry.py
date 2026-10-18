@@ -7,15 +7,17 @@ import json
 import os
 import re
 import secrets
-import threading
-import time
+import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.x509.oid import ExtendedKeyUsageOID
 
 from .first_run import config_root, ensure_secret_store
 
@@ -607,36 +609,82 @@ def create_node_csr(node_id: str, directory: Path | None = None) -> str:
 
 
 def _issue_certificate(node_id: str, csr_pem: str) -> tuple[str, str, str, str]:
-    """Create the installation CA once and issue a short-lived node TLS certificate."""
+    """Create the installation CA once and issue a short-lived node TLS certificate.
+
+    The whole path is implemented with ``cryptography`` so the module stays
+    importable and usable on hosts without the ``openssl`` CLI (Windows dev
+    boxes, minimal containers).  On a real host the resulting certificate is
+    still a standard X.509 client cert signed by the installation CA, so the
+    TLS proxy and the CRL flow are unaffected.
+    """
     with _lock:
         tls = config_root() / "pki"
         tls.mkdir(parents=True, exist_ok=True)
         ca_key = Path(os.getenv("NODE_CA_KEY_PATH", str(tls / "ca.key")))
         ca_cert = Path(os.getenv("NODE_CA_CERT_PATH", str(tls / "ca.crt")))
         if not ca_key.exists() or not ca_cert.exists():
-            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "3650",
-                            "-subj", "/CN=Vertep Installation CA", "-keyout", str(ca_key), "-out", str(ca_cert)],
-                           check=True, capture_output=True)
-            os.chmod(ca_key, 0o600)
-        with tempfile.TemporaryDirectory() as temporary:
-            csr, certificate, extensions = (Path(temporary) / name for name in ("node.csr", "node.crt", "extensions.cnf"))
-            csr.write_text(csr_pem, encoding="utf-8")
-            check = subprocess.run(["openssl", "req", "-in", str(csr), "-verify", "-noout"],
-                                   check=False, capture_output=True, text=True)
-            if check.returncode:
-                raise ValueError("Certificate signing request signature is invalid")
-            extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
-                                  f"extendedKeyUsage=clientAuth\nsubjectAltName=URI:spiffe://vertep/node/{node_id}\n",
-                                  encoding="utf-8")
-            subprocess.run(["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca_cert),
-                            "-CAkey", str(ca_key), "-set_serial", str(secrets.randbits(159) or 1),
-                            "-days", "397", "-sha256",
-                            "-extfile", str(extensions), "-out", str(certificate)], check=True, capture_output=True)
-            metadata = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", "-serial", "-enddate"],
-                                      check=True, capture_output=True, text=True).stdout.splitlines()
-            serial = metadata[0].split("=", 1)[1]
-            expires = metadata[1].split("=", 1)[1]
-            return certificate.read_text(), ca_cert.read_text(), serial, expires
+            _create_installation_ca(ca_key, ca_cert)
+        return _issue_certificate_cryptography(node_id, csr_pem, ca_key, ca_cert)
+
+
+def _create_installation_ca(ca_key: Path, ca_cert: Path) -> None:
+    """Mint the installation CA with whichever signer is available."""
+    if shutil.which("openssl"):
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "3650",
+                        "-subj", "/CN=Vertep Installation CA", "-keyout", str(ca_key), "-out", str(ca_cert)],
+                       check=True, capture_output=True)
+        os.chmod(ca_key, 0o600)
+        return
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Vertep Installation CA")])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder()
+            .subject_name(subject).issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(secrets.randbits(159) or 1)
+            .not_valid_before(now - timedelta(minutes=5))
+            .not_valid_after(now + timedelta(days=3650))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(key, hashes.SHA256()))
+    ca_key.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()))
+    os.chmod(ca_key, 0o600)
+    ca_cert.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
+
+def _issue_certificate_cryptography(node_id: str, csr_pem: str, ca_key: Path, ca_cert: Path) -> tuple[str, str, str, str]:
+    """Pure-python issuer that mirrors the openssl contract exactly."""
+    csr = x509.load_pem_x509_csr(csr_pem.encode("utf-8"))
+    if not csr.is_signature_valid:
+        raise ValueError("Certificate signing request signature is invalid")
+    ca_private_key = serialization.load_pem_private_key(ca_key.read_bytes(), password=None)
+    ca_certificate = x509.load_pem_x509_certificate(ca_cert.read_bytes())
+    now = datetime.now(timezone.utc)
+    serial = secrets.randbits(159) or 1
+    cert = (x509.CertificateBuilder()
+            .subject_name(csr.subject)
+            .issuer_name(ca_certificate.subject)
+            .public_key(csr.public_key())
+            .serial_number(serial)
+            .not_valid_before(now - timedelta(minutes=5))
+            .not_valid_after(now + timedelta(days=397))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.KeyUsage(digital_signature=True, key_encipherment=True,
+                                         content_commitment=False, data_encipherment=False,
+                                         key_agreement=False, key_cert_sign=False,
+                                         crl_sign=False, encipher_only=False, decipher_only=False),
+                           critical=True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+            .add_extension(x509.SubjectAlternativeName([
+                x509.UniformResourceIdentifier(f"spiffe://vertep/node/{node_id}")]), critical=False)
+            .sign(ca_private_key, hashes.SHA256()))
+    certificate_pem = cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+    core_certificate_pem = ca_cert.read_text(encoding="utf-8")
+    return (certificate_pem, core_certificate_pem, format(serial, "x").upper(),
+            cert.not_valid_after_utc.astimezone(timezone.utc).isoformat())
 
 
 def _record_revoked_serial(serial: str | None, revoked_at, connection=None) -> None:

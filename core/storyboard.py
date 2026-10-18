@@ -25,11 +25,24 @@ class StoryboardService:
 
     def queue(self, job: Job, revision: str | None = None) -> Job:
         job.storyboard_error = None
-        # Reset attempt budget only when creating a new storyboard version (regenerate),
-        # not on retry of the same version. On retry, job.storyboards is empty because
-        # the failed attempt didn't add a storyboard; on regenerate, previous storyboards exist.
-        if job.storyboards:
+        # Issue #197/#163.1: the attempt budget belongs to a specific version.
+        # A regenerate/history-branch produces a brand-new version, so its budget
+        # resets; a retry of the *same* version must keep burning the budget it
+        # already started, otherwise a single retry re-arms the budget and a
+        # failing version loops until the process dies.
+        version = (job.storyboards[-1].version + 1 if job.storyboards else 1)
+        if job.storyboard_attempt_version != version:
             job.storyboard_attempt = 0
+            job.storyboard_attempt_version = version
+            # Issue #197/#163.2: pin the revision that is driving this version's
+            # budget.  The pinned value is reused on every retry of the same
+            # version, so a retry never silently falls back to a stale
+            # ``job.revision`` or a previous version's ``revision_request``.
+            job.storyboard_active_revision = (
+                revision
+                or job.revision
+                or (job.storyboards[-1].revision_request if job.storyboards else None)
+            )
         self.store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
 
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
@@ -116,10 +129,10 @@ class StoryboardService:
             job.storyboard_error = error
             self.store.event(job, f"STORYBOARD FAILED {current_attempt}/{attempts}: {error}")
             if current_attempt < attempts:
-                # T3: forward the current job.revision (user instructions) so
-                # each retry applies the same revision context instead of the
-                # original (possibly stale) revision_request.
-                self.queue(job, job.revision or (job.storyboards[-1].revision_request if job.storyboards else None))
+                # Issue #197/#163.2: retry the same version with the revision that
+                # was pinned when this version's budget started, not a stale
+                # ``job.revision`` or the previous version's ``revision_request``.
+                self.queue(job, job.storyboard_active_revision)
                 return job
             self.store.update(job, JobStatus.STORYBOARD_FAILED,
                               f"STORYBOARD FAILED after {attempts} attempts: {error}")

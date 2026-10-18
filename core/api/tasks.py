@@ -27,7 +27,7 @@ from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
                           _pending_voice_scenes,
                           _persist_tts_contract,
                           _scene_for_task, _select_worker, _serialize_job_result,
-                          _task_for, _tts_task_for, _validate_tts_contract,
+                          _task_for, _tts_task_for, _voice_task_for, _validate_tts_contract,
                           assembly_worker_mismatch, engine_release_hold)
 
 router = APIRouter()
@@ -765,8 +765,16 @@ def task_result(result: TaskResult, request: Request):
             # rejected result must leave no accepted artifact and must not change
             # Worker ownership so the job can retry or fail loudly.
             try:
-                _validate_tts_contract(_tts_task_for(job, scene), data,
-                                       artifact.get("contract"))
+                # Issue #197/#165.2: validate the Worker's contract against the
+                # exact voice-task snapshot that was issued at enqueue time,
+                # never against a task rebuilt from the live Character config.
+                # A config change between claim and result must be a controlled
+                # rejection that leaves no artifact, no ack and no Worker
+                # release.
+                _validate_tts_contract(
+                    (job.voice_task_snapshot or {}).get(result.task_id)
+                    or _tts_task_for(job, scene),
+                    data, artifact.get("contract"))
             except ValueError as error:
                 # A rejected result must leave no accepted artifact and must not
                 # change Worker ownership. Keep the worker BUSY with this

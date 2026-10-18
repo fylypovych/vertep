@@ -84,7 +84,11 @@ def voice_preview_endpoint(payload: dict):
     to the Worker must agree, otherwise the preview is refused instead of
     reporting success for a backend the executor never observed.
     """
-    from ..provider_switch import ProviderSwitchError, effective_provider_config
+    from ..provider_switch import (
+        ProviderSwitchError,
+        effective_provider_config,
+        executor_backend_mismatches,
+    )
 
     try:
         effective = effective_provider_config("tts")
@@ -113,6 +117,18 @@ def voice_preview_endpoint(payload: dict):
         # the Worker still names the previous backend: refuse instead of
         # previewing through a backend the executor never observed.
         raise HTTPException(409, "TTS backend switch has not reached the executor yet")
+    mismatches = executor_backend_mismatches("tts")
+    if mismatches:
+        # A Worker reported back an executor configuration that still names a
+        # different backend than CORE considers effective: the switch has not
+        # reached every node that can run the task, so preview must not claim
+        # success (Issue i.0.0.1.70).
+        node = mismatches[0]
+        raise HTTPException(
+            409,
+            f"TTS backend switch has not reached worker '{node['node_name']}' yet "
+            f"(reported '{node['observed']}')",
+        )
 
     voice = str(payload.get("voice") or "default").strip() or "default"
     try:

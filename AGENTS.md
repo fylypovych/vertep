@@ -41,6 +41,7 @@
 - Викликати `ComfyUIAdapter` напряму в `worker/service.py` — використовувати `execute_role_task()`.
 - Блокувати event loop CORE блокуючими викликами FFmpeg — використовувати `ThreadPoolExecutor`.
 - Переписувати історію Git: `git rebase`, `git commit --amend` для старих опублікованих commit, `git reset` з метою перебудови опублікованої історії, `git push --force`, `git push --force-with-lease`, змінювати SHA існуючих опублікованих commit, переміщувати існуючі release tags, видаляти історичні commit через неправильну назву, squash старих commit лише заради виправлення нумерації.
+- Видаляти, перезаписувати або втрачати незакомічені зміни робочого дерева чи індексу: `git checkout -- <path>`, `git restore <path>`, `git reset --hard`, `git clean`, `git stash drop`/`clear`, force-checkout файлів, перезапис файлів без збереження їхнього поточного вмісту. Незакомічені зміни, staged видалення та робота інших агентів зберігаються; перед будь-якою дією, що може їх зачепити, агент зупиняється й узгоджує рішення з користувачем.
 
 ---
 

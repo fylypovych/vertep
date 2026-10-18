@@ -120,6 +120,19 @@ def recover_after_restart(job: Job) -> Job:
     # upstream task for the same approved render.
     job.assembly_task_ids.clear()
     job.assembly_task_id = None
+    # Issue #197/#163.3: every in-flight task pointer must be cleared on
+    # restart, otherwise a Job persisted in TTS_GENERATING/PUBLISHING reloads
+    # with pointers at queue tasks that no longer exist and can be re-claimed
+    # or double-published.  Each branch records what it drops so the audit
+    # trail shows the restart interruption instead of silently losing it.
+    job.tts_active_task_ids.clear()
+    job.voice_task_snapshot.clear()
+    job.publish_task_ids.clear()
+    job.publish_intent.clear()
+    job.image_storyboard_task_ids.clear()
+    job.image_storyboard_task_versions.clear()
+    job.storyboard_task_id = None
+    job.script_task_id = None
     for scene in job.scenes:
         scene.task_id = None
         scene.assigned_worker = None

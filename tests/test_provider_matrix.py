@@ -128,3 +128,27 @@ def test_provider_matrix_publisher_platforms(monkeypatch):
     assert "telegram" in matrix["publisher"]["platforms"]
     configured = matrix["publisher"]["platforms"]["telegram"]["configured"]
     assert isinstance(configured, bool)
+
+
+def test_provider_matrix_publisher_slot_reports_configured(monkeypatch):
+    """The publisher slot exposes a top-level ``configured`` so an all-unconfigured
+    publisher backend is treated as unavailable instead of a silent success."""
+    _clean(monkeypatch)
+    for key in ("PUBLISHER_MOCK", "TELEGRAM_BOT_TOKEN", "YOUTUBE_TOKEN",
+                "TIKTOK_TOKEN", "FACEBOOK_TOKEN", "INSTAGRAM_TOKEN", "THREADS_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+
+    matrix = provider_matrix()
+    configured = matrix["publisher"]["configured"]
+    assert isinstance(configured, bool)
+    platforms = matrix["publisher"]["platforms"]
+    assert configured == any(entry["configured"] for entry in platforms.values())
+
+    empty = provider_matrix()
+    empty_publisher = empty["publisher"]
+    empty_publisher["platforms"] = {
+        channel: {**entry, "configured": False}
+        for channel, entry in empty_publisher["platforms"].items()
+    }
+    assert not any(entry["configured"] for entry in empty_publisher["platforms"].values())
+

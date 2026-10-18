@@ -191,6 +191,7 @@ class JobStore:
         self.repository.save_job(job)
 
     def save_worker(self, worker: dict) -> None:
+        self.workers[worker["node_name"]] = worker
         self.repository.save_worker(worker)
 
 def _load_character_prompt(job: Job) -> tuple[str, dict | None]:

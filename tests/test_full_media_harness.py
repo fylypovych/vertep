@@ -679,3 +679,192 @@ def _storyboard_artifact(job_id: str) -> dict:
     payload = harness._storyboard_llm_stub(job_id)
     encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     return role_executor._artifact("storyboard.json", "storyboard", encoded)
+
+
+# ---------------------------------------------------------------------------
+# Issue #197 / #164.1–#164.3: Text readiness, model routing and Text-specific
+# retry/cancel/restart rows.  Only the external inference transport is
+# substituted; the orchestration, queue, lease and recovery paths stay real.
+# ---------------------------------------------------------------------------
+
+
+class TestTextReadinessAndRecovery:
+    """#164.1 readiness/model routing + #164.2 actual QUEUED->claim->execute
+    evidence + #164.3 reuse of ownership/recovery/media proofs."""
+
+    def test_text_worker_readiness_requires_self_test(self, client, monkeypatch, tmp_path):
+        """A Text Worker that only heartbeats must not be advertised as online."""
+        monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+        monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
+        monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+        harness.write_character(tmp_path / "characters", "harnesschar")
+        harness.register_text_node(client, node_name="text-ready")
+        readiness = harness.node_readiness(client, "text-ready")
+        assert readiness["runtime_status"] != "ONLINE", readiness
+        harness.record_row("text_readiness_requires_self_test", "PENDING_SELF_TEST",
+                           readiness["runtime_status"],
+                           node="text-ready", readiness=readiness)
+
+        harness.submit_self_test(client, "text-ready", status="passed",
+                                capabilities=["text_generation"])
+        readiness = harness.node_readiness(client, "text-ready")
+        assert readiness["runtime_status"] == "ONLINE", readiness
+        harness.record_row("text_readiness_after_self_test", "ONLINE",
+                           readiness["runtime_status"],
+                           node="text-ready", readiness=readiness)
+
+    def test_text_model_routing_travels_to_worker(self, client, monkeypatch, tmp_path):
+        """The Text Worker must receive the model it advertised when it claims."""
+        monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+        monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
+        monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+        harness.write_character(tmp_path / "characters", "harnesschar")
+        job_id = harness.create_job(client, topic="Model routing")
+        harness.register_text_node(client, node_name="text-ready", model="uk_male")
+        harness.submit_self_test(client, "text-ready", status="passed",
+                                capabilities=["text_generation"])
+        task = harness.claim_task(client, job_id, "text-ready", task="script",
+                                 supported_tasks=["text"], capabilities=["text_generation"])
+        actual_model = task["character"]["voice"]["model"]
+        assert actual_model == "uk_male", actual_model
+        harness.record_row("text_model_routing", "uk_male", actual_model,
+                           job_id=job_id, task=task)
+
+    def test_text_storyboard_stage_burns_budget_and_fails_cleanly(self, fleet, monkeypatch,
+                                                               tmp_path):
+        """#164.2 actual QUEUED->claim->execute(rejected)->retry->terminal FAIL."""
+        job_id = harness.create_job(fleet, topic="Text retry budget")
+        harness.approve_script_only(fleet, job_id, monkeypatch)
+        result = harness.text_retry_row(fleet, job_id, attempts=6)
+        job = harness.get_job(fleet, job_id)
+        assert job["status"] == JobStatus.STORYBOARD_FAILED.value, job["status"]
+        assert store.jobs[job_id].storyboard_attempt == result["budget"]
+        assert task_queue.depth() == 0
+        harness.record_row("text_retry_budget_terminal", "STORYBOARD_FAILED",
+                           job["status"], job_id=job_id, **result)
+
+    def test_text_cancel_releases_storyboard_lease(self, fleet, monkeypatch, tmp_path):
+        """#164.2 cancel during the storyboard stage releases the lease."""
+        job_id = harness.create_job(fleet, topic="Text cancel")
+        harness.approve_script_only(fleet, job_id, monkeypatch)
+        result = harness.text_cancel_row(fleet, job_id)
+        job = harness.get_job(fleet, job_id)
+        assert job["status"] == JobStatus.CANCELLED.value, job["status"]
+        harness.record_row("text_cancel_releases_lease", "CANCELLED", job["status"],
+                           job_id=job_id, **result)
+
+    def test_text_restart_replays_job_and_releases_stale_claim(self, fleet, monkeypatch,
+                                                               tmp_path):
+        """#164.3 restart releases the stale storyboard claim and replays the Job
+        from the stage it was in when CORE came back."""
+        job_id = harness.create_job(fleet, topic="Text restart")
+        harness.approve_script_only(fleet, job_id, monkeypatch)
+        result = harness.text_restart_row(fleet, job_id)
+        assert result["recovered_status"] == JobStatus.STORYBOARD_GENERATING, (
+            f"restart must leave the Job on the stage it held, not drop it: "
+            f"{result['recovered_status']}")
+        harness.record_row("text_restart_releases_stale_claim",
+                           JobStatus.STORYBOARD_GENERATING.value,
+                           result["recovered_status"].value, job_id=job_id, **result)
+
+    def test_text_evidence_is_sha_anchored(self, fleet, monkeypatch, tmp_path):
+        """#164.3 reuse the exact-SHA evidence pattern for the Text rows."""
+        job_id = harness.create_job(fleet, topic="Text evidence")
+        task = harness.run_script_task(fleet, job_id)
+        job = harness.get_job(fleet, job_id)
+        provenance = harness.run_provenance()
+        assert provenance["sha"] and len(provenance["sha"]) == 40
+        assert provenance["version"] == Path("VERSION").read_text(encoding="utf-8").strip()
+        harness.record_row("text_evidence_sha_anchored", provenance["sha"],
+                           provenance["sha"], job_id=job_id, task=task,
+                           provenance=provenance)
+
+
+# ---------------------------------------------------------------------------
+# Issue #198 / #165.3: actual Text/Storyboard→Voice→audio→assembly harness rows
+# for the supported espeak voice/provider/model/language/speed matrix.
+# Only the external TTS runtime is substituted; the queue, lease, recovery and
+# metadata paths stay real.
+# ---------------------------------------------------------------------------
+
+
+class TestVoiceAcceptanceRows:
+    """#165.3 cancel/loss/reconnect/lease/duplicate/stale/restart rows driven
+    through the real control plane with the supported voice parameters."""
+
+    def test_voice_cancel_releases_the_audio_lease(self, fleet, monkeypatch, tmp_path):
+        """Cancel during TTS generation releases the voice lease and the
+        rejected audio is never imported."""
+        job_id = harness.create_job(fleet, topic="Voice cancel")
+        harness.approve_script(fleet, job_id, monkeypatch)
+        harness.generate_assets_only(fleet, job_id, monkeypatch)
+        result = harness.voice_cancel_row(fleet, job_id)
+        job = harness.get_job(fleet, job_id)
+        assert job["status"] == JobStatus.CANCELLED.value, job["status"]
+        harness.record_row("voice_cancel_releases_lease", "CANCELLED",
+                           job["status"], job_id=job_id, **result)
+
+    def test_voice_worker_loss_requeues_and_retries(self, fleet, monkeypatch, tmp_path):
+        """A lost Voice Worker must requeue the issued task and retry inside
+        the budget, keeping the same voice parameters."""
+        job_id = harness.create_job(fleet, topic="Voice worker loss")
+        harness.approve_script(fleet, job_id, monkeypatch)
+        harness.generate_assets_only(fleet, job_id, monkeypatch)
+        result = harness.voice_worker_loss_row(fleet, job_id)
+        job = harness.get_job(fleet, job_id)
+        assert job["status"] in {JobStatus.TTS_GENERATING.value,
+                                 JobStatus.ASSET_GENERATION.value}, job["status"]
+        harness.record_row("voice_worker_loss_requeues", job["status"],
+                           job["status"], job_id=job_id, **result)
+
+    def test_voice_reconnect_keeps_supported_parameters(self, fleet, monkeypatch,
+                                                        tmp_path):
+        """A reconnecting Voice Worker must keep the issued voice/provider/
+        model/language/speed and the metadata must survive the reconnect."""
+        job_id = harness.create_job(fleet, topic="Voice reconnect")
+        harness.approve_script(fleet, job_id, monkeypatch)
+        harness.generate_assets_only(fleet, job_id, monkeypatch)
+        result = harness.voice_reconnect_row(fleet, job_id)
+        assert result["voice"] == "uk", result
+        assert result["provider"] == "espeak-ng", result
+        assert result["model"] == "uk_male", result
+        assert result["language"] == "uk", result
+        harness.record_row("voice_reconnect_keeps_parameters",
+                           {"voice": "uk", "provider": "espeak-ng",
+                            "model": "uk_male", "language": "uk"},
+                           result, job_id=job_id)
+
+    def test_voice_duplicate_result_is_refused(self, fleet, monkeypatch, tmp_path):
+        """A second audio result for the same issued task must be refused."""
+        job_id = harness.create_job(fleet, topic="Voice duplicate")
+        harness.approve_script(fleet, job_id, monkeypatch)
+        harness.generate_assets_only(fleet, job_id, monkeypatch)
+        result = harness.voice_duplicate_row(fleet, job_id)
+        assert result["refused"] is True, result
+        harness.record_row("voice_duplicate_refused", True, result["refused"],
+                           job_id=job_id, **result)
+
+    def test_voice_stale_result_after_lease_loss_is_refused(self, fleet, monkeypatch,
+                                                             tmp_path):
+        """A late audio result arriving after the lease was lost must be
+        refused and must not overwrite the scene metadata."""
+        job_id = harness.create_job(fleet, topic="Voice stale")
+        harness.approve_script(fleet, job_id, monkeypatch)
+        harness.generate_assets_only(fleet, job_id, monkeypatch)
+        result = harness.voice_stale_row(fleet, job_id)
+        assert result["refused"] is True, result
+        harness.record_row("voice_stale_refused", True, result["refused"],
+                           job_id=job_id, **result)
+
+    def test_voice_restart_replays_audio_stage(self, fleet, monkeypatch, tmp_path):
+        """Restart CORE while the Voice Worker owns the audio lease; the stale
+        claim must be released and the audio stage must replay."""
+        job_id = harness.create_job(fleet, topic="Voice restart")
+        harness.approve_script(fleet, job_id, monkeypatch)
+        harness.generate_assets_only(fleet, job_id, monkeypatch)
+        result = harness.voice_restart_row(fleet, job_id)
+        assert result["recovered_status"] == JobStatus.TTS_GENERATING, (
+            f"restart must leave the Job on the audio stage: {result}")
+        harness.record_row("voice_restart_replays_audio_stage",
+                           JobStatus.TTS_GENERATING.value,
+                           result["recovered_status"].value, job_id=job_id, **result)

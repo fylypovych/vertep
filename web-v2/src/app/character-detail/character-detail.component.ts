@@ -5,6 +5,7 @@ import { RouterModule, ActivatedRoute, Router } from '@angular/router';
 import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
+import { PolicyService } from '../core/services/policy.service';
 import { CanComponentDeactivate } from '../core/services/unsaved-guard.service';
 import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGeneration, CharacterPublishing } from '../core/models';
 
@@ -155,15 +156,15 @@ import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGen
           </div>
           <div class="flex items-center justify-between pt-2">
             <div class="flex gap-2">
-              <button (click)="save()" [disabled]="saving() || !formId || !name" data-testid="character-save-btn"
+              <button (click)="save()" [disabled]="saving() || !formId || !name || !canSave" [title]="saveReason || 'Зберегти'" data-testid="character-save-btn"
                 class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 text-sm font-medium">
                 {{ saving() ? 'Збереження...' : (isEdit ? 'Зберегти' : 'Створити') }}
               </button>
               <a routerLink="/characters" class="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg">Скасувати</a>
             </div>
             @if (isEdit) {
-              <button (click)="deleteCharacter()" data-testid="character-delete-btn"
-                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium">Видалити</button>
+              <button (click)="deleteCharacter()" [disabled]="!canDelete" [title]="deleteReason || 'Видалити'" data-testid="character-delete-btn"
+                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50">Видалити</button>
             }
           </div>
         </div>
@@ -213,7 +214,13 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
     private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
+    public policy: PolicyService,
   ) {}
+
+  get canSave(): boolean { return this.policy.can(this.isEdit ? 'update_character' : 'create_character').allowed; }
+  get saveReason(): string | null { return this.policy.disabledReason(this.isEdit ? 'update_character' : 'create_character'); }
+  get canDelete(): boolean { return this.policy.can('delete_character').allowed; }
+  get deleteReason(): string | null { return this.policy.disabledReason('delete_character'); }
 
   ngOnInit(): void {
     const id = this.route.snapshot.paramMap.get('id');
@@ -241,6 +248,7 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   }
 
   save(): void {
+    if (!this.canSave) return;
     if (!this.formId || !this.name) { this.toast.show('ID та назва обов\'язкові', 'error'); return; }
     this.saving.set(true);
     const payload: Character = {
@@ -265,6 +273,7 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   }
 
   deleteCharacter(): void {
+    if (!this.canDelete) return;
     this.confirm.confirm({ title: 'Видалити персонажа', message: `Видалити ${this.formId}?` }).subscribe((ok) => {
       if (!ok) return;
       this.resources.deleteCharacter(this.formId).subscribe({

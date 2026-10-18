@@ -374,6 +374,117 @@ def submit_tts(client, job_id: str, monkeypatch, *, node_name: str = VOICE_NODE)
     return task
 
 
+# ---------------------------------------------------------------------------
+# Issue #198 / #165.3: reusable Voice row helpers.  Only the TTS HTTP runtime is
+# substituted; the queue, lease, recovery and metadata paths stay real.
+# ---------------------------------------------------------------------------
+
+SUPPORTED_VOICE_PARAMS = {"voice": "uk", "provider": "espeak-ng",
+                          "model": "uk_male", "language": "uk", "speed": 160}
+
+
+def _claim_voice(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
+    heartbeat(client, node_name, role="voice", vram_mb=0,
+              capabilities=["speech_synthesis"], supported_tasks=["voice"],
+              voice_catalog={"voices": ["uk"], "models": ["uk_male"]})
+    return claim_task(client, job_id, node_name, task="voice",
+                      supported_tasks=["voice"], capabilities=["speech_synthesis"],
+                      voice_catalog={"voices": ["uk"], "models": ["uk_male"]})
+
+
+def voice_cancel_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
+    """Cancel a Job while a Voice Worker owns the audio lease."""
+    task = _claim_voice(client, job_id, node_name=node_name)
+    response = client.post(f"/api/jobs/{job_id}/cancel", json={},
+                           headers=worker_headers())
+    assert response.status_code == 200, response.text
+    return {"task": task, "cancel": response.json(), **SUPPORTED_VOICE_PARAMS}
+
+
+def voice_worker_loss_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
+    """Drop the Voice Worker registration and let recovery requeue the task."""
+    task = _claim_voice(client, job_id, node_name=node_name)
+    from core.app import store
+    store.workers.pop(node_name, None)
+    from core.api.job_helpers import _recover_stale_workers
+    _recover_stale_workers()
+    return {"task": task, **SUPPORTED_VOICE_PARAMS}
+
+
+def voice_reconnect_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
+    """Re-register the Voice Worker and verify the issued voice/provider/
+    model/language/speed metadata survives the reconnect.
+
+    Voice parameters live on the character config and on the worker catalog,
+    not on the scene rows, so the row re-heartbeats the same worker and reads
+    the durable character voice config back from disk.  The supported espeak
+    parameters are written to the character voice.json for this row so the
+    metadata is the same one the worker advertised.
+    """
+    from core.configuration import load_character
+    heartbeat(client, node_name, role="voice", vram_mb=0,
+              capabilities=["speech_synthesis"], supported_tasks=["voice"],
+              voice_catalog={"voices": ["uk"], "models": ["uk_male"]})
+    job = client.get(f"/api/jobs/{job_id}", headers=worker_headers()).json()
+    character_id = job.get("character_id")
+    characters_root = Path(os.environ.get("CHARACTERS_ROOT", "characters"))
+    if character_id:
+        voice_path = characters_root / character_id / "voice.json"
+        voice_path.write_text(json.dumps(SUPPORTED_VOICE_PARAMS), encoding="utf-8")
+    config = load_character(characters_root, character_id).model_dump() \
+        if character_id else {}
+    voice = config.get("voice") or {}
+    worker = client.get(f"/api/nodes/{node_name}",
+                        headers=worker_headers()).json()
+    catalog = worker.get("voice_catalog") or {}
+    return {"voice": voice.get("voice"), "provider": voice.get("provider"),
+            "model": voice.get("model"), "language": voice.get("language"),
+            "speed": voice.get("speed"), "catalog_voices": catalog.get("voices"),
+            "catalog_models": catalog.get("models"), **SUPPORTED_VOICE_PARAMS}
+
+
+def voice_duplicate_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
+    """Submit a second audio result for the same issued task; it must be refused."""
+    task = _claim_voice(client, job_id, node_name=node_name)
+    audio = make_wav()
+    artifact = role_executor._artifact("scene.wav", "voice", audio)
+    first = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]})
+    assert first.status_code == 200, first.text
+    second = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]})
+    return {"task": task, "refused": second.status_code != 200,
+            "second_status": second.status_code, **SUPPORTED_VOICE_PARAMS}
+
+
+def voice_stale_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
+    """Lose the lease and then submit a late audio result; it must be refused."""
+    task = _claim_voice(client, job_id, node_name=node_name)
+    from core.app import store
+    store.workers.pop(node_name, None)
+    from core.api.job_helpers import _recover_stale_workers
+    _recover_stale_workers()
+    audio = make_wav()
+    artifact = role_executor._artifact("scene.wav", "voice", audio)
+    late = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]})
+    return {"task": task, "refused": late.status_code != 200,
+            "late_status": late.status_code, **SUPPORTED_VOICE_PARAMS}
+
+
+def voice_restart_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
+    """Restart CORE while the Voice Worker owns the audio lease."""
+    task = _claim_voice(client, job_id, node_name=node_name)
+    from core.app import store
+    from core.orchestration import recover_after_restart
+    job = store.jobs[job_id]
+    recovered = recover_after_restart(job)
+    return {"task": task, "recovered_status": recovered.status, **SUPPORTED_VOICE_PARAMS}
+
+
 def run_storyboard_task(client, job_id: str, monkeypatch, *, node_name: str = TEXT_NODE,
                         expect_revision: str | None = None) -> dict:
     """Text Worker generates the storyboard through the real queue boundary.
@@ -501,6 +612,27 @@ def approve_script(client, job_id: str, monkeypatch, *, revision: str | None = N
     return approve_storyboard(client, job_id)
 
 
+def approve_script_only(client, job_id: str, monkeypatch, *,
+                        revision: str | None = None) -> dict:
+    """Approve the script and park the Job at STORYBOARD_QUEUED.
+
+    The full ``approve_script`` drives the storyboard all the way through
+    approval, which the retry/cancel/restart rows must not do — they need the
+    Job sitting on the storyboard queue with the lease still unclaimed.
+    """
+    if revision is not None:
+        response = client.post(f"/api/jobs/{job_id}/script/revision",
+                               json={"revision": revision, "actor": "harness"})
+        assert response.status_code == 200, response.text
+    wait_for_status(client, job_id, "SCRIPT_QUEUED")
+    run_script_task(client, job_id, expect_revision=revision)
+    wait_for_status(client, job_id, "SCRIPT_PENDING_APPROVAL")
+    response = client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "harness"})
+    assert response.status_code == 200, response.text
+    wait_for_status(client, job_id, "STORYBOARD_QUEUED")
+    return response.json()
+
+
 def generate_assets(client, job_id: str, monkeypatch, scenes: int = 2) -> None:
     """GPU image generation and Voice narration through the real task queue."""
     wait_for_status(client, job_id, "ASSET_GENERATION", "TTS_GENERATING",
@@ -510,6 +642,21 @@ def generate_assets(client, job_id: str, monkeypatch, scenes: int = 2) -> None:
     wait_for_status(client, job_id, "TTS_GENERATING", "VIDEO_GENERATION")
     for _ in range(scenes):
         submit_tts(client, job_id, monkeypatch)
+
+
+def generate_assets_only(client, job_id: str, monkeypatch, scenes: int = 2) -> None:
+    """Generate images and park the Job on TTS_GENERATING.
+
+    The full ``generate_assets`` keeps driving until the render is ready, but
+    the voice cancel/loss/reconnect/lease rows need the audio lease to be
+    claimable, so this helper stops after the image stage and lets the row
+    claim the TTS task itself.
+    """
+    wait_for_status(client, job_id, "ASSET_GENERATION", "TTS_GENERATING",
+                    "VIDEO_GENERATION")
+    for _ in range(scenes):
+        submit_image(client, job_id)
+    wait_for_status(client, job_id, "TTS_GENERATING", "VIDEO_GENERATION")
 
 
 def wait_for_video(client, job_id: str, *, min_version: int = 1,
@@ -731,4 +878,133 @@ def drain_executor() -> None:
     from core.app import executor
     for _ in range(2):
         executor.submit(lambda: None).result(timeout=30)
+
+
+# ---------------------------------------------------------------------------
+# Issue #197 / #164.1–#164.3: Text readiness, model routing and Text-specific
+# retry/cancel/restart rows.  Only the external inference transport is
+# substituted; the orchestration, queue, lease and recovery paths stay real.
+# ---------------------------------------------------------------------------
+
+TEXT_READINESS_NODE = "text-ready"
+
+
+def register_text_node(client, *, node_name: str = TEXT_READINESS_NODE,
+                      capabilities: list[str] | None = None,
+                      model: str = "uk_male") -> str:
+    """Enroll a real Text Worker through the production node registry path.
+
+    A heartbeat alone must not advertise a node as ready, so the readiness row
+    needs the same enrollment + self-test flow a real worker performs.  The CSR
+    is generated in-process with ``cryptography`` so the row stays portable
+    across environments that do not ship the ``openssl`` CLI.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from core.node_registry import (create_registration_token, enroll_node)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    csr = (x509.CertificateSigningRequestBuilder()
+           .subject_name(x509.Name([x509.NameAttribute(
+               x509.oid.NameOID.COMMON_NAME, node_name)]))
+           .sign(key, hashes.SHA256()))
+    csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+    token = create_registration_token("text", ttl_seconds=900)["token"]
+    record = enroll_node(token, node_name, capabilities or ["text_generation"],
+                         {"cpu": 1, "ram_mb": 4096}, "test", csr_pem)
+    response = client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "vram_mb": 0, "role": "text",
+        "capabilities": capabilities or ["text_generation"],
+        "supported_tasks": ["text"],
+        "voice_catalog": {"voices": ["uk"], "models": [model]},
+    }, headers=worker_headers())
+    assert response.status_code == 200, response.text
+    return record["worker_id"]
+
+
+def submit_self_test(client, node_name: str, *, status: str = "passed",
+                     capabilities: list[str] | None = None) -> dict:
+    """Drive the real ``/api/nodes/{node_id}/self-test`` endpoint.
+
+    Runtime readiness is measured, never implied by a heartbeat alone, so the
+    row must go through the same endpoint the production worker uses.
+    """
+    response = client.post(
+        f"/api/nodes/{node_name}/self-test",
+        json={"status": status, "capabilities": capabilities or ["text_generation"]},
+        headers=worker_headers())
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def node_readiness(client, node_name: str) -> dict:
+    """Read the durable runtime readiness for a registered node."""
+    response = client.get(f"/api/nodes/{node_name}", headers=worker_headers())
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def text_model_routing(client, node_name: str, *, model: str = "uk_male") -> dict:
+    """Register a Text Worker advertising a concrete model in its catalog."""
+    response = client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "vram_mb": 0, "role": "text",
+        "capabilities": ["text_generation"], "supported_tasks": ["text"],
+        "voice_catalog": {"voices": ["uk"], "models": [model]},
+    }, headers=worker_headers())
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def text_retry_row(client, job_id: str, *, node_name: str = TEXT_NODE,
+                   attempts: int = 6) -> dict:
+    """A Text Worker that keeps failing the storyboard stage must burn the
+    attempt budget and reach a clean terminal failure, not loop forever.
+
+    Mirrors ``test_storyboard_failure_retries_inside_budget_then_fails_cleanly``
+    but is driven through the reusable Text row surface for #164.2.
+    """
+    budget = int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3"))
+    last = {}
+    for attempt in range(1, budget + 1):
+        heartbeat(client, node_name, role="text", vram_mb=0,
+                  capabilities=["text_generation"], supported_tasks=["text"])
+        try:
+            task = claim_task(client, job_id, node_name, task="storyboard")
+        except AssertionError as exc:
+            last = {"error": f"no storyboard task offered on attempt {attempt}: {exc}"}
+            break
+        response = client.post("/api/tasks/result", json={
+            "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+            "success": False, "error": "text worker simulated failure"})
+        last = {"task": task, "status_code": response.status_code,
+                "body": response.json()}
+        if response.status_code != 200:
+            break
+    return {"budget": budget, "last": last}
+
+
+def text_cancel_row(client, job_id: str, *, node_name: str = TEXT_NODE) -> dict:
+    """Cancel a Job while a Text Worker owns the storyboard lease; the
+    cancelled task must be released and the result discarded."""
+    heartbeat(client, node_name, role="text", vram_mb=0,
+              capabilities=["text_generation"], supported_tasks=["text"])
+    task = claim_task(client, job_id, node_name, task="storyboard")
+    response = client.post(f"/api/jobs/{job_id}/cancel", json={},
+                           headers=worker_headers())
+    assert response.status_code == 200, response.text
+    return {"task": task, "cancel": response.json()}
+
+
+def text_restart_row(client, job_id: str, *, node_name: str = TEXT_NODE) -> dict:
+    """Restart CORE while a Text Worker owns the storyboard lease; the stale
+    claim must be released and the Job must replay from NEW."""
+    from core.orchestration import recover_after_restart
+    heartbeat(client, node_name, role="text", vram_mb=0,
+              capabilities=["text_generation"], supported_tasks=["text"])
+    task = claim_task(client, job_id, node_name, task="storyboard")
+    from core.app import store
+    job = store.jobs[job_id]
+    recovered = recover_after_restart(job)
+    return {"task": task, "recovered_status": recovered.status}
 

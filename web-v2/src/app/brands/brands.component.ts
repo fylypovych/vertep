@@ -5,6 +5,7 @@ import { RouterModule } from '@angular/router';
 import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
+import { PolicyService } from '../core/services/policy.service';
 import { Brand, Channel } from '../core/models';
 import { BrandChannelsComponent } from './brand-channels.component';
 import { LoadingStateComponent } from '../shared/loading-state.component';
@@ -19,8 +20,8 @@ import { ErrorStateComponent } from '../shared/error-state.component';
     <div class="space-y-5" data-testid="brands-page">
       <div class="flex items-center justify-between">
         <h2 class="text-xl font-semibold text-slate-900">Бренди</h2>
-        <button (click)="openEditor()" data-testid="create-brand-button"
-                class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+        <button (click)="openEditor()" data-testid="create-brand-button" [disabled]="!canCreateBrand" [title]="createBrandReason || 'Новий бренд'"
+                class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
           Новий бренд
         </button>
       </div>
@@ -41,8 +42,8 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                   <p class="text-xs text-slate-500 font-mono">{{ brand.id }}</p>
                 </div>
                 <div class="flex gap-2">
-                  <button (click)="editBrand(brand)" class="text-sm text-blue-600 hover:text-blue-700 font-medium">Редагувати</button>
-                  <button (click)="deleteBrand(brand)" class="text-sm text-red-600 hover:text-red-700 font-medium">Видалити</button>
+                  <button (click)="editBrand(brand)" [disabled]="!canUpdateBrand" [title]="updateBrandReason || 'Редагувати'" class="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-40">Редагувати</button>
+                  <button (click)="deleteBrand(brand)" [disabled]="!canDeleteBrand" [title]="deleteBrandReason || 'Видалити'" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-brand-button">Видалити</button>
                 </div>
               </div>
               <div class="text-sm text-slate-600 mb-3">{{ brand.enabled ? 'Активний' : 'Неактивний' }}</div>
@@ -80,7 +81,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button (click)="closeEditor()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="saveBrand()" [disabled]="saving()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
+            <button (click)="saveBrand()" [disabled]="saving() || !canSaveBrand" [title]="saveBrandReason || 'Зберегти'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
           </div>
         </div>
       </div>
@@ -103,7 +104,17 @@ export class BrandsComponent implements OnInit {
     private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
+    public policy: PolicyService,
   ) {}
+
+  get canCreateBrand(): boolean { return this.policy.can('create_brand').allowed; }
+  get createBrandReason(): string | null { return this.policy.disabledReason('create_brand'); }
+  get canUpdateBrand(): boolean { return this.policy.can('update_brand').allowed; }
+  get updateBrandReason(): string | null { return this.policy.disabledReason('update_brand'); }
+  get canDeleteBrand(): boolean { return this.policy.can('delete_brand').allowed; }
+  get deleteBrandReason(): string | null { return this.policy.disabledReason('delete_brand'); }
+  get canSaveBrand(): boolean { return this.policy.can(this.editingBrand() ? 'update_brand' : 'create_brand').allowed; }
+  get saveBrandReason(): string | null { return this.policy.disabledReason(this.editingBrand() ? 'update_brand' : 'create_brand'); }
 
   ngOnInit(): void {
     this.loadBrands();
@@ -153,6 +164,7 @@ export class BrandsComponent implements OnInit {
   }
 
   saveBrand(): void {
+    if (!this.canSaveBrand) return;
     if (!this.editorForm.id || !this.editorForm.name) {
       this.toast.show('ID та назва є обов\'язковими', 'error');
       return;
@@ -190,6 +202,7 @@ export class BrandsComponent implements OnInit {
   }
 
   deleteBrand(brand: Brand): void {
+    if (!this.canDeleteBrand) return;
     this.confirm.confirm({ title: 'Видалити бренд', message: `Ви впевнені, що хочете видалити бренд ${brand.name} (${brand.id})?` }).subscribe((ok) => {
       if (!ok) return;
       this.resources.deleteBrand(brand.id).subscribe({

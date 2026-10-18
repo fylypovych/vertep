@@ -5,6 +5,7 @@ import { RouterModule } from '@angular/router';
 import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
+import { PolicyService } from '../core/services/policy.service';
 import { Character, CharacterForm } from '../core/models';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -17,7 +18,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="characters-page">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">Персонажі</h3>
-        <button (click)="openCreateModal()" data-testid="create-character-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+        <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="createCharacterReason || 'Новий персонаж'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
           Новий персонаж
         </button>
       </div>
@@ -41,7 +42,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               <p class="text-sm text-slate-600 mb-3">{{ character.id }}</p>
               <div class="flex gap-2">
                 <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">Редагувати</button>
-                <button (click)="deleteCharacter(character.id!)" class="text-sm text-red-600 hover:text-red-700 font-medium">Видалити</button>
+                <button (click)="deleteCharacter(character.id!)" [disabled]="!canDeleteCharacter" [title]="deleteCharacterReason || 'Видалити'" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-character-button">Видалити</button>
               </div>
             </div>
           } @empty {
@@ -196,7 +197,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
         </div>
         <div class="flex justify-end gap-2 mt-6">
           <button (click)="closeModal()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-          <button (click)="saveCharacter()" [disabled]="saving()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
+          <button (click)="saveCharacter()" [disabled]="saving() || !canSaveCharacter" [title]="saveCharacterReason || 'Зберегти'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
         </div>
       </div>
     </div>
@@ -225,7 +226,18 @@ export class CharactersComponent implements OnInit {
   page = 1;
   pageSize = 10;
 
-  constructor(private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService) {}
+  constructor(private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, public policy: PolicyService) {}
+
+  get canCreateCharacter(): boolean { return this.policy.can('create_character').allowed; }
+  get createCharacterReason(): string | null { return this.policy.disabledReason('create_character'); }
+  get canSaveCharacter(): boolean {
+    return this.policy.can(this.editingId ? 'update_character' : 'create_character').allowed;
+  }
+  get saveCharacterReason(): string | null {
+    return this.policy.disabledReason(this.editingId ? 'update_character' : 'create_character');
+  }
+  get canDeleteCharacter(): boolean { return this.policy.can('delete_character').allowed; }
+  get deleteCharacterReason(): string | null { return this.policy.disabledReason('delete_character'); }
 
   ngOnInit(): void {
     this.loadCharacters();
@@ -308,6 +320,7 @@ export class CharactersComponent implements OnInit {
   }
 
   saveCharacter(): void {
+    if (!this.canSaveCharacter) return;
     if (!this.form.name) {
       this.toast.show('Назва є обов\'язковою', 'error');
       return;
@@ -345,6 +358,7 @@ export class CharactersComponent implements OnInit {
   }
 
   deleteCharacter(id: string): void {
+    if (!this.canDeleteCharacter) return;
     this.confirm.confirm({ title: 'Видалити персонажа', message: `Ви впевнені, що хочете видалити ${id}?` }).subscribe((ok) => {
       if (!ok) return;
       this.resources.deleteCharacter(id).subscribe({

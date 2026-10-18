@@ -859,3 +859,99 @@ def test_claim_task_skips_busy_or_draining_text_worker(monkeypatch):
                                         "capabilities": ["text_generation"], "desired_state": "DRAINING"})
     resp = client.post("/api/tasks/claim", json={"node_name": "text-draining", "capabilities": ["text_generation"]})
     assert resp.json().get("task") is None
+
+
+def _repo_task_record(store, task_id: str) -> dict | None:
+    """Read the latest repository record for a task (mirrors test_api.py)."""
+    repo = store.repository
+    path = getattr(repo, "root", None)
+    if path is not None:
+        file_path = path / ".tasks.jsonl"
+        if file_path.exists():
+            latest = None
+            for line in file_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                candidate = json.loads(line)
+                if candidate.get("task", {}).get("task_id") == task_id:
+                    latest = candidate
+            if latest:
+                return latest
+    tasks = getattr(repo, "tasks", None)
+    if isinstance(tasks, dict) and task_id in tasks:
+        return tasks[task_id]
+    return None
+
+
+def test_recover_stale_script_worker_charges_attempt_budget(monkeypatch, tmp_path):
+    """Issue #197/#163.3: a script worker that loses its heartbeat must burn
+    the script attempt budget, exactly like ``_handle_script_result`` does for
+    a failed result.  Without this a node that keeps dropping its heartbeat
+    re-dispatches forever without ever exhausting ``max_retries``.
+    """
+    from core.api.job_helpers import _recover_stale_workers
+    from core.models import Job, JobStatus, utc_now
+    from core.state import task_queue
+    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path))
+    character = tmp_path / "ch"
+    character.mkdir(parents=True)
+    (character / "character.json").write_text(
+        json.dumps({"id": "ch", "name": "C"}, ensure_ascii=False), encoding="utf-8")
+    (character / "system_prompt.txt").write_text("Ти ведучий.", encoding="utf-8")
+    task_queue._inflight.clear()
+    task_queue._local.clear()
+    task_id = "script-stale"
+    task_queue.enqueue({"job_id": "job-script-stale", "task": "script", "task_id": task_id,
+                        "priority": 5, "topic": "x"}, new_attempt=True)
+    job = Job(job_id="job-script-stale", topic="x", character_id="ch", priority=5,
+              status=JobStatus.SCRIPT_GENERATING, created_at=utc_now(),
+              script_task_id=task_id, active_task_id=task_id,
+              script_attempt=0, max_retries=2)
+    store.jobs[job.job_id] = job
+    worker = {"node_name": "text-stale", "status": "BUSY", "current_job": job.job_id,
+              "current_task": task_id, "last_seen": "2000-01-01T00:00:00+00:00",
+              "capabilities": ["text_generation"], "role": "text"}
+    store.save_worker(worker)
+
+    _recover_stale_workers()
+    recovered = store.jobs[job.job_id]
+    assert recovered.script_attempt == 1
+    assert recovered.script_task_id is not None
+    assert recovered.script_task_id != task_id
+    assert store.workers["text-stale"]["current_task"] is None
+    assert store.workers["text-stale"]["status"] == "OFFLINE"
+    lost = _repo_task_record(store, task_id)
+    assert lost is not None and lost["status"] == "RELEASED", lost
+
+
+def test_recover_after_restart_clears_all_inflight_task_pointers():
+    """Issue #197/#163.3: ``recover_after_restart`` must clear every in-flight
+    task pointer, otherwise a Job persisted in TTS_GENERATING/PUBLISHING
+    reloads with pointers at queue tasks that no longer exist and can be
+    re-claimed or double-published.
+    """
+    from core.orchestration import recover_after_restart
+    from core.models import Job, JobStatus, utc_now
+    job = Job(job_id="job-restart", topic="x", character_id="c", priority=5,
+              status=JobStatus.TTS_GENERATING, created_at=utc_now(),
+              tts_active_task_ids={"tts-1": "sc-1"},
+              voice_task_snapshot={"tts-1": {"task_id": "tts-1"}},
+              publish_task_ids={"pub-1": "youtube"},
+              publish_intent={"pub-1": {"channel": "youtube"}},
+              image_storyboard_task_ids={"img-1": "sc-1"},
+              image_storyboard_task_versions={"img-1": {"storyboard_version": 1}},
+              storyboard_task_id="sb-1", script_task_id="sc-1",
+              active_task_id="sc-1", assembly_task_ids={"asm-1": 1},
+              assembly_task_id="asm-1")
+    recovered = recover_after_restart(job)
+    assert recovered.tts_active_task_ids == {}
+    assert recovered.voice_task_snapshot == {}
+    assert recovered.publish_task_ids == {}
+    assert recovered.publish_intent == {}
+    assert recovered.image_storyboard_task_ids == {}
+    assert recovered.image_storyboard_task_versions == {}
+    assert recovered.storyboard_task_id is None
+    assert recovered.script_task_id is None
+    assert recovered.assembly_task_ids == {}
+    assert recovered.assembly_task_id is None
+    assert recovered.active_task_id is None

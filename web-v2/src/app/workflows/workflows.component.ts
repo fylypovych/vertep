@@ -7,6 +7,7 @@ import { catchError, map } from 'rxjs/operators';
 import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
+import { PolicyService } from '../core/services/policy.service';
 import { Workflow, WorkflowValidation, WorkflowVersion, WorkflowUsage, WorkflowFormSchema } from '../core/models';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -46,8 +47,8 @@ function coerceInputValue(value: unknown, type?: string): unknown {
     <div class="space-y-5" data-testid="workflows-page">
       <div class="flex items-center justify-between">
         <h2 class="text-xl font-semibold text-slate-900">Реєстр сценаріїв</h2>
-        <button (click)="openEditor()" data-testid="create-workflow-button"
-                class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+        <button (click)="openEditor()" data-testid="create-workflow-button" [disabled]="!canCreateWorkflow" [title]="createWorkflowReason || 'Новий сценарій'"
+                class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
           Новий сценарій
         </button>
       </div>
@@ -90,9 +91,9 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                     }
                   </td>
                   <td class="px-4 py-3 space-x-2">
-                    <button (click)="editWorkflow(wf)" class="text-sm text-blue-600 hover:text-blue-700 font-medium">Редагувати</button>
+                    <button (click)="editWorkflow(wf)" [disabled]="!canUpdateWorkflow" [title]="updateWorkflowReason || 'Редагувати'" class="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-40">Редагувати</button>
                     <button (click)="viewVersions(wf)" class="text-sm text-amber-600 hover:text-amber-700 font-medium">Історія</button>
-                    <button (click)="deleteWorkflow(wf)" class="text-sm text-red-600 hover:text-red-700 font-medium">Видалити</button>
+                    <button (click)="deleteWorkflow(wf)" [disabled]="!canDeleteWorkflow" [title]="deleteWorkflowReason || 'Видалити'" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-workflow-button">Видалити</button>
                   </td>
                 </tr>
               }
@@ -194,7 +195,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
 
           <div class="flex justify-end gap-2 mt-4 pt-3 border-t">
             <button (click)="closeEditor()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="saveWorkflow()" [disabled]="saving()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
+            <button (click)="saveWorkflow()" [disabled]="saving() || !canSaveWorkflow" [title]="saveWorkflowReason || 'Зберегти'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
           </div>
         </div>
       </div>
@@ -217,7 +218,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                         <div class="text-slate-400 text-[11px]">{{ ver.archived_at }}</div>
                       }
                     </div>
-                    <button (click)="restoreVersion(ver.version)" class="px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium text-xs">Відновити</button>
+                    <button (click)="restoreVersion(ver.version)" [disabled]="!canUpdateWorkflow" [title]="updateWorkflowReason || 'Відновити'" class="px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium text-xs disabled:opacity-40">Відновити</button>
                   </div>
                 }
               </div>
@@ -260,7 +261,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
           }
           <div class="flex justify-end gap-2 pt-3 border-t">
             <button (click)="showConflictModal.set(false)" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="forceDeleteWorkflow()" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium">Видалити примусово (force)</button>
+            <button (click)="forceDeleteWorkflow()" [disabled]="!canDeleteWorkflow" [title]="deleteWorkflowReason || 'Видалити примусово'" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-40">Видалити примусово (force)</button>
           </div>
         </div>
       </div>
@@ -295,7 +296,17 @@ export class WorkflowsComponent implements OnInit {
     private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
+    public policy: PolicyService,
   ) {}
+
+  get canCreateWorkflow(): boolean { return this.policy.can('create_workflow').allowed; }
+  get createWorkflowReason(): string | null { return this.policy.disabledReason('create_workflow'); }
+  get canUpdateWorkflow(): boolean { return this.policy.can('update_workflow').allowed; }
+  get updateWorkflowReason(): string | null { return this.policy.disabledReason('update_workflow'); }
+  get canDeleteWorkflow(): boolean { return this.policy.can('delete_workflow').allowed; }
+  get deleteWorkflowReason(): string | null { return this.policy.disabledReason('delete_workflow'); }
+  get canSaveWorkflow(): boolean { return this.policy.can(this.editingWf ? 'update_workflow' : 'create_workflow').allowed; }
+  get saveWorkflowReason(): string | null { return this.policy.disabledReason(this.editingWf ? 'update_workflow' : 'create_workflow'); }
 
   ngOnInit(): void {
     this.loadWorkflows();
@@ -503,6 +514,7 @@ export class WorkflowsComponent implements OnInit {
   }
 
   restoreVersion(version: number): void {
+    if (!this.canUpdateWorkflow) return;
     if (!this.activeVersionWf) return;
     const wf = this.activeVersionWf;
     this.resources.restoreWorkflowVersion(wf.kind, wf.name, version).subscribe({
@@ -544,6 +556,7 @@ export class WorkflowsComponent implements OnInit {
   }
 
   saveWorkflow(): void {
+    if (!this.canSaveWorkflow) return;
     if (!this.editorForm.name.trim()) {
       this.toast.show('Назва є обов\'язковою', 'error');
       return;
@@ -582,6 +595,7 @@ export class WorkflowsComponent implements OnInit {
   }
 
   deleteWorkflow(wf: Workflow): void {
+    if (!this.canDeleteWorkflow) return;
     this.confirm.confirm({ title: 'Видалити сценарій', message: `Ви впевнені, що хочете видалити ${wf.kind}/${wf.name}?` }).subscribe((ok) => {
       if (!ok) return;
       this.resources.deleteWorkflow(wf.kind, wf.name).subscribe({
@@ -607,6 +621,7 @@ export class WorkflowsComponent implements OnInit {
   }
 
   forceDeleteWorkflow(): void {
+    if (!this.canDeleteWorkflow) return;
     if (!this.pendingDeleteWf) return;
     const wf = this.pendingDeleteWf;
     this.resources.deleteWorkflow(wf.kind, wf.name, true).subscribe({

@@ -207,24 +207,78 @@ def switch_provider(slot: str, backend: str, actor: str = "web",
             "executor_config": provider_executor_config(), **effective}
 
 
-def effective_provider_config(slot: str | None = None) -> dict[str, Any]:
+def worker_provider_acks() -> dict[str, dict[str, str]]:
+    """Non-secret provider selection each registered node last reported.
+
+    The Worker applies the heartbeat-delivered selection and echoes what its
+    executors actually observe.  This is the CORE-side proof that a switch
+    reached the process that runs the task, not only CORE's own environment
+    (Issue i.0.0.1.70).  Only the allowlisted, non-secret subset is ever stored,
+    so no credential can appear here.
+    """
+    try:
+        from .state import store
+    except Exception:  # noqa: BLE001 - a missing store means no proof, not a failure
+        return {}
+    acks: dict[str, dict[str, str]] = {}
+    for name, record in list(getattr(store, "workers", {}).items()):
+        if not isinstance(record, dict):
+            continue
+        config = record.get("provider_config")
+        if isinstance(config, dict):
+            acks[str(record.get("node_name") or name)] = {
+                str(key): str(value) for key, value in config.items()}
+    return acks
+
+
+def executor_backend_mismatches(slot: str) -> list[dict[str, str]]:
+    """Nodes whose reported executor config disagrees with CORE for ``slot``.
+
+    An empty list means every node that has reported an ack observes the same
+    backend CORE believes is effective — or that no node has reported yet, in
+    which case there is nothing to contradict.  A non-empty list is a failed
+    Worker activation: CORE must not report success for a backend the executor
+    never observed (Issue i.0.0.1.70 / #170.2).
+    """
+    from adapters.providers import provider_matrix
+
+    entry = provider_matrix().get(slot, {})
+    env_name = str(entry.get("env") or "")
+    if not env_name:
+        return []
+    expected = str(entry.get("backend") or "").strip().lower()
+    mismatches: list[dict[str, str]] = []
+    for node, ack in worker_provider_acks().items():
+        if env_name not in ack:
+            continue
+        observed = str(ack[env_name]).strip().lower()
+        if observed != expected:
+            mismatches.append({"node_name": node, "observed": observed, "expected": expected})
+    return mismatches
+
+
+def effective_provider_config(slot: str | None = None,
+                              node_name: str | None = None) -> dict[str, Any]:
     """Effective configuration after a switch and after a restart (Issue i.0.0.1.17).
 
     Combines the live ``provider_matrix()`` entry with the persisted
-    ``provider-overrides.json`` selection and the allowlisted executor subset
-    that the Worker observes through the heartbeat channel.  A caller (Settings
-    read model, preview gate, regression test) can prove that the persisted
-    choice, the live CORE matrix and the delivered Worker config agree — a
-    failed activation never reports success because any mismatch raises before
-    a success payload is produced.
+    ``provider-overrides.json`` selection, the allowlisted executor subset that
+    the Worker is delivered through the heartbeat channel and the subset each
+    node reported back as applied.  A caller (Settings read model, preview gate,
+    regression test) can prove that the persisted choice, the live CORE matrix,
+    the delivered Worker config and the Worker ack agree — a failed activation
+    never reports success because any mismatch raises before a success payload is
+    produced.
     """
     from adapters.providers import provider_matrix
 
     matrix = provider_matrix()
     overrides = load_provider_overrides()
     executor = provider_executor_config()
+    acks = worker_provider_acks()
     if slot is None:
-        return {"matrix": matrix, "overrides": overrides, "executor_config": executor}
+        return {"matrix": matrix, "overrides": overrides,
+                "executor_config": executor, "worker_acks": acks}
     entry = matrix.get(slot, {})
     env_name = str(entry.get("env") or "")
     persisted = overrides.get(env_name) if env_name else None
@@ -232,11 +286,19 @@ def effective_provider_config(slot: str | None = None) -> dict[str, Any]:
                  "configured": entry.get("configured"),
                  "env": env_name or None, "persisted": persisted,
                  "executor_config": executor,
+                 "worker_acks": acks,
                  "matrix": {slot: entry}}
     if persisted is not None and entry.get("backend") != persisted:
         raise ProviderSwitchError(
             409, f"Backend '{entry.get('backend')}' has not reached the executor yet "
             f"(persisted '{persisted}' for slot '{slot}')")
+    if node_name and env_name:
+        ack = acks.get(str(node_name), {})
+        observed = ack.get(env_name)
+        if observed is not None and str(observed).strip().lower() != str(entry.get("backend") or "").strip().lower():
+            raise ProviderSwitchError(
+                409, f"Worker '{node_name}' still observes '{observed}' for slot '{slot}', "
+                f"not '{entry.get('backend')}'")
     return effective
 
 

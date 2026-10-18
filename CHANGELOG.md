@@ -1,5 +1,11 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.58
+- Issue #197 — уникнення повторного публікування і втрати черги задач після перезапуску CORE: `recover_after_restart` очищає всі вказівники на вJournal задач (TTS, голосове, публікацію, расказронку, сценарій) і фіксує перерву перезапуску в аудіotreil; бюджет спроб storyboard прив'язується до конкретної версії з закріпленою ревізією; валідація контракту TTS виконується за voice-task snapshot з моменту чергування, а не за живим конфігом персонажа.
+- `core/pipeline.JobStore.save_worker` оновлює внутрішній індекс робітників за ім'ям вузла; `core/pull_executor` читає тіло помилки Ollama через `response.read()`; матриця провайдерів публікації отримує прапор `configured`.
+- Додано тести `tests/test_model_pull_http.py` (контрольний HTTP доказ циклів pull моделі) та `tests/test_system_state_mutation_matrix.py` (матриця мітацій стану системи UI/API); розширено `tests/media_harness.py`, `tests/test_api.py`, `tests/test_browser_e2e.py`, `tests/test_features.py`, `tests/test_full_media_harness.py`, `tests/test_provider_matrix.py`, `tests/test_provider_switch.py`, `tests/test_storyboard.py`, `tests/test_voice_acceptance.py`.
+- Оновлено веб-компоненти `web-v2` (brands, characters, policy.service, workflows, rbac.spec).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.57
 - Issue i.0.0.1.69 — Model pull lifecycle: локальний та node pull досягає COMPLETED лише за явною термінальною подією `success`; EOF без неї — FAILED, а не COMPLETED; cancel закриває застряглий transport одразу; пізній результат/помилка не переписує термінальний стан (COMPLETED/FAILED/CANCELLED фінальні).
 - Issue i.0.0.1.62 — Storyboard results: повний payload (усі обов'язкові поля, типи, схема StoryboardVersion) перевіряється до будь-якої мутації history/Job/cleanup/ack; missing title/description/hashtags/prompt_version/model, неправильні типи чи invalid scene list дають контрольовану відмову, що зберігає попередню pending/approved history, task/lease і стан Worker.

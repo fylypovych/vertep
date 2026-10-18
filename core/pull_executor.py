@@ -102,7 +102,7 @@ def _pull_model(operation_id: str, model: str) -> None:
             with client.stream("POST", f"{base}/api/pull",
                                json={"name": model, "stream": True}) as response:
                 if response.status_code != 200:
-                    body = response.text[:500]
+                    body = response.read()[:500].decode("utf-8", "replace")
                     fail_operation(operation_id, f"Ollama returned {response.status_code}: {body}")
                     return
                 threading.Thread(target=_close_on_cancel,

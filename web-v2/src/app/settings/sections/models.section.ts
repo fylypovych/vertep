@@ -5,6 +5,7 @@ import { SettingsApiService, OperationState, ModelNodeInfo } from '../../core/ap
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 import { ModelInfo } from '../../core/models';
+import { PolicyService } from '../../core/services/policy.service';
 import { LoadingStateComponent } from '../../shared/loading-state.component';
 import { ErrorStateComponent } from '../../shared/error-state.component';
 import { interval, Subscription } from 'rxjs';
@@ -26,7 +27,7 @@ import { interval, Subscription } from 'rxjs';
         </option>
       </select>
       <input [(ngModel)]="modelName" class="flex-1 border rounded px-3 py-2" placeholder="Назва моделі" [disabled]="pulling()" data-testid="pull-model-input">
-      <button (click)="pullModel()" [disabled]="!modelName || pulling()" class="px-4 py-2 bg-emerald-600 text-white rounded" data-testid="pull-model-button">
+      <button (click)="pullModel()" [disabled]="!modelName || pulling() || !canPullModel" [title]="pullModelReason || 'Завантажити модель'" class="px-4 py-2 bg-emerald-600 text-white rounded" data-testid="pull-model-button">
         {{ pulling() ? 'Завантаження...' : 'Завантажити' }}
       </button>
     </div>
@@ -44,7 +45,7 @@ import { interval, Subscription } from 'rxjs';
       <div *ngIf="activePull()?.error" class="text-red-600 text-sm mt-1">{{ activePull()?.error }}</div>
       <div class="flex gap-2 mt-2">
         <button *ngIf="activePull()?.status === 'QUEUED' || activePull()?.status === 'RUNNING'"
-                (click)="cancelPull()" class="text-sm text-red-600 hover:underline" data-testid="pull-cancel-button">Скасувати</button>
+                (click)="cancelPull()" [disabled]="!canCancelPull" [title]="cancelPullReason || 'Скасувати'" class="text-sm text-red-600 hover:underline disabled:opacity-50" data-testid="pull-cancel-button">Скасувати</button>
       </div>
     </div>
 
@@ -68,7 +69,7 @@ import { interval, Subscription } from 'rxjs';
 
     <div *ngFor="let model of models()" class="flex justify-between py-2 border-b" [attr.data-testid]="'model-row-' + model.name">
       <span>{{ model.name }}</span>
-      <button (click)="deleteModel(model.name)" class="text-red-600" [attr.data-testid]="'model-delete-' + model.name">Видалити</button>
+      <button (click)="deleteModel(model.name)" [disabled]="!canDeleteModel" [title]="deleteModelReason || 'Видалити модель'" class="text-red-600 disabled:opacity-40" [attr.data-testid]="'model-delete-' + model.name">Видалити</button>
     </div>
 
     <div class="mt-6 pt-4 border-t" data-testid="voice-preview">
@@ -116,7 +117,15 @@ export class ModelsSectionComponent implements OnInit, OnDestroy {
     private settings: SettingsApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
+    public policy: PolicyService,
   ) {}
+
+  get canPullModel(): boolean { return this.policy.can('pull_model').allowed; }
+  get pullModelReason(): string | null { return this.policy.disabledReason('pull_model'); }
+  get canCancelPull(): boolean { return this.policy.can('cancel_pull').allowed; }
+  get cancelPullReason(): string | null { return this.policy.disabledReason('cancel_pull'); }
+  get canDeleteModel(): boolean { return this.policy.can('delete_model').allowed; }
+  get deleteModelReason(): string | null { return this.policy.disabledReason('delete_model'); }
 
   ngOnInit(): void {
     this.loadModels();
@@ -152,7 +161,7 @@ export class ModelsSectionComponent implements OnInit, OnDestroy {
   }
 
   pullModel(): void {
-    if (!this.modelName || this.pulling()) return;
+    if (!this.modelName || this.pulling() || !this.canPullModel) return;
     this.pulling.set(true);
     this.error.set(null);
     this.settings.pullModel(this.modelName, this.targetNode || undefined).subscribe({
@@ -166,7 +175,7 @@ export class ModelsSectionComponent implements OnInit, OnDestroy {
 
   cancelPull(): void {
     const op = this.activePull();
-    if (!op) return;
+    if (!op || !this.canCancelPull) return;
     this.settings.cancelPull(op.operation_id).subscribe({
       next: (updated) => {
         this.activePull.set(updated as OperationState);
@@ -179,6 +188,7 @@ export class ModelsSectionComponent implements OnInit, OnDestroy {
   }
 
   deleteModel(name: string): void {
+    if (!this.canDeleteModel) return;
     this.confirm.confirm({
       title: 'Видалити модель',
       message: `Видалити модель ${name}${this.targetNode ? ` з вузла ${this.targetNode}` : ''}?`,

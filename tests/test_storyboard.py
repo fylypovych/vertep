@@ -396,6 +396,122 @@ def test_storyboard_regenerate_from_history_rejects_pending(job_store):
         service.regenerate_from_history(job.job_id, 1, "tester")
 
 
+def test_storyboard_retry_keeps_budget_for_same_version(job_store, monkeypatch):
+    """Issue #197/#163.1: retry of the same version must NOT re-arm the budget.
+
+    Before the fix, ``queue()`` reset ``storyboard_attempt`` whenever any
+    storyboard existed, so a retry of the same version started a fresh budget
+    and a failing version could loop forever.  The budget now belongs to a
+    version: a regenerate/history-branch (new version) resets it, a retry of
+    the same version keeps burning the budget it already started.
+    """
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+
+    service.queue(job)
+    assert job.storyboard_attempt_version == 1
+    assert job.storyboard_attempt == 0
+
+    # First failure: budget burns to 1, version stays 1, retry re-queued.
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, False, None, "bad json")
+    assert job.storyboard_attempt == 1
+    assert job.storyboard_attempt_version == 1
+
+    # Second failure: budget burns to 2, still the same version.
+    task_id2 = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id2, False, None, "bad json again")
+    assert job.storyboard_attempt == 2
+    assert job.storyboard_attempt_version == 1
+
+    # Third failure: budget exhausted for version 1 -> terminal failure.
+    task_id3 = job.storyboard_task_id
+    with pytest.raises(RuntimeError):
+        service.handle_result(job.job_id, task_id3, False, None, "bad json third")
+    assert job.storyboard_attempt == 3
+    assert job.status == JobStatus.STORYBOARD_FAILED
+
+
+def test_storyboard_regenerate_resets_budget_for_new_version(job_store):
+    """Issue #197/#163.1: a regenerate/history-branch starts a fresh budget.
+
+    The new version must not inherit the budget already burned by the
+    superseded version.
+    """
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+
+    service.queue(job)
+    service.handle_result(job.job_id, job.storyboard_task_id, True,
+                          [_storyboard_artifact(1)], None)
+    first = job.storyboards[0]
+    for scene in first.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    first.image_status = "ready"
+    service.approve_images(job.job_id, 1, "tester")
+
+    # Regenerate while v1 is still pending_approval (regenerate requires it).
+    service.regenerate(job.job_id, 1, "tester", "Зроби динамічніше")
+    assert job.storyboard_attempt_version == 2
+    assert job.storyboard_attempt == 0
+    assert job.storyboard_active_revision == "Зроби динамічніше"
+
+    # A retry of the new version keeps its own budget.
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, False, None, "bad json")
+    assert job.storyboard_attempt == 1
+    assert job.storyboard_attempt_version == 2
+
+
+def test_storyboard_retry_carries_pinned_revision(job_store, monkeypatch):
+    """Issue #197/#163.2: a retry reuses the revision pinned for the version.
+
+    The pinned revision is set once when the version's budget starts and is
+    reused on every retry of the same version, so a retry never silently falls
+    back to a stale ``job.revision`` or a previous version's
+    ``revision_request``.
+    """
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    job = job_store.create("Нова тема", "hero", 5)
+    job.revision = "додати кадр про кішку"
+    service = StoryboardService(job_store)
+    service.queue(job)
+    assert job.storyboard_active_revision == "додати кадр про кішку"
+
+    captured = {}
+    original_queue = service.queue
+
+    def _spy(job, revision=None):
+        captured["revision"] = revision
+        return original_queue(job, revision=revision)
+
+    service.queue = _spy
+    service.handle_result(job.job_id, job.storyboard_task_id, False, None, "bad json")
+    assert job.storyboard_attempt == 1
+    assert captured["revision"] == "додати кадр про кішку"
+
+
+def test_storyboard_regenerate_from_history_pins_revision(job_store):
+    """Issue #197/#163.2: a history-branch pins the supplied revision."""
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+    service.queue(job)
+    service.handle_result(job.job_id, job.storyboard_task_id, True,
+                          [_storyboard_artifact(1)], None)
+    first = job.storyboards[0]
+    for scene in first.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    first.image_status = "ready"
+    service.approve_images(job.job_id, 1, "tester")
+    service.approve(job.job_id, 1, "tester")
+
+    service.regenerate_from_history(job.job_id, 1, "tester",
+                                    "Повернись до першої версії")
+    assert job.storyboard_active_revision == "Повернись до першої версії"
+    assert job.storyboard_attempt_version == 2
+
+
 def test_storyboard_rest_contract_is_registered():
     from core.app import app
 

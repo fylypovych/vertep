@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
+import { PolicyService } from '../core/services/policy.service';
 import { Channel } from '../core/models';
 
 @Component({
@@ -15,7 +16,7 @@ import { Channel } from '../core/models';
     <div class="mt-3 pt-3 border-t border-slate-100">
       <div class="flex items-center justify-between mb-2">
         <h4 class="text-xs font-medium text-slate-500">Канали бренду</h4>
-        <button (click)="showCreate = true" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Додати канал</button>
+        <button (click)="showCreate = true" [disabled]="!canCreateChannel" [title]="createChannelReason || 'Додати канал'" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium disabled:opacity-40">Додати канал</button>
       </div>
       @if (channels.length === 0) {
         <p class="text-xs text-slate-400">Каналів не налаштовано</p>
@@ -28,8 +29,8 @@ import { Channel } from '../core/models';
                 <span class="text-xs" [class.text-emerald-600]="ch.enabled" [class.text-slate-400]="!ch.enabled">
                   {{ ch.enabled ? 'Активний' : 'Неактивний' }}
                 </span>
-                <button (click)="toggleChannel(ch)" class="text-xs text-blue-600 hover:text-blue-700" data-testid="channel-toggle">{{ ch.enabled ? 'Вимкнути' : 'Увімкнути' }}</button>
-                <button (click)="deleteChannel(ch)" class="text-xs text-red-600 hover:text-red-700" data-testid="channel-delete">Видалити</button>
+                <button (click)="toggleChannel(ch)" [disabled]="!canUpdateChannel" [title]="updateChannelReason || (ch.enabled ? 'Вимкнути' : 'Увімкнути')" class="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-40" data-testid="channel-toggle">{{ ch.enabled ? 'Вимкнути' : 'Увімкнути' }}</button>
+                <button (click)="deleteChannel(ch)" [disabled]="!canDeleteChannel" [title]="deleteChannelReason || 'Видалити'" class="text-xs text-red-600 hover:text-red-700 disabled:opacity-40" data-testid="channel-delete">Видалити</button>
               </div>
             </div>
           }
@@ -55,7 +56,7 @@ import { Channel } from '../core/models';
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button (click)="showCreate = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="createChannel()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">Створити</button>
+            <button (click)="createChannel()" [disabled]="!canCreateChannel" [title]="createChannelReason || 'Створити'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Створити</button>
           </div>
         </div>
       </div>
@@ -75,13 +76,22 @@ export class BrandChannelsComponent implements OnInit {
     private resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
+    public policy: PolicyService,
   ) {}
+
+  get canCreateChannel(): boolean { return this.policy.can('create_channel').allowed; }
+  get createChannelReason(): string | null { return this.policy.disabledReason('create_channel'); }
+  get canUpdateChannel(): boolean { return this.policy.can('update_channel').allowed; }
+  get updateChannelReason(): string | null { return this.policy.disabledReason('update_channel'); }
+  get canDeleteChannel(): boolean { return this.policy.can('delete_channel').allowed; }
+  get deleteChannelReason(): string | null { return this.policy.disabledReason('delete_channel'); }
 
   ngOnInit(): void {
     this.resources.channelTypes().subscribe({ next: (types) => this.channelTypes = types });
   }
 
   createChannel(): void {
+    if (!this.canCreateChannel) return;
     if (!this.newChannel.channel_type || !this.newChannel.target) {
       this.toast.show('Тип і ціль є обов\'язковими', 'error');
       return;
@@ -104,6 +114,7 @@ export class BrandChannelsComponent implements OnInit {
   }
 
   toggleChannel(ch: Channel): void {
+    if (!this.canUpdateChannel) return;
     this.resources.updateChannel(ch.channel_id, { enabled: !ch.enabled }).subscribe({
       next: () => { this.channelChanged.emit(); this.toast.show('Канал оновлено', 'success'); },
       error: (err) => this.toast.show(err.message || 'Помилка оновлення', 'error'),
@@ -111,6 +122,7 @@ export class BrandChannelsComponent implements OnInit {
   }
 
   deleteChannel(ch: Channel): void {
+    if (!this.canDeleteChannel) return;
     this.confirm.confirm({ title: 'Видалити канал', message: `Видалити ${ch.channel_type}:${ch.target}?` }).subscribe((ok) => {
       if (!ok) return;
       this.resources.deleteChannel(ch.channel_id).subscribe({
