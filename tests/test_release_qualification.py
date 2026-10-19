@@ -63,10 +63,33 @@ def artifact_fixture(tmp_path):
                      "platforms": ["linux/amd64", "linux/arm64"]}
               for name in names}
     (bundle / "images.json").write_text(json.dumps(images), encoding="utf-8")
+    # Published SHA256SUMS is part of the full artifact set.
+    (bundle / "SHA256SUMS").write_text(
+        f"{hashlib.sha256((bundle / 'VERSION').read_bytes()).hexdigest()}  VERSION\n"
+        f"{hashlib.sha256((bundle / 'sbom.cdx.json').read_bytes()).hexdigest()}  sbom.cdx.json\n",
+        encoding="utf-8")
     parts = [int(part) for part in version.split(".")]
     sequence = ((parts[0] * 100 + parts[1]) * 100 + parts[2]) * 100 + parts[3]
     private_path, public_path = keypair(tmp_path, "release")
     return bundle, private_path, public_path, version, sequence, images
+
+
+def test_runtime_builder_emits_complete_recomputed_checksums(tmp_path):
+    _, private_key, _, version, sequence, images = artifact_fixture(tmp_path)
+    lock = tmp_path / "image-lock.json"
+    lock.write_text(json.dumps(images), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "runtime_builder", ROOT / "scripts/build-runtime-bundle.py")
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    output = builder.build(ROOT, tmp_path / "built", version, sequence,
+                           lock, private_key, "c" * 40)
+    sums = dict(line.split("  ", 1)[::-1] for line in
+                (output / "SHA256SUMS").read_text(encoding="utf-8").splitlines())
+    actual = {path.relative_to(output).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in output.rglob("*") if path.is_file() and path.name != "SHA256SUMS"}
+    assert sums == actual
+    assert {"manifest.json", "images.json", "sbom.cdx.json", "VERSION"} <= sums.keys()
 
 
 def build_manifest(bundle, private_path, version, sequence, image_lock,

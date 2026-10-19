@@ -40,6 +40,10 @@ _confirm_lock = threading.RLock()
 
 _RESTORE_GUARD_NAME = "restore.guard"
 _RESTORE_GUARD_TTL = 3600
+# Owner registry: only guards this process actually wrote may be refreshed or
+# removed by it (Issue #186.2 — a competing restore must keep its exclusion).
+_guard_owners: dict[str, str] = {}
+_guard_lock = threading.Lock()
 _RESTORE_OPERATIONS_NAME = "operations.json"
 _RESTORE_CONFIRMATIONS_NAME = "confirmations.json"
 
@@ -118,19 +122,52 @@ def _acquire_restore_guard(snapshot_id: str) -> str | None:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
+    with _guard_lock:
+        _guard_owners[str(path)] = payload
     return str(path)
+
+
+def _refresh_restore_guard() -> None:
+    """Extend the TTL of a guard this process owns while the restore runs.
+
+    A restore longer than the TTL must not become stealable mid-flight: the
+    exclusion has to hold until the mutation ends (Issue #186.2).  A guard whose
+    content no longer matches what this process wrote is left untouched.
+    """
+    with _guard_lock:
+        owned = dict(_guard_owners)
+    for guard, expected in owned.items():
+        try:
+            path = Path(guard)
+            if path.read_text(encoding="utf-8") != expected:
+                continue
+            info = json.loads(expected)
+            info["started_at"] = time.time()
+            payload = json.dumps(info)
+            temporary = path.with_name(f"{path.name}.refresh-{os.getpid()}")
+            temporary.write_text(payload, encoding="utf-8")
+            os.replace(temporary, path)
+            with _guard_lock:
+                _guard_owners[guard] = payload
+        except (OSError, ValueError, TypeError):
+            continue
 
 
 def _release_restore_guard(guard: str | None) -> None:
     if not guard:
         return
+    with _guard_lock:
+        expected = _guard_owners.pop(guard, None)
+    if expected is None:
+        # Not a guard this process wrote (anymore): it belongs to a competing
+        # restore and must survive, however stale it looks from here.
+        return
     try:
         path = Path(guard)
-        # Only remove the guard if it still contains a snapshot_id, i.e. it is
-        # an active exclusion owned by this restore. A competing restore must
-        # not be able to delete another's guard (Issue #186.2).
-        info = _read_json_file(path, {})
-        if info.get("snapshot_id"):
+        # Only remove the guard while its content is exactly what this restore
+        # wrote. A takeover by a competing restore must not be undone here
+        # (Issue #186.2).
+        if path.read_text(encoding="utf-8") == expected:
             path.unlink()
     except OSError:
         pass
@@ -590,6 +627,32 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
     encrypted_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     if not secrets.compare_digest(encrypted_digest, str(receipt.get("sha256", ""))):
         raise HTTPException(409, "Checksum snapshot не збігається")
+
+    # Issue #137: the receipt must describe this exact snapshot (format,
+    # identity, integrity size) before any restore work starts.
+    if str(receipt.get("format", "")) != "VERTEP-BACKUP-v1":
+        raise HTTPException(409, "Формат snapshot не підтримується")
+    if receipt.get("snapshot_id") != snapshot_id:
+        raise HTTPException(409, "Receipt належить іншому snapshot")
+    if receipt.get("file") not in (None, source.name):
+        raise HTTPException(409, "Receipt описує інший файл snapshot")
+    if receipt.get("encryption") not in (None, "AES-256-GCM"):
+        raise HTTPException(409, "Receipt містить невідомий алгоритм шифрування")
+    declared_size = receipt.get("size_bytes", receipt.get("size"))
+    if declared_size is not None:
+        try:
+            declared = int(declared_size)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(409, "Receipt містить некоректний розмір snapshot") from error
+        if declared != source.stat().st_size:
+            raise HTTPException(409, "Розмір snapshot не збігається з receipt")
+
+    # Issue #136: the safe-state gate is re-checked at confirm time, so a state
+    # change between the challenge and the confirmation cannot start a restore;
+    # the token is not consumed here and the operator may retry.
+    allowed, reason = _is_restore_allowed()
+    if not allowed:
+        raise HTTPException(409, reason)
 
     # Issue #136: exclude a competing restore (process or thread) before any mutation.
     guard = _acquire_restore_guard(snapshot_id)

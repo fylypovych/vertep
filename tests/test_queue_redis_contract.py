@@ -396,7 +396,7 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
         assert restarted.depth() == 2
         assert restarted.inflight_depth() == 0
         assert len(restarted.dead_letters()) == 1
-        assert {task["job_id"] for task in restarted.ready_tasks()} == {"ready", "failed"}
+        assert {task["job_id"] for task in restarted.ready_tasks()} == {"ready", "leased"}
     finally:
         # "Loss": wiping the durable keys clears counts and state together.
         _flush(restarted)

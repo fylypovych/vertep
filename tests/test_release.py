@@ -45,6 +45,28 @@ def test_known_versions_with_both_formats(tmp_path, monkeypatch):
     assert release.next_version(versions) == "0.0.0.8"
 
 
+def test_known_versions_counts_duplicate_and_unversioned_commits(tmp_path, monkeypatch):
+    release = load_release_module()
+    for subjects, expected in [
+        ("0.0.2.61\n0.0.2.61\n0.0.2.60", "0.0.2.63"),
+        ("technical fix\n0.0.0.99", "0.0.1.1"),
+    ]:
+        monkeypatch.setattr(release, "git", lambda _root, *args: (
+            subjects if args == ("log", "--format=%s") else ""
+        ))
+        assert release.next_version(release.known_versions(tmp_path)) == expected
+
+
+def test_history_normalization_does_not_reuse_higher_remote_version(tmp_path, monkeypatch):
+    release = load_release_module()
+    monkeypatch.setattr(release, "git", lambda _root, *args: (
+        "0.0.2.61\n0.0.2.61" if args == ("log", "--format=%s")
+        else "abc\trefs/tags/0.0.2.70" if args == ("ls-remote", "--tags", "origin")
+        else ""
+    ))
+    assert release.next_version(release.known_versions(tmp_path)) == "0.0.2.71"
+
+
 def test_release_moves_unreleased_notes_to_version_section():
     release = load_release_module()
     source = "# Changelog\n\n## Unreleased\n\n- Додано функцію.\n- Виправлено помилку.\n\n## Older\n\n- Old.\n"

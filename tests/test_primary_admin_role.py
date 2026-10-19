@@ -69,13 +69,16 @@ def test_worker_token_without_config_is_fail_closed(monkeypatch):
     assert security._valid_worker_token("gpu-1", "anything") is False
 
 
-def test_unconfigured_backend_requires_setup_routes_only(monkeypatch):
+def test_unconfigured_backend_requires_setup_routes_only(monkeypatch, tmp_path):
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
-    monkeypatch.delenv("CONFIG_ROOT", raising=False)
+    # Keep the installation unconfigured without touching /data/config on CI.
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path / "unconfigured"))
     monkeypatch.delenv("USERS_JSON", raising=False)
     from fastapi.testclient import TestClient
     from core.app import app
     client = TestClient(app, raise_server_exceptions=False)
     assert client.get("/api/setup").status_code == 200
     assert client.get("/api/health").status_code == 200
-    assert client.get("/api/jobs").status_code == 401
+    blocked = client.get("/api/jobs")
+    assert blocked.status_code == 503
+    assert blocked.headers["X-Vertep-Setup"] == "required"

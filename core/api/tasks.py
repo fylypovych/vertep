@@ -771,7 +771,7 @@ def task_result(result: TaskResult, request: Request):
                 # release.
                 _validate_tts_contract(
                     (job.voice_task_snapshot or {}).get(result.task_id)
-                    or _tts_task_for(job, scene),
+                    or _voice_task_for(job, result.task_id, scene),
                     data, artifact.get("contract"))
             except ValueError as error:
                 # A rejected result must leave no accepted artifact and must not

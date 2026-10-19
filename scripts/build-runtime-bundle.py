@@ -2,6 +2,7 @@
 """Build the signed, deterministic appliance payload consumed by bootstrap.sh."""
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -102,6 +103,11 @@ def build(root: Path, output: Path, version: str, sequence: int,
     signed = sign_release_contract(contract, private_key)
     (output / "manifest.json").write_text(
         json.dumps(signed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    checksums = [
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(output).as_posix()}"
+        for path in sorted(output.rglob("*")) if path.is_file()
+    ]
+    (output / "SHA256SUMS").write_text("\n".join(checksums) + "\n", encoding="utf-8")
     return output
 
 

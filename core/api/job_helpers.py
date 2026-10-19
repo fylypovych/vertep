@@ -1444,8 +1444,9 @@ def _recover_stale_workers() -> None:
                 # keeps dropping its heartbeat cannot re-dispatch the same
                 # version forever.  Once the budget is spent the Job reaches
                 # STORYBOARD_FAILED instead of looping (Issue #197/#163.3).
-                pinned_revision = getattr(job, "storyboard_active_revision", None) or (
-                    job.storyboards[-1].revision_request if job.storyboards else None)
+                pinned_revision = getattr(job, "storyboard_active_revision", None)
+                if pinned_revision is None and job.storyboards:
+                    pinned_revision = job.storyboards[-1].revision_request
                 job.storyboard_active_revision = pinned_revision
                 from ..pipeline import queue_storyboard as _queue_storyboard
                 _queue_storyboard(store, job, revision=pinned_revision)

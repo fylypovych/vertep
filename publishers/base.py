@@ -77,7 +77,13 @@ class Publisher:
         if token_provider is None:
             return True
         try:
-            return bool(token_provider.access_token())
+            if not bool(token_provider.access_token()):
+                return False
+            # Only enforce scopes when the token provider actually reports them;
+            # unknown scopes (empty list) stay backward compatible.
+            if self.token_scopes():
+                return not self.missing_scopes()
+            return True
         except Exception:
             return False
 

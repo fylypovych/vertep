@@ -1,16 +1,41 @@
 # Changelog
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.63
+- Відновлено послідовну нумерацію CHANGELOG і врахування кожного commit під час вибору наступної версії; додано regression tests для дублікатів, commits без версії та зайнятих remote tags.
+- Збережено порожню поточну storyboard revision при recovery; валідація Voice result використовує issued-task snapshot до побічних ефектів.
+- Provider configuration відхиляє відсутній Worker ack; readiness Publisher враховує відомі OAuth scopes, а перед upload перевіряються заявлені hash і size artifact.
+- Посилено перевірки snapshot receipt і safe-state перед restore; звільнення restore guard перевіряє власника.
+- Runtime bundle містить SHA256SUMS усіх файлів; release qualification перевіряє наявність checksum-файла. Додано перевірку фактичних checksum-значень у тесті збирача.
+- Ізольовано unconfigured setup fixture від /data/config та виправлено очікуваний Redis worker-loss результат; розширено Publisher і release qualification fixtures.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.62
+- Виправлено перевірку повного набору поточних scene artifacts: відсутність потрібного типу блокує reassembly для image і video Jobs.
+- Посилено перевірку PNG (розміри, CRC, IDAT) та MP4 (video track); узгоджено контракти й regression fixtures для GPU/assembly/Voice.
+- Dead-letter вилучає task із inflight у Redis і локальній черзі; Docker Compose inventory використовує --no-trunc для повних container IDs.
+- Оновлено відповідні regression tests і правила збереження файлів у AGENTS.md.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.61
-- Issue #238 (#192.4): уникнення витоку стану моніторингу між тестами — `tests/conftest.py` `reset()` тепер очищає `system-state.json`, `status.json`, `deployment-status.json`, `requests/*.json` і `node-registry.json`, щоб не-NORMAL стан системи, неvíкликане оновлення або зареєстрований вузол (наприклад `text-ready`) не створювали лівий алерт у `/api/alerts` іншого тесту.
-- Issue i.0.0.1.69 (доповнення): `sock.shutdown(socket.SHUT_RDWR)` перед `response.close()` у `_close_on_cancel` (`core/pull_executor.py` і `worker/service.py`) перериває читача, заблокований у `recv` на кожній платформі — bare `close()` не будить його на Linux; тест чекає на очистку реєстру скасування замість миттєвої перевірки.
-- Issue #110 Phase C: `system_router` підключено до `core/app.py` замість повторних інлайн-маршрутів; видалено конфліктуючі інлайн-хендлери `/api/system/update`, `/api/system/recovery/normal`, `/api/system/roles`, `/api/system/update/readiness`, `/api/system/update/check|run|restart`, `/api/system/update/rolling|/cancel|/rollback|/promote|/rolling|/rolling/coordinator`, `/api/node/status/{node_name}`, `/api/system/restart`; оновлено тести `tests/test_app_structure.py` та `tests/test_admin_recovery_and_configs.py`.
-- Issue #230: стійке підтвердження дії актора через зв'язок колбека з операцією: `claim_callback` приймає `operation_id` і перевіряє термінальний стан операції через `get_operation`; додано `link_operation(callback_id, operation_id)`; `core/app.py` імпортує `link_operation`, мапу `_ACTION_TO_OP_TYPE` та допоміжний `_link_callback_to_operation`; додано 6 тестів у `tests/test_telegram_system_operations.py`.
-- Issue #231: delegation-шіма `system_restart` у `core/app.py`, що пересилає виклик у `core.api.system.system_restart`.
-- Issue #232: веб-інтерфейс реальних тестів — `confirmRun` тепер чекає активного прогону через polling `listRuns()` (progress/status) замість відразу `next:load()`; додано приватний `pollRunCompletion`.
-- Issue #233: також у веб-інтерфейсі реальних тестів завершено caller flow progress → report/history через актуальний API.
-- Issue #234: узагальнено handlers для обробки запуску/прогресу/звіту реальних тестів без подвійної реалізації компонентів.
-- Issue #236: активний прогрес і довга історія через actual API у `real-tests.component.ts`.
-- Додано тест `tests/test_features.py` для системи оновлення/відновлення.
+- Issue #238 (#192.4) — витік стану моніторингу між тестами: `tests/conftest.py` `reset()` тепер очищає `system-state.json`, `status.json`, `deployment-status.json`, `requests/*.json` і `node-registry.json`, щоб не-NORMAL стан системи, неvíкликане оновлення або зареєстрований вузол не створювали лівий алерт у `/api/alerts` іншого тесту.
+- Issue i.0.0.1.69 (доповнення) — `sock.shutdown(socket.SHUT_RDWR)` перед `response.close()` у `_close_on_cancel` (`core/pull_executor.py` і `worker/service.py`) перериває читача, заблокований у `recv` на кожній платформі; тест чекає на очистку реєстру скасування замість миттєвої перевірки.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.60
+- Issue #110 Phase C — системний API: `system_router` підключено до `core/app.py` замість повторних інлайн-маршрутів; видалено конфліктуючі інлайн-хендлери оновлення, відновлення, ролей, rolling update, статусу вузла та перезапуску; оновлено тести `tests/test_app_structure.py` і `tests/test_admin_recovery_and_configs.py`.
+- Issue #230 — стійке підтвердження дії актора через зв'язок колбека з операцією: `claim_callback` приймає `operation_id` і перевіряє термінальний стан операції через `get_operation`; додано `link_operation(callback_id, operation_id)`; `core/app.py` імпортує `link_operation`, мапу `_ACTION_TO_OP_TYPE` та допоміжний `_link_callback_to_operation`; додано тести у `tests/test_telegram_system_operations.py`.
+- Issue #231 — delegation-шіма `system_restart` у `core/app.py`, що пересилає виклик у `core.api.system.system_restart`.
+- Issue #236 — активний прогрес і довга історія через actual API у веб-компоненті реальних тестів: `confirmRun` чекає прогону через polling `listRuns()` (progress/status) замість відразу `next:load()`; додано приватний `pollRunCompletion`.
+- Також додано тести системи оновлення/відновлення у `tests/test_features.py`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.59
+- Відновлення відео (Issue #81 R2, #119, #82): `_finalize_video_regenerate`, `_notify_video_regeneration`, `_collect_reassembly_inputs` перенесено з `core/app.py` у `core/pipeline.py`; `core/app.py` залишає делегуючі шіми, `core/api/jobs.py` імпортує з `core.pipeline`; збірка використовує лише поточний зареєстрований артект сцени з перевіркою SHA256, без тихого віддачу до історичних версій.
+- Системний API (Issue #110 Phase C): `core/api/system.py` витягнуто з `core/app.py` з реальною реалізацією оновлення, відновлення, ролей, rolling update, перезапуску та статусу вузла замість заглушок.
+- Перезапуск Telegram-polling (Phase B): обробник перезапуску відкрито для `core/api/*` через `telegram_pump`; `core/api/settings.py` використовує `restart_polling()`.
+- Rolling update самоперевірки (Issue #53, #15): застрілели PASSED-результат більше не схвалить іншу цільову версію; порівняння `checked_at >= phase_started` (допускається рівність для грубих годинників хоста).
+- Жорстка перевірка медіа (Issue #178.3): `worker/role_executor.py` — ftyp-бокс має далі заголовок наступного боксу; PNG вимагає повний потік чанків IHDR/IDAT/IEND.
+- Голосовий каталог fail-closed (Issue #198/#165.1): `worker/service.py` та `services/tts_service.py` оголошують лише `espeak-ng`; прибрано `mock` та `none`.
+- Бюджет лабораторії: `openai` винесено з `PAID_PROVIDERS` у `EXTERNAL_PROVIDERS`, вимагає `LAB_OPENAI_BASE_URL`; додано `EXTERNAL_PROVIDERS`.
+- Додано тести та документацію лабораторії (`lab/`, `docs/lab-checklist-*.md`, `docs/lab-gpu-contract.md`, `tests/test_lab_*.py`, `tests/test_app_structure.py`).
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.58
 - Issue #197 — уникнення повторного публікування і втрати черги задач після перезапуску CORE: `recover_after_restart` очищає всі вказівники на вJournal задач (TTS, голосове, публікацію, расказронку, сценарій) і фіксує перерву перезапуску в аудіotreil; бюджет спроб storyboard прив'язується до конкретної версії з закріпленою ревізією; валідація контракту TTS виконується за voice-task snapshot з моменту чергування, а не за живим конфігом персонажа.
 - `core/pipeline.JobStore.save_worker` оновлює внутрішній індекс робітників за ім'ям вузла; `core/pull_executor` читає тіло помилки Ollama через `response.read()`; матриця провайдерів публікації отримує прапор `configured`.
 - Додано тести `tests/test_model_pull_http.py` (контрольний HTTP доказ циклів pull моделі) та `tests/test_system_state_mutation_matrix.py` (матриця мітацій стану системи UI/API); розширено `tests/media_harness.py`, `tests/test_api.py`, `tests/test_browser_e2e.py`, `tests/test_features.py`, `tests/test_full_media_harness.py`, `tests/test_provider_matrix.py`, `tests/test_provider_switch.py`, `tests/test_storyboard.py`, `tests/test_voice_acceptance.py`.
@@ -27,6 +52,11 @@
 - TTS failure recovery: `_handle_tts_failure` скидає `current_job`/`current_task`/`last_seen` Worker, як у voice worker loss recovery.
 - `core/first_run.py`: `_secret_key` fail-closed на нечитабельний ключ; `ensure_secret_store` не підмінює нечитабельний encrypted store і мігрує legacy plaintext.
 - `.github/workflows/ci.yml`: compileall включає директорію `lab`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.56
+- Валідація audio contract зберігає ownership Worker при відмові; розширено Voice acceptance tests.
+- Оновлено durable Telegram callback replay та відповідні regression tests.
+- Посилено GPU media checks, HTTP tests і перевірки відсутніх поточних scene artifacts.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.55
 - Issue i.0.0.1.60 — Create Backup: наскрізний Web→CORE /api/system/backups→Backup service smoke і sanitized errors; повні proxy endpoints для create/list/progress/restore/confirm; _internal_api та _sync_internal_api повертають безпечні помилки без URL/raw body/secrets.
@@ -49,15 +79,13 @@
 - CI/CD: `.github/workflows/ci.yml`, `.github/workflows/release.yml` — release gate, contract validation, real-test runner integration.
 - Dockerfile, config schemas, update-agent, apply-deployment, issue-122 report: Hardened deployment artifacts and validation scripts.
 
-## ПРАВИЛЬНА НАЗВА: 0.0.2.59
-- Відновлення відео (Issue #81 R2, #119, #82): `_finalize_video_regenerate`, `_notify_video_regeneration`, `_collect_reassembly_inputs` перенесено з `core/app.py` у `core/pipeline.py`; `core/app.py` залишає делегуючі шіми, `core/api/jobs.py` імпортує з `core.pipeline`; збірка використовує лише поточний зареєстрований артект сцени з перевіркою SHA256, без тихого віддачу до історичних версій.
-- Системний API (Issue #110 Phase C): `core/api/system.py` витягнуто з `core/app.py` з реальною реалізацією оновлення, відновлення, ролей, rolling update, перезапуску та статусу вузла замість заглушок.
-- Перезапуск Telegram-polling (Phase B): обробник перезапуску відкрито для `core/api/*` через `telegram_pump`; `core/api/settings.py` використовує `restart_polling()`.
-- Rolling update самоперевірки (Issue #53, #15): застрілели PASSED-результат більше не схвалить іншу цільову версію; порівняння `checked_at >= phase_started` (допускається рівність для грубих годинників хоста).
-- Жорстка перевірка медіа (Issue #178.3): `worker/role_executor.py` — ftyp-бокс має далі заголовок наступного боксу; PNG вимагає повний потік чанків IHDR/IDAT/IEND.
-- Голосовий каталог fail-closed (Issue #198/#165.1): `worker/service.py` та `services/tts_service.py` оголошують лише `espeak-ng`; прибрано `mock` та `none`.
-- Бюджет лабораторії: `openai` винесено з `PAID_PROVIDERS` у `EXTERNAL_PROVIDERS`, вимагає `LAB_OPENAI_BASE_URL`; додано `EXTERNAL_PROVIDERS`.
-- Додано тести та документацію лабораторії (`lab/`, `docs/lab-checklist-*.md`, `docs/lab-gpu-contract.md`, `tests/test_lab_*.py`, `tests/test_app_structure.py`).
+## ПРАВИЛЬНА НАЗВА: 0.0.2.53
+- Оновлено ComfyUI Dockerfile, entrypoint і Compose; розширено перевірки runtime inventory у Worker.
+- Оновлено CORE та regression tests video revisions і поточних scene artifacts.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.52
+- Посилено перевірку медіа у Worker та розширено HTTP integration tests GPU: приймання результатів CORE, контракти й відхилення пошкоджених artifacts.
+- Оновлено документацію MoneyPrinter runtime та regression tests submit/audio route.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.51
 - Issue i.0.0.1.17 — Provider switch end-to-end: CORE → persisted overrides → Worker heartbeat → executor env → voice preview + effective config after restart; loopback TTS runtime proves the full config propagation path; executor config carries only allowlisted non-secrets; preview refuses switch that missed the executor.
@@ -104,6 +132,40 @@
   - `tests/test_core_isolation_104.py` (new): Tests for local fallback guard — disabled by default, fallback alone insufficient, demo alone insufficient, explicit dev+demo enables, raises outside demo.
 - Tests: 94 passed across test_api.py, test_storyboard.py, test_features.py; 150 passed in test_assembly_worker_route.py; 19 passed in test_publish_task_helpers.py; 15 passed in test_gpu_http_pipeline.py; 18 passed in test_voice_acceptance.py; 13 passed in test_full_media_harness.py.
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.46
+- Виправлено `tests/test_queue_redis_contract.py::test_wiped_data_directory_starts_empty`: коректне видалення директорії `appendonlydir` Redis при очищенні тестової директорії даних (`shutil.rmtree` для директорій, `unlink` для файлів).
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.45
+- Виправлено маскування секретів у `core/logging_config.py`: прибрано обмежувальний negative lookahead для `bearer`, додано повне маскування `basic_auth` credentials; оновлено `tests/test_no_secrets_acceptance.py` — використання `monkeypatch.setenv` замість прямої зміни `os.environ` для ізоляції тестів.
+- Реалізовано ідемпотентне звітування до GitHub у `core/real_tests/github.py`: `test_run_id` звітується лише один раз, одночасні спроби обробляються як skip; повна пагінація коментарів для виявлення маркерів на будь-якій сторінці.
+- Розширено `TestRun` у `core/real_tests/models.py`: додано `prerequisites`, `progress`, `destructive_confirmation`, `confirmation_timestamp` для повного аудит-ланцюжка.
+- `core/real_tests/storage.py`: ідемпотентний запис GitHub report з merge-логікою — retry об'єднує частково записані дані, не перезаписуючи результат.
+- Додано Web UI для Real Tests: `web-v2/src/app/real-tests/real-tests.component.ts/.html/.css` — вкладки Сценарії/Історія, діалог підтвердження запуску (з destructive-попередженням), перегляд звіту з деталями перевірок, кнопка повторної відправки до GitHub.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.44
+- Виправлено ланцюжок редагування та логування секретів у `core/logging_config.py`, `core/app.py`, `core/operations.py` та `adapters/telegram.py`; додано acceptance-скрипт `tests/test_no_secrets_acceptance.py` для перевірки відсутності ключів у логах, API-відповідях і Telegram payload.
+- Оновлено real-test runner/issue gating у `core/real_tests/runner.py`, `core/real_tests/github.py` та `core/api/real_tests.py`; додано сценарії та історію запусків для UI/HTTP інтерфейсу.
+- Посилено семантику rolling update та черги в `scripts/update-agent.py`, `core/queue.py`, `tests/test_rolling_update.py`, `tests/test_rolling_update_issue86.py` та `tests/test_queue_redis_contract.py`.
+- Виправлено bootstrap wizard validation і security checks у `tests/test_bootstrap_wizard.py`, `tests/test_update_security.py` та `web-v2/src/app/setup/setup.component.ts`.
+- Додано Web UI для real tests через `web-v2/src/app/core/api/real-tests.api.ts` і `web-v2/src/app/real-tests/real-tests.component.ts`.
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.43
+- Issue #90 — Storyboard approval gate & history regeneration:
+  - `core/storyboard.py`, `core/api/storyboards.py`: `expected_image_version` gate блокує missing/mismatched/unapproved storyboard; новий метод `regenerate_from_history()` та endpoint `POST /api/jobs/{job_id}/storyboards/regenerate-from-history` для Browser/backend history selection, revision/regenerate з будь-якої історичної версії.
+  - `tests/test_storyboard.py`: Тести для негативних шляхів approval gate та history-based regeneration flow.
+- Issue #91 — Legacy persistence migration & PostgreSQL backfill:
+  - `scripts/apply-deployment.py`: Інтегровано `ensure_persistent_user_data_legacy_migration()` в restore path та successful apply path.
+  - `db/010_persistent_user_data_backfill.backfill.py`: Disposable backfill jobs з реальними psycopg записами (не mocked).
+  - `tests/test_persistent_user_data.py`, `tests/test_backfill.py`, `tests/test_apply_deployment.py`: Повне тестове покриття.
+- Issue #92 — Backup/restore safety:
+  - `services/backup_service.py`: Mandatory dump inventory (pg_dump/redis-cli returncode=0 без файлу → error); exact snapshot з preservацією empty source root; configurable `BACKUP_REDIS_DUMP_PATH`; safe restore state з concurrent-write exclusion.
+  - `tests/test_backup_read_only.py`, `tests/test_role_services.py`: Backup integration tests оновлено.
+- Issue #95 — Real test runner fixes:
+  - `core/real_tests/scenarios.py`: Zero-argument `core_api` adapter виправлено (повертає "not-applicable" коли CORE_ADDRESS не налаштовано).
+  - `core/real_tests/github.py`, `core/real_tests/runner.py`: Independent deployment identity через `_deployment_sha()`/`_deployment_version()` (без VERSION/unknown fallback); full mandatory check set validation для auto-close в `can_close_issue()`.
+  - `tests/test_real_tests.py`: 8 нових тестів для Issue #95 acceptance.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.42
 - Issue #122 P0-P12 — MoneyPrinterTurbo integration as opt-in VideoEngine (Native default):
   - `adapters/providers/video_engines.py`: NativeVertepEngine, MoneyPrinterEngine, ShortGPTEngine implementing VideoEngine interface; engine selection persists, survives restart, Worker reports effective engine.
@@ -130,41 +192,6 @@
   - `bootstrap.sh`, `deploy/docker-compose.yml`: Bootstrap installer and compose updates.
   - `web-v2/src/app/logs/logs.component.ts`, `web-v2/src/app/core/api/logs.api.ts`: Logs UI component.
   - `.github/workflows/ci.yml`, `.github/workflows/release.yml`: CI and release workflow updates.
-
-## ПРАВИЛЬНА НАЗВА: 0.0.2.43
-- Issue #90 — Storyboard approval gate & history regeneration:
-  - `core/storyboard.py`, `core/api/storyboards.py`: `expected_image_version` gate блокує missing/mismatched/unapproved storyboard; новий метод `regenerate_from_history()` та endpoint `POST /api/jobs/{job_id}/storyboards/regenerate-from-history` для Browser/backend history selection, revision/regenerate з будь-якої історичної версії.
-  - `tests/test_storyboard.py`: Тести для негативних шляхів approval gate та history-based regeneration flow.
-- Issue #91 — Legacy persistence migration & PostgreSQL backfill:
-  - `scripts/apply-deployment.py`: Інтегровано `ensure_persistent_user_data_legacy_migration()` в restore path та successful apply path.
-  - `db/010_persistent_user_data_backfill.backfill.py`: Disposable backfill jobs з реальними psycopg записами (не mocked).
-  - `tests/test_persistent_user_data.py`, `tests/test_backfill.py`, `tests/test_apply_deployment.py`: Повне тестове покриття.
-- Issue #92 — Backup/restore safety:
-  - `services/backup_service.py`: Mandatory dump inventory (pg_dump/redis-cli returncode=0 без файлу → error); exact snapshot з preservацією empty source root; configurable `BACKUP_REDIS_DUMP_PATH`; safe restore state з concurrent-write exclusion.
-  - `tests/test_backup_read_only.py`, `tests/test_role_services.py`: Backup integration tests оновлено.
-- Issue #95 — Real test runner fixes:
-  - `core/real_tests/scenarios.py`: Zero-argument `core_api` adapter виправлено (повертає "not-applicable" коли CORE_ADDRESS не налаштовано).
-  - `core/real_tests/github.py`, `core/real_tests/runner.py`: Independent deployment identity через `_deployment_sha()`/`_deployment_version()` (без VERSION/unknown fallback); full mandatory check set validation для auto-close в `can_close_issue()`.
-  - `tests/test_real_tests.py`: 8 нових тестів для Issue #95 acceptance.
-
-## ПРАВИЛЬНА НАЗВА: 0.0.2.44
-- Виправлено ланцюжок редагування та логування секретів у `core/logging_config.py`, `core/app.py`, `core/operations.py` та `adapters/telegram.py`; додано acceptance-скрипт `tests/test_no_secrets_acceptance.py` для перевірки відсутності ключів у логах, API-відповідях і Telegram payload.
-- Оновлено real-test runner/issue gating у `core/real_tests/runner.py`, `core/real_tests/github.py` та `core/api/real_tests.py`; додано сценарії та історію запусків для UI/HTTP інтерфейсу.
-- Посилено семантику rolling update та черги в `scripts/update-agent.py`, `core/queue.py`, `tests/test_rolling_update.py`, `tests/test_rolling_update_issue86.py` та `tests/test_queue_redis_contract.py`.
-- Виправлено bootstrap wizard validation і security checks у `tests/test_bootstrap_wizard.py`, `tests/test_update_security.py` та `web-v2/src/app/setup/setup.component.ts`.
-- Додано Web UI для real tests через `web-v2/src/app/core/api/real-tests.api.ts` і `web-v2/src/app/real-tests/real-tests.component.ts`.
-
-## Unreleased
-
-## ПРАВИЛЬНА НАЗВА: 0.0.2.46
-- Виправлено `tests/test_queue_redis_contract.py::test_wiped_data_directory_starts_empty`: коректне видалення директорії `appendonlydir` Redis при очищенні тестової директорії даних (`shutil.rmtree` для директорій, `unlink` для файлів).
-
-## ПРАВИЛЬНА НАЗВА: 0.0.2.45
-- Виправлено маскування секретів у `core/logging_config.py`: прибрано обмежувальний negative lookahead для `bearer`, додано повне маскування `basic_auth` credentials; оновлено `tests/test_no_secrets_acceptance.py` — використання `monkeypatch.setenv` замість прямої зміни `os.environ` для ізоляції тестів.
-- Реалізовано ідемпотентне звітування до GitHub у `core/real_tests/github.py`: `test_run_id` звітується лише один раз, одночасні спроби обробляються як skip; повна пагінація коментарів для виявлення маркерів на будь-якій сторінці.
-- Розширено `TestRun` у `core/real_tests/models.py`: додано `prerequisites`, `progress`, `destructive_confirmation`, `confirmation_timestamp` для повного аудит-ланцюжка.
-- `core/real_tests/storage.py`: ідемпотентний запис GitHub report з merge-логікою — retry об'єднує частково записані дані, не перезаписуючи результат.
-- Додано Web UI для Real Tests: `web-v2/src/app/real-tests/real-tests.component.ts/.html/.css` — вкладки Сценарії/Історія, діалог підтвердження запуску (з destructive-попередженням), перегляд звіту з деталями перевірок, кнопка повторної відправки до GitHub.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.41
 - `core/api/jobs.py`, `core/app.py`, `core/pipeline.py`: Issue #82 — atomic claim/release для video regeneration; lease займається перед dispatch і звільняється на кожному exit path, тому паралельні рендери не допускаються, а завершений рендер не блокує Job.
@@ -1647,4 +1674,3 @@
 - Додано GitHub Actions перевірки для Python, тестів, синтаксису shell та конфігурацій Compose.
 - Додано профіль воркера GTX 1660 6 GB/Turing з закріпленими колесами PyTorch CUDA 12.4, режимом ComfyUI low-VRAM, перевіркою CUDA та метаданими heartbeat.
 - Додано перевірки оновлень GitHub тільки для адміністраторів та встановлення з Web UI через постійний systemd агент хоста без відкриття Docker сокета.
-

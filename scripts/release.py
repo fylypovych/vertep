@@ -67,9 +67,24 @@ def known_versions(root: Path) -> list[str]:
         )
     except subprocess.CalledProcessError:
         pass
+    subjects = git(root, "log", "--format=%s").splitlines()
+    normalized = "0.0.0.0"
+    for subject in reversed(subjects):
+        # Every commit consumes a number, even when its published subject
+        # repeats an earlier version or contains no version at all.
+        normalized = next_version([normalized])
+        match = re.match(r"^(v?\d+\.\d+\.\d+\.\d+)(?:\s|$)", subject.strip())
+        if match:
+            parsed = VERSION_RE.fullmatch(match.group(1))
+            parts = tuple(int(part) for part in parsed.groups())
+            if all(part <= 99 for part in parts[1:]):
+                normalized = max(normalized, match.group(1).lstrip("v"),
+                                 key=lambda value: tuple(map(int, value.split("."))))
+    if subjects:
+        versions.append(normalized)
     versions.extend(
         match.group(1)
-        for subject in git(root, "log", "--format=%s").splitlines()
+        for subject in subjects
         if (match := re.match(r"^(v?\d+\.\d+\.\d+\.\d+)(?:\s|$)", subject.strip()))
     )
     version_path = root / "VERSION"

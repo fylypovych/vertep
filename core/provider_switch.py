@@ -295,7 +295,10 @@ def effective_provider_config(slot: str | None = None,
     if node_name and env_name:
         ack = acks.get(str(node_name), {})
         observed = ack.get(env_name)
-        if observed is not None and str(observed).strip().lower() != str(entry.get("backend") or "").strip().lower():
+        if observed is None:
+            raise ProviderSwitchError(
+                409, f"Worker '{node_name}' has not confirmed slot '{slot}' yet")
+        if str(observed).strip().lower() != str(entry.get("backend") or "").strip().lower():
             raise ProviderSwitchError(
                 409, f"Worker '{node_name}' still observes '{observed}' for slot '{slot}', "
                 f"not '{entry.get('backend')}'")

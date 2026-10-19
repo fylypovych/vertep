@@ -185,6 +185,20 @@ def _record_cross_artifact_checks(record, contract: dict, artifact_root: Path,
         recomputed = hashlib.sha256(sbom_path.read_bytes()).hexdigest()
         record("manifest_sbom_hash_matches_sbom", sbom_meta.get("sha256") == recomputed,
                f"manifest={sbom_meta.get('sha256')} actual={recomputed}")
+    # Published SHA256SUMS is part of the full artifact set (Issue #187.3/#187.5).
+    sums_path = None
+    for candidate in ("SHA256SUMS", f"SHA256SUMS-{contract.get('version')}"):
+        path = artifact_root / candidate
+        if path.is_file():
+            sums_path = path
+            break
+    if sums_path is None:
+        record("manifest_sha256sums_present", False, "SHA256SUMS not found")
+    else:
+        lines = sums_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        valid = all(re.fullmatch(r"[0-9a-f]{64}\s+\S.+", line.strip()) for line in lines if line.strip())
+        record("manifest_sha256sums_present", valid and bool(lines),
+               "" if (valid and bool(lines)) else "invalid SHA256SUMS format")
     record("manifest_channel_is_stable", contract.get("channel") == EXPECTED_CHANNEL,
            str(contract.get("channel")))
     expected_sequence = _expected_release_sequence(repo_version)

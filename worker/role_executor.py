@@ -565,6 +565,25 @@ def execute_publisher(task: dict) -> list[dict]:
                    "timestamp": _time.time()}
         return [_artifact("publication.json", "publication_receipt",
                           json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+    # Issue #199/#166.4: verify the approved artifact against the delivery
+    # contract before any upload.  A missing/corrupt/mismatched file must not
+    # reach the adapter.
+    try:
+        expected_sha = (delivery_contract.get("sha256") or delivery_contract.get("video_sha256"))
+        expected_size = delivery_contract.get("size_bytes") or delivery_contract.get("size")
+        if video_path and os.path.isfile(video_path):
+            if expected_sha:
+                import hashlib as _hashlib
+                actual_sha = _hashlib.sha256(open(video_path, "rb").read()).hexdigest()
+                if actual_sha != str(expected_sha).removeprefix("sha256:"):
+                    raise ValueError("delivery contract sha256 mismatch")
+            if expected_size is not None and os.path.getsize(video_path) != int(expected_size):
+                raise ValueError("delivery contract size mismatch")
+    except ValueError as error:
+        receipt = {"channel": channel, "status": "FAILED", "error": str(error),
+                   "timestamp": _time.time()}
+        return [_artifact("publication.json", "publication_receipt",
+                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
     try:
         result = publisher.publish(video_path, metadata)
     except Exception as error:

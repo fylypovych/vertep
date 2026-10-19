@@ -432,12 +432,14 @@ def test_end_to_end_publish_receives_receipt_for_all_platforms(monkeypatch, tmp_
     import json
     from worker.role_executor import execute_publisher
 
+    import hashlib as _hashlib
     video = _mp4(tmp_path, size=1024)
+    _video_sha = _hashlib.sha256(open(video, "rb").read()).hexdigest()
     delivery_contract = {
-        "job_id": "job-e2e", "video_version": "v1", "video_sha256": "abc123",
+        "job_id": "job-e2e", "video_version": "v1", "video_sha256": _video_sha,
         "channel": "youtube",
     }
-    publish_intent = {"video_version": "v1", "video_sha256": "abc123"}
+    publish_intent = {"video_version": "v1", "video_sha256": _video_sha}
 
     platforms = {
         "youtube": (
