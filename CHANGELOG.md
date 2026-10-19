@@ -1,6 +1,8 @@
 # Changelog
 
-## ПРАВИЛЬНА НАЗВА: 0.0.2.60
+## ПРАВИЛЬНА НАЗВА: 0.0.2.61
+- Issue #238 (#192.4): уникнення витоку стану моніторингу між тестами — `tests/conftest.py` `reset()` тепер очищає `system-state.json`, `status.json`, `deployment-status.json`, `requests/*.json` і `node-registry.json`, щоб не-NORMAL стан системи, неvíкликане оновлення або зареєстрований вузол (наприклад `text-ready`) не створювали лівий алерт у `/api/alerts` іншого тесту.
+- Issue i.0.0.1.69 (доповнення): `sock.shutdown(socket.SHUT_RDWR)` перед `response.close()` у `_close_on_cancel` (`core/pull_executor.py` і `worker/service.py`) перериває читача, заблокований у `recv` на кожній платформі — bare `close()` не будить його на Linux; тест чекає на очистку реєстру скасування замість миттєвої перевірки.
 - Issue #110 Phase C: `system_router` підключено до `core/app.py` замість повторних інлайн-маршрутів; видалено конфліктуючі інлайн-хендлери `/api/system/update`, `/api/system/recovery/normal`, `/api/system/roles`, `/api/system/update/readiness`, `/api/system/update/check|run|restart`, `/api/system/update/rolling|/cancel|/rollback|/promote|/rolling|/rolling/coordinator`, `/api/node/status/{node_name}`, `/api/system/restart`; оновлено тести `tests/test_app_structure.py` та `tests/test_admin_recovery_and_configs.py`.
 - Issue #230: стійке підтвердження дії актора через зв'язок колбека з операцією: `claim_callback` приймає `operation_id` і перевіряє термінальний стан операції через `get_operation`; додано `link_operation(callback_id, operation_id)`; `core/app.py` імпортує `link_operation`, мапу `_ACTION_TO_OP_TYPE` та допоміжний `_link_callback_to_operation`; додано 6 тестів у `tests/test_telegram_system_operations.py`.
 - Issue #231: delegation-шіма `system_restart` у `core/app.py`, що пересилає виклик у `core.api.system.system_restart`.

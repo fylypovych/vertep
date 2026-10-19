@@ -247,7 +247,11 @@ def test_local_http_cancel_releases_stalled_transport(pull_http, monkeypatch):
 
     # The reader was released by closing the transport, not by a read timeout.
     assert stored["status"] == "CANCELLED"
-    assert operation["operation_id"] not in _CANCEL_EVENTS
+    # The registry entry is removed by the pull thread's own cleanup, which
+    # races the terminal status that cancel_pull records synchronously; wait
+    # for the release instead of asserting it instantly.
+    assert _wait_until(
+        lambda: operation["operation_id"] not in _CANCEL_EVENTS, timeout=6)
     # Resource release: the server observes the client dropping the socket.
     assert scenario.disconnected.wait(timeout=5), "pull transport was not released"
 
@@ -363,6 +367,9 @@ def test_node_http_cancel_releases_stalled_transport(pull_http, monkeypatch):
     )
     thread.start()
     assert scenario.stream_started.wait(timeout=3)
+    # Let the reader consume the line and block on the stalled stream;
+    # cancelling before that would not exercise the blocked-reader abort.
+    time.sleep(0.3)
 
     cancel.set()
     thread.join(timeout=6)

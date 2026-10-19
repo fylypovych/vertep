@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -71,11 +72,19 @@ def _close_on_cancel(cancel_event: threading.Event, done_event: threading.Event,
 
     The NDJSON reader only wakes when Ollama writes a line, so a stalled
     transport would keep the pull thread blocked until the read timeout.
-    Closing the response unblocks the reader immediately and frees the
-    connection (Issue i.0.0.1.69).
+    Shutting the socket down interrupts a reader blocked in ``recv`` on
+    every platform — a bare ``close()`` does not wake it on Linux — and
+    closing the response then frees the connection (Issue i.0.0.1.69).
     """
     while not done_event.is_set():
         if cancel_event.wait(0.05):
+            try:
+                network_stream = response.extensions.get("network_stream")
+                sock = network_stream.get_extra_info("socket") if network_stream else None
+                if sock is not None:
+                    sock.shutdown(socket.SHUT_RDWR)
+            except Exception:  # noqa: BLE001 - the stream may already be gone
+                pass
             try:
                 response.close()
             except Exception:  # noqa: BLE001 - the transport is going away anyway

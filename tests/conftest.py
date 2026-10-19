@@ -125,6 +125,41 @@ def reset_in_process_api_state():
         # Persistent monitor alerts must not leak between tests.
         from core.alert_store import reset_alert_store
         reset_alert_store()
+        # System operating state and update status are durable files; clear them
+        # so a non-NORMAL state or failed update left by one test cannot create
+        # alerts in another test's /api/alerts response (Issue #192.4).
+        from core.system_state import _path as _system_state_path
+        from core.update_manager import state_root as _update_state_root
+        from core.first_run import config_root as _config_root
+        try:
+            _system_state_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+        _update_root = _update_state_root()
+        for name in ("status.json",):
+            try:
+                (_update_root / name).unlink(missing_ok=True)
+            except OSError:
+                pass
+        requests_dir = _update_root / "requests"
+        if requests_dir.is_dir():
+            for req in requests_dir.glob("*.json"):
+                try:
+                    req.unlink()
+                except OSError:
+                    pass
+        try:
+            (_config_root() / "deployment-status.json").unlink(missing_ok=True)
+        except OSError:
+            pass
+        # The durable node registry (config_root()/node-registry.json) is read by
+        # workers() via registered_nodes(); a node enrolled by one test (e.g.
+        # text-ready from test_full_media_harness) must not leak into another
+        # test's /api/alerts WORKER_OFFLINE reconciliation (Issue #192.4).
+        try:
+            (_config_root() / "node-registry.json").unlink(missing_ok=True)
+        except OSError:
+            pass
 
     reset()
     yield
