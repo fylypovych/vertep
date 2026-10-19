@@ -1439,15 +1439,21 @@ def _recover_stale_workers() -> None:
             store.repository.record_task({"task_id": current_task, "task": "storyboard",
                                           "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
                                          error="storyboard worker heartbeat timed out")
-            task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task,
-                                    "task": "storyboard"},
-                                   "storyboard worker heartbeat timed out")
-            pinned_revision = getattr(job, "storyboard_active_revision", None) or (
-                job.storyboards[-1].revision_request if job.storyboards else None)
-            job.storyboard_active_revision = pinned_revision
-            from ..pipeline import queue_storyboard as _queue_storyboard
-            _queue_storyboard(store, job, revision=pinned_revision)
-            store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
+            if job.storyboard_attempt <= job.max_retries:
+                # Retry within budget: reuse the pinned revision so a node that
+                # keeps dropping its heartbeat cannot re-dispatch the same
+                # version forever.  Once the budget is spent the Job reaches
+                # STORYBOARD_FAILED instead of looping (Issue #197/#163.3).
+                pinned_revision = getattr(job, "storyboard_active_revision", None) or (
+                    job.storyboards[-1].revision_request if job.storyboards else None)
+                job.storyboard_active_revision = pinned_revision
+                from ..pipeline import queue_storyboard as _queue_storyboard
+                _queue_storyboard(store, job, revision=pinned_revision)
+                store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
+            else:
+                task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task,
+                                        "task": "storyboard"},
+                                       "storyboard worker heartbeat timed out (attempts exhausted)")
             worker["current_job"] = None
             worker["current_task"] = None
         elif job and current_task in job.assembly_task_ids:

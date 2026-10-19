@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .atomic_write import atomic_write_json
-from .operations import _state_dir
+from .operations import _state_dir, get_operation
 from .configuration import read_json
 
 
@@ -32,7 +32,7 @@ def _read() -> dict[str, dict[str, Any]]:
 
 
 def claim_callback(callback_id: str, *, actor: str, action: str,
-                   target: str | None = None) -> tuple[dict[str, Any], bool]:
+                   target: str | None = None, operation_id: str | None = None) -> tuple[dict[str, Any], bool]:
     """Persist a callback claim before executing its side effect.
 
     A record whose status is still ``CLAIMED`` means the process died after
@@ -40,6 +40,12 @@ def claim_callback(callback_id: str, *, actor: str, action: str,
     callback is therefore safe and must be allowed so the effect is not lost
     (Issue #174).  A terminal record (``COMPLETED``/``FAILED``) must never run
     again, so its caller sees ``claimed=False`` and skips the side effect.
+
+    If an ``operation_id`` is provided and the associated operation already
+    reached a terminal state (``COMPLETED``/``FAILED``/``CANCELLED``), the
+    effect already ran or finished — the callback must not be replayed even
+    though the record is still ``CLAIMED`` (crash after effect, before
+    ``complete_callback``).
     """
     if not callback_id:
         return {}, True
@@ -49,9 +55,18 @@ def claim_callback(callback_id: str, *, actor: str, action: str,
         if existing is not None:
             if existing.get("status") != "CLAIMED":
                 return existing, False
+            # Durable confirmation: an associated terminal operation means the
+            # effect already ran — do not replay (effect→crash→persist gap).
+            existing_op_id = existing.get("operation_id")
+            if existing_op_id:
+                op = get_operation(existing_op_id)
+                if op and op.get("status") in {"COMPLETED", "FAILED", "CANCELLED"}:
+                    return existing, False
             # Resume an unfinished claim: keep the original actor/action for the
             # audit trail and record the replay attempt.
             existing["replayed_at"] = _now()
+            if operation_id:
+                existing["operation_id"] = operation_id
             atomic_write_json(_path(), records)
             return existing, True
         record = {
@@ -62,6 +77,7 @@ def claim_callback(callback_id: str, *, actor: str, action: str,
             "status": "CLAIMED",
             "claimed_at": _now(),
             "completed_at": None,
+            "operation_id": operation_id,
         }
         records[callback_id] = record
         _state_dir().mkdir(parents=True, exist_ok=True)
@@ -80,6 +96,23 @@ def complete_callback(callback_id: str, *, status: str = "COMPLETED") -> None:
         record["status"] = status
         record["completed_at"] = _now()
         atomic_write_json(_path(), records)
+
+
+def link_operation(callback_id: str, operation_id: str) -> None:
+    """Link a CLAIMED callback record to its operation for crash-replay checking.
+
+    Called after the side effect creates an operation so that a later replay of
+    the same callback can verify the operation reached a terminal state and
+    skip re-execution (effect→crash→persist gap).
+    """
+    if not callback_id:
+        return
+    with _lock:
+        records = _read()
+        record = records.get(callback_id)
+        if record is not None and record.get("status") == "CLAIMED":
+            record["operation_id"] = operation_id
+            atomic_write_json(_path(), records)
 
 
 class DurableCallbackSet:

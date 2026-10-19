@@ -275,7 +275,12 @@ def regenerate_script(store: JobStore, job: Job, revision: str | None = None) ->
 def queue_storyboard(store: JobStore, job: Job, revision: str | None = None) -> Job:
     from .storyboard import StoryboardService
     job.storyboard_error = None
-    store.transition(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
+    # When the storyboard task is already in flight (job is STORYBOARD_GENERATING)
+    # or pending approval, do not transition the job status — only re-queue the
+    # task.  The normal flow (STORYBOARD_APPROVED -> STORYBOARD_QUEUED) still
+    # works.
+    if job.status not in {JobStatus.STORYBOARD_GENERATING, JobStatus.STORYBOARD_PENDING_APPROVAL}:
+        store.transition(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
     service = StoryboardService(store, executor=store.executor)
     service.queue(job, revision)
     return job
@@ -523,9 +528,13 @@ def _collect_reassembly_inputs(job) -> list:
                 # registration at all: the required set is incomplete, so
                 # re-assembly is blocked instead of rendering a partial slide.
                 rejected.append(f"scene {scene.index} (no registered artifact)")
-                continue
-            # Resolved but of a non-required kind: not part of the required set
-            # (e.g. an image clip under a ``video`` task).
+            elif job.task_type == "image":
+                # Resolved but none of the required kind for an IMAGE task:
+                # the scene lacks its required artifact (e.g. audio instead of
+                # image). This is an incomplete required set: block re-assembly.
+                rejected.append(f"scene {scene.index} (no required {accepted} artifact)")
+            # For VIDEO tasks, non-video_scene artifacts (e.g. storyboard
+            # images) are acceptable fallback and are silently skipped.
             continue
         # finish_scene appends new artifacts, so the last one is current.
         current = registered[-1]

@@ -62,7 +62,7 @@ from .operations import (create_operation, get_operation, list_operations,
                          link_operation_request, add_pending_notification,
                          pending_notifications, acknowledge_notification)
 from .telegram_callbacks import (DurableCallbackSet, claim_callback,
-                                 complete_callback)
+                                 complete_callback, link_operation)
 from .update_manager import request_update, update_status
 from .pipeline import regenerate_script
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
@@ -71,6 +71,13 @@ from .node_registry import (create_node_csr, create_registration_token, enroll_n
 from .version import application_version
 from .runtime_identity import CORE_RUNTIME_INSTANCE_ID
 from .deployment_plan import create_plan
+
+# Delegation shim: system_restart moved to core.api.system (Issue #110 Phase C).
+# The CI test caller references core.app.system_restart; keep the symbol alive
+# by delegating to the canonical implementation.
+async def system_restart(payload: dict | None = None):
+    from .api.system import system_restart as _system_restart
+    return await _system_restart(payload)
 from .rolling_update import (cancel_rollout, is_core_node, promote_rollout, reconcile_rollout,
                              rollout_status, rollback_ready_nodes, start_rollout,
                              update_core_coordinator)
@@ -1489,6 +1496,46 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
     return TelegramAdapter().answer_callback(callback_id, "Невідома системна операція.")
 
 
+_ACTION_TO_OP_TYPE = {
+    "sys_update": "update", "sys_update_check": "update", "sys_update_confirm": "update",
+    "sys_restart": "restart", "sys_restart_core": "restart", "sys_restart_worker": "restart",
+    "sys_backup": "backup", "sys_backup_confirm": "backup",
+    "sys_restore": "restore", "sys_restore_confirm": "restore", "sys_restore_execute": "restore",
+    "sys_test": "test", "sys_test_quick": "test", "sys_test_full": "test", "sys_test_node": "test",
+}
+
+
+def _link_callback_to_operation(callback_id: str, action: str, payload: str,
+                                chat_id: str) -> None:
+    """Link a CLAIMED callback to its terminal operation for crash-replay checking.
+
+    After the side effect runs, its operation may have reached COMPLETED/FAILED.
+    Linking the callback record to that operation lets a later replay detect the
+    terminal state and skip re-execution (effect→crash→persist gap, Issue #174).
+    """
+    op_type = _ACTION_TO_OP_TYPE.get(action)
+    if not op_type:
+        return
+    try:
+        operations = list_operations(200)
+    except Exception:
+        return
+    target = payload or None
+    requested_by = f"telegram:{chat_id}"
+    terminal = {"COMPLETED", "FAILED", "CANCELLED"}
+    best = None
+    for op in operations:
+        if (op.get("type") == op_type
+                and op.get("target") == target
+                and op.get("requested_by") == requested_by
+                and op.get("status") in terminal):
+            finished = op.get("finished_at") or ""
+            if best is None or finished > best.get("finished_at", ""):
+                best = op
+    if best and best.get("operation_id"):
+        link_operation(callback_id, best["operation_id"])
+
+
 def _handle_telegram_callback(callback: dict) -> dict:
     data = str(callback.get("data", ""))
     action, _, payload = data.partition(":")
@@ -1519,6 +1566,7 @@ def _handle_telegram_callback(callback: dict) -> dict:
         except Exception:
             complete_callback(callback_id, status="FAILED")
             raise
+        _link_callback_to_operation(callback_id, action, payload, chat_id)
         complete_callback(callback_id)
         return result
 

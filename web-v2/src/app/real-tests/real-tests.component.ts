@@ -1,5 +1,4 @@
 import { Component, signal, computed } from '@angular/core';
-import { finalize } from 'rxjs';
 
 import { RealTestsApiService, RealTestReport, RealTestScenario, RealTestRunSummary } from '../core/api/real-tests.api';
 
@@ -83,11 +82,40 @@ export class RealTestsComponent {
     this.error.set(null);
     this.api
       .run(dialog.rtId, null, true)
-      .pipe(finalize(() => this.running.update((map) => ({ ...map, [dialog.rtId]: false }))))
       .subscribe({
-        next: () => this.load(),
-        error: (err) => this.error.set(err?.error?.detail || err?.message || 'Помилка запуску'),
+        next: (runResponse) => {
+          this.pollRunCompletion(dialog.rtId, runResponse.test_run_id);
+        },
+        error: (err) => {
+          this.error.set(err?.error?.detail || err?.message || 'Помилка запуску');
+          this.running.update((map) => ({ ...map, [dialog.rtId]: false }));
+        },
       });
+  }
+
+  private pollRunCompletion(rtId: string, testRunId: string): void {
+    let attempts = 0;
+    const maxAttempts = 30;
+    const timer = setInterval(() => {
+      attempts += 1;
+      this.api.listRuns(50).subscribe({
+        next: (runsResponse) => {
+          const run = runsResponse.runs.find((r) => r.test_run_id === testRunId);
+          const terminal = run ? run.status !== 'RUNNING' : false;
+          if (terminal || attempts >= maxAttempts) {
+            clearInterval(timer);
+            this.running.update((map) => ({ ...map, [rtId]: false }));
+            this.load();
+          }
+        },
+        error: () => {
+          if (attempts >= maxAttempts) {
+            clearInterval(timer);
+            this.running.update((map) => ({ ...map, [rtId]: false }));
+          }
+        },
+      });
+    }, 1000);
   }
 
   cancelDialog(): void {

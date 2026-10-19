@@ -952,3 +952,93 @@ class TestDurableCallbackCrashRecovery:
         assert "host agent unreachable" in failed.get("msg", "")
         assert adapter.answer_callback.called
         assert "не запущено" in adapter.answer_callback.call_args[0][1]
+
+
+class TestDurableCallbackOperationLinking:
+    """Issue #230: durable actor/target confirmation via operation linking.
+
+    A CLAIMED callback whose associated operation reached a terminal state must
+    not be replayed (effect→crash→persist gap).  link_operation binds the
+    callback record to its operation so claim_callback can detect terminal
+    status on replay.
+    """
+
+    def test_link_operation_binds_callback_to_operation(self):
+        from core import telegram_callbacks as tc
+        from core.operations import create_operation
+        op = create_operation("update", "telegram:42", target="apply")
+        tc.claim_callback("cb-linked", actor="telegram:42", action="sys_update_confirm",
+                          target="apply", operation_id=op["operation_id"])
+        record = tc._read()["cb-linked"]
+        assert record["operation_id"] == op["operation_id"]
+
+    def test_claim_does_not_replay_when_operation_completed(self):
+        from core import telegram_callbacks as tc
+        from core.operations import create_operation, complete_operation
+        op = create_operation("update", "telegram:42", target="apply")
+        complete_operation(op["operation_id"], {"status": "healthy"})
+        tc.claim_callback("cb-completed-op", actor="telegram:42", action="sys_update_confirm",
+                          target="apply", operation_id=op["operation_id"])
+        record, claimed = tc.claim_callback(
+            "cb-completed-op", actor="telegram:42", action="sys_update_confirm",
+            target="apply")
+        assert claimed is False
+        assert record["status"] == "CLAIMED"
+
+    def test_claim_does_not_replay_when_operation_failed(self):
+        from core import telegram_callbacks as tc
+        from core.operations import create_operation, fail_operation
+        op = create_operation("update", "telegram:42", target="apply")
+        fail_operation(op["operation_id"], "host agent unreachable")
+        tc.claim_callback("cb-failed-op", actor="telegram:42", action="sys_update_confirm",
+                          target="apply", operation_id=op["operation_id"])
+        record, claimed = tc.claim_callback(
+            "cb-failed-op", actor="telegram:42", action="sys_update_confirm",
+            target="apply")
+        assert claimed is False
+        assert record["status"] == "CLAIMED"
+
+    def test_claim_replays_when_operation_is_still_active(self):
+        from core import telegram_callbacks as tc
+        from core.operations import create_operation, begin_operation
+        op = create_operation("update", "telegram:42", target="apply")
+        begin_operation(op["operation_id"], "Запит на оновлення прийнято")
+        tc.claim_callback("cb-active-op", actor="telegram:42", action="sys_update_confirm",
+                          target="apply", operation_id=op["operation_id"])
+        record, claimed = tc.claim_callback(
+            "cb-active-op", actor="telegram:42", action="sys_update_confirm",
+            target="apply")
+        assert claimed is True
+        assert record["status"] == "CLAIMED"
+
+    def test_claim_replays_when_no_operation_linked(self):
+        from core import telegram_callbacks as tc
+        # CLAIMED without operation_id: crash before effect, replay must run.
+        tc.claim_callback("cb-no-op", actor="telegram:42", action="sys_cancel")
+        record, claimed = tc.claim_callback(
+            "cb-no-op", actor="telegram:42", action="sys_cancel")
+        assert claimed is True
+        assert record["status"] == "CLAIMED"
+
+    def test_link_operation_then_claim_detects_terminal(self, monkeypatch):
+        """End-to-end: claim → effect completes operation → link → replay blocked."""
+        module = importlib.import_module("core.app")
+        adapter = Mock()
+        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(module, "is_admin_chat", lambda chat_id: True)
+
+        from core import telegram_callbacks as tc
+        from core.operations import create_operation, complete_operation
+
+        # First run: claim the callback, effect runs, operation completes.
+        tc.claim_callback("cb-e2e", actor="telegram:42", action="sys_update_confirm",
+                          target="apply")
+        op = create_operation("update", "telegram:42", target="apply")
+        complete_operation(op["operation_id"], {"status": "healthy"})
+        tc.link_operation("cb-e2e", op["operation_id"])
+
+        # Replay: claim_callback must detect the terminal operation and not replay.
+        record, claimed = tc.claim_callback(
+            "cb-e2e", actor="telegram:42", action="sys_update_confirm", target="apply")
+        assert claimed is False
+        assert record["status"] == "CLAIMED"

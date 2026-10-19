@@ -924,6 +924,48 @@ def test_recover_stale_script_worker_charges_attempt_budget(monkeypatch, tmp_pat
     assert lost is not None and lost["status"] == "RELEASED", lost
 
 
+def test_recover_stale_storyboard_worker_enforces_budget_on_heartbeat_loss(
+    monkeypatch, tmp_path
+):
+    """Issue #197/#163.3: a storyboard worker that loses its heartbeat must burn
+    the storyboard attempt budget; once exhausted, the Job reaches
+    STORYBOARD_FAILED instead of re-queueing forever.
+    """
+    from core.api.job_helpers import _recover_stale_workers
+    from core.models import Job, JobStatus, StageStatus, StageName, utc_now
+    from core.state import task_queue
+
+    task_queue._inflight.clear()
+    task_queue._local.clear()
+    task_id = "storyboard-stale"
+    task_queue.enqueue(
+        {"job_id": "job-stale-sb", "task": "storyboard", "task_id": task_id,
+         "priority": 5, "topic": "x"},
+        new_attempt=True,
+    )
+    job = Job(
+        job_id="job-stale-sb", topic="x", character_id="ch", priority=5,
+        status=JobStatus.STORYBOARD_GENERATING, created_at=utc_now(),
+        storyboard_task_id=task_id, active_task_id=task_id,
+        storyboard_attempt=0, max_retries=2,
+    )
+    store.jobs[job.job_id] = job
+    worker = {
+        "node_name": "storyboard-stale", "status": "BUSY",
+        "current_job": job.job_id, "current_task": task_id,
+        "last_seen": "2000-01-01T00:00:00+00:00",
+        "capabilities": ["storyboard_generation"], "role": "storyboard",
+    }
+    store.save_worker(worker)
+
+    _recover_stale_workers()
+    recovered = store.jobs[job.job_id]
+    assert recovered.storyboard_attempt == 1
+    assert store.workers["storyboard-stale"]["status"] == "OFFLINE"
+    lost = _repo_task_record(store, task_id)
+    assert lost is not None and lost["status"] == "RELEASED", lost
+
+
 def test_recover_after_restart_clears_all_inflight_task_pointers():
     """Issue #197/#163.3: ``recover_after_restart`` must clear every in-flight
     task pointer, otherwise a Job persisted in TTS_GENERATING/PUBLISHING

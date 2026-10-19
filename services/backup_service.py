@@ -125,7 +125,13 @@ def _release_restore_guard(guard: str | None) -> None:
     if not guard:
         return
     try:
-        Path(guard).unlink()
+        path = Path(guard)
+        # Only remove the guard if it still contains a snapshot_id, i.e. it is
+        # an active exclusion owned by this restore. A competing restore must
+        # not be able to delete another's guard (Issue #186.2).
+        info = _read_json_file(path, {})
+        if info.get("snapshot_id"):
+            path.unlink()
     except OSError:
         pass
 
