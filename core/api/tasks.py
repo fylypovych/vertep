@@ -723,8 +723,6 @@ def task_result(result: TaskResult, request: Request):
         return job
     is_tts = result.task_id in job.tts_active_task_ids
     if is_tts:
-        if result.task_id in job.completed_task_ids:
-            return job
         scene = _scene_for_task(job, result.task_id)
         if not scene or scene.assigned_worker != result.node_name:
             raise HTTPException(409, "TTS result does not match the active task")
@@ -839,7 +837,7 @@ def task_result(result: TaskResult, request: Request):
                 return store.update(job, terminal, "VOICE TASK COMPLETED")
         return store.event(job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
     if result.task_id in job.completed_task_ids:
-        return job
+        raise HTTPException(409, "Duplicate result for an already completed task")
     from .job_helpers import cancelled_attempt_release, release_assembly_hold
     from adapters.providers.base import RELEASE_RELEASED
     cancelled = cancelled_attempt_release(job, result.task_id)

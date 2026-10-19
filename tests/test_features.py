@@ -496,7 +496,7 @@ def test_duplicate_worker_result_is_idempotent(monkeypatch):
     payload = {"job_id": job_id, "task_id": task["task_id"], "node_name": "idem-worker", "success": True,
                "filename": "scene.ppm", "image_base64": base64.b64encode(ppm).decode()}
     assert client.post("/api/tasks/result", json=payload, headers=headers).status_code == 200
-    assert client.post("/api/tasks/result", json=payload, headers=headers).status_code == 200
+    assert client.post("/api/tasks/result", json=payload, headers=headers).status_code == 409
 
 
 def test_multiscene_job_fans_out_to_distinct_tasks(monkeypatch):

@@ -65,10 +65,24 @@ def _png(path: Path) -> Path:
     return path
 
 
+def _box(box_type: bytes, payload: bytes) -> bytes:
+    return len(payload).to_bytes(4, "big") + box_type + payload
+
+
 def _mp4(path: Path, size: int = 512) -> Path:
-    """A minimal but structurally valid MP4 (ftyp + payload) for signature checks."""
+    """A structurally valid minimal MP4 for the worker's box-tree media check.
+
+    The Worker verifies the real box tree (ftyp + moov with a video track,
+    Issue #178.3), so the stand-in carries that structure; a ``free`` box pads
+    the payload to the requested total size (tests rely on distinct sizes).
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + bytes(size))
+    hdlr = _box(b"hdlr", b"\x00" * 8 + b"vide" + b"\x00" * 12 + b"\x00")
+    body = (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+            + _box(b"moov", _box(b"trak", _box(b"mdia", hdlr))))
+    if size > len(body) + 8:
+        body += _box(b"free", bytes(size - len(body) - 8))
+    path.write_bytes(body)
     return path
 
 
@@ -942,8 +956,15 @@ class _NodeEngine:
     def render(self, output, **kwargs):
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(
-            b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + bytes(512))
+
+        def box(kind, payload):
+            return len(payload).to_bytes(4, "big") + kind + payload
+
+        hdlr = box(b"hdlr", b"\x00" * 8 + b"vide" + b"\x00" * 12 + b"\x00")
+        body = (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+                + box(b"moov", box(b"trak", box(b"mdia", hdlr))))
+        body += box(b"free", bytes(512 - len(body)))
+        path.write_bytes(body)
         return path
 
     def capabilities(self):

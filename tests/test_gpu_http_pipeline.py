@@ -31,14 +31,21 @@ def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
             + struct.pack(">I", zlib.crc32(chunk_type + payload) & 0xFFFFFFFF))
 
 
-# A structurally complete PNG (IHDR + IDAT + IEND) and an MP4 whose ``ftyp``
-# box is followed by a ``moov`` box: both satisfy the worker's chunk/box walk.
+# A real, structurally valid PNG (correct IHDR dimensions/fields, matching
+# chunk CRCs, a decompressable IDAT) and a real minimal MP4 (ftyp + moov with
+# a video track): both satisfy the worker's strict box/chunk walk (Issue #178.3).
+def _box(box_type: bytes, payload: bytes) -> bytes:
+    return len(payload).to_bytes(4, "big") + box_type + payload
+
+
 PNG = (b"\x89PNG\r\n\x1a\n"
-       + _png_chunk(b"IHDR", b"\x00" * 13)
-       + _png_chunk(b"IDAT", b"\x00" * 8)
+       + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
+       + _png_chunk(b"IDAT", zlib.compress(
+           b"".join(b"\x00" + bytes((30, 40, 50)) * 2 for _ in range(2))))
        + _png_chunk(b"IEND", b""))
-MP4 = (b"\x00\x00\x00\x14ftypmp42" + b"\x00" * 8
-       + b"\x00\x00\x00\x10moov" + b"\x00" * 8)
+HDLR = _box(b"hdlr", b"\x00" * 8 + b"vide" + b"\x00" * 12 + b"\x00")
+MOOV = _box(b"moov", _box(b"trak", _box(b"mdia", HDLR)))
+MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + MOOV
 
 
 @pytest.mark.parametrize("suffix", [".mp4", ".mov"])
@@ -154,6 +161,72 @@ def test_worker_accepts_structurally_valid_png_and_mp4():
     assert verify_media(PNG, ".png") == "image/png"
     assert verify_media(MP4, ".mp4") == "video/mp4"
     assert verify_media(MP4, ".mov") == "video/quicktime"
+
+
+def test_worker_rejects_png_with_invalid_dimensions():
+    """Issue #178.3: a PNG whose IHDR declares a zero dimension is not an image.
+
+    The #178 audit probe (a 61-byte PNG with invalid dimensions) must be
+    refused even when every chunk CRC is internally consistent.
+    """
+    from worker.role_executor import verify_media
+
+    zero_dimension = (b"\x89PNG\r\n\x1a\n"
+                      + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", 0, 0, 8, 2, 0, 0, 0))
+                      + _png_chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00"))
+                      + _png_chunk(b"IEND", b""))
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(zero_dimension, ".png")
+
+
+def test_worker_rejects_png_with_a_broken_chunk_crc():
+    """Issue #178.3: corrupted bytes are caught by the per-chunk CRC, not only
+    by a checksum of the whole payload."""
+    from worker.role_executor import verify_media
+
+    broken = bytearray(PNG)
+    idat = broken.find(b"IDAT")
+    assert idat > 0
+    broken[idat + 4] ^= 0xFF  # flip a byte inside the IDAT payload; CRC now lies
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(bytes(broken), ".png")
+
+
+def test_worker_rejects_png_with_junk_idat():
+    """Issue #178.3: an IDAT payload that does not decompress is junk, even with
+    a correct chunk CRC."""
+    from worker.role_executor import verify_media
+
+    junk_idat = (b"\x89PNG\r\n\x1a\n"
+                 + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+                 + _png_chunk(b"IDAT", b"not-a-zlib-stream")
+                 + _png_chunk(b"IEND", b""))
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(junk_idat, ".png")
+
+
+def test_worker_rejects_ftyp_plus_free_without_a_video_track():
+    """Issue #178.3: ``ftyp`` + ``free`` (the audit's 24-byte probe) has no
+    movie header and no video track — it is signature+junk, not a video."""
+    from worker.role_executor import verify_media
+
+    probe = (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+             + _box(b"free", b"\x00" * 8))
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(probe, ".mp4")
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(probe, ".mov")
+
+
+def test_worker_rejects_moov_without_a_video_handler():
+    """Issue #178.3: a ``moov`` box that carries no ``trak``/video ``hdlr`` is
+    a movie header in name only and must not pass as a video."""
+    from worker.role_executor import verify_media
+
+    audio_only = (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+                  + _box(b"moov", b"\x00" * 16))
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(audio_only, ".mp4")
 
 
 class FakeComfyUI:

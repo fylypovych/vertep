@@ -528,13 +528,13 @@ def _collect_reassembly_inputs(job) -> list:
                 # registration at all: the required set is incomplete, so
                 # re-assembly is blocked instead of rendering a partial slide.
                 rejected.append(f"scene {scene.index} (no registered artifact)")
-            elif job.task_type == "image":
-                # Resolved but none of the required kind for an IMAGE task:
-                # the scene lacks its required artifact (e.g. audio instead of
-                # image). This is an incomplete required set: block re-assembly.
+            else:
+                # Resolved but none of the required kind (e.g. an image or
+                # audio artifact on a video task): the scene lacks its required
+                # artifact. This is an incomplete required set for ANY task
+                # type, so re-assembly is blocked instead of silently skipping
+                # the scene and rendering a partial input list (Issue #177.1).
                 rejected.append(f"scene {scene.index} (no required {accepted} artifact)")
-            # For VIDEO tasks, non-video_scene artifacts (e.g. storyboard
-            # images) are acceptable fallback and are silently skipped.
             continue
         # finish_scene appends new artifacts, so the last one is current.
         current = registered[-1]

@@ -94,7 +94,7 @@ def test_apply_deployment_uses_only_catalog_services_and_erases_token(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+        if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
@@ -131,7 +131,7 @@ def test_text_deployment_provisions_selected_model(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+        if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
@@ -150,7 +150,7 @@ def test_core_deployment_provisions_managed_ollama_model(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+        if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
@@ -175,7 +175,7 @@ def test_core_deployment_activates_multiple_local_roles(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
-        if command[1:3] == ["compose", "--env-file"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+        if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]
             class Result:
@@ -649,7 +649,7 @@ def test_apply_rescues_legacy_roots_before_recreate(tmp_path, monkeypatch):
 
     def runner(command, **kwargs):
         calls.append(command)
-        if command[:2] == ["docker", "compose"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+        if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
             rows = [json.dumps({"Service": s, "ID": f"old-{s}", "State": "running",
                                 "Health": "healthy"}) for s in sorted(selected)]
             return SimpleNamespace(stdout="\n".join(rows) + "\n", returncode=0, stderr="")
@@ -685,7 +685,7 @@ def test_apply_aborts_before_recreate_when_rescue_fails(tmp_path, monkeypatch):
 
     def runner(command, **kwargs):
         calls.append(command)
-        if command[:2] == ["docker", "compose"] and command[-4:] == ["ps", "--all", "--format", "json"]:
+        if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
             rows = [json.dumps({"Service": s, "ID": f"old-{s}", "State": "running"})
                     for s in sorted(selected)]
             return SimpleNamespace(stdout="\n".join(rows) + "\n", returncode=0, stderr="")

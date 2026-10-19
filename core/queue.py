@@ -330,9 +330,15 @@ return cjson.encode(task)
         item = dict(task)
         item.update({"error": error, "failed_at": time.time()})
         if self._redis:
+            task_id = task.get("task_id")
+            if task_id:
+                self._redis.hdel("vertep:tasks:inflight", task_id)
             self._redis.rpush("vertep:tasks:dead", json.dumps(item, sort_keys=True))
         else:
             with self._lock:
+                task_id = task.get("task_id")
+                if task_id:
+                    self._inflight.pop(task_id, None)
                 self._dead_letters.append(item)
         self._bump()
         return item

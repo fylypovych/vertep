@@ -81,7 +81,7 @@ def atomic_json(path: Path, value: dict) -> None:
 
 def runtime_inventory(root: Path, compose: list[str], selected: set[str], role: str,
                       version: str, runner=subprocess.run) -> dict:
-    result = runner([*compose, "ps", "--all", "--format", "json"], check=True, timeout=120,
+    result = runner([*compose, "ps", "--all", "--format", "json", "--no-trunc"], check=True, timeout=120,
                     capture_output=True, text=True)
     rows = []
     output = getattr(result, "stdout", "") or ""
@@ -109,7 +109,7 @@ def runtime_inventory(root: Path, compose: list[str], selected: set[str], role: 
 
 def compose_rows(compose: list[str], selected: set[str], runner=subprocess.run) -> list[dict]:
     """Return the raw compose inventory rows for the selected services."""
-    result = runner([*compose, "ps", "--all", "--format", "json"], check=True, timeout=120,
+    result = runner([*compose, "ps", "--all", "--format", "json", "--no-trunc"], check=True, timeout=120,
                     capture_output=True, text=True)
     rows = []
     output = getattr(result, "stdout", "") or ""

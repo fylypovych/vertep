@@ -190,7 +190,11 @@ class TestR2RegisteredOrderedIntegrityInputs:
         store._save(job)
         assert [p.name for p in _collect_reassembly_inputs(job)] == ["frame-v2.jpg"]
 
-    def test_video_task_reads_video_scene_clips(self, tmp_path, monkeypatch):
+    def test_video_task_scene_without_video_scene_artifact_blocks_reassembly(
+            self, tmp_path, monkeypatch):
+        """Issue #177.1: a video scene with only a non-video artifact is an
+        incomplete required set — the collector must block, not silently skip
+        the scene and render a partial input list."""
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
@@ -198,7 +202,23 @@ class TestR2RegisteredOrderedIntegrityInputs:
         _register_scene(store, job, 1, "clip.mp4", kind="video_scene")
         _register_scene(store, job, 2, "ignored.png", kind="image")
         store._save(job)
-        assert [p.name for p in _collect_reassembly_inputs(job)] == ["clip.mp4"]
+        assert _collect_reassembly_inputs(job) == []
+        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
+        assert any("scene 2 (no required" in line for line in job.events)
+
+    def test_image_task_scene_with_foreign_kind_blocks_reassembly(
+            self, tmp_path, monkeypatch):
+        """Issue #177.1 safe probe: two required image scenes, the second has
+        only an audio artifact — the set is incomplete, so re-assembly must be
+        blocked instead of returning the first input alone."""
+        from core.app import _collect_reassembly_inputs
+        store, job = _build_store(tmp_path)
+        monkeypatch.setattr("core.state.store", store)
+        _register_scene(store, job, 1, "frame.png")
+        _register_scene(store, job, 2, "voice.mp3", kind="audio")
+        store._save(job)
+        assert _collect_reassembly_inputs(job) == []
+        assert any("scene 2 (no required" in line for line in job.events)
 
     def test_corrupted_scene_among_healthy_ones_blocks_reassembly(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs

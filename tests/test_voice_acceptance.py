@@ -450,7 +450,7 @@ class TestTTSDuplicateResult:
             "job_id": job_id, "task_id": tts_task["task_id"],
             "node_name": "voice-worker", "success": True,
             "artifacts": [artifact]})
-        assert resp2.status_code == 200
+        assert resp2.status_code == 409
 
 
 class TestTTSWorkerLossRecovery:
