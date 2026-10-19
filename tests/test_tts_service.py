@@ -50,7 +50,11 @@ def test_voices_endpoint_lists_installed_voices():
     # Issue i.0.0.1.5: the catalog must reconcile voice/provider/model/
     # language/speed readiness with the stock espeak runtime.
     assert set(body["languages"]) == {"uk", "en"}
-    assert "espeak-ng" in body["providers"]
+    # Issue #198/#165.1: the advertised catalog is a readiness contract, so it
+    # must list ONLY the real espeak-ng runtime.  "mock" and "none" are not
+    # synthesizers — advertising them would let CORE's fail-closed catalog gate
+    # accept a voice task the worker could never execute.
+    assert body["providers"] == ["espeak-ng"]
     assert body["speed_range"] == {"min": 80, "max": 450}
 
 

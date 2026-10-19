@@ -20,7 +20,7 @@ from unittest.mock import patch
 import pytest
 
 from core.artifacts import register_artifact
-from core.models import JobStatus, SceneRecord
+from core.models import JobStatus
 from core.pipeline import (JobStore, approve_video, claim_video_regeneration,
                            finalize_job, release_video_regeneration,
                            request_video_revision)
@@ -52,10 +52,18 @@ def _render(mp, on_render=None):
 
 
 def _register_scene_image(store, job) -> Path:
+    """Register a scene artifact via the existing scene record.
+
+    ``finalize_job`` already created ``scene-001`` through ``initialize_plan``;
+    the correct contract is to extend that scene's ``artifact_ids`` (as
+    ``finish_scene`` does), not append a duplicate ``SceneRecord``.
+    """
+    from core.orchestration import finish_scene
     image = _write_file(store.root / job.job_id / "images" / "scene-001.png")
     record = register_artifact(job, store.root, image, "image", scene_id="scene-001")
-    job.scenes.append(SceneRecord(scene_id="scene-001", index=1, prompt="Kadr",
-                                  artifact_ids=[record.artifact_id]))
+    scene = next((s for s in job.scenes if s.scene_id == "scene-001"), None)
+    assert scene is not None, "finalize_job must have created scene-001 via initialize_plan"
+    finish_scene(scene, [record.artifact_id])
     store._save(job)
     return image
 
@@ -72,11 +80,12 @@ def _produce_v1(tmp_path):
 
 
 class TestClaimLease:
-    def test_successful_render_releases_claim(self, tmp_path):
+    def test_successful_render_releases_claim(self, tmp_path, monkeypatch):
         import core.app as app_module
         root, store, job = _produce_v1(tmp_path)
         _register_scene_image(store, job)
         app_module.store = store
+        monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
         assert job.video_regenerating is True
         with patch("core.pipeline.providers") as mp:
@@ -154,7 +163,7 @@ class TestClaimLease:
 
 
 class TestRenderFencing:
-    def test_cancel_during_render_registers_no_version(self, tmp_path):
+    def test_cancel_during_render_registers_no_version(self, tmp_path, monkeypatch):
         import core.app as app_module
         root, store, job = _produce_v1(tmp_path)
         _register_scene_image(store, job)
@@ -165,6 +174,7 @@ class TestRenderFencing:
                 store._save(store.jobs[job.job_id])
 
         app_module.store = store
+        monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
         with patch("core.pipeline.providers") as mp:
             _render(mp, on_render=_cancel_mid_render)
@@ -178,7 +188,7 @@ class TestRenderFencing:
         assert not (root / job.job_id / "final" / "video-v2.mp4").exists()
         assert any("ASSEMBLY RESULT DISCARDED" in event for event in current.events)
 
-    def test_pause_during_render_registers_no_version(self, tmp_path):
+    def test_pause_during_render_registers_no_version(self, tmp_path, monkeypatch):
         import core.app as app_module
         root, store, job = _produce_v1(tmp_path)
         _register_scene_image(store, job)
@@ -189,6 +199,7 @@ class TestRenderFencing:
                 store._save(store.jobs[job.job_id])
 
         app_module.store = store
+        monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
         with patch("core.pipeline.providers") as mp:
             _render(mp, on_render=_pause_mid_render)

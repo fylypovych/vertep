@@ -100,7 +100,13 @@ def voices() -> dict:
         "voices": [{"id": voice, "engine": "espeak-ng"} for voice in installed],
         "models": ["espeak-ng"],
         "languages": languages,
-        "providers": ["espeak-ng", "mock", "none"],
+        # Issue #198/#165.1: advertise ONLY the real espeak-ng runtime.  "mock"
+        # and "none" are not synthesizers — advertising them let CORE's
+        # fail-closed catalog gate accept a voice task that the worker could
+        # never actually execute, and the Job later failed at synthesis time
+        # instead of being refused at dispatch.  A declared catalog is a
+        # contract: every advertised value must be backed by the runtime.
+        "providers": ["espeak-ng"],
         "speed_range": {"min": 80, "max": 450},
         "engine": "espeak-ng",
     }

@@ -172,7 +172,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_scene_index_order_wins_over_lexicographic_names(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         for index, name in ((1, "sb-1-1.png"), (2, "sb-1-10.png"), (10, "sb-1-2.png")):
             _register_scene(store, job, index, name)
         store._save(job)
@@ -183,7 +183,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_non_png_and_newest_artifact_per_scene_are_used(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "frame.webp")
         # a scene regenerated later keeps its older artifact as history
         _register_scene(store, job, 1, "frame-v2.jpg")
@@ -193,7 +193,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_video_task_reads_video_scene_clips(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         job.task_type = "video"
         _register_scene(store, job, 1, "clip.mp4", kind="video_scene")
         _register_scene(store, job, 2, "ignored.png", kind="image")
@@ -203,7 +203,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_corrupted_scene_among_healthy_ones_blocks_reassembly(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "good.png")
         corrupted = _register_scene(store, job, 2, "bad.png")
         corrupted.write_bytes(b"tampered")
@@ -216,7 +216,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_corrupted_current_is_not_substituted_by_a_historical_artifact(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         _add_scene_artifact(store, job, 1, "old.png")
         current = _add_scene_artifact(store, job, 1, "current.png")
         current.write_bytes(b"tampered")  # the current file is corrupt on disk
@@ -229,7 +229,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_missing_current_is_not_substituted_by_a_historical_artifact(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         _add_scene_artifact(store, job, 1, "old.png")
         current = _add_scene_artifact(store, job, 1, "current.png")
         current.unlink()  # the current file is gone
@@ -237,7 +237,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert _collect_reassembly_inputs(job) == []
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
-    def test_no_valid_artifacts_fails_video_explicitly(self, tmp_path):
+    def test_no_valid_artifacts_fails_video_explicitly(self, tmp_path, monkeypatch):
         import core.app as app_module
         store, job = _build_store(tmp_path)
         _render_v1(store, job)
@@ -245,6 +245,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         corrupted.write_bytes(b"tampered")
         store._save(job)
         app_module.store = store
+        monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers"):
             app_module._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
@@ -256,7 +257,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_missing_artifact_file_is_reported(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         path = _register_scene(store, job, 1, "gone.png")
         path.unlink()
         store._save(job)
@@ -266,7 +267,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_scene_without_registered_artifact_blocks_reassembly(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "good.png")
         job.scenes.append(SceneRecord(scene_id="scene-2", index=2, prompt="Kadr",
                                       artifact_ids=[]))
@@ -281,7 +282,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
     def test_unresolved_artifact_id_blocks_reassembly(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "good.png")
         job.scenes.append(SceneRecord(scene_id="scene-2", index=2, prompt="Kadr",
                                       artifact_ids=["does-not-exist"]))
@@ -291,10 +292,30 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert _collect_reassembly_inputs(job) == []
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
+    def test_unresolved_newest_id_is_not_substituted_by_historical_artifact(
+            self, tmp_path, monkeypatch):
+        """#177.2: an unresolved *newest* id blocks; it never falls back.
+
+        A scene that has an intact historical artifact plus a newest id that
+        no longer resolves to any registration must be rejected, not silently
+        re-rendered from the older revision (Issue #119 historical-substitution
+        regression, reproduced by the #177 audit probe).
+        """
+        from core.app import _collect_reassembly_inputs
+        store, job = _build_store(tmp_path)
+        monkeypatch.setattr("core.state.store", store)
+        _add_scene_artifact(store, job, 1, "old.png")
+        # Append an id that has no registration (e.g. a lost DB row).
+        job.scenes[0].artifact_ids.append("vanished-artifact-id")
+        store._save(job)
+        assert _collect_reassembly_inputs(job) == []
+        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
+        assert any("current artifact id unresolved" in line for line in job.events)
+
     def test_complete_registered_set_renders_every_scene(self, tmp_path, monkeypatch):
         from core.app import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.app.store", store)
+        monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "a.png")
         _register_scene(store, job, 2, "b.png")
         store._save(job)
@@ -310,6 +331,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
                                       artifact_ids=[]))
         store._save(job)
         monkeypatch.setattr(app_module, "store", store)
+        monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers"):
             app_module._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]

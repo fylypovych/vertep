@@ -829,10 +829,23 @@ class TestVoiceAcceptanceRows:
         assert result["provider"] == "espeak-ng", result
         assert result["model"] == "uk_male", result
         assert result["language"] == "uk", result
+        # Issue #198/#165.3: the reconnect must prove the *dispatcher's* catalog
+        # surface still carries the issued parameters, not only that the
+        # character config was re-read from disk.  ``catalog_voices`` and
+        # ``catalog_models`` come from the re-registered Worker, so asserting
+        # them proves the catalog match survived the reconnect.
+        assert result["catalog_voices"] == ["uk"], result
+        assert result["catalog_models"] == ["uk_male"], result
         harness.record_row("voice_reconnect_keeps_parameters",
                            {"voice": "uk", "provider": "espeak-ng",
-                            "model": "uk_male", "language": "uk"},
-                           result, job_id=job_id)
+                            "model": "uk_male", "language": "uk",
+                            "catalog_voices": ["uk"],
+                            "catalog_models": ["uk_male"]},
+                           {k: result[k] for k in ("voice", "provider",
+                                                   "model", "language",
+                                                   "catalog_voices",
+                                                   "catalog_models")},
+                           job_id=job_id)
 
     def test_voice_duplicate_result_is_refused(self, fleet, monkeypatch, tmp_path):
         """A second audio result for the same issued task must be refused."""

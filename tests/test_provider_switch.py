@@ -268,7 +268,12 @@ def test_switch_reaches_the_executor_and_drives_preview_and_restart(isolated_con
             if self.path == "/voices":
                 body = json.dumps({"voices": [{"id": "uk", "name": "uk", "engine": "espeak-ng"}],
                                    "models": ["espeak-ng"], "languages": ["uk"],
-                                   "providers": ["espeak-ng", "mock", "none"],
+                                   # Issue #198/#165.1: the stand-in mirrors the
+                                   # real espeak runtime catalog, which advertises
+                                   # only the synthesizer it actually is.  "mock"
+                                   # and "none" are not synthesizers and must not
+                                   # be advertised as ready providers.
+                                   "providers": ["espeak-ng"],
                                    "speed_range": {"min": 80, "max": 450},
                                    "engine": "espeak-ng"}).encode()
                 self.send_response(200)

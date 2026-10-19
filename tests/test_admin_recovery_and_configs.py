@@ -61,7 +61,8 @@ def test_emergency_reason_and_update_log_are_visible_in_alerts(monkeypatch, tmp_
 def test_administrator_can_recover_only_after_health_checks(monkeypatch, tmp_path):
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
     set_system_state(SystemState.EMERGENCY, "rollback failed")
-    monkeypatch.setattr(core_app, "system_status", lambda: {
+    import core.api.status as _status_module
+    monkeypatch.setattr(_status_module, "system_status", lambda: {
         "core": "OK", "postgres": "OK", "redis": "OK"})
 
     response = TestClient(core_app.app).post("/api/system/recovery/normal")

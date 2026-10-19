@@ -14,8 +14,10 @@ as an image, a timeout, cancellation isolation and late-result rejection.
 import base64
 import hashlib
 import json
+import struct
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -23,8 +25,20 @@ from fastapi.testclient import TestClient
 
 from adapters.comfyui import ComfyUIAdapter, PromptCancelledError
 
-PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 13 + b"\x00\x00\x00\x00")
-MP4 = b"\x00\x00\x00\x14ftypmp42" + b"\x00" * 8
+
+def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
+    return (struct.pack(">I", len(payload)) + chunk_type + payload
+            + struct.pack(">I", zlib.crc32(chunk_type + payload) & 0xFFFFFFFF))
+
+
+# A structurally complete PNG (IHDR + IDAT + IEND) and an MP4 whose ``ftyp``
+# box is followed by a ``moov`` box: both satisfy the worker's chunk/box walk.
+PNG = (b"\x89PNG\r\n\x1a\n"
+       + _png_chunk(b"IHDR", b"\x00" * 13)
+       + _png_chunk(b"IDAT", b"\x00" * 8)
+       + _png_chunk(b"IEND", b""))
+MP4 = (b"\x00\x00\x00\x14ftypmp42" + b"\x00" * 8
+       + b"\x00\x00\x00\x10moov" + b"\x00" * 8)
 
 
 @pytest.mark.parametrize("suffix", [".mp4", ".mov"])
@@ -76,9 +90,41 @@ def test_worker_rejects_png_signature_plus_junk():
         verify_media(junk_png, ".png")
     # A structurally present IHDR header but a truncated body is still refused.
     truncated = PNG[:-1]
-    assert len(truncated) < 33
+    assert len(truncated) >= 33
     with pytest.raises(RuntimeError, match="media signature"):
         verify_media(truncated, ".png")
+
+
+def test_worker_rejects_an_ihdr_only_png_stub():
+    """Issue #178.3: signature + IHDR without IDAT/IEND is a stub, not an image."""
+    from worker.role_executor import verify_media
+
+    ihdr_only = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR"
+                 + b"\x00" * 13 + b"\x00\x00\x00\x00")
+    assert len(ihdr_only) == 33
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(ihdr_only, ".png")
+
+
+def test_worker_rejects_a_png_missing_iend():
+    """Issue #178.3: a PNG cut after IDAT (no IEND) is truncated."""
+    from worker.role_executor import verify_media
+
+    without_iend = PNG[:PNG.rfind(b"IEND") - 4]
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(without_iend, ".png")
+
+
+def test_worker_rejects_an_ftyp_only_mp4_stub():
+    """Issue #178.3: an ``ftyp`` box without a following box is not a video."""
+    from worker.role_executor import verify_media
+
+    ftyp_only = b"\x00\x00\x00\x10ftypisom\x00\x00\x00\x00"
+    assert len(ftyp_only) == 16
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(ftyp_only, ".mp4")
+    with pytest.raises(RuntimeError, match="media signature"):
+        verify_media(ftyp_only, ".mov")
 
 
 def test_worker_rejects_video_without_a_complete_ftyp_box():

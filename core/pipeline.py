@@ -476,6 +476,131 @@ def release_video_regeneration(store: JobStore, job: Job) -> Job:
     return job
 
 
+def _collect_reassembly_inputs(job) -> list:
+    """Ordered render inputs for a video re-assembly (Issue #81 R2, #119).
+
+    Registered scene artifacts are the only source: ordered by scene index and
+    integrity-checked with SHA256.  For each scene the *current* registered
+    artifact (the last one appended by ``finish_scene``) is selected **before**
+    the integrity check: a corrupted or missing current artifact must never be
+    silently replaced by an older, historical one (Issue #119).  The collection
+    is extension-agnostic, so non-PNG frames and ``video_scene`` clips for
+    ``task_type == "video"`` are covered.
+
+    If any scene has no registered accepted artifact at all (empty or
+    unresolved ``artifact_ids``) or its current artifact is missing/fails its
+    checksum, the set of current artifacts is insufficient: re-assembly is
+    explicitly blocked by returning an empty list (the caller keeps the previous
+    immutable video versions and fails the render) instead of proceeding with a
+    partial slide.
+
+    No globbing of ``images/``, ``storyboard/`` or ``frames/`` is performed:
+    those directories hold historical versions, and lexicographic filename
+    order is wrong (``sb-1-10`` sorts before ``sb-1-2``).
+    """
+    from .state import store
+    from .artifacts import _digest
+    root = store.root / job.job_id
+    accepted = {"video_scene"} if job.task_type == "video" else {"image"}
+    by_id = {artifact.artifact_id: artifact for artifact in job.artifacts}
+    inputs: dict[int, object] = {}
+    rejected: list[str] = []
+    for scene in sorted(job.scenes, key=lambda value: value.index):
+        # The current artifact is the last id appended by ``finish_scene``. If
+        # that newest id does not resolve (Issue #119 / #177.2), the current
+        # registration is missing: we must NOT silently fall back to an older,
+        # historical artifact, because that would resurrect a stale revision.
+        newest_id = scene.artifact_ids[-1] if scene.artifact_ids else None
+        if newest_id is not None and newest_id not in by_id:
+            rejected.append(f"scene {scene.index} (current artifact id unresolved)")
+            continue
+        resolved = [by_id[artifact_id] for artifact_id in scene.artifact_ids
+                    if artifact_id in by_id]
+        registered = [artifact for artifact in resolved if artifact.kind in accepted]
+        if not registered:
+            if not resolved:
+                # A scene with empty or unresolved ``artifact_ids`` has no
+                # registration at all: the required set is incomplete, so
+                # re-assembly is blocked instead of rendering a partial slide.
+                rejected.append(f"scene {scene.index} (no registered artifact)")
+                continue
+            # Resolved but of a non-required kind: not part of the required set
+            # (e.g. an image clip under a ``video`` task).
+            continue
+        # finish_scene appends new artifacts, so the last one is current.
+        current = registered[-1]
+        path = root / current.path
+        if not path.is_file():
+            rejected.append(f"{current.artifact_id} (missing)")
+            continue
+        if current.sha256 and _digest(path) != current.sha256:
+            rejected.append(f"{current.filename} (integrity)")
+            continue
+        inputs[scene.index] = path
+    if rejected:
+        store.event(job, f"RE-ASSEMBLY ARTIFACTS REJECTED: {', '.join(rejected)}")
+        return []
+    return [inputs[index] for index in sorted(inputs)]
+
+
+def _notify_video_regeneration(job, prefix: str) -> None:
+    """Notify the owning Telegram chat; Web jobs are reported via job events."""
+    source = str(getattr(job, "source", "") or "")
+    if not source.startswith("telegram:"):
+        return
+    try:
+        TelegramAdapter().send_message(source.split(":", 2)[1], f"{prefix}{job.job_id}.")
+    except Exception:
+        pass
+
+
+def _finalize_video_regenerate(job) -> None:
+    """Re-run assembly for video revision using registered scene artifacts.
+
+    The claim taken before dispatch is released on *every* exit path — success,
+    refusal, no inputs and failure — so a finished or aborted render can never
+    leave the Job permanently blocked for regeneration (Issue #82).
+    """
+    from .state import store
+    try:
+        job = store.jobs.get(job.job_id)
+        if not job:
+            return
+        if job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
+            logger.info("Video regeneration skipped: job is %s", job.status.value,
+                        extra={"job_id": job.job_id})
+            return
+        images = _collect_reassembly_inputs(job)
+        if images:
+            with store.lock:
+                job.status = JobStatus.ASSETS_READY
+                job.video_regenerating = True
+                store._save(job)
+            finalize_job_safe(store, job, images)
+        else:
+            # store.update acquires the store lock itself (non-reentrant).
+            job.video_regenerating = False
+            store.update(job, JobStatus.VIDEO_FAILED,
+                         "NO REGISTERED SCENE ARTIFACTS FOR RE-ASSEMBLY")
+            _notify_video_regeneration(job, f"❌ Не знайдено зареєстрованих кадрів для перезбірки {job.job_id}.")
+    except Exception as error:
+        logger.error("Video regeneration failed: %s", error, extra={"job_id": job.job_id})
+        try:
+            with store.lock:
+                job.video_regenerating = False
+            _notify_video_regeneration(job, f"❌ Помилка перегенерування {job.job_id}: {error}")
+        except Exception:
+            pass
+    finally:
+        # Success path included: the claim is a per-attempt lease, not a state.
+        try:
+            current = store.jobs.get(job.job_id)
+            if current is not None:
+                release_video_regeneration(store, current)
+        except Exception:
+            pass
+
+
 def regenerate_video(store: JobStore, job: Job) -> Job:
     """Re-run assembly after video revision request."""
     if job.status != JobStatus.VIDEO_REVISION_REQUESTED:

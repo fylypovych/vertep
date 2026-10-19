@@ -35,7 +35,13 @@ class PaidModelDenied(RuntimeError):
 DEFAULT_ALLOWED_PROVIDERS = ("ollama", "omniroute-free", "local")
 
 #: Providers that are always refused regardless of configuration.
-PAID_PROVIDERS = frozenset({"openai", "anthropic", "gemini", "groq-paid", "paid"})
+#: Note: "openai" is NOT in this list to allow external OpenAI-compatible providers
+#: with custom BASE URL. Use "openai-paid" for the official paid OpenAI API.
+PAID_PROVIDERS = frozenset({"openai-paid", "anthropic", "gemini", "groq-paid", "paid"})
+
+#: External providers that can be configured with custom BASE URL.
+#: These are allowed only if explicitly whitelisted and configured.
+EXTERNAL_PROVIDERS = frozenset({"openai", "openai-compatible"})
 
 
 @dataclass
@@ -195,6 +201,13 @@ class BudgetLedger:
         provider = str(provider or "").strip().lower()
         if provider in PAID_PROVIDERS:
             raise PaidModelDenied(f"paid provider {provider} is outside the allow-list")
+        # External providers require explicit configuration
+        if provider in EXTERNAL_PROVIDERS:
+            if provider == "openai":
+                base_url = os.getenv("LAB_OPENAI_BASE_URL", "").strip()
+                if not base_url:
+                    raise PaidModelDenied(
+                        f"external provider {provider} requires LAB_OPENAI_BASE_URL environment variable")
         return provider in {item.lower() for item in self.allowed_providers}
 
     def require_model(self, provider: str, model: str = "") -> None:

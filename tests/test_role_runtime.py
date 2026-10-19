@@ -172,13 +172,14 @@ def test_system_roles_endpoint_exposes_runtime_status(roles_file, monkeypatch):
 
     monkeypatch.setattr(role_runtime, "registered_nodes", lambda: [])
     payload = local_roles_status()
-    for role in payload["roles"]:
-        assert role["runtime_status"] in role_runtime.ROLE_RUNTIME_STATUSES
+    assert set(payload["role_runtime_status"]) == set(ROLES)
+    for entry in payload["available_roles"]:
+        assert entry["runtime_status"] in role_runtime.ROLE_RUNTIME_STATUSES
 
 
 def test_app_roles_endpoint_carries_runtime_status(roles_file, monkeypatch, tmp_path):
     """The role surface consumed by the Web UI must carry a measured status."""
-    from core import app as core_app
+    from core.api.system import local_roles_status
 
     monkeypatch.setattr(role_runtime, "registered_nodes", lambda: [])
     monkeypatch.setenv("NODE_ROLE", "core")
@@ -188,7 +189,7 @@ def test_app_roles_endpoint_carries_runtime_status(roles_file, monkeypatch, tmp_
     (config / "installation.json").write_text(
         json.dumps({"completed_at": "2026-01-01T00:00:00Z", "node_role": "core"}), encoding="utf-8")
     monkeypatch.setenv("CONFIG_ROOT", str(config))
-    payload = core_app.local_roles_status()
+    payload = local_roles_status()
     assert set(payload["role_runtime_status"]) == set(ROLES)
     for entry in payload["available_roles"]:
         assert entry["runtime_status"] in role_runtime.ROLE_RUNTIME_STATUSES

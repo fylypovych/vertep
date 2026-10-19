@@ -401,7 +401,7 @@ def regenerate_video_endpoint(job_id: str, body: ScriptAction | None = None):
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     # Submit real regeneration (shared path with Telegram)
-    from core.app import _finalize_video_regenerate
+    from core.pipeline import _finalize_video_regenerate
     try:
         executor.submit(_finalize_video_regenerate, job)
     except Exception as error:

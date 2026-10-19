@@ -55,10 +55,12 @@ def test_central_state_policy_blocks_mutation_during_update(monkeypatch, tmp_pat
 
 
 def test_fleet_readiness_requires_every_registered_worker_to_ack_drain(monkeypatch, tmp_path):
-    from core import app as core_app
+    from core.api.system import update_readiness
+    import core.api.system as system_module
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(core_app, "registered_nodes", lambda: [
+    monkeypatch.setattr(system_module, "registered_nodes", lambda: [
         {"node_id": "gpu-1", "revoked_at": None}, {"node_id": "gpu-2", "revoked_at": None}])
+    from core import app as core_app
     monkeypatch.setattr(core_app.store, "save_worker", lambda worker: None)
     monkeypatch.setattr(core_app.store, "load_workers", lambda **kwargs: [])
     monkeypatch.setattr(core_app.store.repository, "load_jobs", lambda: [])
@@ -70,12 +72,12 @@ def test_fleet_readiness_requires_every_registered_worker_to_ack_drain(monkeypat
         "gpu-2": {"node_name": "gpu-2", "status": "BUSY", "current_task": "task-1"},
     })
     set_system_state(SystemState.MAINTENANCE, "fleet drain", "operation-1")
-    readiness = core_app.update_readiness()
+    readiness = update_readiness()
     assert not readiness["ready"]
     assert readiness["unacknowledged_workers"] == ["gpu-1", "gpu-2"]
     for worker in core_app.store.workers.values():
         worker.update({"status": "DRAINING", "current_task": None})
-    readiness = core_app.update_readiness()
+    readiness = update_readiness()
     assert readiness["ready"]
     assert readiness["acknowledged_workers"] == ["gpu-1", "gpu-2"]
 

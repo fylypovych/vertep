@@ -75,6 +75,25 @@ def verify_media(data: bytes, suffix: str) -> str:
         box_size = int.from_bytes(data[0:4], "big")
         if box_size < 16 or box_size > len(data):
             raise _invalid_media(suffix)
+        # An ``ftyp`` box alone is a signature stub, not a video: at least the
+        # header of the next top-level box must follow it (Issue #178.3).
+        if len(data) - box_size < 8:
+            raise _invalid_media(suffix)
+        next_size = int.from_bytes(data[box_size:box_size + 4], "big")
+        if next_size == 0:
+            # Box extends to the end of the file (ISO BMFF special case).
+            pass
+        elif next_size == 1:
+            # 64-bit largesize follows the box header; it must be a plausible
+            # complete box inside the payload.
+            if len(data) - box_size < 16:
+                raise _invalid_media(suffix)
+            largesize = int.from_bytes(data[box_size + 8:box_size + 16], "big")
+            if largesize < 16 or box_size + largesize > len(data):
+                raise _invalid_media(suffix)
+        elif next_size < 8 or box_size + next_size > len(data):
+            # A truncated or implausible next box means the file was cut short.
+            raise _invalid_media(suffix)
         return signatures[1]
 
     if lowered == ".webp":
@@ -84,10 +103,26 @@ def verify_media(data: bytes, suffix: str) -> str:
         return signatures[1]
 
     if lowered == ".png":
-        # PNG: 8-byte signature followed by a complete IHDR chunk header
-        # (length 13 + ``IHDR``).  ``signature + junk`` cannot fake this.
-        if (len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n"
-                or data[8:12] != b"\x00\x00\x00\r" or data[12:16] != b"IHDR"):
+        # PNG: 8-byte signature followed by a complete chunk stream — IHDR
+        # first, at least one IDAT, and IEND last.  A signature-plus-IHDR stub
+        # (or a payload cut mid-stream) is not a decodable image (Issue #178.3).
+        if len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n":
+            raise _invalid_media(suffix)
+        offset = 8
+        chunks = []
+        while offset + 8 <= len(data):
+            length = int.from_bytes(data[offset:offset + 4], "big")
+            chunk_type = data[offset + 4:offset + 8]
+            end = offset + 12 + length
+            if end > len(data):
+                raise _invalid_media(suffix)
+            chunks.append(chunk_type)
+            offset = end
+            if chunk_type == b"IEND":
+                break
+        if not chunks or chunks[0] != b"IHDR" or b"IDAT" not in chunks:
+            raise _invalid_media(suffix)
+        if chunks[-1] != b"IEND":
             raise _invalid_media(suffix)
         return signatures[1]
 

@@ -229,16 +229,30 @@ def test_dispatcher_selects_voice_worker_by_catalog():
     # Issue i.0.0.1.5: provider/model/language/speed readiness is reconciled
     # end-to-end — only supported combinations pass, unsupported are refused.
     full = _voice_worker("full-voice", {"voices": ["uk"], "models": ["uk_male"],
-                                         "languages": ["uk"], "providers": ["mock"]})
+                                          "languages": ["uk"], "providers": ["mock"]})
     assert available_worker([full], job, task_type="voice",
-                            voice_requirements={"voice": "uk", "model": "uk_male",
-                                                "provider": "mock", "language": "uk"})["node_name"] == "full-voice"
+                             voice_requirements={"voice": "uk", "model": "uk_male",
+                                                 "provider": "mock", "language": "uk"})["node_name"] == "full-voice"
     assert available_worker([full], job, task_type="voice",
-                            voice_requirements={"voice": "uk", "provider": "other"}) is None
+                             voice_requirements={"voice": "uk", "provider": "other"}) is None
     assert available_worker([full], job, task_type="voice",
-                            voice_requirements={"voice": "uk", "speed": 500}) is None
+                             voice_requirements={"voice": "uk", "speed": 500}) is None
     assert available_worker([full], job, task_type="voice",
-                            voice_requirements={"voice": "uk", "speed": 160})["node_name"] == "full-voice"
+                             voice_requirements={"voice": "uk", "speed": 160})["node_name"] == "full-voice"
+    # Issue #198/#165.1: the real espeak runtime catalog advertises ONLY the
+    # synthesizer it actually is.  A job that asks for a provider the runtime
+    # never advertised ("none" / "mock") must therefore be refused at dispatch
+    # time instead of being accepted by a catalog gate and failing later at
+    # synthesis time.  The catalog is a contract: every advertised value must be
+    # backed by the runtime, so an unbacked request has no matching node.
+    real = _voice_worker("real-voice", {"voices": ["uk"], "providers": ["espeak-ng"]})
+    assert available_worker([real], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "provider": "none"}) is None
+    assert available_worker([real], job, task_type="voice",
+                            voice_requirements={"voice": "uk", "provider": "mock"}) is None
+    assert available_worker([real], job, task_type="voice",
+                            voice_requirements={"voice": "uk",
+                                                "provider": "espeak-ng"})["node_name"] == "real-voice"
 
 
 def _make_wav(duration: float = 0.5, rate: int = 22050) -> bytes:

@@ -16,6 +16,7 @@ the flow.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -447,7 +448,12 @@ def voice_duplicate_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> 
     """Submit a second audio result for the same issued task; it must be refused."""
     task = _claim_voice(client, job_id, node_name=node_name)
     audio = make_wav()
+    contract = {"format": "audio_contract/v1",
+                "sha256": hashlib.sha256(audio).hexdigest(),
+                "provider": "mock", "voice": "uk",
+                "language": "uk", "model": "uk_male", "speed": 160}
     artifact = role_executor._artifact("scene.wav", "voice", audio)
+    artifact["contract"] = contract
     first = client.post("/api/tasks/result", json={
         "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
         "success": True, "artifacts": [artifact]})

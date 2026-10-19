@@ -212,7 +212,13 @@ def voice_catalog() -> dict:
         # advertises regardless of the logical provider label, so the node
         # accepts the providers the runtime catalog declares (or the espeak
         # default) instead of inventing a new provider integration.
-        providers = ["espeak-ng", "mock", "none"]
+        # Issue #198/#165.1: advertise ONLY the synthesizer this worker
+        # actually is.  "mock" and "none" are not synthesizers — advertising
+        # them let CORE's fail-closed catalog gate accept a voice task the
+        # worker could never execute, and the Job later failed at synthesis
+        # time instead of being refused at dispatch.  A declared catalog is a
+        # contract: every advertised value must be backed by the runtime.
+        providers = ["espeak-ng"]
     result: dict[str, object] = {}
     if voices:
         result["voices"] = sorted(set(voices))

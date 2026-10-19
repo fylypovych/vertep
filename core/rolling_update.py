@@ -324,7 +324,7 @@ def _rollback_confirmed(rollout: dict, node: dict, record: dict) -> bool:
     request = node.get("self_test_request")
     return (record.get("version") == node.get("previous_version")
             and test.get("status") == "PASSED"
-            and str(test.get("checked_at", "")) > str(node.get("phase_started_at", ""))
+            and str(test.get("checked_at", "")) >= str(node.get("phase_started_at", ""))
             and isinstance(request, dict)
             and request.get("operation_id") == rollout.get("operation_id")
             and request.get("target_version") == node.get("previous_version")
@@ -372,7 +372,7 @@ def _reconcile_core_active(rollout: dict, node: dict, workers: dict[str, dict]) 
         if (bound
                 and test.get("status") == "PASSED"
                 and coordinator.get("version") == rollout["target_version"]
-                and str(test.get("checked_at", "")) > str(node.get("phase_started_at", ""))):
+                and str(test.get("checked_at", "")) >= str(node.get("phase_started_at", ""))):
             node["phase"] = "READY"
             coordinator.update({"coordinator_state": "READY"})
             coordinator.pop("self_test_requested_at", None)
@@ -473,9 +473,10 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
                 active.update({"phase": "FAILED", "error": test.get("error", "Self-test failed")})
                 return _begin_rollback(rollout, workers, active["error"])
             # The self-test must be PASSED, the worker must be at the target
-            # version, AND the test result must be newer than the phase start
+            # version, AND the test result must not predate the phase start
             # to prevent a stale PASSED result from approving a different
-            # target version.  (Issue #53, #15 — self-test binding.)
+            # target version.  (Issue #53, #15 — self-test binding.)  Equality
+            # is accepted: coarse host clocks can stamp both within one tick.
             _ensure_self_test_request(active, rollout, rollout["target_version"], worker)
             bound = _self_test_bound(test, active, rollout)
             if not bound:
@@ -485,7 +486,7 @@ def reconcile_rollout(workers: dict[str, dict]) -> dict:
             if (bound
                     and test.get("status") == "PASSED"
                     and worker.get("version") == rollout["target_version"]
-                    and checked_at > phase_started):
+                    and checked_at >= phase_started):
                 active["phase"] = "READY"
                 worker.pop("desired_state", None)
                 worker.pop("update_target_version", None)

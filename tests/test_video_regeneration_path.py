@@ -75,22 +75,28 @@ def _digest_file(path: Path) -> str:
 def _register_scene_image(store, job) -> Path:
     """Issue #81 R2: re-assembly reads registered scene artifacts only."""
     from core.artifacts import register_artifact
-    from core.models import SceneRecord
+    from core.orchestration import finish_scene, initialize_plan
     image = _write_file(store.root / job.job_id / "images" / "scene-001.png")
     record = register_artifact(job, store.root, image, "image", scene_id="scene-001")
-    job.scenes.append(SceneRecord(scene_id="scene-001", index=1, prompt="Kadr",
-                                  artifact_ids=[record.artifact_id]))
+    # The real pipeline creates scene records from job.script via
+    # initialize_plan; reproduce that instead of appending a duplicate
+    # SceneRecord with the same scene_id/index.
+    initialize_plan(job)
+    scene = next((s for s in job.scenes if s.scene_id == "scene-001"), None)
+    assert scene is not None, "initialize_plan must create scene-001 from job.script"
+    finish_scene(scene, [record.artifact_id])
     store._save(job)
     return image
 
 
 class TestSharedRegenerationAndApi:
-    def test_finalize_video_regenerate_produces_new_immutable_version(self, tmp_path):
+    def test_finalize_video_regenerate_produces_new_immutable_version(self, tmp_path, monkeypatch):
         import core.app as app_module
         root, store, job = _produce_v1(tmp_path)
         scene_image = _register_scene_image(store, job)
         v1_sha = _digest_file(root / job.job_id / "final" / "video-v1.mp4")
         app_module.store = store  # shared path reads the module-global store
+        monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers") as mp:
             _render(mp)
             app_module._finalize_video_regenerate(job)
@@ -211,7 +217,7 @@ class TestSharedRegenerationAndApi:
         assert current.status == JobStatus.VIDEO_PENDING_APPROVAL
         assert current.video_revisions == []
 
-    def test_finalize_video_regenerate_aborts_on_cancelled(self, tmp_path):
+    def test_finalize_video_regenerate_aborts_on_cancelled(self, tmp_path, monkeypatch):
         """Issue #49: cancelled job must not be resurrected by async regeneration."""
         import core.app as app_module
         root, store, job = _produce_v1(tmp_path)
@@ -219,6 +225,7 @@ class TestSharedRegenerationAndApi:
             job.status = JobStatus.CANCELLED
             store._save(job)
         app_module.store = store
+        monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers") as mp:
             _render(mp)
             app_module._finalize_video_regenerate(job)
