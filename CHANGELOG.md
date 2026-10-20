@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.65
+- `tests/test_lab_api_auth.py`: тести laboratory API більше не використовують production-шляхи `/srv/vertep-lab/repo` і `/var/lib/vertep-lab` — `create_app()` викликається з тимчасовими `state_dir` і `workspace_root`, тому набір тестів проходить на CI-раннері без root-прав.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.64
 - Telegram polling: виправлено `NameError` у `adapters/telegram.py` — `TelegramPollingService` тепер коректно визначає `config_root()`, створює директорію конфігурації під час збереження offset і більше не блокує старт FastAPI (`vertep-core-1`); додано тести на явний `offset_file` та відсутню директорію.
 - `core/app.py`: Telegram-колбеки `approve`/`reject` і `publish_channel`/`publish_all` захищені від повторного виконання через `claim_callback`/`complete_callback`; помилка обробки фіксується статусом `FAILED` і не лишає операцію незакритою.
