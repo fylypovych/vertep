@@ -63,7 +63,10 @@ def wait_for_published_port(name, container_port, timeout=60):
         if bindings:
             return inspection, bindings[0]["HostPort"]
         time.sleep(0.2)
-    logs = run("logs", name, check=False).stdout.strip()
+    logs = subprocess.run(
+        ["docker", "logs", name], capture_output=True, text=True, timeout=60,
+        stderr=subprocess.STDOUT,
+    ).stdout.strip()
     pytest.fail(
         f"Container {name} did not publish {container_port} in time; "
         f"state={inspection.get('State')}; logs={logs}"
