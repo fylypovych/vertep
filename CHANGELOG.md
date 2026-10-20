@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.67
+- `tests/test_lab_web_docker.py`: опублікований порт контейнера тепер очікується, а не зчитується одноразовим `docker inspect` — bind ephemeral-port з'являється лише після старту контейнера; каталог browser-assets створюється з режимом 0755 у системному temp, бо pytest-каталоги мають 0700 і недоступні непривілейованому користувачу контейнера; при таймауті до звіту додаються стан і логи контейнера.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.66
 - Issue i.0.0.2.51 (#251) — Docker-частина Web-панелі лабораторії: додано `deploy/lab/Dockerfile.web` (nginx-image з read-only rootfs, без production Web UI; готова browser-збірка підключається окремим bind mount) та `deploy/lab/web/nginx.conf`.
 - `deploy/lab/web/nginx.conf`: роздача SPA з `no-store` для `index.html`, проксі `/api/lab/` до Lab API без зміни `Authorization` і cookies, `/healthz` та `/readyz` (503, коли немає `index.html`), невідомі `/api/` шляхи повертають 404 замість index-сторінки.

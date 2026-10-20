@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -47,6 +48,42 @@ def wait_for(url, predicate):
     pytest.fail(f"Timed out waiting for {url}")
 
 
+def wait_for_published_port(name, container_port, timeout=60):
+    """Return the host port of a container published with an ephemeral port.
+
+    The binding appears in the inspection only after the container has started,
+    so the lookup has to wait instead of reading a single snapshot.
+    """
+    deadline = time.monotonic() + timeout
+    inspection = {}
+    while time.monotonic() < deadline:
+        inspection = json.loads(run("inspect", name).stdout)[0]
+        bindings = (inspection.get("NetworkSettings", {}).get("Ports") or {}).get(
+            container_port)
+        if bindings:
+            return inspection, bindings[0]["HostPort"]
+        time.sleep(0.2)
+    logs = run("logs", name, check=False).stdout.strip()
+    pytest.fail(
+        f"Container {name} did not publish {container_port} in time; "
+        f"state={inspection.get('State')}; logs={logs}"
+    )
+
+
+def readable_asset_dir():
+    """Create an asset directory the container user can traverse and read.
+
+    pytest creates its temporary directories with mode 0700, which the
+    unprivileged container user cannot enter, so a plain system temporary
+    directory with explicit permissions is used instead.
+    """
+    root = Path(tempfile.mkdtemp(prefix="vertep-lab-web-"))
+    os.chmod(root, 0o755)
+    assets = root / "browser"
+    assets.mkdir(mode=0o755)
+    return root, assets
+
+
 def test_web_compose_requires_real_dist_and_is_isolated(docker, tmp_path):
     compose = ROOT / "deploy/lab/docker-compose.web.yml"
     env = {**os.environ, "LAB_WEB_DIST": str(tmp_path)}
@@ -71,14 +108,13 @@ def test_web_compose_requires_real_dist_and_is_isolated(docker, tmp_path):
     assert "LAB_WEB_DIST" in result.stderr
 
 
-def test_web_image_http_readiness_spa_and_authenticated_api_proxy(docker, tmp_path):
+def test_web_image_http_readiness_spa_and_authenticated_api_proxy(docker):
     suffix = uuid.uuid4().hex[:12]
     network = f"vertep-lab-web-test-{suffix}"
     api = f"{network}-api"
     web = f"{network}-web"
     image = f"vertep-lab-web-test:{suffix}"
-    assets = tmp_path / "browser"
-    assets.mkdir(mode=0o755)
+    asset_root, assets = readable_asset_dir()
     server = """
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -104,9 +140,9 @@ HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
             "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true",
             "-p", "127.0.0.1::8080", "-v", f"{assets}:/srv/lab-web:ro", image)
-        inspection = json.loads(run("inspect", web).stdout)[0]
+        inspection, port = wait_for_published_port(web, "8080/tcp")
         assert inspection["Config"]["User"] == "nginx"
-        port = inspection["NetworkSettings"]["Ports"]["8080/tcp"][0]["HostPort"]
+        assert inspection["State"]["Running"] is True
         origin = f"http://127.0.0.1:{port}"
         wait_for(origin + "/healthz", lambda r: r.status_code == 200)
         with httpx.Client(base_url=origin, trust_env=False, timeout=5) as client:
@@ -138,3 +174,4 @@ HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
         run("rm", "-f", web, api, check=False)
         run("network", "rm", network, check=False)
         run("image", "rm", image, check=False)
+        shutil.rmtree(asset_root, ignore_errors=True)
