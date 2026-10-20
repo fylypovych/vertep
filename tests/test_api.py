@@ -1840,6 +1840,65 @@ def test_polling_restart_replays_from_saved_offset(tmp_path):
     assert service.last_update_id == 2
 
 
+def test_telegram_polling_service_init_without_offset_file_uses_config_root(tmp_path, monkeypatch):
+    """Issue fix: TelegramPollingService must resolve config_root() when no
+    explicit offset_file is supplied.  Before the fix this raised
+    ``NameError: name 'config_root' is not defined`` and blocked FastAPI
+    startup, leaving vertep-core-1 unhealthy.
+    """
+    from adapters.telegram import TelegramPollingService
+    import adapters.telegram as telegram_module
+
+    config_dir = tmp_path / "config"
+    monkeypatch.setattr(telegram_module, "config_root", lambda: config_dir)
+    monkeypatch.setenv("TELEGRAM_POLLING_ENABLED", "true")
+
+    service = TelegramPollingService(token="test-token", on_update=lambda update: None)
+    assert service.offset_file == config_dir / "telegram_polling_state.json"
+    assert service.offset == 0
+
+    # Persisting must create the config directory automatically.
+    service.offset = 7
+    service.last_update_id = 6
+    service._save_offset()
+    assert config_dir.is_dir()
+    assert (config_dir / "telegram_polling_state.json").exists()
+    reloaded = TelegramPollingService(token="test-token", on_update=lambda update: None)
+    assert reloaded.offset == 7
+    assert reloaded.last_update_id == 6
+
+
+def test_telegram_polling_service_init_missing_config_dir_is_safe(tmp_path, monkeypatch):
+    """The default offset file must not crash when the config directory does
+    not yet exist; the directory is created lazily on first save."""
+    from adapters.telegram import TelegramPollingService
+    import adapters.telegram as telegram_module
+
+    missing_dir = tmp_path / "does-not-exist" / "config"
+    monkeypatch.setattr(telegram_module, "config_root", lambda: missing_dir)
+    monkeypatch.setenv("TELEGRAM_POLLING_ENABLED", "true")
+
+    service = TelegramPollingService(token="test-token", on_update=lambda update: None)
+    assert service.offset == 0
+    service.offset = 5
+    service.last_update_id = 4
+    service._save_offset()
+    assert missing_dir.is_dir()
+    assert (missing_dir / "telegram_polling_state.json").exists()
+
+
+def test_telegram_polling_service_init_explicit_offset_file_still_works(tmp_path):
+    """Passing an explicit offset_file must keep using it and never touch
+    config_root()."""
+    from adapters.telegram import TelegramPollingService
+
+    state_file = tmp_path / "custom-state.json"
+    service = TelegramPollingService(token="test-token", on_update=lambda update: None,
+                                     offset_file=state_file)
+    assert service.offset_file == state_file
+    assert service.offset == 0
+
+
 def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypatch):
     """Real Telegram webhook flow creates persisted Job with character's generation workflow.
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.64
+- Telegram polling: виправлено `NameError` у `adapters/telegram.py` — `TelegramPollingService` тепер коректно визначає `config_root()`, створює директорію конфігурації під час збереження offset і більше не блокує старт FastAPI (`vertep-core-1`); додано тести на явний `offset_file` та відсутню директорію.
+- `core/app.py`: Telegram-колбеки `approve`/`reject` і `publish_channel`/`publish_all` захищені від повторного виконання через `claim_callback`/`complete_callback`; помилка обробки фіксується статусом `FAILED` і не лишає операцію незакритою.
+- `lab/api.py`: видача grant вимагає автентифікації власника — `LAB_OWNER_TOKEN` і заголовок `X-Lab-Owner-Token`; `approved_by` береться з автентифікованої особи `LAB_OWNER_IDENTITY`, а не з тіла запиту; типовий ресурсний провайдер більше не підставляється.
+- `lab/policy.py`: grant відхиляє самопідтвердження (`approved_by` дорівнює actor) і оточення поза `lab`/`test`.
+- `lab/governance.py`: додано `submit_ir_evidence` (обов'язкові version, commit, environment, expected, actual, reviewer) та `delegate_close_ir` (owner-delegated close лише за активним grant і повним доказом).
+- `lab/orchestrator.py`: оркестратор виконує задачу через фактичний executor, зберігає результат у звіті та переводить задачу у `FAILED` при помилці виконання.
+- Issue i.0.0.2.50: додано тести `tests/test_lab_api_auth.py`, `tests/test_lab_executor.py`, `tests/test_lab_isolation.py`; розширено `tests/test_api.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.63
 - Відновлено послідовну нумерацію CHANGELOG і врахування кожного commit під час вибору наступної версії; додано regression tests для дублікатів, commits без версії та зайнятих remote tags.
 - Збережено порожню поточну storyboard revision при recovery; валідація Voice result використовує issued-task snapshot до побічних ефектів.
@@ -148,7 +159,6 @@
 - Посилено семантику rolling update та черги в `scripts/update-agent.py`, `core/queue.py`, `tests/test_rolling_update.py`, `tests/test_rolling_update_issue86.py` та `tests/test_queue_redis_contract.py`.
 - Виправлено bootstrap wizard validation і security checks у `tests/test_bootstrap_wizard.py`, `tests/test_update_security.py` та `web-v2/src/app/setup/setup.component.ts`.
 - Додано Web UI для real tests через `web-v2/src/app/core/api/real-tests.api.ts` і `web-v2/src/app/real-tests/real-tests.component.ts`.
-## Unreleased
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.43
 - Issue #90 — Storyboard approval gate & history regeneration:

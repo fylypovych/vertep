@@ -175,8 +175,55 @@ class Governance:
         """Editing any issue — including a ``lab`` one — is never autonomous."""
         return self._refuse_or_report(Action.EDIT_ISSUE, issue)
 
-    def close_issue(self, issue: str) -> dict:
-        return self._refuse_or_report(Action.CLOSE_ISSUE, issue)
+    def submit_ir_evidence(self, issue: str, evidence: dict) -> dict:
+        """Record and validate evidence for a candidate ``ir`` close.
+
+        Evidence must be a real, complete proof: version/commit, environment,
+        expected vs actual and an independent reviewer.  Incomplete or mock
+        evidence is rejected here, before any close is considered
+        (Issue i.0.0.2.50, L6).
+        """
+        required = ("version", "commit", "environment", "expected", "actual",
+                    "reviewer")
+        if not isinstance(evidence, dict):
+            raise GovernanceError("evidence must be an object")
+        missing = [key for key in required if not str(evidence.get(key, "")).strip()]
+        if missing:
+            self.gate.trail.append(actor=self.actor, action="submit_ir_evidence",
+                                  subject=issue, decision="REJECTED",
+                                  rule="incomplete_evidence",
+                                  reason="missing " + ", ".join(missing))
+            return {"accepted": False, "missing": missing}
+        record = {"issue": issue, "evidence": evidence,
+                  "submitted_at": datetime.now(timezone.utc).isoformat(),
+                  "actor": self.actor}
+        append_jsonl(self.state_dir / "ir-evidence.jsonl", record)
+        self.gate.trail.append(actor=self.actor, action="submit_ir_evidence",
+                              subject=issue, decision="RECORDED",
+                              rule="evidence_submitted", reason="evidence recorded")
+        return {"accepted": True, "record": record}
+
+    def delegate_close_ir(self, issue: str, evidence: dict | None = None) -> dict:
+        """Owner-delegated close of an ``ir`` after complete evidence.
+
+        The gate stays the authority: without an active ``delegate_close_ir``
+        grant (or incomplete evidence) the close is refused.
+        """
+        if evidence is not None:
+            verdict = self.submit_ir_evidence(issue, evidence)
+            if not verdict.get("accepted"):
+                return {"allowed": False, "reason": "incomplete evidence",
+                        "missing": verdict.get("missing", [])}
+        try:
+            self.gate.require(Action.DELEGATE_CLOSE_IR, actor=self.actor,
+                              subject=issue)
+        except PolicyDenied as error:
+            return {"allowed": False, "reason": str(error),
+                    "rule": error.decision.rule}
+        self.gate.trail.append(actor=self.actor, action="delegate_close_ir",
+                              subject=issue, decision="DELEGATED",
+                              rule="owner_grant", reason="ir close delegated")
+        return {"allowed": True, "issue": issue, "action": "delegate_close_ir"}
 
     def create_i_issue(self, title: str) -> dict:
         return self._refuse_or_report(Action.CREATE_I_ISSUE, title)

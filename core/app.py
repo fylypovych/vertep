@@ -1578,11 +1578,33 @@ def _handle_telegram_callback(callback: dict) -> dict:
     elif action in {"approve", "reject"}:
         if not is_admin_chat(chat_id):
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
-        return _handle_approve_job(callback, chat_id, payload) if action == "approve" else _handle_reject_job(callback, chat_id, payload)
+        _record, claimed = claim_callback(callback_id, actor=f"telegram:{chat_id}",
+                                         action=action, target=payload or None)
+        if not claimed:
+            return TelegramAdapter().answer_callback(callback_id, "Операцію вже оброблено.")
+        try:
+            result = (_handle_approve_job(callback, chat_id, payload) if action == "approve"
+                      else _handle_reject_job(callback, chat_id, payload))
+        except Exception:
+            complete_callback(callback_id, status="FAILED")
+            raise
+        complete_callback(callback_id)
+        return result
     elif action in {"publish_channel", "publish_all"}:
         if not is_admin_chat(chat_id):
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
-        return _handle_publish_channel(callback, chat_id, payload) if action == "publish_channel" else _handle_publish_all(callback, chat_id, payload)
+        _record, claimed = claim_callback(callback_id, actor=f"telegram:{chat_id}",
+                                         action=action, target=payload or None)
+        if not claimed:
+            return TelegramAdapter().answer_callback(callback_id, "Операцію вже оброблено.")
+        try:
+            result = (_handle_publish_channel(callback, chat_id, payload) if action == "publish_channel"
+                      else _handle_publish_all(callback, chat_id, payload))
+        except Exception:
+            complete_callback(callback_id, status="FAILED")
+            raise
+        complete_callback(callback_id)
+        return result
     elif action in {"sb_ok", "sb_regen", "sb_edit", "sb_reject",
                     "sb_img_ok", "sb_img_regen", "sb_img_edit", "sb_img_scene"}:
         if not is_admin_chat(chat_id):

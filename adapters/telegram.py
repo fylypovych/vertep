@@ -9,6 +9,7 @@ from typing import Callable
 import httpx
 
 from core.logging_config import secret_redact as _redact
+from core.first_run import config_root
 
 logger = logging.getLogger(__name__)
 

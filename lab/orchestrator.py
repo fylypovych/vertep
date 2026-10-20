@@ -99,13 +99,14 @@ class Orchestrator:
 
     def __init__(self, workspace: Workspace, gate: PolicyGate, budget: BudgetLedger,
                  trail=None, *, provider=None, actor: str = "lab",
-                 timeout_seconds: int = 1800):
+                 timeout_seconds: int = 1800, executor=None):
         self.workspace = workspace
         self.gate = gate
         self.budget = budget
         self.actor = actor
         self.timeout_seconds = timeout_seconds
         self.trail = trail or gate.trail
+        self.executor = executor
         self.leases = (LeaseManager(provider, state_dir=workspace.state_dir, actor=actor)
                        if provider is not None else None)
         self.queue: list[Task] = []
@@ -176,9 +177,10 @@ class Orchestrator:
         return report
 
     def run_once(self, *, model: str = "ollama:qwen2.5-coder",
-                 provider: str = "ollama") -> dict:
+                 provider: str = "ollama", executor=None) -> dict:
         """Execute one queued task end-to-end, fail-closed at every gate."""
         result: dict = {"state": RunState.BLOCKED.value, "checks": None, "reason": ""}
+        active_executor = self.executor if executor is None else executor
         try:
             self.workspace.require_isolated()
         except IsolationViolation as error:
@@ -233,14 +235,24 @@ class Orchestrator:
             self._save_queue()
         try:
             self.gate.require(Action.LOCAL_FIX, actor=self.actor, subject=task.task_id)
+            task_result = None
+            if active_executor is not None:
+                task_result = active_executor(task, model=model, provider=provider,
+                                             workspace=self.workspace)
             task.state = RunState.COMPLETED.value
             self.budget.record_run(status="completed", detail=task.task_id)
             result.update({"state": RunState.COMPLETED.value, "task": task.as_dict(),
-                           "reason": "task executed under standing permission"})
+                           "reason": "task executed under standing permission",
+                           "result": task_result})
         except PolicyDenied as error:
             task.state = RunState.BLOCKED.value
             self.budget.record_run(status="blocked", detail=str(error))
             result.update({"state": RunState.BLOCKED.value, "task": task.as_dict(),
+                           "reason": str(error)})
+        except Exception as error:
+            task.state = RunState.FAILED.value
+            self.budget.record_run(status="failed", detail=str(error))
+            result.update({"state": RunState.FAILED.value, "task": task.as_dict(),
                            "reason": str(error)})
         finally:
             if not standing:

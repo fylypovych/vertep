@@ -220,8 +220,16 @@ class PolicyGate:
             raise ValueError(f"{name} is not a gated action")
         if not str(approved_by).strip():
             raise ValueError("a grant requires the approving owner identity")
+        # A grant is an owner act: the laboratory (or any actor) may not
+        # approve a grant for itself, and an empty/self identity is not proof
+        # of authority (Issue i.0.0.2.50, L4).
+        approved = str(approved_by).strip()
+        if approved == str(actor).strip() or approved.lower() in {"lab", "self", "unknown"}:
+            raise ValueError("a grant requires an independent owner approver")
+        if str(environment).strip() not in {"lab", "test"}:
+            raise ValueError("a grant is only valid inside the laboratory environment")
         grant = Grant(grant_id=grant_id or f"g-{len(self.grants()) + 1:04d}",
-                      actor=actor, action=name, subject=subject, approved_by=approved_by,
+                      actor=actor, action=name, subject=subject, approved_by=approved,
                       granted_at=datetime.now(timezone.utc).isoformat(),
                       expires_at=expires_at, environment=environment,
                       scope_version=scope_version)

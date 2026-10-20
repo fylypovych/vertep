@@ -11,12 +11,12 @@ orchestrator and the policy gate keep working.
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from .budget import BudgetLedger
 from .governance import Governance, IssueTransport
-from .gpu_lease import FakeResourceProvider, ResourceRequirement
+from .gpu_lease import ResourceRequirement
 from .orchestrator import Orchestrator
 from .policy import PolicyGate
 from .workspace import Workspace
@@ -62,7 +62,7 @@ def create_app(state_dir=None, workspace_root=None, *, provider=None) -> FastAPI
     workspace.prepare()
     gate = PolicyGate(state)
     budget = BudgetLedger(state / "budget")
-    provider = provider if provider is not None else FakeResourceProvider()
+    provider = provider if provider is not None else None
     orchestrator = Orchestrator(workspace, gate, budget, provider=provider)
     governance = Governance(gate, IssueTransport(dry_run=True),
                             state_dir=state / "governance")
@@ -91,14 +91,22 @@ def create_app(state_dir=None, workspace_root=None, *, provider=None) -> FastAPI
                            subject=request.subject).as_dict()
 
     @app.post("/api/lab/grants")
-    def register_grant(request: GrantRequest) -> dict:
+    def register_grant(request: GrantRequest, raw_request: Request) -> dict:
+        # Grants are an owner act: the caller must prove ownership through a
+        # shared secret, and approved_by is taken from that authenticated
+        # identity rather than from the request body (Issue i.0.0.2.50, L4).
+        owner_token = os.getenv("LAB_OWNER_TOKEN", "")
+        supplied = raw_request.headers.get("X-Lab-Owner-Token", "")
+        if not owner_token or supplied != owner_token:
+            raise HTTPException(401, "owner authentication required")
+        owner_identity = os.getenv("LAB_OWNER_IDENTITY", "owner")
         try:
             grant = gate.register_grant(actor=request.actor, action=request.action,
-                                        subject=request.subject,
-                                        approved_by=request.approved_by,
-                                        expires_at=request.expires_at,
-                                        environment=request.environment,
-                                        scope_version=request.scope_version)
+                                         subject=request.subject,
+                                         approved_by=owner_identity,
+                                         expires_at=request.expires_at,
+                                         environment=request.environment,
+                                         scope_version=request.scope_version)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         return {"grant": grant.as_dict()}
