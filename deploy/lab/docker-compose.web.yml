@@ -1,0 +1,60 @@
+name: vertep-lab-web
+
+# Standalone frontend/API packaging; no production CORE or GPU dependency.
+services:
+  lab-control:
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile
+    image: ghcr.io/fylypovych/vertep-lab-control:${VERSION:-dev}
+    command: ["uvicorn", "lab.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      LAB_STATE_DIR: /var/lib/vertep-lab
+      LAB_WORKSPACE: /var/lib/vertep-lab/workspace
+      LAB_IDLE_SHARING_ENABLED: "false"
+    volumes:
+      - lab-web-state:/var/lib/vertep-lab
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/lab/status', timeout=3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks: [lab-web]
+
+  lab-web:
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile.web
+    image: ghcr.io/fylypovych/vertep-lab-web:${VERSION:-dev}
+    ports:
+      - "127.0.0.1:${LAB_WEB_PORT:-8444}:8080"
+    volumes:
+      - type: bind
+        source: ${LAB_WEB_DIST:?Вкажіть абсолютний шлях до готової Angular browser збірки лабораторії}
+        target: /srv/lab-web
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      lab-control:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [lab-web]
+
+volumes:
+  lab-web-state:
+
+networks:
+  lab-web:

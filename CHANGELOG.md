@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.66
+- Issue i.0.0.2.51 (#251) — Docker-частина Web-панелі лабораторії: додано `deploy/lab/Dockerfile.web` (nginx-image з read-only rootfs, без production Web UI; готова browser-збірка підключається окремим bind mount) та `deploy/lab/web/nginx.conf`.
+- `deploy/lab/web/nginx.conf`: роздача SPA з `no-store` для `index.html`, проксі `/api/lab/` до Lab API без зміни `Authorization` і cookies, `/healthz` та `/readyz` (503, коли немає `index.html`), невідомі `/api/` шляхи повертають 404 замість index-сторінки.
+- `deploy/lab/docker-compose.web.yml`: standalone-пакування Lab API і Web — окремі state volume і network, без Docker socket, production volumes/secrets і GPU; `LAB_WEB_DIST` обов'язковий (`create_host_path: false`), listener лише на loopback.
+- `deploy/lab/web/README.md`: інструкція складання й запуску та чіткі межі — це Docker-частина #251, а не приймання Angular UI.
+- `tests/test_lab_web_docker.py`: disposable-перевірка на реальних контейнерах — compose-конфігурація та ізоляція, readiness, SPA fallback, проксі авторизації; без Docker тест пропускається.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.65
 - `tests/test_lab_api_auth.py`: тести laboratory API більше не використовують production-шляхи `/srv/vertep-lab/repo` і `/var/lib/vertep-lab` — `create_app()` викликається з тимчасовими `state_dir` і `workspace_root`, тому набір тестів проходить на CI-раннері без root-прав.
 
