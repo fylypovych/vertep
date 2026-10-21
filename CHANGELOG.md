@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.70
+- Issue ir.0.0.2.52 (#252) — Lab: підготовка кваліфікації реальної VM/GPU isolation, production-priority і 24/7 режиму. `lab/qualification.py` (нове): каталог рядків R1–R6 з обов'язковими фактами, канонічним текстом очікування та потрібними правами власника; схема evidence row і машино-читний валідатор, який відхиляє неповні рядки, короткий SHA, артефакт без `sha256`, `SKIPPED`/`MOCK`, секрети в доказі та верифікацію самим виконавцем; загальний вердикт `PASS` лише коли всі рядки повні.
+- `lab/qualification_run.py` (нове): реальні collector'и стенду (версія, повний SHA, digests образів, host/OS/CPU/RAM/SSD, контейнер і Docker, негативні ізоляційні проби production-шляхів, egress allowlist, відсутність GPU passthrough, VRAM через `nvidia-smi`) та раннери рядків R1–R6: вимірювання lease на production-priority endpoint (deny без lease, queue/reservation, heartbeat/revoke, release ack, VRAM до/після), fault-сценарії (connection loss, заборона GPU без lease, реконфіляція lease після restart, finally-release), перший actual audit в ізольованій Git copy через реальний role-executor, перевірка 24/7 activation і budgets; невиміряне фіксується як `BLOCKED` із конкретною причиною, ніколи як `PASS`.
+- `scripts/qualify_lab.py` (нове): CLI `--plan` (каталог рядків і відсутні передумови — не доказ), `--collect` (збір доказів на стенді), `--validate` (незалежна перевірка наявного документа); код 0 лише за повного `PASS`, каталог доказів за замовчуванням поза робочим деревом.
+- `docs/lab-qualification.md` (нове): процедура R1–R6 — передумови стенду, потрібні права власника, дії оператора на кожному рядку, формат доказу, правила валідатора, коди виходу та заборони (deploy, GPU-операції, production-priority, 24/7 activation і публікація залишаються за власником).
+- `tests/test_lab_qualification.py` (нове): 39 тестів — цілісність каталогу, правила валідації рядка, матриця доказів (усі рядки потрібні для `PASS`), collector'и, раннери (`BLOCKED` без endpoint, активації та незалежної верифікації) та CLI (план не є доказом, `validate` відхиляє неповний документ).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.69
 - Issue i.0.0.2.50 (#250) — Lab: фактичне виконання, погодження та recovery-safe governance. `lab/executor.py` (нове): клієнт role-executor за контрактом `role-executor/1` з перевіркою ізоляції перед відправкою, fail-closed без явного endpoint (`LAB_ROLE_EXECUTOR_URL` + `LAB_ROLE_EXECUTOR_ENABLED`), окремим повідомленням про таймаут.
 - `lab/roles.py` (нове): розбір `lab/role_profiles.md` (рівно 8 профілів) і рольова матриця прав — `reviewer` лише read-only, `qa` не виконує зміни.
