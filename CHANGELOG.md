@@ -8,6 +8,13 @@
 - Нові тести: telegram durable acceptance, lab web e2e, media browser e2e, update browser e2e.
 - Додано deploy/lab/web/app та telegram transport fixtures.
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.72
+- Оновлено VERSION та CHANGELOG для версії 0.0.2.72
+- Додано тести GPU runtime inventory delivery
+- Виправлено роботу role_executor worker
+- Оновлено core/api та scripts
+- Додано/modifed тести acceptance
+
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.70
 - Issue ir.0.0.2.52 (#252) — Lab: підготовка кваліфікації реальної VM/GPU isolation, production-priority і 24/7 режиму. `lab/qualification.py` (нове): каталог рядків R1–R6 з обов'язковими фактами, канонічним текстом очікування та потрібними правами власника; схема evidence row і машино-читний валідатор, який відхиляє неповні рядки, короткий SHA, артефакт без `sha256`, `SKIPPED`/`MOCK`, секрети в доказі та верифікацію самим виконавцем; загальний вердикт `PASS` лише коли всі рядки повні.
