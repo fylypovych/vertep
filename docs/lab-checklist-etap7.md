@@ -44,7 +44,7 @@ docker compose -f /opt/vertep-lab/docker-compose.yml exec lab-control python -m 
 docker compose -f /opt/vertep-lab/docker-compose.yml exec lab-control bash -c "
 python -m lab.cli grant create_lab_issue \
   --subject lab.0.0.0.1 \
-  --approved-by owner \
+  --owner-token \"\$LAB_OWNER_TOKEN\" \
   --hours 24
 "
 ```
@@ -55,10 +55,14 @@ python -m lab.cli grant create_lab_issue \
 docker compose -f /opt/vertep-lab/docker-compose.yml exec lab-control bash -c "
 python -m lab.cli grant create_ir_issue \
   --subject ir.0.0.0.1 \
-  --approved-by owner \
+  --owner-token \"\$LAB_OWNER_TOKEN\" \
   --hours 24
 "
 ```
+
+`LAB_OWNER_TOKEN` має бути у `/opt/vertep-lab/lab.env` (права 0600) і
+пред'являтися при кожній owner-акції: без секрету grant не створюється, а
+identity погоджувача береться з `LAB_OWNER_IDENTITY`, не з аргументів.
 
 ### 2.3 Перевірити активні grants
 

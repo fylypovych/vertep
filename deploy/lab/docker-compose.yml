@@ -26,6 +26,13 @@ services:
       - LAB_POLICY_GATE_ACTIVE=true
       - LAB_IDLE_SHARING_ENABLED=${LAB_IDLE_SHARING_ENABLED:-false}
       - LAB_VERTEP_URL=${LAB_VERTEP_URL:-}
+      # Owner acts (grant/revoke) and publication need the owner secret; without
+      # them the laboratory stays fail-closed and the transport stays dry-run.
+      - LAB_OWNER_TOKEN=${LAB_OWNER_TOKEN:-}
+      - LAB_OWNER_IDENTITY=${LAB_OWNER_IDENTITY:-owner}
+      - LAB_GITHUB_TOKEN=${LAB_GITHUB_TOKEN:-}
+      - LAB_GITHUB_REPOSITORY=${LAB_GITHUB_REPOSITORY:-}
+      - LAB_GITHUB_API_URL=${LAB_GITHUB_API_URL:-}
     deploy:
       resources:
         limits:

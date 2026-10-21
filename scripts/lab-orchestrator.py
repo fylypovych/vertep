@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lab.budget import BudgetLedger, LabPaused, QuotaExceeded  # noqa: E402
+from lab.executor import executor_from_environment  # noqa: E402
 from lab.gpu_lease import FakeResourceProvider, VertepResourceClient  # noqa: E402
 from lab.orchestrator import Orchestrator  # noqa: E402
 from lab.policy import PolicyGate  # noqa: E402
@@ -26,11 +27,25 @@ from lab.workspace import Workspace  # noqa: E402
 
 
 def build_provider(arguments):
-    """Production adapter when configured, deterministic fake otherwise."""
+    """Real adapter when configured, explicit fake for demos, none otherwise.
+
+    A silent fake would let a scheduled run look green against production it
+    never touched (Issue #250, L2), so the fake provider must be asked for.
+    """
     base_url = arguments.vertep_url or os.getenv("LAB_VERTEP_URL", "")
-    if not base_url:
+    if base_url:
+        return VertepResourceClient(base_url, enabled=arguments.idle_sharing)
+    if arguments.fake_provider:
         return FakeResourceProvider()
-    return VertepResourceClient(base_url, enabled=arguments.idle_sharing)
+    return None
+
+
+def build_executor(arguments):
+    """Resolve the role executor — fail-closed without an owner endpoint."""
+    url = arguments.role_executor_url
+    if url:
+        return executor_from_environment(url, enabled=True)
+    return executor_from_environment(os.getenv("LAB_ROLE_EXECUTOR_URL", ""))
 
 
 def main(argv=None) -> int:
@@ -42,6 +57,11 @@ def main(argv=None) -> int:
     parser.add_argument("--vertep-url", default="")
     parser.add_argument("--idle-sharing", action="store_true",
                         help="дозволити idle GPU lease (лише після реальних гарантій)")
+    parser.add_argument("--fake-provider", action="store_true",
+                        help="явно увімкнути fake resource provider (для демо/тестів)")
+    parser.add_argument("--role-executor-url", default="",
+                        help="явний endpoint role executor (інакше LAB_ROLE_EXECUTOR_URL "
+                             "+ LAB_ROLE_EXECUTOR_ENABLED)")
     parser.add_argument("--max-runs", type=int, default=1)
     parser.add_argument("--report", default="")
     arguments = parser.parse_args(argv)
@@ -52,7 +72,9 @@ def main(argv=None) -> int:
     gate = PolicyGate(state_dir)
     budget = BudgetLedger(state_dir / "budget")
     provider = build_provider(arguments)
-    orchestrator = Orchestrator(workspace, gate, budget, provider=provider)
+    executor = build_executor(arguments)
+    orchestrator = Orchestrator(workspace, gate, budget, provider=provider,
+                                executor=executor)
 
     try:
         outcomes = orchestrator.run_cycle(max_runs=arguments.max_runs)

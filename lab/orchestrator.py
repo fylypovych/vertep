@@ -26,14 +26,19 @@ from .audit import AuditTrail
 from .budget import BudgetLedger, LabPaused, QuotaExceeded
 from .gpu_lease import (LeaseDenied, LeaseLost, LeaseManager, ResourceRequirement,
                         ResourceUnavailable)
-from .policy import Action, PolicyDenied, PolicyGate
-from .state_store import read_json, write_json
+from .policy import ROLE_PROFILES, Action, PolicyDenied, PolicyGate
+from .state_store import append_jsonl, read_json, read_jsonl, write_json
 from .workspace import IsolationViolation, Workspace, check_command
 
-#: Roles approved in the issue; one agent may execute them sequentially with
-#: profile Skills instead of keeping eight permanently running models.
-ROLES = ("architect", "backend", "ai_gpu", "frontend", "devops", "qa", "security",
-         "reviewer")
+#: Roles approved in the issue; parsed from ``lab/role_profiles.md`` through the
+#: policy gate, never hard-coded here (Issue i.0.0.2.50, L1).
+ROLES: tuple = tuple(ROLE_PROFILES)
+
+#: Task kinds whose product is a written observation: they run under the role's
+#: ``write_report`` standing permission instead of ``local_fix``.  Everything
+#: else is change work, so the gate rules on ``local_fix`` *as the task's role*,
+#: which is what keeps a read-only reviewer from ever executing a fix.
+_REPORT_KINDS = frozenset({"audit", "review", "report"})
 
 
 class RunState(str, Enum):
@@ -122,6 +127,23 @@ class Orchestrator:
     def _handoff_path(self) -> Path:
         return self.workspace.state_dir / "handoff.json"
 
+    @property
+    def _results_path(self) -> Path:
+        return self.workspace.state_dir / "results.jsonl"
+
+    def _record_result(self, task: Task, state: str, *, result=None,
+                       reason: str = "") -> dict:
+        """Persist one durable, per-role result so every role keeps its own."""
+        record = {"at": datetime.now(timezone.utc).isoformat(),
+                  "task_id": task.task_id, "kind": task.kind, "role": task.role,
+                  "state": state, "result": result, "reason": reason}
+        append_jsonl(self._results_path, record)
+        return record
+
+    def results(self) -> list:
+        """Every recorded run result, oldest first, with its role."""
+        return read_jsonl(self._results_path)
+
     def _load_queue(self) -> None:
         payload = read_json(self._queue_path, default=[]) or []
         self.queue = [Task(**item) for item in payload
@@ -169,6 +191,7 @@ class Orchestrator:
     def status(self) -> dict:
         report = {"workspace": self.workspace.as_dict(), "policy": self.gate.status(),
                   "budget": self.budget.usage(), "roles": list(ROLES),
+                  "executor": {"configured": self.executor is not None},
                   "queue": [task.as_dict() for task in self.queue],
                   "handoff": self.read_handoff()}
         if self.leases is not None:
@@ -207,6 +230,18 @@ class Orchestrator:
             return {**result, "state": RunState.FAILED.value,
                     "reason": "static checks failed before any AI call"}
 
+        # A run may only complete after a *real* role invocation: without an
+        # enabled executor nothing executes, so the run is reported, never
+        # pretended (Issue i.0.0.2.50, L1/L2 — no silent fake provider).
+        if active_executor is None:
+            reason = ("no role executor configured: COMPLETED requires a real "
+                      "role invocation (LAB_ROLE_EXECUTOR_URL)")
+            self.budget.record_run(status="blocked", detail=reason)
+            self.trail.append(actor=self.actor, action="run_once", subject="",
+                              decision="BLOCKED", rule="executor_required",
+                              reason=reason)
+            return {**result, "state": RunState.BLOCKED.value, "reason": reason}
+
         if self._expired():
             self.budget.record_run(status="blocked", detail="run timeout")
             return {**result, "state": RunState.BLOCKED.value, "reason": "run timeout"}
@@ -234,24 +269,31 @@ class Orchestrator:
         if not standing:
             self._save_queue()
         try:
-            self.gate.require(Action.LOCAL_FIX, actor=self.actor, subject=task.task_id)
-            task_result = None
-            if active_executor is not None:
-                task_result = active_executor(task, model=model, provider=provider,
-                                             workspace=self.workspace)
+            # The gate rules *as the task's role*, so a read-only reviewer can
+            # never execute change work and a QA result stays separate from the
+            # independent review (Issue i.0.0.2.50, L1).
+            execution_action = (Action.WRITE_REPORT if task.kind in _REPORT_KINDS
+                                else Action.LOCAL_FIX)
+            self.gate.require(execution_action, actor=task.role, subject=task.task_id)
+            task_result = active_executor(task, model=model, provider=provider,
+                                          workspace=self.workspace)
             task.state = RunState.COMPLETED.value
             self.budget.record_run(status="completed", detail=task.task_id)
+            self._record_result(task, RunState.COMPLETED.value, result=task_result)
             result.update({"state": RunState.COMPLETED.value, "task": task.as_dict(),
-                           "reason": "task executed under standing permission",
+                           "reason": f"task {task.task_id} executed by role "
+                                     f"{task.role} through the role executor",
                            "result": task_result})
         except PolicyDenied as error:
             task.state = RunState.BLOCKED.value
             self.budget.record_run(status="blocked", detail=str(error))
+            self._record_result(task, RunState.BLOCKED.value, reason=str(error))
             result.update({"state": RunState.BLOCKED.value, "task": task.as_dict(),
                            "reason": str(error)})
         except Exception as error:
             task.state = RunState.FAILED.value
             self.budget.record_run(status="failed", detail=str(error))
+            self._record_result(task, RunState.FAILED.value, reason=str(error))
             result.update({"state": RunState.FAILED.value, "task": task.as_dict(),
                            "reason": str(error)})
         finally:

@@ -98,8 +98,14 @@ LAB_BRANCH=main
 # Actor
 LAB_ACTOR=lab
 
-# Owner
-LAB_OWNER=owner
+# Owner (секрет власника: grant/revoke вимагають його пред'явлення)
+LAB_OWNER_TOKEN=<секрет-власника>
+LAB_OWNER_IDENTITY=owner
+
+# GitHub transport (без токена й репозиторію транспорт лишається dry-run)
+LAB_GITHUB_TOKEN=
+LAB_GITHUB_REPOSITORY=owner/repo
+LAB_GITHUB_API_URL=
 EOF
 ```
 

@@ -85,10 +85,16 @@ def check_environment(environment: dict | None = None) -> IsolationReport:
 
 
 def check_command(command) -> IsolationReport:
-    """Refuse a command that would drive the production Docker daemon directly."""
+    """Refuse a command that would drive the production Docker daemon directly.
+
+    Production paths are matched on path boundaries, so the laboratory's own
+    directories (``/opt/vertep-lab``, ``/var/lib/vertep-lab``) are not confused
+    with the production tree (``/opt/vertep``, ``/data/config``).
+    """
     text = " ".join(str(part) for part in command)
     problems = [f"command references production path {forbidden}"
-                for forbidden in FORBIDDEN_PATHS if forbidden in text]
+                for forbidden in FORBIDDEN_PATHS
+                if re.search(re.escape(forbidden) + r"(?=$|[\s'\":/])", text)]
     if _DOCKER_COMMAND.search(text):
         problems.append("command would drive the production Docker daemon")
     return IsolationReport(not problems, problems)

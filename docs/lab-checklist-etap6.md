@@ -293,7 +293,7 @@ python -m pytest tests/test_api.py -v
 # Включити policy gate (тимчасово для тесту)
 docker compose -f /opt/vertep-lab/docker-compose.yml exec lab-control bash -c "
 export LAB_POLICY_GATE_ACTIVE=true
-python -m lab.cli grant create_lab_issue --approved-by owner --hours 8
+python -m lab.cli grant create_lab_issue --owner-token \"\$LAB_OWNER_TOKEN\" --hours 8
 "
 
 # Створити issue

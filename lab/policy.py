@@ -29,7 +29,8 @@ from pathlib import Path
 from typing import Iterable
 
 from .audit import AuditTrail
-from .state_store import read_json, write_json
+from .roles import RoleProfile, load_role_profiles
+from .state_store import append_jsonl, read_json, read_jsonl, write_json
 
 #: Actions the laboratory may always perform inside its own isolated copy.
 STANDING_PERMISSIONS = frozenset({
@@ -55,6 +56,15 @@ GATED_ACTIONS = frozenset({
 
 ISSUE_TYPES = ("lab", "i", "ir", "var")
 _IDENTIFIER = re.compile(r"^(lab|i|ir|var)\.\d+\.\d+\.\d+\.\d+$")
+
+#: The owner-approved role table parsed from ``lab/role_profiles.md``.  The
+#: gate rules on a role's standing/gated actions from this single source, so no
+#: caller may carry its own copy of the permissions (Issue i.0.0.2.50, L1/L4).
+#: Parsing is strict: an unknown or forbidden action fails the import instead
+#: of silently widening a role.
+ROLE_PROFILES: dict[str, RoleProfile] = load_role_profiles(
+    standing=STANDING_PERMISSIONS, gated=GATED_ACTIONS, forbidden=FORBIDDEN_ACTIONS)
+ROLES: tuple[str, ...] = tuple(ROLE_PROFILES)
 
 
 class Action(str, Enum):
@@ -182,6 +192,13 @@ class PolicyGate:
 
     state_dir: Path
     activated: bool = False
+    #: The environment this gate governs; a grant minted for another
+    #: environment never authorises a decision taken here (Issue i.0.0.2.50, L4).
+    environment: str = "lab"
+    #: The approval scope this gate is bound to.  A grant carrying a different
+    #: ``scope_version`` (or one bound to a different scope) does not match, so
+    #: a stale scope cannot be re-authorised by relabelling a request.
+    scope_version: str = ""
     trail: AuditTrail = field(init=False)
 
     def __post_init__(self) -> None:
@@ -257,44 +274,72 @@ class PolicyGate:
                               decision="REVOKED", rule="owner_action",
                               reason="delegation cancelled")
         return found
-
-    def active_grant(self, actor: str, action: str, subject: str) -> Grant | None:
+    def active_grant(self, actor: str, action: str, subject: str, *,
+                     scope: str | None = None) -> Grant | None:
+        """First grant matching actor, action, subject, environment and scope."""
         name = _action_name(action)
+        effective_scope = self.scope_version if scope is None else str(scope)
         for grant in self.grants():
-            if grant.matches(actor, name, subject) and grant.active():
+            if (grant.matches(actor, name, subject) and grant.active()
+                    and grant.environment == self.environment
+                    and grant.scope_version == effective_scope):
                 return grant
         return None
 
     # -- decisions -------------------------------------------------------
     def decide(self, action, *, actor: str, subject: str = "",
+               scope: str | None = None,
                now: datetime | None = None) -> Decision:
+        """Rule on one action; role standing is checked before any grant.
+
+        A role from ``role_profiles.md`` may only exercise what its own profile
+        lists: standing actions pass, anything outside its gated set is refused
+        with ``role_permission`` before a grant is even considered.  Unknown
+        actors (``lab`` and friends) keep the classic standing/gated ordering.
+        """
         name = _action_name(action)
         now = now or datetime.now(timezone.utc)
         if name in FORBIDDEN_ACTIONS:
             return self._record(False, name, actor, subject, "forbidden_action",
                                 "publication and production writes are never autonomous",
                                 now=now)
-        if name in STANDING_PERMISSIONS:
-            return self._record(True, name, actor, subject, "standing_permission",
-                                "allowed inside the isolated laboratory copy", now=now)
-        if name not in GATED_ACTIONS:
-            return self._record(False, name, actor, subject, "unknown_action",
-                                "deny by default: no rule permits this action", now=now)
+        profile = ROLE_PROFILES.get(str(actor))
+        if profile is not None:
+            if name in profile.standing:
+                return self._record(True, name, actor, subject, "standing_permission",
+                                    f"role {actor} standing permission", now=now)
+            if name not in profile.gated:
+                return self._record(
+                    False, name, actor, subject, "role_permission",
+                    f"role {actor} is not permitted to perform {name}",
+                    now=now)
+        else:
+            if name in STANDING_PERMISSIONS:
+                return self._record(True, name, actor, subject, "standing_permission",
+                                    "allowed inside the isolated laboratory copy",
+                                    now=now)
+            if name not in GATED_ACTIONS:
+                return self._record(False, name, actor, subject, "unknown_action",
+                                    "deny by default: no rule permits this action",
+                                    now=now)
         if not self.activated:
             return self._record(False, name, actor, subject, "gate_inactive",
                                 "policy gate is not activated yet", now=now)
-        grant = self.active_grant(actor, name, subject)
+        grant = self.active_grant(actor, name, subject, scope=scope)
         if grant is None:
             return self._record(False, name, actor, subject, "no_active_grant",
-                                "no matching, unexpired owner grant", now=now)
+                                "no matching, unexpired owner grant for this "
+                                "environment and scope", now=now)
         return self._record(True, name, actor, subject, "owner_grant",
                             f"grant {grant.grant_id}", grant=grant, now=now)
 
-    def allow(self, action, *, actor: str, subject: str = "") -> bool:
-        return self.decide(action, actor=actor, subject=subject).allowed
+    def allow(self, action, *, actor: str, subject: str = "",
+              scope: str | None = None) -> bool:
+        return self.decide(action, actor=actor, subject=subject, scope=scope).allowed
 
-    def require(self, action, *, actor: str, subject: str = "") -> Decision:
-        decision = self.decide(action, actor=actor, subject=subject)
+    def require(self, action, *, actor: str, subject: str = "",
+                scope: str | None = None) -> Decision:
+        decision = self.decide(action, actor=actor, subject=subject, scope=scope)
         if not decision.allowed:
             raise PolicyDenied(decision)
         return decision
@@ -310,6 +355,42 @@ class PolicyGate:
                           extra={"grant_id": grant.grant_id} if grant else None)
         return decision
 
+    # -- temporary rights requests (Issue i.0.0.2.50, L7) ----------------
+    @property
+    def _rights_path(self) -> Path:
+        return self.state_dir / "rights-requests.jsonl"
+
+    def request_rights(self, *, actor: str, action, subject: str = "",
+                       reason: str = "", ttl_hours: int = 8) -> dict:
+        """Persist a request for a temporary right — without granting it.
+
+        A request is only a durable, auditable demand: it never returns a
+        grant, never unlocks an effect and never replaces owner approval.  The
+        owner answers it by minting a scoped grant (or by refusing).
+        """
+        name = _action_name(action)
+        if name in FORBIDDEN_ACTIONS:
+            raise ValueError(f"{name} can never be requested")
+        if name not in GATED_ACTIONS:
+            raise ValueError(f"{name} is not a temporary right")
+        if int(ttl_hours) <= 0:
+            raise ValueError("ttl_hours must be positive")
+        record = {"request_id": f"r-{len(self.rights_requests()) + 1:04d}",
+                  "created_at": datetime.now(timezone.utc).isoformat(),
+                  "actor": str(actor), "action": name, "subject": str(subject),
+                  "reason": str(reason), "ttl_hours": int(ttl_hours),
+                  "state": "PENDING", "environment": self.environment,
+                  "scope_version": self.scope_version}
+        append_jsonl(self._rights_path, record)
+        self.trail.append(actor=str(actor) or "unknown", action=f"rights_request:{name}",
+                          subject=str(subject), decision="REQUESTED",
+                          rule="rights_request", reason=str(reason))
+        return record
+
+    def rights_requests(self) -> list:
+        """All recorded requests, in submission order (none is auto-approved)."""
+        return read_jsonl(self._rights_path)
+
     # -- reporting -------------------------------------------------------
     def status(self) -> dict:
         return {"activated": self.activated,
@@ -318,6 +399,43 @@ class PolicyGate:
                 "standing_permissions": sorted(STANDING_PERMISSIONS),
                 "forbidden_actions": sorted(FORBIDDEN_ACTIONS),
                 "audit": self.trail.verify()}
+
+
+def reserve_identifier(kind: str, taken: Iterable[str]) -> str:
+    """Next free ``kind.A.B.C.D`` identifier from the shared continuous series.
+
+    Every issue kind draws from **one** continuous series (``AGENTS.md`` §4.2):
+    numbers already held by any kind count against the next one — after
+    ``var.0.0.1.8`` comes ``i.0.0.1.9``, and ``0.0.0.99`` is followed by
+    ``0.0.1.0``.  The caller refuses a number another issue already holds, so
+    this function only computes the successor of the current maximum.
+    """
+    if kind not in ISSUE_TYPES:
+        raise ValueError(f"unknown issue kind {kind}; expected one of {ISSUE_TYPES}")
+    pattern = re.compile(r"^(?:lab|i|ir|var)\.(\d+)\.(\d+)\.(\d+)\.(\d+)$")
+    highest = (0, 0, 0, 0)
+    for value in taken:
+        match = pattern.match(str(value).strip())
+        if match:
+            parts = tuple(int(group) for group in match.groups())
+            if parts > highest:
+                highest = parts
+
+    def increment(parts: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        a, b, c, d = parts
+        d += 1
+        if d >= 100:
+            d, c = 0, c + 1
+        if c >= 100:
+            c, b = 0, b + 1
+        if b >= 100:
+            b, a = 0, a + 1
+        if a >= 100:
+            raise ValueError("identifier series exhausted")
+        return a, b, c, d
+
+    candidate = increment(highest)
+    return f"{kind}." + ".".join(str(part) for part in candidate)
 
 
 def validate_lab_finding(finding: dict) -> dict:

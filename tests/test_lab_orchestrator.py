@@ -10,6 +10,7 @@ and a restart restores state without losing the hand-off.
 import json
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -46,9 +47,15 @@ def ledger(tmp_path):
     return BudgetLedger(tmp_path / "state")
 
 
+def _stub_executor(task, *, model, provider, workspace):
+    """Minimal real invocation stand-in for the controlled role endpoint."""
+    return {"task_id": task.task_id, "role": task.role}
+
+
 @pytest.fixture()
 def orchestrator(environment, gate, ledger):
-    return Orchestrator(environment, gate, ledger, provider=FakeResourceProvider())
+    return Orchestrator(environment, gate, ledger, provider=FakeResourceProvider(),
+                        executor=_stub_executor)
 
 
 def test_orchestrator_starts_with_an_empty_queue(orchestrator):
@@ -63,11 +70,22 @@ def test_enqueue_rejects_unknown_roles(environment, gate, ledger):
 def test_static_checks_are_run_before_any_ai_call(environment, gate, ledger, tmp_path):
     provider = FakeResourceProvider()
     orchestrator = Orchestrator(environment, gate, ledger, provider=provider,
-                                actor="lab")
+                                actor="lab", executor=_stub_executor)
     result = orchestrator.run_once()
     assert result["state"] == RunState.COMPLETED.value
     assert result["checks"]["passed"] is True
-    assert result["reason"] == "task executed under standing permission"
+    assert "role reviewer" in result["reason"]
+    assert "role executor" in result["reason"]
+
+
+def test_run_without_an_executor_is_blocked_not_completed(environment, gate, ledger,
+                                                          tmp_path):
+    orchestrator = Orchestrator(environment, gate, ledger,
+                                provider=FakeResourceProvider())
+    result = orchestrator.run_once()
+    assert result["state"] == RunState.BLOCKED.value
+    assert "no role executor configured" in result["reason"]
+    assert orchestrator.results() == []
 
 
 def test_failed_static_checks_stop_before_model_calls(environment, gate, ledger, tmp_path):
@@ -87,21 +105,23 @@ def test_rate_limit_pauses_the_laboratory(environment, gate, ledger, tmp_path):
 
 def test_run_is_blocked_when_the_lease_cannot_be_granted(environment, gate, ledger, tmp_path):
     provider = FakeResourceProvider(queue_depth=1)
-    result = Orchestrator(environment, gate, ledger, provider=provider).run_once()
+    result = Orchestrator(environment, gate, ledger, provider=provider,
+                          executor=_stub_executor).run_once()
     assert result["state"] == RunState.BLOCKED.value
+    assert "lease" in result["reason"]
 
 
 def test_restart_recovers_state_and_preserves_handoff(environment, gate, ledger, tmp_path):
     work = tmp_path / "workspace"
     shutil.copytree(environment.root, work)
     first = Orchestrator(Workspace(work, environ={}), gate, ledger,
-                         provider=FakeResourceProvider())
+                         provider=FakeResourceProvider(), executor=_stub_executor)
     first.enqueue("audit", role="reviewer", payload={"scope": "gate"})
     outcome = first.run_once()
     assert outcome["state"] == RunState.COMPLETED.value
 
     second = Orchestrator(Workspace(work, environ={}), gate, ledger,
-                          provider=FakeResourceProvider())
+                          provider=FakeResourceProvider(), executor=_stub_executor)
     assert len(second.queue) == 1
     assert second.queue[0].state == RunState.COMPLETED.value
     handoff = second.read_handoff()
@@ -116,7 +136,7 @@ def test_restart_preserves_budget_and_queue(environment, gate, ledger, tmp_path)
     work = tmp_path / "workspace"
     shutil.copytree(environment.root, work)
     first = Orchestrator(Workspace(work, environ={}), gate, ledger,
-                         provider=FakeResourceProvider())
+                         provider=FakeResourceProvider(), executor=_stub_executor)
     first.enqueue("test", role="qa", payload={"case": "1"})
     first.run_once()
 
@@ -135,6 +155,24 @@ def test_run_cycle_stops_on_the_first_blocking_result(environment, gate, ledger,
     assert all(item["state"] == RunState.FAILED.value for item in outcomes)
 
 
+def test_an_expired_run_is_blocked_before_any_role_invocation(environment, gate, ledger,
+                                                              tmp_path):
+    calls = []
+
+    def executor(task, *, model, provider, workspace):
+        calls.append(task.task_id)
+        return {"task_id": task.task_id}
+
+    orchestrator = Orchestrator(environment, gate, ledger,
+                                provider=FakeResourceProvider(), executor=executor)
+    # The cycle budget is already spent: the run must stop, not execute.
+    orchestrator.started = time.monotonic() - 3600
+    result = orchestrator.run_once()
+    assert result["state"] == RunState.BLOCKED.value
+    assert result["reason"] == "run timeout"
+    assert calls == []
+
+
 def test_status_maps_the_gpu_and_budget_state(environment, gate, ledger, tmp_path):
     leases = FakeResourceProvider(vram_mb=8192)
     orchestrator = Orchestrator(environment, gate, ledger, provider=leases)
@@ -143,3 +181,4 @@ def test_status_maps_the_gpu_and_budget_state(environment, gate, ledger, tmp_pat
     assert status["budget"]["max_runs_per_day"] == 24
     assert status["roles"] == ["architect", "backend", "ai_gpu", "frontend",
                                "devops", "qa", "security", "reviewer"]
+    assert status["executor"] == {"configured": False}

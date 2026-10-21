@@ -52,8 +52,19 @@ Ubuntu VM: регулярний аудит коду, локальні випра
 python -m lab.cli status
 python -m lab.cli audit
 python -m lab.cli check create_lab_issue --subject lab.0.0.0.1
-python -m lab.cli grant create_lab_issue --approved-by owner --hours 8
+# grant — owner act: потрібен секрет власника (LAB_OWNER_TOKEN у lab.env)
+python -m lab.cli grant create_lab_issue --owner-token "$LAB_OWNER_TOKEN" --hours 8
 ```
+
+`--approved-by` більше не є доказом повноважень: identity погоджувача береться з
+автентифікованого власника (`LAB_OWNER_IDENTITY`), а grant без секрету
+власника відмовляється. Те саме правило діє в API (`X-Lab-Owner-Token`) і в
+Web-панелі, тому обхід через CLI неможливий.
+
+Публікація в GitHub вимагає окремого налаштування транспорту:
+`LAB_GITHUB_TOKEN`, `LAB_GITHUB_REPOSITORY` і, для контрольованого
+середовища, `LAB_GITHUB_API_URL`. Без токена й репозиторію транспорт лишається
+у dry-run, і кожна відповідь містить `dry_run: true`.
 
 Для планового запуску: `installer/vertep-lab.timer` (нічні цикли).
 
