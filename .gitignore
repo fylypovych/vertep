@@ -56,3 +56,4 @@ RELEASE_IDENTITY.json
 /moneyprinter-runtime-evidence/
 /moneyprinter-runtime-check
 /.kilo_publish_repro/state
+/.pytest_tmp

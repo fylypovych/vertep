@@ -17,6 +17,7 @@ import json
 import struct
 import threading
 import time
+import uuid
 import zlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -332,6 +333,12 @@ def comfyui(monkeypatch, tmp_path):
     workflow.parent.mkdir(parents=True, exist_ok=True)
     workflow.write_text(json.dumps({"1": {"class_type": "CLIPTextEncode",
                                           "inputs": {"text": "{{TOPIC}}"}}}), encoding="utf-8")
+    # A video workflow resolves to ``workflows/video/<name>.json`` inside
+    # WORKFLOWS_ROOT, exactly as the repository convention requires.
+    video_workflow = tmp_path / "video" / "demo.json"
+    video_workflow.parent.mkdir(parents=True, exist_ok=True)
+    video_workflow.write_text(json.dumps({"1": {"class_type": "VHS_VideoCombine",
+                                                "inputs": {"text": "{{TOPIC}}"}}}), encoding="utf-8")
     yield server
     server.close()
 
@@ -663,3 +670,298 @@ def test_core_rejects_a_video_contract_declaring_an_image_payload():
                              "size": len(MP4), "mime_type": "image/png"}}
     with pytest.raises(ValueError, match="non-video"):
         validate_media_contract(artifact, MP4, expected="video")
+
+
+# ── Issue #178.3: CORE re-verifies the media it stores ─────────────────────
+
+#: The exact probes of the #212 audit: a PNG that carries only its IHDR chunk,
+#: a MP4 that carries only an ftyp box and a MP4 whose ftyp is followed by a
+#: free box instead of a movie header.
+IHDR_ONLY_PNG = (b"\x89PNG\r\n\x1a\n"
+                 + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)))
+FTYP_ONLY_MP4 = b"\x00\x00\x00\x10ftypisom\x00\x00\x00\x00"
+FTYP_PLUS_FREE_MP4 = (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+                      + _box(b"free", b"\x00" * 8))
+TRUNCATED_PNG = PNG[:PNG.rfind(b"IEND") - 4]
+
+
+@pytest.mark.parametrize("payload,suffix", [
+    (IHDR_ONLY_PNG, ".png"),
+    (TRUNCATED_PNG, ".png"),
+    (b"\x89PNG\r\n\x1a\n" + b"\x00" * 12, ".png"),
+    (FTYP_ONLY_MP4, ".mp4"),
+    (FTYP_PLUS_FREE_MP4, ".mp4"),
+    (FTYP_ONLY_MP4, ".mov"),
+])
+def test_core_refuses_media_it_cannot_decode(payload, suffix):
+    """CORE must not store a payload that only walks past the magic bytes."""
+    from core.file_validation import validate_media_integrity
+
+    with pytest.raises(ValueError, match="media signature"):
+        validate_media_integrity(payload, suffix)
+
+
+def test_core_accepts_structurally_valid_media():
+    from core.file_validation import validate_media_integrity
+
+    validate_media_integrity(PNG, ".png")
+    validate_media_integrity(MP4, ".mp4")
+
+
+def test_core_refuses_a_contract_whose_checksum_matches_damaged_bytes():
+    """A truthful checksum is not enough: the payload must also be a real media."""
+    from core.file_validation import validate_media_contract
+
+    damaged = bytearray(PNG)
+    damaged[1:4] = b"XXX"
+    payload = bytes(damaged)
+    artifact = {"contract": {"format": "media_contract/v1",
+                             "sha256": hashlib.sha256(payload).hexdigest(),
+                             "size": len(payload), "mime_type": "image/png"}}
+    with pytest.raises(ValueError, match="media signature"):
+        validate_media_contract(artifact, payload, expected="image")
+
+
+def test_core_refuses_a_stub_payload_with_a_truthful_contract(comfyui, monkeypatch):
+    """The refused payload must not reach the Job storage at all."""
+    client, job, task, node_name, _auth = _dispatched_video_task(monkeypatch)
+    artifact = {"filename": "scene-001.mp4", "kind": "video",
+                "data_base64": base64.b64encode(FTYP_ONLY_MP4).decode("ascii"),
+                "contract": {"format": "media_contract/v1", "kind": "video",
+                             "mime_type": "video/mp4", "size": len(FTYP_ONLY_MP4),
+                             "sha256": hashlib.sha256(FTYP_ONLY_MP4).hexdigest()}}
+    response = _post_result(client, job, task, node_name=node_name, artifacts=[artifact])
+    assert response.status_code == 400, response.text
+    assert "media signature" in response.text
+    assert not [item for item in job.artifacts if item.kind == "video_scene"]
+
+
+# ── Issue #178.4: the video contour CORE → Worker → CORE ───────────────────
+
+VIDEO_WORKFLOW = "workflows/video/demo.json"
+
+
+def _unique_node(prefix="gpu-video"):
+    return f"{prefix}-{uuid.uuid4().hex[:6]}"
+
+
+def _register_gpu(client, node_name, *, vram_mb=32768, auth=None):
+    auth = auth or {"x-vertep-token": "worker-token"}
+    client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "vram_mb": vram_mb, "role": "gpu",
+        "capabilities": ["video_generation", "image_generation"],
+        "supported_tasks": ["video", "image"]}, headers=auth)
+    return auth
+
+
+def _video_job(monkeypatch, *, min_vram_mb=16384, scenes=1, topic="HTTP video render"):
+    """Create a real video Job in ASSET_GENERATION with queued scene tasks."""
+    from core.api.job_helpers import _enqueue_job_task
+    from core.app import store
+    from core.models import JobStatus, SceneRecord
+    from core.orchestration import StageName, StageStatus, transition_stage
+
+    job = store.create(topic, "did_samogon", 5, task_type="video",
+                       min_vram_mb=min_vram_mb, workflow=VIDEO_WORKFLOW)
+    for index in range(1, scenes + 1):
+        job.scenes.append(SceneRecord(scene_id=f"scene-{index:03d}", index=index,
+                                      prompt=f"{topic} {index}",
+                                      video_prompt=f"{topic} {index}",
+                                      voiceover="", duration=1))
+    transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
+    store.update(job, JobStatus.ASSET_GENERATION, "ASSET GENERATION STARTED")
+    for scene in job.scenes:
+        _enqueue_job_task(job, scene)
+    return job
+
+
+def _dispatched_video_task(monkeypatch, *, node_name=None, vram_mb=32768,
+                            min_vram_mb=16384, scenes=1):
+    """Drive CORE to the point where a real GPU video task is claimable."""
+    node_name = node_name or _unique_node()
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    monkeypatch.setattr("core.security._valid_worker_request", lambda node, request: True)
+    # The final assembly is not part of this contour: it would run FFmpeg in a
+    # background thread, so it is observed but not executed here.
+    monkeypatch.setattr("core.api.tasks._finalize_and_notify", lambda job, images: None)
+    client = _core_client()
+    auth = _register_gpu(client, node_name, vram_mb=vram_mb)
+    job = _video_job(monkeypatch, min_vram_mb=min_vram_mb, scenes=scenes)
+    for _ in range(200):
+        claimed = client.post("/api/tasks/claim",
+                              json={"node_name": node_name, "vram_mb": vram_mb},
+                              headers=auth).json().get("task")
+        if claimed and claimed.get("job_id") == job.job_id and claimed.get("task") == "video":
+            return client, job, claimed, node_name, auth
+        time.sleep(0.01)
+    raise AssertionError("no video task was dispatched")
+
+
+def _post_result(client, job, task, *, node_name, success=True, artifacts=None, error=None):
+    payload = {"job_id": job.job_id, "task_id": task["task_id"], "node_name": node_name,
+               "success": success, "artifacts": artifacts or []}
+    if error is not None:
+        payload["error"] = error
+    return client.post("/api/tasks/result", json=payload,
+                       headers={"x-vertep-token": "worker-token"})
+
+
+def _video_runtime(comfyui):
+    """Make the fake ComfyUI answer with a real MP4 render."""
+    comfyui.view_body = MP4
+    comfyui.view_status = 200
+    comfyui.output_key = "videos"
+    comfyui.output_suffix = ".mp4"
+    comfyui.view_content_type = "video/mp4"
+
+
+def test_core_imports_a_verified_video_scene_from_a_real_http_render(comfyui, monkeypatch):
+    """Issue #178.4: CORE → GPU Worker → prompt/history/view → video artifact.
+
+    The video contour is closed end to end: a real video Job is queued in CORE,
+    a GPU Worker claims it over HTTP, the worker renders through the real
+    ComfyUI socket and CORE imports the render as a ``video_scene`` artifact
+    after re-verifying it structurally.
+    """
+    from worker import role_executor
+    from core.app import store
+
+    _video_runtime(comfyui)
+    client, job, task, node_name, _auth = _dispatched_video_task(monkeypatch)
+    artifacts = role_executor.execute_role_task("gpu", task)
+    assert artifacts and artifacts[0]["kind"] == "video"
+    contract = artifacts[0]["contract"]
+    assert contract["format"] == "media_contract/v1"
+    assert contract["mime_type"] == "video/mp4"
+    assert contract["sha256"] == hashlib.sha256(MP4).hexdigest()
+    assert contract["size"] == len(MP4)
+
+    response = _post_result(client, job, task, node_name=node_name, artifacts=artifacts)
+    assert response.status_code == 200, response.text
+    # The render really travelled over the socket.
+    paths = [path for _method, path in comfyui.requests]
+    assert any(path == "/prompt" for path in paths)
+    assert any(path.startswith("/history/") for path in paths)
+    assert any(path.startswith("/view") for path in paths)
+    # CORE stored the verified render as a video scene of the Job.
+    stored = store.root / job.job_id / "video" / "scene-001.mp4"
+    assert stored.is_file()
+    assert stored.read_bytes() == MP4
+    assert [item.kind for item in job.artifacts] == ["video_scene"]
+    assert job.scenes[0].artifact_ids
+    assert job.scenes[0].assigned_worker == node_name
+
+
+# ── Issue #178.5: the fault matrix at the CORE contour ─────────────────────
+
+
+def test_core_records_a_malformed_runtime_history_as_a_failed_attempt(comfyui, monkeypatch):
+    """A broken runtime history must reach CORE as a failure, never as a render."""
+    from worker import role_executor
+
+    _video_runtime(comfyui)
+    comfyui.history_override = {"prompt-1": {"outputs": {"9": {"unexpected": []}}}}
+    client, job, task, node_name, _auth = _dispatched_video_task(monkeypatch)
+    with pytest.raises(RuntimeError):
+        role_executor.execute_role_task("gpu", task)
+    response = _post_result(client, job, task, node_name=node_name, success=False,
+                            error="ComfyUI completed without a video output")
+    assert response.status_code == 200, response.text
+    assert any("FAILED, RETRY" in event for event in job.events)
+    assert not [item for item in job.artifacts if item.kind == "video_scene"]
+    # The attempt is retried instead of silently lost.
+    assert job.scenes[0].task_id and job.scenes[0].task_id != task["task_id"]
+
+
+def test_core_records_a_render_timeout_as_a_failed_attempt(comfyui, monkeypatch):
+    """A runtime that never answers must fail the attempt, not hang the Job."""
+    from adapters.comfyui import ComfyUIAdapter
+    from worker import role_executor
+
+    _video_runtime(comfyui)
+    comfyui.never_finishes = True
+    monkeypatch.setattr("adapters.comfyui.time.sleep", lambda _seconds: None)
+    # The real waiter is used, only its deadline is shortened so the test does
+    # not spend the production timeout in a busy loop.
+    original_wait = ComfyUIAdapter.wait_for_result
+    monkeypatch.setattr("adapters.comfyui.ComfyUIAdapter.wait_for_result",
+                        lambda self, prompt_id, timeout=300: original_wait(self, prompt_id, timeout=1))
+    client, job, task, node_name, _auth = _dispatched_video_task(monkeypatch)
+    with pytest.raises(TimeoutError):
+        role_executor.execute_role_task("gpu", task)
+    response = _post_result(client, job, task, node_name=node_name, success=False,
+                            error="ComfyUI prompt timed out")
+    assert response.status_code == 200, response.text
+    assert any("FAILED, RETRY" in event for event in job.events)
+    assert not [item for item in job.artifacts if item.kind == "video_scene"]
+
+
+def test_core_refuses_a_late_result_of_an_imported_attempt(comfyui, monkeypatch):
+    """A result that arrives twice must never overwrite the accepted render."""
+    from worker import role_executor
+    from core.app import store
+
+    _video_runtime(comfyui)
+    client, job, task, node_name, _auth = _dispatched_video_task(monkeypatch)
+    artifacts = role_executor.execute_role_task("gpu", task)
+    assert _post_result(client, job, task, node_name=node_name,
+                        artifacts=artifacts).status_code == 200
+    stored = (store.root / job.job_id / "video" / "scene-001.mp4").read_bytes()
+    late = _post_result(client, job, task, node_name=node_name, artifacts=artifacts)
+    assert late.status_code == 409, late.text
+    assert "Duplicate result" in late.text
+    assert (store.root / job.job_id / "video" / "scene-001.mp4").read_bytes() == stored
+
+
+def test_core_refuses_a_result_from_a_node_that_does_not_own_the_attempt(comfyui, monkeypatch):
+    """A foreign node must not be able to finish an attempt of another node."""
+    client, job, task, _node_name, _auth = _dispatched_video_task(monkeypatch)
+    response = _post_result(client, job, task, node_name=_unique_node("gpu-foreign"),
+                            success=True, artifacts=[])
+    assert response.status_code == 409, response.text
+    assert "assigned to another worker" in response.text
+
+
+def test_core_does_not_dispatch_a_video_task_to_a_node_without_enough_vram(comfyui, monkeypatch):
+    """A node that cannot hold the render must not be handed the task."""
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    monkeypatch.setattr("core.security._valid_worker_request", lambda node, request: True)
+    monkeypatch.setattr("core.api.tasks._finalize_and_notify", lambda job, images: None)
+    client = _core_client()
+    small = _unique_node("gpu-small")
+    auth = _register_gpu(client, small, vram_mb=8192)
+    job = _video_job(monkeypatch, min_vram_mb=32768)
+    refused = client.post("/api/tasks/claim",
+                          json={"node_name": small, "vram_mb": 8192},
+                          headers=auth).json()
+    assert refused.get("task") is None
+    # A node that can hold the render gets the task.
+    big = _unique_node("gpu-big")
+    _register_gpu(client, big, vram_mb=32768, auth=auth)
+    for _ in range(200):
+        claimed = client.post("/api/tasks/claim",
+                              json={"node_name": big, "vram_mb": 32768},
+                              headers=auth).json().get("task")
+        if claimed and claimed.get("job_id") == job.job_id:
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("the video task was not dispatched to a capable node")
+    assert claimed["min_vram_mb"] == 32768
+
+
+def test_cancelling_one_job_never_reaches_another_node(comfyui, monkeypatch):
+    """The cancellation of one Job must not interrupt the work of another node."""
+    client, job_a, task_a, node_a, auth = _dispatched_video_task(monkeypatch)
+    _client_b, job_b, task_b, node_b, _auth_b = _dispatched_video_task(monkeypatch)
+    assert node_a != node_b
+
+    client.post(f"/api/jobs/{job_a.job_id}/cancel")
+    cancellations_a = client.get(f"/api/tasks/cancellations/{node_a}", headers=auth).json()
+    cancellations_b = client.get(f"/api/tasks/cancellations/{node_b}", headers=auth).json()
+    assert [item["task_id"] for item in cancellations_a] == [task_a["task_id"]]
+    assert cancellations_b == []
+    # The untouched Job keeps its own attempt alive.
+    assert job_b.active_task_ids.get(task_b["task_id"]) == job_b.scenes[0].scene_id

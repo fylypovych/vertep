@@ -1,6 +1,9 @@
 import hashlib
 import json
 
+from adapters.media_integrity import (MediaIntegrityError, STRUCTURAL_SUFFIXES,
+                                      suffix_for_mime, verify_media_bytes)
+
 MEDIA_CONTRACT_FORMAT = "media_contract/v1"
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/x-portable-pixmap"}
 VIDEO_MIME_TYPES = {"video/mp4", "video/webm", "video/quicktime"}
@@ -13,6 +16,12 @@ def validate_media_contract(artifact: dict, data: bytes, *, expected: str) -> No
     size, checksum and media kind are re-derived by CORE so a truncated, swapped
     or mislabelled payload cannot be stored as a finished artifact.
     ``expected`` is either ``"image"`` or ``"video"``.
+
+    A truthful checksum is not enough on its own: the Worker may have hashed
+    bytes that were never a decodable image or video.  The payload is therefore
+    re-verified structurally as well, so a signature-only stub, a
+    signature+junk payload or a truncated download is refused even when its
+    checksum matches perfectly (Issue #178.3).
     """
     contract = artifact.get("contract") or {}
     if not contract:
@@ -28,9 +37,42 @@ def validate_media_contract(artifact: dict, data: bytes, *, expected: str) -> No
         raise ValueError("Artifact contract declares a non-image payload")
     if expected == "video" and mime_type not in VIDEO_MIME_TYPES:
         raise ValueError("Artifact contract declares a non-video payload")
+    suffix = suffix_for_mime(mime_type)
+    if suffix is None:
+        raise ValueError(f"Artifact contract declares an unknown media type: {mime_type}")
+    try:
+        verify_media_bytes(data, suffix)
+    except MediaIntegrityError as error:
+        raise ValueError(str(error)) from error
+
+
+def validate_media_integrity(data: bytes, suffix: str) -> None:
+    """Verify a media payload a Worker delivered to CORE.
+
+    An image or a video is verified structurally, not by its magic bytes: a
+    signature-only stub, a signature followed by junk and a truncated download
+    all hash perfectly and would otherwise be stored as a finished artifact
+    (Issue #178.3).  Every other declared type keeps the signature check.
+    """
+    suffix = suffix.lower()
+    if suffix in STRUCTURAL_SUFFIXES:
+        try:
+            verify_media_bytes(data, suffix)
+        except MediaIntegrityError as error:
+            raise ValueError(str(error)) from error
+        return
+    validate_signature(data, suffix)
 
 
 def validate_signature(data: bytes, suffix: str) -> None:
+    """Verify the declared signature of a file.
+
+    This is the check for user-supplied reference material: it proves the
+    payload belongs to the declared file type, not that it is a decodable
+    image or video.  Media delivered by a Worker goes through
+    :func:`validate_media_integrity` instead, which also re-derives the
+    structure of the payload.
+    """
     suffix = suffix.lower()
     valid = True
     if suffix == ".png":

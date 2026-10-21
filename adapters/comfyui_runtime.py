@@ -38,6 +38,15 @@ INVENTORY_FORMAT = "comfyui_runtime/v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
+#: The immutable build pins of the ComfyUI image and the Dockerfile arguments
+#: that carry them.  The argument is the single source of truth: the expected
+#: inventory and the build report are both derived from it, so a pin can never
+#: be recorded in one place and built from another (Issue #120/#178.1).
+PINNED_COMPONENTS: dict[str, str] = {
+    "COMFYUI_COMMIT": "comfyui",
+    "VHS_COMMIT": "ComfyUI-VideoHelperSuite",
+}
+
 
 class RuntimeInventoryError(RuntimeError):
     """Raised when the GPU runtime does not match its pinned inventory."""
@@ -155,3 +164,84 @@ def installed_components(comfyui_root: Path | None = None) -> dict:
     except (OSError, ValueError):
         return {}
     return data.get("components", {}) if isinstance(data, dict) else {}
+
+
+def pinned_components(dockerfile: str) -> dict:
+    """Read the immutable build pins out of the ComfyUI Dockerfile.
+
+    A pin is a full commit: a floating branch or tag is refused, because the
+    build input has to be the immutable identity the node later verifies.
+    """
+    components: dict[str, dict] = {}
+    for argument, name in PINNED_COMPONENTS.items():
+        match = re.search(rf"^ARG {argument}=([0-9a-f]{{40}})$", dockerfile, re.MULTILINE)
+        if not match:
+            raise RuntimeInventoryError(
+                f"Pinned build argument {argument} is missing or is not an immutable commit")
+        commit = match.group(1)
+        components[name] = {"version": commit, "commit": commit}
+    return components
+
+
+def digest_tree(root: Path | None) -> dict:
+    """Digest every file under ``root`` as ``{relative path: {sha256}}``.
+
+    The relative path is POSIX-style, so the inventory is portable between the
+    machine that produced it and the node that verifies it.
+    """
+    if root is None or not root.is_dir():
+        return {}
+    entries: dict[str, dict] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        entries[relative] = {"sha256": file_sha256(path)}
+    return entries
+
+
+def pinned_document(dockerfile: str) -> dict:
+    """The pins-only document shipped with the runtime bundle.
+
+    The bundle is installed on a host that has no source checkout and therefore
+    no Dockerfile; the immutable component pins travel with it so the
+    deployment can still write the expected inventory of the GPU node.
+    """
+    return {"format": INVENTORY_FORMAT, "components": pinned_components(dockerfile),
+            "workflows": {}, "models": {}}
+
+def build_expected_inventory(*, components: dict, workflows_root: Path | None = None,
+                             models_root: Path | None = None) -> dict:
+    """Build the *expected* runtime inventory of the GPU node.
+
+    The expected inventory is the contract the node verifies itself against: the
+    immutable component pins of the image, plus the content of the workflows and
+    models the node is supposed to serve.  It is produced from the pins of the
+    Dockerfile that builds the image, so the pin and the recorded commit can
+    never diverge (Issue #120/#178.1).
+    """
+    if not components:
+        raise RuntimeInventoryError("Pinned runtime inventory declares no components")
+    return {
+        "format": INVENTORY_FORMAT,
+        "components": components,
+        "workflows": digest_tree(workflows_root),
+        "models": digest_tree(models_root),
+    }
+
+
+def expected_inventory_from_dockerfile(dockerfile: str, *, workflows_root: Path | None = None,
+                                       models_root: Path | None = None) -> dict:
+    """Build the expected inventory from a ComfyUI Dockerfile."""
+    return build_expected_inventory(components=pinned_components(dockerfile),
+                                    workflows_root=workflows_root,
+                                    models_root=models_root)
+
+
+def write_expected_inventory(path: Path, inventory: dict) -> None:
+    """Write the expected inventory to the path the Worker reads it from."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(inventory, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                         encoding="utf-8")
+    temporary.replace(path)

@@ -479,9 +479,8 @@ def publish_job(job_id: str, channels: list[str] | None = None):
     return job
 
 
-@router.get("/jobs/{job_id}/final/video.mp4")
+@router.get("/api/jobs/{job_id}/final/video.mp4")
 def video(job_id: str):
-    job = store.jobs.get(job_id)
     job = store.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")

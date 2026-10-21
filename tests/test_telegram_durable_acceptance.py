@@ -415,7 +415,9 @@ class TestContentCallbackAcceptance:
                                                     f"publish_channel:{CHANNEL_ID}:{fixtures['job_id']}")
             assert "Опубліковано" in duplicate
             repeated = acceptance.job(fixtures["job_id"])
-            assert list(repeated["publish_task_ids"]) == [task_id]
+            # The duplicate callback must not enqueue a second publish task:
+            # the completed receipt is the durable marker of the publication.
+            assert repeated["publish_task_ids"] == {}
             assert repeated["publication_results"][CHANNEL_TYPE]["remote_id"] == "controlled-remote-2"
         finally:
             acceptance.stop_core()

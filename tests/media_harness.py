@@ -802,6 +802,19 @@ def video_evidence(job_id: str, job: dict) -> dict:
     }
 
 
+def current_test_id() -> str | None:
+    """The pytest node id of the test that is recording the evidence.
+
+    Issue #121.4–5 requires the acceptance evidence to name the test that
+    produced it, next to the SHA of the run and the observed result.  A row
+    without a test id is therefore not a proof and must not be reported as one.
+    """
+    marker = os.environ.get("PYTEST_CURRENT_TEST", "")
+    if not marker:
+        return None
+    return marker.split(" (", 1)[0] or None
+
+
 def run_provenance() -> dict:
     """Identify the exact run: SHA, version and the configuration in effect.
 
@@ -864,7 +877,8 @@ def record_evidence(name: str, payload) -> None:
             document = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
             document = {}
-    document[name] = dict(payload, provenance=run_provenance()) \
+    document[name] = dict(payload, provenance=run_provenance(),
+                          test_id=current_test_id()) \
         if isinstance(payload, dict) else payload
     path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
 

@@ -700,7 +700,7 @@ def test_distributed_video_artifact_reaches_final_assembly(monkeypatch, tmp_path
     completed = wait_for(client, job_id)
     assert completed["status"] == "READY"
     assert any(item["kind"] == "video_scene" for item in completed["artifacts"])
-    assert b"ftyp" in client.get(f"/jobs/{job_id}/final/video.mp4").content[:32]
+    assert b"ftyp" in client.get(f"/api/jobs/{job_id}/final/video.mp4").content[:32]
 
 
 def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):

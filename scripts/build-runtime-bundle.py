@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from adapters.comfyui_runtime import pinned_document
 from core.release_contract import sign_release_contract
 
 
@@ -82,6 +83,13 @@ def build(root: Path, output: Path, version: str, sequence: int,
     for name in MONITORING:
         _copy(root / name, output / name)
     _copy(root / "installer/update-public.pem", output / "installer/update-public.pem")
+    # The immutable ComfyUI component pins travel with the bundle: the host has
+    # no source checkout, so the deployment needs them to write the expected
+    # runtime inventory the GPU node verifies itself against (Issue #120/#178.1).
+    (output / "config/comfyui-runtime-pins.json").write_text(
+        json.dumps(pinned_document(
+            (root / "docker/comfyui-nvidia/Dockerfile").read_text(encoding="utf-8")),
+            ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     shutil.copytree(root / "core", output / "core",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copytree(root / "db", output / "db",

@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..artifacts import register_artifact
-from ..file_validation import validate_media_contract, validate_signature
+from ..file_validation import validate_media_contract, validate_media_integrity
 from ..models import (JobStatus, StageName, StageStatus, TaskClaim, TaskRenew,
                       TaskResult, utc_now)
 from ..orchestration import (all_scenes_ready, cancel_scene, fail_scene,
@@ -755,7 +755,7 @@ def task_result(result: TaskResult, request: Request):
             if suffix not in allowed_suffixes:
                 raise HTTPException(400, f"Unsupported audio artifact type: {suffix}")
             try:
-                validate_signature(data, suffix)
+                validate_media_integrity(data, suffix)
             except ValueError as error:
                 raise HTTPException(400, str(error)) from error
             filename = f"voice-{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"voice-{scene.scene_id}-{artifact_index:03d}{suffix}"
@@ -946,10 +946,10 @@ def task_result(result: TaskResult, request: Request):
         if suffix not in allowed_suffixes:
             raise HTTPException(400, f"Unsupported {job.task_type} artifact type")
         try:
-            validate_signature(data, suffix)
+            validate_media_integrity(data, suffix)
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
-        expected_media = "video" if folder == "videos" else ("image" if folder == "images" else None)
+        expected_media = "video" if folder == "video" else ("image" if folder == "images" else None)
         if expected_media:
             try:
                 validate_media_contract(artifact, data, expected=expected_media)
@@ -957,6 +957,11 @@ def task_result(result: TaskResult, request: Request):
                 raise HTTPException(400, str(error)) from error
         filename = f"{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"{scene.scene_id}-{artifact_index:03d}{suffix}"
         image_path = store.root / job.job_id / folder / filename
+        # The folder of a result kind is not necessarily part of the Job layout
+        # created at creation time (a video scene lands in ``videos/``), so it is
+        # created on demand instead of failing the whole import with an OSError
+        # (Issue #178.4).
+        image_path.parent.mkdir(parents=True, exist_ok=True)
         prepared_images.append((image_path, data))
     temporary_images = []
     try:

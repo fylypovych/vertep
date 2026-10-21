@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from adapters.comfyui_runtime import (build_expected_inventory, write_expected_inventory)
 from core.deployment_plan import create_plan
 from core.persistent_data import (
     LEGACY_EPHEMERAL_ROOTS,
@@ -104,6 +105,35 @@ def runtime_inventory(root: Path, compose: list[str], selected: set[str], role: 
                  "generated_at": datetime.now(timezone.utc).isoformat(),
                  "services": sorted(selected), "containers": rows}
     atomic_json(root / "config/runtime-inventory.json", inventory)
+    return inventory
+
+
+def gpu_runtime_inventory(root: Path) -> dict | None:
+    """Write the expected ComfyUI runtime inventory of the GPU node.
+
+    The immutable component pins travel with the runtime bundle; the workflow and
+    model digests are taken from the roots this deployment serves.  The Worker
+    verifies the document against the build report the ComfyUI image publishes,
+    so a missing, drifted or tampered runtime can never become ready
+    (Issue #120/#178.1).  A bundle without the pins document leaves the node
+    without an inventory, which the production readiness then refuses.
+    """
+    pins_path = root / "config/comfyui-runtime-pins.json"
+    if not pins_path.is_file():
+        return None
+    try:
+        pins = json.loads(pins_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    components = pins.get("components") if isinstance(pins, dict) else None
+    if not components:
+        return None
+    inventory = build_expected_inventory(
+        components=components,
+        workflows_root=root / "storage" / "workflows",
+        models_root=root / "models",
+    )
+    write_expected_inventory(root / "config/comfyui-runtime-inventory.json", inventory)
     return inventory
 
 
@@ -479,6 +509,10 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
             raise RuntimeError("Selected services are not healthy: " + ", ".join(unhealthy))
         inventory["modules"] = _module_status(inventory["containers"], plan["modules"])
         atomic_json(root / "config/runtime-inventory.json", inventory)
+        # The expected ComfyUI runtime inventory of the GPU node is written from
+        # the pins of the release and the roots this deployment serves, so the
+        # node can verify its runtime before it becomes ready.
+        gpu_runtime_inventory(root)
         installation_path = root / "config/installation.json"
         if installation_path.is_file():
             installation = json.loads(installation_path.read_text(encoding="utf-8"))

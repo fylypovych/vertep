@@ -133,6 +133,29 @@ class TestSharedRegenerationAndApi:
         assert current.status == JobStatus.VIDEO_REVISION_REQUESTED
         assert current.video_revisions[0].text == "regenerate"
 
+    def test_web_regenerate_after_revision_request_succeeds(self, tmp_path):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from core.app import app
+        import core.api.jobs as jobs_mod
+        root, store, job = _produce_v1(tmp_path)
+        original_post = jobs_mod.store
+        jobs_mod.store = store
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            revision = client.post(f"/api/jobs/{job.job_id}/video/revision",
+                                   json={"revision": "regenerate", "actor": "test"})
+            assert revision.status_code == 200
+            with patch("core.pipeline._finalize_video_regenerate", lambda j: j):
+                resp = client.post(f"/api/jobs/{job.job_id}/video/regenerate",
+                                   json={"actor": "test"})
+                assert resp.status_code == 200, resp.text
+        finally:
+            jobs_mod.store = original_post
+        current = store.jobs[job.job_id]
+        assert current.status == JobStatus.VIDEO_REVISION_REQUESTED
+        assert [r.text for r in current.video_revisions] == ["regenerate"]
+
     def test_web_video_approve_rejects_stale_version(self, tmp_path):
         from fastapi.testclient import TestClient
         from core.app import app

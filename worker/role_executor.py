@@ -8,9 +8,9 @@ import os
 import re
 import time as _time
 import uuid
-import zlib
 from pathlib import Path
 import httpx
+from adapters import media_integrity
 from adapters.providers import providers
 
 logger = logging.getLogger("worker.executor")
@@ -23,63 +23,17 @@ def _artifact(filename: str, kind: str, data: bytes) -> dict:
             "data_base64": base64.b64encode(data).decode("ascii")}
 
 
-# Minimal magic-byte signatures for the media Vertep accepts.  A runtime that
-# answers with an HTML error page, a truncated download or an empty body must be
-# rejected on the worker instead of being shipped to CORE as an artifact.
-_MEDIA_SIGNATURES: dict[str, tuple[tuple[bytes, ...], str]] = {
-    ".png": ((b"\x89PNG\r\n\x1a\n",), "image/png"),
-    ".jpg": ((b"\xff\xd8\xff",), "image/jpeg"),
-    ".jpeg": ((b"\xff\xd8\xff",), "image/jpeg"),
-    ".webp": ((b"RIFF",), "image/webp"),
-    ".ppm": ((b"P1", b"P2", b"P3", b"P4", b"P5", b"P6"), "image/x-portable-pixmap"),
-    ".mp4": ((b"ftyp",), "video/mp4"),
-    ".webm": ((b"\x1a\x45\xdf\xa3",), "video/webm"),
-    ".mov": ((b"ftyp",), "video/quicktime"),
-}
-
-
+# The structural media rules live in ``adapters.media_integrity`` so the Worker
+# (which downloads the bytes) and CORE (which stores them) verify the payload
+# the same way: a runtime that answers with an HTML error page, a signature-only
+# stub, a signature followed by junk or a truncated download must never travel
+# as an artifact (Issue #121/#178.3).
 def media_signature(suffix: str) -> str:
     """Return the declared mime type for a supported media suffix."""
-    signatures = _MEDIA_SIGNATURES.get(suffix.lower())
-    if not signatures:
-        raise RuntimeError(f"Unsupported media artifact type: {suffix}")
-    return signatures[1]
-
-
-def _invalid_media(suffix: str) -> RuntimeError:
-    return RuntimeError(f"{suffix} payload does not match its declared media signature")
-
-
-def _box_tree_has_video_handler(data: bytes, start: int, end: int) -> bool:
-    """True when the ISO BMFF box subtree at ``[start, end)`` declares a video track.
-
-    A real movie file carries ``moov > trak > mdia > hdlr`` with handler type
-    ``vide``; a signature stub or signature+junk payload never does
-    (Issue #178.3).
-    """
-    offset = start
-    while offset + 8 <= end:
-        size = int.from_bytes(data[offset:offset + 4], "big")
-        box_type = data[offset + 4:offset + 8]
-        header = 8
-        if size == 1:
-            if offset + 16 > end:
-                return False
-            size = int.from_bytes(data[offset + 8:offset + 16], "big")
-            header = 16
-        elif size == 0:
-            size = end - offset
-        if size < header or offset + size > end:
-            return False
-        if box_type == b"hdlr":
-            payload = data[offset + header:offset + size]
-            if len(payload) >= 12 and payload[8:12] == b"vide":
-                return True
-        elif box_type in {b"trak", b"mdia", b"minf", b"stbl", b"moov"}:
-            if _box_tree_has_video_handler(data, offset + header, offset + size):
-                return True
-        offset += size
-    return False
+    try:
+        return media_integrity.media_mime_type(suffix)
+    except media_integrity.MediaIntegrityError as error:
+        raise RuntimeError(str(error)) from error
 
 
 def verify_media(data: bytes, suffix: str) -> str:
@@ -90,158 +44,10 @@ def verify_media(data: bytes, suffix: str) -> str:
     by junk, a truncated download or an empty body must be rejected on the
     worker instead of being shipped to CORE as an artifact (Issue #121/#178).
     """
-    signatures = _MEDIA_SIGNATURES.get(suffix.lower())
-    if not signatures:
-        raise RuntimeError(f"Unsupported media artifact type: {suffix}")
-    if not data:
-        raise RuntimeError(f"Empty {suffix} payload from the compute runtime")
-
-    lowered = suffix.lower()
-
-    if lowered in {".mp4", ".mov"}:
-        # ISO base media file format: walk the real top-level box tree instead
-        # of trusting a signature prefix.  A video must contain a ``moov`` box
-        # with a video track (``trak > mdia > hdlr`` handler ``vide``), so a
-        # signature-only stub, a truncated box or a signature+junk payload
-        # (e.g. ``ftyp`` + ``free`` without a movie header) is refused
-        # (Issue #178.3).
-        if len(data) < 16 or data[4:8] != b"ftyp":
-            raise _invalid_media(suffix)
-        total = len(data)
-        offset = 0
-        moov: tuple[int, int] | None = None
-        while offset + 8 <= total:
-            size = int.from_bytes(data[offset:offset + 4], "big")
-            box_type = data[offset + 4:offset + 8]
-            header = 8
-            if size == 1:
-                if offset + 16 > total:
-                    raise _invalid_media(suffix)
-                size = int.from_bytes(data[offset + 8:offset + 16], "big")
-                header = 16
-            elif size == 0:
-                # Box extends to the end of the file (ISO BMFF special case).
-                size = total - offset
-            if size < header or offset + size > total:
-                # A truncated or implausible box means the file was cut short.
-                raise _invalid_media(suffix)
-            if box_type == b"moov":
-                moov = (offset + header, offset + size)
-            offset += size
-        if offset != total or moov is None:
-            # Trailing bytes that cannot form a box, or no movie header at all:
-            # this is a signature stub, not a decodable video.
-            raise _invalid_media(suffix)
-        start, end = moov
-        has_trak = False
-        has_video_handler = False
-        child = start
-        while child + 8 <= end:
-            child_size = int.from_bytes(data[child:child + 4], "big")
-            child_type = data[child + 4:child + 8]
-            child_header = 8
-            if child_size == 1:
-                if child + 16 > end:
-                    raise _invalid_media(suffix)
-                child_size = int.from_bytes(data[child + 8:child + 16], "big")
-                child_header = 16
-            elif child_size == 0:
-                child_size = end - child
-            if child_size < child_header or child + child_size > end:
-                raise _invalid_media(suffix)
-            if child_type == b"trak":
-                has_trak = True
-                if _box_tree_has_video_handler(data, child + child_header,
-                                               child + child_size):
-                    has_video_handler = True
-            child += child_size
-        if child != end or not has_trak or not has_video_handler:
-            # A ``moov`` without a track, or without a video handler, is not a
-            # video: the payload is junk that merely walked past the signature.
-            raise _invalid_media(suffix)
-        return signatures[1]
-
-    if lowered == ".webp":
-        if (len(data) < 12 or not data.startswith(b"RIFF")
-                or data[8:12] != b"WEBP"):
-            raise _invalid_media(suffix)
-        return signatures[1]
-
-    if lowered == ".png":
-        # PNG: 8-byte signature followed by a complete chunk stream — IHDR
-        # first, at least one IDAT, and IEND last.  Every chunk's CRC32 is
-        # verified, the IHDR must declare valid dimensions/fields and the IDAT
-        # stream must decompress, so corrupt or fabricated bytes (invalid
-        # dimensions, a broken CRC, junk IDAT) are refused instead of shipped
-        # as a verified image (Issue #178.3).
-        if len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n":
-            raise _invalid_media(suffix)
-        offset = 8
-        chunks = []
-        idat_payload = bytearray()
-        while offset + 8 <= len(data):
-            length = int.from_bytes(data[offset:offset + 4], "big")
-            chunk_type = data[offset + 4:offset + 8]
-            end = offset + 12 + length
-            if end > len(data):
-                raise _invalid_media(suffix)
-            payload = data[offset + 8:offset + 8 + length]
-            stored_crc = int.from_bytes(data[offset + 8 + length:end], "big")
-            if zlib.crc32(chunk_type + payload) & 0xFFFFFFFF != stored_crc:
-                raise _invalid_media(suffix)
-            if chunk_type == b"IHDR":
-                if length != 13:
-                    raise _invalid_media(suffix)
-                width = int.from_bytes(payload[0:4], "big")
-                height = int.from_bytes(payload[4:8], "big")
-                bit_depth, color_type = payload[8], payload[9]
-                compression, filter_method = payload[10], payload[11]
-                interlace = payload[12]
-                valid_depths = {0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8},
-                                4: {8, 16}, 6: {8, 16}}
-                if (width < 1 or height < 1 or color_type not in valid_depths
-                        or bit_depth not in valid_depths[color_type]
-                        or compression != 0 or filter_method != 0
-                        or interlace not in (0, 1)):
-                    raise _invalid_media(suffix)
-            elif chunk_type == b"IDAT":
-                idat_payload.extend(payload)
-            chunks.append(chunk_type)
-            offset = end
-            if chunk_type == b"IEND":
-                break
-        if not chunks or chunks[0] != b"IHDR" or b"IDAT" not in chunks:
-            raise _invalid_media(suffix)
-        if chunks[-1] != b"IEND":
-            raise _invalid_media(suffix)
-        try:
-            zlib.decompress(bytes(idat_payload))
-        except zlib.error:
-            raise _invalid_media(suffix) from None
-        return signatures[1]
-
-    if lowered in {".jpg", ".jpeg"}:
-        # JPEG: SOI marker, a segment marker, and the EOI marker that a real
-        # encoded image always ends with.
-        if (len(data) < 4 or not data.startswith(b"\xff\xd8\xff")
-                or not data.endswith(b"\xff\xd9")):
-            raise _invalid_media(suffix)
-        return signatures[1]
-
-    if lowered == ".ppm":
-        # Netpbm: the magic (P1..P6) must be followed by a size header line.
-        if len(data) < 15 or not data.startswith(signatures[0]):
-            raise _invalid_media(suffix)
-        header_end = data.find(b"\n", 2)
-        if header_end < 3 or not data[2:header_end].split():
-            raise _invalid_media(suffix)
-        return signatures[1]
-
-    # Fallback for any other declared type: signature plus a minimum length.
-    if len(data) < 12 or not any(
-            data.startswith(marker) for marker in signatures[0]):
-        raise _invalid_media(suffix)
-    return signatures[1]
+    try:
+        return media_integrity.verify_media_bytes(data, suffix)
+    except media_integrity.MediaIntegrityError as error:
+        raise RuntimeError(str(error)) from error
 
 
 def _media_artifact(filename: str, kind: str, data: bytes, *, workflow: str | None = None,

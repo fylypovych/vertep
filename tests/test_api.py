@@ -175,10 +175,10 @@ def test_health_and_job_flow():
             break
         time.sleep(0.025)
     assert job["status"] == "READY"
-    video = client.get(f"/jobs/{job_id}/final/video.mp4")
+    video = client.get(f"/api/jobs/{job_id}/final/video.mp4")
     assert video.status_code == 200
     assert b"ftyp" in video.content[:32]
-    video = client.get(f"/jobs/{job_id}/final/video.mp4")
+    video = client.get(f"/api/jobs/{job_id}/final/video.mp4")
     assert video.status_code == 200
     assert b"ftyp" in video.content[:32]
 

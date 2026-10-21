@@ -99,6 +99,10 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
                 "runtime_instance_id": current_instance_id,
                 "acknowledged_at": utc_now(),
             }
+            # The operation id stays on the record: it is the durable link
+            # between the acknowledged restart effect and the Fleet operation
+            # that requested it (Issue #174.4).
+            data["restart_operation_id"] = restart_operation_id
             data["status"] = "READY"
         else:
             data["desired_state"] = desired

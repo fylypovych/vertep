@@ -316,6 +316,9 @@ class TestRegenerationDedup:
         job = _make_job_for_store(tmp_path)
         job.status = JobStatus.VIDEO_REVISION_REQUESTED
         job.video_regenerating = True
+        # The chat that owns the Job acts on it; every other chat needs the
+        # administrator gate (Issue #81 R3).
+        job.source = "telegram:42"
         adapter = Mock()
         module = importlib.import_module("core.app")
         callback = {"id": "cb-dedup", "data": "vid_regen:test-job-001", "message": {"chat": {"id": "42"}}}

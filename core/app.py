@@ -314,7 +314,14 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                                   "/api/system/restart", "/api/system/test",
                                   "/api/system/backups"}
         internal_actions = request.url.path.startswith("/api/nodes/") and request.url.path.endswith("/actions")
-        if ((request.url.path in internal_update_routes or internal_actions)
+        # The Fleet self-calls (Telegram restart/system handlers) read the node
+        # listing and the node detail with the internal key; without that the
+        # readiness poll could never observe the acknowledged restart.
+        internal_node_read = (request.method == "GET"
+                              and (request.url.path == "/api/nodes"
+                                   or request.url.path.startswith("/api/nodes/")))
+        if ((request.url.path in internal_update_routes or internal_actions
+                or internal_node_read)
                 and internal_key
                 and secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), internal_key)):
             response = await call_next(request)
@@ -1480,6 +1487,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 )
             complete_operation(op["operation_id"], {"status": "ready", "node_id": node_id,
                                                        "restart_operation_id": restart_operation_id,
+                                                       "runtime_instance_id": restart_ack.get("runtime_instance_id"),
                                                        "message": f"Worker {node_id} перезапущено успішно"})
             audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"Worker {node_id} READY", f"telegram:{chat_id}")
             _queue_operation_notification(
@@ -2311,9 +2319,9 @@ def _handle_publish_channel(callback: dict, chat_id: str, payload: str) -> dict:
         return TelegramAdapter().answer_callback(callback_id, "Канал не знайдено")
     result = _publish_to_channel(job, channel)
     if result.get("status") == "PUBLISHED":
-        status_text = "✅ Описано"
+        status_text = "✅ Опубліковано"
     elif result.get("status") == "QUEUED":
-        status_text = "📤 Описано в чергу"
+        status_text = "📤 Опубліковано в чергу"
     else:
         status_text = f"❌ Помилка: {result.get('error', 'невідомо')}"
     return TelegramAdapter().answer_callback(callback_id, f"{channel.channel_type} ({channel.target}): {status_text}")

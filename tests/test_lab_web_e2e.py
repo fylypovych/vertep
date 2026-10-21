@@ -39,6 +39,15 @@ APP = ROOT / "deploy/lab/web/app"
 DIST = APP / "dist/vertep-lab-web/browser"
 OWNER_TOKEN = "lab-e2e-owner-secret"
 API_PORT_ENV = "LAB_E2E_API_PORT"
+REQUIRE = os.getenv("VERTEP_REQUIRE_LAB_WEB_E2E") == "1"
+
+try:
+    from playwright.sync_api import expect, sync_playwright
+except ImportError:  # pragma: no cover - dependency is required in CI
+    if REQUIRE:
+        pytest.fail("playwright is not installed; the Lab panel Browser proof is required",
+                    pytrace=False)
+    pytest.skip("playwright is not installed", allow_module_level=True)
 
 
 def _require_npm_or_fail():
@@ -306,8 +315,6 @@ def seed(environment: Lab) -> dict:
 
 
 def test_real_backend_browser_and_cli_parity(lab):
-    from playwright.sync_api import expect, sync_playwright
-
     ids = seed(lab)
     status = lab.client.get("/api/lab/status").json()
     assert status["policy"]["activated"] is True

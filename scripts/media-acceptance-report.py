@@ -107,7 +107,13 @@ def _provenance(evidence: dict[str, Any] | None) -> dict[str, Any]:
 
 def evaluate(evidence: dict[str, Any] | None, *,
              only: tuple[str, ...] | None = None) -> dict[str, Any]:
-    """Turn one evidence document into a per-row verdict."""
+    """Turn one evidence document into a per-row verdict.
+
+    A row is only a proof when it names the test that produced it, carries the
+    result of that test and comes from one single run (Issue #121.4–5): the
+    report states the exact SHA, the test IDs and the results, and refuses to
+    claim a row it cannot attribute.
+    """
     rows: dict[str, Any] = {}
     for name in ROWS:
         if only and name not in only:
@@ -116,14 +122,20 @@ def evaluate(evidence: dict[str, Any] | None, *,
         if record is None:
             rows[name] = {"status": NOT_RUN, "detail": "no evidence recorded"}
             continue
+        test_id = record.get("test_id") if isinstance(record, dict) else None
+        if not test_id:
+            rows[name] = {"status": NOT_RUN,
+                          "detail": "the row does not name the test that produced it"}
+            continue
         problems = _verify_files(record) if isinstance(record, dict) else []
         if problems:
-            rows[name] = {"status": FAIL, "detail": "; ".join(problems)}
+            rows[name] = {"status": FAIL, "detail": "; ".join(problems), "test_id": test_id}
             continue
         job_id = record.get("job_id") if isinstance(record, dict) else None
         rows[name] = {"status": PASS,
                       "expected": record.get("expected"),
                       "actual": record.get("actual"),
+                      "test_id": test_id,
                       "detail": f"evidence recorded for job {job_id}" if job_id
                       else "evidence recorded"}
     try:
@@ -163,10 +175,11 @@ def render_markdown(report: dict[str, Any], version: str) -> str:
              "",
              f"Verdict: **{report['summary']}**",
              "",
-             "| Row | Verdict | Expected | Actual | Detail |",
-             "| --- | --- | --- | --- | --- |"]
+             "| Row | Verdict | Test | Expected | Actual | Detail |",
+             "| --- | --- | --- | --- | --- | --- |"]
     for name, row in report["rows"].items():
-        lines.append(f"| `{name}` | {row['status']} | {_cell(row.get('expected'))} "
+        lines.append(f"| `{name}` | {row['status']} | {_cell(row.get('test_id'))} "
+                     f"| {_cell(row.get('expected'))} "
                      f"| {_cell(row.get('actual'))} | {row['detail']} |")
     lines += ["", "## Run provenance", "",
               f"- SHA: `{provenance.get('sha') or 'unknown'}`",
