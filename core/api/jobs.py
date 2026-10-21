@@ -40,7 +40,7 @@ STATUS_GROUPS: dict[str, set[str]] = {
     "queued": {"NEW", "SCRIPT_QUEUED", "STORYBOARD_QUEUED"},
     "waiting": {"WAITING_FOR_SYSTEM", "PENDING_APPROVAL", "SCRIPT_PENDING_APPROVAL",
                 "SCRIPT_REVISION_REQUESTED", "STORYBOARD_PENDING_APPROVAL",
-                "STORYBOARD_REVISION_REQUESTED", "VIDEO_PENDING_APPROVAL",
+                "STORYBOARD_READY", "STORYBOARD_REVISION_REQUESTED", "VIDEO_PENDING_APPROVAL",
                 "VIDEO_REVISION_REQUESTED"},
     "completed": {"SCRIPT_READY", "SCRIPT_APPROVED", "STORYBOARD_APPROVED", "ASSETS_READY",
                   "VIDEO_READY", "VIDEO_APPROVED", "READY", "PUBLISHED"},
@@ -389,7 +389,11 @@ def regenerate_video_endpoint(job_id: str, body: ScriptAction | None = None):
         raise HTTPException(404, "Job not found")
     actor = (body.actor if body else None) or "api"
     try:
-        job = request_video_revision(store, job, "regenerate", actor)
+        if job.status == JobStatus.VIDEO_PENDING_APPROVAL:
+            job = request_video_revision(store, job, "regenerate", actor)
+        elif job.status != JobStatus.VIDEO_REVISION_REQUESTED:
+            raise ValueError(
+                f"Cannot regenerate video in status {job.status.value}")
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     # Issue #82: the regeneration attempt is claimed atomically before dispatch

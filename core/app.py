@@ -60,10 +60,13 @@ from .operations import (create_operation, get_operation, list_operations,
                          begin_operation, advance_operation, complete_operation, fail_operation,
                          is_operation_in_progress, audit_entry, OperationStatus,
                          link_operation_request, add_pending_notification,
-                         pending_notifications, acknowledge_notification)
+                         pending_notifications, acknowledge_notification,
+                         set_operation_fields)
 from .telegram_callbacks import (DurableCallbackSet, claim_callback,
-                                 complete_callback, link_operation)
-from .update_manager import request_update, update_status
+                                 complete_callback, link_operation,
+                                 set_callback_target)
+from .update_manager import (mark_request_failed, pending_request_ids,
+                             request_update, update_status)
 from .pipeline import regenerate_script
 from .node_registry import (create_node_csr, create_registration_token, enroll_node, node_roles,
                             registered_nodes, renew_node, revoke_node, verify_node_certificate,
@@ -71,6 +74,10 @@ from .node_registry import (create_node_csr, create_registration_token, enroll_n
 from .version import application_version
 from .runtime_identity import CORE_RUNTIME_INSTANCE_ID
 from .deployment_plan import create_plan
+
+# Wall-clock moment this CORE process started.  Operations created before it
+# belong to an earlier process and may be stale leftovers (Issue #174.3).
+_PROCESS_STARTED_AT = datetime.now(timezone.utc)
 
 # Delegation shim: system_restart moved to core.api.system (Issue #110 Phase C).
 # The CI test caller references core.app.system_restart; keep the symbol alive
@@ -160,7 +167,22 @@ async def lifespan(_app):
                 store.update(recovered_job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
             executor.submit(_prepare_and_dispatch, recovered_job)
     watchdog_task = asyncio.create_task(_watchdog())
-    _start_telegram_polling()
+    # Issue #174.3: an update operation whose host request was lost must reach
+    # a terminal state after a restart, otherwise every retry is refused.
+    try:
+        recovered = _recover_stale_update_operations()
+        if recovered:
+            logger.warning("Recovered %d stale update operation(s) after restart", len(recovered))
+    except Exception as recover_error:  # noqa: BLE001 - never block startup
+        logger.warning("Update operation recovery failed: %s", recover_error)
+    # Issue #174.4: a restart operation whose effect survived the process
+    # restart must be finished and reported to the operator.
+    try:
+        finished = _reconcile_restart_operations()
+        if finished:
+            logger.warning("Finished %d restart operation(s) after restart", len(finished))
+    except Exception as reconcile_error:  # noqa: BLE001 - never block startup
+        logger.warning("Restart operation reconciliation failed: %s", reconcile_error)
     # Issue #78: model pulls live on background threads/worker commands and do
     # not survive a CORE restart — fail the orphaned ones so a retry is possible.
     try:
@@ -170,6 +192,9 @@ async def lifespan(_app):
             logger.warning("Reconciled %d orphaned model operation(s) after restart", recovered)
     except Exception as reconcile_error:  # noqa: BLE001 - never block startup
         logger.warning("Model operation reconcile failed: %s", reconcile_error)
+    # The polling service delivers the durable notifications that the
+    # reconciliation above has queued, so it starts after the recovery.
+    _start_telegram_polling()
     yield
     watchdog_task.cancel()
     _stop_telegram_polling()
@@ -850,6 +875,197 @@ def _system_status_text() -> str:
     return "\n".join(lines)
 
 
+def _host_status_is_stale(status: dict) -> bool:
+    """True when the durable update status stopped progressing.
+
+    The host agent refreshes ``status.json`` while it works on a request.  A
+    status that stayed in ``PENDING``/``RUNNING`` longer than the configured
+    window belongs to a host agent that died mid-operation (Issue #174.3).
+    """
+    try:
+        window = int(os.getenv("UPDATE_OPERATION_STALE_SECONDS", "3600"))
+    except ValueError:
+        window = 3600
+    if window <= 0:
+        return False
+    updated_at = str(status.get("updated_at") or "")
+    if not updated_at:
+        return False
+    try:
+        moment = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - moment).total_seconds() > window
+
+
+def _operation_started_before_process(operation: dict) -> bool:
+    """True when the operation was created by an earlier CORE process."""
+    created_at = str(operation.get("created_at") or "")
+    if not created_at:
+        return False
+    try:
+        moment = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment < _PROCESS_STARTED_AT
+
+
+def _recover_stale_update_operations() -> list[str]:
+    """Fail update operations whose host request was lost (Issue #174.3).
+
+    A CORE process that dies while the host agent works on a request leaves
+    the operation in ``RUNNING`` forever and the host status in
+    ``PENDING``/``RUNNING``.  Every later confirmation is then refused as
+    "already in progress", so the failure path has to become terminal and a
+    retry has to stay possible.
+    """
+    try:
+        status = update_status() or {}
+    except Exception:
+        return []
+    state = str(status.get("state", "")).upper()
+    host_request = status.get("request_id")
+    queued = pending_request_ids()
+    host_stale = _host_status_is_stale(status)
+    recovered: list[str] = []
+    for operation in list_operations(200):
+        if operation.get("type") != "update":
+            continue
+        if operation.get("status") not in {OperationStatus.QUEUED.value,
+                                           OperationStatus.RUNNING.value}:
+            continue
+        external = operation.get("external_request_id")
+        if external:
+            if external in queued:
+                continue
+            if external == host_request and state in {"PENDING", "RUNNING"}:
+                if not host_stale:
+                    continue
+                mark_request_failed(external, "Update host agent stopped responding")
+        elif not _operation_started_before_process(operation):
+            continue
+        fail_operation(
+            operation["operation_id"],
+            "Stale update operation recovered: the host request is no longer active",
+        )
+        recovered.append(operation["operation_id"])
+    return recovered
+
+
+def _record_operation_field(operation_id: str, **fields) -> None:
+    """Persist correlation fields of an operation without breaking the flow.
+
+    The fields tie the Telegram operation to the durable effect identity
+    (``restart_operation_id``, ``previous_runtime_instance_id``).  A missing
+    operation record must not abort the requested operation itself.
+    """
+    try:
+        set_operation_fields(operation_id, **fields)
+    except KeyError:
+        logger.warning("Operation %s is not persisted; correlation fields were dropped",
+                       str(operation_id)[:8])
+
+
+def _queue_operation_notification(operation: dict, marker: str, message: str) -> None:
+    """Queue a durable Telegram notification for a finished operation.
+
+    The inline callback answer is lost when the CORE process dies between the
+    effect and the answer.  The durable queue keeps the final result, and the
+    delivery happens after the restart (Issue #174.4).
+    """
+    requested_by = str(operation.get("requested_by") or "")
+    if not requested_by.startswith("telegram:"):
+        return
+    chat_id = requested_by.split(":", 1)[1]
+    add_pending_notification(chat_id, f"{marker} {message}")
+
+
+def _reconcile_restart_operations() -> list[str]:
+    """Finish restart operations whose effect survived a CORE process restart.
+
+    A restart effect is durable: the node records the acknowledgement of its
+    new runtime instance and the CORE records its own instance id.  After a
+    process restart the operation has to reach a terminal state instead of
+    blocking every later restart request (Issue #174.4).
+    """
+    finished: list[str] = []
+    for operation in list_operations(200):
+        if operation.get("type") != "restart":
+            continue
+        if operation.get("status") not in {OperationStatus.QUEUED.value,
+                                           OperationStatus.RUNNING.value}:
+            continue
+        target = str(operation.get("target") or "")
+        if target == "core":
+            previous = str(operation.get("previous_runtime_instance_id") or "")
+            if not previous or previous == CORE_RUNTIME_INSTANCE_ID:
+                continue
+            complete_operation(operation["operation_id"],
+                               {"status": "healthy", "target": "core",
+                                "runtime_instance_id": CORE_RUNTIME_INSTANCE_ID,
+                                "message": "CORE перезапущено"})
+            _queue_operation_notification(
+                operation, "✅",
+                f"Перезапуск CORE #{operation['operation_id'][:8]} завершено.")
+            finished.append(operation["operation_id"])
+            continue
+        worker = store.workers.get(target) or {}
+        acknowledgement = worker.get("restart_ack") or {}
+        if (worker.get("status") == "READY"
+                and acknowledgement.get("operation_id")
+                and acknowledgement.get("operation_id") == operation.get("restart_operation_id")):
+            complete_operation(operation["operation_id"],
+                               {"status": "ready", "node_id": target,
+                                "restart_operation_id": acknowledgement.get("operation_id"),
+                                "runtime_instance_id": acknowledgement.get("runtime_instance_id"),
+                                "message": f"Worker {target} перезапущено успішно"})
+            _queue_operation_notification(
+                operation, "✅",
+                f"Вузол {target} перезапущено і READY. ID: {operation['operation_id'][:8]}")
+            finished.append(operation["operation_id"])
+    return finished
+
+
+def _release_notes_for(version: str) -> list[str]:
+    """Release notes of a target version for the update confirmation.
+
+    The notes come from the release artefacts that ship with the source tree
+    (``releases/<version>.md`` or the matching ``CHANGELOG.md`` block).  A
+    deployment without them confirms the version transition only.
+    """
+    if not version:
+        return []
+    root = Path(__file__).resolve().parents[1]
+    text = ""
+    try:
+        text = (root / "releases" / f"{version}.md").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    if not text:
+        try:
+            changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        except OSError:
+            return []
+        pattern = re.compile(
+            rf"(?ms)^## ПРАВИЛЬНА НАЗВА: {re.escape(version)}\s*\n(.*?)(?=^## |\Z)")
+        match = pattern.search(changelog)
+        text = match.group(1) if match else ""
+    return [line.strip() for line in text.splitlines() if line.strip().startswith("-")][:10]
+
+
+def _update_target_version() -> str | None:
+    """Version the update operation would move the system to."""
+    try:
+        status = update_status() or {}
+    except Exception:
+        return None
+    return status.get("available_version") or None
+
+
 def _reconcile_update_operations() -> None:
     """Correlate durable update-agent results with Telegram operations."""
     try:
@@ -858,12 +1074,25 @@ def _reconcile_update_operations() -> None:
         return
     request_id = status.get("request_id")
     state = str(status.get("state", "")).upper()
-    if not request_id or state not in {"SUCCEEDED", "FAILED", "ROLLED_BACK"}:
+    if not request_id:
         return
     for operation in list_operations(200):
         if (operation.get("type") != "update"
                 or operation.get("external_request_id") != request_id
                 or operation.get("status") not in {"QUEUED", "RUNNING"}):
+            continue
+        # Phase trail: the host agent reports its phase in ``status.json``.
+        # Mirroring it into the durable operation keeps the Telegram status
+        # output truthful while the update is still running (Issue #174.3).
+        phase = str(status.get("phase") or "").strip()
+        if phase and phase != operation.get("current_phase"):
+            try:
+                progress = int(status.get("progress") or 0)
+            except (TypeError, ValueError):
+                progress = 0
+            advance_operation(operation["operation_id"], phase, progress,
+                              status.get("message"))
+        if state not in {"SUCCEEDED", "FAILED", "ROLLED_BACK"}:
             continue
         if state == "SUCCEEDED":
             complete_operation(operation["operation_id"], status)
@@ -874,9 +1103,11 @@ def _reconcile_update_operations() -> None:
         requested_by = str(operation.get("requested_by") or "")
         if requested_by.startswith("telegram:"):
             chat_id = requested_by.split(":", 1)[1]
+            version = status.get("current_version") or status.get("available_version")
+            suffix = f" ({version})" if version else ""
             add_pending_notification(
                 chat_id,
-                f"{marker} Операція оновлення #{operation['operation_id'][:8]} завершена: "
+                f"{marker} Операція оновлення #{operation['operation_id'][:8]}{suffix} завершена: "
                 f"{status.get('message') or state}",
             )
 
@@ -886,9 +1117,16 @@ def _deliver_pending_telegram_notifications() -> None:
     adapter = TelegramAdapter()
     for notification in pending_notifications():
         try:
-            adapter.send_message(notification["chat_id"], notification["message"])
+            result = adapter.send_message(notification["chat_id"], notification["message"])
         except Exception as error:
             logger.warning("Telegram operation notification delivery failed: %s", error)
+            continue
+        if isinstance(result, dict) and result.get("status") == "STUB":
+            # Nothing was delivered (the bot token is not configured), so the
+            # notification has to stay queued for the next attempt
+            # (Issue #174.2).
+            logger.warning("Telegram operation notification was not delivered: %s",
+                           result.get("reason"))
             continue
         acknowledge_notification(notification["notification_id"])
 
@@ -987,6 +1225,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         return TelegramAdapter().answer_callback(callback_id, _system_status_text())
 
     if action == "sys_update":
+        _recover_stale_update_operations()
         _reconcile_update_operations()
         existing = is_operation_in_progress("update")
         if existing:
@@ -1002,7 +1241,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         available = update_info.get("available_version")
         message = f"🔄 Поточна версія: {current}\n"
         if available:
-            message += f"Доступна: {available}\n\nОновити Vertep?"
+            message += f"Доступна: {available}\n"
+            notes = _release_notes_for(available)
+            if notes:
+                message += "\nЗміни:\n" + "\n".join(notes) + "\n"
+            message += "\nОновити Vertep?"
             confirm_action = "sys_update_confirm"
         else:
             message += "Доступних оновлень немає.\n\nПеревірети доступність оновлення?"
@@ -1011,6 +1254,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
 
     if action == "sys_update_check":
         try:
+            _recover_stale_update_operations()
             op, created = get_or_create_operation("update", f"telegram:{chat_id}", target="check")
             if not created:
                 return TelegramAdapter().answer_callback(
@@ -1031,6 +1275,12 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
     if action == "sys_update_confirm":
         op = None
         try:
+            _recover_stale_update_operations()
+            _reconcile_update_operations()
+            target = _update_target_version()
+            # Durable confirmation: the claim record keeps the actor and the
+            # confirmed target next to the action (Issue #174.2).
+            set_callback_target(callback_id, target)
             op, created = get_or_create_operation("update", f"telegram:{chat_id}", target="apply")
             if not created:
                 return TelegramAdapter().answer_callback(
@@ -1042,8 +1292,11 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                 link_operation_request(op["operation_id"], request)
             begin_operation(op["operation_id"], "Запит на оновлення прийнято")
             audit_entry(op["operation_id"], "RUNNING", "Update started via Telegram", f"telegram:{chat_id}")
+            confirmed = f" → {target}" if target else ""
             return TelegramAdapter().answer_callback(
-                callback_id, f"Оновлення заплановано. ID операції: {op['operation_id'][:8]}"
+                callback_id,
+                f"✅ Підтверджено: telegram:{chat_id}{confirmed}. "
+                f"ID операції: {op['operation_id'][:8]}"
             )
         except Exception as error:
             # The operation may already exist: never leave it running on a
@@ -1083,6 +1336,7 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
         )
 
     if action == "sys_restart_core_confirm":
+        _reconcile_restart_operations()
         op, created = get_or_create_operation("restart", f"telegram:{chat_id}", target="core")
         if not created:
             return TelegramAdapter().answer_callback(
@@ -1095,16 +1349,25 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
                 audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
+                _queue_operation_notification(
+                    op, "❌", f"Перезапуск CORE не вдався: {result['_error'][:200]}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск CORE не вдався: {result['_error'][:200]}"
                 )
-            advance_operation(op["operation_id"], "Очікування здоров'я CORE", 50, "Перезапуск ініційовано, очікуємо HEALTHY")
             previous_instance_id = (result or {}).get("previous_runtime_instance_id")
             if not previous_instance_id:
                 fail_operation(op["operation_id"], "CORE restart response did not include process identity")
+                _queue_operation_notification(
+                    op, "❌",
+                    "Перезапуск CORE не підтверджено: API не повернув ідентифікатор процесу.")
                 return TelegramAdapter().answer_callback(
                     callback_id, "❌ Перезапуск CORE не підтверджено: API не повернув ідентифікатор процесу."
                 )
+            # The durable record keeps the effect identity, so the operation can
+            # be finished after a CORE process restart (Issue #174.4).
+            _record_operation_field(op["operation_id"],
+                                 previous_runtime_instance_id=previous_instance_id)
+            advance_operation(op["operation_id"], "Очікування здоров'я CORE", 50, "Перезапуск ініційовано, очікуємо HEALTHY")
             # A healthy response from the old process is not restart evidence.
             healthy = False
             for _ in range(30):  # up to 60 seconds
@@ -1117,16 +1380,22 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             if not healthy:
                 fail_operation(op["operation_id"], "CORE не став HEALTHY після перезапуску (timeout 60s)")
                 audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "GET /api/health timeout", f"telegram:{chat_id}")
+                _queue_operation_notification(
+                    op, "❌",
+                    f"Перезапуск CORE: сервіс не став HEALTHY за 60s. ID: {op['operation_id'][:8]}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск CORE: сервіс не став HEALTHY за 60s. ID: {op['operation_id'][:8]}"
                 )
             complete_operation(op["operation_id"], {"status": "healthy", "message": "CORE перезапущено успішно"})
             audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "CORE healthy", f"telegram:{chat_id}")
+            _queue_operation_notification(
+                op, "✅", f"CORE перезапущено і HEALTHY. ID: {op['operation_id'][:8]}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ CORE перезапущено і HEALTHY. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
             fail_operation(op["operation_id"], str(error))
+            _queue_operation_notification(op, "❌", f"Перезапуск CORE не вдався: {error}")
             return TelegramAdapter().answer_callback(callback_id, f"❌ Перезапуск CORE не вдався: {error}")
 
     if action == "sys_restart_worker":
@@ -1149,13 +1418,16 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
     if action == "sys_restart_worker_confirm":
         node_id = payload
         if not node_id:
-            return TelegramAdapter().answer_callback(callback_id, "Некоректний вузол.")
+            return TelegramAdapter().answer_callback(callback_id, "Невірний вузол.")
+        _reconcile_restart_operations()
         op, created = get_or_create_operation("restart", f"telegram:{chat_id}", target=node_id)
         if not created:
             return TelegramAdapter().answer_callback(
                 callback_id, f"Перезапуск вже в процесі (#{op['operation_id'][:8]})."
             )
         begin_operation(op["operation_id"], f"Перезапуск вузла {node_id}")
+        advance_operation(op["operation_id"], "Drain", 20,
+                          f"Вузол {node_id} виходить із розподілу задач")
         audit_entry(op["operation_id"], "INTERNAL_CALL", f"POST /api/nodes/{node_id}/actions action=restart", f"telegram:{chat_id}")
         try:
             result = _call_core_api("POST", f"/api/nodes/{node_id}/actions",
@@ -1164,17 +1436,29 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
             if result and "_error" in result:
                 fail_operation(op["operation_id"], result["_error"])
                 audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"error: {result['_error'][:200]}", f"telegram:{chat_id}")
+                _queue_operation_notification(
+                    op, "❌", f"Перезапуск {node_id} не вдався: {result['_error'][:200]}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск {node_id} не вдався: {result['_error'][:200]}"
                 )
             restart_operation_id = (result or {}).get("restart_operation_id")
             if not restart_operation_id:
                 fail_operation(op["operation_id"], f"Worker {node_id} restart response has no operation id")
+                _queue_operation_notification(
+                    op, "❌", f"Перезапуск {node_id} не підтверджено: відсутній ID операції.")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск {node_id} не підтверджено: відсутній ID операції."
                 )
-            advance_operation(op["operation_id"], f"Очікування підтвердження {node_id}", 50,
-                              "Перезапуск ініційовано, очікуємо новий процес")
+            # The durable record keeps the Fleet effect identity, so the
+            # operation can be finished after a CORE process restart
+            # (Issue #174.4).
+            _record_operation_field(op["operation_id"],
+                                    restart_operation_id=restart_operation_id)
+            # ``Drain`` is the phase the restart operation spends in while the
+            # Fleet effect runs; the acknowledgement phase follows it, so the
+            # durable record keeps ``Drain`` until the node comes back READY.
+            advance_operation(op["operation_id"], "Drain", 50,
+                              "Перезапуск ініційовано, очікуємо підтвердження від вузла")
             # READY alone is insufficient: require the acknowledgement tied to this request.
             ready = False
             for _ in range(30):  # up to 60 seconds
@@ -1187,7 +1471,10 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                     break
             if not ready:
                 fail_operation(op["operation_id"], f"Worker {node_id} не став READY після перезапуску (timeout 60s)")
-                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"GET /api/nodes/{node_id} timeout", f"telegram:{chat_id}")
+                audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", "GET /api/nodes/{node_id} timeout", f"telegram:{chat_id}")
+                _queue_operation_notification(
+                    op, "❌",
+                    f"Перезапуск {node_id}: вузол не став READY за 60s. ID: {op['operation_id'][:8]}")
                 return TelegramAdapter().answer_callback(
                     callback_id, f"❌ Перезапуск {node_id}: вузол не став READY за 60s. ID: {op['operation_id'][:8]}"
                 )
@@ -1195,12 +1482,15 @@ def _handle_system_callback(callback: dict, chat_id: str, action: str, payload: 
                                                        "restart_operation_id": restart_operation_id,
                                                        "message": f"Worker {node_id} перезапущено успішно"})
             audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"Worker {node_id} READY", f"telegram:{chat_id}")
+            _queue_operation_notification(
+                op, "✅", f"Вузол {node_id} перезапущено і READY. ID: {op['operation_id'][:8]}")
             return TelegramAdapter().answer_callback(
                 callback_id, f"✅ Вузол {node_id} перезапущено і READY. ID: {op['operation_id'][:8]}"
             )
         except Exception as error:
             fail_operation(op["operation_id"], str(error))
             audit_entry(op["operation_id"], "INTERNAL_CALL_RESULT", f"exception: {error}", f"telegram:{chat_id}")
+            _queue_operation_notification(op, "❌", f"Перезапуск {node_id} не вдався: {error}")
             return TelegramAdapter().answer_callback(callback_id, f"❌ Перезапуск {node_id} не вдався: {error}")
 
     if action == "sys_backup":
@@ -1615,8 +1905,10 @@ def _handle_telegram_callback(callback: dict) -> dict:
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
         return _handle_script_callback(callback, chat_id, action, payload)
     elif action in {"vid_ok", "vid_regen", "vid_edit", "vid_reject"}:
-        if not is_admin_chat(chat_id):
-            return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
+        # Issue #81 R3: every video action (approval, rejection, revision text,
+        # regeneration) is bound to the chat that owns the Job.  The ownership
+        # check runs before the admin gate so a foreign chat is rejected with
+        # the ownership message, not a generic admin message.
         return _handle_video_callback(callback, chat_id, action, payload)
 
     job_id = payload
@@ -1901,10 +2193,16 @@ def _handle_video_callback(callback: dict, chat_id: str, action: str, payload: s
     source_parts = str(job.source or "").split(":")
     source_chat_id = source_parts[1] if len(source_parts) >= 2 and source_parts[0] == "telegram" else None
     # Issue #81 R3: every video action (approval, rejection, revision text,
-    # regeneration) is bound to the chat that owns the Job.
+    # regeneration) is bound to the chat that owns the Job.  The ownership
+    # check runs before the admin gate so a foreign chat is rejected with the
+    # ownership message, not a generic admin message.
     if source_chat_id is not None and source_chat_id != chat_id:
         if action in {"vid_ok", "vid_reject", "vid_edit", "vid_regen"}:
             return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: chat не є власником job")
+    # The owner is allowed to act on their own job; every other chat must be
+    # an administrator, so the admin gate is applied after the ownership check.
+    if not is_admin_chat(chat_id) and source_chat_id != chat_id:
+        return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено: лише для адміністраторів.")
     from .pipeline import approve_video, claim_video_regeneration, request_video_revision
     try:
         if action == "vid_ok":
@@ -2012,7 +2310,12 @@ def _handle_publish_channel(callback: dict, chat_id: str, payload: str) -> dict:
     if not channel:
         return TelegramAdapter().answer_callback(callback_id, "Канал не знайдено")
     result = _publish_to_channel(job, channel)
-    status_text = "✅ Опубліковано" if result.get("status") == "PUBLISHED" else f"❌ Помилка: {result.get('error', 'невідомо')}"
+    if result.get("status") == "PUBLISHED":
+        status_text = "✅ Описано"
+    elif result.get("status") == "QUEUED":
+        status_text = "📤 Описано в чергу"
+    else:
+        status_text = f"❌ Помилка: {result.get('error', 'невідомо')}"
     return TelegramAdapter().answer_callback(callback_id, f"{channel.channel_type} ({channel.target}): {status_text}")
 
 
@@ -2042,10 +2345,29 @@ def _publish_to_channel(job, channel) -> dict:
     from .api.job_helpers import _has_publisher_worker
     if not _has_publisher_worker(store):
         return {"status": "NOT_CONFIGURED", "error": "Publisher Worker не зареєстровано; публікація неможлива без Publisher Worker"}
+    # Issue #174.2: a callback that is replayed after a crash must not publish
+    # the same job twice.  A finished receipt and an in-flight publish task are
+    # the durable markers of an already dispatched publication.
+    receipt = (getattr(job, "publication_results", None) or {}).get(channel.channel_type)
+    if receipt and receipt.get("status") == "PUBLISHED":
+        return {"status": "PUBLISHED", "channel": channel.channel_type,
+                "remote_id": receipt.get("remote_id"), "url": receipt.get("url"),
+                "duplicate": True}
+    in_flight = {value for value in (getattr(job, "publish_task_ids", None) or {}).values()}
+    if channel.channel_type in in_flight:
+        return {"status": "QUEUED", "channel": channel.channel_type, "duplicate": True}
     from .api.job_helpers import _enqueue_publish_task
     queued = _enqueue_publish_task(store, job, channel.channel_type)
     if queued is None:
         return {"status": "NOT_CONFIGURED", "error": f"Publisher для {channel.channel_type} не налаштовано"}
+    # A Publisher Worker accepts a publish task only while the Job is in
+    # PUBLISHING (core/api/tasks.py); otherwise the claim drops the queued
+    # task and the publication never happens.  The Telegram path has to move
+    # the Job into that state, exactly like the Web publish endpoint does.
+    if job.status != JobStatus.PUBLISHING:
+        transition_stage(job, StageName.PUBLISH, StageStatus.RUNNING)
+        store.update(job, JobStatus.PUBLISHING,
+                     f"PUBLISHING {channel.channel_type} via Publisher Worker")
     return {"status": "QUEUED", "task_id": queued["task_id"], "channel": channel.channel_type}
 
 

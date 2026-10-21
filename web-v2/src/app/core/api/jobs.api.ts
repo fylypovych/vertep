@@ -56,8 +56,8 @@ export class JobsApiService {
     return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/approve`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
   publish(jobId: string, channels?: string[]): Observable<Job> {
-    const qs = channels?.length ? `?channels=${encodeURIComponent(channels.join(','))}` : '';
-    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/publish${qs}`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+    return this.http.post<Job>(`${this.base.url}/jobs/${this.base.enc(jobId)}/publish`,
+      channels ?? [], { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
   artifacts(jobId: string): Observable<{ job_id: string; artifacts: ArtifactRecord[] }> {
     return this.http.get<{ job_id: string; artifacts: ArtifactRecord[] }>(`${this.base.url}/jobs/${this.base.enc(jobId)}/artifacts`, { headers: this.h() }).pipe(catchError(this.base.handleError));

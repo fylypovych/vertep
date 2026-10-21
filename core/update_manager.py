@@ -42,6 +42,45 @@ def update_status() -> dict:
     return status
 
 
+def pending_request_ids() -> set[str]:
+    """Identifiers of update requests still waiting for the host agent.
+
+    A request file is removed by the host agent once it starts processing the
+    request, so an identifier that is neither queued nor reported by the
+    durable status belongs to a request the host no longer knows about.
+    """
+    root = state_root()
+    requests = root / "requests"
+    if not requests.is_dir():
+        return set()
+    return {path.stem for path in requests.glob("*.json") if path.is_file()}
+
+
+def mark_request_failed(request_id: str, message: str) -> dict:
+    """Move the durable update status of a lost request to a terminal state.
+
+    The host agent writes ``status.json`` while it works on a request.  If it
+    dies the status stays ``PENDING``/``RUNNING`` forever and every later
+    request is refused as "already pending or running" (Issue #174.3).  The
+    CORE marks such a request as failed so the failure path is terminal and
+    a retry becomes possible.
+    """
+    root = state_root()
+    status = _read_json(root / "status.json", {})
+    if not status:
+        status = update_status()
+    if str(status.get("state", "")).upper() in {"SUCCEEDED", "FAILED", "ROLLED_BACK"}:
+        return status
+    failed = {**status,
+              "state": "FAILED",
+              "phase": "RECOVERING",
+              "request_id": request_id or status.get("request_id"),
+              "message": message,
+              "updated_at": utc_now()}
+    atomic_write_json(root / "status.json", failed)
+    return failed
+
+
 def request_update(action: str) -> dict:
     if os.getenv("WEB_UPDATE_ENABLED", "false").lower() != "true":
         raise RuntimeError("Web updates are disabled on this node")

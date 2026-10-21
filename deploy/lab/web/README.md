@@ -1,51 +1,61 @@
-# Docker для Web лабораторії
+# Angular Web лабораторії
 
-Контейнер обслуговує готову Angular browser-збірку окремої лабораторії та
-проксіює `/api/lab/` до Lab API. Production CORE і його Web UI не використовуються.
-Це Docker-частина `i.0.0.2.51` (#251), а не реалізація чи приймання самого UI.
-Окремого Angular застосунку лабораторії поки немає; його розробка залишається в #251.
+Окремий Angular-застосунок лабораторії (`i.0.0.2.51`, #251). Він не
+використовує production CORE, `web-v2`, production volumes чи Docker socket:
+єдине джерело даних — Lab API (`/api/lab/`), єдине джерело повноважень —
+policy gate на backend.
 
-## Збірка image
+Застосунок лежить у `deploy/lab/web/app` (standalone components, Angular 21,
+TypeScript 5.9). Сторінки: dashboard, issues + evidence, пакети `ir`,
+approvals (grants/rights/consolidation), GPU, історія рішень, звіти,
+налаштування сповіщень. Owner token зберігається лише в `sessionStorage` і
+передається заголовком `X-Lab-Owner-Token`; UI не вирішує, чи дозволена дія,
+а показує рішення policy gate.
 
-З кореня repository:
+Небезпечні дії (revoke, consolidation, зміна сповіщень, подання/закриття
+`ir`) вимагають явного підтвердження в інтерфейсі й окремо перевіряються
+сервером. Неавторизований клієнт отримує відмову незалежно від того, CLI це
+чи Web.
+
+## Локальна збірка
+
+```sh
+cd deploy/lab/web/app
+npm ci
+npm run build   # dist/vertep-lab-web/browser
+```
+
+## Docker
+
+Image збирає Angular-застосунок усередині себе (multi-stage: `node:24-alpine`
+→ `nginx:1.27-alpine`), тому зовнішній `LAB_WEB_DIST` більше не потрібен.
 
 ```sh
 docker build -f deploy/lab/Dockerfile.web -t vertep-lab-web:dev .
-```
-
-Image містить HTTP server/config, а frontend підключається read-only під час
-запуску. Це дозволяє використовувати збірку погодженого UI без зміни Dockerfile.
-
-## Запуск після появи Angular збірки лабораторії
-
-`LAB_WEB_DIST` — абсолютний шлях до каталогу browser output з `index.html`
-та JS/CSS/assets. Не підставляти production `web-v2` замість Lab UI.
-
-```sh
-export LAB_WEB_DIST=/absolute/path/to/lab-angular/dist/browser
 docker compose -f deploy/lab/docker-compose.web.yml up --build -d
 ```
 
-Панель: `http://127.0.0.1:8444`. Порт можна змінити через `LAB_WEB_PORT`.
-API не публікує host port. Compose створює власний Lab state volume і network;
-Docker socket, production volumes/secrets та GPU не підключаються.
-Policy activation, grants і запуск автономної роботи не виконуються.
-Compose не запускає sandbox/executor; це окремі компоненти #250.
+Панель: `http://127.0.0.1:8444`, порт змінюється через `LAB_WEB_PORT`. API не
+публікує host port. Compose створює власний Lab state volume і network;
+Docker socket, production volumes/secrets та GPU не підключаються. Policy
+activation, grants і запуск автономної роботи не виконуються. Compose не
+запускає sandbox/executor; це окремі компоненти #250.
 
-`/healthz` перевіряє лише HTTP server. `/readyz` і Docker healthcheck вимагають
-`index.html`; без збірки readiness повертає 503. Це не перевірка повного UI/API
-acceptance. Health Lab API перевіряється окремо перед стартом Web.
-Авторизація залишається на backend: proxy не додає credentials і не змінює
-Authorization/cookies. Тут немає TLS termination; для віддаленого доступу потрібен
-погоджений HTTPS proxy, локальний listener залишається на loopback.
+`nginx.conf` віддає SPA fallback, `/healthz` і `/readyz`, а `/api/lab/`
+проксіює на `lab-control:8000` без додавання чи зміни credentials. TLS
+termination тут відсутній: для віддаленого доступу потрібен погоджений HTTPS
+proxy, локальний listener залишається на loopback.
 
 ## Перевірка
 
 ```sh
-docker compose -f deploy/lab/docker-compose.web.yml config --quiet
+python -m pytest -q tests/test_lab_web_e2e.py
 python -m pytest -q tests/test_lab_web_docker.py
 ```
 
-Docker integration test потребує працюючого daemon; skip без Docker не означає
-успішного запуску image. Тест використовує synthetic assets/API, а не приймає
-відсутній Angular UI як завершений #251.
+`test_lab_web_e2e.py` піднімає справжній Lab API з тимчасовим state,
+production Angular build і статичний proxy з тим самим контрактом, що nginx,
+після чого проходить Browser-сценарії та звіряє стан/рішення з CLI. Docker
+test потребує працюючого daemon: skip без Docker не є доказом роботи image.
+Обидва тести обов'язкові в CI job `lab-web-e2e`; відсутній npm або Docker там
+валить job, а не пропускається.

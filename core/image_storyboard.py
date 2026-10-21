@@ -126,7 +126,13 @@ def handle_image_result(store, job: Job, task_id: str, success: bool, image_base
     job.image_storyboard_task_versions.pop(task_id, None)
     if storyboard and all(s.image_artifact_id for s in storyboard.scenes):
         storyboard.image_status = "ready"
-        store.event(job, f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY")
+        from .models import JobStatus
+        if job.status == JobStatus.STORYBOARD_PENDING_APPROVAL:
+            store.transition(
+                job, JobStatus.STORYBOARD_READY,
+                f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY")
+        else:
+            store.event(job, f"IMAGE STORYBOARD {storyboard.version}:{storyboard.image_version} READY")
         if job.source.startswith("telegram:"):
             chat_id = job.source.split(":", 2)[1]
             try:

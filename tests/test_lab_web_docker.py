@@ -1,11 +1,17 @@
-"""Disposable HTTP/Compose proof for the Lab Web image, not UI acceptance."""
+"""Disposable HTTP/Compose proof for the Lab Web image, not UI acceptance.
+
+The image bakes the real Angular laboratory build (Issue #251, U1), so this
+test proves packaging, read-only isolation, SPA fallback and the authenticated
+API proxy.  Actual browser/CLI acceptance against the live backend lives in
+``tests/test_lab_web_e2e.py``; neither test replaces the other.
+"""
 
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
-import tempfile
 import time
 import uuid
 
@@ -19,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def run(*args, check=True, **kwargs):
     return subprocess.run(
         ["docker", *args], check=check, capture_output=True, text=True,
-        timeout=600, **kwargs,
+        timeout=1200, **kwargs,
     )
 
 
@@ -73,51 +79,33 @@ def wait_for_published_port(name, container_port, timeout=60):
     )
 
 
-def readable_asset_dir():
-    """Create an asset directory the container user can traverse and read.
-
-    pytest creates its temporary directories with mode 0700, which the
-    unprivileged container user cannot enter, so a plain system temporary
-    directory with explicit permissions is used instead.
-    """
-    root = Path(tempfile.mkdtemp(prefix="vertep-lab-web-"))
-    os.chmod(root, 0o755)
-    assets = root / "browser"
-    assets.mkdir(mode=0o755)
-    return root, assets
-
-
-def test_web_compose_requires_real_dist_and_is_isolated(docker, tmp_path):
+def test_web_compose_is_self_contained_and_isolated(docker):
     compose = ROOT / "deploy/lab/docker-compose.web.yml"
-    env = {**os.environ, "LAB_WEB_DIST": str(tmp_path)}
     config = json.loads(run(
-        "compose", "-f", str(compose), "config", "--format", "json", env=env,
+        "compose", "-f", str(compose), "config", "--format", "json",
     ).stdout)
     services = config["services"]
     assert set(services) == {"lab-web", "lab-control"}
     web = services["lab-web"]
     assert Path(web["build"]["context"]).resolve() == ROOT
+    assert web["build"]["dockerfile"] == "deploy/lab/Dockerfile.web"
     assert web["ports"][0]["host_ip"] == "127.0.0.1"
     assert web["read_only"] is True
-    assert web["volumes"][0]["read_only"] is True
+    # The panel build is baked into the image; there is no host bind mount that
+    # could silently substitute production assets (Issue #251, U1).
+    assert not web.get("volumes")
     assert not services["lab-control"].get("ports")
     assert services["lab-control"]["command"][0] == "uvicorn"
     assert all("docker.sock" not in str(s.get("volumes", [])) for s in services.values())
     assert all(not s.get("privileged") for s in services.values())
-    # A missing asset directory must not silently create an empty host folder.
-    env.pop("LAB_WEB_DIST")
-    result = run("compose", "-f", str(compose), "config", env=env, check=False)
-    assert result.returncode != 0
-    assert "LAB_WEB_DIST" in result.stderr
 
 
-def test_web_image_http_readiness_spa_and_authenticated_api_proxy(docker):
+def test_web_image_serves_baked_angular_and_authenticated_api_proxy(docker):
     suffix = uuid.uuid4().hex[:12]
     network = f"vertep-lab-web-test-{suffix}"
     api = f"{network}-api"
     web = f"{network}-web"
     image = f"vertep-lab-web-test:{suffix}"
-    asset_root, assets = readable_asset_dir()
     server = """
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -142,26 +130,28 @@ HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
         run("run", "-d", "--name", web, "--network", network,
             "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true",
-            "-p", "127.0.0.1::8080", "-v", f"{assets}:/srv/lab-web:ro", image)
+            "-p", "127.0.0.1::8080", image)
         inspection, port = wait_for_published_port(web, "8080/tcp")
         assert inspection["Config"]["User"] == "nginx"
         assert inspection["State"]["Running"] is True
         origin = f"http://127.0.0.1:{port}"
         wait_for(origin + "/healthz", lambda r: r.status_code == 200)
-        with httpx.Client(base_url=origin, trust_env=False, timeout=5) as client:
-            assert client.get("/readyz").status_code == 503
-            assert client.get("/review/example").status_code == 503
-            index = "<!doctype html><html lang='uk'><body>Тест збірки</body></html>"
-            (assets / "index.html").write_text(index, encoding="utf-8")
-            (assets / "app.js").write_text("window.labFixture = true;", encoding="utf-8")
+        with httpx.Client(base_url=origin, trust_env=False, timeout=10) as client:
             assert client.get("/readyz").status_code == 200
-            page = client.get("/review/example")
-            assert page.status_code == 200 and page.text == index
-            assert page.headers["cache-control"] == "no-store"
-            assert client.get("/app.js").status_code == 200
+            index = client.get("/")
+            assert index.status_code == 200
+            assert "<app-root>" in index.text and "Vertep Lab" in index.text
+            assert index.headers["cache-control"] == "no-store"
+            # Angular deep link falls back to the SPA, not to a 404.
+            deep = client.get("/approvals")
+            assert deep.status_code == 200 and deep.text == index.text
+            script = re.search(r'src="([^"]+\.js)"', index.text)
+            assert script, "Angular build did not reference its main bundle"
+            assert client.get(script.group(1)).status_code == 200
             assert client.get("/missing.js").status_code == 404
             assert client.get("/api/jobs").status_code == 404
-            response = wait_for(origin + "/api/lab/status", lambda r: r.status_code == 200)
+            response = wait_for(origin + "/api/lab/status",
+                                lambda r: r.status_code == 200)
             assert response.json()["path"] == "/api/lab/status"
             response = client.get("/api/lab/status?case=proxy", headers={
                 "Authorization": "Bearer synthetic-test-token", "Cookie": "lab=test",
@@ -170,11 +160,11 @@ HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
                                        "authorization": "Bearer synthetic-test-token",
                                        "cookie": "lab=test"}
             assert client.get("/api/lab/conflict").status_code == 409
-        result = run("exec", web, "sh", "-c", "echo forbidden > /srv/lab-web/write", check=False)
+        result = run("exec", web, "sh", "-c", "echo forbidden > /srv/lab-web/write",
+                     check=False)
         assert result.returncode != 0
     finally:
         # Only uniquely named, disposable artifacts created by this test.
         run("rm", "-f", web, api, check=False)
         run("network", "rm", network, check=False)
         run("image", "rm", image, check=False)
-        shutil.rmtree(asset_root, ignore_errors=True)

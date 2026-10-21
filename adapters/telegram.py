@@ -22,6 +22,17 @@ def _integration_secret(name: str) -> str | None:
         return None
 
 
+def api_root() -> str:
+    """Root URL of the Telegram Bot API.
+
+    ``TELEGRAM_API_BASE`` points the adapter at a controlled Bot API
+    transport (a disposable local endpoint used by the automated Telegram
+    acceptance).  Without it the public Telegram API is used.
+    """
+    override = (os.getenv("TELEGRAM_API_BASE") or "").strip().rstrip("/")
+    return override or "https://api.telegram.org"
+
+
 def _fsync_directory(path) -> bool:
     """Flush directory metadata so a rename inside it survives power loss.
 
@@ -51,7 +62,8 @@ def _fsync_directory(path) -> bool:
 class TelegramAdapter:
     def __init__(self) -> None:
         self.token = _integration_secret("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
-        self.base_url = f"https://api.telegram.org/bot{self.token}"
+        self.api_root = api_root()
+        self.base_url = f"{self.api_root}/bot{self.token}"
 
     def configured(self) -> bool:
         return bool(self.token)
@@ -82,7 +94,7 @@ class TelegramAdapter:
         file_path = metadata.json().get("result", {}).get("file_path")
         if not file_path:
             raise RuntimeError("Telegram returned no file_path")
-        response = httpx.get(f"https://api.telegram.org/file/bot{self.token}/{file_path}", timeout=60)
+        response = httpx.get(f"{self.api_root}/file/bot{self.token}/{file_path}", timeout=60)
         response.raise_for_status()
         if len(response.content) > max_bytes:
             raise RuntimeError("Telegram attachment exceeds configured size limit")
@@ -163,7 +175,8 @@ class TelegramPollingService:
         offset_file: pathlib.Path | None = None,
     ) -> None:
         self.token = token
-        self.base_url = f"https://api.telegram.org/bot{self.token}"
+        self.api_root = api_root()
+        self.base_url = f"{self.api_root}/bot{self.token}"
         self.on_update = on_update
         self.offset_file = offset_file or (config_root() / "telegram_polling_state.json")
         self.last_error: str | None = None

@@ -1,8 +1,19 @@
+# Separate Angular laboratory panel baked into its own image (Issue #251, U1).
+# The panel has no runtime dependency on production CORE or its web-v2 build.
+FROM node:24-alpine AS build
+
+WORKDIR /src
+COPY deploy/lab/web/app/package.json deploy/lab/web/app/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY deploy/lab/web/app/ ./
+RUN npm run build
+
 FROM nginx:1.27-alpine
 
-# Only the Lab frontend is mounted here; the production Web UI is not bundled.
+# Only the Lab frontend is served here; the production Web UI is not bundled.
 COPY deploy/lab/web/nginx.conf /etc/nginx/nginx.conf
-RUN mkdir -p /srv/lab-web && chown nginx:nginx /srv/lab-web
+COPY --from=build /src/dist/vertep-lab-web/browser /srv/lab-web
+RUN chown -R nginx:nginx /srv/lab-web
 
 USER nginx
 EXPOSE 8080

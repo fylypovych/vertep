@@ -29,11 +29,15 @@ Ubuntu VM: регулярний аудит коду, локальні випра
   * `cli.py` — CLI клієнт
   * `api.py` — FastAPI backend для Web панелі
   * `role_profiles.md` — профілі 8 агентних ролей
-* `deploy/lab/` — Docker Compose для лабораторії на окремій VM, Dockerfile.
+* `deploy/lab/web/app/` — окремий Angular-застосунок панелі (standalone
+  components, власна збірка, без production CORE/`web-v2`).
+* `deploy/lab/` — Docker Compose для лабораторії на окремій VM, Dockerfile,
+  `Dockerfile.web` (Angular build → nginx) і `docker-compose.web.yml`.
 * `installer/vertep-lab.service` + `.timer` — системні одиниці для планувального
   запуску циклу лабораторії.
 * `docs/lab.md` — ця документація.
-* `tests/test_lab_*.py` — контрактні тести (118 passed).
+* `tests/test_lab_*.py` — контрактні тести, Docker proof і Browser+CLI
+  acceptance панелі (`test_lab_web_e2e.py`).
 
 ## Правила лабораторії
 
@@ -93,7 +97,18 @@ Web-панелі, тому обхід через CLI неможливий.
 - Атомарна послідовність перевірена
 - Audit trail записує всі рішення
 
----
+### Етап 3.5 — Angular Web панель ✅
+- `deploy/lab/web/app/` — окремий Angular-застосунок: dashboard,
+  issues/evidence, пакети `ir`, grants/rights/consolidation, GPU, історія
+  рішень, звіти, сповіщення.
+- Web і CLI працюють з одним Lab API, одним policy gate і одним audit trail;
+  owner token передається як `X-Lab-Owner-Token`, UI не містить логіки
+  повноважень.
+- `tests/test_lab_web_e2e.py` — реальний backend, production Angular build і
+  Browser-сценарії з звіркою стану/рішень із CLI; включно з відмовою
+  неавторизованому клієнту та роботою лабораторії при недоступній панелі.
+- `tests/test_lab_web_docker.py` — self-contained image/compose proof.
+- CI job `lab-web-e2e`: build, Playwright E2E і Docker proof без skip.
 
 ## Наступні етапи (потребують реальної VM/GPU)
 
@@ -154,5 +169,6 @@ Web-панелі, тому обхід через CLI неможливий.
 2. Власник видає grants для дозволених gated-дій
 3. Визначити ліміти бюджету на основі вимірювань
 4. Вдосконалити Skills на основі результатів Етапу 6
-5. Angular Web + CLI: макети визначають scope першої версії
+5. Angular Web + CLI: перша версія реалізована (Етап 3.5), подальший scope
+   макетів — лише за рішенням власника
 6. Перевірити production-priority при 24/7 роботі

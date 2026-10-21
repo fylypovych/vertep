@@ -35,13 +35,6 @@ services:
     image: ghcr.io/fylypovych/vertep-lab-web:${VERSION:-dev}
     ports:
       - "127.0.0.1:${LAB_WEB_PORT:-8444}:8080"
-    volumes:
-      - type: bind
-        source: ${LAB_WEB_DIST:?Вкажіть абсолютний шлях до готової Angular browser збірки лабораторії}
-        target: /srv/lab-web
-        read_only: true
-        bind:
-          create_host_path: false
     read_only: true
     tmpfs:
       - /tmp

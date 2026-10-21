@@ -309,6 +309,23 @@ def test_has_interrupt_evidence_handles_unreadable_audit(tmp_path):
     assert agent._has_interrupt_evidence(tmp_path) is False
 
 
+def test_interrupted_update_recovery_after_restart_rolls_back(tmp_path, monkeypatch):
+    """A process restart with an in-flight apply rolls back the interrupted
+    mutation under the live lease and reports ROLLED_BACK, not RUNNING forever."""
+    agent = _load_agent()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "status.json").write_text(json.dumps({
+        "state": "RUNNING", "phase": "UPDATING", "request_id": "a" * 32,
+        "log": []}), encoding="utf-8")
+    commands = []
+    monkeypatch.setattr(agent, "run",
+                        lambda cmd, root, **kw: commands.append(cmd) or "")
+    agent.recover_if_interrupted(tmp_path / "root", state_dir)
+    assert len(commands) == 1 and "rollback" in " ".join(commands[0])
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "ROLLED_BACK"
+
 def test_recover_if_interrupted_unreadable_status_with_evidence(tmp_path, monkeypatch):
     """When status.json is unreadable but audit.jsonl has entries, recovery triggers."""
     agent = _load_agent()
@@ -716,6 +733,94 @@ def test_update_rejects_downgrade(tmp_path, monkeypatch):
     status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
     assert "downgrade" in status.get("message", "").lower()
 
+
+def test_update_disk_full_journals_failure_and_retry_succeeds(tmp_path, monkeypatch):
+    """Injected ENOSPC during package download is journaled, leaves no applied
+    runtime change, and the same operation can be retried after space is freed."""
+    agent = _load_agent()
+    import errno
+    import core.update_protocol as _upd
+    import core.version as _ver
+    monkeypatch.setattr(_upd, "fetch_manifest", lambda channel: {
+        "version": "0.0.2.0", "channel": "stable", "sha256": "d" * 64,
+        "signature": "sig", "required": False})
+    monkeypatch.setattr(_upd, "validate_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(_upd, "validate_replay_state", lambda *a, **kw: None)
+    monkeypatch.setattr(_ver, "application_version", lambda: "0.0.1.0")
+    applied = []
+    monkeypatch.setattr(agent, "run", lambda cmd, root, **kw: "")
+    monkeypatch.setattr(agent, "run_fenced",
+                        lambda cmd, root, state, lease, env=None: applied.append(cmd[-1]) or "")
+
+    def disk_full(_manifest, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"partial")
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(_upd, "download_package", disk_full)
+
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    first = requests / ("f" * 32 + ".json")
+    first.write_text(json.dumps({"request_id": "f" * 32, "action": "update"}),
+                     encoding="utf-8")
+    assert agent.process_request(tmp_path, state_dir, first, skip_drain=True) is False
+    assert not applied, "ENOSPC still reached the privileged apply"
+    assert not first.exists()
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED"
+    assert "space" in status["message"].lower()
+    journal = [json.loads(line) for line in
+               (state_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert any(event.get("operation_id") == "f" * 32 for event in journal)
+    assert all(event.get("event_hash") for event in journal)
+
+    def download(_manifest, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"package")
+        return path
+    monkeypatch.setattr(_upd, "download_package", download)
+    second = requests / ("a" * 32 + ".json")
+    second.write_text(json.dumps({"request_id": "a" * 32, "action": "update"}),
+                      encoding="utf-8")
+    assert agent.process_request(tmp_path, state_dir, second, skip_drain=True) is True
+    assert applied == ["0.0.2.0"]
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "SUCCEEDED" and status["progress"] == 100
+
+def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkeypatch):
+    """A host command timeout is a correlated failure: rollback runs and the
+    operation reports ROLLED_BACK instead of hanging or claiming success."""
+    agent = _load_agent()
+    import core.update_protocol as _upd
+    import core.version as _ver
+    monkeypatch.setattr(_upd, "fetch_manifest", lambda channel: {
+        "version": "0.0.2.0", "channel": "stable", "sha256": "e" * 64,
+        "signature": "sig", "required": False})
+    monkeypatch.setattr(_upd, "validate_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(_upd, "validate_replay_state", lambda *a, **kw: None)
+    monkeypatch.setattr(_ver, "application_version", lambda: "0.0.1.0")
+    monkeypatch.setattr(_upd, "download_package",
+                        lambda _manifest, path: (path.parent.mkdir(parents=True, exist_ok=True),
+                                                 path.write_bytes(b"package"), path)[-1])
+    commands = []
+    monkeypatch.setattr(agent, "run", lambda cmd, root, **kw: commands.append(cmd) or "")
+    def timed_out(*_args, **_kwargs):
+        raise RuntimeError("Command timed out after 1 seconds")
+    monkeypatch.setattr(agent, "run_fenced", timed_out)
+
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    request = requests / ("b" * 32 + ".json")
+    request.write_text(json.dumps({"request_id": "b" * 32, "action": "update"}),
+                       encoding="utf-8")
+    assert agent.process_request(tmp_path, state_dir, request, skip_drain=True) is False
+    assert any("rollback" in " ".join(cmd) for cmd in commands)
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "ROLLED_BACK"
+    assert "timed out" in status["message"].lower()
+    assert not request.exists()
 
 def test_update_rejects_missing_root_metadata(tmp_path, monkeypatch):
     """update-agent rejects when REQUIRE_OFFLINE_ROOT=true but no root metadata."""

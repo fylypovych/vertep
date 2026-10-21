@@ -98,6 +98,34 @@ def complete_callback(callback_id: str, *, status: str = "COMPLETED") -> None:
         atomic_write_json(_path(), records)
 
 
+def set_callback_target(callback_id: str, target: str | None) -> None:
+    """Bind the resolved target of a claimed callback to its durable record.
+
+    The callback data of a system confirmation often carries only the action
+    (``sys_update_confirm``), while the confirmed target is known only after
+    the handler resolved it (for example the target version).  Persisting it
+    next to the actor keeps the durable confirmation complete: actor, action
+    and target survive a process restart and are visible to the audit trail.
+    """
+    if not callback_id or not target:
+        return
+    with _lock:
+        records = _read()
+        record = records.get(callback_id)
+        if record is None or record.get("status") != "CLAIMED":
+            return
+        record["target"] = target
+        atomic_write_json(_path(), records)
+
+
+def get_callback(callback_id: str) -> dict[str, Any] | None:
+    """Return the durable record of a callback, if it exists."""
+    if not callback_id:
+        return None
+    with _lock:
+        return _read().get(callback_id)
+
+
 def link_operation(callback_id: str, operation_id: str) -> None:
     """Link a CLAIMED callback record to its operation for crash-replay checking.
 

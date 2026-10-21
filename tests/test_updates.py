@@ -126,6 +126,51 @@ def test_worker_restart_host_consumer_effect_and_retry(monkeypatch, tmp_path):
 
 @pytest.mark.skipif(os.name != "posix",
                     reason="host consumer is an executable shell script; Windows cannot run it")
+def test_worker_update_request_changes_runtime_instance_and_acks(monkeypatch, tmp_path):
+    """A correlated rolling-update request reaches the host consumer, mutates the
+    runtime instance and returns a request-bound SUCCEEDED result."""
+    agent = load_update_agent()
+    root, state = tmp_path / "repo", tmp_path / "state"
+    scripts = root / "scripts"
+    requests = state / "requests"
+    scripts.mkdir(parents=True)
+    requests.mkdir(parents=True)
+    runtime_version = tmp_path / "runtime-version"
+    (scripts / "vertep").write_text(
+        "#!/bin/bash\n"
+        "case \"$1\" in\n"
+        "  apply-update) printf '%s' \"$3\" > \"$VERTEP_TEST_EFFECT\" ;;\n"
+        "  rollback) printf 'previous' > \"$VERTEP_TEST_EFFECT\" ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (scripts / "release-layout.py").write_text("print('retained')\n", encoding="utf-8")
+    monkeypatch.setenv("UPDATE_REQUEST_DIR", str(requests))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state))
+    monkeypatch.setenv("VERTEP_TEST_EFFECT", str(runtime_version))
+    import core.update_protocol as protocol
+    import core.version as version
+    monkeypatch.setattr(protocol, "fetch_manifest", lambda channel: {
+        "version": "9.9.9", "channel": "stable", "required": False})
+    monkeypatch.setattr(protocol, "validate_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(protocol, "validate_replay_state", lambda *a, **kw: None)
+    monkeypatch.setattr(protocol, "download_package",
+                        lambda _manifest, path: (path.parent.mkdir(parents=True, exist_ok=True),
+                                                 path.write_bytes(b"package"), path)[-1])
+    monkeypatch.setattr(version, "application_version", lambda: "0.0.1.0")
+    operation_id = "9" * 32
+
+    request_local_update("9.9.9", action="update", request_id=operation_id)
+    assert agent.process_request(root, state, requests / f"{operation_id}.json",
+                                 skip_drain=True) is True
+    assert runtime_version.read_text(encoding="utf-8") == "9.9.9"
+    status = json.loads((state / "status.json").read_text(encoding="utf-8"))
+    assert status["request_id"] == operation_id
+    assert status["state"] == "SUCCEEDED" and status["progress"] == 100
+    assert not (requests / f"{operation_id}.json").exists()
+
+@pytest.mark.skipif(os.name != "posix",
+                    reason="host consumer is an executable shell script; Windows cannot run it")
 def test_worker_rollback_reaches_host_consumer(monkeypatch, tmp_path):
     agent = load_update_agent()
     root, state = tmp_path / "repo", tmp_path / "state"

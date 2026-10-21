@@ -82,7 +82,7 @@ def write_character(root, character_id: str, voice: dict | None = None) -> Path:
     directory = Path(root) / character_id
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "character.json").write_text(
-        json.dumps({"name": "Test Char", "language": "uk"}), encoding="utf-8")
+        json.dumps({"id": character_id, "name": "Test Char", "language": "uk"}), encoding="utf-8")
     (directory / "voice.json").write_text(json.dumps(voice or {
         "provider": "mock", "voice": "uk", "language": "uk",
         "model": "uk_male", "speed": 160,

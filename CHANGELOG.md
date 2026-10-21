@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.71
+- Оновлення web-v2 та backend для durable Telegram acceptance, lab web Docker, update security.
+- Виправлення jobs/tasks/api/app, image_storyboard, models, telegram_callbacks, update_manager.
+- Нові тести: telegram durable acceptance, lab web e2e, media browser e2e, update browser e2e.
+- Додано deploy/lab/web/app та telegram transport fixtures.
+
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.70
 - Issue ir.0.0.2.52 (#252) — Lab: підготовка кваліфікації реальної VM/GPU isolation, production-priority і 24/7 режиму. `lab/qualification.py` (нове): каталог рядків R1–R6 з обов'язковими фактами, канонічним текстом очікування та потрібними правами власника; схема evidence row і машино-читний валідатор, який відхиляє неповні рядки, короткий SHA, артефакт без `sha256`, `SKIPPED`/`MOCK`, секрети в доказі та верифікацію самим виконавцем; загальний вердикт `PASS` лише коли всі рядки повні.
 - `lab/qualification_run.py` (нове): реальні collector'и стенду (версія, повний SHA, digests образів, host/OS/CPU/RAM/SSD, контейнер і Docker, негативні ізоляційні проби production-шляхів, egress allowlist, відсутність GPU passthrough, VRAM через `nvidia-smi`) та раннери рядків R1–R6: вимірювання lease на production-priority endpoint (deny без lease, queue/reservation, heartbeat/revoke, release ack, VRAM до/після), fault-сценарії (connection loss, заборона GPU без lease, реконфіляція lease після restart, finally-release), перший actual audit в ізольованій Git copy через реальний role-executor, перевірка 24/7 activation і budgets; невиміряне фіксується як `BLOCKED` із конкретною причиною, ніколи як `PASS`.

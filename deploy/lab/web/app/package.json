@@ -1,0 +1,25 @@
+{
+  "name": "vertep-lab-web",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "@angular/common": "^21.2.25",
+    "@angular/compiler": "^21.2.25",
+    "@angular/core": "^21.2.25",
+    "@angular/forms": "^21.2.25",
+    "@angular/platform-browser": "^21.2.25",
+    "@angular/router": "^21.2.25",
+    "zone.js": "^0.15.0"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^21.2.25",
+    "@angular/cli": "^21.2.25",
+    "@angular/compiler-cli": "^21.2.25",
+    "typescript": "~5.9.0"
+  },
+  "scripts": {
+    "build": "ng build",
+    "start": "ng serve",
+    "e2e": "python -m pytest -q ../../../tests/test_lab_web_e2e.py"
+  }
+}

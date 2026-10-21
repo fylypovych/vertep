@@ -67,7 +67,9 @@ def claim_task(payload: TaskClaim, request: Request):
         job = store.jobs.get(task["job_id"])
         if task.get("kind") == "image_storyboard":
             sb_version = task.get("storyboard_version")
-            if job.status != JobStatus.STORYBOARD_PENDING_APPROVAL or job.active_storyboard_version != sb_version:
+            if job.status not in {JobStatus.STORYBOARD_PENDING_APPROVAL,
+                                  JobStatus.STORYBOARD_READY} \
+                    or job.active_storyboard_version != sb_version:
                 task_queue.ack(task["task_id"])
                 continue
             worker = _select_worker([worker_data], job, task_type="image", min_vram_mb=task.get("min_vram_mb")) if job else None

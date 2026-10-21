@@ -342,10 +342,12 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
               <label class="text-xs text-slate-500 mb-1 block">Версія розкадровки</label>
               <select (change)="selectStoryboardVersion($any($event.target).value ? +$any($event.target).value : null)"
                       class="text-sm border border-slate-300 rounded px-2 py-1" data-testid="storyboard-version-select">
-                <option [value]="activeStoryboard()?.version ?? ''" selected>Активна (v{{ job()!.active_storyboard_version }})</option>
+                <option [value]="job()!.active_storyboard_version"
+                        [selected]="selectedStoryboardVersion() === null">Активна (v{{ job()!.active_storyboard_version }})</option>
                 @for (sb of allStoryboardVersions(); track sb.version) {
                   @if (sb.version !== job()!.active_storyboard_version) {
-                    <option [value]="sb.version">v{{ sb.version }} ({{ sb.image_status || 'created' }})</option>
+                    <option [value]="sb.version"
+                            [selected]="selectedStoryboardVersion() === sb.version">v{{ sb.version }} ({{ sb.image_status || 'created' }})</option>
                   }
                 }
               </select>
@@ -923,7 +925,8 @@ export class JobDetailComponent implements OnInit, OnDestroy {
 
   canReviewStoryboard(): boolean {
     const j = this.job();
-    return !!j && j.status === 'STORYBOARD_PENDING_APPROVAL' && !!j.active_storyboard_version;
+    return !!j && (j.status === 'STORYBOARD_PENDING_APPROVAL' || j.status === 'STORYBOARD_READY')
+      && !!j.active_storyboard_version;
   }
 
    canReviewScript(): boolean {
@@ -1001,13 +1004,15 @@ export class JobDetailComponent implements OnInit, OnDestroy {
   }
 
   selectStoryboardVersion(version: number | null) {
-    this.selectedStoryboardVersion.set(version);
+    const active = this.job()?.active_storyboard_version ?? null;
+    this.selectedStoryboardVersion.set(version === active ? null : version);
   }
 
   canRegenerateImage(): boolean {
     const j = this.job();
     const sb = this.activeStoryboard();
-    return !!j && !!sb && (j.status === 'STORYBOARD_READY' || j.status === 'STORYBOARD_FAILED' || j.status === 'VIDEO_REVISION_REQUESTED');
+    return !!j && !!sb && (j.status === 'STORYBOARD_READY' || j.status === 'STORYBOARD_PENDING_APPROVAL'
+      || j.status === 'STORYBOARD_FAILED' || j.status === 'VIDEO_REVISION_REQUESTED');
   }
 
   canRevisionImage(): boolean {

@@ -32,10 +32,15 @@ RELEASE_IDENTITY.json
 
 # Frontend Angular
 /web-v2/node_modules/
+/deploy/lab/web/app/node_modules/
 /web-v2/dist/
 /web-v2/playwright-report/
 /web-v2/test-results/
 /web-v2/.angular/
+/deploy/lab/web/app/dist/
+/deploy/lab/web/app/playwright-report/
+/deploy/lab/web/app/test-results/
+/deploy/lab/web/app/.angular/
 
 # Test output (transient)
 /test-results/
@@ -50,3 +55,4 @@ RELEASE_IDENTITY.json
 /qualification.json
 /moneyprinter-runtime-evidence/
 /moneyprinter-runtime-check
+/.kilo_publish_repro/state
