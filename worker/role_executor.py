@@ -373,10 +373,17 @@ def execute_publisher(task: dict) -> list[dict]:
                           json.dumps(receipt, sort_keys=True).encode("utf-8"))]
     # Issue #199/#166.4: verify the approved artifact against the delivery
     # contract before any upload.  A missing/corrupt/mismatched file must not
-    # reach the adapter.
+    # reach the adapter.  If the file is not available locally (disposable
+    # Publisher with separate filesystem), fetch it from CORE.
     try:
         expected_sha = (delivery_contract.get("sha256") or delivery_contract.get("video_sha256"))
         expected_size = delivery_contract.get("size_bytes") or delivery_contract.get("size")
+        if video_path and not os.path.isfile(video_path):
+            # Fetch approved video from CORE for disposable Publisher node
+            from pathlib import Path as _Path
+            video_path_obj = _Path(video_path)
+            video_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            _fetch_approved_input(task, video_path_obj.name, video_path_obj, str(expected_sha) if expected_sha else "")
         if video_path and os.path.isfile(video_path):
             if expected_sha:
                 import hashlib as _hashlib
@@ -386,6 +393,11 @@ def execute_publisher(task: dict) -> list[dict]:
             if expected_size is not None and os.path.getsize(video_path) != int(expected_size):
                 raise ValueError("delivery contract size mismatch")
     except ValueError as error:
+        receipt = {"channel": channel, "status": "FAILED", "error": str(error),
+                   "timestamp": _time.time()}
+        return [_artifact("publication.json", "publication_receipt",
+                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+    except (OSError, RuntimeError) as error:
         receipt = {"channel": channel, "status": "FAILED", "error": str(error),
                    "timestamp": _time.time()}
         return [_artifact("publication.json", "publication_receipt",

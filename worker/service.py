@@ -177,12 +177,14 @@ def voice_catalog() -> dict:
     languages = [item.strip().lower() for item in os.getenv("TTS_LANGUAGES", "").split(",") if item.strip()]
     providers = [item.strip().lower() for item in os.getenv("TTS_PROVIDERS", "").split(",") if item.strip()]
     speed_range: dict | None = None
+    fetched_from_runtime = False
     if not voices and not models and not languages:
         url = os.getenv("TTS_URL", "http://tts:8090").rstrip("/")
         try:
             catalog = httpx.get(f"{url}/voices", timeout=10).json()
             if isinstance(catalog, dict):
-                voices = [str(item.get("id", item)) for item in catalog.get("voices", [])]
+                fetched_from_runtime = True
+                voices = [str(item.get("id", item)) for item in catalog.get("voices", []) if item]
                 fetched_models = catalog.get("models", [])
                 if isinstance(fetched_models, list):
                     models = [str(item) for item in fetched_models if str(item).strip()]
@@ -198,28 +200,24 @@ def voice_catalog() -> dict:
                                    "max": fetched_range.get("max", 450)}
         except (httpx.HTTPError, ValueError):
             voices = []
+            models = []
+            languages = []
+            providers = []
+            fetched_from_runtime = False
     if not languages and voices:
-        # The espeak runtime has no separate language table: derive language
-        # tags from the installed voice identifiers (``en-us`` → ``en``) so
-        # CORE can gate on language without a new provider integration.
         seen: set[str] = set()
         for voice in voices:
             tag = str(voice).strip().lower().split("_")[0].split("-")[0]
             if tag:
                 seen.add(tag)
         languages = sorted(seen)
-    if not providers:
-        # The stock espeak runtime behind this worker synthesizes any voice it
-        # advertises regardless of the logical provider label, so the node
-        # accepts the providers the runtime catalog declares (or the espeak
-        # default) instead of inventing a new provider integration.
-        # Issue #198/#165.1: advertise ONLY the synthesizer this worker
-        # actually is.  "mock" and "none" are not synthesizers — advertising
-        # them let CORE's fail-closed catalog gate accept a voice task the
-        # worker could never execute, and the Job later failed at synthesis
-        # time instead of being refused at dispatch.  A declared catalog is a
-        # contract: every advertised value must be backed by the runtime.
+    if not providers and voices and not fetched_from_runtime:
         providers = ["espeak-ng"]
+    # Issue #197/#165.1: if the runtime advertises an empty voices catalog,
+    # return {} so CORE refuses dispatch (fail-closed). Never fabricate
+    # providers/voices when none were proven.
+    if fetched_from_runtime and not voices and not models:
+        return {}
     result: dict[str, object] = {}
     if voices:
         result["voices"] = sorted(set(voices))
@@ -227,10 +225,14 @@ def voice_catalog() -> dict:
         result["models"] = sorted(set(models))
     if languages:
         result["languages"] = sorted(set(languages))
-    if providers:
+    if providers and result:  # only advertise providers if we have voices/models
+        result["providers"] = sorted(set(providers))
+    elif providers and not result and not fetched_from_runtime and voices:
         result["providers"] = sorted(set(providers))
     if speed_range:
         result["speed_range"] = speed_range
+    if not result:
+        return {}
     return result
 
 

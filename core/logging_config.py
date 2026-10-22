@@ -88,6 +88,28 @@ def _redact_json_value(match: re.Match) -> str:
     return prefix + quote + "[REDACTED]" + quote
 
 
+def redact_payload(value: Any, key: str = "") -> Any:
+    """Recursively redact secret-shaped values in an operator-visible payload.
+
+    The same masking as the JSON log formatter is applied to structured data
+    that crosses a runtime boundary into CORE state (publication receipts,
+    delivery metadata, audit/report payloads).  A secret a publisher or
+    transport put into ``error``/``url``/metadata must be masked where it is
+    persisted and served, not only when a log line is written (Issue #190).
+    """
+    if isinstance(value, str):
+        if key and any(name in key.lower() for name in _SECRET_KEY_NAMES):
+            return "[REDACTED]"
+        if any(name in value.lower() for name in _SECRET_KEY_NAMES):
+            return "[REDACTED]"
+        return secret_redact(value)
+    if isinstance(value, dict):
+        return {item_key: redact_payload(item, item_key) for item_key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_payload(item, key) for item in value]
+    return value
+
+
 class JsonFormatter(logging.Formatter):
     def _redact_extra_value(self, value: Any, key: str = "") -> Any:
         """Recursively redact secrets in dict/list extras, safely stringify others."""

@@ -247,6 +247,28 @@ def test_integrations_error_field_is_redacted(monkeypatch):
         assert "[REDACTED]" in error
 
 
+def test_publisher_reconnect_endpoint_shape(monkeypatch):
+    """Issue #167.3: OAuth reconnect endpoint returns ready state and missing scopes."""
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "test-token")
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    client = _client()
+    resp = client.post("/api/settings/publisher/youtube/reconnect")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["channel"] == "youtube"
+    assert isinstance(data["reconnected"], bool)
+    assert isinstance(data["ready"], bool)
+    assert isinstance(data["configured"], bool)
+    assert isinstance(data["missing_scopes"], list)
+
+
+def test_publisher_reconnect_unknown_channel_404():
+    """Reconnect for unknown channel returns 404."""
+    client = _client()
+    resp = client.post("/api/settings/publisher/unknown/reconnect")
+    assert resp.status_code == 404
+
+
 # ── Secrets ───────────────────────────────────────────────────────
 
 def test_secrets_shape():

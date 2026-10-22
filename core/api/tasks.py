@@ -24,7 +24,7 @@ from ..system_state import dispatch_allowed, get_system_state
 from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
                           _character_voice_enabled, _dispatch_tts, _has_voice_worker,
                           _handle_tts_failure, _job_is_due, _ordered_scene_files,
-                          _pending_voice_scenes,
+                          _pending_voice_scenes, _redact_payload,
                           _persist_tts_contract,
                           _scene_for_task, _select_worker, _serialize_job_result,
                           _task_for, _tts_task_for, _voice_task_for, _validate_tts_contract,
@@ -949,6 +949,16 @@ def task_result(result: TaskResult, request: Request):
             validate_media_integrity(data, suffix)
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
+        if job.task_type in {"publish", "backup"} and suffix == ".json":
+            # Issue #190: a receipt artifact is persisted under the Job tree and
+            # later served to the Web UI.  Mask secret-shaped values here too so
+            # the on-disk copy cannot leak what the API boundary already masks.
+            try:
+                receipt = json.loads(data.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as error:
+                raise HTTPException(400, "Invalid receipt artifact") from error
+            data = json.dumps(_redact_payload(receipt), ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8")
         expected_media = "video" if folder == "video" else ("image" if folder == "images" else None)
         if expected_media:
             try:

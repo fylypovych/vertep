@@ -84,7 +84,15 @@ def create_job(request: JobCreate):
         executor.submit(_prepare_and_dispatch, job)
     elif job.status == JobStatus.NEW:
         store.event(job, f"SCHEDULED FOR {job.scheduled_for}")
+    # Issue #190: redact any publication metadata on return paths too.
+    try:
+        from .job_helpers import _redact_payload
+        if getattr(job, "publication_results", None):
+            job.publication_results = _redact_payload(job.publication_results)
+    except Exception:
+        pass
     return job
+
 
 
 @router.get("/api/jobs")
@@ -137,7 +145,17 @@ def job_structured_events(job_id: str):
 def get_job(job_id: str):
     if job_id not in store.jobs:
         raise HTTPException(404, "Job not found")
-    return store.jobs[job_id]
+    job = store.jobs[job_id]
+    # Issue #190: publication receipts/metadata served by CORE/UI may contain
+    # secrets injected by a publisher/transport; redact before serialization.
+    try:
+        from .job_helpers import _redact_payload
+        if getattr(job, "publication_results", None):
+            job.publication_results = _redact_payload(job.publication_results)
+    except Exception:
+        pass
+    return job
+
 
 
 @router.get("/api/jobs/{job_id}/assets")

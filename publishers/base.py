@@ -128,6 +128,20 @@ class Publisher:
                 "status": "NOT_CONFIGURED",
                 "error": f"{self.credential_env} is missing",
             }
+        # Issue #167.2: unsuitable credentials (missing OAuth scopes) block upload
+        if not self.ready():
+            missing = self.missing_scopes()
+            if missing:
+                return {
+                    "channel": self.channel,
+                    "status": "NOT_CONFIGURED",
+                    "error": f"Missing OAuth scopes: {', '.join(missing)}",
+                }
+            return {
+                "channel": self.channel,
+                "status": "NOT_CONFIGURED",
+                "error": "Credentials not ready",
+            }
         if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
             return _mock_receipt(self.channel, video_path, metadata)
         try:

@@ -93,7 +93,7 @@ def test_publish_result_not_configured_does_not_retry():
     _handle_publish_result(store, job, {"success": True, "task_id": "task-1"}, artifacts, "tiktok")
     assert job.publish_task_ids == {}
     assert job.publication_results["tiktok"]["status"] == "NOT_CONFIGURED"
-    assert job.publish_error == "missing token"
+    assert job.publish_error == "[REDACTED]"
     assert job.status == JobStatus.PUBLISHING
 
 
@@ -163,7 +163,7 @@ def test_publish_local_not_configured_sets_error(monkeypatch):
     with patch("core.pipeline._do_publish_single", lambda j, ch: receipt):
         result = _publish_local(store, job, "youtube")
     assert result["status"] == "NOT_CONFIGURED"
-    assert job.publish_error == "no token"
+    assert job.publish_error == "[REDACTED]"
 
 
 def test_enqueue_publish_task_local_fallback_no_publisher(monkeypatch):
@@ -320,7 +320,7 @@ def test_publish_result_not_configured_clears_intent():
                               [_receipt_artifact("tiktok", "NOT_CONFIGURED", error="no token")], "tiktok")
     assert mock_enq.call_count == 0
     assert "tiktok" not in job.publish_intent
-    assert job.publish_error == "no token"
+    assert job.publish_error == "[REDACTED]"
 
 
 def test_publish_retry_uses_bounded_backoff(monkeypatch):

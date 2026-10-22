@@ -49,6 +49,12 @@ def _load_receipt(publication_id: str) -> dict | None:
 
 
 def _save_receipt(receipt: dict) -> dict:
+    from core.logging_config import redact_payload
+
+    # Issue #190: a receipt is persisted to disk and later served by CORE/UI,
+    # so secret-shaped values in ``error``/``url``/metadata must be masked
+    # before the write, not only in logs.
+    receipt = redact_payload(receipt)
     publication_id = receipt["publication_id"]
     destination = _root() / f"{publication_id}.json"
     with _lock:

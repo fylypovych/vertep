@@ -1138,6 +1138,9 @@ def _publish_local(job_store, job, channel: str) -> dict:
     require_no_local_execution("publish")
     from ..pipeline import _do_publish_single
     result = _do_publish_single(job, channel)
+    # Local (dev/demo) publication crosses the same operator-visible boundary
+    # as a worker receipt, so mask secret-shaped values before storing it.
+    result = _redact_payload(result)
     job.publication_results[channel] = result
     if result.get("status") == "PUBLISHED":
         channel_str = ",".join(result.get("channels", [channel]))
@@ -1188,13 +1191,9 @@ def _redact_payload(value):
     publisher or transport put into ``error``/``url``/metadata must be masked at
     this boundary, not only when a log line is written (Issue #190).
     """
-    if isinstance(value, str):
-        return secret_redact(value)
-    if isinstance(value, dict):
-        return {key: _redact_payload(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_payload(item) for item in value]
-    return value
+    from ..logging_config import redact_payload
+
+    return redact_payload(value)
 
 
 def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> None:
@@ -1364,19 +1363,19 @@ def _recover_stale_workers() -> None:
             # result.  Without this a node that keeps dropping its heartbeat
             # re-dispatches forever without ever exhausting ``max_retries``.
             job.script_attempt = getattr(job, "script_attempt", 0) + 1
-            # Issue #197/#163.3: charge the script attempt budget for the lost
-            # lease, exactly like ``_handle_script_result`` does for a failed
-            # result.  Without this a node that keeps dropping its heartbeat
-            # re-dispatches forever without ever exhausting ``max_retries``.
-            # The task is re-enqueued (not dead-lettered): the Job stays on the
-            # lifecycle path and a healthy Worker re-claims it.  Only terminal
-            # exhaustion dead-letters.
             store.repository.record_task({"task_id": current_task, "task": "script",
                                           "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
                                          error="script worker heartbeat timed out")
-            system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
-            store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
+            if job.script_attempt <= getattr(job, "max_retries", 3):
+                system_prompt, character = _load_character_prompt(job)
+                _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
+                store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
+            else:
+                task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task, "task": "script"},
+                                       "script worker heartbeat timed out after retries")
+                store.update(job, JobStatus.SCRIPT_FAILED,
+                             f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
+                store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} FAILED AFTER RETRIES")
             worker["current_job"] = None
             worker["current_task"] = None
         elif job and current_task in job.publish_task_ids and job.status == JobStatus.PUBLISHING:
@@ -1423,13 +1422,6 @@ def _recover_stale_workers() -> None:
                                                                                JobStatus.STORYBOARD_GENERATING}:
             # Worker loss during storyboard generation: release the lease and
             # re-queue the storyboard so the Job stays on the lifecycle path.
-            # Issue #197/#163.3: this branch must agree with
-            # ``handle_expired_storyboard_lease`` (core/app.py) about the
-            # budget and the revision.  Both paths now burn the same
-            # version-scoped budget and reuse the pinned revision, so a node
-            # that keeps dropping its heartbeat cannot re-dispatch the same
-            # version forever; once the budget is spent the Job reaches
-            # STORYBOARD_FAILED instead of looping.
             task_queue.release(current_task)
             job.storyboard_task_id = None
             job.assigned_worker = None
@@ -1439,14 +1431,15 @@ def _recover_stale_workers() -> None:
             store.repository.record_task({"task_id": current_task, "task": "storyboard",
                                           "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
                                          error="storyboard worker heartbeat timed out")
-            if job.storyboard_attempt <= job.max_retries:
-                # Retry within budget: reuse the pinned revision so a node that
-                # keeps dropping its heartbeat cannot re-dispatch the same
-                # version forever.  Once the budget is spent the Job reaches
-                # STORYBOARD_FAILED instead of looping (Issue #197/#163.3).
+            attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
+            if job.storyboard_attempt < attempts:
                 pinned_revision = getattr(job, "storyboard_active_revision", None)
-                if pinned_revision is None and job.storyboards:
-                    pinned_revision = job.storyboards[-1].revision_request
+                # Issue #197/#163.1: do not pull a stale revision_request from a
+                # superseded storyboard unless it matches the pinned active revision.
+                if pinned_revision is None and getattr(job, "storyboards", None):
+                    last = job.storyboards[-1]
+                    if getattr(last, "revision_request", None) is not None and getattr(job, "storyboard_attempt_version", None) == getattr(last, "version", None):
+                        pinned_revision = last.revision_request
                 job.storyboard_active_revision = pinned_revision
                 from ..pipeline import queue_storyboard as _queue_storyboard
                 _queue_storyboard(store, job, revision=pinned_revision)
@@ -1455,6 +1448,11 @@ def _recover_stale_workers() -> None:
                 task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task,
                                         "task": "storyboard"},
                                        "storyboard worker heartbeat timed out (attempts exhausted)")
+                job.storyboard_task_id = None
+                job.active_task_id = None
+                store.update(job, JobStatus.STORYBOARD_FAILED,
+                             f"STORYBOARD FAILED after {attempts} attempts: task lease expired repeatedly")
+                store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} FAILED AFTER RETRIES")
             worker["current_job"] = None
             worker["current_task"] = None
         elif job and current_task in job.assembly_task_ids:

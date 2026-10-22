@@ -136,3 +136,37 @@ def delete_logo():
     if logo_path.is_file():
         logo_path.unlink()
     return {"deleted": True}
+
+
+@router.post("/api/settings/publisher/{channel}/reconnect")
+def reconnect_publisher_channel(channel: str):
+    """Trigger OAuth reconnection for a publisher channel (Issue #167.3).
+
+    Invalidates the cached token and attempts to obtain a fresh one from the
+    secret store or via OAuth refresh. Returns the new ready state and, if
+    applicable, missing scopes.
+    """
+    from adapters.publisher import PUBLISHERS
+    from ..logging_config import secret_redact
+
+    publisher = PUBLISHERS.get(channel)
+    if not publisher:
+        raise HTTPException(404, f"Unknown publisher channel: {channel}")
+
+    try:
+        reconnected = publisher.reconnect()
+    except Exception as error:
+        return {
+            "channel": channel,
+            "reconnected": False,
+            "ready": publisher.ready(),
+            "error": secret_redact(str(error)),
+        }
+
+    return {
+        "channel": channel,
+        "reconnected": reconnected,
+        "ready": publisher.ready(),
+        "configured": publisher.configured(),
+        "missing_scopes": publisher.missing_scopes(),
+    }

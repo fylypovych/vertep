@@ -102,7 +102,8 @@ def run_test(payload: RunRequest, request: Request):
     except ValueError as exc:
         # Issue #84: a Runner error may embed provider credentials, so the API
         # response must not echo the raw exception text.
-        from ..logging_config import secret_redact
+        from ..logging_config import redact_payload, secret_redact
+
         raise HTTPException(status_code=404, detail=secret_redact(str(exc))) from exc
     # i.0.0.0.96: persist the pre-execution confirmation with the run.
     from ..real_tests.models import utc_now as _utc_now

@@ -299,3 +299,37 @@ def test_secret_corpus_never_crosses_real_surfaces(monkeypatch, tmp_path):
 
     # error API response
     assert_clean(_json_error(f"api_key={SECRET_CORPUS['api_key']}", status=400).body.decode())
+
+    # Publication receipts/metadata must be redacted at CORE boundaries (Issue #190)
+    from core.api import job_helpers
+    from core.models import Job, JobStatus
+    from core import state
+    from pathlib import Path
+    import tempfile
+
+    receipt = {"publication_id": "pub-1", "channel": "youtube", "status": "FAILED",
+               "error": f"api_key={SECRET_CORPUS['api_key']}",
+               "url": f"https://example.com?token={SECRET_CORPUS['token']}"}
+    redacted_receipt = job_helpers._redact_payload(receipt)
+    assert_clean(redacted_receipt)
+    assert redacted_receipt["status"] == "FAILED"
+
+    # Job with publication_results containing secrets must be redacted in API serialization
+    with tempfile.TemporaryDirectory() as tmpdir:
+        old_root = state.store.root
+        try:
+            state.store.root = Path(tmpdir)
+            job = Job(job_id="j-sec", topic="t", character_id="c", priority=1, source="x",
+                      task_type="video", created_at="2026-01-01T00:00:00+00:00",
+                      status=JobStatus.FAILED)
+            job.publication_results = {"youtube": {"channel": "youtube", "status": "FAILED",
+                                                   "error": f"password={SECRET_CORPUS['password']}",
+                                                   "url": f"https://yt?token={SECRET_CORPUS['token']}"}}
+            state.store.jobs[job.job_id] = job
+            from core.api import jobs as jobs_api
+            res = jobs_api.get_job("j-sec")
+            assert_clean(res)
+        finally:
+            state.store.root = old_root
+            state.store.jobs.pop("j-sec", None)
+

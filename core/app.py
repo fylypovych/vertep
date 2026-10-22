@@ -486,7 +486,27 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
         brand = read_json(_Path(_os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
         active_revision = getattr(job, "storyboard_active_revision", None)
         if active_revision is None and job.storyboards:
-            active_revision = job.storyboards[-1].revision_request
+            last = job.storyboards[-1]
+            if getattr(last, "revision_request", None) is not None:
+                active_revision = last.revision_request
+            elif getattr(job, "storyboard_active_revision", None) is not None:
+                active_revision = getattr(job, "storyboard_active_revision")
+            # Issue #197/#163.1: never substitute a stale revision_request from a
+            # superseded storyboard when none is pinned for the active revision;
+            # keep None so the prompt uses the character/job defaults.
+        else:
+            if active_revision is None and getattr(job, "storyboard_active_revision", None) is not None:
+                active_revision = getattr(job, "storyboard_active_revision")
+        if active_revision is None and getattr(job, "storyboards", None):
+            # Avoid pulling from an arbitrary previous revision; only use an
+            # explicitly pinned active_revision.
+            pass
+        from .storyboard import build_storyboard_prompt
+        from .configuration import load_character, read_json
+        import os as _os
+        from pathlib import Path as _Path
+        character = load_character(_Path(_os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
+        brand = read_json(_Path(_os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
         prompt = build_storyboard_prompt(job, character, brand, active_revision)
         version = (job.storyboards[-1].version + 1 if job.storyboards else 1)
         image_version = job.storyboards[-1].image_version if job.storyboards else 1
@@ -497,6 +517,7 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
             "revision": active_revision,
             "timeout": int(_os.getenv("OLLAMA_STORYBOARD_TIMEOUT", "300")),
         })
+
         job.storyboard_task_id = new_task["task_id"]
         job.active_task_id = new_task["task_id"]
         job.storyboard_attempt_version = version
