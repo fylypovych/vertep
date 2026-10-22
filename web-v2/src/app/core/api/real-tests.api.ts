@@ -68,6 +68,15 @@ export interface RealTestRunResponse {
   rt_id: string;
 }
 
+export interface RealTestRunProgress {
+  test_run_id: string;
+  rt_id: string;
+  status: string;
+  progress: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
 export interface RealTestRetryResponse {
   test_run_id: string;
   status: string;
@@ -128,6 +137,13 @@ export class RealTestsApiService {
   getRun(testRunId: string): Observable<RealTestReport> {
     return this.http.get<RealTestReport>(
       `${this.baseUrl}/real-tests/runs/${encodeURIComponent(testRunId)}`,
+      { headers: this.getHeaders() },
+    ).pipe(catchError(this.handleError));
+  }
+
+  getRunProgress(testRunId: string): Observable<RealTestRunProgress> {
+    return this.http.get<RealTestRunProgress>(
+      `${this.baseUrl}/real-tests/runs/${encodeURIComponent(testRunId)}/progress`,
       { headers: this.getHeaders() },
     ).pipe(catchError(this.handleError));
   }

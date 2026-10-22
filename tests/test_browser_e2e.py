@@ -3168,6 +3168,169 @@ def test_backup_create_smoke_through_real_backend_without_route_mocks():
             browser.close()
 
 
+# ── i.0.0.2.59 (#188.1–#188.2 → #150.1/#150.3): Runner Web progress/history/retry ──
+# Ці тести мокують /api/real-tests* через page.route (як і інші UI-тести) і не вимагають
+# запущеного CORE сервера. Доводять через browser: сценарій списку → передумови →
+# підтвердження деструктивної перевірки → запуск → прогрес → термінальний стан → історія
+# після reload → звіт → повторна відправка. Orchestration не підміняється.
+
+
+def test_real_tests_run_flow_through_browser_api():
+    """#188.1 → #150.1: Web list→prerequisites→confirmation→run→progress→report/history."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
+        _mock_session(page)
+        _mock_status(page)
+
+        scenario_id = "rt::S04"
+        scenario_payload = {
+            "scenarios": [
+                {
+                    "id": scenario_id,
+                    "name": "Тестовий сценарій",
+                    "rt_id": scenario_id,
+                    "rt_issue": 35,
+                    "description": "Опис сценарію",
+                    "checks": ["backup_roundtrip"],
+                }
+            ],
+            "available_checks": ["backup_roundtrip", "docker"],
+            "version": "0.0.2.73",
+        }
+        run_id = "a" * 32
+
+        def scenarios_handler(route):
+            route.fulfill(json=scenario_payload)
+
+        def prerequisites_handler(route):
+            route.fulfill(json={
+                "rt_id": scenario_id,
+                "name": "Тестовий сценарій",
+                "description": "Опис сценарію",
+                "checks": ["backup_roundtrip"],
+                "mandatory_checks": ["backup_roundtrip"],
+                "destructive_checks": ["backup_roundtrip"],
+                "requires_confirmation": True,
+            })
+
+        runs_state = {"runs": []}
+
+        def run_handler(route):
+            runs_state["runs"].append({
+                "test_run_id": run_id,
+                "rt_id": scenario_id,
+                "rt_issue_number": 35,
+                "version": "0.0.2.73",
+                "commit_sha": "b" * 40,
+                "status": "RUNNING",
+                "final_result": None,
+                "started_at": "2026-01-01T00:00:00Z",
+                "finished_at": None,
+                "initiator": "admin",
+                "progress": "started: 0/1 checks",
+                "prerequisites": {"checks": ["backup_roundtrip"]},
+                "destructive_confirmation": True,
+                "confirmation_timestamp": "2026-01-01T00:00:00Z",
+            })
+            route.fulfill(json={
+                "test_run_id": run_id, "status": "RUNNING", "result": None, "rt_id": scenario_id,
+            })
+
+        def list_runs_handler(route):
+            route.fulfill(json={"runs": list(runs_state["runs"])})
+
+        def get_run_handler(route):
+            run = next((r for r in runs_state["runs"] if r["test_run_id"] == run_id), None)
+            if run is None:
+                route.fulfill(status=404, json={"detail": "not found"})
+                return
+            route.fulfill(json={
+                "test_run_id": run_id,
+                "rt_id": scenario_id,
+                "rt_issue_number": 35,
+                "version": "0.0.2.73",
+                "commit_sha": "b" * 40,
+                "status": "PASS",
+                "final_result": "PASS",
+                "initiator": "admin",
+                "progress": "progress: 1/1 checks",
+                "started_at": "2026-01-01T00:00:00Z",
+                "finished_at": "2026-01-01T00:01:00Z",
+                "checks": [
+                    {"name": "backup_roundtrip", "status": "PASS", "detail": "ok", "mandatory": True},
+                ],
+                "github_report": {"reported_at": "2026-01-01T00:01:00Z", "comment_id": "1"},
+                "error_details": None,
+            })
+
+        def retry_report_handler(route):
+            route.fulfill(json={
+                "test_run_id": run_id,
+                "status": "REPORTED",
+                "github_report": {"reported_at": "2026-01-01T00:02:00Z", "comment_id": "2"},
+            })
+
+        page.route("**/api/real-tests/scenarios", scenarios_handler)
+        page.route(f"**/api/real-tests/scenarios/{scenario_id}/prerequisites", prerequisites_handler)
+        page.route("**/api/real-tests/run", run_handler)
+        page.route("**/api/real-tests/runs", list_runs_handler)
+        page.route(f"**/api/real-tests/runs/{run_id}", get_run_handler)
+        page.route(f"**/api/real-tests/runs/{run_id}/retry-report", retry_report_handler)
+
+        page.goto(f"{BASE_URL}/real-tests")
+        expect(page.locator("[data-testid='real-tests-page']")).to_be_visible()
+
+        # Список сценаріїв завантажено.
+        expect(page.locator("[data-testid='real-tests-tab-scenarios']")).to_be_visible()
+        expect(page.locator(f"[data-testid='real-tests-scenario-{scenario_id}']")).to_be_visible()
+
+        # Запуск → діалог підтвердження з деструктивними перевірками.
+        page.locator(f"[data-testid='real-tests-scenario-{scenario_id}']").get_by_role(
+            "button", name="Запустити").click()
+        expect(page.locator("[data-testid='real-tests-confirm']")).to_be_visible()
+        expect(page.locator("[data-testid='real-tests-confirm-destructive']")).to_contain_text(
+            "деструктивні перевірки")
+        expect(page.locator("[data-testid='real-tests-confirm-destructive-list']")).to_contain_text(
+            "backup_roundtrip")
+
+        # Підтвердження запуску.
+        page.get_by_role("button", name="Запустити").click()
+        expect(page.locator("[data-testid='real-tests-confirm']")).not_to_be_visible()
+        expect(page.locator(f"[data-testid='real-tests-scenario-{scenario_id}']")).to_contain_text(
+            "Запуск…")
+
+        # Прогрес досягає термінального стану і запуск з'являється в історії.
+        expect(page.locator(f"[data-testid='real-tests-scenario-{scenario_id}']")).to_contain_text(
+            "PASS", timeout=15000)
+
+        # Історія містить прогон з прогресом і ініціатором.
+        page.get_by_role("button", name="Історія").click()
+        expect(page.locator("[data-testid='real-tests-tab-history']")).to_be_visible()
+        expect(page.locator(f"[data-testid='real-tests-run-{run_id}']")).to_be_visible()
+        row = page.locator(f"[data-testid='real-tests-run-{run_id}']")
+        expect(row).to_contain_text("admin")
+        expect(row).to_contain_text("progress: 1/1")
+
+        # Звіт прогону містить результат, перевірку, версію та SHA.
+        row.get_by_role("button", name="Звіт").click()
+        expect(page.locator("[data-testid='real-tests-report']")).to_be_visible()
+        expect(page.locator("[data-testid='real-tests-report']")).to_contain_text("Пройдено")
+        expect(page.locator("[data-testid='real-tests-report']")).to_contain_text("backup_roundtrip")
+        expect(page.locator("[data-testid='real-tests-report']")).to_contain_text("0.0.2.73")
+        expect(page.locator("[data-testid='real-tests-report']")).to_contain_text("b" * 40)
+
+        # Повторна відправка звіту.
+        page.get_by_role("button", name="Повторити відправку до GitHub").click()
+        expect(page.locator("[data-testid='real-tests-report']")).to_contain_text("REPORTED")
+
+        assert page_errors == [], f"pageerror: {page_errors}"
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
 # ── i.0.0.2.3 (#196.1–#196.4): Character/Workflow через реальний CORE API ──
 # Ці тести не мокують /api/characters* і /api/workflows*: вони доводять справжній
 # save/reload, uniqueness, validation і force-контракт на запущеному CORE. Штатні

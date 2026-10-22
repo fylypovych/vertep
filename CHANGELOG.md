@@ -20,6 +20,14 @@
 - Оновлено VERSION та CHANGELOG
 - Додано release notes для нової версії
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.74
+- Оновлено bootstrap.sh: прив'язані версії Docker та Docker Compose для Ubuntu 24.04, додано перевірку після встановлення.
+- Додано асинхронний запуск реальних тестів у core/api/real_tests.py для live progress у веб-інтерфейсі.
+- Додано endpoint /api/real-tests/runs/{test_run_id}/progress (Issue #188.2) для polling прогресу.
+- Додано endpoint /api/errors/collect для збору сторінок помилок з Web UI.
+- Додано GlobalErrorHandlerService у web-v2 — централізований обробник помилок Angular з відправкою даних до backend.
+- Оновлено web-v2 реальні тести: getRunProgress замість listRuns, прогресовий polling.
+- Додано та оновлено тести: real_tests, backup_restore_durable, bootstrap_wizard, browser_e2e, comfyui_runtime_inventory.
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.70
 - Issue ir.0.0.2.52 (#252) — Lab: підготовка кваліфікації реальної VM/GPU isolation, production-priority і 24/7 режиму. `lab/qualification.py` (нове): каталог рядків R1–R6 з обов'язковими фактами, канонічним текстом очікування та потрібними правами власника; схема evidence row і машино-читний валідатор, який відхиляє неповні рядки, короткий SHA, артефакт без `sha256`, `SKIPPED`/`MOCK`, секрети в доказі та верифікацію самим виконавцем; загальний вердикт `PASS` лише коли всі рядки повні.
 - `lab/qualification_run.py` (нове): реальні collector'и стенду (версія, повний SHA, digests образів, host/OS/CPU/RAM/SSD, контейнер і Docker, негативні ізоляційні проби production-шляхів, egress allowlist, відсутність GPU passthrough, VRAM через `nvidia-smi`) та раннери рядків R1–R6: вимірювання lease на production-priority endpoint (deny без lease, queue/reservation, heartbeat/revoke, release ack, VRAM до/після), fault-сценарії (connection loss, заборона GPU без lease, реконфіляція lease після restart, finally-release), перший actual audit в ізольованій Git copy через реальний role-executor, перевірка 24/7 activation і budgets; невиміряне фіксується як `BLOCKED` із конкретною причиною, ніколи як `PASS`.

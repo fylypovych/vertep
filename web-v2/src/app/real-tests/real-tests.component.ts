@@ -98,10 +98,9 @@ export class RealTestsComponent {
     const maxAttempts = 30;
     const timer = setInterval(() => {
       attempts += 1;
-      this.api.listRuns(50).subscribe({
-        next: (runsResponse) => {
-          const run = runsResponse.runs.find((r) => r.test_run_id === testRunId);
-          const terminal = run ? run.status !== 'RUNNING' : false;
+      this.api.getRunProgress(testRunId).subscribe({
+        next: (progress) => {
+          const terminal = progress.status !== 'RUNNING';
           if (terminal || attempts >= maxAttempts) {
             clearInterval(timer);
             this.running.update((map) => ({ ...map, [rtId]: false }));

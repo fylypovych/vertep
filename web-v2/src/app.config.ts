@@ -1,4 +1,4 @@
-import { ApplicationConfig } from '@angular/core';
+import { ApplicationConfig, ErrorHandler } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { routes } from './app/app.routes';
 import { provideAnimations } from '@angular/platform-browser/animations';
@@ -7,6 +7,7 @@ import { AuthInterceptor } from './app/core/interceptors/auth.interceptor';
 import { LoadingInterceptor } from './app/core/interceptors/loading.interceptor';
 import { ErrorInterceptor } from './app/core/interceptors/error.interceptor';
 import { AuthGuard } from './app/core/auth.guard';
+import { GlobalErrorHandlerService } from './app/core/error-handler.service';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -16,6 +17,7 @@ export const appConfig: ApplicationConfig = {
     { provide: HTTP_INTERCEPTORS, useClass: AuthInterceptor, multi: true },
     { provide: HTTP_INTERCEPTORS, useClass: LoadingInterceptor, multi: true },
     { provide: HTTP_INTERCEPTORS, useClass: ErrorInterceptor, multi: true },
+    { provide: ErrorHandler, useClass: GlobalErrorHandlerService },
     AuthGuard,
   ],
 };

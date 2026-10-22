@@ -30,6 +30,12 @@ class RunRequest(BaseModel):
     check_names: list[str] | None = None
     confirm_destructive: bool = False
 
+class ErrorReport(BaseModel):
+    timestamp: str
+    error: str
+    user_agent: str | None = None
+    url: str | None = None
+
 
 def _get_runner() -> RealTestRunner:
     global _runner
@@ -106,10 +112,23 @@ def run_test(payload: RunRequest, request: Request):
     update_test_run(run)
     _audit(run.test_run_id, "confirmed",
            "pre-execution confirmation by {}".format(actor), actor)
-    run = runner.run_checks(run, check_names=payload.check_names)
-    run = runner.finalize(run)
-    runner.report_to_github(run)
-    runner.close_rt_issue(run)
+    # Run checks asynchronously for live progress
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    executor = ThreadPoolExecutor(max_workers=1)
+    def _run():
+        try:
+            run = runner.run_checks(run, check_names=payload.check_names)
+            run = runner.finalize(run)
+            runner.report_to_github(run)
+            runner.close_rt_issue(run)
+            update_test_run(run)
+        except Exception:
+            # Fail closed: ensure run is persisted with error
+            from ..real_tests.models import TestRunStatus
+            run.status = TestRunStatus.FAILED
+            update_test_run(run)
+    executor.submit(_run)
     return {"test_run_id": run.test_run_id, "status": run.status.value,
             "result": run.final_result, "rt_id": run.rt_id}
 
@@ -161,6 +180,23 @@ def get_run(test_run_id: str):
     return _get_runner().get_report(test_run_id)
 
 
+@router.get("/api/real-tests/runs/{test_run_id}/progress")
+def get_run_progress(test_run_id: str):
+    """Issue #188.2: provide live progress for Runner Web UI polling."""
+    _check_operation()
+    run = get_test_run(test_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Test run not found")
+    return {
+        "test_run_id": run.test_run_id,
+        "rt_id": run.rt_id,
+        "status": run.status.value,
+        "progress": run.progress,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
+
+
 @router.post("/api/real-tests/runs/{test_run_id}/retry-report")
 def retry_report(test_run_id: str, request: Request):
     _check_operation()
@@ -170,3 +206,18 @@ def retry_report(test_run_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Test run not found")
     return {"test_run_id": run.test_run_id, "status": run.status.value,
             "github_report": run.github_report}
+
+
+@router.post("/api/errors/collect")
+def collect_errors(report: ErrorReport):
+    """Collect page errors from Web UI for diagnostics."""
+    # Fail closed: store error metadata, do not expose secrets
+    import logging
+    logger = logging.getLogger("vertep.errors")
+    logger.warning("Collected page error", extra={
+        "timestamp": report.timestamp,
+        "user_agent": report.user_agent,
+        "url": report.url,
+        "error": str(report.error)[:500],
+    })
+    return {"accepted": True}

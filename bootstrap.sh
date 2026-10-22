@@ -11,6 +11,8 @@ REGISTRATION_TOKEN=${VERTEP_NODE_TOKEN:-}
 BOOTSTRAP_SERVICES=(proxy core license-manager dispatcher scheduler certificate-manager migrate postgres redis update-agent)
 MIN_RAM_MB=${VERTEP_MIN_RAM_MB:-4096}
 MIN_DISK_MB=${VERTEP_MIN_DISK_MB:-20480}
+DOCKER_APT_VERSION='29.1.3-0ubuntu3~24.04.2'
+COMPOSE_APT_VERSION='2.40.3+ds1-0ubuntu1~24.04.1'
 
 fail(){ printf 'VERTEP: %s\n' "$*" >&2; exit 1; }
 progress(){ printf '\n==> %s\n' "$*"; }
@@ -68,7 +70,7 @@ elif grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/de
 progress "Installing container runtime"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils python3-psycopg docker.io docker-compose-v2
+apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils python3-psycopg docker.io=$DOCKER_APT_VERSION docker-compose-v2=$COMPOSE_APT_VERSION
 systemctl enable --now docker
 # Verify minimum Docker version (24.0+ for compose v2 support)
 docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "0.0.0")
@@ -80,6 +82,15 @@ compose_version=$(docker compose version --short 2>/dev/null || echo "0.0.0")
 compose_major=$(echo "$compose_version" | cut -d. -f1)
 if [[ "$compose_major" -lt 2 ]]; then
   fail "Docker Compose $compose_version is too old; minimum required is v2"
+fi
+# Verify effective apt versions match pinned versions
+docker_pkg_version=$(dpkg-query -W -f='${Version}' docker.io 2>/dev/null || echo "")
+if [[ "$docker_pkg_version" != "$DOCKER_APT_VERSION" ]]; then
+  fail "Docker apt version mismatch: expected $DOCKER_APT_VERSION, got $docker_pkg_version"
+fi
+compose_pkg_version=$(dpkg-query -W -f='${Version}' docker-compose-v2 2>/dev/null || echo "")
+if [[ "$compose_pkg_version" != "$COMPOSE_APT_VERSION" ]]; then
+  fail "Docker Compose apt version mismatch: expected $COMPOSE_APT_VERSION, got $compose_pkg_version"
 fi
 if [[ $gpu_vendor == nvidia && $driver == unavailable ]]; then
   apt-get install -y -qq ubuntu-drivers-common

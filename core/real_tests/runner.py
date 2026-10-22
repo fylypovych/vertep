@@ -153,7 +153,7 @@ class RealTestRunner:
             append_check(run.test_run_id, result)
             audit_entry(run.test_run_id, "check", f"{name}: {result.status.value}", "runner")
             run.checks.append(result)
-            run.progress = "progress: {}/{} checks".format(len(run.checks), len(names))
+            run.progress = "progress: {}/{} - {}".format(len(run.checks), len(names), name)
             update_test_run(run)
         return run
 

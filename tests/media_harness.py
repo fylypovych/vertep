@@ -877,9 +877,9 @@ def record_evidence(name: str, payload) -> None:
             document = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
             document = {}
-    document[name] = dict(payload, provenance=run_provenance(),
-                          test_id=current_test_id()) \
-        if isinstance(payload, dict) else payload
+    provenance = dict(run_provenance(), test_id=current_test_id())
+    record = dict(payload, provenance=provenance, test_id=current_test_id())
+    document[name] = record if isinstance(payload, dict) else payload
     path.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
 
 

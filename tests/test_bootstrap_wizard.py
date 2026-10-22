@@ -578,3 +578,20 @@ class TestBootstrapDockerCompose:
     def test_compose_min_version(self):
         bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
         assert "v2" in bs
+
+    def test_docker_version_pin(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "DOCKER_APT_VERSION=" in bs
+        assert "docker.io=$DOCKER_APT_VERSION" in bs
+
+    def test_compose_version_pin(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "COMPOSE_APT_VERSION=" in bs
+        assert "docker-compose-v2=$COMPOSE_APT_VERSION" in bs
+
+    def test_effective_version_verification(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "dpkg-query -W -f='${Version}' docker.io" in bs
+        assert "Docker apt version mismatch" in bs
+        assert "dpkg-query -W -f='${Version}' docker-compose-v2" in bs
+        assert "Docker Compose apt version mismatch" in bs
