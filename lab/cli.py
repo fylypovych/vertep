@@ -44,7 +44,10 @@ def build_context(args) -> dict:
     budget = BudgetLedger(state_dir / "budget")
     provider = None
     if getattr(args, "gpu", False):
-        provider = FakeResourceProvider()
+        if os.getenv("LAB_GPU_FAKE", "1").lower() in {"1", "true", "yes"}:
+            provider = FakeResourceProvider()
+        else:
+            raise RuntimeError("GPU lease requires a real resource provider; set LAB_GPU_FAKE=1 for demo mode")
     # Fail-closed: without an owner-configured endpoint no run can report
     # COMPLETED (Issue i.0.0.2.50, L1); an explicit CLI URL opts in for demos.
     executor_url = getattr(args, "role_executor_url", None)

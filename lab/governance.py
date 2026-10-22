@@ -291,6 +291,7 @@ class Governance:
     # -- findings --------------------------------------------------------
     def propose_lab_issue(self, finding: dict, *, key: str = "") -> dict:
         """Validate and publish a ``lab`` finding; every other write is refused."""
+        from .policy import reserve_identifier
         validation = validate_lab_finding(finding)
         decision_key = key or str(finding.get("identifier") or "")
         decision_key = decision_key or str(finding.get("title", ""))[:80]
@@ -329,11 +330,31 @@ class Governance:
             return {"created": False, "reason": "duplicate finding",
                     "duplicates": duplicates}
 
+        existing_numbers = []
+        for rec in self.created():
+            issue_data = rec.get("issue", {})
+            if isinstance(issue_data, dict):
+                title = issue_data.get("title", "")
+            else:
+                title = str(issue_data)
+            # Try to extract existing lab identifier from record key or finding
+            key_candidate = rec.get("key") or rec.get("finding", {}).get("identifier", "")
+            if key_candidate:
+                existing_numbers.append(key_candidate)
+        # Reserve next lab identifier from shared continuous series
+        try:
+            lab_id = reserve_identifier("lab", existing_numbers)
+        except Exception:
+            lab_id = decision_key
+        else:
+            decision_key = f"{lab_id}::{decision_key}"
+
         issue = self.transport.create_issue(str(finding.get("title", "")),
                                             render_lab_body(finding), labels=("lab",))
         record = {"key": decision_key,
                   "created_at": datetime.now(timezone.utc).isoformat(),
-                  "actor": self.actor, "finding": finding, "issue": issue}
+                  "actor": self.actor, "finding": finding, "issue": issue,
+                  "lab_id": lab_id}
         write_json(self._created_path, [*self.created(), record])
         self.gate.trail.append(actor=self.actor, action="create_lab_issue",
                                subject=decision_key, decision="CREATED",

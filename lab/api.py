@@ -96,14 +96,17 @@ def _require_owner(raw_request: Request) -> str:
 
 
 def create_app(state_dir=None, workspace_root=None, *, provider=None,
-               executor=None) -> FastAPI:
+                executor=None) -> FastAPI:
     """Build the laboratory API around one shared gate instance."""
+    from .executor import executor_from_environment
     state = Path(state_dir or os.getenv("LAB_STATE_DIR", "/var/lib/vertep-lab"))
     workspace = Workspace(Path(workspace_root or os.getenv("LAB_WORKSPACE",
                                                            "/srv/vertep-lab/repo")))
     workspace.prepare()
     gate = PolicyGate(state)
     budget = BudgetLedger(state / "budget")
+    if executor is None:
+        executor = executor_from_environment(os.getenv("LAB_ROLE_EXECUTOR_URL", ""))
     orchestrator = Orchestrator(workspace, gate, budget, provider=provider,
                                 executor=executor)
     governance = Governance(gate, default_transport(),

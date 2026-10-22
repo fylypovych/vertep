@@ -1,0 +1,20 @@
+name: audio
+version: "0.0.2.74"
+label: Audio Module
+role: voice
+capabilities:
+  - speech_synthesis
+entrypoint: modules.audio.audio_module:AudioModule
+logic: modules.audio.audio_logic
+depends_on: []
+resources:
+  min_vram_mb: 0
+  cpu_cores: 1
+  ram_mb: 1024
+  gpu_required: false
+coexists_with:
+  - voice_node
+feature_flag: VERTEP_AUDIO_MODULE_ENABLED
+description: >
+  Аудіо модуль (Audio Module) як паралельна альтернатива Voice Node.
+  Чиста бізнес-логіка у audio_logic.py, виклики TTS — через провайдерів.

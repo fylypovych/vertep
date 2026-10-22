@@ -407,5 +407,8 @@ case "${1:-status}" in
       *) echo "Unknown node role in /etc/vertep/node.conf" >&2; exit 1 ;;
     esac
     ;;
-  *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback}"; exit 2 ;;
+  backup)
+    python3 "$ROOT/core/backup/__init__.py" "${@:2}"
+    ;;
+  *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback|backup}"; exit 2 ;;
 esac

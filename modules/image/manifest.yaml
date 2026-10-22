@@ -1,0 +1,25 @@
+name: image
+version: "0.0.2.74"
+label: Image Module
+role: gpu
+capabilities:
+  - image_generation
+  - image_upscale
+  - controlnet
+  - inpainting
+  - video_generation
+  - video_assembly
+entrypoint: modules.image.image_module:ImageModule
+logic: modules.image.image_logic
+depends_on: []
+resources:
+  min_vram_mb: 6144
+  cpu_cores: 2
+  ram_mb: 2048
+  gpu_required: true
+coexists_with:
+  - gpu_node
+feature_flag: VERTEP_IMAGE_MODULE_ENABLED
+description: >
+  Модуль генерації зображень/відео (Image Module) як паралельна альтернатива GPU Node.
+  Чиста бізнес-логіка у image_logic.py, виклики ComfyUI — через провайдерів.

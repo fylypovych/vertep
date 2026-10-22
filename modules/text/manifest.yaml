@@ -1,0 +1,22 @@
+name: text
+version: "0.0.2.74"
+label: Text Module
+role: text
+capabilities:
+  - text_generation
+  - script_generation
+  - storyboard_generation
+entrypoint: modules.text.text_module:TextModule
+logic: modules.text.text_logic
+depends_on: []
+resources:
+  min_vram_mb: 0
+  cpu_cores: 1
+  ram_mb: 512
+  gpu_required: false
+coexists_with:
+  - text_node
+feature_flag: VERTEP_TEXT_MODULE_ENABLED
+description: >
+  Текстовий модуль (Text Module) як паралельна альтернатива Text Node.
+  Чиста бізнес-логіка у text_logic.py, виклики LLM — через провайдерів.

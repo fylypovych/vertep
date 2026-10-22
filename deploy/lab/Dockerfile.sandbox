@@ -11,6 +11,9 @@ FROM python:3.10-slim
 ENV VERTEP_LAB_HOME=/srv/vertep-lab
 WORKDIR $VERTEP_LAB_HOME
 
+# Copy laboratory code into the image
+COPY ../../lab ./lab
+
 # The sandbox is self-contained: no host checkout, no network of the host's.
 # The only writable space the task ever sees is its private tmpfs.
 RUN mkdir -p $VERTEP_LAB_HOME/repo && chmod 1777 $VERTEP_LAB_HOME/repo

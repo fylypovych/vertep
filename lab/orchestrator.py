@@ -146,8 +146,14 @@ class Orchestrator:
 
     def _load_queue(self) -> None:
         payload = read_json(self._queue_path, default=[]) or []
-        self.queue = [Task(**item) for item in payload
-                      if isinstance(item, dict) and {"task_id", "kind", "role"} <= item.keys()]
+        tasks = []
+        for item in payload:
+            if isinstance(item, dict) and {"task_id", "kind", "role"} <= item.keys():
+                task = Task(**item)
+                if task.state == RunState.RUNNING.value:
+                    task.state = RunState.PENDING.value
+                tasks.append(task)
+        self.queue = tasks
 
     def _save_queue(self) -> None:
         write_json(self._queue_path, [task.as_dict() for task in self.queue])
@@ -269,16 +275,33 @@ class Orchestrator:
         if not standing:
             self._save_queue()
         try:
+            if self.leases is not None and self.leases.lease is not None:
+                try:
+                    self.leases.heartbeat()
+                except Exception:
+                    pass
             # The gate rules *as the task's role*, so a read-only reviewer can
             # never execute change work and a QA result stays separate from the
             # independent review (Issue i.0.0.2.50, L1).
             execution_action = (Action.WRITE_REPORT if task.kind in _REPORT_KINDS
-                                else Action.LOCAL_FIX)
+                                 else Action.LOCAL_FIX)
             self.gate.require(execution_action, actor=task.role, subject=task.task_id)
             task_result = active_executor(task, model=model, provider=provider,
                                           workspace=self.workspace)
+            if self.leases is not None and self.leases.lease is not None:
+                try:
+                    self.leases.heartbeat()
+                except Exception:
+                    pass
             task.state = RunState.COMPLETED.value
-            self.budget.record_run(status="completed", detail=task.task_id)
+            tokens_used = 0
+            try:
+                tokens_used = int(task_result.get("tokens_used")
+                                  or task_result.get("result", {}).get("tokens_used")
+                                  or 0)
+            except Exception:
+                tokens_used = 0
+            self.budget.record_run(tokens=tokens_used, status="completed", detail=task.task_id)
             self._record_result(task, RunState.COMPLETED.value, result=task_result)
             result.update({"state": RunState.COMPLETED.value, "task": task.as_dict(),
                            "reason": f"task {task.task_id} executed by role "

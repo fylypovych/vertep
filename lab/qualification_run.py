@@ -76,11 +76,13 @@ def _run(command: list[str], *, timeout: int = 60, cwd=None) -> dict:
     """Run a read-only command and report the outcome without raising."""
     try:
         completed = subprocess.run(command, capture_output=True, text=True,
-                                   timeout=timeout, cwd=cwd)
-    except (OSError, subprocess.SubprocessError) as error:
+                                   timeout=timeout, cwd=cwd, errors="replace")
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(error)}
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
     return {"ok": completed.returncode == 0, "returncode": completed.returncode,
-            "stdout": completed.stdout, "stderr": completed.stderr}
+            "stdout": stdout, "stderr": stderr}
 
 
 def sha256_file(path) -> str:
