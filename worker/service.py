@@ -236,6 +236,56 @@ def voice_catalog() -> dict:
     return result
 
 
+def _executor_resolves(key: str, value: str) -> bool:
+    """Whether the executors of this process really resolve the delivered backend.
+
+    Issue #181.3: a Worker must not report a provider as applied when its own
+    executors still resolve a different backend or cannot use it at all.  The
+    slots that are resolved through a provider instance are verified against
+    that instance; every other delivered value is plain configuration the
+    executor reads.
+    """
+    expected = str(value).strip().lower()
+    from adapters.providers import providers as registry
+
+    if key == "VERTEP_VIDEO_ENGINE":
+        engine = registry.video_engine()
+        if str(getattr(engine, "engine_id", "") or "").strip().lower() != expected:
+            return False
+        return bool(engine.configured())
+    if key == "TTS_PROVIDER":
+        provider = registry.tts()
+        if str(getattr(provider, "provider", "") or "").strip().lower() != expected:
+            return False
+        return bool(provider.configured())
+    return True
+
+
+def _effective_backend(key: str) -> str:
+    """The backend this process effectively uses for a provider slot."""
+    from adapters.providers import provider_matrix
+
+    for entry in provider_matrix().values():
+        if entry.get("env") == key:
+            return str(entry.get("backend") or "").strip().lower()
+    return ""
+
+
+def _restore_provider_env(previous: dict[str, str | None]) -> None:
+    """Put the previous effective provider environment back."""
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    try:
+        from adapters import providers as providers_module
+
+        providers_module._providers = None
+    except Exception:  # noqa: BLE001 - a stale cache must not break the loop
+        pass
+
+
 def apply_provider_config(config: dict | None) -> dict[str, str]:
     """Apply the non-secret provider selection delivered by CORE (Issue i.0.0.1.17).
 
@@ -246,15 +296,22 @@ def apply_provider_config(config: dict | None) -> dict[str, str]:
     tasks observe the switched backend, and the provider registry cache is
     dropped so factories re-read the environment.  Returns the applied mapping
     so heartbeats can report the effective executor configuration back.
+
+    A delivery this node cannot resolve is a failed activation: the previous
+    effective configuration is restored and the heartbeat reports what the node
+    really observes, so CORE never records a success for a backend that never
+    became effective on the node that runs the tasks (Issue #181.3).
     """
     applied: dict[str, str] = {}
     if not isinstance(config, dict):
         return applied
     from core.provider_switch import _PROVIDER_EXECUTOR_ENV_ALLOWLIST
 
+    previous: dict[str, str | None] = {}
     for key, value in config.items():
         if key not in _PROVIDER_EXECUTOR_ENV_ALLOWLIST or not isinstance(value, str):
             continue
+        previous[key] = os.environ.get(key)
         if os.environ.get(key) != value:
             os.environ[key] = value
         applied[key] = value
@@ -265,6 +322,14 @@ def apply_provider_config(config: dict | None) -> dict[str, str]:
             providers_module._providers = None
         except Exception:  # noqa: BLE001 - a stale cache must not break the loop
             pass
+        failed = [key for key, value in applied.items() if not _executor_resolves(key, value)]
+        if failed:
+            _restore_provider_env(previous)
+            observed = executor_provider_config()
+            for key in failed:
+                if key not in observed:
+                    observed[key] = _effective_backend(key)
+            return observed
     return applied
 
 

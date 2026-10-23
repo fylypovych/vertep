@@ -108,3 +108,31 @@ def test_operations_read_shapes():
     metrics = client.get("/api/metrics")
     assert metrics.status_code == 200
     assert isinstance(metrics.json(), dict)
+
+
+def test_jobs_client_endpoints_exist():
+    _assert_endpoints([
+        ("GET", "/api/jobs"),
+        ("GET", "/api/jobs/{job_id}"),
+        ("POST", "/api/jobs"),
+        ("POST", "/api/jobs/{job_id}/script/approve"),
+        ("POST", "/api/jobs/{job_id}/script/regenerate"),
+        ("POST", "/api/jobs/{job_id}/video/approve"),
+        ("POST", "/api/jobs/{job_id}/video/regenerate"),
+        ("POST", "/api/jobs/{job_id}/cancel"),
+    ])
+
+
+def test_settings_client_endpoints_exist():
+    _assert_endpoints([
+        ("GET", "/api/settings/providers"),
+        ("GET", "/api/settings/video-engine"),
+        ("POST", "/api/settings/providers/{slot}"),
+    ])
+
+
+def test_channels_client_endpoints_exist():
+    _assert_endpoints([
+        ("GET", "/api/brands"),
+        ("GET", "/api/brands/{brand_id}/channels"),
+    ])

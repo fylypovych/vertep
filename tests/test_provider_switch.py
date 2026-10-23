@@ -11,6 +11,7 @@ for the pinned runtime, so nothing about the successful path is stubbed inside
 CORE.
 """
 
+import base64
 import contextlib
 import json
 import os
@@ -612,16 +613,21 @@ except Exception as e:
 config = control.get("provider_config") or {}
 applied = worker_service.apply_provider_config(config)
 observed = worker_service.executor_provider_config()
+# The Worker reports what its executors really observe. A delivery this node
+# could not activate is reported with the backend it restored, so CORE never
+# records a success for a backend that never became effective here.
+report_config = dict(observed)
+report_config.update(applied)
 # Mirror the real Worker loop (worker/service.py): after applying the delivered
 # config it reports the effective executor config back on the next heartbeat.
 ack = httpx.post(f"{core}/api/workers/heartbeat",
-                 json={"node_name": node, "provider_config": observed},
+                 json={"node_name": node, "provider_config": report_config},
                  headers={"X-Vertep-Token": token}, timeout=10)
 ack.raise_for_status()
 engine = registry.video_engine()
 Path(os.environ["REPORT_PATH"]).write_text(json.dumps({
     "applied": applied,
-    "observed": observed,
+    "observed": report_config,
     "video_engine_env": os.environ.get("VERTEP_VIDEO_ENGINE"),
     "money_printer_url": os.environ.get("MONEY_PRINTER_URL"),
     "engine_class": type(engine).__name__,
@@ -629,13 +635,15 @@ Path(os.environ["REPORT_PATH"]).write_text(json.dumps({
 """
 
 
-def _run_worker_apply(core_url: str, node_name: str, run_dir: Path) -> dict:
+def _run_worker_apply(core_url: str, node_name: str, run_dir: Path,
+                      drop_env: tuple[str, ...] = ()) -> dict:
     """Run a separate Worker process that fetches its config from CORE.
 
     The subprocess inherits no engine selection of its own, so whatever it ends
     up resolving must have come from the ``provider_config`` CORE served on the
     stock heartbeat response — the delivery channel the real Worker loop uses,
-    not a locally written JSON fixture (Issue #170.3 / #181.2).
+    not a locally written JSON fixture (Issue #170.3 / #181.2).  ``drop_env``
+    removes node-local provider configuration the subprocess must not inherit.
     """
     import subprocess
     import sys
@@ -647,7 +655,7 @@ def _run_worker_apply(core_url: str, node_name: str, run_dir: Path) -> dict:
     env["NODE_TOKEN"] = os.getenv("NODE_API_TOKEN", "")
     env["WORKER_NODE"] = node_name
     env["REPORT_PATH"] = str(report_path)
-    for key in ("VERTEP_VIDEO_ENGINE", "MONEY_PRINTER_URL"):
+    for key in ("VERTEP_VIDEO_ENGINE", "MONEY_PRINTER_URL", *drop_env):
         env.pop(key, None)
     subprocess.run([sys.executable, "-c", _WORKER_APPLY_EXECUTOR],
                    cwd=str(Path(__file__).resolve().parents[1]),
@@ -791,3 +799,208 @@ def test_a_refused_engine_switch_keeps_the_previous_engine_on_the_worker_too(
         report = _run_worker_apply(base, "gpu-01", tmp_path / "run")
         assert report["observed"].get("VERTEP_VIDEO_ENGINE") is None
         assert report["engine_class"] != "MoneyPrinterEngine"
+
+
+# ---------------------------------------------------------------------------
+# Issue #170.1/#170.2/#181.2: the switched provider serves a real task
+# ---------------------------------------------------------------------------
+
+
+class _TTSRuntimeHandler(BaseHTTPRequestHandler):
+    """Loopback TTS runtime that records the synthesis request it receives."""
+
+    def log_message(self, *args):
+        return
+
+    def do_POST(self):
+        if self.path != "/synthesize":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        self.server.requests.append(payload)
+        audio = b"RIFF\x04\x00\x00\x00WAVE-test"
+        body = json.dumps({"audio_base64": base64.b64encode(audio).decode(),
+                           "mime_type": "audio/wav", "engine": "espeak-ng"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@contextlib.contextmanager
+def _tts_runtime_on_loopback():
+    """Serve the TTS runtime the Worker task talks to, and record its requests."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _TTSRuntimeHandler)
+    server.requests = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", server.requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+#: Runs in a fresh interpreter: it applies the configuration CORE delivered on
+#: the stock heartbeat channel and then executes a real task through the stock
+#: executor path, so the report proves that the task ran with the switched
+#: provider in the process that actually executes tasks.
+_WORKER_EXECUTE_TASK = r"""
+import json, os
+from pathlib import Path
+import httpx
+from worker import service as worker_service
+from worker.role_executor import execute_role_task
+
+core = os.environ["CORE_URL"]
+token = os.environ["NODE_TOKEN"]
+node = os.environ.get("WORKER_NODE", "voice-01")
+report_path = os.environ["REPORT_PATH"]
+report = {}
+try:
+    control = httpx.post(f"{core}/api/workers/heartbeat", json={"node_name": node},
+                         headers={"X-Vertep-Token": token}, timeout=10)
+    control.raise_for_status()
+    applied = worker_service.apply_provider_config(control.json().get("provider_config") or {})
+    observed = worker_service.executor_provider_config()
+    task = json.loads(os.environ["TASK_PAYLOAD"])
+    artifacts = execute_role_task("voice", task)
+    ack = httpx.post(f"{core}/api/workers/heartbeat",
+                     json={"node_name": node, "provider_config": observed},
+                     headers={"X-Vertep-Token": token}, timeout=10)
+    ack.raise_for_status()
+    contract = (artifacts[0].get("contract") or {}) if artifacts else {}
+    report = {
+        "applied": applied,
+        "observed": observed,
+        "artifact_count": len(artifacts),
+        "artifact_kind": artifacts[0].get("kind") if artifacts else None,
+        "contract_provider": contract.get("provider"),
+        "contract_voice": contract.get("voice"),
+    }
+except Exception as error:
+    report = {"error": f"{type(error).__name__}: {error}"}
+Path(report_path).write_text(json.dumps(report), encoding="utf-8")
+if "error" in report:
+    raise SystemExit(1)
+"""
+
+
+def _run_worker_task(core_url: str, node_name: str, run_dir: Path, task: dict) -> dict:
+    """Run a separate Worker process that executes a task with the delivered config."""
+    import subprocess
+    import sys
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    report_path = run_dir / "report.json"
+    env = dict(os.environ)
+    env["CORE_URL"] = core_url
+    env["NODE_TOKEN"] = os.getenv("NODE_API_TOKEN", "")
+    env["WORKER_NODE"] = node_name
+    env["REPORT_PATH"] = str(report_path)
+    env["TASK_PAYLOAD"] = json.dumps(task, ensure_ascii=False)
+    # The Worker starts without a provider selection of its own: everything it
+    # uses has to arrive from CORE through the heartbeat channel.
+    env.pop("TTS_PROVIDER", None)
+    result = subprocess.run([sys.executable, "-c", _WORKER_EXECUTE_TASK],
+                            cwd=str(Path(__file__).resolve().parents[1]),
+                            env=env, capture_output=True, text=True)
+    report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+    if result.returncode != 0:
+        raise AssertionError(f"worker task failed: {report} {result.stderr[-800:]}")
+    return report
+
+
+def test_a_task_runs_in_the_worker_process_that_applied_the_switched_provider(
+        isolated_config, tmp_path, monkeypatch):
+    """Issue #170.1/#170.2/#181.2: the switched provider serves a real task.
+
+    CORE → persisted selection → heartbeat delivery → Worker apply → the stock
+    executor runs the task → the runtime receives the new provider.  The
+    Worker process starts without a selection of its own, so the only source of
+    the switched backend is the configuration CORE delivered.
+    """
+    import httpx
+
+    from core.provider_switch import effective_provider_config
+
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    task = {"task": "voice", "topic": "Привіт Vertep", "voice": "uk",
+            "scene_id": "scene-matrix", "character_id": "matrix_char",
+            "language": "uk", "speed": 150}
+    with _live_core() as (base, auth), _tts_runtime_on_loopback() as (runtime_url, requests):
+        monkeypatch.setenv("TTS_URL", runtime_url)
+        response = httpx.post(f"{base}/api/settings/providers/tts",
+                              json={"backend": "mock"},
+                              headers={"Authorization": auth}, timeout=30)
+        assert response.status_code == 200, response.text
+        assert response.json()["executor_config"]["TTS_PROVIDER"] == "mock"
+
+        report = _run_worker_task(base, "voice-01", tmp_path / "run1", task)
+        assert report["applied"] == {"TTS_PROVIDER": "mock"}
+        assert report["observed"]["TTS_PROVIDER"] == "mock"
+        assert report["artifact_count"] == 1
+        assert report["artifact_kind"] == "audio"
+        assert report["contract_provider"] == "mock"
+        assert report["contract_voice"] == "uk"
+        assert requests, "the runtime received no synthesis request"
+        assert requests[-1]["provider"] == "mock"
+        assert requests[-1]["text"] == "Привіт Vertep"
+
+        effective = effective_provider_config("tts", node_name="voice-01")
+        assert effective["backend"] == "mock"
+        assert effective["worker_acks"]["voice-01"]["TTS_PROVIDER"] == "mock"
+
+        # A restarted Worker process applies the same persisted selection again
+        # and runs the task with it: the switch is not lost with the process.
+        restarted = _run_worker_task(base, "voice-01", tmp_path / "run2", task)
+        assert restarted["observed"]["TTS_PROVIDER"] == "mock"
+        assert restarted["contract_provider"] == "mock"
+        assert requests[-1]["provider"] == "mock"
+
+
+def test_a_worker_that_cannot_activate_the_switched_provider_keeps_its_previous_config(
+        isolated_config, tmp_path, monkeypatch):
+    """Issue #181.3: a failed Worker activation restores the previous config.
+
+    The switched backend is usable on CORE but not on the Worker node, because
+    the address of the provider runtime is node-local configuration.  The Worker
+    therefore cannot activate it: it restores the backend it had before the
+    delivery, reports what it really observes, and CORE refuses to report the
+    slot as effective for that node.
+    """
+    import httpx
+
+    from core.provider_switch import effective_provider_config, executor_backend_mismatches
+
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    monkeypatch.setenv("PIPER_URL", "http://piper-core:5000")
+    with _live_core() as (base, auth):
+        response = httpx.post(f"{base}/api/settings/providers/tts",
+                              json={"backend": "piper"},
+                              headers={"Authorization": auth}, timeout=30)
+        assert response.status_code == 200, response.text
+        assert response.json()["effective_config"]["backend"] == "piper"
+
+        # The Worker node knows no runtime address and starts without a
+        # selection of its own, so it cannot use Piper.
+        report = _run_worker_apply(base, "voice-01", tmp_path / "run",
+                                   drop_env=("PIPER_URL", "TTS_PROVIDER"))
+        assert report["observed"]["TTS_PROVIDER"] == "none"
+
+        # CORE sees the contradiction and never claims success for this node.
+        assert executor_backend_mismatches("tts") == [
+            {"node_name": "voice-01", "observed": "none", "expected": "piper"}]
+        with pytest.raises(ProviderSwitchError):
+            effective_provider_config("tts", node_name="voice-01")
+
+        # The read model states the failed activation instead of reporting the
+        # switched provider as effective on the node that runs the tasks.
+        read_model = client.get("/api/settings/providers").json()
+        assert read_model["worker_activation"]["tts"]["ok"] is False
+        assert read_model["worker_activation"]["tts"]["mismatches"] == [
+            {"node_name": "voice-01", "observed": "none", "expected": "piper"}]
+        assert read_model["worker_acks"]["voice-01"]["TTS_PROVIDER"] == "none"

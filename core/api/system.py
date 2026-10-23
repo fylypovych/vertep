@@ -1,4 +1,5 @@
-"""Real System API routes: update, recovery, roles and restart (Issue #110 Phase C).
+"""Real System API routes: update, recovery, roles, models, certificates,
+operations and test (Issue #110 Phase C).
 
 Extracted verbatim from ``core/app.py``: the same paths, methods and response
 codes. The actual logic lives here; ``core/app.py`` only re-registers the
@@ -8,27 +9,36 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import uuid
+import base64 as basic64
+import binascii
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ..certificates import list_certificates
 from ..deployment_plan import create_plan
 from ..first_run import config_root, installation
 from ..models import (JobStatus, RollingUpdateRequest, CoordinatorUpdateRequest,
-                      utc_now)
+                      StageStatus, utc_now)
 from ..node_registry import node_roles, registered_nodes
 from ..operations import audit_entry
+from ..pull_executor import PlacementError, cancel_pull, start_delete, start_pull
 from ..rolling_update import (cancel_rollout, is_core_node, promote_rollout,
                               reconcile_rollout, rollback_ready_nodes,
                               rollout_status, start_rollout,
                               update_core_coordinator)
 from ..runtime_identity import CORE_RUNTIME_INSTANCE_ID
-from ..security import _valid_worker_request
+from ..security import (_authenticate_user, _valid_session,
+                        _valid_worker_request)
 from ..state import store, task_queue
 from ..system_state import (SystemState, dispatch_allowed, get_system_state,
                             set_system_state)
 from ..update_manager import request_update, update_status
 from ..version import application_version
+from adapters.providers import provider_matrix
 
 router = APIRouter()
 
@@ -306,3 +316,219 @@ async def system_restart(payload: dict | None = None):
     return {"target": "node", "node_id": node_id, "status": "restart_requested",
             "restart_operation_id": worker["restart_operation_id"],
             "message": f"Worker {node_id} marked for restart"}
+
+
+# ---------------------------------------------------------------------------
+# System models (Ollama) routes
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/system/models")
+async def system_models():
+    """Local Ollama model list plus the per-node placement/readiness view."""
+    try:
+        local = await _internal_api("GET", "OLLAMA_URL", "/api/tags")
+    except Exception:  # noqa: BLE001 - placement stays usable without local Ollama
+        local = None
+    if not isinstance(local, dict):
+        local = {}
+    local.setdefault("models", [])
+    from ..pull_executor import model_placement
+    local["nodes"] = model_placement()
+    return local
+
+
+@router.get("/api/system/models/nodes")
+async def system_model_nodes():
+    """Per-node model catalog placement, readiness and cache freshness."""
+    from ..pull_executor import model_placement
+    return {"nodes": model_placement()}
+
+
+def _actor_from_request(request: Request) -> tuple[str, str]:
+    """Return (actor, role) for the authenticated request, or ('unknown', '')."""
+    identity = _valid_session(request.cookies.get("vertep_session", ""))
+    if identity:
+        return identity
+    header = request.headers.get("authorization", "")
+    try:
+        scheme, encoded = header.split(" ", 1)
+        user, supplied = basic64.b64decode(encoded).decode().split(":", 1)
+        role = _authenticate_user(user, supplied) if scheme.lower() == "basic" else None
+        if role:
+            return user, role
+    except (ValueError, UnicodeError, binascii.Error):
+        pass
+    return "unknown", ""
+
+
+@router.post("/api/system/models/pull")
+async def pull_system_model(request: Request):
+    """Start an async model pull and return the durable operation record.
+
+    The actual Ollama pull runs either locally (background thread) or on a
+    placed Text node (heartbeat command channel); poll
+    ``GET /api/operations/{operation_id}`` for progress.  Idempotent: a second
+    request for the same ``(node, model)`` returns the existing operation.
+    """
+    payload = await request.json()
+    name = str(payload.get("name", ""))
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", name):
+        raise HTTPException(422, "Invalid model name")
+    node = str(payload.get("node") or "").strip() or None
+    from ..pull_executor import PlacementError, start_pull
+    actor, _role = _actor_from_request(request)
+    try:
+        return start_pull(name, requested_by=actor, node_name=node)
+    except PlacementError as error:
+        raise HTTPException(error.status_code, error.message) from error
+
+
+@router.post("/api/system/models/pull/{operation_id}/cancel")
+async def cancel_pull_model(operation_id: str):
+    from ..pull_executor import cancel_pull
+    operation = cancel_pull(operation_id, reason="cancelled via API")
+    if operation is None:
+        raise HTTPException(404, "Operation not found or already terminal")
+    return operation
+
+
+@router.delete("/api/system/models/{name:path}")
+async def delete_system_model(name: str, request: Request, node: str | None = None):
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}", name):
+        raise HTTPException(422, "Invalid model name")
+    if node:
+        from ..pull_executor import PlacementError, start_delete
+        actor, _role = _actor_from_request(request)
+        try:
+            return start_delete(name, requested_by=actor, node_name=node)
+        except PlacementError as error:
+            raise HTTPException(error.status_code, error.message) from error
+    return await _internal_api("DELETE", "OLLAMA_URL", "/api/delete", {"name": name})
+
+
+# ---------------------------------------------------------------------------
+# System test route
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/system/test")
+async def system_test(payload: dict | None = None):
+    """Run system self-test (Quick or Full).
+
+    Quick test covers CORE API, PostgreSQL, Redis, Dispatcher, storage.
+    Full test additionally verifies Text/Voice/GPU Workers, Backup, Monitoring,
+    provider matrix, certificates, storage, task results.
+    """
+    body = payload or {}
+    scope = str(body.get("scope", "quick")).lower()
+    if scope not in {"quick", "full"}:
+        raise HTTPException(422, "scope must be 'quick' or 'full'")
+    from ..health_checks import health_status, run_checks
+    checks = run_checks(role=os.getenv("NODE_ROLE", "core"))
+    result = {"scope": scope, "result": health_status(checks), "checks": checks}
+    if scope == "full":
+        try:
+            nodes = registered_nodes()
+            result["nodes"] = [{"node_id": n.get("node_id"), "role": n.get("role"),
+                                "status": n.get("status")} for n in nodes]
+        except Exception as error:
+            result["nodes_error"] = str(error)
+
+        # Enhanced full self-test checks
+        try:
+            from adapters.providers import provider_matrix
+            result["provider_matrix"] = provider_matrix()
+        except Exception as error:
+            result["provider_matrix_error"] = str(error)
+
+        try:
+            from ..certificates import list_certificates
+            certs = list_certificates()
+            result["certificates"] = {
+                "total": len(certs),
+                "expiring_soon": sum(1 for c in certs if c.get("expires_in_days", 999) < 30),
+                "expired": sum(1 for c in certs if c.get("expires_in_days", 999) < 0)
+            }
+        except Exception as error:
+            result["certificates_error"] = str(error)
+
+        try:
+            from ..first_run import default_storage_root
+            storage_root = default_storage_root()
+            storage_root.mkdir(parents=True, exist_ok=True)
+            probe = storage_root / f".self-test-{uuid.uuid4().hex}.tmp"
+            with probe.open("wb") as handle:
+                handle.write(b"vertep-storage-self-test")
+                handle.flush()
+                os.fsync(handle.fileno())
+            probe.unlink()
+            result["storage"] = {
+                "writable": True,
+                "execution_probe": "write-fsync-delete",
+                "path": str(storage_root)
+            }
+        except Exception as error:
+            result["storage_error"] = str(error)
+
+        try:
+            from core.queue import TaskQueue
+            task_queue = TaskQueue()
+            from core.state import store
+            recent_jobs = list(store.jobs.values())[-50:] if store.jobs else []
+            task_stats = {"completed": 0, "failed": 0, "pending": 0}
+            for job in recent_jobs:
+                scenes = job.scenes if hasattr(job, "scenes") else []
+                for scene in scenes:
+                    status = scene.status.value if scene.status else ""
+                    if status == StageStatus.READY.value:
+                        task_stats["completed"] += 1
+                    elif status == StageStatus.FAILED.value:
+                        task_stats["failed"] += 1
+                    elif status in {StageStatus.PENDING.value, StageStatus.RUNNING.value,
+                                    StageStatus.PAUSED.value}:
+                        task_stats["pending"] += 1
+            result["task_results"] = task_stats
+        except Exception as error:
+            result["task_results_error"] = str(error)
+
+        # Align final result with actual provider/certificate/storage/task failures:
+        # inventory zeros (0 providers/certs), errors, unwritable storage,
+        # and task result failures all downgrade the result to UNHEALTHY.
+        full_failures = []
+        if "provider_matrix_error" in result:
+            full_failures.append("provider_matrix")
+        elif isinstance(result.get("provider_matrix"), dict):
+            pm = result["provider_matrix"]
+            if isinstance(pm, dict) and len(pm) == 0:
+                full_failures.append("provider_matrix(empty)")
+            else:
+                unavailable = [name for name, provider in pm.items()
+                               if isinstance(provider, dict)
+                               and provider.get("configured") is False]
+                if unavailable:
+                    full_failures.append("providers(unavailable: " + ", ".join(unavailable) + ")")
+        if "certificates_error" in result:
+            full_failures.append("certificates")
+        elif isinstance(result.get("certificates"), dict):
+            certs = result["certificates"]
+            if isinstance(certs, dict) and (certs.get("total", 0) == 0):
+                full_failures.append("certificates(zero)")
+            elif isinstance(certs, dict) and certs.get("expired", 0) > 0:
+                full_failures.append(f"certificates({certs['expired']} expired)")
+        if "storage_error" in result:
+            full_failures.append("storage")
+        elif isinstance(result.get("storage"), dict) and not result["storage"].get("writable", False):
+            full_failures.append("storage(unwritable)")
+        if "task_results_error" in result:
+            full_failures.append("task_results")
+        elif isinstance(result.get("task_results"), dict):
+            ts = result["task_results"]
+            if isinstance(ts, dict) and ts.get("failed", 0) > 0:
+                full_failures.append(f"task_results({ts['failed']} failed)")
+        if full_failures:
+            result["result"] = "UNHEALTHY"
+            result["full_test_failures"] = full_failures
+
+    return result
+

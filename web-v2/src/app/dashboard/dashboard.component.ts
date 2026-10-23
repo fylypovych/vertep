@@ -238,8 +238,7 @@ export class DashboardComponent implements OnInit {
   loadData(): void {
     this.dashboardState.run(() => Promise.all([
       this.systemApi.status().toPromise(),
-      this.workersApi.list().toPromise(),
-      this.jobsApi.statistics().toPromise()
+      this.workersApi.list().toPromise()
     ]), 'Не вдалося завантажити панель');
     this.loading.set(true);
     this.error = null;

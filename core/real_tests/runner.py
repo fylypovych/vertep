@@ -308,6 +308,8 @@ class RealTestRunner:
             "commit": run.commit_sha,
             "result": run.final_result,
             "status": run.status.value,
+            "progress": run.progress,
+            "initiator": run.initiator,
             "environment": _redact_mapping(run.environment),
             "hardware": _redact_mapping(run.hardware),
             "core_node_id": run.core_node_id,

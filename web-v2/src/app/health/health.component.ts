@@ -5,13 +5,16 @@ import { SystemApiService } from '../core/api/system.api';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
+import { EmptyStateComponent } from '../shared/empty-state.component';
 import { HealthCheck, HealthHistoryEntry, MetricsResponse } from '../core/models';
 import { roleLabel } from '../core/presentation';
+import { RemoteState } from '../core/state/remote-state';
+import { RemoteMutation } from '../core/state/remote-state';
 
 @Component({
   selector: 'app-health',
   standalone: true,
-  imports: [CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
+  imports: [CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
   template: `
     <div class="space-y-6" data-testid="health-page">
       <div class="flex items-center justify-between">
@@ -19,10 +22,10 @@ import { roleLabel } from '../core/presentation';
         <a [href]="grafanaUrl()" target="_blank" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Grafana</a>
       </div>
 
-      @if (loading()) {
+      @if (healthState.loading()) {
         <app-loading-state />
-      } @else if (error()) {
-        <app-error-state [message]="error()!" (retry)="loadHealth()" />
+      } @else if (healthState.failed()) {
+        <app-error-state [message]="healthState.error()!" (retry)="loadHealth()" />
       } @else {
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div class="bg-slate-50 rounded-lg p-4">
@@ -63,22 +66,22 @@ import { roleLabel } from '../core/presentation';
         <div class="mb-6">
           <h4 class="text-sm font-medium text-slate-900 mb-2">Метрики</h4>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500">Всього завдань</p>
-            <p class="text-xl font-bold text-slate-900">{{ metrics()['jobs_total'] || 0 }}</p>
-          </div>
-          <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500">Готові до виконання</p>
-            <p class="text-xl font-bold text-slate-900">{{ metrics()['queue_ready'] || 0 }}</p>
-          </div>
-          <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500">В обробці</p>
-            <p class="text-xl font-bold text-slate-900">{{ metrics()['queue_inflight'] || 0 }}</p>
-          </div>
-          <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500">Воркери онлайн</p>
-            <p class="text-xl font-bold text-slate-900">{{ metrics()['workers_online'] || 0 }}</p>
-          </div>
+            <div class="bg-slate-50 rounded-lg p-4">
+              <p class="text-xs text-slate-500">Всього завдань</p>
+              <p class="text-xl font-bold text-slate-900">{{ metrics()['jobs_total'] || 0 }}</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4">
+              <p class="text-xs text-slate-500">Готові до виконання</p>
+              <p class="text-xl font-bold text-slate-900">{{ metrics()['queue_ready'] || 0 }}</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4">
+              <p class="text-xs text-slate-500">В обробці</p>
+              <p class="text-xl font-bold text-slate-900">{{ metrics()['queue_inflight'] || 0 }}</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4">
+              <p class="text-xs text-slate-500">Воркери онлайн</p>
+              <p class="text-xl font-bold text-slate-900">{{ metrics()['workers_online'] || 0 }}</p>
+            </div>
           </div>
 
           @if (jobsByStatus().length > 0) {
@@ -103,13 +106,15 @@ import { roleLabel } from '../core/presentation';
 
         <div>
           <h4 class="text-sm font-medium text-slate-900 mb-2">Історія стану</h4>
-          @if (historyLoading()) {
+          @if (historyState.loading()) {
             <div class="animate-pulse bg-slate-100 rounded-lg h-20"></div>
-          } @else if (history().length === 0) {
+          } @else if (historyState.failed()) {
+            <app-error-state [message]="historyState.error()!" (retry)="loadHistory()" />
+          } @else if (historyState.data().length === 0) {
             <p class="text-sm text-slate-500">Немає історії</p>
           } @else {
             <div class="space-y-2">
-              @for (entry of history() | slice:0:10; track entry.timestamp) {
+              @for (entry of historyState.data() | slice:0:10; track entry.timestamp) {
                 <div class="bg-slate-50 rounded-lg p-3">
                   <div class="flex items-center justify-between">
                     <span class="text-xs text-slate-500">{{ entry.timestamp | vertepDate }}</span>
@@ -142,15 +147,12 @@ import { roleLabel } from '../core/presentation';
   `,
 })
 export class HealthComponent implements OnInit, OnDestroy {
-  loading = signal(false);
-  error = signal<string | null>(null);
-  healthStatus = signal<string>('—');
-  service = signal<string>('—');
-  jobsCount = signal(0);
-  checks = signal<Array<{ key: string; value: [boolean, string] }>>([]);
-  metrics = signal<MetricsResponse>({ jobs_total: 0, queue_ready: 0, queue_inflight: 0, queue_dead_letter: 0, workers_online: 0, jobs_scheduled: 0, jobs_by_status: {}, scenes_by_status: {} });
-  historyLoading = signal(false);
-  history = signal<HealthHistoryEntry[]>([]);
+  readonly healthState = new RemoteState<HealthCheck | null>(null);
+  readonly metricsState = new RemoteState<MetricsResponse>({
+    jobs_total: 0, queue_ready: 0, queue_inflight: 0, queue_dead_letter: 0, workers_online: 0, jobs_scheduled: 0, jobs_by_status: {}, scenes_by_status: {}
+  });
+  readonly historyState = new RemoteState<HealthHistoryEntry[]>([]);
+
   private pollTimer: Subscription | null = null;
 
   constructor(private systemApi: SystemApiService) {}
@@ -170,36 +172,47 @@ export class HealthComponent implements OnInit, OnDestroy {
   }
 
   loadHealth(): void {
-    this.loading.set(true);
-    this.error.set(null);
-    this.systemApi.health().subscribe({
-      next: (health: HealthCheck) => {
-        this.healthStatus.set(health.status);
-        this.service.set(health.service || '—');
-        this.jobsCount.set(health.jobs || 0);
-        this.checks.set(Object.entries(health.checks || {}).map(([key, value]) => ({ key, value: value as [boolean, string] })));
-        this.loading.set(false);
-      },
-      error: (err) => {
-        this.error.set(err.message || 'Не вдалося завантажити стан');
-        this.loading.set(false);
-      },
-    });
+    this.healthState.run(() => new Promise<HealthCheck>((resolve, reject) => {
+      this.systemApi.health().subscribe({
+        next: (health) => resolve(health),
+        error: (err) => reject(err),
+      });
+    }), 'Не вдалося завантажити стан');
     this.systemApi.metrics().subscribe({
-      next: (metrics) => this.metrics.set(metrics),
+      next: (metrics) => this.metricsState.data.set(metrics),
       error: () => {},
     });
   }
 
   loadHistory(): void {
-    this.historyLoading.set(true);
-    this.systemApi.healthHistory().subscribe({
-      next: (data) => {
-        this.history.set((data.history || []) as unknown as HealthHistoryEntry[]);
-        this.historyLoading.set(false);
-      },
-      error: () => this.historyLoading.set(false),
-    });
+    this.historyState.run(() => new Promise<HealthHistoryEntry[]>((resolve, reject) => {
+      this.systemApi.healthHistory().subscribe({
+        next: (data) => resolve((data.history || []) as unknown as HealthHistoryEntry[]),
+        error: (err) => reject(err),
+      });
+    }), 'Не вдалося завантажити історію');
+  }
+
+  healthStatus(): string {
+    return this.healthState.data()?.status || '—';
+  }
+
+  service(): string {
+    return this.healthState.data()?.service || '—';
+  }
+
+  jobsCount(): number {
+    return this.healthState.data()?.jobs || 0;
+  }
+
+  checks(): Array<{ key: string; value: [boolean, string] }> {
+    const health = this.healthState.data();
+    if (!health) return [];
+    return Object.entries(health.checks || {}).map(([key, value]) => ({ key, value: value as [boolean, string] }));
+  }
+
+  metrics(): MetricsResponse {
+    return this.metricsState.data();
   }
 
   healthOk(): boolean {
@@ -214,7 +227,7 @@ export class HealthComponent implements OnInit, OnDestroy {
   }
 
   jobsByStatus(): Array<{ status: string; count: number }> {
-    const m = this.metrics() as { jobs_by_status?: Record<string, number> };
+    const m = this.metricsState.data() as { jobs_by_status?: Record<string, number> };
     const byStatus = m?.jobs_by_status || {};
     return Object.entries(byStatus).map(([status, count]) => ({ status, count }));
   }

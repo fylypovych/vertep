@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from core.app import app
 from core.real_tests.models import (
-    CheckResult, CheckStatus, TestRun, TestRunStatus,
+    CheckResult, CheckStatus, TestRun, TestRunStatus, utc_now,
 )
 from core.real_tests.runner import RealTestRunner
 from core.real_tests.scenarios import (
@@ -722,6 +722,159 @@ class TestRealTestsAPI:
         assert data["checks"] == ["backup_roundtrip"]
         assert data["destructive_checks"] == ["backup_roundtrip"]
         assert data["requires_confirmation"] is True
+
+    def test_green_web_run_flow_full_lifecycle(self, admin_client, monkeypatch):
+        """#188.2: green Web list→prerequisites→confirmation→run→progress→report/history/retry."""
+        from core.api import real_tests as api
+        from core.real_tests.storage import get_test_run as _get_run
+
+        monkeypatch.setattr(api, "_runner", None)
+
+        # Mock the runner to execute checks and report successfully
+        def mock_start(self, *args, **kwargs):
+            run = TestRun(
+                rt_id="rt::S01", rt_issue_number=40, version="0.0.1.0",
+                commit_sha="abc", environment={}, hardware={},
+                core_node_id="core-1", targets=[],
+            )
+            run.checks = []
+            run.progress = "started: 0/1 checks"
+            update_test_run(run)
+            return run
+
+        def mock_checks(self, run, check_names=None):
+            run.checks.append(CheckResult(
+                name="bootstrap_first_run", status=CheckStatus.PASS, detail="ok",
+                duration_ms=10, evidence={}, error=None,
+            ))
+            run.progress = "progress: 1/1 - bootstrap_first_run"
+            update_test_run(run)
+            return run
+
+        def mock_finalize(self, run):
+            run.status = TestRunStatus.PASS
+            run.final_result = "PASS"
+            run.finished_at = utc_now()
+            update_test_run(run)
+            return run
+
+        def mock_report(self, run):
+            return {"reported": True, "comment_id": "42", "error": None}
+
+        monkeypatch.setattr(RealTestRunner, "start", mock_start)
+        monkeypatch.setattr(RealTestRunner, "run_checks", mock_checks)
+        monkeypatch.setattr(RealTestRunner, "finalize", mock_finalize)
+        monkeypatch.setattr(RealTestRunner, "report_to_github", mock_report)
+        monkeypatch.setattr(RealTestRunner, "close_rt_issue",
+                            lambda self, run: {"closed": True})
+
+        # 1) List scenarios
+        resp = admin_client.get("/api/real-tests/scenarios",
+                                auth=("admin", "secret123"))
+        assert resp.status_code == 200
+
+        # 2) Prerequisites for destructive scenario
+        resp = admin_client.get("/api/real-tests/scenarios/rt::S01/prerequisites",
+                                auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        pre = resp.json()
+        assert pre["requires_confirmation"] is True
+
+        # 3) Run (confirm destructive)
+        resp = admin_client.post("/api/real-tests/run",
+                                 json={"rt_id": "rt::S01", "confirm_destructive": True},
+                                 auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        data = resp.json()
+        test_run_id = data["test_run_id"]
+        assert data["status"] == "RUNNING"
+
+        # 4) Progress polling reaches terminal PASS
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            prog = admin_client.get(
+                f"/api/real-tests/runs/{test_run_id}/progress",
+                auth=("admin", "secret123"),
+            ).json()
+            if prog["status"] != TestRunStatus.RUNNING.value:
+                break
+            time.sleep(0.01)
+        assert prog["status"] == TestRunStatus.PASS.value
+
+        # 5) Get run report
+        resp = admin_client.get(f"/api/real-tests/runs/{test_run_id}",
+                                auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        report = resp.json()
+        assert report["result"] == "PASS"
+
+        # 6) Persisted run has terminal state
+        persisted = _get_run(test_run_id)
+        assert persisted is not None
+        assert persisted.status is TestRunStatus.PASS
+        assert persisted.final_result == "PASS"
+        assert persisted.github_report is not None
+        assert persisted.github_report.get("comment_id") == "42"
+
+        # 7) Retry report (idempotent)
+        resp = admin_client.post(
+            f"/api/real-tests/runs/{test_run_id}/retry-report",
+            auth=("admin", "secret123"),
+        )
+        assert resp.status_code == 200
+
+    def test_background_future_failure_marks_run_terminal(
+        self, admin_client, monkeypatch
+    ):
+        """#188.1: if _execute_run raises unexpectedly, _observe_run marks run FAIL,
+        not RUNNING forever."""
+        from core.api import real_tests as api
+        from core.real_tests.storage import get_test_run as _get_run
+
+        monkeypatch.setattr(api, "_runner", None)
+
+        def mock_start(self, *args, **kwargs):
+            run = TestRun(
+                rt_id="rt::S01", rt_issue_number=40, version="0.0.1.0",
+                commit_sha="abc", environment={}, hardware={},
+                core_node_id="core-1", targets=[],
+            )
+            run.checks = []
+            run.progress = "started: 0/1 checks"
+            update_test_run(run)
+            return run
+
+        def mock_checks_raises_unexpected(self, run, check_names=None):
+            # Simulates an exception escaping _execute_run's inner try/except
+            raise RuntimeError("unexpected executor failure secret=hunter2")
+
+        monkeypatch.setattr(RealTestRunner, "start", mock_start)
+        monkeypatch.setattr(RealTestRunner, "run_checks", mock_checks_raises_unexpected)
+
+        resp = admin_client.post("/api/real-tests/run",
+                                 json={"rt_id": "rt::S01", "confirm_destructive": True},
+                                 auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        test_run_id = resp.json()["test_run_id"]
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            prog = admin_client.get(
+                f"/api/real-tests/runs/{test_run_id}/progress",
+                auth=("admin", "secret123"),
+            ).json()
+            if prog["status"] != TestRunStatus.RUNNING.value:
+                break
+            time.sleep(0.01)
+
+        assert prog["status"] == TestRunStatus.FAIL.value
+        persisted = _get_run(test_run_id)
+        assert persisted is not None
+        assert persisted.status is TestRunStatus.FAIL
+        assert "hunter2" not in (persisted.error_details or "")
+        assert "[REDACTED]" in (persisted.error_details or "")
+
+
 
 
 # ---------------------------------------------------------------------------

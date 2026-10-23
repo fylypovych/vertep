@@ -61,27 +61,36 @@ def _execute_run(runner: RealTestRunner, run, check_names: list[str] | None) -> 
     from ..real_tests.models import TestRunStatus, utc_now
     from ..logging_config import secret_redact
 
+    def _terminal_failure(exc: Exception) -> None:
+        try:
+            run.status = TestRunStatus.FAIL
+            run.final_result = "FAIL"
+            run.finished_at = utc_now()
+            run.progress = "failed"
+            run.error_details = secret_redact(f"{type(exc).__name__}: {exc}")[:2000]
+            update_test_run(run)
+        except Exception:
+            _logger.exception(
+                "Real test run %s could not persist terminal failure", run.test_run_id
+            )
+
     try:
         run = runner.run_checks(run, check_names=check_names)
         run = runner.finalize(run)
     except Exception as exc:
-        run.status = TestRunStatus.FAIL
-        run.final_result = "FAIL"
-        run.finished_at = utc_now()
-        run.progress = "failed"
-        run.error_details = secret_redact(f"{type(exc).__name__}: {exc}")[:2000]
-        update_test_run(run)
+        _terminal_failure(exc)
         _logger.exception("Real test run %s failed during execution", run.test_run_id)
         return
 
-    update_test_run(run)
     try:
+        update_test_run(run)
         runner.report_to_github(run)
         runner.close_rt_issue(run)
-    except Exception:
+    except Exception as exc:
+        _terminal_failure(exc)
         _logger.exception("Real test run %s completed but reporting failed", run.test_run_id)
-    finally:
-        update_test_run(run)
+        return
+    update_test_run(run)
 
 
 def _observe_run(future: Future, test_run_id: str) -> None:
@@ -89,6 +98,17 @@ def _observe_run(future: Future, test_run_id: str) -> None:
         future.result()
     except Exception:
         _logger.exception("Real test run %s background task failed", test_run_id)
+        from ..real_tests.models import TestRunStatus, utc_now
+        from ..logging_config import secret_redact
+        from ..real_tests.storage import get_test_run, update_test_run
+        run = get_test_run(test_run_id)
+        if run is not None and run.status == TestRunStatus.RUNNING:
+            run.status = TestRunStatus.FAIL
+            run.final_result = "FAIL"
+            run.finished_at = utc_now()
+            run.progress = "failed"
+            run.error_details = secret_redact("background task failed")[:2000]
+            update_test_run(run)
 
 
 @router.get("/api/real-tests/scenarios")

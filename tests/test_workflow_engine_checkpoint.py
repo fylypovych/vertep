@@ -152,7 +152,9 @@ def test_workflow_engine_pause_resume(tmp_path):
         "tasks": [{"id": "t1", "dependencies": []}],
     }
     job_id = engine.create_job(definition)
-    engine.start_job(job_id)
+    # Manually set to IN_PROGRESS to test pause
+    engine._jobs[job_id]["status"] = "IN_PROGRESS"
+    engine.state.save_job(job_id, engine._jobs[job_id])
     paused = engine.pause_job(job_id)
     assert paused["status"] == "PAUSED"
     resumed = engine.resume_job(job_id)

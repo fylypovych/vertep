@@ -8,6 +8,7 @@ import { EmptyStateComponent } from '../shared/empty-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
+import { RemoteState } from '../core/state/remote-state';
 
 @Component({
   selector: 'app-logs',
@@ -50,17 +51,17 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
               <option [ngValue]="1000">1000</option>
             </select>
           </label>
-          <button type="submit" class="self-end rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+          <button type="submit" [disabled]="logsState.loading()" class="self-end rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
             Оновити
           </button>
         </form>
       </div>
 
-      @if (loading()) {
+      @if (logsState.loading()) {
         <app-loading-state />
-      } @else if (error()) {
-        <app-error-state [message]="error()" (retry)="loadLogs()" />
-      } @else if (entries().length === 0) {
+      } @else if (logsState.failed()) {
+        <app-error-state [message]="logsState.error()!" (retry)="loadLogs()" />
+      } @else if (logsState.data().length === 0) {
         <app-empty-state message="Логів не знайдено" />
       } @else {
         <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white" data-testid="logs-table">
@@ -75,7 +76,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              @for (entry of entries(); track entry.timestamp + '_' + entry.logger + '_' + entry.message) {
+              @for (entry of logsState.data(); track entry.timestamp + '_' + entry.logger + '_' + entry.message) {
                 <tr class="align-top hover:bg-slate-50">
                   <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{{ entry.timestamp | vertepDate }}</td>
                   <td class="px-4 py-3">
@@ -89,7 +90,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                     } @else {
                       <div>{{ entry.logger || 'CORE' }}</div>
                     }
-                    @if (entry.actor) { <div>Користувач: {{ entry.actor }}</div> }
+                    @if (entry.actor) { <div class="text-slate-500">Користувач: {{ entry.actor }}</div> }
                   </td>
                   <td class="min-w-80 px-4 py-3 text-slate-800">
                     <div class="whitespace-pre-wrap break-words">{{ entry.message }}</div>
@@ -122,11 +123,9 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
   `,
 })
 export class LogsComponent implements OnInit {
-  readonly entries = signal<LogEntry[]>([]);
-  readonly loading = signal(false);
+  readonly logsState = new RemoteState<LogEntry[]>([]);
   readonly loadingOlder = signal(false);
   readonly hasMore = signal(false);
-  readonly error = signal<string | null>(null);
 
   level = '';
   jobId = '';
@@ -140,19 +139,19 @@ export class LogsComponent implements OnInit {
   }
 
   loadLogs(): void {
-    this.loading.set(true);
-    this.error.set(null);
-    this.logsApi.logs(this.query()).pipe(finalize(() => this.loading.set(false))).subscribe({
-      next: (entries) => {
-        this.entries.set(entries);
-        this.hasMore.set(entries.length >= this.limit);
-      },
-      error: (error) => this.error.set(this.errorMessage(error, 'Не вдалося завантажити логи')),
-    });
+    this.logsState.run(() => new Promise<LogEntry[]>((resolve, reject) => {
+      this.logsApi.logs(this.query()).pipe(finalize(() => {})).subscribe({
+        next: (entries) => {
+          resolve(entries);
+          this.hasMore.set(entries.length >= this.limit);
+        },
+        error: (err) => reject(err),
+      });
+    }), 'Не вдалося завантажити логи');
   }
 
   loadOlder(): void {
-    const current = this.entries();
+    const current = this.logsState.data();
     if (current.length === 0 || this.loadingOlder()) {
       return;
     }
@@ -162,10 +161,10 @@ export class LogsComponent implements OnInit {
       next: (older) => {
         const seen = new Set(current.map((entry) => `${entry.timestamp}_${entry.logger}_${entry.message}`));
         const appended = older.filter((entry) => !seen.has(`${entry.timestamp}_${entry.logger}_${entry.message}`));
-        this.entries.set([...current, ...appended]);
+        this.logsState.data.set([...current, ...appended]);
         this.hasMore.set(older.length >= this.limit && appended.length > 0);
       },
-      error: (error) => this.error.set(this.errorMessage(error, 'Не вдалося завантажити старіші логи')),
+      error: (error) => this.logsState.error.set(this.errorMessage(error, 'Не вдалося завантажити старіші логи')),
     });
   }
 

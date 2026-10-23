@@ -3234,7 +3234,6 @@ def test_real_tests_run_flow_through_browser_api():
                 "prerequisites": {"checks": ["backup_roundtrip"]},
                 "destructive_confirmation": True,
                 "confirmation_timestamp": "2026-01-01T00:00:00Z",
-                "github_report": {"reported_at": "2026-01-01T00:01:00Z", "comment_id": "1"},
             })
             route.fulfill(json={
                 "test_run_id": run_id, "status": "RUNNING", "result": None, "rt_id": scenario_id,

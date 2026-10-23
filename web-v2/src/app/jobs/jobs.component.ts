@@ -7,7 +7,7 @@ import { QueueApiService } from '../core/api/queue.api';
 import { ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
-import { Job, Character, Brand, Workflow, JobCreate, QueueState, DeadLetterTask } from '../core/models';
+import { Job, Character, Brand, Workflow, JobCreate, JobPage, QueueState, DeadLetterTask } from '../core/models';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -308,7 +308,7 @@ export class JobsComponent implements OnInit, OnDestroy {
   pagedJobs = signal<Job[]>([]);
   total = signal(0);
   pages = signal(1);
-  jobsState = new RemoteState<Job[]>([]);
+  jobsState = new RemoteState<JobPage | undefined>(undefined);
   loading = signal(false);
   error = signal<string | null>(null);
   showCreateModal = false;

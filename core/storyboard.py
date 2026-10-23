@@ -69,7 +69,7 @@ class StoryboardService:
             "prompt": prompt,
             "storyboard_version": version,
             "image_version": image_version,
-            "revision": revision,
+            "revision": job.storyboard_active_revision,
             "timeout": int(os.getenv("OLLAMA_STORYBOARD_TIMEOUT", "300")),
         }
 
@@ -363,10 +363,10 @@ class StoryboardService:
                 f"Cannot regenerate from storyboard version {version} with status {base_storyboard.status}"
             )
 
-        # Build revision from base storyboard's content if not provided
+        # Build revision from base storyboard's content if not provided.
+        # Default stays None -- do NOT fall back to base_storyboard.revision_request,
+        # that would pin a stale revision from a previous version.
         effective_revision = revision
-        if effective_revision is None and base_storyboard.revision_request:
-            effective_revision = base_storyboard.revision_request
 
         # Mark the base version as superseded if it was pending or approved
         if base_storyboard.status in {"pending_approval", "approved"}:

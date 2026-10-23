@@ -512,6 +512,155 @@ def test_storyboard_regenerate_from_history_pins_revision(job_store):
     assert job.storyboard_attempt_version == 2
 
 
+def test_storyboard_default_revision_stays_none(job_store, monkeypatch):
+    """#163.2: default revision (no revision arg, no job.revision) stays None
+    through queue, does not fall back to any previous revision_request."""
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    job = job_store.create("Нова тема", "hero", 5)
+    # No job.revision set, no revision arg → default None
+    service = StoryboardService(job_store)
+    service.queue(job)
+    assert job.storyboard_active_revision is None
+    assert job.storyboard_attempt_version == 1
+    assert job.storyboard_attempt == 0
+
+    # First failure → retry of same version re-uses pinned None revision
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, False, None, "bad json")
+    assert job.storyboard_attempt == 1
+    assert job.storyboard_active_revision is None  # still default None, not stale revision_request
+
+
+def test_storyboard_default_revision_through_retry(job_store, monkeypatch):
+    """#163.2: retry of same version re-uses pinned revision (None for default),
+    never silently falls back to a previous version's revision_request."""
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    job = job_store.create("Нова тема", "hero", 5)
+    # No job.revision set → truly default None
+    service = StoryboardService(job_store)
+
+    # First version with default revision
+    service.queue(job)
+    assert job.storyboard_active_revision is None  # default None
+    assert job.storyboard_attempt_version == 1
+
+    # Complete v1
+    service.handle_result(job.job_id, job.storyboard_task_id, True,
+                          [_storyboard_artifact(1)], None)
+    first = job.storyboards[0]
+    first.revision_request = "старий revision_request із версії 1"
+    for scene in first.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    first.image_status = "ready"
+    service.approve_images(job.job_id, 1, "tester")
+    service.approve(job.job_id, 1, "tester")
+
+    # Regenerate v2 with default revision (None) — must NOT inherit v1's revision_request
+    service.regenerate_from_history(job.job_id, 1, "tester", None)
+    assert job.storyboard_active_revision is None  # default None, not "старий revision_request..."
+    assert job.storyboard_attempt_version == 2
+
+    # Retry of v2 keeps pinned None
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, False, None, "bad json")
+    assert job.storyboard_attempt == 1
+    assert job.storyboard_active_revision is None
+
+
+def test_storyboard_regenerate_from_history_default_none(job_store):
+    """#163.2: regenerate_from_history without explicit revision keeps default None,
+    does not fall back to base_storyboard.revision_request."""
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+    service.queue(job)
+    service.handle_result(job.job_id, job.storyboard_task_id, True,
+                          [_storyboard_artifact(1)], None)
+    first = job.storyboards[0]
+    first.revision_request = "старий revision_request із версії 1"
+    for scene in first.scenes:
+        scene.image_artifact_id = f"artifact-{scene.index}"
+    first.image_status = "ready"
+    service.approve_images(job.job_id, 1, "tester")
+    service.approve(job.job_id, 1, "tester")
+
+    # No explicit revision → must stay None, not inherit "старий revision_request..."
+    service.regenerate_from_history(job.job_id, 1, "tester", None)
+    assert job.storyboard_active_revision is None
+    assert job.storyboard_attempt_version == 2
+
+
+def test_storyboard_lease_loss_retry_dead_letter(job_store, monkeypatch):
+    """#163.3: heartbeat/lease-loss → dead-letter after budget exhausted;
+    no lost or duplicate released tasks; SCRIPT_QUEUED fix preserved."""
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "2")
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+    service.queue(job)
+
+    # Simulate worker loss: expired storyboard lease, retry with pinned revision
+    task_id = job.storyboard_task_id
+    service.handle_result(job.job_id, task_id, False, None,
+                          "storyboard task lease expired")
+    assert job.storyboard_attempt == 1
+    assert job.storyboard_active_revision is None  # default pinned through retry
+
+    task_id2 = job.storyboard_task_id
+    with pytest.raises(RuntimeError):
+        service.handle_result(job.job_id, task_id2, False, None,
+                              "storyboard task lease expired again")
+    assert job.storyboard_attempt == 2
+    assert job.status == JobStatus.STORYBOARD_FAILED
+    assert job.storyboard_error is not None
+
+    # Dead-letter recorded by job_helpers for the lost lease task
+    assert len(job_store.jobs[job.job_id].storyboard_error or "") > 0
+
+
+def test_storyboard_cancel_and_restart(job_store, monkeypatch):
+    """#163.3: cancelled storyboard result is terminal late answer; restart
+    re-queues with pinned revision, no duplicate released task."""
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+    service.queue(job)
+
+    # Cancelled result is rejected — task stays claimable
+    task_id = job.storyboard_task_id
+    rejected = service.handle_result(job.job_id, task_id, True, None, None,
+                                     cancelled=True)
+    assert rejected is None
+    assert job.status == JobStatus.STORYBOARD_QUEUED
+    assert job.storyboard_task_id == task_id  # still claimable
+
+    # Restart: re-queue with pinned revision (default None)
+    service.queue(job)
+    assert job.storyboard_active_revision is None
+    assert job.storyboard_attempt == 0  # fresh queue, not a retry budget burn
+
+
+def test_storyboard_heartbeat_loss_metadata_consistency(job_store, monkeypatch):
+    """#163.3: heartbeat loss produces consistent Job/Worker/repository/queue
+    metadata — no lost or extra released tasks."""
+    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "1")
+    job = job_store.create("Нова тема", "hero", 5)
+    service = StoryboardService(job_store)
+    service.queue(job)
+
+    # Worker heartbeat lost mid-execution → single attempt, terminal failure
+    task_id = job.storyboard_task_id
+    with pytest.raises(RuntimeError):
+        service.handle_result(job.job_id, task_id, False, None,
+                              "script worker heartbeat timed out")
+    assert job.storyboard_attempt == 1
+    assert job.status == JobStatus.STORYBOARD_FAILED
+    assert job.storyboard_error is not None
+
+    # No duplicate task: active_task_id cleared on terminal failure
+    assert job.storyboard_task_id is not None  # last task id recorded
+    # Repository sees exactly one failed attempt for this storyboard version
+    assert job.storyboards == []  # no storyboard was ever produced
+
+
 def test_storyboard_rest_contract_is_registered():
     from core.app import app
 

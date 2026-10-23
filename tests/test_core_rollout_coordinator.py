@@ -10,6 +10,7 @@ writes a target version or a PASSED self-test into the coordinator directly.
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -277,3 +278,92 @@ def test_cancel_fence_blocks_host_request_enqueue(driver, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="Mutation blocked"):
         driver.enqueue_host_request(tmp_path, "update", "0.0.0.2", "b" * 32)
     assert not (tmp_path / "requests" / f"{'b' * 32}.json").exists()
+
+
+@pytest.mark.skipif(os.name != "posix",
+                    reason="host consumer is a POSIX shell script; real deployment test needs Linux")
+def test_core_target_executes_through_real_deployment_not_monkeypatched(
+        driver, agent, tmp_path, monkeypatch):
+    """CORE target execution goes through the real process_request → run_fenced
+    flow with a disposable scripts/vertep host consumer (no monkeypatched run_fenced),
+    producing a correlated version change and bound self-test callback.
+    Covers #175.1, #193.1, #193.3."""
+    import core.update_protocol as protocol
+    import core.version as version
+    import core.system_state as system_state
+
+    version_file = tmp_path / "app-version.txt"
+    version_file.write_text("0.0.0.1", encoding="utf-8")
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    monkeypatch.setattr("core.version.application_version",
+                        lambda: version_file.read_text(encoding="utf-8").strip())
+    monkeypatch.setattr(system_state, "set_system_state", lambda *a, **kw: None)
+
+    # Disposable host consumer script (the production privileged contract)
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    vertep_script = scripts_dir / "vertep"
+    vertep_script.write_text(
+        "#!/bin/bash\n"
+        "set -u\n"
+        "case \"$1\" in\n"
+        "  apply-update)\n"
+        "    printf '%s' \"$3\" > \"$VERTEP_TEST_EFFECT\"\n"
+        "    ;;\n"
+        "  rollback)\n"
+        "    printf 'previous' > \"$VERTEP_TEST_EFFECT\"\n"
+        "    ;;\n"
+        "esac\n",
+        encoding="utf-8")
+    vertep_script.chmod(0o755)
+
+    effect_file = tmp_path / "host-effect.txt"
+    monkeypatch.setenv("VERTEP_TEST_EFFECT", str(effect_file))
+
+    # Monkeypatch network/validation boundaries, NOT run_fenced
+    monkeypatch.setattr(protocol, "fetch_manifest",
+                        lambda channel: {"version": "0.0.0.2", "channel": "stable",
+                                         "required": False})
+    monkeypatch.setattr(protocol, "validate_manifest",
+                        lambda manifest, public_key, expected_channel=None: None)
+    monkeypatch.setattr(protocol, "validate_replay_state",
+                        lambda manifest, trusted: None)
+    monkeypatch.setattr(protocol, "download_package",
+                        lambda manifest, path: (path.parent.mkdir(parents=True, exist_ok=True),
+                                               path.write_bytes(b"pkg"), path)[-1])
+    # Mock prune (run) — not the privileged apply
+    monkeypatch.setattr(agent, "run",
+                        lambda cmd, root, extra_env=None: "retained")
+
+    from core.rolling_update import reconcile_rollout, rollout_status, start_rollout
+
+    start_rollout("0.0.0.2", ["core"], order="core-first")
+    rollout = reconcile_rollout({})
+    host = driver.default_host(tmp_path, tmp_path)
+
+    # 1) Drain: driver reports drained flag and current version
+    reported = driver.drive_once(host, "core", rollout)
+    assert reported["drained"] is True
+    assert reported["version"] == "0.0.0.1"
+
+    # 2) Update: driver enqueues real request; process_request applies via real run_fenced
+    rollout = reconcile_rollout({})
+    operation_id = rollout["operation_id"]
+    coordinator = rollout["core_coordinators"]["core"]
+    assert coordinator["coordinator_state"] == "UPDATING"
+    request_file = tmp_path / "requests" / f"{operation_id}.json"
+    assert request_file.is_file()
+
+    # Run through REAL process_request → REAL run_fenced (not monkeypatched)
+    result = agent.process_request(tmp_path, tmp_path, request_file, skip_drain=True)
+    assert result is True
+    assert effect_file.read_text(encoding="utf-8") == "0.0.0.2"  # runtime instance changed
+    assert not request_file.exists()  # consumed
+
+    # 3) Driver reports the observed version through real bound self-test callback
+    rollout = rollout_status()
+    reported = driver.drive_once(host, "core", rollout)
+    assert reported["version"] == "0.0.0.2"
+    rollout = reconcile_rollout({})
+    assert rollout["core_coordinators"]["core"]["coordinator_state"] == "SELF_TESTING"

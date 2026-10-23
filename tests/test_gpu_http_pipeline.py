@@ -26,6 +26,12 @@ from fastapi.testclient import TestClient
 
 from adapters.comfyui import ComfyUIAdapter, PromptCancelledError
 
+# Proper decodable media fixtures (Issue #178.3/#178.4): the real MP4 fixture
+# from test_gpu_media_fixtures carries ftyp + moov + mdat (media samples), not
+# just ftyp + moov.  The stub MP4 below is kept for structural box-walk checks
+# only; the end-to-end pipeline tests use MP4_VALID.
+from tests.test_gpu_media_fixtures import MP4_VALID
+
 
 def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
     return (struct.pack(">I", len(payload)) + chunk_type + payload
@@ -631,7 +637,7 @@ def test_worker_renders_a_verified_video_artifact_over_http(comfyui, monkeypatch
     from worker.role_executor import execute_role_task
     from core.file_validation import validate_media_contract, validate_signature
 
-    comfyui.view_body = MP4
+    comfyui.view_body = MP4_VALID
     comfyui.view_status = 200
     comfyui.output_key = "videos"
     comfyui.output_suffix = ".mp4"
@@ -644,11 +650,11 @@ def test_worker_renders_a_verified_video_artifact_over_http(comfyui, monkeypatch
     assert artifacts and artifacts[0]["kind"] == "video"
     artifact = artifacts[0]
     data = base64.b64decode(artifact["data_base64"])
-    assert data == MP4
+    assert data == MP4_VALID
     contract = artifact["contract"]
     assert contract["format"] == "media_contract/v1"
-    assert contract["sha256"] == hashlib.sha256(MP4).hexdigest()
-    assert contract["size"] == len(MP4)
+    assert contract["sha256"] == hashlib.sha256(MP4_VALID).hexdigest()
+    assert contract["size"] == len(MP4_VALID)
     assert contract["mime_type"] == "video/mp4"
     # The real endpoints were used in order.
     paths = [path for _method, path in comfyui.requests]
@@ -809,7 +815,7 @@ def _post_result(client, job, task, *, node_name, success=True, artifacts=None, 
 
 def _video_runtime(comfyui):
     """Make the fake ComfyUI answer with a real MP4 render."""
-    comfyui.view_body = MP4
+    comfyui.view_body = MP4_VALID
     comfyui.view_status = 200
     comfyui.output_key = "videos"
     comfyui.output_suffix = ".mp4"
@@ -834,8 +840,8 @@ def test_core_imports_a_verified_video_scene_from_a_real_http_render(comfyui, mo
     contract = artifacts[0]["contract"]
     assert contract["format"] == "media_contract/v1"
     assert contract["mime_type"] == "video/mp4"
-    assert contract["sha256"] == hashlib.sha256(MP4).hexdigest()
-    assert contract["size"] == len(MP4)
+    assert contract["sha256"] == hashlib.sha256(MP4_VALID).hexdigest()
+    assert contract["size"] == len(MP4_VALID)
 
     response = _post_result(client, job, task, node_name=node_name, artifacts=artifacts)
     assert response.status_code == 200, response.text
@@ -847,7 +853,7 @@ def test_core_imports_a_verified_video_scene_from_a_real_http_render(comfyui, mo
     # CORE stored the verified render as a video scene of the Job.
     stored = store.root / job.job_id / "video" / "scene-001.mp4"
     assert stored.is_file()
-    assert stored.read_bytes() == MP4
+    assert stored.read_bytes() == MP4_VALID
     assert [item.kind for item in job.artifacts] == ["video_scene"]
     assert job.scenes[0].artifact_ids
     assert job.scenes[0].assigned_worker == node_name

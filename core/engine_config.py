@@ -346,6 +346,13 @@ def effective_engine_config(*, probe: bool = False, engine=None) -> dict[str, An
     selected = str(matrix.get("selected") or matrix.get("backend") or "native")
     report = verify_effective_engine(probe=probe, engine=engine)
     options = engine_options()
+    # Issue #181.3: the nodes that run the tasks report what their executors
+    # really observe.  A node that contradicts the selection is a failed
+    # activation, so the read model states it instead of reporting a success
+    # for an engine that no node can execute.
+    from .provider_switch import executor_backend_mismatches
+
+    mismatches = executor_backend_mismatches("video_engine")
     return {
         "selected": selected,
         "effective": engine_id,
@@ -363,6 +370,9 @@ def effective_engine_config(*, probe: bool = False, engine=None) -> dict[str, An
         "upstream_reference": report["upstream_reference"],
         "ready": report["ready"],
         "reason": report["reason"],
+        "ready_for_tasks": bool(report["ready"]) and not mismatches,
+        "activation_failed": bool(mismatches),
+        "worker_activation": {"ok": not mismatches, "mismatches": mismatches},
         "probed": bool(probe) and engine_id != "native",
         "options": options,
         "system_state": get_system_state()["state"],

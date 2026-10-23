@@ -413,3 +413,86 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
         assert queue.depth() == 0
         assert queue.inflight_depth() == 0
         assert queue.dead_letters() == []
+
+
+def test_dashboard_jobs_queue_http_consistency_through_loss_and_core_restart(
+        redis_url, monkeypatch):
+    """#194.1 / #148.2: real Redis + actual CORE API/читачі Dashboard/Jobs/Queue
+    до/після worker lease loss/dead-letter та CORE/Redis restart/loss.
+    Узгоджені counts/state без fallback під виглядом Redis."""
+    import redis as redis_py
+
+    monkeypatch.setenv("REDIS_URL", redis_url)
+    queue = TaskQueue()
+    assert queue.backend == "redis", "no fallback backend allowed"
+    _flush(queue)
+
+    client = TestClient(app)
+
+    # Enqueue three tasks via the real TaskQueue (durable Redis).
+    t1 = queue.enqueue({"job_id": "job-1", "priority": 1})
+    t2 = queue.enqueue({"job_id": "job-2", "priority": 2})
+    t3 = queue.enqueue({"job_id": "job-3", "priority": 3})
+    assert queue.depth() == 3
+
+    # CORE API reader: queue state before any worker loss.
+    state_before = _queue_state(client)
+    assert state_before["total"]["ready"] == 3
+    assert state_before["total"]["inflight"] == 0
+    assert state_before["total"]["dead_letter"] == 0
+
+    # A worker claims two tasks, then is lost (lease expires, never renewed).
+    claimed_one = queue.claim(lease_seconds=1)
+    claimed_two = queue.claim(lease_seconds=1)
+    assert queue.depth() == 1
+    assert queue.inflight_depth() == 2
+
+    # CORE API reader during worker loss: inflight counts reflect durable state.
+    state_during_loss = _queue_state(client)
+    assert state_during_loss["total"]["inflight"] == 2
+    assert state_during_loss["total"]["ready"] == 1
+
+    # Dead-letter one lost claim; the other's lease expires and requeues.
+    queue.dead_letter(claimed_one, "GPU error")
+    requeued = queue.requeue_expired(now=time.time() + 5)
+    assert [item["task_id"] for item in requeued] == [claimed_two["task_id"]]
+    assert queue.inflight_depth() == 0
+    assert queue.depth() == 2
+    assert len(queue.dead_letters()) == 1
+
+    # CORE API reader after worker loss + dead-letter: counts consistent.
+    state_after_loss = _queue_state(client)
+    assert state_after_loss["total"]["ready"] == 2
+    assert state_after_loss["total"]["inflight"] == 0
+    assert state_after_loss["total"]["dead_letter"] == 1
+    assert len(state_after_loss["dead_letter"]) == 1
+    assert state_after_loss["dead_letter"][0]["error"] == "GPU error"
+
+    # "CORE restart": brand-new TaskQueue + TestClient observes identical durable state.
+    monkeypatch.setenv("REDIS_URL", redis_url)
+    restarted_queue = TaskQueue()
+    assert restarted_queue.backend == "redis"
+    restarted_client = TestClient(app)
+    try:
+        restarted_state = _queue_state(restarted_client)
+        assert restarted_state["total"]["ready"] == 2
+        assert restarted_state["total"]["inflight"] == 0
+        assert restarted_state["total"]["dead_letter"] == 1
+        assert len(restarted_state["dead_letter"]) == 1
+        assert restarted_state["dead_letter"][0]["error"] == "GPU error"
+        assert {task["job_id"] for task in restarted_state["ready"]} == {"job-1", "job-3"}
+
+        # Dead-letter list endpoint also consistent after restart.
+        dl_response = restarted_client.get("/api/tasks/dead-letter")
+        assert dl_response.status_code == 200
+        dl_data = dl_response.json()
+        assert len(dl_data) == 1
+        assert dl_data[0]["error"] == "GPU error"
+    finally:
+        _flush(restarted_queue)
+        _flush(queue)
+        assert queue.depth() == 0
+        assert queue.inflight_depth() == 0
+        assert queue.dead_letters() == []
+
+

@@ -85,7 +85,7 @@ class ModuleRegistry:
 
     def _is_system_dependency(self, dep: str) -> bool:
         """Check if dependency is a system-level dependency."""
-        system_deps = {"core_runtime", "python_runtime", "docker_runtime"}
+        system_deps = {"core_runtime", "python_runtime", "docker_runtime", "gpu_runtime"}
         return dep in system_deps
 
     def has_capability(self, capability: str) -> bool:

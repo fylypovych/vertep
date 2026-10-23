@@ -16,8 +16,23 @@ router = APIRouter()
 
 @router.get("/api/settings/providers")
 def provider_backends():
-    """Active backend matrix (Settings → Движки обробки)."""
-    return {"matrix": provider_matrix()}
+    """Active backend matrix (Settings → Движки обробки).
+
+    Issue #181.3: the matrix is accompanied by the activation evidence of the
+    nodes that run the tasks.  A backend that a node could not activate is
+    reported as a failed activation instead of a success, so the UI never shows
+    a provider as effective while the node executing the tasks still uses the
+    previous one.
+    """
+    from ..provider_switch import executor_backend_mismatches, worker_provider_acks
+
+    matrix = provider_matrix()
+    activation: dict[str, dict] = {}
+    for slot in matrix:
+        mismatches = executor_backend_mismatches(slot)
+        activation[slot] = {"ok": not mismatches, "mismatches": mismatches}
+    return {"matrix": matrix, "worker_acks": worker_provider_acks(),
+            "worker_activation": activation}
 
 
 @router.get("/api/settings/video-engine")

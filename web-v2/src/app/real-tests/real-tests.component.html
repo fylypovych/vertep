@@ -216,7 +216,7 @@
               </tbody>
             </table>
 
-            @if (!report()!.github_report) {
+            @if (!report()!.github_report || report()!.status === 'REPORT_PENDING') {
               <button
                 type="button"
                 class="rounded-lg border border-slate-300 px-3 py-2 text-sm"

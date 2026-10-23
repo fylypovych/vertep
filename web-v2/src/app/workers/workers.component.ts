@@ -198,7 +198,7 @@ import { RemoteState } from '../core/state/remote-state';
 })
 export class WorkersComponent implements OnInit {
   workers = signal<Worker[]>([]);
-  workersState = new RemoteState<Worker[]>([]);
+  workersState = new RemoteState<Worker[] | undefined>(undefined);
   loading = signal(false);
   error = signal<string | null>(null);
   showWizard = false;
