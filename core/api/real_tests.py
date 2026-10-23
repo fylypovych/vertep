@@ -8,6 +8,9 @@ operation to be allowed by the current system state.
 
 from __future__ import annotations
 
+import logging
+from concurrent.futures import Future, ThreadPoolExecutor
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -20,6 +23,8 @@ from ..version import application_version
 
 router = APIRouter()
 _runner: RealTestRunner | None = None
+_run_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="real-test-run")
+_logger = logging.getLogger(__name__)
 
 # Shared with core.real_tests.runner (single source of truth, i.0.0.0.96).
 _DESTRUCTIVE_CHECKS = DESTRUCTIVE_CHECKS
@@ -52,6 +57,40 @@ def _check_operation() -> None:
         )
 
 
+def _execute_run(runner: RealTestRunner, run, check_names: list[str] | None) -> None:
+    from ..real_tests.models import TestRunStatus, utc_now
+    from ..logging_config import secret_redact
+
+    try:
+        run = runner.run_checks(run, check_names=check_names)
+        run = runner.finalize(run)
+    except Exception as exc:
+        run.status = TestRunStatus.FAIL
+        run.final_result = "FAIL"
+        run.finished_at = utc_now()
+        run.progress = "failed"
+        run.error_details = secret_redact(f"{type(exc).__name__}: {exc}")[:2000]
+        update_test_run(run)
+        _logger.exception("Real test run %s failed during execution", run.test_run_id)
+        return
+
+    update_test_run(run)
+    try:
+        runner.report_to_github(run)
+        runner.close_rt_issue(run)
+    except Exception:
+        _logger.exception("Real test run %s completed but reporting failed", run.test_run_id)
+    finally:
+        update_test_run(run)
+
+
+def _observe_run(future: Future, test_run_id: str) -> None:
+    try:
+        future.result()
+    except Exception:
+        _logger.exception("Real test run %s background task failed", test_run_id)
+
+
 @router.get("/api/real-tests/scenarios")
 def scenarios():
     _check_operation()
@@ -61,7 +100,7 @@ def scenarios():
             {
                 "id": s["id"],
                 "name": s["name"],
-                "rt_id": s.get("rt", ""),
+                "rt_id": s.get("rt", "").split()[0],
                 "rt_issue": s.get("rt_issue"),
                 "description": s.get("description", ""),
                 "checks": s.get("checks", []),
@@ -113,25 +152,10 @@ def run_test(payload: RunRequest, request: Request):
     update_test_run(run)
     _audit(run.test_run_id, "confirmed",
            "pre-execution confirmation by {}".format(actor), actor)
-    # Run checks asynchronously for live progress
-    from concurrent.futures import ThreadPoolExecutor
-    import threading
-    executor = ThreadPoolExecutor(max_workers=1)
-    def _run():
-        try:
-            run = runner.run_checks(run, check_names=payload.check_names)
-            run = runner.finalize(run)
-            runner.report_to_github(run)
-            runner.close_rt_issue(run)
-            update_test_run(run)
-        except Exception:
-            # Fail closed: ensure run is persisted with error
-            from ..real_tests.models import TestRunStatus
-            run.status = TestRunStatus.FAILED
-            update_test_run(run)
-    executor.submit(_run)
-    return {"test_run_id": run.test_run_id, "status": run.status.value,
-            "result": run.final_result, "rt_id": run.rt_id}
+    future = _run_executor.submit(_execute_run, runner, run, payload.check_names)
+    future.add_done_callback(lambda completed: _observe_run(completed, run.test_run_id))
+    return {"test_run_id": run.test_run_id, "status": "RUNNING",
+            "result": None, "rt_id": run.rt_id, "progress": run.progress}
 
 
 @router.get("/api/real-tests/runs")

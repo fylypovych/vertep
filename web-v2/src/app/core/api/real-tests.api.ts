@@ -52,10 +52,10 @@ export interface RealTestReport {
   test_run_id: string;
   rt_id: string;
   status: string;
-  final_result: string;
+  result: string | null;
   initiator: string;
   version: string;
-  commit_sha: string;
+  commit: string;
   checks: Array<{ name: string; status: string; detail: string; mandatory: boolean }>;
   github_report: Record<string, unknown> | null;
   error_details: string | null;
@@ -66,6 +66,7 @@ export interface RealTestRunResponse {
   status: string;
   result: string;
   rt_id: string;
+  progress: string | null;
 }
 
 export interface RealTestRunProgress {

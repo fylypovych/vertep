@@ -8,6 +8,7 @@ import { Worker, Job } from '../core/models';
 import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics } from '../core/presentation';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
+import { RemoteState } from '../core/state/remote-state';
 
 @Component({
   selector: 'app-dashboard',
@@ -15,10 +16,10 @@ import { ErrorStateComponent } from '../shared/error-state.component';
   imports: [CommonModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="space-y-6" data-testid="dashboard">
-      @if (loading()) {
+      @if (dashboardState.loading()) {
         <app-loading-state />
-      } @else if (error) {
-        <app-error-state [message]="error" (retry)="loadData()" />
+      } @else if (dashboardState.failed()) {
+        <app-error-state [message]="dashboardState.error()!" (retry)="loadData()" />
       } @else {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="stat-workers">
@@ -213,6 +214,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
   `,
 })
 export class DashboardComponent implements OnInit {
+  dashboardState = new RemoteState<any>({});
   loading = signal(true);
   error: string | null = null;
   onlineWorkers: number | null = null;
@@ -234,6 +236,11 @@ export class DashboardComponent implements OnInit {
   }
 
   loadData(): void {
+    this.dashboardState.run(() => Promise.all([
+      this.systemApi.status().toPromise(),
+      this.workersApi.list().toPromise(),
+      this.jobsApi.statistics().toPromise()
+    ]), 'Не вдалося завантажити панель');
     this.loading.set(true);
     this.error = null;
 

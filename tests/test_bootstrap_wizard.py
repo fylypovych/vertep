@@ -2,6 +2,9 @@
 import json
 import os
 import re
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
@@ -595,3 +598,65 @@ class TestBootstrapDockerCompose:
         assert "Docker apt version mismatch" in bs
         assert "dpkg-query -W -f='${Version}' docker-compose-v2" in bs
         assert "Docker Compose apt version mismatch" in bs
+
+    def _run_effective_runtime_check(self, **versions):
+        bash = shutil.which("bash")
+        if not bash:
+            pytest.skip("bash runtime fixture is exercised by the required Ubuntu CI job")
+        source = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        match = re.search(
+            r"(?ms)^verify_container_runtime\(\) \{\n.*?^\}",
+            source,
+        )
+        assert match, "bootstrap must define the executable runtime-version gate"
+        fixture = textwrap.dedent(
+            """
+            set -euo pipefail
+            DOCKER_APT_VERSION='29.1.3-0ubuntu3~24.04.2'
+            COMPOSE_APT_VERSION='2.40.3+ds1-0ubuntu1~24.04.1'
+            fail() { printf '%s\\n' "$*" >&2; exit 1; }
+            docker() {
+              if [[ "$1" == version && "$2" == --format ]]; then
+                case "$3" in
+                  '{{.Client.Version}}') printf '%s\\n' "$MOCK_DOCKER_CLIENT_VERSION" ;;
+                  '{{.Server.Version}}') printf '%s\\n' "$MOCK_DOCKER_SERVER_VERSION" ;;
+                  *) return 2 ;;
+                esac
+              elif [[ "$1" == compose && "$2" == version && "$3" == --short ]]; then
+                printf '%s\\n' "$MOCK_COMPOSE_VERSION"
+              else
+                return 2
+              fi
+            }
+            """
+        )
+        result = subprocess.run(
+            [bash, "-c", fixture + match.group(0) + "\nverify_container_runtime"],
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "MOCK_DOCKER_CLIENT_VERSION": versions.get("client", "29.1.3"),
+                "MOCK_DOCKER_SERVER_VERSION": versions.get("server", "29.1.3"),
+                "MOCK_COMPOSE_VERSION": versions.get("compose", "v2.40.3"),
+            },
+            check=False,
+        )
+        return result
+
+    def test_effective_runtime_versions_match_all_pins(self):
+        result = self._run_effective_runtime_check()
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize(
+        ("version", "expected_error"),
+        [
+            ({"client": "29.1.2"}, "Docker Client version mismatch"),
+            ({"server": "29.1.2"}, "Docker Server version mismatch"),
+            ({"compose": "v2.40.2"}, "Docker Compose runtime version mismatch"),
+        ],
+    )
+    def test_effective_runtime_version_drift_fails_closed(self, version, expected_error):
+        result = self._run_effective_runtime_check(**version)
+        assert result.returncode != 0
+        assert expected_error in result.stderr

@@ -38,16 +38,23 @@ class StoryboardService:
             # budget.  The pinned value is reused on every retry of the same
             # version, so a retry never silently falls back to a stale
             # ``job.revision`` or a previous version's ``revision_request``.
-            job.storyboard_active_revision = (
-                revision
-                or job.revision
-                or (job.storyboards[-1].revision_request if job.storyboards else None)
-            )
+            if revision is not None:
+                storyboard_active_revision = revision
+            elif job.revision is not None:
+                storyboard_active_revision = job.revision
+            else:
+                # The "default" case: no revision supplied and no job revision
+                # set.  Do NOT fall back to a previous version's
+                # revision_request -- that would pin a stale revision and the
+                # next regeneration/retry cycle would silently rebuild from an
+                # outdated revision.
+                storyboard_active_revision = None
+            job.storyboard_active_revision = storyboard_active_revision
         self.store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
 
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
         brand = read_json(Path(os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
-        prompt = build_storyboard_prompt(job, character, brand, revision)
+        prompt = build_storyboard_prompt(job, character, brand, job.storyboard_active_revision)
 
         version = (job.storyboards[-1].version + 1 if job.storyboards else 1)
         image_version = 1

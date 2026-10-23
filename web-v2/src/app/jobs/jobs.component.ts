@@ -14,6 +14,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 import { inStatusGroup, statusLabel } from '../core/presentation';
 import { Subscription, timer } from 'rxjs';
 import { PolicyService } from '../core/services/policy.service';
+import { RemoteState } from '../core/state/remote-state';
 
 @Component({
   selector: 'app-jobs',
@@ -43,10 +44,10 @@ import { PolicyService } from '../core/services/policy.service';
           </select>
         </div>
 
-        @if (loading()) {
+        @if (jobsState.loading()) {
           <app-loading-state />
-        } @else if (error()) {
-          <app-error-state [message]="error()!" (retry)="loadJobs()" />
+        } @else if (jobsState.failed()) {
+          <app-error-state [message]="jobsState.error()!" (retry)="loadJobs()" />
         } @else {
           <div class="overflow-x-auto">
             <table class="w-full text-sm text-left" data-testid="jobs-table">
@@ -101,13 +102,13 @@ import { PolicyService } from '../core/services/policy.service';
             <button (click)="loadQueue()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Оновити</button>
           </div>
 
-          @if (queueLoading()) {
+          @if (queueState.loading()) {
             <div class="space-y-3">
               @for (_ of [1,2,3]; track $index) {
                 <div class="animate-pulse bg-slate-100 rounded-lg h-16"></div>
               }
             </div>
-          } @else if (queueError()) {
+          } @else if (queueState.failed()) {
             <p class="text-sm text-red-600">{{ queueError() }}</p>
           } @else {
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -307,6 +308,7 @@ export class JobsComponent implements OnInit, OnDestroy {
   pagedJobs = signal<Job[]>([]);
   total = signal(0);
   pages = signal(1);
+  jobsState = new RemoteState<Job[]>([]);
   loading = signal(false);
   error = signal<string | null>(null);
   showCreateModal = false;
@@ -334,6 +336,7 @@ export class JobsComponent implements OnInit, OnDestroy {
 
   statusGroup = '';
 
+  queueState = new RemoteState<QueueState>({ scheduled: [], ready: [], inflight: [], deadLetter: [] } as unknown as QueueState);
   queueLoading = signal(false);
   queueError = signal<string | null>(null);
   scheduledJobs = signal<Job[]>([]);
@@ -405,12 +408,15 @@ export class JobsComponent implements OnInit, OnDestroy {
   }
 
   loadJobs(): void {
+    this.jobsState.run(() => {
+      return this.jobsApi.listPage({ statusGroup: this.statusGroup || undefined, search: this.search || undefined, page: this.page, perPage: this.pageSize }).toPromise();
+    }, 'Не вдалося завантажити завдання');
+    // Legacy signals kept for compatibility during migration
     this.loading.set(true);
     this.error.set(null);
     this.jobsApi.listPage({ statusGroup: this.statusGroup || undefined, search: this.search || undefined, page: this.page, perPage: this.pageSize }).subscribe({
       next: (result) => {
         if (Array.isArray(result)) {
-          // Legacy plain-array response (any consumer that still serves it).
           this.pagedJobs.set(result);
           this.total.set(result.length);
           this.pages.set(Math.max(1, Math.ceil(result.length / this.pageSize)));

@@ -14,7 +14,11 @@ from typing import Any
 
 @dataclass
 class Snapshot:
-    """Знімок стану systems: jobs, tasks, artifacts, settings, checksum."""
+    """Знімок стану systems: jobs, tasks, artifacts, settings, checksum.
+
+    Issue #300 (i.0.0.3.0): Extended with module-specific backup state
+    and workflow checkpoint support for Architecture 2.0.
+    """
 
     snapshot_id: str
     created_at: str
@@ -23,6 +27,8 @@ class Snapshot:
     tasks: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     settings: dict[str, Any] = field(default_factory=dict)
+    module_state: dict[str, Any] = field(default_factory=dict)
+    workflow_checkpoints: dict[str, Any] = field(default_factory=dict)
     checksum: str = ""
     incremental: bool = False
     parent_snapshot_id: str | None = None
@@ -36,6 +42,8 @@ class Snapshot:
             "tasks": self.tasks,
             "artifacts": self.artifacts,
             "settings": self.settings,
+            "module_state": self.module_state,
+            "workflow_checkpoints": self.workflow_checkpoints,
             "checksum": self.checksum,
             "incremental": self.incremental,
             "parent_snapshot_id": self.parent_snapshot_id,
@@ -51,6 +59,8 @@ class Snapshot:
             tasks=data.get("tasks", []),
             artifacts=data.get("artifacts", []),
             settings=data.get("settings", {}),
+            module_state=data.get("module_state", {}),
+            workflow_checkpoints=data.get("workflow_checkpoints", {}),
             checksum=str(data.get("checksum", "")),
             incremental=bool(data.get("incremental", False)),
             parent_snapshot_id=data.get("parent_snapshot_id"),
@@ -63,6 +73,8 @@ class Snapshot:
             "tasks": self.tasks,
             "artifacts": self.artifacts,
             "settings": self.settings,
+            "module_state": self.module_state,
+            "workflow_checkpoints": self.workflow_checkpoints,
         }
         encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -76,7 +88,9 @@ class Snapshot:
     def create(cls, jobs: list[dict[str, Any]], tasks: list[dict[str, Any]],
                artifacts: list[dict[str, Any]], settings: dict[str, Any],
                version: str, incremental: bool = False,
-               parent_snapshot_id: str | None = None) -> "Snapshot":
+               parent_snapshot_id: str | None = None,
+               module_state: dict[str, Any] | None = None,
+               workflow_checkpoints: dict[str, Any] | None = None) -> "Snapshot":
         """Створити новий знімок стану."""
         snapshot_id = f"snap-{time.time_ns()}-{uuid.uuid4().hex[:8]}"
         now = datetime.now(timezone.utc).isoformat()
@@ -88,6 +102,8 @@ class Snapshot:
             tasks=tasks,
             artifacts=artifacts,
             settings=settings,
+            module_state=module_state or {},
+            workflow_checkpoints=workflow_checkpoints or {},
             incremental=incremental,
             parent_snapshot_id=parent_snapshot_id,
         )

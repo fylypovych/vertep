@@ -134,6 +134,18 @@ jobs:
           echo "E2E preconditions verified"
       - name: Run browser E2E smoke tests
         run: python -m pytest tests/test_browser_e2e.py -q
+      - name: Run Runner actual-backend browser acceptance
+        env:
+          VERTEP_REQUIRE_RUNNER_BROWSER_E2E: "1"
+          VERTEP_RUNNER_BROWSER_EVIDENCE: ${{ runner.temp }}/runner-browser-evidence.json
+        run: python -m pytest -q tests/test_runner_browser_e2e.py
+      - name: Upload Runner browser evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runner-browser-acceptance
+          path: ${{ runner.temp }}/runner-browser-evidence.json
+          if-no-files-found: error
       - name: Run Update Center real-backend browser acceptance
         env:
           VERTEP_REQUIRE_UPDATE_BROWSER_E2E: "1"

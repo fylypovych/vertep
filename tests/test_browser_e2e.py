@@ -3181,7 +3181,6 @@ def test_real_tests_run_flow_through_browser_api():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
-        page.route("**/api/**", lambda route: route.fulfill(json={}))
         _mock_session(page)
         _mock_status(page)
 
@@ -3217,6 +3216,7 @@ def test_real_tests_run_flow_through_browser_api():
             })
 
         runs_state = {"runs": []}
+        progress_state = {"polls": 0}
 
         def run_handler(route):
             runs_state["runs"].append({
@@ -3234,6 +3234,7 @@ def test_real_tests_run_flow_through_browser_api():
                 "prerequisites": {"checks": ["backup_roundtrip"]},
                 "destructive_confirmation": True,
                 "confirmation_timestamp": "2026-01-01T00:00:00Z",
+                "github_report": {"reported_at": "2026-01-01T00:01:00Z", "comment_id": "1"},
             })
             route.fulfill(json={
                 "test_run_id": run_id, "status": "RUNNING", "result": None, "rt_id": scenario_id,
@@ -3253,32 +3254,66 @@ def test_real_tests_run_flow_through_browser_api():
                 "rt_issue_number": 35,
                 "version": "0.0.2.73",
                 "commit_sha": "b" * 40,
-                "status": "PASS",
-                "final_result": "PASS",
+                "status": run["status"],
+                "result": run["final_result"],
                 "initiator": "admin",
-                "progress": "progress: 1/1 checks",
+                "progress": run["progress"],
+                "commit": "b" * 40,
                 "started_at": "2026-01-01T00:00:00Z",
-                "finished_at": "2026-01-01T00:01:00Z",
+                "finished_at": run["finished_at"],
                 "checks": [
                     {"name": "backup_roundtrip", "status": "PASS", "detail": "ok", "mandatory": True},
                 ],
-                "github_report": {"reported_at": "2026-01-01T00:01:00Z", "comment_id": "1"},
+                "github_report": run["github_report"],
                 "error_details": None,
             })
 
-        def retry_report_handler(route):
+        def progress_handler(route):
+            progress_state["polls"] += 1
+            run = next(r for r in runs_state["runs"] if r["test_run_id"] == run_id)
+            if progress_state["polls"] == 1:
+                route.fulfill(json={
+                    "test_run_id": run_id,
+                    "rt_id": scenario_id,
+                    "status": "RUNNING",
+                    "progress": "progress: 0/1 checks",
+                    "started_at": run["started_at"],
+                    "finished_at": None,
+                })
+                return
+            run.update({
+                "status": "PASS",
+                "final_result": "PASS",
+                "progress": "progress: 1/1 checks",
+                "finished_at": "2026-01-01T00:01:00Z",
+            })
             route.fulfill(json={
                 "test_run_id": run_id,
-                "status": "REPORTED",
-                "github_report": {"reported_at": "2026-01-01T00:02:00Z", "comment_id": "2"},
+                "rt_id": scenario_id,
+                "status": run["status"],
+                "progress": run["progress"],
+                "started_at": run["started_at"],
+                "finished_at": run["finished_at"],
             })
 
+        def retry_report_handler(route):
+            run = next(r for r in runs_state["runs"] if r["test_run_id"] == run_id)
+            run["status"] = "REPORTED"
+            run["github_report"] = {"reported_at": "2026-01-01T00:02:00Z", "comment_id": "2"}
+            route.fulfill(json={
+                "test_run_id": run_id,
+                "status": run["status"],
+                "github_report": run["github_report"],
+            })
+
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
         page.route("**/api/real-tests/scenarios", scenarios_handler)
         page.route(f"**/api/real-tests/scenarios/{scenario_id}/prerequisites", prerequisites_handler)
         page.route("**/api/real-tests/run", run_handler)
         page.route("**/api/real-tests/runs", list_runs_handler)
-        page.route(f"**/api/real-tests/runs/{run_id}", get_run_handler)
+        page.route(f"**/api/real-tests/runs/{run_id}/progress", progress_handler)
         page.route(f"**/api/real-tests/runs/{run_id}/retry-report", retry_report_handler)
+        page.route(f"**/api/real-tests/runs/{run_id}", get_run_handler)
 
         page.goto(f"{BASE_URL}/real-tests")
         expect(page.locator("[data-testid='real-tests-page']")).to_be_visible()
@@ -3303,14 +3338,19 @@ def test_real_tests_run_flow_through_browser_api():
             "Запуск…")
 
         # Прогрес досягає термінального стану і запуск з'являється в історії.
-        expect(page.locator(f"[data-testid='real-tests-scenario-{scenario_id}']")).to_contain_text(
-            "PASS", timeout=15000)
+        expect(
+            page.locator(f"[data-testid='real-tests-scenario-{scenario_id}'] "
+                         "[data-testid='real-tests-progress']")
+        ).to_contain_text("checks", timeout=15000)
+        expect(page.locator(f"[data-testid='real-tests-scenario-{scenario_id}']")
+               .get_by_role("button", name="Запустити")).to_be_enabled()
 
         # Історія містить прогон з прогресом і ініціатором.
         page.get_by_role("button", name="Історія").click()
         expect(page.locator("[data-testid='real-tests-tab-history']")).to_be_visible()
         expect(page.locator(f"[data-testid='real-tests-run-{run_id}']")).to_be_visible()
         row = page.locator(f"[data-testid='real-tests-run-{run_id}']")
+        expect(row).to_contain_text("PASS")
         expect(row).to_contain_text("admin")
         expect(row).to_contain_text("progress: 1/1")
 

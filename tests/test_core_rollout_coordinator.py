@@ -72,8 +72,13 @@ def _run_host_agent(agent, monkeypatch, root, state_dir, version_file, request_f
         return ""
 
     def fake_run_fenced(command, root, state_dir, lease, extra_env=None):
-        target = command[-1]
-        version_file.write_text(str(target), encoding="utf-8")
+        import subprocess
+        target = str(command[-1])
+        # Real disposable effect: run a subprocess that writes the version file
+        subprocess.run(
+            ["python", "-c", f"open(r'{version_file}', 'w', encoding='utf-8').write('{target}')"],
+            check=True
+        )
         return ""
 
     monkeypatch.setattr(agent, "run", fake_run)

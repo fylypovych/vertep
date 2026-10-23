@@ -304,9 +304,11 @@ def test_secret_corpus_never_crosses_real_surfaces(monkeypatch, tmp_path):
     from core.api import job_helpers
     from core.models import Job, JobStatus
     from core import state
+    from core.repository import MemoryRepository
     from pathlib import Path
     import tempfile
 
+    # 1) Helper-level redaction (unit boundary).
     receipt = {"publication_id": "pub-1", "channel": "youtube", "status": "FAILED",
                "error": f"api_key={SECRET_CORPUS['api_key']}",
                "url": f"https://example.com?token={SECRET_CORPUS['token']}"}
@@ -314,22 +316,60 @@ def test_secret_corpus_never_crosses_real_surfaces(monkeypatch, tmp_path):
     assert_clean(redacted_receipt)
     assert redacted_receipt["status"] == "FAILED"
 
-    # Job with publication_results containing secrets must be redacted in API serialization
+    # 2) Worker receipt ingestion -> persisted metadata -> HTTP API boundary.
+    # A Publisher Worker submits a receipt via /api/tasks/result; CORE redacts
+    # it at ingestion, persists it in publication_results, and serves it via
+    # /api/jobs/{id} for DOM consumption.
+    task_id = "task-sec-1"
     with tempfile.TemporaryDirectory() as tmpdir:
         old_root = state.store.root
+        old_repo = state.store.repository
         try:
             state.store.root = Path(tmpdir)
+            state.store.repository = MemoryRepository()
+            state.store.repository.jobs["j-sec"] = None  # ensure clean
             job = Job(job_id="j-sec", topic="t", character_id="c", priority=1, source="x",
                       task_type="video", created_at="2026-01-01T00:00:00+00:00",
-                      status=JobStatus.FAILED)
-            job.publication_results = {"youtube": {"channel": "youtube", "status": "FAILED",
-                                                   "error": f"password={SECRET_CORPUS['password']}",
-                                                   "url": f"https://yt?token={SECRET_CORPUS['token']}"}}
+                      status=JobStatus.PUBLISHING)
+            job.active_task_id = task_id
+            job.publish_task_ids = {task_id: "youtube"}
+            job.publish_intent = {}
+            job.publish_retry_count = {}
+            job.published_channels = set()
+            job.publication_results = {}
+            job.published_to = []
+            job.max_retries = 0
+            job.publish_attempt = 0
+            job.publish_error = None
             state.store.jobs[job.job_id] = job
+
+            # Receipt artifact with secrets, as a Publisher Worker would submit.
+            worker_receipt = {"channel": "youtube", "status": "FAILED",
+                              "error": f"password={SECRET_CORPUS['password']}",
+                              "url": f"https://yt?token={SECRET_CORPUS['token']}",
+                              "timestamp": 1.0}
+            payload = json.dumps(worker_receipt, ensure_ascii=False).encode("utf-8")
+            artifact = {"kind": "publication_receipt", "filename": "publication.json",
+                        "data_base64": base64.b64encode(payload).decode("ascii")}
+
+            job_helpers._handle_publish_result(
+                state.store, job,
+                {"success": True, "task_id": task_id, "error": None},
+                [artifact], "youtube")
+
+            # Persisted metadata must be redacted (not just the helper).
+            persisted = job.publication_results["youtube"]
+            assert_clean(persisted)
+            assert persisted["status"] == "FAILED"
+            assert SECRET_CORPUS["password"] not in persisted["error"]
+            assert SECRET_CORPUS["token"] not in persisted["url"]
+
+            # HTTP API boundary: get_job redacts again for DOM consumption.
             from core.api import jobs as jobs_api
             res = jobs_api.get_job("j-sec")
             assert_clean(res)
         finally:
             state.store.root = old_root
+            state.store.repository = old_repo
             state.store.jobs.pop("j-sec", None)
 

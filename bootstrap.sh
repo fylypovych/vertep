@@ -72,17 +72,38 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils python3-psycopg docker.io=$DOCKER_APT_VERSION docker-compose-v2=$COMPOSE_APT_VERSION
 systemctl enable --now docker
-# Verify minimum Docker version (24.0+ for compose v2 support)
-docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "0.0.0")
-docker_major=$(echo "$docker_version" | cut -d. -f1)
-if [[ "$docker_major" -lt 24 ]]; then
-  fail "Docker $docker_version is too old; minimum required is 24.0"
-fi
-compose_version=$(docker compose version --short 2>/dev/null || echo "0.0.0")
-compose_major=$(echo "$compose_version" | cut -d. -f1)
-if [[ "$compose_major" -lt 2 ]]; then
-  fail "Docker Compose $compose_version is too old; minimum required is v2"
-fi
+verify_container_runtime() {
+  local expected_docker_version expected_compose_version
+  docker_client_version=$(docker version --format '{{.Client.Version}}' 2>/dev/null) \
+    || fail "Docker Client version could not be determined"
+  docker_server_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null) \
+    || fail "Docker Server version could not be determined"
+  compose_version=$(docker compose version --short 2>/dev/null) \
+    || fail "Docker Compose version could not be determined"
+  compose_version=${compose_version#v}
+
+  expected_docker_version=${DOCKER_APT_VERSION%%-*}
+  expected_compose_version=${COMPOSE_APT_VERSION%%+*}
+  [[ "$docker_client_version" == "$expected_docker_version" ]] \
+    || fail "Docker Client version mismatch: expected $expected_docker_version, got $docker_client_version"
+  [[ "$docker_server_version" == "$expected_docker_version" ]] \
+    || fail "Docker Server version mismatch: expected $expected_docker_version, got $docker_server_version"
+  [[ "$compose_version" == "$expected_compose_version" ]] \
+    || fail "Docker Compose runtime version mismatch: expected $expected_compose_version, got $compose_version"
+
+  # Preserve explicit minimum-version diagnostics for unsupported older runtimes.
+  docker_version=$docker_server_version
+  docker_major=$(echo "$docker_version" | cut -d. -f1)
+  if [[ "$docker_major" -lt 24 ]]; then
+    fail "Docker $docker_version is too old; minimum required is 24.0"
+  fi
+  compose_major=$(echo "$compose_version" | cut -d. -f1)
+  if [[ "$compose_major" -lt 2 ]]; then
+    fail "Docker Compose $compose_version is too old; minimum required is v2"
+  fi
+}
+verify_container_runtime
+
 # Verify effective apt versions match pinned versions
 docker_pkg_version=$(dpkg-query -W -f='${Version}' docker.io 2>/dev/null || echo "")
 if [[ "$docker_pkg_version" != "$DOCKER_APT_VERSION" ]]; then

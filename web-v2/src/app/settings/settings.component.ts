@@ -2,6 +2,7 @@ import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { NavigationEnd, Router } from '@angular/router';
 import { filter, Subscription } from 'rxjs';
+import { RemoteState } from '../core/state/remote-state';
 import { SystemInfoSectionComponent } from './sections/system-info.section';
 import { TelegramSectionComponent } from './sections/telegram.section';
 import { SecretsSectionComponent } from './sections/secrets.section';
@@ -53,6 +54,7 @@ import { VideoEngineSectionComponent } from './sections/video-engine.section';
 })
 export class SettingsComponent implements OnInit, OnDestroy {
   readonly activeTab = signal('system');
+  settingsState = new RemoteState<any>({});
   private routeSubscription?: Subscription;
 
   constructor(private router: Router) {}

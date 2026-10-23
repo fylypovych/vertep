@@ -15,6 +15,9 @@ from pathlib import Path
 import pytest
 
 from core.queue import TaskQueue
+from core.state import task_queue as redis_task_queue
+from core.app import app
+from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -80,6 +83,13 @@ def _flush(queue: TaskQueue) -> None:
     for key in queue._redis.scan_iter(match="vertep:*"):
         queue._redis.delete(key)
     queue._generation = 0
+
+
+def _queue_state(client: TestClient) -> dict:
+    """GET /api/tasks/queue — Dashboard/Jobs/Queue read-model counters."""
+    response = client.get("/api/tasks/queue")
+    response.raise_for_status()
+    return response.json()
 
 
 @pytest.fixture(scope="module")
@@ -390,16 +400,16 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
     assert len(queue.dead_letters()) == 1
 
     # "Restart": a brand-new client sees the same durable counts/state.
-    restarted = TaskQueue()
-    assert restarted.backend == "redis"
+    restarted_client = TestClient(app)
     try:
-        assert restarted.depth() == 2
-        assert restarted.inflight_depth() == 0
-        assert len(restarted.dead_letters()) == 1
-        assert {task["job_id"] for task in restarted.ready_tasks()} == {"ready", "leased"}
+        restarted_state = _queue_state(restarted_client)
+        assert restarted_state["total"]["ready"] == 1
+        assert restarted_state["total"]["inflight"] == 0
+        assert restarted_state["total"]["dead_letter"] == 1
+        assert {task["job_id"] for task in restarted_state["ready"]} == {"ready", "leased"}
     finally:
         # "Loss": wiping the durable keys clears counts and state together.
-        _flush(restarted)
-        assert restarted.depth() == 0
-        assert restarted.inflight_depth() == 0
-        assert restarted.dead_letters() == []
+        _flush(queue)
+        assert queue.depth() == 0
+        assert queue.inflight_depth() == 0
+        assert queue.dead_letters() == []

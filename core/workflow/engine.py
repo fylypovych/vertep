@@ -6,6 +6,8 @@ retries, timeouts, pause/resume/cancel support.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from .dsl import validate_workflow
 from .state import WorkflowState
 

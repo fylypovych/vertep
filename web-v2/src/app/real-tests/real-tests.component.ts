@@ -18,6 +18,7 @@ export class RealTestsComponent {
   loading = signal(true);
   error = signal<string | null>(null);
   running = signal<Record<string, boolean>>({});
+  runProgress = signal<Record<string, string>>({});
   confirmDialog = signal<{ rtId: string; name: string; destructive: boolean; checks?: string[] } | null>(null);
   report = signal<RealTestReport | null>(null);
   selectedRunId = signal<string | null>(null);
@@ -84,6 +85,10 @@ export class RealTestsComponent {
       .run(dialog.rtId, null, true)
       .subscribe({
         next: (runResponse) => {
+          this.runProgress.update((progress) => ({
+            ...progress,
+            [dialog.rtId]: runResponse.progress || 'Запуск перевірок…',
+          }));
           this.pollRunCompletion(dialog.rtId, runResponse.test_run_id);
         },
         error: (err) => {
@@ -95,26 +100,33 @@ export class RealTestsComponent {
 
   private pollRunCompletion(rtId: string, testRunId: string): void {
     let attempts = 0;
-    const maxAttempts = 30;
-    const timer = setInterval(() => {
+    const maxAttempts = 240;
+    const poll = () => {
       attempts += 1;
       this.api.getRunProgress(testRunId).subscribe({
         next: (progress) => {
+          this.runProgress.update((current) => ({
+            ...current,
+            [rtId]: progress.progress || progress.status,
+          }));
           const terminal = progress.status !== 'RUNNING';
           if (terminal || attempts >= maxAttempts) {
-            clearInterval(timer);
             this.running.update((map) => ({ ...map, [rtId]: false }));
             this.load();
+            return;
           }
+          setTimeout(poll, 250);
         },
         error: () => {
           if (attempts >= maxAttempts) {
-            clearInterval(timer);
             this.running.update((map) => ({ ...map, [rtId]: false }));
+            return;
           }
+          setTimeout(poll, 250);
         },
       });
-    }, 1000);
+    };
+    setTimeout(poll, 250);
   }
 
   cancelDialog(): void {

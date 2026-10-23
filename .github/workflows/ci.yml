@@ -8,6 +8,24 @@ permissions:
   contents: read
 
 jobs:
+  runtime-identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build and execute the standard runtime identity probe
+        run: python scripts/verify-runtime-identity.py --evidence runtime-identity-evidence.json
+      - name: Upload runtime identity evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-identity
+          path: runtime-identity-evidence.json
+          if-no-files-found: error
+
   local-contracts:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

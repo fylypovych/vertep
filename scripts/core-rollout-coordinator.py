@@ -52,17 +52,19 @@ def update_state_dir(root: Path) -> Path:
 
 
 def enqueue_host_request(state_dir: Path, action: str, target_version: str,
-                         request_id: str) -> Path:
+                          request_id: str) -> Path:
     """Write a privileged host-update request for the update-agent.
 
-    Mirrors ``worker.service.request_local_update`` so the CORE host reuses the
-    exact request contract (``requests/<request_id>.json`` + ``worker-update-target``
+    Mirrors ``worker.service.request_local_update`` so the CORE host reuses the exact
+    request contract (``requests/<request_id>.json`` + ``worker-update-target``
     marker) and honours the same cancel fence before mutating anything.
     """
     if action not in {"update", "rollback", "restart"}:
         raise ValueError("Unsupported host request action")
     if not _REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError("request_id must be 32 lowercase hexadecimal characters")
+    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", target_version):
+        raise ValueError("target_version must be A.B.C.D")
     requests = state_dir / "requests"
     requests.mkdir(parents=True, exist_ok=True)
     fence_path = state_dir / "cancel-fence.json"
@@ -169,6 +171,9 @@ def drive_once(host: Host, node_id: str, rollout: dict) -> dict | None:
     operation_id = rollout.get("operation_id")
     if not isinstance(operation_id, str) or not _REQUEST_ID_RE.fullmatch(operation_id):
         return None
+    coordinator_op = coordinator.get("operation_id")
+    if coordinator_op and coordinator_op != operation_id:
+        return None
 
     try:
         if state == "DRAINING":
@@ -187,11 +192,16 @@ def drive_once(host: Host, node_id: str, rollout: dict) -> dict | None:
             updates = {"version": target, "update_operation_id": operation_id}
         elif state == "SELF_TESTING":
             version = host.current_version()
+            if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
+                return None
             request = coordinator.get("self_test_request")
             if not isinstance(request, dict):
                 return None
+            self_test_result = host.self_test(request, version)
+            if not isinstance(self_test_result, dict) or "status" not in self_test_result:
+                return None
             updates = {"version": version,
-                       "self_test": host.self_test(request, version)}
+                       "self_test": self_test_result}
         elif state == "ROLLBACK":
             previous = coordinator.get("rollback_target_version")
             if not previous:

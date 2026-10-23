@@ -92,6 +92,11 @@
                   {{ running()[scenario.rt_id || scenario.id] ? 'Запуск…' : 'Запустити' }}
                 </button>
               </div>
+              @if (runProgress()[scenario.rt_id || scenario.id]) {
+                <p class="mt-2 text-xs text-slate-500" data-testid="real-tests-progress">
+                  {{ runProgress()[scenario.rt_id || scenario.id] }}
+                </p>
+              }
             </div>
           }
         </div>
@@ -183,10 +188,10 @@
             <p><span class="text-slate-500">Статус:</span> {{ report()!.status }}</p>
             <p>
               <span class="text-slate-500">Результат:</span>
-              <span [class]="statusClass(report()!.final_result)">{{ resultLabel(report()!.final_result) }}</span>
+              <span [class]="statusClass(report()!.result || '')">{{ resultLabel(report()!.result || '') }}</span>
             </p>
             <p><span class="text-slate-500">Версія:</span> {{ report()!.version }}</p>
-            <p><span class="text-slate-500">SHA:</span> {{ report()!.commit_sha }}</p>
+            <p><span class="text-slate-500">SHA:</span> {{ report()!.commit }}</p>
 
             @if (report()!.error_details) {
               <p class="text-amber-700" data-testid="real-tests-report-error">{{ report()!.error_details }}</p>

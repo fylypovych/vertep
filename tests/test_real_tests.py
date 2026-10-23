@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -498,6 +499,21 @@ def admin_client(tmp_path, monkeypatch):
 
 
 class TestRealTestsAPI:
+    @staticmethod
+    def _wait_for_terminal_status(admin_client, test_run_id, timeout=5):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            response = admin_client.get(
+                f"/api/real-tests/runs/{test_run_id}/progress",
+                auth=("admin", "secret123"),
+            )
+            assert response.status_code == 200, response.text
+            progress = response.json()
+            if progress["status"] != TestRunStatus.RUNNING.value:
+                return progress
+            time.sleep(0.01)
+        pytest.fail(f"real test run {test_run_id} did not reach a terminal state")
+
     def test_scenarios_endpoint(self, admin_client):
         resp = admin_client.get("/api/real-tests/scenarios",
                                 auth=("admin", "secret123"))
@@ -506,6 +522,12 @@ class TestRealTestsAPI:
         assert "scenarios" in data
         assert "available_checks" in data
         assert "version" in data
+        by_id = {scenario["id"]: scenario for scenario in data["scenarios"]}
+        assert by_id["S01"]["rt_id"] == "rt::S01"
+        assert all(
+            scenario["rt_id"].startswith("rt::") and " " not in scenario["rt_id"]
+            for scenario in data["scenarios"]
+        )
 
     def test_scenarios_requires_auth(self, admin_client):
         resp = admin_client.get("/api/real-tests/scenarios")
@@ -544,8 +566,91 @@ class TestRealTestsAPI:
                                  auth=("admin", "secret123"))
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "PASS"
-        assert data["result"] == "PASS"
+        assert data["status"] == "RUNNING"
+        terminal = self._wait_for_terminal_status(admin_client, data["test_run_id"])
+        assert terminal["status"] == "PASS"
+
+    def test_run_endpoint_executes_checks_and_persists_terminal_progress(
+        self, admin_client, monkeypatch
+    ):
+        from core.api import real_tests as api
+        from core.real_tests.storage import get_test_run as _get_run
+
+        monkeypatch.setattr(api, "_runner", None)
+        entered_check = threading.Event()
+        continue_check = threading.Event()
+
+        def controlled_check():
+            entered_check.set()
+            assert continue_check.wait(5), "controlled check was not released"
+            return True, "controlled check passed"
+
+        monkeypatch.setitem(CHECK_REGISTRY, "bootstrap_first_run", controlled_check)
+        monkeypatch.setattr(RealTestRunner, "report_to_github",
+                            lambda self, run: {"reported": False, "error": "test boundary"})
+        monkeypatch.setattr(RealTestRunner, "close_rt_issue",
+                            lambda self, run: {"closed": False})
+
+        response = admin_client.post(
+            "/api/real-tests/run",
+            json={"rt_id": "rt::S01", "confirm_destructive": True},
+            auth=("admin", "secret123"),
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["status"] == "RUNNING"
+        assert data["progress"] == "started: 0/1 checks"
+        assert entered_check.wait(5), "background Runner did not enter the real check loop"
+
+        progress = admin_client.get(
+            f"/api/real-tests/runs/{data['test_run_id']}/progress",
+            auth=("admin", "secret123"),
+        ).json()
+        assert progress["status"] == "RUNNING"
+        assert progress["progress"] == "started: 0/1 checks"
+
+        continue_check.set()
+        terminal = self._wait_for_terminal_status(admin_client, data["test_run_id"])
+        assert terminal["status"] == "PASS"
+        persisted = _get_run(data["test_run_id"])
+        assert persisted is not None
+        assert persisted.final_result == "PASS"
+        assert persisted.progress == "progress: 1/1 - bootstrap_first_run"
+        assert [check.name for check in persisted.checks] == ["bootstrap_first_run"]
+
+    def test_run_endpoint_persists_background_execution_failure(
+        self, admin_client, monkeypatch
+    ):
+        from core.api import real_tests as api
+        from core.real_tests.storage import get_test_run as _get_run
+
+        monkeypatch.setattr(api, "_runner", None)
+
+        def fail_checks(self, run, check_names=None):
+            raise RuntimeError("controlled runner failure pwd=runnerpass123")
+
+        monkeypatch.setattr(RealTestRunner, "run_checks", fail_checks)
+        response = admin_client.post(
+            "/api/real-tests/run",
+            json={"rt_id": "rt::S01", "confirm_destructive": True},
+            auth=("admin", "secret123"),
+        )
+        assert response.status_code == 200, response.text
+        test_run_id = response.json()["test_run_id"]
+        terminal = self._wait_for_terminal_status(admin_client, test_run_id)
+        assert terminal["status"] == "FAIL"
+        report = admin_client.get(
+            f"/api/real-tests/runs/{test_run_id}",
+            auth=("admin", "secret123"),
+        ).json()
+        persisted = _get_run(test_run_id)
+        assert report["result"] == "FAIL"
+        assert report["error_details"].startswith("RuntimeError: controlled runner failure ")
+        assert "runnerpass123" not in report["error_details"]
+        assert "***REDACTED***" in report["error_details"]
+        assert persisted is not None
+        assert persisted.status is TestRunStatus.FAIL
+        assert persisted.finished_at
 
     def test_run_test_invalid_rt_id(self, admin_client):
         resp = admin_client.post("/api/real-tests/run",
@@ -734,6 +839,11 @@ class TestSecretRedaction:
         text = "token = ***REDACTED***"
         result = _redact_secrets(text)
         assert result.count("***REDACTED***") == 1
+
+    def test_redact_keeps_benign_colon_text(self):
+        from core.real_tests.runner import _redact_secrets
+        text = "RuntimeError: controlled runner failure"
+        assert _redact_secrets(text) == text
 
     def test_secret_pattern_covers_all_key_names(self):
         """Verify the regex covers all expected secret key names."""
@@ -1613,6 +1723,16 @@ class TestIssue138:
                             lambda *a, **k: (_ for _ in ()).throw(OSError("no git")))
         assert release_identity.resolve_release_sha() == ""
         assert gh_mod._deployment_sha() == ""
+
+    def test_unknown_baked_identity_blocks_acceptance(self, tmp_path, monkeypatch):
+        from core import release_identity
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.setenv(
+            "VERTEP_RELEASE_IDENTITY_FILE",
+            _write_identity(tmp_path, sha="unknown"),
+        )
+        assert release_identity.resolve_release_sha() == "unknown"
+        assert gh_mod._deployment_sha() == "unknown"
 
     def test_truncated_identity_blocks_acceptance(self, tmp_path, monkeypatch):
         from core.real_tests import runner as runner_mod

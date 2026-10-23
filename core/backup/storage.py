@@ -50,6 +50,9 @@ class SnapshotStorage:
                     "parent_snapshot_id": data.get("parent_snapshot_id"),
                     "jobs_count": len(data.get("jobs", [])),
                     "tasks_count": len(data.get("tasks", [])),
+                    "artifacts_count": len(data.get("artifacts", [])),
+                    "modules_count": len(data.get("module_state", {})),
+                    "workflows_count": len(data.get("workflow_checkpoints", {})),
                     "checksum": data.get("checksum"),
                 })
             except (OSError, ValueError):

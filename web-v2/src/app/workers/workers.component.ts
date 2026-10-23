@@ -11,6 +11,7 @@ import { roleLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
+import { RemoteState } from '../core/state/remote-state';
 
 @Component({
   selector: 'app-workers',
@@ -29,10 +30,10 @@ import { ErrorStateComponent } from '../shared/error-state.component';
         <input [(ngModel)]="search" data-testid="workers-search" placeholder="Пошук за назвою або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
-      @if (loading()) {
+      @if (workersState.loading()) {
         <app-loading-state />
-      } @else if (error()) {
-        <app-error-state [message]="error()!" (retry)="loadWorkers()" />
+      } @else if (workersState.failed()) {
+        <app-error-state [message]="workersState.error()!" (retry)="loadWorkers()" />
       } @else {
         <div class="overflow-x-auto">
           <table class="w-full text-sm text-left" data-testid="workers-table">
@@ -197,6 +198,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 })
 export class WorkersComponent implements OnInit {
   workers = signal<Worker[]>([]);
+  workersState = new RemoteState<Worker[]>([]);
   loading = signal(false);
   error = signal<string | null>(null);
   showWizard = false;
@@ -266,6 +268,7 @@ export class WorkersComponent implements OnInit {
   }
 
   loadWorkers(): void {
+    this.workersState.run(() => this.workersApi.list().toPromise(), 'Не вдалося завантажити воркери');
     this.loading.set(true);
     this.error.set(null);
     this.workersApi.list().subscribe({

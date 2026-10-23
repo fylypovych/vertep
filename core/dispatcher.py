@@ -232,3 +232,187 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
 
 def can_retry(job: Job) -> bool:
     return job.retries < job.max_retries
+
+
+# ── Issue #300 (i.0.0.3.0): Architecture 2.0 Dispatcher with shadow mode ──
+
+from dataclasses import dataclass, field  # noqa: E402
+
+
+@dataclass
+class TaskRequest:
+    """A task to be dispatched to a worker/module."""
+
+    task_id: str
+    task_type: str
+    capabilities_required: set[str] = field(default_factory=set)
+    vram_mb: int | None = None
+    payload: dict = field(default_factory=dict)
+    shadow_mode: bool = False
+
+
+@dataclass
+class TaskResponse:
+    """Response from task assignment."""
+
+    accepted: bool
+    worker_id: str | None = None
+    capabilities_matched: set[str] = field(default_factory=set)
+    declined_reason: str | None = None
+    shadow_result: dict | None = None
+
+
+class Dispatcher:
+    """Dispatcher for assigning tasks to workers/modules with shadow mode.
+
+    Shadow mode routes a task to both a role worker and a module worker in
+    parallel, records results for parity comparison, and supports rollback
+    to the role path.
+    """
+
+    RUNTIME_READY_STATUSES = {"ONLINE", "READY", "FREE", "BUSY"}
+
+    def __init__(self, config: dict | None = None) -> None:
+        self.config = config or {}
+        self._node_registry: dict[str, dict] = {}
+        self._task_leases: dict[str, dict] = {}
+        self._node_capabilities: dict[str, set] = {}
+        self._node_resources: dict[str, dict] = {}
+        # Shadow results: task_id -> {role_result, module_result, parity_ok}
+        self._shadow_results: dict[str, dict] = {}
+
+    def register_node(self, node_id: str, capabilities: set, resources: dict, role: str) -> None:
+        """Register a worker node with its capabilities and resources."""
+        self._node_registry[node_id] = {
+            "capabilities": capabilities,
+            "resources": resources,
+            "role": role,
+            "last_heartbeat": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        }
+        self._node_capabilities[node_id] = capabilities
+        self._node_resources[node_id] = resources
+
+    def unregister_node(self, node_id: str) -> None:
+        """Unregister a worker node and revoke its active tasks."""
+        self._node_registry.pop(node_id, None)
+        self._node_capabilities.pop(node_id, None)
+        self._node_resources.pop(node_id, None)
+        for task_id, lease in list(self._task_leases.items()):
+            if lease.get("worker_id") == node_id:
+                self.revoke_task(task_id)
+
+    def assign_task(self, task: TaskRequest) -> TaskResponse:
+        """Assign a task to the best available worker.
+
+        In shadow mode, records the assignment for parity comparison.
+        """
+        required_cap = task.capabilities_required or {task.task_type}
+        candidates = self._find_candidates(required_cap, task)
+        if not candidates:
+            return TaskResponse(
+                accepted=False,
+                declined_reason="No worker with required capabilities available",
+            )
+        candidate = self._select_best_candidate(candidates, task)
+        if not candidate:
+            return TaskResponse(
+                accepted=False,
+                declined_reason="No suitable worker after filtering",
+            )
+        lease_duration = __import__("datetime").timedelta(
+            minutes=self.config.get("lease_duration_minutes", 30)
+        )
+        expires_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc) + lease_duration
+        self._task_leases[task.task_id] = {
+            "worker_id": candidate["node_id"],
+            "expires_at": expires_at,
+            "task_id": task.task_id,
+        }
+        self._node_registry[candidate["node_id"]]["last_heartbeat"] = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        if task.shadow_mode:
+            self._shadow_results[task.task_id] = {
+                "task_type": task.task_type,
+                "worker": candidate["node_id"],
+                "role_result": None,
+                "module_result": None,
+                "parity_ok": None,
+            }
+        return TaskResponse(
+            accepted=True,
+            worker_id=candidate["node_id"],
+            capabilities_matched=candidate["capabilities"],
+        )
+
+    def record_shadow_result(self, task_id: str, source: str, result: dict) -> None:
+        """Record a shadow execution result for parity comparison."""
+        if task_id not in self._shadow_results:
+            self._shadow_results[task_id] = {
+                "task_type": "", "worker": "", "role_result": None,
+                "module_result": None, "parity_ok": None,
+            }
+        entry = self._shadow_results[task_id]
+        if source == "role":
+            entry["role_result"] = result
+        elif source == "module":
+            entry["module_result"] = result
+        if entry["role_result"] is not None and entry["module_result"] is not None:
+            entry["parity_ok"] = self._compare_results(entry["role_result"], entry["module_result"])
+
+    def _compare_results(self, role_result: dict, module_result: dict) -> bool:
+        """Compare role and module results for parity."""
+        return (
+            role_result.get("kind") == module_result.get("kind")
+            and bool(role_result.get("data") or role_result.get("filename"))
+            and bool(module_result.get("data") or module_result.get("filename"))
+        )
+
+    def get_shadow_parity(self, task_id: str) -> dict | None:
+        """Get shadow parity result for a task."""
+        return self._shadow_results.get(task_id)
+
+    def rollback_to_role(self, task_id: str) -> bool:
+        """Rollback a task from module to role path."""
+        if task_id in self._shadow_results:
+            self._shadow_results[task_id]["parity_ok"] = False
+            self._shadow_results[task_id]["rolled_back"] = True
+            return True
+        return False
+
+    def _find_candidates(self, required_cap: set, task: TaskRequest) -> list[dict]:
+        candidates = []
+        for node_id, info in self._node_registry.items():
+            capabilities = info["capabilities"]
+            if not required_cap.issubset(capabilities):
+                continue
+            resources = info["resources"]
+            if task.vram_mb is not None:
+                min_vram = task.vram_mb
+                if resources.get("vram_mb", 0) < min_vram:
+                    continue
+            candidates.append({
+                "node_id": node_id,
+                "capabilities": capabilities,
+                "resources": resources,
+            })
+        return candidates
+
+    def _select_best_candidate(self, candidates: list[dict], task: TaskRequest) -> dict | None:
+        if not candidates:
+            return None
+        return candidates[0]
+
+    def revoke_task(self, task_id: str) -> bool:
+        """Revoke/cancel a task lease."""
+        if task_id in self._task_leases:
+            del self._task_leases[task_id]
+            return True
+        return False
+
+    def query_worker_status(self, node_id: str) -> dict | None:
+        """Query the status of a worker node."""
+        return self._node_registry.get(node_id)
+
+    def heartbeat(self, node_id: str) -> None:
+        """Process a heartbeat from a worker node."""
+        if node_id in self._node_registry:
+            self._node_registry[node_id]["last_heartbeat"] = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)

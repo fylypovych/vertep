@@ -365,6 +365,9 @@ def _redact_secrets(text: str) -> str:
                   r"\1***REDACTED***", text)
 
     def replace_secret(match: re.Match) -> str:
+        key = re.split(r"\s*[:=]", match.group("prefix"), maxsplit=1)[0]
+        if not _SECRET_KEY_NAME_RE.search(key):
+            return match.group(0)
         value = match.group("value").strip("\"'")
         if len(value) < 8:
             return match.group(0)

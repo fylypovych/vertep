@@ -160,7 +160,7 @@ def test_role_isolation_failure_is_reported(tmp_path):
 def test_valid_artifact_root_passes_release_gates(tmp_path):
     bundle, private, public, version, sequence, _ = artifact_fixture(tmp_path)
     build_manifest(bundle, private, version, sequence, bundle / "images.json")
-    report, gates = qualify_artifact(bundle, public)
+    report, gates = qualify_artifact(bundle, public, expected_source_sha="c" * 40)
     failures = [check for check in report["checks"] if not check["passed"]]
     assert not failures, failures
     for name in ("release_artifact_gates", "manifest_contract_structure",

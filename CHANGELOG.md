@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.77
+- Додано модульну архітектуру: `core/module/discovery`, `manifest`, `registry`.
+- Додано workflow DSL, engine та state management (`core/workflow/`).
+- Додано GPU provider інтерфейси, router та registry (`core/gpu/`), контракти провайдерів.
+- Додано backup модулі: resume, snapshot, storage, `core/backup/`.
+- Додано контракти архітектури: artifact, backup_restore, core_worker_protocol, gpu_provider, module, workflow_dag.
+- Додано модулі `modules/audio`, `modules/image`, `modules/text` з маніфестами та логікою.
+- Додано worker roles: `gpu_node`, `text_node`, `voice_node` та протокол handler.
+- Оновлено лабораторію: `lab/api.py`, `lab/cli.py`, `lab/governance.py`, `lab/orchestrator.py`, `lab/qualification_run.py` — покращення policy, heartbeat, токен-бухгалтерії та numeric reservation.
+- Оновлено `deploy/lab/Dockerfile.sandbox` — копіювання lab коду.
+- Додано тести: audio_module, image_module, text_module, backup_restore, worker_roles, lab_sandbox_isolation.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.76
 - Оновлення робочого дерева після попереднього пушу.
 
@@ -9,24 +21,6 @@
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.75
 - Виправлено логіку завдань та API, оновлено налагодження логування та публікації, додано перевірки безпечності та контракти веб-інтерфейсу.
 
-
-## ПРАВИЛЬНА НАЗВА: 0.0.2.71
-- Оновлення web-v2 та backend для durable Telegram acceptance, lab web Docker, update security.
-- Виправлення jobs/tasks/api/app, image_storyboard, models, telegram_callbacks, update_manager.
-- Нові тести: telegram durable acceptance, lab web e2e, media browser e2e, update browser e2e.
-- Додано deploy/lab/web/app та telegram transport fixtures.
-
-## ПРАВИЛЬНА НАЗВА: 0.0.2.72
-- Оновлено VERSION та CHANGELOG для версії 0.0.2.72
-- Додано тести GPU runtime inventory delivery
-- Виправлено роботу role_executor worker
-- Оновлено core/api та scripts
-- Додано/modifed тести acceptance
-
-## ПРАВИЛЬНА НАЗВА: 0.0.2.73
-- Commit та push усіх незакомічених змін
-- Оновлено VERSION та CHANGELOG
-- Додано release notes для нової версії
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.74
 - Оновлено bootstrap.sh: прив'язані версії Docker та Docker Compose для Ubuntu 24.04, додано перевірку після встановлення.
@@ -36,6 +30,25 @@
 - Додано GlobalErrorHandlerService у web-v2 — централізований обробник помилок Angular з відправкою даних до backend.
 - Оновлено web-v2 реальні тести: getRunProgress замість listRuns, прогресовий polling.
 - Додано та оновлено тести: real_tests, backup_restore_durable, bootstrap_wizard, browser_e2e, comfyui_runtime_inventory.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.73
+- Commit та push усіх незакомічених змін
+- Оновлено VERSION та CHANGELOG
+- Додано release notes для нової версії
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.72
+- Оновлено VERSION та CHANGELOG для версії 0.0.2.72
+- Додано тести GPU runtime inventory delivery
+- Виправлено робота role_executor worker
+- Оновлено core/api та scripts
+- Додано/modifed тести acceptance
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.71
+- Оновлення web-v2 та backend для durable Telegram acceptance, lab web Docker, update security.
+- Виправлення jobs/tasks/api/app, image_storyboard, models, telegram_callbacks, update_manager.
+- Нові тести: telegram durable acceptance, lab web e2e, media browser e2e, update browser e2e.
+- Додано deploy/lab/web/app та telegram transport fixtures.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.70
 - Issue ir.0.0.2.52 (#252) — Lab: підготовка кваліфікації реальної VM/GPU isolation, production-priority і 24/7 режиму. `lab/qualification.py` (нове): каталог рядків R1–R6 з обов'язковими фактами, канонічним текстом очікування та потрібними правами власника; схема evidence row і машино-читний валідатор, який відхиляє неповні рядки, короткий SHA, артефакт без `sha256`, `SKIPPED`/`MOCK`, секрети в доказі та верифікацію самим виконавцем; загальний вердикт `PASS` лише коли всі рядки повні.
 - `lab/qualification_run.py` (нове): реальні collector'и стенду (версія, повний SHA, digests образів, host/OS/CPU/RAM/SSD, контейнер і Docker, негативні ізоляційні проби production-шляхів, egress allowlist, відсутність GPU passthrough, VRAM через `nvidia-smi`) та раннери рядків R1–R6: вимірювання lease на production-priority endpoint (deny без lease, queue/reservation, heartbeat/revoke, release ack, VRAM до/після), fault-сценарії (connection loss, заборона GPU без lease, реконфіляція lease після restart, finally-release), перший actual audit в ізольованій Git copy через реальний role-executor, перевірка 24/7 activation і budgets; невиміряне фіксується як `BLOCKED` із конкретною причиною, ніколи як `PASS`.
