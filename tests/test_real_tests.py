@@ -759,6 +759,11 @@ class TestRealTestsAPI:
             return run
 
         def mock_report(self, run):
+            # Mirror RealTestRunner.report_to_github: a successful report is
+            # persisted on the run, so the lifecycle assertion can read it back.
+            run.github_report = {"reported_at": utc_now(), "comment_id": "42",
+                                 "final_result": run.final_result, "posted": True}
+            update_test_run(run)
             return {"reported": True, "comment_id": "42", "error": None}
 
         monkeypatch.setattr(RealTestRunner, "start", mock_start)

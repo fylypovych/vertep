@@ -9,6 +9,15 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.81
+- Додано `GET`/`POST /api/system/state` у `core/api/system.py` — незмінний method/path контракт стану системи (Issue #168.2): GET повертає поточний стан, POST переводить систему в `EMERGENCY`.
+- Додано `PUT /api/workers` у `core/api/workers.py` — незмінний method/path контракт оновлення worker (Issue #168.2) з валідацією payload та 404 для невідомого вузла.
+- Publisher-адаптери Instagram, Threads і TikTok повертають `remote_id` та `url` у receipt публікації.
+- Розширено `tests/test_gpu_media_fixtures.py`: чистий Python-декодер зображень/відео (`decode_png`, `decode_mp4_frame`, `MediaDecodeError`) з розбором box-дерева ISO BMFF, sample-таблиць, `avcC`/SPS та IDR-slice; тести позитивного декодування, відмови на junk/обрізаних/пошкоджених даних, детермінованості фікстур і крос-перевірки з FFmpeg.
+- Оновлено `tests/test_publisher_durable_reconciliation.py`: durable reconciliation після втраченого ack і рестарту (`publication_results`/`published_channels`, очищений `publish_intent`) та виміряний `not_before` backoff через реальний `/api/tasks/result`.
+- Відновлено `GET /api/system/installation-manifest` у `core/api/system.py` — маршрут було випадково втрачено під час рефакторингу 0.0.2.79 (регресія, зафіксована `tests/test_second_spec.py`).
+- Узгоджено мок `report_to_github` у `tests/test_real_tests.py::test_green_web_run_flow_full_lifecycle` з контрактом реального runner'а — звіт зберігається на прогоні.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.79
 - Витягнуто логіку System API (оновлення, відновлення, ролі, моделі, сертифікати, операції, самотестування) з `core/app.py` у окремі модулі `core/api/system.py`, `core/api/backups.py`, `core/api/operations.py`, `core/api/certificates.py`, `core/api/_internal.py`; `core/app.py` лишає лише реєстрацію роутерів.
 - Додано endpoints для роботи з моделями Ollama: `GET /api/system/models`, `GET /api/system/models/nodes`, `POST /api/system/models/pull`, `POST /api/system/models/pull/{operation_id}/cancel`, `DELETE /api/system/models/{name}` — ідемпотентний pull/delete з placement на вузол і poll через `/api/operations/{operation_id}`.

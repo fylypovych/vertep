@@ -57,6 +57,8 @@ class InstagramPublisher(Publisher):
             "channel": self.channel,
             "status": "PUBLISHED",
             "id": result.get("id") or creation_id,
+            "remote_id": result.get("id") or creation_id,
+            "url": f"https://www.instagram.com/reel/{result.get('id') or creation_id}/",
             "media_id": creation_id,
             "upload": {"mode": "graph-api-reels"},
         }

@@ -537,9 +537,11 @@ def test_publish_no_duplicate_after_lost_ack_and_restart(monkeypatch, tmp_path):
     from core.repository import FileRepository
     restarted = JobStore(root=str(store.root), repository=FileRepository(store.root))
     restored_job = restarted.jobs[job.job_id]
-    assert restored_job.publish_intent["youtube"]["video_version"] == 1
-    assert restored_job.publish_intent["youtube"]["video_sha256"] == video_sha
+    # The durable published channel survives the restart (lost-ack reconciliation).
     assert "youtube" in restored_job.published_channels
+    assert restored_job.publication_results["youtube"]["status"] == "PUBLISHED"
+    assert restored_job.publication_results["youtube"]["video_sha256"] == video_sha
+    assert restored_job.publish_intent.get("youtube") is None  # cleared after success
 
     # Re-publishing the same channel is not re-queued: job is terminal (PUBLISHED).
     response = client.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"])
@@ -548,7 +550,13 @@ def test_publish_no_duplicate_after_lost_ack_and_restart(monkeypatch, tmp_path):
 
 def test_publish_measured_backoff_through_real_flow(monkeypatch, tmp_path):
     """Issue #166.3: transient failure re-queues with not_before delay
-    measured at claim time, not by log lines."""
+    measured at claim time, not by log lines.
+
+    The worker role executor raises on a transient (empty-transport) error;
+    the real boundary is the ``/api/tasks/result`` endpoint, where CORE's
+    ``_handle_publish_result`` increments the per-channel retry counter and
+    re-enqueues the task with a measured ``not_before`` backoff.
+    """
     monkeypatch.setenv("PUBLISHER_MOCK", "false")
     monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "platform-token")
 
@@ -564,17 +572,25 @@ def test_publish_measured_backoff_through_real_flow(monkeypatch, tmp_path):
     assert claim.status_code == 200
     task = claim.json()["task"]
 
-    # Force a transient error from the adapter (empty response → exception).
+    # Force a transient error from the adapter (empty response -> exception).
     _set_publisher_transport("youtube", [])
     try:
         execute_role_task("publisher", task)
     except Exception:
-        pass  # transient → worker would mark failed and CORE re-queues with backoff
+        pass  # transient -> the Worker would report success=False to CORE
 
-    # The job records the retry attempt and the re-enqueued task carries
-    # not_before (claim-time backoff) rather than only a log entry.
+    # Submit the transient failure through the real result boundary so CORE's
+    # backoff logic runs and the measured retry counter is incremented.
+    failed = client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+        "success": False, "error": "transient network error",
+    })
+    assert failed.status_code == 200, failed.text
+
     job_after = store.jobs[job.job_id]
     assert job_after.publish_retry_count.get("youtube", 0) >= 1
-    # The queue depth reflects the re-queued retry task.
+    # The re-enqueued retry task carries a measured not_before backoff: a claim
+    # now must not return it before the delay expires (only this task is queued).
     assert task_queue.depth() >= 1
+    assert task_queue.claim() is None
 

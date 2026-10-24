@@ -55,6 +55,8 @@ class ThreadsPublisher(Publisher):
             "channel": self.channel,
             "status": "PUBLISHED",
             "id": result.get("id") or media_id,
+            "remote_id": result.get("id") or media_id,
+            "url": f"https://www.threads.net/@user/post/{result.get('id') or media_id}",
             "media_id": media_id,
             "upload": {"mode": "threads-api"},
         }

@@ -66,6 +66,35 @@ def recover_normal_operation():
     return set_system_state(SystemState.NORMAL, "Administrator confirmed healthy runtime recovery")
 
 
+@router.get("/api/system/state")
+def web_system_state():
+    """Issue #168.2: the immutable API method/path contract for system state.
+
+    GET returns the current state; POST sets it.  Both paths are pinned by an
+    executable request so the route classification matrix cannot drift.
+    """
+    return get_system_state()
+
+
+@router.post("/api/system/state")
+def system_state(payload: dict):
+    """Set the system state (used by the Backup Node to enter EMERGENCY)."""
+    reason = payload.get("reason", "manual update")
+    return set_system_state(SystemState.EMERGENCY, reason)
+
+
+@router.get("/api/system/installation-manifest")
+def installation_manifest():
+    """Public installation manifest, without the administrator block."""
+    manifest_path = config_root() / "installation-manifest.json"
+    if manifest_path.is_file():
+        try:
+            return json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise HTTPException(503, "Installation manifest is unreadable") from error
+    return {key: item for key, item in installation().items() if key != "administrator"}
+
+
 @router.get("/api/system/roles")
 def local_roles_status():
     definitions = node_roles()

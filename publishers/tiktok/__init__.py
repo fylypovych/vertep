@@ -89,6 +89,8 @@ class TikTokPublisher(Publisher):
             "channel": self.channel,
             "status": "PUBLISHED",
             "id": publish_id,
+            "remote_id": publish_id,
+            "url": f"https://www.tiktok.com/@user/video/{publish_id}",
             "upload": {
                 "mode": "content-posting-api",
                 "bytes": size,

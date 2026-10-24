@@ -192,6 +192,30 @@ def worker_model_progress(payload: ModelProgressReport, request: Request):
             "operation": result["operation"]}
 
 
+@router.put("/api/workers")
+def update_workers(payload: dict):
+    """Issue #168.2: the immutable API method/path contract for workers.
+
+    PUT accepts a worker update payload; the route is pinned by an executable
+    request so the route classification matrix cannot drift.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "payload must be an object")
+    node_name = payload.get("node_name") or payload.get("node_id")
+    if not node_name:
+        raise HTTPException(422, "payload must include node_name")
+    worker = store.workers.get(node_name)
+    if worker is None:
+        raise HTTPException(404, "Unknown worker")
+    allowed = {"status", "desired_state", "current_job", "current_task", "last_seen",
+               "capabilities", "supported_tasks", "hardware", "version", "role"}
+    for key, value in payload.items():
+        if key in allowed:
+            worker[key] = value
+    store.save_worker(worker)
+    return {"ok": True, "node_name": node_name}
+
+
 @router.get("/api/workers")
 def workers(role: str | None = None, status: str | None = None, capability: str | None = None):
     _recover_stale_workers()
