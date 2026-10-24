@@ -1,6 +1,32 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.2.80
+- Реалізовано завершення rollback та actual Browser flow для Issue i.0.0.3.18
+- Реалізовано actual enrollment та measured Browser acceptance для Issue i.0.0.3.19
+- Виправлено _make_worker capabilities та worker enrollment flow
+- Додано MPT task/queue proof та Settings Browser guards
+- Реалізовано worker activation failure test recovery
+- Додано provider/task/preview та MPT settings/secret reference
 # Changelog
 
 ## Unreleased
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.79
+- Витягнуто логіку System API (оновлення, відновлення, ролі, моделі, сертифікати, операції, самотестування) з `core/app.py` у окремі модулі `core/api/system.py`, `core/api/backups.py`, `core/api/operations.py`, `core/api/certificates.py`, `core/api/_internal.py`; `core/app.py` лишає лише реєстрацію роутерів.
+- Додано endpoints для роботи з моделями Ollama: `GET /api/system/models`, `GET /api/system/models/nodes`, `POST /api/system/models/pull`, `POST /api/system/models/pull/{operation_id}/cancel`, `DELETE /api/system/models/{name}` — ідемпотентний pull/delete з placement на вузол і poll через `/api/operations/{operation_id}`.
+- Додано `POST /api/system/test` (scope `quick`/`full`) — централізований самотест системи з перевірками стану вузлів.
+- Додано `core/engine_config.py` — ефективна конфігурація VideoEngine (`selected`/`effective`/`config_revision`/`agree`).
+- Додано `core/telegram/__init__.py`.
+- Додано тести: `tests/test_node_setup_readiness.py` (Issue #294 — measured enrollment, runtime_status matrix, self-test fail-closed), `tests/test_mpt_recovery.py`, `tests/test_system_state_mutation_matrix.py`, `tests/test_storyboard.py`, `tests/test_real_tests.py`, `tests/test_queue_redis_contract.py`, `tests/test_provider_switch.py`, `tests/test_core_rollout_coordinator.py`, `tests/test_api_client_contracts.py`, `tests/test_browser_e2e.py`, `tests/test_gpu_http_pipeline.py`, `tests/test_workflow_engine_checkpoint.py`.
+- Оновлено Web UI: `health.component.ts`, `logs.component.ts`, `dashboard.component.ts`, `jobs.component.ts`, `workers.component.ts`, `real-tests.component.html`.
+- Оновлено `worker/service.py`, `core/storyboard.py`, `core/api/real_tests.py`, `core/api/settings.py`, `core/module/registry.py`, `core/real_tests/runner.py`.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.2.78
+- Додано Architecture 2.0 Dispatcher з shadow mode (`core/dispatcher.py`): `TaskRequest`/`TaskResponse`, `Dispatcher` з паралельною routing-логікою role worker + module worker, parity comparison і rollback на role path; `core/dispatcher/dispatcher.py` вилучено.
+- Додано `scripts/verify-runtime-identity.py` — збірка і перевірка runtime image без checkout (build-arg `VERTEP_VERSION`/`VERTEP_RELEASE_SHA`/`VERTEP_ENVIRONMENT`).
+- Розширено `core/backup/__init__.py`, `core/backup/resume.py`, `core/backup/snapshot.py`, `core/backup/storage.py` — покращення resume/snapshot/state.
+- Оновлено `core/workflow/engine.py`, `core/workflow/state.py`, `core/storyboard.py`, `core/real_tests/runner.py`, `core/api/real_tests.py`, `scripts/core-rollout-coordinator.py`.
+- Додано тести: `tests/test_architecture_20_integration.py`, `tests/test_backup_confirmation_progress.py`, `tests/test_backup_module_state.py`, `tests/test_dispatcher_shadow.py`, `tests/test_gpu_media_fixtures.py`, `tests/test_module_registry.py`, `tests/test_publisher_durable_reconciliation.py`, `tests/test_runner_browser_e2e.py`, `tests/test_voice_issued_result.py`, `tests/test_workflow_engine_checkpoint.py`, `tests/test_browser_e2e.py`, `tests/test_real_tests.py`, `tests/test_release_qualification.py`, `tests/test_queue_redis_contract.py`, `tests/test_bootstrap_wizard.py`, `tests/test_core_rollout_coordinator.py`, `tests/test_no_secrets_acceptance.py`.
+- Додано `characters/char-contract/` (character.json, system_prompt.txt, voice.json) як приклад контракту персонажа.
+- Оновлено `bootstrap.sh`, `.github/workflows/browser-e2e.yml`, `.github/workflows/ci.yml`, Web UI (`dashboard`, `jobs`, `real-tests`, `settings`, `workers`).
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.77
 - Додано модульну архітектуру: `core/module/discovery`, `manifest`, `registry`.

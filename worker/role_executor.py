@@ -424,6 +424,7 @@ def execute_publisher(task: dict) -> list[dict]:
         result.setdefault("video_version", publish_intent["video_version"])
     if publish_intent.get("video_sha256"):
         result.setdefault("video_sha256", publish_intent["video_sha256"])
+    result.setdefault("remote_id", result.get("id"))
     return [_artifact("publication.json", "publication_receipt",
                       json.dumps(result, sort_keys=True).encode("utf-8"))]
 

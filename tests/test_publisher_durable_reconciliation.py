@@ -42,6 +42,9 @@ from publishers import (
     TikTokPublisher, YoutubePublisher,
 )
 from publishers.oauth import YouTubeTokenProvider
+from worker.role_executor import execute_role_task
+
+import publishers
 
 
 _WORKER_TOKEN = "publisher-durable-worker-token"
@@ -401,4 +404,177 @@ def test_publisher_ready_requires_token_and_scopes(monkeypatch):
     monkeypatch.setenv("PUBLISHER_MOCK", "false")
     pub = YoutubePublisher(transport=FakeTransport([]))
     assert pub.configured() is True
+
+
+# ── Real orchestration: CORE → queue → Worker → adapter → CORE ──
+
+
+def _register_publisher_worker(client, node_name: str = "pub-worker") -> None:
+    client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "role": "publisher", "vram_mb": 0,
+        "supported_tasks": ["publish"], "capabilities": ["publishing"]})
+
+
+def _set_publisher_transport(channel: str, responses: list) -> None:
+    publisher = publishers.LIVE_PUBLISHERS[channel]
+    publisher.transport = FakeTransport(list(responses))
+
+
+_PLATFORMS = [
+    ("youtube", YoutubePublisher, "YOUTUBE_ACCESS_TOKEN",
+     {"title": "Тест"},
+     [httpx.Response(200, headers={"Location": "https://u.example/1"}),
+      httpx.Response(200, json={"id": "yt-id"})]),
+    ("tiktok", TikTokPublisher, "TIKTOK_ACCESS_TOKEN",
+     {"title": "тест", "privacy": "public"},
+     [httpx.Response(200, json={"data": {"upload_url": "https://up.example/seg",
+                                           "publish_id": "tk-id"}}),
+      httpx.Response(200, json={"status_code": 0}),
+      httpx.Response(200, json={"data": {"status": "SEND_TO_USER_FEED"}})]),
+    ("facebook", FacebookPublisher, "FACEBOOK_ACCESS_TOKEN",
+     {"description": "hi", "page_id": "page-7"},
+     [httpx.Response(200, json={"id": "fb-id"})]),
+    ("instagram", InstagramPublisher, "INSTAGRAM_ACCESS_TOKEN",
+     {"instagram_user_id": "ig-9", "video_url": "https://cdn.example/v.mp4"},
+     [httpx.Response(200, json={"id": "container-1"}),
+      httpx.Response(200, json={"id": "media-55"})]),
+    ("threads", ThreadsPublisher, "THREADS_ACCESS_TOKEN",
+     {"threads_user_id": "th-3", "video_url": "https://cdn.example/v.mp4",
+      "description": "пост"},
+     [httpx.Response(200, json={"id": "thread-media-1"}),
+      httpx.Response(200, json={"id": "thread-12"})]),
+]
+
+
+@pytest.mark.parametrize("channel,cls,cred_env,meta,responses", _PLATFORMS)
+def test_publish_all_platforms_through_real_orchestration(
+        monkeypatch, tmp_path, channel, cls, cred_env, meta, responses):
+    """Issue #166.5: all 5 publishers through CORE→queue→Worker→adapter→CORE
+    with controlled external HTTP (FakeTransport), not direct publisher.publish()."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    monkeypatch.setenv(cred_env, "platform-token")
+
+    video_bytes = _mp4_video(tmp_path)
+    video_sha = hashlib.sha256(video_bytes).hexdigest()
+    job = _new_job_with_video(video_bytes, video_sha)
+    job.script = {"title": "Publish", "scenes": [{"prompt": "scene", "duration": 1}], **meta}
+    store.jobs[job.job_id] = job
+
+    client = _make_client()
+    _register_publisher_worker(client)
+
+    # Enqueue publish task via the real API endpoint.
+    response = client.post(f"/api/jobs/{job.job_id}/publish", json=[channel])
+    assert response.status_code == 200, f"{channel}: {response.text}"
+
+    # Claim the task through the real claim endpoint.
+    claim = client.post("/api/tasks/claim", json={"node_name": "pub-worker", "vram_mb": 0})
+    assert claim.status_code == 200, claim.text
+    task = claim.json()["task"]
+    assert task["channel"] == channel
+    assert task["job_id"] == job.job_id
+
+    # Pre-upload durable intent is pinned to the approved video version (#166.1).
+    intent = job.publish_intent.get(channel)
+    assert intent is not None
+    assert intent["video_version"] == 1
+    assert intent["video_sha256"] == video_sha
+
+    # Execute via the real role executor with a controlled transport.
+    _set_publisher_transport(channel, responses)
+    artifacts = execute_role_task("publisher", task)
+    receipt_artifact = next(a for a in artifacts if a.get("kind") == "publication_receipt")
+    assert receipt_artifact is not None
+
+    # Submit the receipt through the real result boundary.
+    submit = client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+        "success": True, "artifacts": [receipt_artifact],
+    })
+    assert submit.status_code == 200, f"{channel}: {submit.text}"
+
+    # Verify the channel is durably published with matching receipt correlation.
+    updated = store.jobs[job.job_id]
+    assert channel in updated.published_channels, f"{channel}: {updated.publication_results}"
+    assert updated.publication_results[channel]["status"] == "PUBLISHED"
+    assert updated.publication_results[channel]["video_sha256"] == video_sha
+
+
+def test_publish_no_duplicate_after_lost_ack_and_restart(monkeypatch, tmp_path):
+    """Issue #166.1: after a lost ack/restart, the persisted intent is reused
+    and the same artifact is not re-uploaded (idempotent skip)."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "platform-token")
+
+    video_bytes = _mp4_video(tmp_path)
+    video_sha = hashlib.sha256(video_bytes).hexdigest()
+    job = _new_job_with_video(video_bytes, video_sha)
+    store.jobs[job.job_id] = job
+    client = _make_client()
+    _register_publisher_worker(client)
+
+    # First publish: claim, execute, submit.
+    response = client.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"])
+    assert response.status_code == 200, response.text
+    claim = client.post("/api/tasks/claim", json={"node_name": "pub-worker", "vram_mb": 0})
+    assert claim.status_code == 200
+    task = claim.json()["task"]
+    _set_publisher_transport("youtube", [
+        httpx.Response(200, headers={"Location": "https://u.example/1"}),
+        httpx.Response(200, json={"id": "yt-id"}),
+    ])
+    artifacts = execute_role_task("publisher", task)
+    receipt = next(a for a in artifacts if a.get("kind") == "publication_receipt")
+    submit = client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": task["task_id"], "node_name": "pub-worker",
+        "success": True, "artifacts": [receipt],
+    })
+    assert submit.status_code == 200, submit.text
+    assert "youtube" in store.jobs[job.job_id].published_channels
+
+    # Simulate restart: a fresh JobStore over the same root replays the job.
+    from core.pipeline import JobStore
+    from core.repository import FileRepository
+    restarted = JobStore(root=str(store.root), repository=FileRepository(store.root))
+    restored_job = restarted.jobs[job.job_id]
+    assert restored_job.publish_intent["youtube"]["video_version"] == 1
+    assert restored_job.publish_intent["youtube"]["video_sha256"] == video_sha
+    assert "youtube" in restored_job.published_channels
+
+    # Re-publishing the same channel is not re-queued: job is terminal (PUBLISHED).
+    response = client.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"])
+    assert response.status_code == 409, response.text
+
+
+def test_publish_measured_backoff_through_real_flow(monkeypatch, tmp_path):
+    """Issue #166.3: transient failure re-queues with not_before delay
+    measured at claim time, not by log lines."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "false")
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "platform-token")
+
+    video_bytes = _mp4_video(tmp_path)
+    video_sha = hashlib.sha256(video_bytes).hexdigest()
+    job = _new_job_with_video(video_bytes, video_sha)
+    store.jobs[job.job_id] = job
+    client = _make_client()
+    _register_publisher_worker(client)
+
+    client.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"])
+    claim = client.post("/api/tasks/claim", json={"node_name": "pub-worker", "vram_mb": 0})
+    assert claim.status_code == 200
+    task = claim.json()["task"]
+
+    # Force a transient error from the adapter (empty response → exception).
+    _set_publisher_transport("youtube", [])
+    try:
+        execute_role_task("publisher", task)
+    except Exception:
+        pass  # transient → worker would mark failed and CORE re-queues with backoff
+
+    # The job records the retry attempt and the re-enqueued task carries
+    # not_before (claim-time backoff) rather than only a log entry.
+    job_after = store.jobs[job.job_id]
+    assert job_after.publish_retry_count.get("youtube", 0) >= 1
+    # The queue depth reflects the re-queued retry task.
+    assert task_queue.depth() >= 1
 

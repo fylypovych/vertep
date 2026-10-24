@@ -332,22 +332,18 @@ class Governance:
 
         existing_numbers = []
         for rec in self.created():
-            issue_data = rec.get("issue", {})
-            if isinstance(issue_data, dict):
-                title = issue_data.get("title", "")
-            else:
-                title = str(issue_data)
-            # Try to extract existing lab identifier from record key or finding
-            key_candidate = rec.get("key") or rec.get("finding", {}).get("identifier", "")
-            if key_candidate:
-                existing_numbers.append(key_candidate)
-        # Reserve next lab identifier from shared continuous series
+            for candidate in (rec.get("lab_id"), rec.get("identifier"),
+                              rec.get("key"),
+                              (rec.get("finding") or {}).get("identifier")):
+                if candidate:
+                    existing_numbers.append(str(candidate))
+        # Reserve the next lab identifier from the shared continuous series
+        # (§4.2).  The decision key stays stable so a retry resolves to the
+        # already created record instead of minting a second issue.
         try:
             lab_id = reserve_identifier("lab", existing_numbers)
         except Exception:
             lab_id = decision_key
-        else:
-            decision_key = f"{lab_id}::{decision_key}"
 
         issue = self.transport.create_issue(str(finding.get("title", "")),
                                             render_lab_body(finding), labels=("lab",))

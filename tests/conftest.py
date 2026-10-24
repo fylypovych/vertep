@@ -164,3 +164,175 @@ def reset_in_process_api_state():
     reset()
     yield
     reset()
+
+
+_DISPOSABLE_HOST_CONSUMER = '''#!/usr/bin/env python3
+"""Disposable Vertep host consumer with the production request contract."""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _layout():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "release_layout", ROOT / "scripts" / "release-layout.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _activation() -> dict:
+    path = ROOT / ".activation.json"
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _extract(package: Path, staging: Path) -> Path:
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "safe-extract.py"),
+                    str(package), str(staging)], check=True)
+    if (staging / "VERSION").is_file():
+        return staging
+    children = sorted(item for item in staging.iterdir() if item.is_dir())
+    if len(children) != 1:
+        raise SystemExit("release payload is incomplete")
+    return children[0]
+
+
+def _prepare(payload: Path, version: str) -> None:
+    releases = ROOT / "releases"
+    releases.mkdir(parents=True, exist_ok=True)
+    release = releases / version
+    if release.exists():
+        raise SystemExit(f"release already exists: {version}")
+    try:
+        _layout().prepare(ROOT, payload, version)
+        return
+    except OSError:
+        shutil.rmtree(release, ignore_errors=True)
+    shutil.copytree(payload, release)
+    (release / ".release.json").write_text(
+        json.dumps({"version": version, "sha256": ""}), encoding="utf-8")
+
+
+def _activate_by_copy(version: str) -> None:
+    release = ROOT / "releases" / version
+    staged = ROOT / f".current.{os.getpid()}.tmp"
+    if staged.exists():
+        shutil.rmtree(staged)
+    shutil.copytree(release, staged)
+    current = ROOT / "current"
+    replaced = ROOT / f".current.{os.getpid()}.previous"
+    if current.exists():
+        os.replace(current, replaced)
+    os.replace(staged, current)
+    shutil.rmtree(replaced, ignore_errors=True)
+
+
+def _activate(version: str, previous) -> None:
+    release = ROOT / "releases" / version
+    if not (release / "VERSION").is_file():
+        raise SystemExit("release is missing")
+    try:
+        _layout().activate(ROOT, version)
+    except OSError:
+        _activate_by_copy(version)
+    shutil.copyfile(ROOT / "current" / "VERSION", ROOT / "VERSION")
+    (ROOT / ".activation.json").write_text(
+        json.dumps({"current": version, "previous": previous}), encoding="utf-8")
+
+
+def main() -> None:
+    action = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if action == "apply-update":
+        package = Path(sys.argv[2])
+        version = sys.argv[3]
+        if (ROOT / "fail-apply").exists():
+            raise SystemExit(7)
+        staging = ROOT / f".staging.{os.getpid()}"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        payload = _extract(package, staging)
+        _prepare(payload, version)
+        _activate(version, _activation().get("current"))
+        shutil.rmtree(staging, ignore_errors=True)
+        if (ROOT / "fail-migration").exists():
+            raise SystemExit(9)
+    elif action == "rollback":
+        previous = _activation().get("previous")
+        if not previous:
+            raise SystemExit("no immutable previous release is available")
+        _activate(previous, None)
+    elif action == "restart-runtime":
+        (ROOT / "runtime-restarted").write_text("restarted", encoding="utf-8")
+    else:
+        raise SystemExit(f"unsupported action: {action}")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+_DISPOSABLE_BASH_CONSUMER = """#!/bin/bash
+set -euo pipefail
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+exec python3 "$ROOT/scripts/vertep-host.py" "$@"
+"""
+
+
+@pytest.fixture
+def disposable_deployment():
+    """Build a disposable Vertep installation with the host-consumer contract.
+
+    The installation keeps immutable releases below ``releases/``, activates one
+    of them as the active runtime instance and exposes its ``VERSION`` through
+    ``current/VERSION``, exactly like the appliance release layout.  The host
+    consumer performs the real instance switch, so the update agent observes a
+    replaced runtime instead of a marker file.
+    """
+
+    def build(root: Path, current_version: str = "0.0.0.1") -> Path:
+        root = Path(root)
+        scripts = root / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "vertep-host.py").write_text(_DISPOSABLE_HOST_CONSUMER, encoding="utf-8")
+        if os.name == "nt":
+            (scripts / "vertep").write_text(_DISPOSABLE_HOST_CONSUMER, encoding="utf-8")
+        else:
+            consumer = scripts / "vertep"
+            consumer.write_text(_DISPOSABLE_BASH_CONSUMER, encoding="utf-8")
+            consumer.chmod(0o755)
+        shutil.copyfile(Path(__file__).parents[1] / "scripts" / "safe-extract.py",
+                        scripts / "safe-extract.py")
+        shutil.copyfile(Path(__file__).parents[1] / "scripts" / "release-layout.py",
+                        scripts / "release-layout.py")
+        release = root / "releases" / current_version
+        release.mkdir(parents=True, exist_ok=True)
+        (release / "VERSION").write_text(current_version, encoding="utf-8")
+        (release / "application.txt").write_text(f"runtime {current_version}", encoding="utf-8")
+        (release / ".release.json").write_text(
+            json.dumps({"version": current_version, "sha256": ""}), encoding="utf-8")
+        (root / "VERSION").write_text(current_version, encoding="utf-8")
+        current = root / "current"
+        if os.name != "nt":
+            current.symlink_to(Path("releases") / current_version, target_is_directory=True)
+        else:
+            shutil.copytree(release, current)
+        (root / ".activation.json").write_text(
+            json.dumps({"current": current_version, "previous": None}), encoding="utf-8")
+        return root
+
+    return build

@@ -3181,6 +3181,7 @@ def test_real_tests_run_flow_through_browser_api():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
         _mock_session(page)
         _mock_status(page)
 
@@ -3305,7 +3306,6 @@ def test_real_tests_run_flow_through_browser_api():
                 "github_report": run["github_report"],
             })
 
-        page.route("**/api/**", lambda route: route.fulfill(json={}))
         page.route("**/api/real-tests/scenarios", scenarios_handler)
         page.route(f"**/api/real-tests/scenarios/{scenario_id}/prerequisites", prerequisites_handler)
         page.route("**/api/real-tests/run", run_handler)

@@ -1,0 +1,1183 @@
+{
+  "issue": "fylypovych/vertep#122",
+  "owner_decision": "required: an explicit exact old-list or the decision \u00ab\u043f\u043e\u0440\u043e\u0436\u043d\u0456\u0439 / \u043d\u0435 \u0440\u043e\u0431\u0438\u043c\u043e old\u00bb. The absence of candidates is not an approval (\u00a74.1 P12).",
+  "rows": [
+    {
+      "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.1`",
+      "issue": "#4",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.2`",
+      "issue": "#5",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0413\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f/\u043f\u043e\u043a\u0430\u0437 image assets \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; versioned scene storyboard, approval \u0456 \u0441\u0443\u043f\u0443\u0442\u043d\u0456 persistence/restore \u0432\u0438\u043c\u043e\u0433\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.3`",
+      "issue": "#6",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.4`",
+      "issue": "#7",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.5`",
+      "issue": "#8",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "TTS/catalog/synthesis \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Voice Worker, task-specific readiness, bounded retry, ownership \u0442\u0430 audio contract \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.6`",
+      "issue": "#9",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.7`",
+      "issue": "#10",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 Upload-Post cross-post; official adapters, OAuth, approved-version intent/receipt \u0456 Publisher Worker Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.8`",
+      "issue": "#11",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Image/video/material generation \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e; Native ComfyUI, immutable inventory, attestation/VRAM routing \u0442\u0430 integrity \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.9`",
+      "issue": "#12",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Node roles/Fleet/enrollment, measured readiness, multi-host/TLS \u0456 remote controls Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.10`",
+      "issue": "#13",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 \u0432\u043b\u0430\u0441\u043d\u0456 \u0437\u0430\u043f\u0443\u0441\u043a/WebUI; Zero Shell Ubuntu bootstrap, Vertep Wizard/Nodes, approval \u0456 HTTPS acceptance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.11`",
+      "issue": "#14",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Safe Update, drain, signed immutable deployment, rollback \u0456 recovery Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.12`",
+      "issue": "#15",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u041f\u043e\u0432\u043d\u0438\u0439 Vertep Backup/Restore, system-state safety \u0442\u0430 Web caller flow \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.13`",
+      "issue": "#16",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Angular Zero Shell \u0430\u0434\u043c\u0456\u043d\u043f\u0430\u043d\u0435\u043b\u044c, domain contracts, localization/accessibility \u0456 parity \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 WebUI MPT.",
+      "identifier": "`i.0.0.0.14`",
+      "issue": "#17",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep auth/RBAC, secrets/PKI, state guards, release trust/Monitoring \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 API-key MPT.",
+      "identifier": "`i.0.0.0.15`",
+      "issue": "#18",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Monitoring Node, metrics/alerts/log lifecycle \u0456 \u043f\u043e\u0432'\u044f\u0437\u0430\u043d\u0438\u0439 Vertep UI \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.16`",
+      "issue": "#19",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0422\u043e\u0447\u043d\u0438\u0439-SHA Browser/CI gate \u0456 Vertep backend acceptance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 \u0442\u0435\u0441\u0442\u0430\u043c\u0438 MPT.",
+      "identifier": "`i.0.0.0.17`",
+      "issue": "#20",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043f\u043e\u043a\u0440\u0438\u0432\u0430\u0454 \u043c\u0435\u0434\u0456\u0430\u0441\u0442\u0430\u0434\u0456\u0457; Vertep E2E/qualification, approval/recovery \u0456 \u0444\u0456\u0437\u0438\u0447\u043d\u0456 Native/runtime \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0438 \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.18`",
+      "issue": "#21",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Telegram polling/access/system operations, durable confirmations \u0456 self-test Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.20`",
+      "issue": "#22",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 task history/material preview/download; Vertep editor, structured timeline, version conflict \u0442\u0430 State Action Matrix \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.21`",
+      "issue": "#23",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Provider/voice/model configuration \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Character/Workflow management \u0456 effective Worker deployment/switch \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.22`",
+      "issue": "#24",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Angular Zero Shell \u0430\u0434\u043c\u0456\u043d\u043f\u0430\u043d\u0435\u043b\u044c, domain contracts, localization/accessibility \u0456 parity \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 WebUI MPT.",
+      "identifier": "`i.0.0.0.23`",
+      "issue": "#25",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Node roles/Fleet/enrollment, measured readiness, multi-host/TLS \u0456 remote controls Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.24`",
+      "issue": "#26",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Release trust/key lifecycle/SBOM/runtime artifacts \u0456 \u0456\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0435 \u0440\u0435\u043b\u0456\u0437\u043d\u0435 \u0434\u043e\u0440\u0443\u0447\u0435\u043d\u043d\u044f \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.25`",
+      "issue": "#27",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u0443/Redis queue; capability dispatch, leases/fencing, dead-letter, system gating \u0456 Vertep qualification \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.26`",
+      "issue": "#28",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Profile/session identity/password \u0456 account/RBAC UX Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.27`",
+      "issue": "#29",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Angular Zero Shell \u0430\u0434\u043c\u0456\u043d\u043f\u0430\u043d\u0435\u043b\u044c, domain contracts, localization/accessibility \u0456 parity \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 WebUI MPT.",
+      "identifier": "`i.0.0.0.28`",
+      "issue": "#30",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "CORE generation isolation/static gate \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u0456 \u0437 \u043e\u0431\u043e\u043c\u0430 engines; MPT execution \u043f\u0456\u0434\u043b\u044f\u0433\u0430\u0454 \u0442\u0456\u0439 \u0441\u0430\u043c\u0456\u0439 \u043c\u0435\u0436\u0456.",
+      "identifier": "`i.0.0.0.29`",
+      "issue": "#31",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Persistent Character/Brand/Workflow/Job data, legacy migration \u0456 PostgreSQL backfill Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.30`",
+      "issue": "#32",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043f\u043e\u043a\u0440\u0438\u0432\u0430\u0454 \u043c\u0435\u0434\u0456\u0430\u0441\u0442\u0430\u0434\u0456\u0457; Vertep E2E/qualification, approval/recovery \u0456 \u0444\u0456\u0437\u0438\u0447\u043d\u0456 Native/runtime \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0438 \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.31`",
+      "issue": "#33",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043f\u043e\u043a\u0440\u0438\u0432\u0430\u0454 \u043c\u0435\u0434\u0456\u0430\u0441\u0442\u0430\u0434\u0456\u0457; Vertep E2E/qualification, approval/recovery \u0456 \u0444\u0456\u0437\u0438\u0447\u043d\u0456 Native/runtime \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0438 \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`ir.0.0.0.19`",
+      "issue": "#34",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Clean install, migration, Backup/Restore, multi-host update/recovery \u2014 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0438 Vertep, \u0430 \u043d\u0435 MPT.",
+      "identifier": "`ir.0.0.0.32`",
+      "issue": "#35",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0413\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f/\u043f\u043e\u043a\u0430\u0437 image assets \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; versioned scene storyboard, approval \u0456 \u0441\u0443\u043f\u0443\u0442\u043d\u0456 persistence/restore \u0432\u0438\u043c\u043e\u0433\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.33`",
+      "issue": "#36",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Telegram polling/access/system operations, durable confirmations \u0456 self-test Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.37`",
+      "issue": "#37",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Real Test Runner, deployment identity, GitHub reporting/auto-close \u0442\u0430 proof governance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.38`",
+      "issue": "#38",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.39`",
+      "issue": "#39",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 \u0432\u043b\u0430\u0441\u043d\u0456 \u0437\u0430\u043f\u0443\u0441\u043a/WebUI; Zero Shell Ubuntu bootstrap, Vertep Wizard/Nodes, approval \u0456 HTTPS acceptance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`ir.0.0.0.40`",
+      "issue": "#40",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Provider/voice/model configuration \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Character/Workflow management \u0456 effective Worker deployment/switch \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.41`",
+      "issue": "#41",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Node roles/Fleet/enrollment, measured readiness, multi-host/TLS \u0456 remote controls Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`ir.0.0.0.42`",
+      "issue": "#42",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.43`",
+      "issue": "#43",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0414\u043b\u044f #44 \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f Text/Voice primitives; account/RBAC \u0442\u0430 \u0440\u0435\u0430\u043b\u044c\u043d\u0456 Worker/approval \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`ir.0.0.0.44`",
+      "issue": "#44",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0406\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0456 Git/governance \u0440\u043e\u0431\u043e\u0442\u0438 \u043d\u0435 \u0434\u0443\u0431\u043b\u044e\u044e\u0442\u044c\u0441\u044f MPT; \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0457\u0445 \u0456\u0441\u0442\u043e\u0440\u0456\u044e.",
+      "identifier": "`i.0.0.0.45`",
+      "issue": "#45",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.46`",
+      "issue": "#46",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Cross-post \u0454; \u0440\u0435\u0430\u043b\u044c\u043d\u0456 official platform OAuth/Publisher Node/receipt/partial failure \u043a\u0440\u0438\u0442\u0435\u0440\u0456\u0457 Vertep \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`ir.0.0.0.47`",
+      "issue": "#47",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.48`",
+      "issue": "#49",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`ir.0.0.0.49`",
+      "issue": "#50",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0406\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0456 Git/governance \u0440\u043e\u0431\u043e\u0442\u0438 \u043d\u0435 \u0434\u0443\u0431\u043b\u044e\u044e\u0442\u044c\u0441\u044f MPT; \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0457\u0445 \u0456\u0441\u0442\u043e\u0440\u0456\u044e.",
+      "identifier": "`i.0.0.0.50`",
+      "issue": "#51",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Profile/session identity/password \u0456 account/RBAC UX Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.51`",
+      "issue": "#52",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Image/video/material generation \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e; Native ComfyUI, immutable inventory, attestation/VRAM routing \u0442\u0430 integrity \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.52`",
+      "issue": "#53",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep auth/RBAC, secrets/PKI, state guards, release trust/Monitoring \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 API-key MPT.",
+      "identifier": "`ir.0.0.0.53`",
+      "issue": "#54",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0406\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0456 Git/governance \u0440\u043e\u0431\u043e\u0442\u0438 \u043d\u0435 \u0434\u0443\u0431\u043b\u044e\u044e\u0442\u044c\u0441\u044f MPT; \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0457\u0445 \u0456\u0441\u0442\u043e\u0440\u0456\u044e.",
+      "identifier": "`i.0.0.0.54`",
+      "issue": "#55",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Queue/media \u0442\u0430 provider primitives \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e \u0441\u043f\u0456\u043b\u044c\u043d\u0456; Job UI, Fleet, trust, CORE isolation \u0456 qualification \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.55`",
+      "issue": "#56",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043f\u043e\u043a\u0440\u0438\u0432\u0430\u0454 \u043c\u0435\u0434\u0456\u0430\u0441\u0442\u0430\u0434\u0456\u0457; Vertep E2E/qualification, approval/recovery \u0456 \u0444\u0456\u0437\u0438\u0447\u043d\u0456 Native/runtime \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0438 \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`ir.0.0.0.56`",
+      "issue": "#57",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Release trust/key lifecycle/SBOM/runtime artifacts \u0456 \u0456\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0435 \u0440\u0435\u043b\u0456\u0437\u043d\u0435 \u0434\u043e\u0440\u0443\u0447\u0435\u043d\u043d\u044f \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.57`",
+      "issue": "#58",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0406\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0456 Git/governance \u0440\u043e\u0431\u043e\u0442\u0438 \u043d\u0435 \u0434\u0443\u0431\u043b\u044e\u044e\u0442\u044c\u0441\u044f MPT; \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 \u0457\u0445 \u0456\u0441\u0442\u043e\u0440\u0456\u044e.",
+      "identifier": "`i.0.0.0.58`",
+      "issue": "#59",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0413\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f/\u043f\u043e\u043a\u0430\u0437 image assets \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; versioned scene storyboard, approval \u0456 \u0441\u0443\u043f\u0443\u0442\u043d\u0456 persistence/restore \u0432\u0438\u043c\u043e\u0433\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.59`",
+      "issue": "#60",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0413\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f/\u043f\u043e\u043a\u0430\u0437 image assets \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; versioned scene storyboard, approval \u0456 \u0441\u0443\u043f\u0443\u0442\u043d\u0456 persistence/restore \u0432\u0438\u043c\u043e\u0433\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`ir.0.0.0.61`",
+      "issue": "#61",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.62`",
+      "issue": "#62",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Real Test Runner, deployment identity, GitHub reporting/auto-close \u0442\u0430 proof governance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`ir.0.0.0.63`",
+      "issue": "#63",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.64`",
+      "issue": "#64",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Image/video/material generation \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e; Native ComfyUI, immutable inventory, attestation/VRAM routing \u0442\u0430 integrity \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.65`",
+      "issue": "#65",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.66`",
+      "issue": "#66",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Media task creation \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Vertep workflow/Character ID/editor \u0442\u0430 Backup UI defects \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.67`",
+      "issue": "#67",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "CORE claim/result owner/lease/task/version acceptance \u0454 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u043e\u043c Vertep, \u043d\u0435\u0437\u0430\u043b\u0435\u0436\u043d\u0438\u043c \u0432\u0456\u0434 LLM engine.",
+      "identifier": "`i.0.0.0.68`",
+      "issue": "#68",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.69`",
+      "issue": "#69",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "CORE generation isolation/static gate \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u0456 \u0437 \u043e\u0431\u043e\u043c\u0430 engines; MPT execution \u043f\u0456\u0434\u043b\u044f\u0433\u0430\u0454 \u0442\u0456\u0439 \u0441\u0430\u043c\u0456\u0439 \u043c\u0435\u0436\u0456.",
+      "identifier": "`i.0.0.0.70`",
+      "issue": "#70",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "TTS/catalog/synthesis \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Voice Worker, task-specific readiness, bounded retry, ownership \u0442\u0430 audio contract \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.71`",
+      "issue": "#71",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "TTS/catalog/synthesis \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Voice Worker, task-specific readiness, bounded retry, ownership \u0442\u0430 audio contract \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.72`",
+      "issue": "#72",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 Upload-Post cross-post; official adapters, OAuth, approved-version intent/receipt \u0456 Publisher Worker Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.73`",
+      "issue": "#73",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 Upload-Post cross-post; official adapters, OAuth, approved-version intent/receipt \u0456 Publisher Worker Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.74`",
+      "issue": "#74",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Profile/session identity/password \u0456 account/RBAC UX Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.75`",
+      "issue": "#75",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep auth/RBAC, secrets/PKI, state guards, release trust/Monitoring \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 API-key MPT.",
+      "identifier": "`i.0.0.0.76`",
+      "issue": "#76",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep Workflow Form\u2194JSON, history/dependencies/identity \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u0430\u043c\u0438 MPT.",
+      "identifier": "`i.0.0.0.77`",
+      "issue": "#77",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Provider/voice/model configuration \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Character/Workflow management \u0456 effective Worker deployment/switch \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.78`",
+      "issue": "#78",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Angular Zero Shell \u0430\u0434\u043c\u0456\u043d\u043f\u0430\u043d\u0435\u043b\u044c, domain contracts, localization/accessibility \u0456 parity \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 WebUI MPT.",
+      "identifier": "`i.0.0.0.79`",
+      "issue": "#79",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Node roles/Fleet/enrollment, measured readiness, multi-host/TLS \u0456 remote controls Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.80`",
+      "issue": "#80",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.81`",
+      "issue": "#81",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043f\u043e\u043a\u0440\u0438\u0432\u0430\u0454 \u043c\u0435\u0434\u0456\u0430\u0441\u0442\u0430\u0434\u0456\u0457; Vertep E2E/qualification, approval/recovery \u0456 \u0444\u0456\u0437\u0438\u0447\u043d\u0456 Native/runtime \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0438 \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.0.82`",
+      "issue": "#82",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Image/video/material generation \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e; Native ComfyUI, immutable inventory, attestation/VRAM routing \u0442\u0430 integrity \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.83`",
+      "issue": "#83",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep auth/RBAC, secrets/PKI, state guards, release trust/Monitoring \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 API-key MPT.",
+      "identifier": "`i.0.0.0.84`",
+      "issue": "#84",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Monitoring Node, metrics/alerts/log lifecycle \u0456 \u043f\u043e\u0432'\u044f\u0437\u0430\u043d\u0438\u0439 Vertep UI \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.85`",
+      "issue": "#85",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Safe Update, drain, signed immutable deployment, rollback \u0456 recovery Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.86`",
+      "issue": "#86",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Safe Update, drain, signed immutable deployment, rollback \u0456 recovery Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.87`",
+      "issue": "#87",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Release trust/key lifecycle/SBOM/runtime artifacts \u0456 \u0456\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0435 \u0440\u0435\u043b\u0456\u0437\u043d\u0435 \u0434\u043e\u0440\u0443\u0447\u0435\u043d\u043d\u044f \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.88`",
+      "issue": "#88",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u0443/Redis queue; capability dispatch, leases/fencing, dead-letter, system gating \u0456 Vertep qualification \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.89`",
+      "issue": "#89",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044f \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Web/Telegram approval, version/hash, scene revision \u0456 \u0448\u0442\u0430\u0442\u043d\u0438\u0439 lifecycle \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.0.90`",
+      "issue": "#90",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Persistent Character/Brand/Workflow/Job data, legacy migration \u0456 PostgreSQL backfill Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.91`",
+      "issue": "#91",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u041f\u043e\u0432\u043d\u0438\u0439 Vertep Backup/Restore, system-state safety \u0442\u0430 Web caller flow \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.92`",
+      "issue": "#92",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Telegram polling/access/system operations, durable confirmations \u0456 self-test Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.93`",
+      "issue": "#93",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Telegram polling/access/system operations, durable confirmations \u0456 self-test Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.94`",
+      "issue": "#94",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Real Test Runner, deployment identity, GitHub reporting/auto-close \u0442\u0430 proof governance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.95`",
+      "issue": "#95",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Real Test Runner, deployment identity, GitHub reporting/auto-close \u0442\u0430 proof governance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.96`",
+      "issue": "#96",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Telegram polling/access/system operations, durable confirmations \u0456 self-test Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.97`",
+      "issue": "#97",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "closed",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 \u0432\u043b\u0430\u0441\u043d\u0456 \u0437\u0430\u043f\u0443\u0441\u043a/WebUI; Zero Shell Ubuntu bootstrap, Vertep Wizard/Nodes, approval \u0456 HTTPS acceptance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.0.98`",
+      "issue": "#98",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0422\u043e\u0447\u043d\u0438\u0439-SHA Browser/CI gate \u0456 Vertep backend acceptance \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 \u0442\u0435\u0441\u0442\u0430\u043c\u0438 MPT.",
+      "identifier": "`i.0.0.0.99`",
+      "issue": "#99",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043d\u044f media task \u0454 \u0432 MPT; Telegram brand/character, Vertep workflow identity \u0442\u0430 Character UI acceptance \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.1.0`",
+      "issue": "#100",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u041f\u043e\u0432\u043d\u0438\u0439 Vertep Backup/Restore, system-state safety \u0442\u0430 Web caller flow \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.1.1`",
+      "issue": "#101",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "CORE claim/result owner/lease/task/version acceptance \u0454 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u043e\u043c Vertep, \u043d\u0435\u0437\u0430\u043b\u0435\u0436\u043d\u0438\u043c \u0432\u0456\u0434 LLM engine.",
+      "identifier": "`i.0.0.1.2`",
+      "issue": "#102",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.1.3`",
+      "issue": "#103",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "CORE generation isolation/static gate \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u0456 \u0437 \u043e\u0431\u043e\u043c\u0430 engines; MPT execution \u043f\u0456\u0434\u043b\u044f\u0433\u0430\u0454 \u0442\u0456\u0439 \u0441\u0430\u043c\u0456\u0439 \u043c\u0435\u0436\u0456.",
+      "identifier": "`i.0.0.1.4`",
+      "issue": "#104",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "TTS/catalog/synthesis \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Voice Worker, task-specific readiness, bounded retry, ownership \u0442\u0430 audio contract \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",
+      "identifier": "`i.0.0.1.5`",
+      "issue": "#105",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Preview/\u0432\u0456\u0434\u0435\u043e\u043f\u0443\u0431\u043b\u0456\u043a\u0430\u0446\u0456\u044f \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Telegram access/polling, durable operations, Fleet \u0456 Angular UX \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.1.6`",
+      "issue": "#106",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0406\u0437\u043e\u043b\u044c\u043e\u0432\u0430\u043d\u0430 \u043b\u0430\u0431\u043e\u0440\u0430\u0442\u043e\u0440\u0456\u044f \u0440\u043e\u0437\u0440\u043e\u0431\u043a\u0438, policy gate, \u0430\u0433\u0435\u043d\u0442\u0438/QA/reviewer \u0456 production-priority GPU lease \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`var.0.0.1.7`",
+      "issue": "#107",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Provider pipeline/\u0447\u0435\u0440\u0433\u0430 \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; DAG/\u043c\u043e\u0434\u0443\u043b\u0456/distributed capabilities/artifact ACL/lease/local-only \u0430\u0440\u0445\u0456\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0437\u0430\u043b\u0438\u0448\u0430\u0454\u0442\u044c\u0441\u044f (\u0434\u0435\u0442\u0430\u043b\u0456 \u043d\u0438\u0436\u0447\u0435).",
+      "identifier": "`var.0.0.1.8`",
+      "issue": "#108",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep auth/RBAC, secrets/PKI, state guards, release trust/Monitoring \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 API-key MPT.",
+      "identifier": "`i.0.0.1.9`",
+      "issue": "#109",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "\u0421\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u043d\u0438\u0439 \u0440\u0435\u0444\u0430\u043a\u0442\u043e\u0440\u0438\u043d\u0433 CORE/API/Telegram \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0438\u0439 MPT.",
+      "identifier": "`i.0.0.1.10`",
+      "issue": "#110",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "TTS \u0456 cross-post primitives \u0454; V3/V4/P2/P3/P4 ownership, delivery, backoff, receipt/recovery Vertep \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.1.11`",
+      "issue": "#111",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 Upload-Post cross-post; official adapters, OAuth, approved-version intent/receipt \u0456 Publisher Worker Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.1.12`",
+      "issue": "#112",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "MPT \u043c\u0430\u0454 Upload-Post cross-post; official adapters, OAuth, approved-version intent/receipt \u0456 Publisher Worker Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.1.13`",
+      "issue": "#113",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep auth/RBAC, secrets/PKI, state guards, release trust/Monitoring \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 API-key MPT.",
+      "identifier": "`i.0.0.1.14`",
+      "issue": "#114",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep Workflow Form\u2194JSON, history/dependencies/identity \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u0430\u043c\u0438 MPT.",
+      "identifier": "`i.0.0.1.15`",
+      "issue": "#115",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Vertep model pull terminal status/transport cancellation \u0456 restart reconciliation \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.1.16`",
+      "issue": "#116",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Provider/voice/model configuration \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f; Character/Workflow management \u0456 effective Worker deployment/switch \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.1.17`",
+      "issue": "#117",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Node roles/Fleet/enrollment, measured readiness, multi-host/TLS \u0456 remote controls Vertep \u043d\u0435 \u0437\u0430\u043c\u0456\u043d\u0435\u043d\u0456.",
+      "identifier": "`i.0.0.1.18`",
+      "issue": "#118",
+      "overlap": "\u041d\u0435\u043c\u0430\u0454",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Reassembly \u0454 \u0432 MPT; \u0432\u0438\u0431\u0456\u0440 \u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e\u0433\u043e registered artifact \u0456 \u0437\u0430\u0431\u043e\u0440\u043e\u043d\u0430 historical fallback \u2014 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 Vertep.",
+      "identifier": "`i.0.0.1.19`",
+      "issue": "#119",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Image/video/material generation \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e; Native ComfyUI, immutable inventory, attestation/VRAM routing \u0442\u0430 integrity \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.1.20`",
+      "issue": "#120",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    },
+    {
+      "decision": "Image/video/material generation \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u0454\u0442\u044c\u0441\u044f \u0447\u0430\u0441\u0442\u043a\u043e\u0432\u043e; Native ComfyUI, immutable inventory, attestation/VRAM routing \u0442\u0430 integrity \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f.",
+      "identifier": "`i.0.0.1.21`",
+      "issue": "#121",
+      "overlap": "\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u0435",
+      "problems": [],
+      "retires": false,
+      "status": "open",
+      "verdict": "kept"
+    }
+  ],
+  "summary": {
+    "blocked": 0,
+    "duplicate_issues": [],
+    "kept": 117,
+    "retire_with_evidence": 0,
+    "rows": 117
+  }
+}

@@ -172,6 +172,19 @@ def run(command: list[str], root: Path, extra_env: dict[str, str] | None = None)
     return _collect(process, float(os.getenv("UPDATE_TIMEOUT_SECONDS", "3600")))
 
 
+def host_command(root: Path, action: str, *arguments: str) -> list[str]:
+    """Build the privileged host-consumer command for ``action``.
+
+    The appliance runs the bash ``scripts/vertep`` consumer; development hosts
+    without bash execute the same consumer contract with the current
+    interpreter so a disposable deployment can be exercised on every platform.
+    """
+    script = root / "scripts" / "vertep"
+    if os.name == "nt":
+        return [sys.executable, str(script), action, *arguments]
+    return ["/bin/bash", str(script), action, *arguments]
+
+
 def run_fenced(command: list[str], root: Path, state_dir: Path, lease,
                extra_env: dict[str, str] | None = None) -> str:
     """Run a host mutation that is actually stopped when the fence is lost.
@@ -333,11 +346,14 @@ def _has_interrupt_evidence(state_dir: Path) -> bool:
 
 def _attempt_rollback(root: Path, state_dir: Path, state: dict) -> None:
     """Shared rollback logic for interrupted update recovery."""
-    output = run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root)
+    output = run(host_command(root, "rollback"), root)
     state["log"].extend(output.splitlines()[-100:])
     state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "message": "Rollback completed",
                   "updated_at": now()})
     atomic_json(state_dir / "status.json", state)
+    append_audit(state_dir, {"operation_id": state.get("request_id"), "phase": "RECOVERING",
+                             "message": "Previous release restored",
+                             "action": state.get("action")})
     from core.system_state import SystemState, set_system_state
     set_system_state(SystemState.NORMAL, "Previous release restored", state.get("request_id"), state_dir)
 
@@ -373,7 +389,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             if action == "restart":
                 transition(state_dir, state, "RESTARTING", "Restarting active Vertep services", 70)
                 assert_mutation_allowed(state_dir, lease)
-                output = run(["/bin/bash", str(root / "scripts" / "vertep"), "restart-runtime"],
+                output = run(host_command(root, "restart-runtime"),
                              root, {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
                 merge_runtime_progress(state_dir, state)
                 state["log"].extend(output.splitlines()[-100:])
@@ -384,7 +400,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             if action == "rollback":
                 transition(state_dir, state, "RECOVERING", "Restoring the previous release", 40)
                 assert_mutation_allowed(state_dir, lease)
-                output = run(["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root)
+                output = run(host_command(root, "rollback"), root)
                 state["log"].extend(output.splitlines()[-100:])
                 state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
                               "message": "Previous release restored", "updated_at": now()})
@@ -449,8 +465,9 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                     manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
                 transition(state_dir, state, "UPDATING", "Backup and package installation started", 50)
                 assert_mutation_allowed(state_dir, lease)
-                output = run_fenced(["/bin/bash", str(root / "scripts" / "vertep"), "apply-update",
-                                     str(package), manifest["version"]], root, state_dir, lease,
+                output = run_fenced(host_command(root, "apply-update",
+                                                str(package), manifest["version"]),
+                                    root, state_dir, lease,
                                     {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
                 merge_runtime_progress(state_dir, state)
                 state["log"].extend(output.splitlines()[-200:])
@@ -470,7 +487,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                     transition(state_dir, state, "RECOVERING", "Health check failed; rolling back")
                     assert_mutation_allowed(state_dir, lease)
                     state["log"].extend(run(
-                        ["/bin/bash", str(root / "scripts" / "vertep"), "rollback"], root
+                        host_command(root, "rollback"), root
                     ).splitlines()[-100:])
                     state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
                                   "message": "Попередню версію відновлено автоматично"})

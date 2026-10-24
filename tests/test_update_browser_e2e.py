@@ -12,10 +12,12 @@ Criteria: #193.7 (mutation -> actual CORE -> operation state in Browser),
 #193.8 (effective executor/fence, no direct status/version writes),
 #193.9 (pageerror/console collectors, negative feedback, no skip in CI).
 
-The host executor is a POSIX shell script (the production contract), so the
-scenario runs on the Linux CI runner.  Locally without POSIX shell/web-v2 build
-it reports a skip; CI sets ``VERTEP_REQUIRE_UPDATE_BROWSER_E2E=1`` so a missing
-requirement fails instead of silently passing.
+The host executor keeps the production request contract and replaces the active
+runtime instance of a disposable installation.  The scenario runs on the Linux
+CI runner, which provides the appliance platform together with Playwright and
+the web-v2 build.  Locally without them it reports a skip; CI sets
+``VERTEP_REQUIRE_UPDATE_BROWSER_E2E=1`` so a missing requirement fails instead
+of silently passing.
 """
 
 import base64
@@ -23,9 +25,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import time
 
 import httpx
@@ -82,7 +86,7 @@ def _wait_until(predicate, timeout=60, interval=0.2, message="condition"):
 @pytest.fixture(scope="module")
 def disposable_core(tmp_path_factory):
     if os.name != "posix":
-        _unsatisfied("host update executor is a POSIX shell script; run this proof on Linux")
+        _unsatisfied("the Update Center Browser acceptance runs on the Linux CI runner")
     _web_dist()  # fail closed before starting anything in required mode
     base = tmp_path_factory.mktemp("update-browser")
     state_dir = base / "update"
@@ -102,6 +106,10 @@ def disposable_core(tmp_path_factory):
         "COOKIE_SECURE": "false",
     }
     env.pop("USERS_JSON", None)
+    # The disposable CORE proves the update flow only; an inherited Redis URL
+    # would make its health probe depend on a service that is not part of the
+    # scenario.
+    env.pop("REDIS_URL", None)
     log = (base / "core.log").open("wb")
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "core.app:app", "--host", "127.0.0.1",
@@ -129,37 +137,16 @@ def disposable_core(tmp_path_factory):
     log.close()
 
 
-def _executor_root(base: Path) -> Path:
-    """Disposable installation root with the real privileged command contract."""
-    root = base / "runtime"
-    (root / "scripts").mkdir(parents=True)
-    script = root / "scripts" / "vertep"
-    script.write_text(
-        "#!/bin/bash\n"
-        "set -u\n"
-        "root=\"${VERTEP_TEST_ROOT:?}\"\n"
-        "case \"$1\" in\n"
-        "  apply-update)\n"
-        "    [[ -n \"${VERTEP_UPDATE_STATUS_FILE:-}\" ]] && "
-        "printf '%s' '{\"state\":\"RUNNING\",\"phase\":\"UPDATING\","
-        "\"progress\":80,\"message\":\"Applying runtime\"}' "
-        "> \"$VERTEP_UPDATE_STATUS_FILE\"\n"
-        "    if [[ -f \"$root/fail-apply\" ]]; then exit 7; fi\n"
-        "    printf '%s' \"$3\" > \"$root/app-version.txt\"\n"
-        "    ;;\n"
-        "  rollback)\n"
-        "    printf '%s' \"$VERTEP_TEST_PREVIOUS\" > \"$root/app-version.txt\"\n"
-        "    ;;\n"
-        "  restart-runtime)\n"
-        "    printf '%s' \"restarted\" > \"$root/runtime-restarted\"\n"
-        "    ;;\n"
-        "esac\n",
-        encoding="utf-8")
-    script.chmod(0o755)
-    (root / "scripts" / "release-layout.py").write_text(
-        "print('retained releases')\n", encoding="utf-8")
-    (root / "app-version.txt").write_text(CURRENT_VERSION, encoding="utf-8")
-    return root
+def _release_package(base: Path, version: str) -> Path:
+    """Build a real release archive for the disposable installation."""
+    payload = base / f"payload-{version}"
+    payload.mkdir(parents=True, exist_ok=True)
+    (payload / "VERSION").write_text(version, encoding="utf-8")
+    (payload / "application.txt").write_text(f"runtime {version}", encoding="utf-8")
+    archive = base / f"vertep-{version}.tar.gz"
+    with tarfile.open(archive, "w:gz") as package:
+        package.add(payload, arcname=payload.name)
+    return archive
 
 
 def _run_host_agent(base: Path, root: Path, state_dir: Path, monkeypatch) -> bool:
@@ -176,13 +163,13 @@ def _run_host_agent(base: Path, root: Path, state_dir: Path, monkeypatch) -> boo
                         lambda *_args, **_kwargs: None)
     monkeypatch.setattr(protocol, "validate_replay_state",
                         lambda *_args, **_kwargs: None)
+    archive = _release_package(base, TARGET_VERSION)
     monkeypatch.setattr(
         protocol, "download_package",
         lambda _manifest, path: (path.parent.mkdir(parents=True, exist_ok=True),
-                                 path.write_bytes(b"disposable package"), path)[-1])
+                                 shutil.copyfile(archive, path), path)[-1])
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
-    monkeypatch.setenv("VERTEP_TEST_ROOT", str(root))
-    monkeypatch.setenv("VERTEP_TEST_PREVIOUS", CURRENT_VERSION)
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
     requests = sorted((state_dir / "requests").glob("*.json"))
     assert len(requests) == 1, f"expected one queued host request, found {requests}"
     return agent.process_request(root, state_dir, requests[0], skip_drain=True)
@@ -201,9 +188,9 @@ def _attach_collectors(page):
 
 
 def test_update_center_browser_drives_real_core_and_host_executor(
-        disposable_core, monkeypatch):
+        disposable_core, disposable_deployment, monkeypatch):
     base, state_dir = Path(disposable_core["root"]), disposable_core["state_dir"]
-    root = _executor_root(base)
+    root = disposable_deployment(base / "runtime", CURRENT_VERSION)
     url = disposable_core["url"]
     credentials = base64.b64encode(
         f"{ADMIN_USER}:{ADMIN_PASSWORD}".encode()).decode()
@@ -230,7 +217,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
         # 2) The real host executor applies the update; only then does the
         #    operation reach SUCCEEDED (nothing here writes the status directly).
         assert _run_host_agent(base, root, state_dir, monkeypatch) is True
-        assert (root / "app-version.txt").read_text(encoding="utf-8") == TARGET_VERSION
+        assert (root / "current" / "VERSION").read_text(encoding="utf-8").strip() == TARGET_VERSION
         assert not request_file.exists()
         status = httpx.get(f"{url}/api/system/update", auth=(ADMIN_USER, ADMIN_PASSWORD)).json()
         assert status["state"] == "SUCCEEDED" and status["progress"] == 100
@@ -249,7 +236,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
             page.get_by_test_id("update-install").click()
         assert failed.value.ok, failed.value.text()
         assert _run_host_agent(base, root, state_dir, monkeypatch) is False
-        assert (root / "app-version.txt").read_text(encoding="utf-8") == CURRENT_VERSION
+        assert (root / "current" / "VERSION").read_text(encoding="utf-8").strip() == CURRENT_VERSION
         status = httpx.get(f"{url}/api/system/update", auth=(ADMIN_USER, ADMIN_PASSWORD)).json()
         assert status["state"] == "ROLLED_BACK"
         page.reload()
