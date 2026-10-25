@@ -585,26 +585,7 @@ def _json_error(detail: str, status: int, **extra) -> Response:
                     media_type="application/json")
 
 
-@app.post("/api/session")
-def create_session(response: Response, request: Request):
-    header = request.headers.get("authorization", "")
-    try:
-        _, encoded = header.split(" ", 1)
-        user, supplied = basic64.b64decode(encoded).decode("utf-8").split(":", 1)
-    except (ValueError, UnicodeError, binascii.Error):
-        user, supplied = "admin", os.getenv("ADMIN_PASSWORD", "")
-    # Issue #75 S1: an unverified credential never mints an admin session.
-    role = _authenticate_user(user, supplied)
-    if role is None:
-        return _json_error("Invalid credentials", 401)
-    token = _session_token(user, role)
-    csrf = hmac.new(os.getenv("ADMIN_PASSWORD", "").encode(), token.encode(), hashlib.sha256).hexdigest()
-    response.set_cookie("vertep_session", token, httponly=True, samesite="strict",
-                        secure=os.getenv("COOKIE_SECURE", "false").lower() == "true",
-                        max_age=int(os.getenv("SESSION_TTL", "28800")))
-    response.set_cookie("vertep_csrf", csrf, httponly=False, samesite="strict",
-                        secure=os.getenv("COOKIE_SECURE", "false").lower() == "true")
-    return session_response((user, role))
+
 
 @app.delete("/api/session")
 def logout(response: Response):

@@ -7,6 +7,7 @@ retries, timeouts, pause/resume/cancel support.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, Dict
 
 from .dsl import validate_workflow
 from .state import WorkflowState
@@ -19,6 +20,19 @@ class WorkflowEngine:
         self.state = state or WorkflowState()
         self._jobs: Dict[str, dict] = {}
         self._running: Dict[str, set] = {}  # job_id -> set of running task IDs
+        self._load_existing_jobs()
+
+    def _load_existing_jobs(self) -> None:
+        """Restore in-memory job cache from persisted state."""
+        try:
+            job_ids = self.state.list_checkpoints()
+        except Exception:
+            job_ids = []
+        for job_id in job_ids:
+            job = self.state.load_job(job_id)
+            if job is not None:
+                self._jobs[job_id] = job
+                self._running.setdefault(job_id, set())
 
     def create_job(self, definition: dict, params: dict | None = None) -> str:
         """Create a new workflow job.
@@ -50,6 +64,8 @@ class WorkflowEngine:
                 "progress_percent": 0,
                 "output": None,
                 "error": None,
+                "dependencies": list(task.get("dependencies", [])),
+                "type": task.get("type"),
             }
 
         self.state.save_job(job_id, self._jobs[job_id])

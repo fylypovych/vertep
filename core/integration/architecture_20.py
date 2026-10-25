@@ -6,9 +6,12 @@ abstraction into a cohesive system that can be initialized and used by CORE.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from core.workflow.engine import WorkflowEngine
 from core.module.registry import ModuleRegistry
-from core.dispatcher.dispatcher import Dispatcher
+from core.dispatcher import Dispatcher
 from core.gpu.provider_registry import GPUProviderRegistry
 from core.gpu.local_mode import LocalModelProvider
 
