@@ -91,17 +91,24 @@ def provider_executor_config() -> dict[str, str]:
             if key in _PROVIDER_EXECUTOR_ENV_ALLOWLIST}
 
 
-def _write_overrides(overrides: dict[str, str], actor: str | None = None,
-                     slot: str | None = None) -> None:
-    payload = {
-        "overrides": dict(overrides),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "actor": actor,
-        "slot": slot,
-    }
-    path = _overrides_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, payload)
+def _snapshot_path() -> Path:
+    return config_root() / "provider-overrides.previous.json"
+
+
+def _save_snapshot(overrides: dict[str, str], actor: str | None = None,
+                    slot: str | None = None) -> None:
+    try:
+        payload = {
+            "overrides": dict(overrides),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "actor": actor,
+            "slot": slot,
+        }
+        path = _snapshot_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, payload)
+    except Exception:
+        pass
 
 
 def apply_provider_overrides() -> dict[str, str]:
@@ -172,6 +179,11 @@ def switch_provider(slot: str, backend: str, actor: str = "web",
     old_override = overrides.get(env_name)
     endpoint_had_override = endpoint_env in overrides
     endpoint_old_override = overrides.get(endpoint_env)
+
+    try:
+        _save_snapshot(overrides, actor=actor, slot=slot)
+    except Exception:
+        pass
 
     overrides[env_name] = requested
     if endpoint_env:
@@ -370,6 +382,25 @@ def _rollback(env_name: str, overrides: dict[str, str], had_override: bool,
               old_override: str | None, previous_value: str | None,
               actor: str, slot: str,
               extra_env: tuple = ()) -> None:
+    try:
+        from .first_run import config_root
+        import json
+        prev = config_root() / "provider-overrides.previous.json"
+        if prev.is_file():
+            try:
+                snap = json.loads(prev.read_text(encoding="utf-8"))
+                if isinstance(snap, dict) and isinstance(snap.get("overrides"), dict):
+                    try:
+                        _write_overrides(snap.get("overrides") or {}, actor=actor, slot=snap.get("slot"))
+                        applied = apply_provider_overrides()
+                        reset_provider_registry()
+                        return
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    except Exception:
+        pass
     if had_override and old_override is not None:
         overrides[env_name] = old_override
     else:
