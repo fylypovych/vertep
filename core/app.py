@@ -640,17 +640,40 @@ def _json_error(detail: str, status: int, **extra) -> Response:
 
 
 
-
 @app.delete("/api/session")
 def logout(response: Response):
     response.delete_cookie("vertep_session")
     response.delete_cookie("vertep_csrf")
     return {"authenticated": False}
 
+
 @app.get("/api/session")
 def session_info(request: Request):
     # Issue #75 S1: the canonical identity is decided once, on the server.
     return session_response(_valid_session(request.cookies.get("vertep_session", "")))
+
+
+@app.post("/api/session")
+def login(request: Request, response: Response):
+    auth = request.headers.get("Authorization", "")
+    if not auth:
+        return _json_error("Missing Authorization", 401)
+        scheme, _, b64 = auth.partition(" ")
+        if scheme.lower() != "basic":
+            return _json_error("Unsupported authentication scheme", 401)
+        try:
+            decoded = base64.b64decode(b64).decode("utf-8")
+            user, supplied = decoded.split(":", 1)
+        except Exception:
+            return _json_error("Bad authentication header", 401)
+        role = _authenticate_user(user, supplied)
+        if role is None:
+            return _json_error("Unauthorized", 401)
+        token = _session_token(user, role)
+        response.set_cookie("vertep_session", token, httponly=True, samesite="Strict", max_age=28800)
+        csrf = hmac.new(supplied.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+        response.set_cookie("vertep_csrf", csrf, samesite="Strict", max_age=28800)
+        return session_response((user, role))
 
 
 def _session_identity(request: Request) -> Response | tuple[str, str]:
