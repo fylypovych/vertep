@@ -713,7 +713,12 @@ class TestRestartAcceptance:
 
             # The node comes back with a new runtime instance and acknowledges
             # the restart; the CORE process dies before it can confirm.
-            self._heartbeat(acceptance, "instance-after-restart")
+            try:
+                self._heartbeat(acceptance, "instance-after-restart")
+            except httpx.ReadError:
+                # The intentional crash may precede the HTTP response.
+                # Exit code and durable ack are checked below.
+                pass
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 if acceptance.process.poll() is not None:

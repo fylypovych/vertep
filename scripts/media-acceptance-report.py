@@ -98,11 +98,15 @@ def _provenance(evidence: dict[str, Any] | None) -> dict[str, Any]:
             if isinstance(record, dict) and record.get("provenance")]
     if not seen:
         return {}
-    unique = {json.dumps(item, sort_keys=True) for item in seen}
+    # test_id identifies a row, not a separate run. All run-level fields
+    # (including SHA, version and backend configuration) must still agree.
+    runs = [{key: value for key, value in item.items() if key != "test_id"}
+            for item in seen]
+    unique = {json.dumps(item, sort_keys=True) for item in runs}
     if len(unique) > 1:
         raise ValueError(
             "the evidence rows come from different runs; refusing to report one SHA")
-    return seen[0]
+    return runs[0]
 
 
 def evaluate(evidence: dict[str, Any] | None, *,

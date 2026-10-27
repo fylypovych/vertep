@@ -1,3 +1,14 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.2.86
+- Повністю переписано README відповідно до поточних CORE/Worker, Web UI та session API, provider layer, MoneyPrinterTurbo, модульної архітектури й окремої LAB.
+- Уточнено production і source/demo встановлення, межі реального приймання `ir`, правила публікації та вимоги до evidence.
+- Видалено 12 погоджених одноразових patch/debug-файлів, дублікатів тексту Issue та застарілий WORKPLAN.md.
+- Виправлено посилання на розділи AGENTS.md й опис структури документації.
+- Узгоджено VERSION із наступним номером після commit 0.0.2.85: 0.0.2.86; історію Git і попередні tags не змінено.
+- Відновлено атомарне збереження provider overrides, втрачене в 0.0.2.85, та коректне відновлення змінних процесу під час rollback engines.
+- Media acceptance порівнює provenance прогону окремо від test_id рядка, зберігаючи відмову для різних SHA, версій, конфігурацій і run_id.
+- Telegram restart зберігає runtime_instance_id із підтвердженого стану вузла; crash/replay helper оновлено після перенесення callback handlers.
+- Виправлено Browser mock історії Runner з query-параметрами та підключення API до реальної тестової Redis-черги з коректними лічильниками після втрати Worker.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.80
 - Реалізовано завершення rollback та actual Browser flow для Issue i.0.0.3.18
 - Реалізовано actual enrollment та measured Browser acceptance для Issue i.0.0.3.19

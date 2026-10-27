@@ -7,6 +7,7 @@ import re
 import socket
 import sys
 import uuid
+from urllib.parse import quote
 from pathlib import Path
 
 import pytest
@@ -3228,6 +3229,7 @@ def test_real_tests_run_flow_through_browser_api():
                 "commit_sha": "b" * 40,
                 "status": "RUNNING",
                 "final_result": None,
+                "github_report": None,
                 "started_at": "2026-01-01T00:00:00Z",
                 "finished_at": None,
                 "initiator": "admin",
@@ -3307,9 +3309,9 @@ def test_real_tests_run_flow_through_browser_api():
             })
 
         page.route("**/api/real-tests/scenarios", scenarios_handler)
-        page.route(f"**/api/real-tests/scenarios/{scenario_id}/prerequisites", prerequisites_handler)
+        page.route(f"**/api/real-tests/scenarios/{quote(scenario_id, safe='')}/prerequisites", prerequisites_handler)
         page.route("**/api/real-tests/run", run_handler)
-        page.route("**/api/real-tests/runs", list_runs_handler)
+        page.route("**/api/real-tests/runs?*", list_runs_handler)
         page.route(f"**/api/real-tests/runs/{run_id}/progress", progress_handler)
         page.route(f"**/api/real-tests/runs/{run_id}/retry-report", retry_report_handler)
         page.route(f"**/api/real-tests/runs/{run_id}", get_run_handler)
@@ -3331,7 +3333,7 @@ def test_real_tests_run_flow_through_browser_api():
             "backup_roundtrip")
 
         # Підтвердження запуску.
-        page.get_by_role("button", name="Запустити").click()
+        page.get_by_test_id("real-tests-confirm").get_by_role("button", name="Запустити").click()
         expect(page.locator("[data-testid='real-tests-confirm']")).not_to_be_visible()
         expect(page.locator(f"[data-testid='real-tests-scenario-{scenario_id}']")).to_contain_text(
             "Запуск…")

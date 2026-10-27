@@ -264,3 +264,24 @@ def test_cli_requires_an_evidence_source():
 def test_every_declared_row_is_reported(row):
     verdict = report.evaluate({})
     assert row in verdict["rows"]
+
+
+def test_different_tests_in_one_run_share_provenance():
+    common = {"sha": "a" * 40, "version": "0.0.2.86", "run_id": "same-run",
+              "config": {"backend": "native"}}
+    verdict = report.evaluate({
+        "lease": _row(provenance=dict(common, test_id="test_lease")),
+        "cancel": _row(provenance=dict(common, test_id="test_cancel")),
+    })
+    assert verdict["provenance"] == common
+
+
+@pytest.mark.parametrize("field,value", [("run_id", "other-run"),
+                                         ("config", {"backend": "other"}),
+                                         ("version", "0.0.2.85")])
+def test_different_run_fields_are_still_refused(field, value):
+    common = {"sha": "a" * 40, "version": "0.0.2.86", "run_id": "same-run",
+              "config": {"backend": "native"}}
+    with pytest.raises(ValueError, match="different runs"):
+        report.evaluate({"lease": _row(provenance=common),
+                         "cancel": _row(provenance=dict(common, **{field: value}))})

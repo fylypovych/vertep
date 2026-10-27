@@ -80,7 +80,7 @@ def _wait_for_core_healthy(previous_instance_id: str) -> bool:
     return False
 
 
-def _wait_for_worker_ready(node_id: str, restart_operation_id: str) -> bool:
+def _wait_for_worker_ready(node_id: str, restart_operation_id: str) -> dict | None:
     """Wait up to ~60 s for a worker to report READY with a matching restart ack."""
     for _ in range(30):  # up to 60 seconds
         time.sleep(2)
@@ -88,8 +88,8 @@ def _wait_for_worker_ready(node_id: str, restart_operation_id: str) -> bool:
         restart_ack = ((node or {}).get("update_state") or {}).get("restart_ack") or {}
         if (node and node.get("status") == "READY"
                 and restart_ack.get("operation_id") == restart_operation_id):
-            return True
-    return False
+            return node
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +607,7 @@ def _sys_restart_worker_confirm(callback: dict, chat_id: str, action: str, paylo
             )
         _app_attr("complete_operation")(op["operation_id"], {"status": "ready", "node_id": node_id,
                                                 "restart_operation_id": restart_operation_id,
-                                                "runtime_instance_id": ((result or {}).get("update_state") or {}).get("restart_ack", {}).get("runtime_instance_id"),
+                                                "runtime_instance_id": (ready.get("update_state") or {}).get("restart_ack", {}).get("runtime_instance_id"),
                                                 "message": f"Worker {node_id} перезапущено успішно"})
         _app_attr("audit_entry")(op["operation_id"], "INTERNAL_CALL_RESULT", f"Worker {node_id} READY", f"telegram:{chat_id}")
         _queue_operation_notification(

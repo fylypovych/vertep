@@ -84,7 +84,8 @@ def main() -> None:
                 # The durable claim is already on disk; the effect never runs.
                 os._exit(9)
 
-            app._handle_system_callback = _crash
+            from core.telegram import handlers
+            handlers._handle_system_callback = _crash
         result = app._handle_telegram_callback(_callback(callback_id, chat_id, data))
         payload = {"ok": True}
         if isinstance(result, dict):

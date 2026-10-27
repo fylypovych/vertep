@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from core.queue import TaskQueue
-from core.state import task_queue as redis_task_queue
 from core.app import app
 from fastapi.testclient import TestClient
 
@@ -375,6 +374,7 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
     monkeypatch.setenv("REDIS_URL", redis_url)
     queue = TaskQueue()
     assert queue.backend == "redis"
+    monkeypatch.setattr("core.api.tasks.task_queue", queue)
     _flush(queue)
 
     ready = queue.enqueue({"job_id": "ready", "priority": 1})
@@ -400,10 +400,13 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
     assert len(queue.dead_letters()) == 1
 
     # "Restart": a brand-new client sees the same durable counts/state.
+    restarted_queue = TaskQueue()
+    assert restarted_queue.backend == "redis"
+    monkeypatch.setattr("core.api.tasks.task_queue", restarted_queue)
     restarted_client = TestClient(app)
     try:
         restarted_state = _queue_state(restarted_client)
-        assert restarted_state["total"]["ready"] == 1
+        assert restarted_state["total"]["ready"] == 2
         assert restarted_state["total"]["inflight"] == 0
         assert restarted_state["total"]["dead_letter"] == 1
         assert {task["job_id"] for task in restarted_state["ready"]} == {"ready", "leased"}
@@ -425,6 +428,7 @@ def test_dashboard_jobs_queue_http_consistency_through_loss_and_core_restart(
     monkeypatch.setenv("REDIS_URL", redis_url)
     queue = TaskQueue()
     assert queue.backend == "redis", "no fallback backend allowed"
+    monkeypatch.setattr("core.api.tasks.task_queue", queue)
     _flush(queue)
 
     client = TestClient(app)
@@ -472,6 +476,7 @@ def test_dashboard_jobs_queue_http_consistency_through_loss_and_core_restart(
     monkeypatch.setenv("REDIS_URL", redis_url)
     restarted_queue = TaskQueue()
     assert restarted_queue.backend == "redis"
+    monkeypatch.setattr("core.api.tasks.task_queue", restarted_queue)
     restarted_client = TestClient(app)
     try:
         restarted_state = _queue_state(restarted_client)
