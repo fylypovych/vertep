@@ -12,7 +12,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { inStatusGroup, statusLabel } from '../core/presentation';
-import { Subscription, timer } from 'rxjs';
+import { Subscription, timer, forkJoin } from 'rxjs';
 import { PolicyService } from '../core/services/policy.service';
 import { RemoteState } from '../core/state/remote-state';
 
@@ -109,7 +109,7 @@ import { RemoteState } from '../core/state/remote-state';
               }
             </div>
           } @else if (queueState.failed()) {
-            <p class="text-sm text-red-600">{{ queueError() }}</p>
+            <p class="text-sm text-red-600" data-testid="queue-error">{{ queueError() }}</p>
           } @else {
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               <div class="bg-slate-50 rounded-lg p-4">
@@ -458,39 +458,27 @@ export class JobsComponent implements OnInit, OnDestroy {
   loadQueue(): void {
     this.queueLoading.set(true);
     this.queueError.set(null);
-    this.queueSubs.add(
-      this.queue.state().subscribe({
-        next: (state: QueueState) => {
-          this.readyTasks.set(state.ready || []);
-          this.inflightTasks.set(state.inflight || []);
-          this.readyCount.set((state.ready || []).length);
-          this.inflightCount.set((state.inflight || []).length);
-          this.queueLoading.set(false);
-        },
-        error: (err) => {
-          this.queueError.set(err.message || 'Не вдалося завантажити чергу');
-          this.queueLoading.set(false);
-        },
-      }),
-    );
-    this.queueSubs.add(
-      this.queue.deadLetter().subscribe({
-        next: (tasks) => {
-          this.deadLetterTasks.set(tasks);
-          this.deadLetterCount.set(tasks.length);
-        },
-        error: () => {},
-      }),
-    );
-    this.queueSubs.add(
-      this.jobsApi.list().subscribe({
-        next: (jobs) => {
-          const scheduled = jobs.filter(j => j.status === 'NEW' && j.scheduled_for);
-          this.scheduledJobs.set(scheduled);
-        },
-        error: () => {},
-      }),
-    );
+    this.queueState.run(() => new Promise<QueueState>((resolve, reject) => {
+      this.queueSubs.add(forkJoin({ state: this.queue.state(),
+        tasks: this.queue.deadLetter(), jobs: this.jobsApi.list() }).subscribe({
+          next: ({state, tasks, jobs}) => {
+            this.readyTasks.set(state.ready || []);
+            this.inflightTasks.set(state.inflight || []);
+            this.readyCount.set((state.ready || []).length);
+            this.inflightCount.set((state.inflight || []).length);
+            this.deadLetterTasks.set(tasks);
+            this.deadLetterCount.set(tasks.length);
+            this.scheduledJobs.set(jobs.filter(j => j.status === 'NEW' && j.scheduled_for));
+            this.queueLoading.set(false);
+            resolve(state);
+          },
+          error: (err) => {
+            this.queueError.set(err.message || 'Не вдалося завантажити чергу');
+            this.queueLoading.set(false);
+            reject(err);
+          },
+        }));
+    }), 'Не вдалося завантажити чергу');
   }
 
   retryTask(taskId: string): void {

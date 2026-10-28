@@ -1,6 +1,8 @@
 import hashlib
 import importlib.util
 import json
+import subprocess
+import pytest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from core.release_contract import sign_release_contract
+from tests.acceptance_provenance import acceptance_provenance
 
 
 ROOT = Path(__file__).parents[1]
@@ -92,6 +95,32 @@ def test_runtime_builder_emits_complete_recomputed_checksums(tmp_path):
     assert {"manifest.json", "images.json", "sbom.cdx.json", "VERSION"} <= sums.keys()
 
 
+@pytest.mark.parametrize("mutation", [None, "missing-runtime", "sbom", "checksums", "inventory"])
+def test_actual_bundle_builder_to_qualification_fail_closed(tmp_path, mutation):
+    """Build real runtime files; fixture image lock is not an image-build proof."""
+    _, private, public, version, sequence, images = artifact_fixture(tmp_path)
+    lock = tmp_path / "image-lock.json"
+    lock.write_text(json.dumps(images), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("actual_runtime_builder", ROOT / "scripts/build-runtime-bundle.py")
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    bundle = builder.build(ROOT, tmp_path / "actual-built", version, sequence, lock, private, sha)
+    if mutation == "missing-runtime":
+        # Preserve the generated file while making its required signed path absent.
+        (bundle / "scripts/update-agent.py").rename(bundle / "saved-update-agent.py")
+    elif mutation == "sbom":
+        (bundle / "sbom.cdx.json").write_text('{"substituted":true}', encoding="utf-8")
+    elif mutation == "checksums":
+        (bundle / "SHA256SUMS").write_text("0" * 64 + "  VERSION\n", encoding="utf-8")
+    elif mutation == "inventory":
+        changed = json.loads((bundle / "images.json").read_text(encoding="utf-8"))
+        changed["core"]["digest"] = "sha256:" + "0" * 64
+        (bundle / "images.json").write_text(json.dumps(changed), encoding="utf-8")
+    report, _ = qualify_artifact(bundle, public, expected_source_sha=sha)
+    assert report["passed"] is (mutation is None), report
+
+
 def build_manifest(bundle, private_path, version, sequence, image_lock,
                    issued_at=None, validity_days=30, source_commit_sha="c" * 40):
     contract = contract_builder().build_contract(
@@ -102,9 +131,15 @@ def build_manifest(bundle, private_path, version, sequence, image_lock,
          "minimum_version": "0.0.0.1"},
         source_commit_sha,
     )
+    # Match the real builder: the external checksum list is written after the
+    # signed manifest, so it is not itself part of that signed file inventory.
+    contract["files"].pop("SHA256SUMS", None)
     signed = sign_release_contract(contract, private_path)
     (bundle / "manifest.json").write_text(
         json.dumps(signed, ensure_ascii=False, indent=2), encoding="utf-8")
+    (bundle / "SHA256SUMS").write_text("".join(
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(bundle).as_posix()}\n"
+        for path in sorted(bundle.rglob("*")) if path.is_file() and path.name != "SHA256SUMS"), encoding="utf-8")
     return signed
 
 

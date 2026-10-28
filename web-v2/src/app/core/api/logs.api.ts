@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, catchError, throwError } from 'rxjs';
 
 export interface LogEntry {
+  cursor?: string;
   timestamp: string;
   level: string;
   message: string;

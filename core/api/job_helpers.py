@@ -971,6 +971,7 @@ def _handle_script_result(store, job, result, artifacts) -> None:
 
     if task_id and job.script_task_id == task_id:
         job.script_task_id = None
+        job.assigned_worker = None
 
     if not success:
         error = result.get("error") or "UNKNOWN SCRIPT GENERATION ERROR"
@@ -1355,8 +1356,9 @@ def _recover_stale_workers() -> None:
             worker["current_job"] = None
             worker["current_task"] = None
         elif job and job.script_task_id == current_task and job.status in {JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING}:
-            task_queue.release(current_task)
+            task_queue.discard(current_task)
             job.script_task_id = None
+            job.active_task_id = None
             job.assigned_worker = None
             # Issue #197/#163.3: charge the script attempt budget for the lost
             # lease, exactly like ``_handle_script_result`` does for a failed
@@ -1373,11 +1375,14 @@ def _recover_stale_workers() -> None:
             else:
                 task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task, "task": "script"},
                                        "script worker heartbeat timed out after retries")
+                store.repository.record_task({"job_id": job.job_id, "task_id": current_task, "task": "script"},
+                                             "FAILED", worker.get("node_name"), error="script worker heartbeat timed out after retries")
                 store.update(job, JobStatus.SCRIPT_FAILED,
                              f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
                 store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} FAILED AFTER RETRIES")
             worker["current_job"] = None
             worker["current_task"] = None
+            store.save_worker(worker)
         elif job and current_task in job.publish_task_ids and job.status == JobStatus.PUBLISHING:
             task_queue.release(current_task)
             channel = job.publish_task_ids.pop(current_task, None)
@@ -1420,9 +1425,8 @@ def _recover_stale_workers() -> None:
             worker["current_task"] = None
         elif job and job.storyboard_task_id == current_task and job.status in {JobStatus.STORYBOARD_QUEUED,
                                                                                JobStatus.STORYBOARD_GENERATING}:
-            # Worker loss during storyboard generation: release the lease and
-            # re-queue the storyboard so the Job stays on the lifecycle path.
-            task_queue.release(current_task)
+            # Retire the lost attempt before issuing a replacement ID.
+            task_queue.discard(current_task)
             job.storyboard_task_id = None
             job.assigned_worker = None
             job.storyboard_attempt = getattr(job, "storyboard_attempt", 0) + 1
@@ -1434,12 +1438,6 @@ def _recover_stale_workers() -> None:
             attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
             if job.storyboard_attempt < attempts:
                 pinned_revision = getattr(job, "storyboard_active_revision", None)
-                # Issue #197/#163.1: do not pull a stale revision_request from a
-                # superseded storyboard unless it matches the pinned active revision.
-                if pinned_revision is None and getattr(job, "storyboards", None):
-                    last = job.storyboards[-1]
-                    if getattr(last, "revision_request", None) is not None and getattr(job, "storyboard_attempt_version", None) == getattr(last, "version", None):
-                        pinned_revision = last.revision_request
                 job.storyboard_active_revision = pinned_revision
                 from ..pipeline import queue_storyboard as _queue_storyboard
                 _queue_storyboard(store, job, revision=pinned_revision)
@@ -1448,6 +1446,8 @@ def _recover_stale_workers() -> None:
                 task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task,
                                         "task": "storyboard"},
                                        "storyboard worker heartbeat timed out (attempts exhausted)")
+                store.repository.record_task({"job_id": job.job_id, "task_id": current_task, "task": "storyboard"},
+                                             "FAILED", worker.get("node_name"), error="storyboard worker heartbeat timed out (attempts exhausted)")
                 job.storyboard_task_id = None
                 job.active_task_id = None
                 store.update(job, JobStatus.STORYBOARD_FAILED,
@@ -1455,6 +1455,7 @@ def _recover_stale_workers() -> None:
                 store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} FAILED AFTER RETRIES")
             worker["current_job"] = None
             worker["current_task"] = None
+            store.save_worker(worker)
         elif job and current_task in job.assembly_task_ids:
             # Issue #122 P6: a Worker that disappears while it owns an assembly
             # attempt releases the lease, the version stays unaccepted and the

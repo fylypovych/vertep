@@ -53,6 +53,17 @@ ROWS: tuple[str, ...] = (
     "evidence",
 )
 
+TEXT_PROCESS_ROWS = (
+    "text_process_core_redis_restart",
+    "text_process_default_revision_recovery_heartbeat",
+    "text_process_default_revision_recovery_lease",
+    "text_process_cancel",
+    "text_process_script_recovery_heartbeat",
+    "text_process_script_recovery_lease",
+    "text_process_failed_results_script",
+    "text_process_failed_results_storyboard",
+)
+
 
 def _digest(path: Path) -> str | None:
     try:
@@ -110,7 +121,8 @@ def _provenance(evidence: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def evaluate(evidence: dict[str, Any] | None, *,
-             only: tuple[str, ...] | None = None) -> dict[str, Any]:
+             only: tuple[str, ...] | None = None,
+             include_text_process: bool = False) -> dict[str, Any]:
     """Turn one evidence document into a per-row verdict.
 
     A row is only a proof when it names the test that produced it, carries the
@@ -119,7 +131,7 @@ def evaluate(evidence: dict[str, Any] | None, *,
     claim a row it cannot attribute.
     """
     rows: dict[str, Any] = {}
-    for name in ROWS:
+    for name in ROWS + (TEXT_PROCESS_ROWS if include_text_process else ()):
         if only and name not in only:
             continue
         record = (evidence or {}).get(name)
@@ -220,13 +232,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", default="", help="comma separated subset of rows")
     parser.add_argument("--require-all", action="store_true",
                         help="exit non-zero unless every row is PASS")
+    parser.add_argument("--expected-sha", default="", help="independent full SHA required by CI")
+    parser.add_argument("--include-text-process", action="store_true",
+                        help="require actual CORE/Redis Text process recovery rows (#358/#359)")
     args = parser.parse_args(argv)
 
     if not args.evidence:
         parser.error("--evidence or VERTEP_MEDIA_EVIDENCE is required")
     only = tuple(part.strip() for part in args.only.split(",") if part.strip()) or None
     try:
-        report = evaluate(_load_evidence(Path(args.evidence)), only=only)
+        report = evaluate(_load_evidence(Path(args.evidence)), only=only,
+                          include_text_process=args.include_text_process)
+        if args.expected_sha:
+            import re
+            observed = (report.get("provenance") or {}).get("sha")
+            if not re.fullmatch(r"[0-9a-f]{40}", args.expected_sha) or observed != args.expected_sha:
+                raise ValueError("evidence SHA does not match the independent expected full SHA")
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

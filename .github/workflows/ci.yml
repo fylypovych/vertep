@@ -8,6 +8,36 @@ permissions:
   contents: read
 
 jobs:
+  gpu-built-inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Встановлення залежностей acceptance tests
+        run: python -m pip install -r requirements.txt
+      - name: Pinned GPU image, inventory delivery, readiness та media trace
+        env:
+          VERTEP_REQUIRE_GPU_BUILT_INVENTORY: "1"
+        run: >-
+          python -m pytest -q tests/test_gpu_built_inventory.py
+          tests/test_gpu_runtime_inventory_delivery.py tests/test_gpu_http_pipeline.py
+          tests/test_gpu_media_fixtures.py tests/test_comfyui_runtime_inventory.py
+          -o junit_family=legacy --junitxml=${{ runner.temp }}/gpu-inventory.xml
+          --basetemp=${{ runner.temp }}/gpu-inventory
+      - name: Збереження image identity та actual inventory evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpu-inventory-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/gpu-inventory.xml
+            ${{ runner.temp }}/gpu-inventory/**/gpu-build.log
+            ${{ runner.temp }}/gpu-inventory/**/gpu-built-evidence.json
+
   runtime-identity:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -31,6 +61,7 @@ jobs:
     timeout-minutes: 20
     env:
       VERTEP_TEST_REDIS_URL: redis://localhost:6379/0
+      VERTEP_REQUIRE_PKI_CALLER_ACCEPTANCE: "1"
     services:
       redis:
         image: redis:7-alpine
@@ -68,7 +99,17 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q core adapters worker telegram publishers scripts lab tests
       - name: Run test suite
-        run: python -m pytest -q
+        run: |
+          openssl version
+          python -m pytest -q -o junit_family=legacy --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"
+      - name: Збереження exact-SHA process та trust acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-contracts-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/local-contracts.xml
+            ${{ runner.temp }}/local-contracts/**/backup-process-*.log
       - name: Validate shell syntax
         run: bash -n bootstrap.sh install.sh installer/*.sh scripts/vertep scripts/restore.sh
       - name: Validate Compose configurations
@@ -164,14 +205,19 @@ jobs:
           printf 'ci-only-secret-store-passphrase' > config/secret-store.passphrase
       - name: Run the media acceptance harness and record evidence
         env:
-          VERTEP_MEDIA_EVIDENCE: media-evidence/evidence.json
-        run: python -m pytest -q tests/test_full_media_harness.py tests/test_media_acceptance_report.py
+          VERTEP_MEDIA_EVIDENCE: media-evidence/${{ github.run_id }}-${{ github.run_attempt }}/evidence.json
+          VERTEP_REQUIRE_TEXT_REDIS_PROCESS: "1"
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq redis-server
+          redis-server --version
+          python -m pytest -q -o junit_family=legacy --junitxml=media-evidence/${{ github.run_id }}-${{ github.run_attempt }}/junit.xml tests/test_full_media_harness.py tests/test_text_redis_process.py tests/test_media_acceptance_report.py
       - name: Render the media acceptance report
         run: |
           python scripts/media-acceptance-report.py \
-            --evidence media-evidence/evidence.json \
+            --evidence media-evidence/${{ github.run_id }}-${{ github.run_attempt }}/evidence.json \
             --out media-evidence/media-acceptance \
-            --require-all
+            --require-all --include-text-process --expected-sha "$GITHUB_SHA"
       - name: Upload media acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7

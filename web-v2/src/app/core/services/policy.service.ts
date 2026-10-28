@@ -18,7 +18,7 @@ export interface PolicyDecision {
 const BLOCKED_AFTER_NORMAL: SystemMode[] = ['UPDATING', 'RECOVERING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
 const BLOCKED_CREATE_JOB: SystemMode[] = ['READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
 const BLOCKED_BACKUP: SystemMode[] = ['MAINTENANCE', 'UPDATING', 'RECOVERING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
-const BLOCKED_RESTORE: SystemMode[] = ['MAINTENANCE', 'UPDATING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
+const BLOCKED_RESTORE: SystemMode[] = ['UPDATING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
 const BLOCKED_RECOVERY: SystemMode[] = ['NORMAL', 'MAINTENANCE', 'UPDATING', 'RECOVERING', 'READ_ONLY', 'UNAVAILABLE'];
 
 const MUTATION_BLOCKED_IN: Record<string, SystemMode[]> = {
@@ -58,7 +58,7 @@ const MUTATION_BLOCKED_IN: Record<string, SystemMode[]> = {
   start_update: BLOCKED_AFTER_NORMAL,
   // POST /api/system/backups -> "backup" (NORMAL only).
   create_backup: BLOCKED_BACKUP,
-  // POST /api/system/backups/<id>/restore -> "restore" (NORMAL/RECOVERING).
+  // POST /api/system/backups/<id>/restore -> "restore" (NORMAL/MAINTENANCE/RECOVERING).
   restore_backup: BLOCKED_RESTORE,
   // /api/system/models and /api/models/text -> "model_pull".
   pull_model: BLOCKED_AFTER_NORMAL,

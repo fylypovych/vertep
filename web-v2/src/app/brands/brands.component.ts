@@ -10,6 +10,7 @@ import { Brand, Channel } from '../core/models';
 import { BrandChannelsComponent } from './brand-channels.component';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
+import { RemoteState } from '../core/state/remote-state';
 
 @Component({
   selector: 'app-brands',
@@ -47,7 +48,9 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                 </div>
               </div>
               <div class="text-sm text-slate-600 mb-3">{{ brand.enabled ? 'Активний' : 'Неактивний' }}</div>
-              <app-brand-channels [brandId]="brand.id" [channels]="brandChannels[brand.id] || []" (channelAdded)="onChannelAdded($event)" (channelChanged)="loadChannels(brand.id)" />
+              <app-brand-channels [brandId]="brand.id" [channels]="channelStates[brand.id]?.data() || []"
+                [loading]="channelStates[brand.id]?.loading() || false" [error]="channelStates[brand.id]?.error() || null"
+                (retry)="loadChannels(brand.id)" (channelAdded)="onChannelAdded($event)" (channelChanged)="loadChannels(brand.id)" />
             </div>
           }
         </div>
@@ -97,7 +100,7 @@ export class BrandsComponent implements OnInit {
   editorForm: { id: string; name: string; enabled: boolean } = { id: '', name: '', enabled: true };
   metadataJson = '';
   publishingJson = '';
-  brandChannels: Record<string, Channel[]> = {};
+  channelStates: Record<string, RemoteState<Channel[]>> = {};
   editingBrand = signal<Brand | null>(null);
 
   constructor(
@@ -134,10 +137,8 @@ export class BrandsComponent implements OnInit {
   }
 
   loadChannels(brandId: string): void {
-    this.resources.channels(brandId).subscribe({
-      next: (channels) => { this.brandChannels[brandId] = channels; },
-      error: () => { this.brandChannels[brandId] = []; },
-    });
+    const state = this.channelStates[brandId] ||= new RemoteState<Channel[]>([]);
+    state.run(() => this.resources.channels(brandId), 'Не вдалося завантажити канали');
   }
 
   openEditor(): void {
@@ -214,7 +215,7 @@ export class BrandsComponent implements OnInit {
 
   onChannelAdded(channel: Channel): void {
     const brandId = channel.brand_id;
-    this.brandChannels[brandId] = [...(this.brandChannels[brandId] || []), channel];
+    this.loadChannels(brandId);
   }
 
   parseJson(text: string): Record<string, unknown> {

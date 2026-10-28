@@ -217,6 +217,22 @@ async def lifespan(_app):
             _ov_log.warning("Provider override apply failed: %s", override_error)
         except Exception:
             pass
+    # JobStore resets interrupted scripts before Redis is constructed. Retire
+    # their old leases before dispatching replacements, including durable owners.
+    for task in task_queue.ready_tasks() + task_queue.inflight_tasks():
+        job = store.jobs.get(task.get("job_id"))
+        if task.get("task") != "script" or not job or job.script_task_id == task["task_id"]:
+            continue
+        task_queue.discard(task["task_id"])
+        owner = None
+        for worker in store.workers.values():
+            if worker.get("current_task") == task["task_id"]:
+                owner = worker.get("node_name")
+                worker["current_task"] = None
+                worker["current_job"] = None
+                worker["status"] = "OFFLINE"
+                store.save_worker(worker)
+        store.repository.record_task(task, "RELEASED", owner, error="script interrupted by CORE restart")
     for recovered_job in list(store.jobs.values()):
         if (recovered_job.status in {JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM}
                 and dispatch_allowed() and _job_is_due(recovered_job)):
@@ -308,6 +324,12 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return self._secure(await call_next(request))
         if request.method != "GET":
             path = request.url.path
+            operating_state = get_system_state()
+            if (str(operating_state.get("operation_id") or "").startswith("restore:")
+                    and operating_state.get("state") in {"MAINTENANCE", "RECOVERING"}
+                    and path not in {"/api/system/state", "/api/session"}
+                    and not (path.startswith("/api/system/backups/") and "/restore" in path)):
+                return self._secure(Response("Restore is in progress; writes are blocked", 423))
             operation = None
             if path == "/api/jobs" and request.method == "POST":
                 operation = "create_job"
@@ -369,7 +391,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         internal_update_routes = {"/api/status", "/api/system/update/check", "/api/system/update/run",
                                   "/api/system/update/readiness", "/api/system/recovery/normal",
                                   "/api/system/restart", "/api/system/test",
-                                  "/api/system/backups"}
+                                  "/api/system/backups", "/api/system/state"}
         internal_actions = request.url.path.startswith("/api/nodes/") and request.url.path.endswith("/actions")
         # The Fleet self-calls (Telegram restart/system handlers) read the node
         # listing and the node detail with the internal key; without that the
@@ -377,8 +399,10 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         internal_node_read = (request.method == "GET"
                               and (request.url.path == "/api/nodes"
                                    or request.url.path.startswith("/api/nodes/")))
+        internal_backup_restore = bool(re.fullmatch(
+            r"/api/system/backups/[A-Za-z0-9_-]+/restore(?:/confirm|/progress)?", request.url.path))
         if ((request.url.path in internal_update_routes or internal_actions
-                or internal_node_read)
+                or internal_node_read or internal_backup_restore)
                 and internal_key
                 and secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), internal_key)):
             response = await call_next(request)
@@ -497,6 +521,9 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
         return False
     attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
     current = getattr(job, "storyboard_attempt", 0) + 1
+    # requeue_expired already returned this ID to ready; a replacement must
+    # supersede it rather than leave a second runnable task behind.
+    task_queue.discard(task["task_id"])
     job.storyboard_attempt = current
     job.assigned_worker = None
     # Issue #197/#163.3: the lease that expired belonged to a specific Worker.
@@ -516,6 +543,7 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
     if stale_worker:
         stale_worker["current_job"] = None
         stale_worker["current_task"] = None
+        stale_worker["status"] = stale_worker.get("desired_state") or "READY"
         stale_worker["last_seen"] = utc_now()
         store.save_worker(stale_worker)
     # Record the lost lease in the repository so the audit trail shows the
@@ -545,28 +573,6 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
         character = load_character(_Path(_os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
         brand = read_json(_Path(_os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
         active_revision = getattr(job, "storyboard_active_revision", None)
-        if active_revision is None and job.storyboards:
-            last = job.storyboards[-1]
-            if getattr(last, "revision_request", None) is not None:
-                active_revision = last.revision_request
-            elif getattr(job, "storyboard_active_revision", None) is not None:
-                active_revision = getattr(job, "storyboard_active_revision")
-            # Issue #197/#163.1: never substitute a stale revision_request from a
-            # superseded storyboard when none is pinned for the active revision;
-            # keep None so the prompt uses the character/job defaults.
-        else:
-            if active_revision is None and getattr(job, "storyboard_active_revision", None) is not None:
-                active_revision = getattr(job, "storyboard_active_revision")
-        if active_revision is None and getattr(job, "storyboards", None):
-            # Avoid pulling from an arbitrary previous revision; only use an
-            # explicitly pinned active_revision.
-            pass
-        from .storyboard import build_storyboard_prompt
-        from .configuration import load_character, read_json
-        import os as _os
-        from pathlib import Path as _Path
-        character = load_character(_Path(_os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
-        brand = read_json(_Path(_os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
         prompt = build_storyboard_prompt(job, character, brand, active_revision)
         version = (job.storyboards[-1].version + 1 if job.storyboards else 1)
         image_version = job.storyboards[-1].image_version if job.storyboards else 1
@@ -587,9 +593,41 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
     else:
         job.storyboard_task_id = None
         job.active_task_id = None
+        task_queue.dead_letter(task, "storyboard task lease expired (attempts exhausted)")
+        store.repository.record_task(task, "FAILED", stale_node,
+                                     error="storyboard task lease expired (attempts exhausted)")
         store.update(job, JobStatus.STORYBOARD_FAILED,
                      f"STORYBOARD FAILED after {attempts} attempts: task lease expired repeatedly")
         store.event(job, f"TASK {task['task_id']} LEASE EXPIRED; FAILED ({current}/{attempts})")
+    return True
+
+
+def handle_expired_script_lease(task: dict) -> bool:
+    job = store.jobs.get(task.get("job_id"))
+    if not job or job.status != JobStatus.SCRIPT_GENERATING or job.script_task_id != task.get("task_id"):
+        return False
+    task_queue.discard(task["task_id"])
+    owner = None
+    for worker in store.workers.values():
+        if worker.get("current_task") == task["task_id"]:
+            owner = worker.get("node_name")
+            worker["current_task"] = None
+            worker["current_job"] = None
+            worker["status"] = worker.get("desired_state") or "READY"
+            store.save_worker(worker)
+    job.script_task_id = None
+    job.active_task_id = None
+    job.assigned_worker = None
+    job.script_attempt += 1
+    store.repository.record_task(task, "RELEASED", owner, error="script task lease expired")
+    if job.script_attempt <= job.max_retries:
+        from .api.job_helpers import _load_character_prompt, _enqueue_script_task
+        prompt, character = _load_character_prompt(job)
+        _enqueue_script_task(store, job, prompt, character, revision=job.revision)
+    else:
+        task_queue.dead_letter(task, "script task lease expired (attempts exhausted)")
+        store.repository.record_task(task, "FAILED", owner, error="script task lease expired (attempts exhausted)")
+        store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
     return True
 
 
@@ -610,6 +648,8 @@ async def _watchdog() -> None:
                 job.status = JobStatus.NEW
                 executor.submit(_prepare_and_dispatch, job)
         for task in task_queue.requeue_expired():
+            if handle_expired_script_lease(task):
+                continue
             if handle_expired_storyboard_lease(store, task):
                 continue
             job = store.jobs.get(task.get("job_id"))

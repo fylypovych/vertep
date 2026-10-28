@@ -199,6 +199,30 @@ def _record_cross_artifact_checks(record, contract: dict, artifact_root: Path,
         valid = all(re.fullmatch(r"[0-9a-f]{64}\s+\S.+", line.strip()) for line in lines if line.strip())
         record("manifest_sha256sums_present", valid and bool(lines),
                "" if (valid and bool(lines)) else "invalid SHA256SUMS format")
+        problems, listed = [], set()
+        for line in lines:
+            if not line.strip():
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+                problems.append("invalid checksum entry")
+                continue
+            digest, name = parts[0], parts[1].removeprefix("*")
+            target = artifact_root / name
+            if name in listed:
+                problems.append(f"duplicate checksum: {name}")
+            listed.add(name)
+            if (artifact_root.resolve() not in target.resolve().parents
+                    or target.is_symlink() or not target.is_file()):
+                problems.append(f"missing or unsafe checksum target: {name}")
+            elif hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                problems.append(f"checksum mismatch: {name}")
+        required = set(contract.get("files", {})) | {"manifest.json"}
+        required -= {"SHA256SUMS", f"SHA256SUMS-{contract.get('version')}"}
+        missing = required - listed
+        if missing:
+            problems.append("missing checksums: " + ", ".join(sorted(missing)))
+        record("manifest_sha256sums_verified", not problems, "; ".join(problems))
     record("manifest_channel_is_stable", contract.get("channel") == EXPECTED_CHANNEL,
            str(contract.get("channel")))
     expected_sequence = _expected_release_sequence(repo_version)

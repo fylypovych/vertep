@@ -26,6 +26,7 @@ import struct
 import subprocess
 import time
 import wave
+import uuid
 from pathlib import Path
 
 from adapters.ffmpeg import FFmpegAdapter
@@ -43,6 +44,7 @@ WAIT_DELAY = 0.025
 
 #: Environment variable holding the evidence file consumed by the CI report.
 EVIDENCE_ENV = "VERTEP_MEDIA_EVIDENCE"
+_EVIDENCE_RUN_ID = uuid.uuid4().hex
 
 
 # ---------------------------------------------------------------------------
@@ -833,7 +835,7 @@ def run_provenance() -> dict:
         sha = None
     version = (root / "VERSION").read_text(encoding="utf-8").strip() \
         if (root / "VERSION").is_file() else None
-    return {"sha": sha, "version": version,
+    return {"run_id": _EVIDENCE_RUN_ID, "sha": sha, "version": version,
             "dirty": bool(sha and subprocess.run(
                 ["git", "status", "--porcelain"], cwd=root, capture_output=True,
                 text=True, timeout=30).stdout.strip()),

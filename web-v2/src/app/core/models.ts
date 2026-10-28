@@ -505,6 +505,7 @@ export interface Alert {
 }
 
 export interface LogEntry {
+  cursor?: string;
   level: string;
   message: string;
   timestamp?: string;

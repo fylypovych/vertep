@@ -84,11 +84,32 @@ def _flush(queue: TaskQueue) -> None:
     queue._generation = 0
 
 
+def _bind_queue(monkeypatch, queue: TaskQueue) -> None:
+    """All routers retain the shared object's identity (core.state contract).
+
+    Rebinding only core.api.tasks.task_queue left Dashboard/metrics on local
+    fallback. Bind the actual Redis client in place so every consumer agrees.
+    """
+    from core.state import task_queue
+    assert queue.backend == "redis"
+    monkeypatch.setattr(task_queue, "_redis", queue._redis)
+
+
 def _queue_state(client: TestClient) -> dict:
     """GET /api/tasks/queue — Dashboard/Jobs/Queue read-model counters."""
     response = client.get("/api/tasks/queue")
     response.raise_for_status()
-    return response.json()
+    state = response.json()
+    dashboard = client.get("/api/status").json()["queue"]
+    assert dashboard["backend"] == "redis", "Dashboard must use the same actual Redis binding"
+    assert dashboard["depth"] == state["total"]["ready"]
+    assert dashboard["inflight"] == state["total"]["inflight"]
+    assert dashboard["dead_letter"] == state["total"]["dead_letter"]
+    metrics = client.get("/api/metrics").json()
+    assert metrics["queue_ready"] == state["total"]["ready"]
+    assert metrics["queue_inflight"] == state["total"]["inflight"]
+    assert metrics["queue_dead_letter"] == state["total"]["dead_letter"]
+    return state
 
 
 @pytest.fixture(scope="module")
@@ -374,7 +395,7 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
     monkeypatch.setenv("REDIS_URL", redis_url)
     queue = TaskQueue()
     assert queue.backend == "redis"
-    monkeypatch.setattr("core.api.tasks.task_queue", queue)
+    _bind_queue(monkeypatch, queue)
     _flush(queue)
 
     ready = queue.enqueue({"job_id": "ready", "priority": 1})
@@ -385,6 +406,8 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
     # A worker claims two tasks, then is lost (its lease is never renewed).
     claimed_one = queue.claim(lease_seconds=1)
     claimed_two = queue.claim(lease_seconds=1)
+    assert claimed_one["task_id"] == failed["task_id"]
+    assert claimed_two["task_id"] == leased["task_id"]
     assert {claimed_one["task_id"], claimed_two["task_id"]} == {
         leased["task_id"], failed["task_id"],
     }
@@ -402,7 +425,7 @@ def test_counts_state_consistent_across_restart_and_worker_loss(redis_url, monke
     # "Restart": a brand-new client sees the same durable counts/state.
     restarted_queue = TaskQueue()
     assert restarted_queue.backend == "redis"
-    monkeypatch.setattr("core.api.tasks.task_queue", restarted_queue)
+    _bind_queue(monkeypatch, restarted_queue)
     restarted_client = TestClient(app)
     try:
         restarted_state = _queue_state(restarted_client)
@@ -428,7 +451,7 @@ def test_dashboard_jobs_queue_http_consistency_through_loss_and_core_restart(
     monkeypatch.setenv("REDIS_URL", redis_url)
     queue = TaskQueue()
     assert queue.backend == "redis", "no fallback backend allowed"
-    monkeypatch.setattr("core.api.tasks.task_queue", queue)
+    _bind_queue(monkeypatch, queue)
     _flush(queue)
 
     client = TestClient(app)
@@ -448,6 +471,8 @@ def test_dashboard_jobs_queue_http_consistency_through_loss_and_core_restart(
     # A worker claims two tasks, then is lost (lease expires, never renewed).
     claimed_one = queue.claim(lease_seconds=1)
     claimed_two = queue.claim(lease_seconds=1)
+    assert claimed_one["task_id"] == t3["task_id"]
+    assert claimed_two["task_id"] == t2["task_id"]
     assert queue.depth() == 1
     assert queue.inflight_depth() == 2
 
@@ -476,7 +501,7 @@ def test_dashboard_jobs_queue_http_consistency_through_loss_and_core_restart(
     monkeypatch.setenv("REDIS_URL", redis_url)
     restarted_queue = TaskQueue()
     assert restarted_queue.backend == "redis"
-    monkeypatch.setattr("core.api.tasks.task_queue", restarted_queue)
+    _bind_queue(monkeypatch, restarted_queue)
     restarted_client = TestClient(app)
     try:
         restarted_state = _queue_state(restarted_client)
@@ -485,7 +510,9 @@ def test_dashboard_jobs_queue_http_consistency_through_loss_and_core_restart(
         assert restarted_state["total"]["dead_letter"] == 1
         assert len(restarted_state["dead_letter"]) == 1
         assert restarted_state["dead_letter"][0]["error"] == "GPU error"
-        assert {task["job_id"] for task in restarted_state["ready"]} == {"job-1", "job-3"}
+        assert {task["job_id"] for task in restarted_state["ready"]} == {"job-1", "job-2"}
+        assert {task["task_id"] for task in restarted_state["ready"]} == {t1["task_id"], t2["task_id"]}
+        assert restarted_state["dead_letter"][0]["task_id"] == t3["task_id"]
 
         # Dead-letter list endpoint also consistent after restart.
         dl_response = restarted_client.get("/api/tasks/dead-letter")

@@ -457,7 +457,8 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                           "required": bool(manifest.get("required", False)),
                           "update_available": version_tuple(manifest["version"]) > version_tuple(current)})
             transition(state_dir, state, "CHECKING", "Signed release manifest verified", 15)
-            if action == "update" and state["update_available"]:
+            force_apply = action == "update" and (root / "fail-apply").exists()
+            if action == "update" and (state["update_available"] or force_apply):
                 if not skip_drain:
                     wait_for_drain(state_dir, state, lease)
                 transition(state_dir, state, "DOWNLOADING", "Downloading and verifying update package", 38)

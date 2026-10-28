@@ -76,6 +76,52 @@ def test_confirmation_token_is_single_use(monkeypatch, backup_env):
     assert "використано" in repeat.text.lower()
 
 
+def test_confirmation_is_rechecked_after_waiting_for_actual_guard(monkeypatch, backup_env):
+    import concurrent.futures
+    import threading
+    client = TestClient(backup_service.app)
+    sid = client.post("/snapshots", json={"job_id": "confirmation-race"}).json()["snapshot_id"]
+    token = client.post(f"/snapshots/{sid}/restore").json()["confirmation_token"]
+    entered, release = threading.Event(), threading.Event()
+    real_acquire = backup_service._acquire_restore_guard
+    calls, lock = [], threading.Lock()
+    def delayed_first_acquire(snapshot_id):
+        with lock:
+            first = not calls
+            calls.append(snapshot_id)
+        if first:
+            entered.set()
+            assert release.wait(10)
+        return real_acquire(snapshot_id)
+    monkeypatch.setattr(backup_service, "_acquire_restore_guard", delayed_first_acquire)
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        stale = pool.submit(client.post, f"/snapshots/{sid}/restore/confirm", params={"token": token})
+        try:
+            assert entered.wait(5)
+            assert client.post(f"/snapshots/{sid}/restore/confirm", params={"token": token}).status_code == 200
+            target = backup_env.parent / "config/a.txt"
+            target.write_text("writer after completed restore", encoding="utf-8")
+        finally:
+            release.set()
+        assert stale.result(timeout=10).status_code == 401
+    assert target.read_text(encoding="utf-8") == "writer after completed restore"
+
+
+def test_restore_cannot_replay_historical_normal_over_live_restore_fence(backup_env):
+    config = backup_env.parent / "config"
+    state_file = config / "update/system-state.json"
+    state_file.parent.mkdir()
+    state_file.write_text('{"state":"NORMAL","operation_id":null}', encoding="utf-8")
+    client = TestClient(backup_service.app)
+    sid = client.post("/snapshots", json={"job_id": "restore-fence"}).json()["snapshot_id"]
+    token = client.post(f"/snapshots/{sid}/restore").json()["confirmation_token"]
+    live = {"state": "MAINTENANCE", "operation_id": "restore:" + sid}
+    state_file.write_text(json.dumps(live), encoding="utf-8")
+    response = client.post(f"/snapshots/{sid}/restore/confirm", params={"token": token})
+    assert response.status_code == 200, response.text
+    assert json.loads(state_file.read_text(encoding="utf-8")) == live
+
+
 def test_confirmation_is_bound_to_snapshot(monkeypatch, backup_env):
     client = TestClient(backup_service.app)
     first = client.post("/snapshots", json={"job_id": "d3"}).json()["snapshot_id"]

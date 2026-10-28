@@ -17,6 +17,7 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+from contextlib import asynccontextmanager
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import FastAPI, HTTPException
@@ -25,7 +26,13 @@ from pydantic import BaseModel, Field
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-app = FastAPI(title="Vertep Backup", version="1")
+@asynccontextmanager
+async def _lifespan(_app):
+    recover_interrupted_restore()
+    yield
+
+
+app = FastAPI(title="Vertep Backup", version="1", lifespan=_lifespan)
 _lock = threading.RLock()
 MAGIC = b"VERTEP-BACKUP-v1\0"
 
@@ -108,10 +115,19 @@ def _acquire_restore_guard(snapshot_id: str) -> str | None:
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         info = _read_json_file(path, {})
+        import psutil
+        owner = info.get("pid")
+        operation = _load_operations().get(info.get("snapshot_id"), {})
+        if ((isinstance(owner, int) and psutil.pid_exists(owner))
+                or operation.get("status") in {"running", "error"}):
+            # Elapsed TTL cannot steal an active or interrupted mutation.
+            return None
         age = time.time() - float(info.get("started_at", 0) or 0)
         if age <= _RESTORE_GUARD_TTL:
             return None
         try:
+            if _read_json_file(path, {}) != info:
+                return None
             path.unlink()
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except OSError:
@@ -194,6 +210,20 @@ def _finalize_restore_failure(snapshot_id: str, message: str, emergency_reason: 
     })
 
 
+def recover_interrupted_restore() -> None:
+    """Persist a crashed owner's failure; retain its fence for safe recovery."""
+    import psutil
+    guard = _read_json_file(_restore_state_dir() / _RESTORE_GUARD_NAME, {})
+    snapshot_id = guard.get("snapshot_id")
+    pid = guard.get("pid")
+    if not snapshot_id or not isinstance(pid, int) or psutil.pid_exists(pid):
+        return
+    operation = _load_operations().get(snapshot_id, {})
+    if operation.get("status") == "running":
+        _finalize_restore_failure(snapshot_id, "Restore process interrupted",
+                                  "Restore owner exited before completion")
+
+
 def _sources() -> list[tuple[str, Path]]:
     raw = os.getenv("BACKUP_SOURCES", "").strip()
     if raw:
@@ -231,9 +261,9 @@ def _get_system_state() -> dict | None:
         return None
     try:
         req = urllib.request.Request(f"{core_url}/api/system/state")
-        token = os.getenv("NODE_API_TOKEN", "")
+        token = os.getenv("INTERNAL_API_KEY", "")
         if token:
-            req.add_header("Authorization", f"Bearer {token}")
+            req.add_header("x-vertep-internal-key", token)
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
@@ -252,10 +282,10 @@ def _is_restore_allowed() -> tuple[bool, str]:
             return True, "standalone"
         return False, "CORE state API недоступний; безпечне відновлення не підтверджено"
     current = str(state.get("state", "NORMAL"))
-    # Issue #60: restore is only safe in MAINTENANCE or RECOVERY states.
+    # Issue #60: restore is only safe in MAINTENANCE or RECOVERING states.
     # NORMAL and UPDATING indicate active system usage — restoring there risks
     # data corruption and concurrent-write conflicts.
-    _ALLOWED_STATES = {"MAINTENANCE", "RECOVERY"}
+    _ALLOWED_STATES = {"MAINTENANCE", "RECOVERING"}
     if current not in _ALLOWED_STATES:
         return False, (
             f"Відновлення заборонено в стані {current}. "
@@ -599,19 +629,21 @@ def confirm_restore(snapshot_id: str, token: str) -> dict:
     return _execute_restore(snapshot_id, token)
 
 
-def _consume_confirmation(token: str | None) -> None:
+def _consume_confirmation(token: str | None, snapshot_id: str) -> bool:
     """Durably mark a confirmation token used, once a restore is actually starting."""
     if not token:
-        return
+        return True
     with _confirm_lock:
         confirmations = _load_confirmations()
-        conf = confirmations.get(token) or _restore_confirmations.get(token)
-        if not conf:
-            return
+        conf = confirmations.get(token)
+        if (not conf or conf.get("status") != "pending" or conf.get("snapshot_id") != snapshot_id
+                or time.time() > conf.get("expires_at", 0)):
+            return False
         conf = {**conf, "status": "consumed", "consumed_at": time.time()}
         confirmations[token] = conf
         _atomic_write_json(_restore_state_dir() / _RESTORE_CONFIRMATIONS_NAME, confirmations)
         _restore_confirmations[token] = conf
+        return True
 
 def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
     key = _key()
@@ -659,7 +691,9 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
     if guard is None:
         raise HTTPException(409, "Відновлення вже виконується іншим процесом")
     # Issue #136: consume the single-use token only once the restore really starts.
-    _consume_confirmation(token)
+    if not _consume_confirmation(token, snapshot_id):
+        _release_restore_guard(guard)
+        raise HTTPException(401, "Токен підтвердження вже використано або застарів")
 
     started_at = time.time()
     _write_operation(snapshot_id, {"status": "running", "progress": 5,
@@ -669,8 +703,9 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
                                    "snapshot_id": snapshot_id})
         
     try:
-        # Issue #60: System must be in MAINTENANCE/RECOVERY during restore
-        _set_system_state("MAINTENANCE", f"System restore initiated for {snapshot_id}")
+        # Issue #60: System must be in MAINTENANCE/RECOVERING during restore
+        _set_system_state("MAINTENANCE", f"System restore initiated for {snapshot_id}",
+                          operation_id=f"restore:{snapshot_id}")
         
         if not _core_available():
             raise HTTPException(503, "CORE недоступний, відновлення заборонено")
@@ -698,10 +733,16 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
                 if not source_root.is_dir():
                     continue
                 destination.mkdir(parents=True, exist_ok=True)
-                snapshot_files = set()
+                # A snapshot may contain an older global state. Never replace
+                # the live restore fence with that historical NORMAL state.
+                protected = {path for path in destination.rglob("system-state.json")
+                             if _read_json_file(path, {}).get("operation_id") == f"restore:{snapshot_id}"}
+                snapshot_files = set(protected)
                 for item in sorted(source_root.rglob("*")):
                     relative = item.relative_to(source_root)
                     target = destination / relative
+                    if target in protected:
+                        continue
                     if item.is_dir():
                         target.mkdir(parents=True, exist_ok=True)
                         snapshot_files.add(target)
@@ -799,17 +840,17 @@ def _core_available() -> bool:
         return False
 
 
-def _set_system_state(state: str, reason: str) -> None:
+def _set_system_state(state: str, reason: str, operation_id: str | None = None) -> None:
     """Set the GLOBAL system state on CORE."""
     core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
     if not core_url:
         return
     headers = {"Content-Type": "application/json"}
-    token = os.getenv("NODE_API_TOKEN", "")
+    token = os.getenv("INTERNAL_API_KEY", "")
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        headers["x-vertep-internal-key"] = token
     try:
-        payload = json.dumps({"state": state, "reason": reason, "operation_id": None}).encode("utf-8")
+        payload = json.dumps({"state": state, "reason": reason, "operation_id": operation_id}).encode("utf-8")
         req = urllib.request.Request(f"{core_url}/api/system/state", data=payload,
                                       headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -821,11 +862,11 @@ def _set_system_state(state: str, reason: str) -> None:
 def _set_emergency(reason: str) -> None:
     core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
     if not core_url:
-        return
+        raise RuntimeError("CORE is not configured; EMERGENCY cannot be confirmed")
     headers = {"Content-Type": "application/json"}
-    token = os.getenv("NODE_API_TOKEN", "")
+    token = os.getenv("INTERNAL_API_KEY", "")
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        headers["x-vertep-internal-key"] = token
     try:
         # Issue #36/#16: CORE did not expose a mutating state endpoint, so this POST
         # previously hit a GET-only route (405). The route now durably sets EMERGENCY.

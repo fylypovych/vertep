@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import re
 import uuid
 import base64 as basic64
@@ -77,10 +78,21 @@ def web_system_state():
 
 
 @router.post("/api/system/state")
-def system_state(payload: dict):
+def system_state(payload: dict, request: Request):
     """Set the system state (used by the Backup Node to enter EMERGENCY)."""
     reason = payload.get("reason", "manual update")
-    return set_system_state(SystemState.EMERGENCY, reason)
+    target = payload.get("state", "EMERGENCY")
+    if target not in {"EMERGENCY", "MAINTENANCE", "RECOVERING", "NORMAL"}:
+        raise HTTPException(422, "Unsupported restore state")
+    if target != "EMERGENCY":
+        key = os.getenv("INTERNAL_API_KEY", "")
+        if not key or not secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), key):
+            raise HTTPException(403, "Restore state requires internal authentication")
+    if target == "NORMAL":
+        from ..health_checks import run_checks, health_status
+        if health_status(run_checks("core")) != "HEALTHY":
+            raise HTTPException(409, "Post-restore health checks failed")
+    return set_system_state(SystemState(target), reason, payload.get("operation_id"))
 
 
 @router.get("/api/system/installation-manifest")

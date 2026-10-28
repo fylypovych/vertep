@@ -2433,6 +2433,11 @@ def _mock_chrome_data(page):
     page.route("**/api/characters", lambda route: route.fulfill(json=[]))
     page.route("**/api/workflows", lambda route: route.fulfill(json=[]))
     page.route("**/api/brands", lambda route: route.fulfill(json=[]))
+    # This UI-only smoke has a mocked session, hence no backend cookie. Letting
+    # Logs hit the real protected API races the title assertion with a 401
+    # redirect to /login and then /. Actual Logs HTTP proof lives separately.
+    page.route("**/api/logs*", lambda route: route.fulfill(json=[])
+               if route.request.method == "GET" else route.fallback())
 
 
 def test_header_metadata_matches_navigation():

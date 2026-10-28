@@ -76,7 +76,7 @@ import { RemoteState } from '../core/state/remote-state';
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              @for (entry of logsState.data(); track entry.timestamp + '_' + entry.logger + '_' + entry.message) {
+              @for (entry of logsState.data(); track entry.cursor || (entry.timestamp + '_' + entry.logger + '_' + entry.message)) {
                 <tr class="align-top hover:bg-slate-50">
                   <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{{ entry.timestamp | vertepDate }}</td>
                   <td class="px-4 py-3">
@@ -155,12 +155,14 @@ export class LogsComponent implements OnInit {
     if (current.length === 0 || this.loadingOlder()) {
       return;
     }
-    const oldest = current[current.length - 1].timestamp;
+    const last = current[current.length - 1];
+    const oldest = last.cursor || last.timestamp;
     this.loadingOlder.set(true);
     this.logsApi.logs({ ...this.query(), before: oldest }).pipe(finalize(() => this.loadingOlder.set(false))).subscribe({
       next: (older) => {
-        const seen = new Set(current.map((entry) => `${entry.timestamp}_${entry.logger}_${entry.message}`));
-        const appended = older.filter((entry) => !seen.has(`${entry.timestamp}_${entry.logger}_${entry.message}`));
+        const identity = (entry: LogEntry) => entry.cursor || `${entry.timestamp}_${entry.logger}_${entry.message}`;
+        const seen = new Set(current.map(identity));
+        const appended = older.filter((entry) => !seen.has(identity(entry)));
         this.logsState.data.set([...current, ...appended]);
         this.hasMore.set(older.length >= this.limit && appended.length > 0);
       },

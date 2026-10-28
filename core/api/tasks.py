@@ -107,6 +107,7 @@ def claim_task(payload: TaskClaim, request: Request):
             # repository record and the Job lifecycle agree.  Without this the
             # job stays in STORYBOARD_QUEUED while the worker is actively
             # generating, and a concurrent second claim sees a claimable task.
+            job.assigned_worker = payload.node_name
             store.update(job, JobStatus.STORYBOARD_GENERATING,
                          f"STORYBOARD TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
             store.event(job, f"{payload.node_name} STORYBOARD CLAIMED {task['task_id']}")
@@ -130,6 +131,7 @@ def claim_task(payload: TaskClaim, request: Request):
             store.save_worker(store.workers[payload.node_name])
             store.event(job, f"{payload.node_name} SCRIPT CLAIMED {task['task_id']}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
+            job.assigned_worker = payload.node_name
             store.update(job, JobStatus.SCRIPT_GENERATING, f"SCRIPT TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
             return {"task": task}
         if task.get("task") == "publish":
@@ -261,6 +263,13 @@ def claim_task(payload: TaskClaim, request: Request):
 def renew_task(payload: TaskRenew, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
+    text_job = next((job for job in store.jobs.values()
+                     if payload.task_id in {job.script_task_id, job.storyboard_task_id}), None)
+    if text_job is not None:
+        owned, _ = _text_task_lease(text_job, payload.task_id, payload.node_name)
+        if not owned:
+            raise HTTPException(409, "Task is no longer assigned to this worker")
+        return {"renewed": task_queue.renew(payload.task_id)}
     job = next((job for job in store.jobs.values() if payload.task_id in job.active_task_ids), None)
     if job is not None and _scene_for_task(job, payload.task_id):
         scene = _scene_for_task(job, payload.task_id)
@@ -388,6 +397,8 @@ def queue_tasks(limit: int = Query(default=50, ge=1, le=500), offset: int = Quer
             # reconcile a separate, contradictory queue model.
             "job_status": job.status.value if job else None,
             "kind": task.get("kind"),
+            "error": _redact_payload(task.get("error")),
+            "failed_at": task.get("failed_at"),
         }
 
     def _scheduled() -> list[dict]:
@@ -514,16 +525,28 @@ def task_result(result: TaskResult, request: Request):
             store.event(job, f"STORYBOARD RESULT {result.task_id} REJECTED: "
                              f"{reason} (node={result.node_name})")
             return job
+        terminal_error = None
         try:
             accepted = StoryboardService(store).handle_result(job.job_id, result.task_id, result.success,
                                                               result.artifacts, result.error, result.node_name,
                                                               cancelled=result.cancelled)
-        except (ValueError, RuntimeError) as error:
+        except RuntimeError as error:
+            if result.success or job.status != JobStatus.STORYBOARD_FAILED:
+                raise HTTPException(400, str(error)) from error
+            # A failed result that exhausts the budget is still an accepted
+            # result: finish its lease and owner before returning the failed Job.
+            job.storyboard_task_id = None
+            job.active_task_id = None
+            accepted = job
+            terminal_error = str(error)
+        except ValueError as error:
             raise HTTPException(400, str(error)) from error
         if accepted is None:
             # Rejected result: the task stays in flight for the legitimate
             # claim holder; do NOT ack, dead-letter or free the worker.
             return job
+        job.assigned_worker = None
+        store.repository.save_job(job)
         worker = store.workers.get(result.node_name)
         if worker:
             desired_status = worker.get("desired_state")
@@ -535,6 +558,8 @@ def task_result(result: TaskResult, request: Request):
         store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
         if not result.success:
             _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, result.error)
+        if terminal_error is not None:
+            raise HTTPException(400, terminal_error)
         return job
     if job.script_task_id == result.task_id:
         from ..api.job_helpers import _handle_script_result
@@ -567,7 +592,7 @@ def task_result(result: TaskResult, request: Request):
         _tq2.ack(result.task_id)
         store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "script"},
                                      "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
-        if not result.success:
+        if not result.success and job.status != JobStatus.SCRIPT_FAILED:
             _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "script"}, result.error)
         return job
     if result.task_id in job.assembly_task_ids:

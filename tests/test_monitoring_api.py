@@ -320,6 +320,29 @@ def test_read_logs_pages_with_before_cursor(monkeypatch, tmp_path):
     assert [item["message"] for item in all_entries] == [f"m{i:02d}" for i in range(4, -1, -1)]
 
 
+def test_log_cursor_preserves_timestamp_ties_and_identical_records(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    line = json.dumps({"timestamp": "2026-01-01T00:00:00Z", "level": "INFO",
+                       "message": "same timestamp and message", "node_name": "tie-node"})
+    root = _write_logs(tmp_path, [line] * 5, [line] * 3)
+    monkeypatch.setenv("LOG_ROOT", str(root))
+    seen = []
+    before = None
+    while True:
+        params = {"limit": 3, "node_name": "tie-node"}
+        if before:
+            params["before"] = before
+        response = client.get("/api/logs", params=params)
+        assert response.status_code == 200
+        page = response.json()
+        if not page:
+            break
+        seen.extend(item["cursor"] for item in page)
+        assert len(seen) <= 8
+        before = page[-1]["cursor"]
+    assert len(seen) == len(set(seen)) == 8
+
+
 # ── Log redaction (Issue #53, #18 block) ───────────────────────────────
 
 def test_secret_redact_masks_key_value_and_bearer():

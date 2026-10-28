@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from ..api._internal import _internal_api
+from ..system_state import get_system_state, set_system_state, SystemState
+from ..state import store, task_queue
 
 router = APIRouter()
 
@@ -48,6 +50,18 @@ async def restore_progress_proxy(snapshot_id: str):
 async def restore_system_backup(snapshot_id: str):
     if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
         raise HTTPException(422, "Invalid snapshot identifier")
+    state = get_system_state()
+    owner = str(state.get("operation_id") or "")
+    if owner.startswith("restore:") and owner != f"restore:{snapshot_id}":
+        raise HTTPException(409, "Another restore is awaiting confirmation or executing")
+    safe_jobs = {"PAUSED", "FAILED", "CANCELLED", "PUBLISHED", "READY", "SCRIPT_PENDING_APPROVAL",
+                 "STORYBOARD_PENDING_APPROVAL", "STORYBOARD_READY", "VIDEO_PENDING_APPROVAL",
+                 "VIDEO_REVISION_REQUESTED", "WAITING_FOR_SYSTEM"}
+    if task_queue.inflight_depth() or any(job.status.value not in safe_jobs for job in list(store.jobs.values())):
+        raise HTTPException(409, "Active jobs must be drained before restore")
+    # The owner already requested restore; freeze writes before obtaining its
+    # snapshot-bound challenge. Cancellation/failure must not imply NORMAL.
+    set_system_state(SystemState.MAINTENANCE, f"Restore confirmation for {snapshot_id}", f"restore:{snapshot_id}")
     return await _internal_api(
         "POST", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore"
     )

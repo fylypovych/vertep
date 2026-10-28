@@ -376,6 +376,9 @@ class StoryboardService:
 
         self.store.update(job, JobStatus.STORYBOARD_REVISION_REQUESTED,
                           f"STORYBOARD {version} REVISION REQUESTED by {actor} (history branch)")
+        # An explicit history branch starts a fresh generation even when the
+        # previous attempt failed before it could persist the next version.
+        job.storyboard_attempt_version = None
         return self.queue(job, effective_revision)
 
     def get(self, job_id: str, version: int | None = None) -> StoryboardVersion:

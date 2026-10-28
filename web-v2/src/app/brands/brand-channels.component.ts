@@ -6,19 +6,25 @@ import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { PolicyService } from '../core/services/policy.service';
 import { Channel } from '../core/models';
+import { LoadingStateComponent } from '../shared/loading-state.component';
+import { ErrorStateComponent } from '../shared/error-state.component';
 
 @Component({
   selector: 'app-brand-channels',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="mt-3 pt-3 border-t border-slate-100">
+    <div class="mt-3 pt-3 border-t border-slate-100" [attr.data-testid]="'brand-channels-' + brandId">
       <div class="flex items-center justify-between mb-2">
         <h4 class="text-xs font-medium text-slate-500">Канали бренду</h4>
         <button (click)="showCreate = true" [disabled]="!canCreateChannel" [title]="createChannelReason || 'Додати канал'" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium disabled:opacity-40">Додати канал</button>
       </div>
-      @if (channels.length === 0) {
+      @if (loading) {
+        <app-loading-state />
+      } @else if (error) {
+        <app-error-state [message]="error" (retry)="retry.emit()" />
+      } @else if (channels.length === 0) {
         <p class="text-xs text-slate-400">Каналів не налаштовано</p>
       } @else {
         <div class="space-y-1">
@@ -66,6 +72,9 @@ import { Channel } from '../core/models';
 export class BrandChannelsComponent implements OnInit {
   @Input() brandId = '';
   @Input() channels: Channel[] = [];
+  @Input() loading = false;
+  @Input() error: string | null = null;
+  @Output() retry = new EventEmitter<void>();
   @Output() channelAdded = new EventEmitter<Channel>();
   @Output() channelChanged = new EventEmitter<void>();
   showCreate = false;

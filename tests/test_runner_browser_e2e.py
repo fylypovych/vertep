@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from tests.acceptance_provenance import acceptance_provenance
 
 
 try:
@@ -143,7 +144,10 @@ def test_runner_web_actual_api_progress_history_restart_and_retry(tmp_path):
 
             scenario = page.locator("[data-testid='real-tests-scenario-S01']")
             expect(scenario).to_be_visible()
-            scenario.get_by_role("button", name="Запустити").click()
+            with page.expect_response(lambda response: response.url.endswith("/prerequisites")) as prerequisites:
+                scenario.get_by_role("button", name="Запустити").click()
+            assert prerequisites.value.status == 200
+            assert "bootstrap_first_run" in prerequisites.value.json()["mandatory_checks"]
             dialog = page.locator("[data-testid='real-tests-confirm']")
             expect(dialog).to_be_visible()
             with page.expect_response(
@@ -219,6 +223,14 @@ def test_runner_web_actual_api_progress_history_restart_and_retry(tmp_path):
             assert final_report["initiator"] == ADMIN_USER
             assert final_report["progress"].startswith("progress:")
             assert final_report["checks"][0]["name"] == "bootstrap_first_run"
+            history = page.request.get(f"{base_url}/api/real-tests/runs?limit=50")
+            assert history.status == 200
+            assert len([entry for entry in history.json()["runs"] if entry["test_run_id"] == run_id]) == 1
+            second_retry = page.request.post(f"{base_url}/api/real-tests/runs/{run_id}/retry-report",
+                headers={"X-CSRF-Token": next(cookie["value"] for cookie in page.context.cookies()
+                                            if cookie["name"] == "vertep_csrf")})
+            assert second_retry.status == 200, second_retry.text()
+            assert page.request.get(f"{base_url}/api/real-tests/runs/{run_id}").json()["checks"] == final_report["checks"]
             assert page_errors == [], f"pageerror: {page_errors}"
             assert console_errors == [], f"console.error: {console_errors}"
             _save_evidence({

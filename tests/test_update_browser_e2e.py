@@ -48,6 +48,7 @@ except ImportError:  # pragma: no cover - dependency is required in CI
                     pytrace=False)
     pytest.skip("playwright is not installed", allow_module_level=True)
 TARGET_VERSION = "9.9.9"
+FAIL_TARGET_VERSION = "9.9.10"
 CURRENT_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 

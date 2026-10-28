@@ -12,7 +12,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-system-info',
   standalone: true,
   imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info"><h3 class="text-lg font-semibold mb-4">Система</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="status()" class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="system-info"><p>Стан: {{ systemStateLabel }}</p><p>Версія: {{ status()?.version || '-' }}</p><p>Ядро: {{ status()?.core || '-' }}</p><p>База даних: {{ status()?.postgres || '-' }}</p><p>Redis: {{ status()?.redis || '-' }}</p><p>Поточна: <span data-testid="status-update-current-version">{{ status()?.update?.['current_version'] || '-' }}</span></p><p>Доступна: <span data-testid="status-update-available-version">{{ status()?.update?.['available_version'] || '-' }}</span></p></div>
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info"><h3 class="text-lg font-semibold mb-4">Система</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" (retry)="ngOnInit()" /><div *ngIf="status()" class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="system-info"><p>Стан: {{ systemStateLabel }}</p><p>Версія: {{ status()?.version || '-' }}</p><p>Ядро: {{ status()?.core || '-' }}</p><p>База даних: {{ status()?.postgres || '-' }}</p><p>Redis: {{ status()?.redis || '-' }}</p><p>Поточна: <span data-testid="status-update-current-version">{{ status()?.update?.['current_version'] || '-' }}</span></p><p>Доступна: <span data-testid="status-update-available-version">{{ status()?.update?.['available_version'] || '-' }}</span></p></div>
   <table *ngIf="backendsList().length" class="w-full mt-4" data-testid="backends-table">
     <thead><tr class="text-left text-slate-500 text-sm"><th class="py-1">Слот</th><th>Налаштовано</th><th>Бекенд</th><th>Зміна</th></tr></thead>
     <tbody>
@@ -110,6 +110,7 @@ export class SystemInfoSectionComponent implements OnInit {
   }
 
   ngOnInit(): void {
+    this.error.set(null);
     this.loading.set(true);
     this.systemApi.status().subscribe({
       next: (s) => { this.status.set(s); this.loading.set(false); },

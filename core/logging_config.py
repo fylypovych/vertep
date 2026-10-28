@@ -1,4 +1,6 @@
 import json
+import base64
+import hashlib
 import logging
 import os
 import re
@@ -194,11 +196,22 @@ def read_logs(limit: int = 200, level: str | None = None, job_id: str | None = N
     (``*.jsonl.1``, ``*.jsonl.2``, ...) so older relevant records stay
     retrievable.  Records are filtered *before* the tail is taken, so a
     job/node/level filter never silently drops older matching entries.
-    ``before`` (ISO timestamp) pages to records strictly older than it.
+    ``before`` accepts a returned cursor (including timestamp ties), or a
+    legacy ISO timestamp to select records strictly older than it.
     """
     root = Path(os.getenv("LOG_ROOT", "logs"))
     files = sorted(root.glob("*.jsonl*"), key=_rotation_order)
     result = []
+    boundary = None
+    if before and before.startswith("log:"):
+        try:
+            boundary = tuple(json.loads(base64.urlsafe_b64decode(before[4:]).decode()))
+            if (len(boundary) != 3 or not isinstance(boundary[0], str)
+                    or not isinstance(boundary[1], str) or not isinstance(boundary[2], int)):
+                return []
+        except (ValueError, TypeError, UnicodeDecodeError):
+            return []
+    occurrences = {}
     for path in files:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -218,11 +231,19 @@ def read_logs(limit: int = 200, level: str | None = None, job_id: str | None = N
             if node_name and item.get("node_name") != node_name:
                 continue
             timestamp = item.get("timestamp", "")
-            if before and timestamp and timestamp >= before:
+            digest = hashlib.sha256(json.dumps(item, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            identity = (timestamp, digest)
+            occurrence = occurrences.get(identity, 0)
+            occurrences[identity] = occurrence + 1
+            key = (timestamp, digest, occurrence)
+            if boundary is not None and key >= boundary:
                 continue
-            result.append(item)
-    result.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
-    return result[:min(max(limit, 1), 1000)]
+            if boundary is None and before and timestamp and timestamp >= before:
+                continue
+            item["cursor"] = "log:" + base64.urlsafe_b64encode(json.dumps(key).encode()).decode()
+            result.append((key, item))
+    result.sort(key=lambda entry: entry[0], reverse=True)
+    return [item for _, item in result[:min(max(limit, 1), 1000)]]
 
 
 def _redact_log_item(item: dict) -> dict:

@@ -48,6 +48,15 @@ def test_missing_evidence_is_never_a_pass(tmp_path):
     assert all(row["status"] == report.NOT_RUN for row in verdict["rows"].values())
 
 
+def test_required_text_process_rows_cannot_be_replaced_by_helper_evidence():
+    evidence = {name: _row(expected="ok", actual="ok") for name in report.ROWS}
+    verdict = report.evaluate(evidence, include_text_process=True)
+    assert verdict["summary"] == report.NOT_RUN
+    assert all(verdict["rows"][name]["status"] == report.NOT_RUN for name in report.TEXT_PROCESS_ROWS)
+    evidence.update({name: _row(expected="ok", actual="ok") for name in report.TEXT_PROCESS_ROWS})
+    assert report.evaluate(evidence, include_text_process=True)["summary"] == report.PASS
+
+
 def test_partial_evidence_is_not_run_not_a_pass():
     verdict = report.evaluate({"lease": _row(job_id="job-1")})
     assert verdict["rows"]["lease"]["status"] == report.PASS
@@ -163,6 +172,22 @@ def test_cli_fails_when_the_rows_come_from_different_runs(tmp_path):
         capture_output=True, text=True)
     assert result.returncode == 1
     assert "different runs" in result.stderr
+
+
+def test_same_sha_different_run_ids_remain_rejected():
+    with pytest.raises(ValueError, match="different runs"):
+        report.evaluate({"lease": _row(provenance={"sha": "a" * 40, "run_id": "first"}),
+                         "cancel": _row(provenance={"sha": "a" * 40, "run_id": "second"})})
+
+
+def test_uniform_substituted_sha_fails_independent_expected_identity(tmp_path):
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(json.dumps({name: _row(provenance={"sha": "a" * 40, "run_id": "one"})
+                                    for name in report.ROWS}), encoding="utf-8")
+    command = [sys.executable, str(SCRIPT), "--evidence", str(evidence), "--require-all", "--expected-sha"]
+    result = subprocess.run([*command, "b" * 40], capture_output=True, text=True)
+    assert result.returncode == 1 and "independent expected" in result.stderr
+    assert subprocess.run([*command, "a" * 40], capture_output=True, text=True).returncode == 0
 
 
 def test_cli_writes_json_and_markdown_and_fails_the_gate(tmp_path):

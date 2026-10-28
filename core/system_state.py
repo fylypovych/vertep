@@ -116,7 +116,7 @@ STATE_OPERATION_POLICY = {
                          "update", "restart", "test", "backup", "restore", "real_test", "model_pull",
                          "resource_management"},
     SystemState.MAINTENANCE: {"read", "create_job", "mutate_job", "node_control", "configuration",
-                              "update", "restart", "test", "real_test", "model_pull", "resource_management"},
+                              "update", "restart", "test", "real_test", "model_pull", "resource_management", "restore"},
     SystemState.UPDATING: {"read", "create_job"},
     SystemState.RECOVERING: {"read", "create_job", "restore"},
     SystemState.READ_ONLY: {"read"},

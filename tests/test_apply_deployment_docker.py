@@ -142,3 +142,58 @@ def test_rescue_preserves_existing_persistent_data_and_is_idempotent(compose_pro
     # The newer file is not overwritten; the legacy record is not counted as migrated.
     assert json.loads((characters_dest / "record.json").read_text())["id"] == "newer"
     assert migrated.get("characters", 0) == 0
+
+
+@docker_gate
+def test_standard_apply_rescues_before_actual_recreate_and_consumer_reads_back(compose_project, tmp_path, monkeypatch):
+    """#354 AC1: the standard apply owns rescue, recreate and migration."""
+    import hashlib
+    deployment = _module()
+    old = _container_id(compose_project)
+    payload = {"id": "legacy-consumer", "artifact": "approved.bin",
+               "sha256": hashlib.sha256(b"approved legacy bytes").hexdigest()}
+    _seed_legacy_root(old, "characters", payload)
+    assert _run(["docker", "exec", old, "sh", "-c",
+                 "printf '%s' 'approved legacy bytes' > /app/characters/approved.bin"]).returncode == 0
+    config = tmp_path / "config"
+    config.mkdir()
+    roles = {"text": {"services": ["worker"], "modules": ["worker"], "capabilities": ["text_generation"]}}
+    (config / "node_roles.json").write_text(json.dumps(roles), encoding="utf-8")
+    project = compose_project[compose_project.index("-p") + 1]
+    (tmp_path / ".env").write_text(f"VERTEP_VERSION=0.0.0.1\nCOMPOSE_PROJECT_NAME={project}\n", encoding="utf-8")
+    plan = deployment.create_plan(roles, "text", "0.0.0.1", [])
+    (config / "deployment-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    request = {"role": "text", "version": "0.0.0.1", "core_url": "https://core.invalid",
+               "additional_roles": [], "plan_sha256": plan["sha256"]}
+    roots = {}
+    for label, environment in (("characters", "CHARACTERS_ROOT"), ("brands", "BRANDS_ROOT"),
+                                ("workflows", "WORKFLOWS_ROOT")):
+        roots[label] = tmp_path / "storage" / label
+        roots[label].mkdir(parents=True)
+        monkeypatch.setenv(environment, str(roots[label]))
+    monkeypatch.setenv("JOB_ROOT", str(tmp_path / "storage/jobs"))
+    # Changing the mounts forces Compose itself to recreate the old worker.
+    services = {"worker": {"image": IMAGE, "command": ["sleep", "3600"],
+                "volumes": [f"{roots[label]}:/app/{label}" for label in roots]}}
+    for service in deployment.BOOTSTRAP_SERVICES:
+        services[service] = {"image": IMAGE, "command": ["sleep", "3600"], "profiles": ["unused"]}
+    import yaml
+    (tmp_path / "docker-compose.yml").write_text(yaml.safe_dump({"services": services}), encoding="utf-8")
+    (config / "deployment-request.json").write_text(json.dumps(request), encoding="utf-8")
+    result = deployment.apply(tmp_path)
+    assert result["state"] == "SUCCEEDED", result
+    current = _container_id(compose_project)
+    assert current != old
+    response = _run(["docker", "exec", current, "cat", "/app/characters/record.json"])
+    assert response.returncode == 0 and json.loads(response.stdout) == payload
+    artifact = _run(["docker", "exec", current, "cat", "/app/characters/approved.bin"])
+    assert artifact.returncode == 0
+    assert hashlib.sha256(artifact.stdout.encode()).hexdigest() == payload["sha256"]
+    assert (config / "legacy-rescue/characters" / old / "record.json").is_file()
+    # A second standard apply cannot overwrite a consumer's newer persistent record.
+    newer = {**payload, "id": "newer-consumer-record"}
+    (roots["characters"] / "record.json").write_text(json.dumps(newer), encoding="utf-8")
+    (config / "deployment-request.json").write_text(json.dumps(request), encoding="utf-8")
+    assert deployment.apply(tmp_path)["state"] == "SUCCEEDED"
+    response = _run(["docker", "exec", _container_id(compose_project), "cat", "/app/characters/record.json"])
+    assert response.returncode == 0 and json.loads(response.stdout) == newer
