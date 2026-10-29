@@ -10,6 +10,7 @@ import time as _time
 import uuid
 from pathlib import Path
 import httpx
+from worker.migration_trace import post as migration_post, stream as migration_stream, external as migration_external
 from adapters import media_integrity
 from adapters.providers import providers
 
@@ -83,7 +84,7 @@ def execute_text(task: dict) -> list[dict]:
         payload["stream"] = True
     timeout = task.get("timeout", 120)
     if stream:
-        with httpx.stream("POST", endpoint, json=payload, timeout=timeout) as response:
+        with migration_stream(httpx, "POST", endpoint, json=payload, timeout=timeout) as response:
             response.raise_for_status()
             text_parts = []
             for line in response.iter_lines():
@@ -99,7 +100,7 @@ def execute_text(task: dict) -> list[dict]:
                     break
             text = "".join(text_parts)
     else:
-        response = httpx.post(endpoint, json=payload, timeout=timeout)
+        response = migration_post(httpx, endpoint, json=payload, timeout=timeout)
         response.raise_for_status()
         text = response.json().get("response", "")
     if not isinstance(text, str) or not text.strip():
@@ -134,7 +135,7 @@ def execute_script(task: dict) -> list[dict]:
 
     payload = {"model": model, "prompt": base_prompt, "stream": False, "format": "json"}
     timeout = int(task.get("timeout", os.getenv("OLLAMA_SCRIPT_TIMEOUT", "300")))
-    response = httpx.post(endpoint, json=payload, timeout=timeout)
+    response = migration_post(httpx, endpoint, json=payload, timeout=timeout)
     response.raise_for_status()
     raw = response.json().get("response", "")
     if not raw:
@@ -156,7 +157,7 @@ def execute_storyboard(task: dict) -> list[dict]:
     model = os.getenv("OLLAMA_STORYBOARD_MODEL") or os.getenv("OLLAMA_MODEL", "llama3.2")
     payload = {"model": model, "prompt": task["prompt"], "stream": False, "format": "json"}
     timeout = task.get("timeout", 300)
-    response = httpx.post(endpoint, json=payload, timeout=timeout)
+    response = migration_post(httpx, endpoint, json=payload, timeout=timeout)
     response.raise_for_status()
     raw = response.json().get("response", "")
     if not raw:
@@ -290,7 +291,7 @@ def execute_voice(task: dict) -> list[dict]:
     if config["model"]:
         payload["model"] = config["model"]
     payload["provider"] = config["provider"]
-    response = httpx.post(endpoint, json=payload, timeout=180)
+    response = migration_post(httpx, endpoint, json=payload, timeout=180)
     response.raise_for_status()
     content_type = response.headers.get("content-type", "")
     if "json" in content_type:
@@ -498,13 +499,14 @@ def execute_image(task: dict) -> list[dict]:
     if scenes:
         artifacts = []
         for index, scene in enumerate(scenes, 1):
-            data, filename, kind = adapter.generate_output(workflow, scene.get("prompt") or topic, "image")
+            prompt = scene.get("prompt") or topic
+            data, filename, kind = migration_external(("compute", workflow, prompt, "image"), lambda: adapter.generate_output(workflow, prompt, "image"))
             if kind != "image":
                 raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
             artifacts.append(_media_artifact(f"scene-{index:03d}{Path(filename).suffix or '.png'}",
                                             "image", data, workflow=workflow, task_type="image"))
         return artifacts
-    data, filename, kind = adapter.generate_output(workflow, topic, "image")
+    data, filename, kind = migration_external(("compute", workflow, topic, "image"), lambda: adapter.generate_output(workflow, topic, "image"))
     if kind != "image":
         raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
     return [_media_artifact(filename, "image", data, workflow=workflow, task_type="image")]
@@ -516,7 +518,7 @@ def execute_video(task: dict) -> list[dict]:
     topic = task.get("topic") or task.get("prompt") or ""
     if workflow:
         try:
-            data, filename, kind = adapter.generate_output(workflow, topic, "video")
+            data, filename, kind = migration_external(("compute", workflow, topic, "video"), lambda: adapter.generate_output(workflow, topic, "video"))
             if kind != "video":
                 raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
             return [_media_artifact(filename, "video", data, workflow=workflow, task_type="video")]
@@ -528,9 +530,9 @@ def execute_video(task: dict) -> list[dict]:
     for index, scene in enumerate(scenes, 1):
         scene_workflow = (task.get("workflow")
                           or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json"))
-        scene_data, scene_filename, kind = adapter.generate_output(
-            scene_workflow,
-            scene.get("prompt") or topic, "image")
+        prompt = scene.get("prompt") or topic
+        scene_data, scene_filename, kind = migration_external(("compute", scene_workflow, prompt, "image"),
+            lambda: adapter.generate_output(scene_workflow, prompt, "image"))
         if kind != "image":
             raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
         artifacts.append(_media_artifact(f"scene-{index:03d}{Path(scene_filename).suffix or '.png'}",
@@ -808,7 +810,7 @@ ROLE_TASKS = {"text": {"text", "script", "storyboard"}, "voice": {"voice"}, "pub
               "backup": {"backup"}, "gpu": {"image", "video", "assembly"}}
 
 
-def execute_role_task(role: str, task: dict, *, _routing: bool = False) -> list[dict]:
+def execute_role_task(role: str, task: dict, *, _routing: bool = False, _migration: bool = False) -> list[dict]:
     if task.get("module_name"):
         from worker.module_runtime import execute_module
         return execute_module(task["module_name"], task)
@@ -819,12 +821,15 @@ def execute_role_task(role: str, task: dict, *, _routing: bool = False) -> list[
         allowed = {task for local_role in local_roles for task in ROLE_TASKS.get(local_role, set())}
     if task_type not in allowed:
         raise PermissionError(f"Role {role} is not authorized to execute {task_type}")
+    if not _migration and not _routing and role in {"text", "gpu", "voice"}:
+        from worker.migration import execute
+        return execute(role, task, execute_role_task)
     if not _routing and task.get("task") in {"script", "text", "image", "video"}:
         from worker.gpu_routing import router_for
         router = router_for(role, execute_role_task)
         if router is not None:
             capability = {"script": "text_generation", "text": "text_generation", "image": "image_generation", "video": "video_generation"}[task["task"]]
-            result = router.execute(capability, task)
+            result = migration_external(("gpu_router", capability, task), lambda: router.execute(capability, task))
             if result.get("status") not in {"complete", "completed"}:
                 raise RuntimeError("Provider has not completed inference")
             return result["artifacts"]

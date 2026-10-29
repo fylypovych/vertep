@@ -9,15 +9,48 @@ all real, and the wiring used by the API and the CLI is exercised too.
 
 import json
 import threading
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from lab.governance import (GitHubApiTransport, Governance, GovernanceError,
-                            IssueTransport, default_transport)
+                            IssueTransport, default_transport, issue_scope)
 from lab.policy import PolicyGate
 
 TOKEN = "lab-transport-token"
+
+
+def test_process_crash_after_remote_create_recovers_without_duplicate(tmp_path, github):
+    """The OS process dies after POST succeeds, before the local effect record."""
+    gate = PolicyGate(tmp_path / "state", activated=True)
+    gate.register_grant(actor="lab", action="create_i_issue", subject="i.0.0.0.1",
+                        scope_version=issue_scope("i", "Approved implementation", "i.0.0.0.1"),
+                        approved_by="owner", expires_at="2099-01-01T00:00:00+00:00")
+    script = r'''
+import os,sys
+from pathlib import Path
+from lab.governance import Governance,GitHubApiTransport
+from lab.policy import PolicyGate
+class CrashTransport(GitHubApiTransport):
+ def create_issue(self,*args,**kwargs):
+  result=super().create_issue(*args,**kwargs)
+  os._exit(73)
+root=Path(sys.argv[1])
+transport=(CrashTransport if sys.argv[3]=='crash' else GitHubApiTransport)('owner/repo',token='lab-transport-token',base_url=sys.argv[2])
+governance=Governance(PolicyGate(root/'state',activated=True),transport,state_dir=root/'gov',repository='owner/repo')
+result=governance.create_i_issue('Approved implementation',identifier='i.0.0.0.1',key='approved-scope')
+assert result['allowed']
+'''
+    first = subprocess.run([sys.executable, "-c", script, str(tmp_path), github.url, "crash"], capture_output=True, timeout=30)
+    assert first.returncode == 73, first.stderr.decode(errors="replace")
+    assert len(github.issues) == 1
+    for _ in range(2):
+        retry = subprocess.run([sys.executable, "-c", script, str(tmp_path), github.url, "retry"], capture_output=True, timeout=30)
+        assert retry.returncode == 0, retry.stderr.decode(errors="replace")
+    assert len(github.issues) == 1
+    assert len([r for r in github.requests if r["method"] == "POST"]) == 1
 
 
 class _GitHub:
@@ -52,6 +85,14 @@ class _GitHub:
                                        "headers": dict(self.headers)})
                 if path.endswith("/issues"):
                     self._answer(200, state.issues)
+                    return
+                if path.endswith("/comments"):
+                    self._answer(200, state.comments)
+                    return
+                if "/issues/" in path:
+                    number = int(path.rsplit("/", 1)[1])
+                    match = next((issue for issue in state.issues if issue["number"] == number), None)
+                    self._answer(200 if match else 404, match or {"message": "not found"})
                     return
                 self._answer(404, {"message": "not found"})
 
@@ -164,7 +205,7 @@ def test_close_issue_comments_and_closes(github):
     closed = transport.close_issue(issue["number"], comment="Закрито за доказом")
     assert closed["state"] == "closed"
     assert closed["dry_run"] is False
-    assert github.comments[-1]["body"] == "Закрито за доказом"
+    assert github.comments[-1]["body"].startswith("Закрито за доказом\n\n<!-- vertep-lab-close:")
     assert github.issues[0]["state"] == "closed"
     assert github.requests[-1]["method"] == "PATCH"
 
@@ -256,7 +297,7 @@ def test_governance_publishes_through_the_real_transport(tmp_path, github):
     outcome = governance.propose_lab_issue(finding, key="lab.0.0.0.1")
     assert outcome["created"] is True
     assert outcome["issue"]["number"] == 100
-    assert github.issues[0]["title"] == "Підтверджений дефект транспорту"
+    assert github.issues[0]["title"] == "lab.0.0.0.1 — Підтверджений дефект транспорту"
     assert github.issues[0]["labels"] == ["lab"]
 
     # A retry must not publish a second issue.

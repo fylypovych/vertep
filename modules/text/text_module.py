@@ -22,8 +22,9 @@ logger = __import__("logging").getLogger("modules.text")
 class TextModule:
     """Text Module: паралельне співіснення з Text Node через feature flag."""
 
-    def __init__(self, provider: Any | None = None) -> None:
+    def __init__(self, provider: Any | None = None, executor=None) -> None:
         self.provider = provider
+        self._bound_executor = executor
         self._active_tasks: dict[str, dict] = {}
 
     @property
@@ -54,6 +55,9 @@ class TextModule:
 
         Логіка нормалізації — чиста (``text_logic.py``), виклик LLM — через провайдера.
         """
+        if self._bound_executor is not None:
+            from modules.execution import execute_bound
+            return execute_bound(self, task)
         task_type = task.get("task", "text")
         topic = task.get("topic") or task.get("prompt") or ""
         system_prompt = task.get("system_prompt", "")

@@ -107,6 +107,11 @@ def create_app(state_dir=None, workspace_root=None, *, provider=None,
     budget = BudgetLedger(state / "budget")
     if executor is None:
         executor = executor_from_environment(os.getenv("LAB_ROLE_EXECUTOR_URL", ""))
+    if provider is None and os.getenv("LAB_RESOURCE_URL"):
+        from .gpu_lease import VertepResourceClient
+        provider = VertepResourceClient(os.environ["LAB_RESOURCE_URL"],
+            token=os.getenv("LAB_RESOURCE_TOKEN", ""),
+            enabled=os.getenv("LAB_IDLE_SHARING_ENABLED", "false").lower() in {"true", "1", "yes"})
     orchestrator = Orchestrator(workspace, gate, budget, provider=provider,
                                 executor=executor)
     governance = Governance(gate, default_transport(),
@@ -169,7 +174,7 @@ def create_app(state_dir=None, workspace_root=None, *, provider=None,
                                         payload=request.payload)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
-        return {"task": task.as_dict()}
+        return {"task": task.as_dict(), "approval_scope": task.approval_scope}
 
     @app.post("/api/lab/run")
     def run() -> dict:

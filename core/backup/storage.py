@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,26 @@ class SnapshotStorage:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, snapshot_id: str) -> Path:
+        if not isinstance(snapshot_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+            raise ValueError("Invalid snapshot identifier")
         return self.root / f"{snapshot_id}.json"
+
+    def verify_chain(self, snapshot_id: str) -> bool:
+        seen = set()
+        try:
+            while snapshot_id:
+                if snapshot_id in seen:
+                    return False
+                seen.add(snapshot_id)
+                snapshot = self.load_snapshot(snapshot_id)
+                if not snapshot.verify() or snapshot.snapshot_id != snapshot_id:
+                    return False
+                if not snapshot.incremental:
+                    return True
+                snapshot_id = snapshot.parent_snapshot_id
+            return False
+        except (OSError, ValueError, KeyError):
+            return False
 
     def save_snapshot(self, snapshot: Snapshot) -> str:
         """Зберегти знімок та повернути його ID."""

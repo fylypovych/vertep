@@ -21,5 +21,13 @@ with httpx.Client(headers={"X-Vertep-Token": os.environ["NODE_API_TOKEN"]}, time
     result = execute_task(None, task, "text-process")
     result.update(architecture_workflow=True, lease_id=task["lease_id"])
     submit_result(client, core, result)
+    from worker.module_runtime import inventory
+    from datetime import datetime, timezone
+    heartbeat = client.post(core + "/api/workers/heartbeat", json={
+        "node_name": "text-process", "role": "text", "status": "FREE", "vram_mb": 0,
+        "capabilities": ["text_generation"], "supported_tasks": ["text"],
+        "module_inventory": inventory(),
+        "self_test": {"status": "PASSED", "role": "text", "checked_at": datetime.now(timezone.utc).isoformat()}})
+    heartbeat.raise_for_status()
     print(json.dumps({"task_id": task["task_id"], "lease_id": task["lease_id"], "success": result["success"],
                       "dependencies": list(task.get("dependencies", {}))}))

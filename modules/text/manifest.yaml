@@ -9,6 +9,8 @@ capabilities:
 entrypoint: modules.text.text_module:TextModule
 logic: modules.text.text_logic
 depends_on: []
+backup:
+  paths: [text/state.json]
 resources:
   min_vram_mb: 0
   cpu_cores: 1

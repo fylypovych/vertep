@@ -21,8 +21,9 @@ logger = __import__("logging").getLogger("modules.image")
 class ImageModule:
     """Image Module: паралельне співіснення з GPU Node через feature flag."""
 
-    def __init__(self, provider: Any | None = None) -> None:
+    def __init__(self, provider: Any | None = None, executor=None) -> None:
         self.provider = provider
+        self._bound_executor = executor
         self._active_tasks: dict[str, dict] = {}
 
     @property
@@ -50,6 +51,9 @@ class ImageModule:
 
     def execute(self, task: dict[str, Any]) -> list[dict[str, Any]]:
         """Виконати завдання генерації зображення/відео через провайдера."""
+        if self._bound_executor is not None:
+            from modules.execution import execute_bound
+            return execute_bound(self, task)
         task_type = task.get("task", "image")
         task_id = str(task.get("task_id") or task.get("job_id") or "unknown")
 

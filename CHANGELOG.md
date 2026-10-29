@@ -1,3 +1,15 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.2.90
+- `core/models.py`: додано `owner`/`project`/`acl` до `ArtifactRecord`, `JobCreate`, `JobEvent`, `Job`.
+- `lab/governance.py`: serialized governance (`serialized`, `RemoteRejected`, `issue_scope`, `_create_effect`, `get_issue`, `identifiers`), віддалена перевірка, резервування планів перенесення (`transfer-intents`), перевірка evidence (`evidence.verify`).
+- `lab/api.py`/`cli.py`: `LAB_RESOURCE_URL`/`LAB_RESOURCE_TOKEN` для реального resource provider замість лише fake-режиму.
+- `core/backup/`: додано `__main__.py`, `workflow.py`, оновлено `resume.py`, `snapshot.py`, `storage.py`.
+- `lab/evidence.py`: новий модуль перевірки доказів з хешуванням, комітом SHA, артефактами та незалежною атестацією.
+- `modules/`: оновлено `audio/image/text` модулі, `execution.py`, `manifest.yaml`.
+- `tests/`: оновлено/додано тести lab (`test_lab_executor`, `test_lab_ir_acceptance`, `test_lab_api_auth`, `test_lab_sandbox_isolation`, `test_lab_web_e2e`, `test_lab_github_transport`, `test_lab_evidence_fixture`), module migration (`test_module_migration_integration`), workflow (`test_workflow_provider_http`, `test_workflow_backup_execution`).
+- `scripts/vertep`, `vertep-cli.py`, `vertep.ps1`: оновлено CLI, resource-параметри, GPU-режим.
+- `deploy/lab/Dockerfile.sandbox`, `docker-compose.yml`: оновлено sandbox-конфігурацію.
+- `core/backup/workflow.py`, `lab/workspace.py`, `lab/policy.py`, `lab/state_store.py`, `worker/module_runtime.py`, `worker/role_executor.py`: оновлено відповідно до governance та resource-provider змін.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.89
 - Виправлено CI job `media-acceptance`: evidence-каталог створюється до запуску pytest, а `--basetemp` винесено в `$RUNNER_TEMP`; тимчасові каталоги тестів більше не залежать від evidence-каталогу і помилка `FileNotFoundError ... runtime-tests` не виникає.
 - Release `prepare`: compose acceptance `tests/test_apply_deployment_docker.py` задає реальний `HEALTHCHECK` для тестового worker, тому `wait_for_healthy` отримує фактичний health state замість 600-секундного таймауту.

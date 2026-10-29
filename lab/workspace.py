@@ -156,6 +156,16 @@ class Workspace:
         if not report.isolated:
             raise IsolationViolation("; ".join(report.problems))
 
+    def run(self, command, *, timeout=60):
+        """Invoke a checked command only in the laboratory's own working copy."""
+        import subprocess
+        self.require_isolated()
+        report = check_command(command)
+        if not report.isolated:
+            raise IsolationViolation("; ".join(report.problems))
+        environment = dict(os.environ if self.environ is None else self.environ)
+        return subprocess.run(command, cwd=self.root, env=environment, capture_output=True, text=True, timeout=timeout)
+
     def as_dict(self) -> dict:
         report = self.verify()
         return {"root": str(self.root), "repository_url": self.repository_url,

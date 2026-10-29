@@ -24,6 +24,7 @@ from lab.gpu_lease import FakeResourceProvider
 from lab.orchestrator import Orchestrator, RunState
 from lab.policy import PolicyGate
 from lab.workspace import IsolationViolation, Workspace
+from tests.test_lab_resource_transport import production
 
 
 # -- a controlled local role endpoint --------------------------------------
@@ -35,7 +36,7 @@ class _Endpoint:
         self.status_code = status_code
         self.delay = delay
         self.respond = respond or (lambda payload: {
-            "status": "ok", "result": {"task_id": payload["task"]["task_id"]}})
+            "status": "ok", "tokens_used": 0, "result": {"task_id": payload["task"]["task_id"]}})
         state = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -149,6 +150,8 @@ def test_run_reaches_completed_only_through_the_real_endpoint(env, tmp_path, end
     assert request["payload"]["model"] == "ollama:qwen2.5-coder"
     assert request["payload"]["workspace"]["root"] == str(env.root)
     assert request["headers"]["X-Vertep-Contract"] == "role-executor/1"
+    assert request["payload"]["limits"]["max_requests"] == 1
+    assert request["payload"]["limits"]["max_tokens"] == ledger.max_tokens_per_day
     assert result["result"]["result"] == {"task_id": "audit"}
     records = orchestrator.results()
     assert len(records) == 1
@@ -165,6 +168,72 @@ def test_executor_token_is_sent_to_the_endpoint(env, tmp_path, endpoint, gate, l
 
 
 # -- L2: fail-closed refusal paths -----------------------------------------
+@pytest.mark.parametrize("deny", [False, True])
+def test_stock_resource_client_controls_real_role_invocation(env, gate, ledger, endpoint, production, monkeypatch, deny):
+    from lab.api import create_app
+    monkeypatch.setenv("LAB_RESOURCE_URL", production.url)
+    monkeypatch.setenv("LAB_RESOURCE_TOKEN", "lab-token")
+    monkeypatch.setenv("LAB_IDLE_SHARING_ENABLED", "true")
+    production.state.queue_depth = 1 if deny else 0
+    app = create_app(state_dir=gate.state_dir, workspace_root=env.root, executor=_executor(endpoint.url))
+    orchestrator = app.state.context["orchestrator"]
+    orchestrator.workspace.environ = {}
+    outcome = orchestrator.run_once()
+    assert outcome["state"] == ("BLOCKED" if deny else "COMPLETED")
+    assert len(endpoint.requests) == (0 if deny else 1)
+    if not deny:
+        assert production.state.released
+        assert production.state.heartbeats == 2
+        assert endpoint.requests[0]["payload"]["resource_lease"]["lease_id"]
+
+
+def test_missing_usage_stays_unknown_and_blocks_after_restart(env, tmp_path, gate, ledger):
+    endpoint = _Endpoint(respond=lambda payload: {"status": "ok", "result": {"done": True}})
+    try:
+        first = Orchestrator(env, gate, ledger, executor=_executor(endpoint.url))
+        assert first.run_once()["state"] == "COMPLETED"
+        assert ledger.usage()["tokens_last_day"] is None
+        restarted = Orchestrator(env, gate, BudgetLedger(ledger.state_dir), executor=_executor(endpoint.url))
+        outcome = restarted.run_once()
+        assert outcome["state"] == "PAUSED" and "unknown" in outcome["reason"]
+        assert len(endpoint.requests) == 1
+    finally:
+        endpoint.close()
+
+
+def test_returned_usage_exceeding_limit_fails_and_blocks_more_calls(env, gate, ledger):
+    ledger.max_tokens_per_day = 10
+    endpoint = _Endpoint(respond=lambda payload: {"status": "ok", "tokens_used": 11, "result": {"done": True}})
+    try:
+        orchestrator = Orchestrator(env, gate, ledger, executor=_executor(endpoint.url))
+        assert orchestrator.run_once()["state"] == "FAILED"
+        assert ledger.usage()["tokens_last_day"] == 11
+        assert ledger.runs[-1]["status"] == "failed"
+        assert endpoint.requests[0]["payload"]["limits"]["max_tokens"] == 10
+        assert orchestrator.run_once()["state"] == "PAUSED"
+        assert len(endpoint.requests) == 1
+    finally:
+        endpoint.close()
+
+
+def test_exact_scope_approval_drives_one_task_and_retry(env, tmp_path, gate, ledger, endpoint):
+    orchestrator = Orchestrator(env, gate, ledger, executor=_executor(endpoint.url))
+    task = orchestrator.enqueue("fix", role="backend", task_id="approved-task", payload={"path": "lab/example.py"})
+    assert orchestrator.run_once()["state"] == "BLOCKED"
+    assert endpoint.requests == []
+    gate.register_grant(actor="lab", action="execute_approved_task", subject=task.task_id,
+                        scope_version=task.approval_scope, approved_by="owner",
+                        expires_at="2099-01-01T00:00:00+00:00")
+    restarted = Orchestrator(env, gate, BudgetLedger(ledger.state_dir), executor=_executor(endpoint.url))
+    restarted.enqueue("fix", role="backend", task_id=task.task_id, payload=task.payload)
+    assert restarted.run_once()["state"] == "COMPLETED"
+    assert len(endpoint.requests) == 1
+    same = restarted.enqueue("fix", role="backend", task_id=task.task_id, payload=task.payload)
+    assert same.state == "COMPLETED"
+    with pytest.raises(ValueError, match="different scope"):
+        restarted.enqueue("fix", role="backend", task_id=task.task_id, payload={"path": "other.py"})
+
+
 def test_disabled_executor_never_calls_the_endpoint(env, tmp_path, endpoint, gate,
                                                     ledger):
     executor = EndpointRoleExecutor(endpoint.url, enabled=False)

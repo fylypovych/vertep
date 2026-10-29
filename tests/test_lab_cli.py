@@ -15,7 +15,9 @@ import pytest
 
 from lab.cli import main
 from lab.policy import PolicyGate
+from lab.governance import issue_scope
 from lab.workspace import FORBIDDEN_ENVIRONMENT
+from tests.test_lab_resource_transport import production
 
 OWNER_TOKEN = "owner-secret"
 
@@ -131,7 +133,8 @@ def test_revoke_requires_the_owner_secret(paths, capsys):
 
 def test_one_owner_grant_creates_exactly_one_issue_and_no_more(paths, capsys):
     rc = main([*paths["base"], "grant", "create_i_issue",
-               "--subject", "i.0.0.1.9", "--owner-token", OWNER_TOKEN])
+               "--subject", "i.0.0.1.9", "--owner-token", OWNER_TOKEN,
+               "--scope-version", issue_scope("i", "Затверджений implementation", "i.0.0.1.9")])
     assert rc == 0
     capsys.readouterr()
 
@@ -193,7 +196,10 @@ def test_rights_request_refuses_forbidden_actions(paths, capsys):
     assert "can never be requested" in out["reason"]
 
 
-def test_gpu_lease_denies_a_role_outside_its_profile(paths, capsys):
+def test_gpu_lease_denies_a_role_outside_its_profile(paths, capsys, production, monkeypatch):
+    monkeypatch.setenv("LAB_RESOURCE_URL", production.url)
+    monkeypatch.setenv("LAB_RESOURCE_TOKEN", "lab-token")
+    monkeypatch.setenv("LAB_IDLE_SHARING_ENABLED", "true")
     rc = main([*paths["base"], "--actor", "reviewer", "--gpu", "gpu", "request",
                "--model", "qwen2.5-coder:7b"])
     out = json.loads(capsys.readouterr().out)
@@ -202,7 +208,10 @@ def test_gpu_lease_denies_a_role_outside_its_profile(paths, capsys):
     assert out["decision"]["rule"] == "role_permission"
 
 
-def test_gpu_lease_request_and_release_through_the_cli(paths, capsys):
+def test_gpu_lease_request_and_release_through_the_cli(paths, capsys, production, monkeypatch):
+    monkeypatch.setenv("LAB_RESOURCE_URL", production.url)
+    monkeypatch.setenv("LAB_RESOURCE_TOKEN", "lab-token")
+    monkeypatch.setenv("LAB_IDLE_SHARING_ENABLED", "true")
     rc = main([*paths["base"], "--gpu", "gpu", "request",
                "--model", "qwen2.5-coder:7b"])
     granted = json.loads(capsys.readouterr().out)

@@ -33,6 +33,8 @@ from urllib.parse import urlsplit
 
 import httpx
 import pytest
+from tests.lab_evidence_fixture import signed_contract_evidence
+from tests.test_lab_github_transport import _GitHub
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "deploy/lab/web/app"
@@ -182,6 +184,7 @@ class Lab:
         self.state.mkdir()
         self.workspace.mkdir()
         self.api_port = _free_port()
+        self.github = _GitHub()
         self.env = {
             **os.environ,
             "PYTHONPATH": str(ROOT),
@@ -191,6 +194,11 @@ class Lab:
             "LAB_OWNER_TOKEN": OWNER_TOKEN,
             "LAB_OWNER_IDENTITY": "owner",
             "LAB_IDLE_SHARING_ENABLED": "false",
+            "LAB_GITHUB_API_URL": self.github.url,
+            "LAB_GITHUB_TOKEN": "controlled-browser-token",
+            "LAB_GITHUB_REPOSITORY": "owner/repo",
+            "LAB_EVIDENCE_ROOT": str(tmp_path / "controlled-evidence"),
+            "LAB_REVIEW_TRUST_ROOT": str(tmp_path / "controlled-review-trust"),
             API_PORT_ENV: str(self.api_port),
         }
         runner = tmp_path / "lab_web_e2e_app.py"
@@ -257,6 +265,7 @@ class Lab:
                 except subprocess.TimeoutExpired:
                     self.api.kill()
             self.api_log.close()
+            self.github.close()
             try:
                 self.web.shutdown()
             except Exception:
@@ -291,6 +300,7 @@ def seed(environment: Lab) -> dict:
         "rights-request", "consolidate_ir", "--subject", "ir.0.0.9.1",
         "--reason", "потрібне перенесення залишку на реальному стенді")
     evidence = {
+        "identifier": "ir.0.0.9.1",
         "version": "0.0.2.51",
         "commit": "abc1234",
         "environment": "disposable-lab-vm",
@@ -299,6 +309,8 @@ def seed(environment: Lab) -> dict:
         "reviewer": "independent-reviewer",
         "test_results": {"passed": 5, "failed": 0, "skipped": 0},
     }
+    evidence = signed_contract_evidence(evidence,
+        root=environment.env["LAB_EVIDENCE_ROOT"], trust=environment.env["LAB_REVIEW_TRUST_ROOT"])
     verdict = environment.client.post(
         "/api/lab/ir/evidence",
         json={"identifier": "ir.0.0.9.1", "evidence": evidence}).json()

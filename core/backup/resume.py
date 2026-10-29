@@ -61,8 +61,7 @@ class ResumeManager:
     def verify_snapshot(self, snapshot_id: str) -> bool:
         """Перевірити цілісність знімка."""
         try:
-            snapshot = self.storage.load_snapshot(snapshot_id)
-            return snapshot.verify()
+            return self.storage.verify_chain(snapshot_id)
         except Exception:
             return False
 

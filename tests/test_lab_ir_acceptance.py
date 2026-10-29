@@ -8,8 +8,16 @@ never loses criteria.
 """
 
 from datetime import datetime, timedelta, timezone
+import pytest
+from tests.lab_evidence_fixture import signed_contract_evidence
 
-from lab.governance import Governance, IssueTransport
+
+@pytest.fixture(autouse=True)
+def review_boundary(tmp_path, monkeypatch):
+    monkeypatch.setenv("LAB_EVIDENCE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LAB_REVIEW_TRUST_ROOT", str(tmp_path / "trusted-reviewers"))
+
+from lab.governance import Governance, IssueTransport, RemoteRejected
 from lab.policy import PolicyGate, reserve_identifier
 
 
@@ -17,7 +25,7 @@ class _FakeTransport(IssueTransport):
     """Recording transport for tests that must not touch GitHub."""
 
     def __init__(self):
-        super().__init__(dry_run=True)
+        super().__init__(dry_run=False)
         self.created = []
         self.closed = []
         self.duplicates = []
@@ -26,14 +34,17 @@ class _FakeTransport(IssueTransport):
     def create_issue(self, title, body, labels=()):
         self.calls += 1
         self.created.append({"title": title, "body": body, "labels": list(labels)})
-        return {"number": 100 + len(self.created),
-                "url": f"https://github.com/owner/repo/issues/{100 + len(self.created)}",
+        return {"number": 100 + len(getattr(self, "previous", [])) + len(self.created),
+                "url": f"https://github.com/owner/repo/issues/{100 + len(getattr(self, 'previous', [])) + len(self.created)}",
                 "dry_run": self.dry_run}
 
     def find_duplicates(self, title):
         self.calls += 1
         self.duplicates.append(title)
         return []
+
+    def get_issue(self, number):
+        return (getattr(self, "previous", []) + self.created)[int(number) - 101]
 
     def close_issue(self, issue_number, comment=""):
         self.calls += 1
@@ -52,7 +63,7 @@ class _FlakyCreateTransport(_FakeTransport):
     def create_issue(self, title, body, labels=()):
         self.attempts += 1
         if self.attempts == self.fail_on_call:
-            raise OSError("connection reset by peer")
+            raise RemoteRejected("controlled remote rejection before creating the successor")
         return super().create_issue(title, body, labels)
 
 
@@ -72,17 +83,18 @@ def _grant(gate, action: str, subject: str):
 
 
 def _full_evidence() -> dict:
-    return {
+    return signed_contract_evidence({
         "identifier": "ir.0.0.0.1",
         "kind": "real_server_verification",
         "version": "0.0.2.68",
         "commit": "fab401e1",
+        "issue_number": 41,
         "environment": "ubuntu-24.04 clean install, physical GPU node",
         "expected": "всі тести пройдено на реальному стенді",
         "actual": "pytest: 8 passed, 0 failed, 0 skipped",
         "reviewer": "qa-standalone",
         "test_results": {"passed": 8, "failed": 0, "skipped": 0},
-    }
+    })
 
 
 def _partial_evidence() -> dict:
@@ -111,6 +123,20 @@ def _successors() -> list:
 
 
 # -- L6: evidence before any close ------------------------------------
+@pytest.mark.parametrize("field,value", [("commit", "fab401e1"), ("commit", "f" * 40),
+    ("expected", "changed acceptance"), ("actual", "different result"),
+    ("identifier", "ir.0.0.0.2"), ("reviewer", "untrusted-reviewer")])
+def test_mismatched_source_result_or_review_never_closes(tmp_path, field, value):
+    gate = _gate(tmp_path)
+    _grant(gate, "delegate_close_ir", "ir.0.0.0.1")
+    transport = _FakeTransport()
+    governance = _gov(tmp_path, gate, transport)
+    evidence = _full_evidence()
+    evidence[field] = value
+    assert not governance.delegate_close_ir("ir.0.0.0.1", evidence).get("closed", False)
+    assert transport.closed == []
+
+
 def test_ir_close_without_evidence_is_refused(tmp_path):
     gate = _gate(tmp_path)
     transport = _FakeTransport()
@@ -120,6 +146,17 @@ def test_ir_close_without_evidence_is_refused(tmp_path):
     assert not outcome["allowed"]
     assert outcome["rule"] == "incomplete_evidence"
     assert transport.closed == []
+
+
+def test_unconfirmed_remote_close_never_becomes_durable_acceptance(tmp_path):
+    gate = _gate(tmp_path)
+    _grant(gate, "delegate_close_ir", "ir.0.0.0.1")
+    class RefusedClose(_FakeTransport):
+        def close_issue(self, issue_number, comment=""):
+            return {"number": issue_number, "state": "open"}
+    governance = _gov(tmp_path, gate, RefusedClose())
+    assert not governance.delegate_close_ir("ir.0.0.0.1", _full_evidence())["closed"]
+    assert governance.closed() == {}
 
 
 def test_partial_test_results_are_rejected(tmp_path):
@@ -210,7 +247,7 @@ def test_atomic_ir_transfer_sequence(tmp_path):
 
     # successors first — exactly two, with reserved and explicit numbers
     assert [c["title"] for c in transport.created] == [
-        "Перевірка lease: черги", "Перевірка lease: відновлення"]
+        "ir.0.0.0.2 — Перевірка lease: черги", "ir.0.0.0.3 — Перевірка lease: відновлення"]
     # only the source is closed, and only after verification
     assert len(transport.closed) == 1
     assert transport.closed[0]["number"] == 41
@@ -316,6 +353,7 @@ def test_crash_between_successors_leaves_source_open_then_retry_completes(tmp_pa
 
     # retry after the crash resumes with the same reserved numbers
     stable = _FakeTransport()
+    stable.previous = list(flaky.created)
     governance.transport = stable
     retry = governance.consolidate_ir(_source_ir(), _successors())
     assert retry["allowed"] and retry["closed"]

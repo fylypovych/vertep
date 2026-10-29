@@ -59,6 +59,9 @@ def endpoints():
                     "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()}})
             elif self.path == "/lease/release":
                 self.send({"released": True, "contract_version": "1"})
+            elif self.path == "/lease/heartbeat":
+                self.send({"active": True, "state": "GRANTED", "contract_version": "1",
+                           "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()})
             else:
                 self.send_error(404)
 

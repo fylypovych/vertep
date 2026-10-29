@@ -224,3 +224,7 @@ jobs:
         run: docker compose -f deploy/lab/docker-compose.web.yml config --quiet
       - name: Run Lab Web Docker proof
         run: python -m pytest -q tests/test_lab_web_docker.py
+      - name: Build and run isolated Lab sandbox negative tests
+        env:
+          LAB_SANDBOX_DOCKER_URL: unix:///var/run/docker.sock
+        run: python -m pytest -q tests/test_lab_sandbox_runtime.py

@@ -33,6 +33,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         jobs=[], tasks=[], artifacts=[], settings={}, version=version,
         incremental=incremental, parent_snapshot_id=parent,
     )
+    from .workflow import capture
+    capture(snapshot)
+    if incremental:
+        if not parent or not storage.verify_chain(parent):
+            raise ValueError("Incremental snapshot requires a verified parent")
     sid = storage.save_snapshot(snapshot)
     print(f"Snapshot created: {sid}")
     return 0
@@ -46,6 +51,9 @@ def cmd_restore(args: argparse.Namespace) -> int:
         print(f"Snapshot {snapshot_id} failed integrity check", file=sys.stderr)
         return 1
     jobs = manager.restore_jobs(snapshot_id)
+    from .workflow import restore
+    restored_workflows = restore(storage.load_snapshot(snapshot_id))
+    print(f"Restored {restored_workflows} workflows")
     print(f"Restored {len(jobs)} jobs from snapshot {snapshot_id}")
     for job in jobs:
         print(f"  - {job.get('job_id', 'unknown')}: {job.get('status', 'unknown')}")

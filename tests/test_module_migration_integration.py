@@ -15,9 +15,9 @@ from worker.role_executor import execute_role_task
 class TestTextModuleMigration:
     """Text Node → Text Module migration integration tests."""
 
-    def test_text_module_path_when_enabled(self):
+    def test_text_module_path_when_enabled(self, monkeypatch):
         """Module path used when feature flag enabled."""
-        os.environ["VERTEP_TEXT_MODULE_ENABLED"] = "true"
+        monkeypatch.setenv("VERTEP_TEXT_MODULE_ENABLED", "true")
         import importlib
         import worker.roles.text_node
         importlib.reload(worker.roles.text_node)
@@ -57,9 +57,9 @@ class TestTextModuleMigration:
 class TestImageModuleMigration:
     """GPU Node → Image Module migration integration tests."""
 
-    def test_image_module_path_when_enabled(self):
+    def test_image_module_path_when_enabled(self, monkeypatch):
         """Module path used when feature flag enabled."""
-        os.environ["VERTEP_IMAGE_MODULE_ENABLED"] = "true"
+        monkeypatch.setenv("VERTEP_IMAGE_MODULE_ENABLED", "true")
         import importlib
         import worker.roles.gpu_node
         importlib.reload(worker.roles.gpu_node)
@@ -98,9 +98,9 @@ class TestImageModuleMigration:
 class TestAudioModuleMigration:
     """Voice Node → Audio Module migration integration tests."""
 
-    def test_audio_module_path_when_enabled(self):
+    def test_audio_module_path_when_enabled(self, monkeypatch):
         """Module path used when feature flag enabled."""
-        os.environ["VERTEP_AUDIO_MODULE_ENABLED"] = "true"
+        monkeypatch.setenv("VERTEP_AUDIO_MODULE_ENABLED", "true")
         import importlib
         import worker.roles.voice_node
         importlib.reload(worker.roles.voice_node)

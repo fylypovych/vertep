@@ -14,7 +14,7 @@ name: vertep-lab
 services:
   lab-control:
     build:
-      context: .
+      context: ../..
       dockerfile: deploy/lab/Dockerfile
     image: ghcr.io/fylypovych/vertep-lab-control:${VERSION:-dev}
     ports:
@@ -26,6 +26,8 @@ services:
       - LAB_POLICY_GATE_ACTIVE=true
       - LAB_IDLE_SHARING_ENABLED=${LAB_IDLE_SHARING_ENABLED:-false}
       - LAB_VERTEP_URL=${LAB_VERTEP_URL:-}
+      - LAB_RESOURCE_URL=${LAB_RESOURCE_URL:-}
+      - LAB_RESOURCE_TOKEN=${LAB_RESOURCE_TOKEN:-}
       # Owner acts (grant/revoke) and publication need the owner secret; without
       # them the laboratory stays fail-closed and the transport stays dry-run.
       - LAB_OWNER_TOKEN=${LAB_OWNER_TOKEN:-}
@@ -49,21 +51,19 @@ services:
 
   lab-sandbox:
     build:
-      context: .
+      context: ../..
       dockerfile: deploy/lab/Dockerfile.sandbox
     image: ghcr.io/fylypovych/vertep-lab-sandbox:${VERSION:-dev}
     command: ["python", "-m", "lab.cli", "run"]
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     read_only: true
     tmpfs:
       - /tmp
     security_opt:
       - no-new-privileges:true
     volumes:
-      - lab-state:/var/lib/vertep-lab
+      - lab-state:/var/lib/vertep-lab:ro
       - lab-repo:/srv/vertep-lab/repo:ro
     environment:
       - LAB_IDLE_SHARING_ENABLED=${LAB_IDLE_SHARING_ENABLED:-false}
@@ -73,7 +73,8 @@ services:
           cpus: "2"
           memory: 4G
     restart: "no"
-    networks: [lab-net]
+    network_mode: none
+    pids_limit: 64
 
 volumes:
   lab-state:

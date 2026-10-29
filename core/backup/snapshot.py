@@ -32,6 +32,7 @@ class Snapshot:
     checksum: str = ""
     incremental: bool = False
     parent_snapshot_id: str | None = None
+    schema_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +48,7 @@ class Snapshot:
             "checksum": self.checksum,
             "incremental": self.incremental,
             "parent_snapshot_id": self.parent_snapshot_id,
+            "schema_version": self.schema_version,
         }
 
     @classmethod
@@ -64,6 +66,7 @@ class Snapshot:
             checksum=str(data.get("checksum", "")),
             incremental=bool(data.get("incremental", False)),
             parent_snapshot_id=data.get("parent_snapshot_id"),
+            schema_version=data.get("schema_version", ""),
         )
 
     def compute_checksum(self) -> str:
@@ -76,12 +79,16 @@ class Snapshot:
             "module_state": self.module_state,
             "workflow_checkpoints": self.workflow_checkpoints,
         }
+        if self.schema_version:
+            payload.update(schema_version=self.schema_version, snapshot_id=self.snapshot_id,
+                           version=self.version, created_at=self.created_at,
+                           incremental=self.incremental, parent_snapshot_id=self.parent_snapshot_id)
         encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
     def verify(self) -> bool:
         """Перевірити цілісність знімку за контрольною сумою."""
-        expected = self.checksum or self.compute_checksum()
+        expected = self.checksum
         return self.compute_checksum() == expected
 
     @classmethod
@@ -106,6 +113,7 @@ class Snapshot:
             workflow_checkpoints=workflow_checkpoints or {},
             incremental=incremental,
             parent_snapshot_id=parent_snapshot_id,
+            schema_version="snapshot/1",
         )
         snapshot.checksum = snapshot.compute_checksum()
         return snapshot

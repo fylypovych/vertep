@@ -12,6 +12,8 @@ capabilities:
 entrypoint: modules.image.image_module:ImageModule
 logic: modules.image.image_logic
 depends_on: []
+backup:
+  paths: [image/state.json]
 resources:
   min_vram_mb: 6144
   cpu_cores: 2

@@ -23,7 +23,7 @@ def _module_enabled() -> bool:
 def _get_module() -> TextModule:
     global _text_module
     if _text_module is None:
-        _text_module = TextModule()
+        _text_module = TextModule(executor=lambda task: _original_execute("text", task, _migration=True))
     return _text_module
 
 

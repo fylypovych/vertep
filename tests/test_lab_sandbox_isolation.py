@@ -4,7 +4,7 @@ from pathlib import Path
 def test_dockerfile_copies_lab_code():
     dockerfile = Path("deploy/lab/Dockerfile.sandbox")
     content = dockerfile.read_text(encoding="utf-8")
-    assert "COPY ../../lab ./lab" in content, "Dockerfile must copy lab package"
+    assert "COPY lab ./lab" in content, "Dockerfile must copy lab from the repository build context"
     assert 'CMD ["python", "-m", "lab.cli", "status"]' in content
 
 def test_sandbox_no_network_flags():

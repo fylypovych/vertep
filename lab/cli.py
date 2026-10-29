@@ -44,10 +44,14 @@ def build_context(args) -> dict:
     budget = BudgetLedger(state_dir / "budget")
     provider = None
     if getattr(args, "gpu", False):
-        if os.getenv("LAB_GPU_FAKE", "1").lower() in {"1", "true", "yes"}:
+        if os.getenv("LAB_RESOURCE_URL"):
+            from .gpu_lease import VertepResourceClient
+            provider = VertepResourceClient(os.environ["LAB_RESOURCE_URL"], token=os.getenv("LAB_RESOURCE_TOKEN", ""),
+                enabled=os.getenv("LAB_IDLE_SHARING_ENABLED", "false").lower() in {"true", "1", "yes"})
+        elif os.getenv("LAB_GPU_FAKE", "0").lower() in {"1", "true", "yes"} and os.getenv("LAB_DEMO_MODE") == "1":
             provider = FakeResourceProvider()
         else:
-            raise RuntimeError("GPU lease requires a real resource provider; set LAB_GPU_FAKE=1 for demo mode")
+            raise RuntimeError("GPU lease requires configured LAB_RESOURCE_URL; fake resource mode requires explicit LAB_DEMO_MODE=1")
     # Fail-closed: without an owner-configured endpoint no run can report
     # COMPLETED (Issue i.0.0.2.50, L1); an explicit CLI URL opts in for demos.
     executor_url = getattr(args, "role_executor_url", None)
@@ -175,7 +179,7 @@ def command_gpu(context) -> int:
     leases: LeaseManager | None = context["leases"]
     args = context["args"]
     if leases is None:
-        _print({"error": "no resource provider configured; pass --gpu for the fake"})
+        _print({"error": "no resource provider configured; use --gpu with LAB_RESOURCE_URL"})
         return 1
     if args.gpu_command == "status":
         _print(leases.status())
@@ -281,7 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", default=None)
     parser.add_argument("--actor", default=os.getenv("LAB_ACTOR", "lab"))
     parser.add_argument("--gpu", action="store_true",
-                        help="увімкнути керування lease (fake provider у цьому CLI)")
+                        help="увімкнути керування lease через LAB_RESOURCE_URL")
     parser.add_argument("--role-executor-url", default=None,
                         help="явний endpoint role executor (для демо/скриптів; "
                              "інакше LAB_ROLE_EXECUTOR_URL + LAB_ROLE_EXECUTOR_ENABLED)")

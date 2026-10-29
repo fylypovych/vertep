@@ -7,6 +7,8 @@ capabilities:
 entrypoint: modules.audio.audio_module:AudioModule
 logic: modules.audio.audio_logic
 depends_on: []
+backup:
+  paths: [audio/state.json]
 resources:
   min_vram_mb: 0
   cpu_cores: 1

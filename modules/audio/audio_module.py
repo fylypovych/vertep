@@ -20,8 +20,9 @@ logger = __import__("logging").getLogger("modules.audio")
 class AudioModule:
     """Audio Module: паралельне співіснення з Voice Node через feature flag."""
 
-    def __init__(self, provider: Any | None = None) -> None:
+    def __init__(self, provider: Any | None = None, executor=None) -> None:
         self.provider = provider
+        self._bound_executor = executor
         self._active_tasks: dict[str, dict] = {}
 
     @property
@@ -48,6 +49,9 @@ class AudioModule:
         }
 
     def execute(self, task: dict[str, Any]) -> list[dict[str, Any]]:
+        if self._bound_executor is not None:
+            from modules.execution import execute_bound
+            return execute_bound(self, task)
         """Виконати завдання синтезу мовлення через провайдера."""
         errors = validate_voice_task(task)
         if errors:

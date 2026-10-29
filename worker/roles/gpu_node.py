@@ -23,7 +23,7 @@ def _module_enabled() -> bool:
 def _get_module() -> ImageModule:
     global _image_module
     if _image_module is None:
-        _image_module = ImageModule()
+        _image_module = ImageModule(executor=lambda task: _original_execute("gpu", task, _migration=True))
     return _image_module
 
 

@@ -76,6 +76,10 @@ class WorkflowEngine:
         job_id = str(uuid.uuid4())
 
         self._jobs[job_id] = {
+            "schema_version": "workflow/1",
+            "owner": (params or {}).get("owner"),
+            "project": (params or {}).get("project"),
+            "acl": deepcopy((params or {}).get("acl", [])),
             "id": job_id,
             "definition": deepcopy(definition),
             "params": deepcopy(params or {}),

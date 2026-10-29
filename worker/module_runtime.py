@@ -30,10 +30,11 @@ def load_module(manager, name):
 
 
 def inventory():
+    from worker.migration import inventory as builtin_inventory
+    result = builtin_inventory()
     manager = packages()
     if manager is None:
-        return []
-    result = []
+        return result
     for manifest in manager.registry.list_modules():
         try:
             module = load_module(manager, manifest.name)
@@ -48,6 +49,15 @@ def inventory():
 
 
 def execute_module(name, task):
+    from worker.migration import ROUTES, enabled, execute, inventory as builtin_inventory
+    for role, (module_name, _, _) in ROUTES.items():
+        if module_name == name and enabled(name):
+            manifest = next(item for item in builtin_inventory() if item["name"] == name)
+            if task.get("module_version") and task["module_version"] != manifest["version"]:
+                raise ValueError("Bundled module version mismatch")
+            from worker.role_executor import execute_role_task
+            payload = {key: value for key, value in task.items() if key != "module_name"}
+            return execute(role, payload, execute_role_task)
     manager = packages()
     if manager is None:
         raise RuntimeError("Module storage is not configured")

@@ -14,6 +14,7 @@ Orchestrator; it does not own any production state.
 """
 
 import json
+import hashlib
 import subprocess
 import sys
 import time
@@ -27,7 +28,17 @@ from .budget import BudgetLedger, LabPaused, QuotaExceeded
 from .gpu_lease import (LeaseDenied, LeaseLost, LeaseManager, ResourceRequirement,
                         ResourceUnavailable)
 from .policy import ROLE_PROFILES, Action, PolicyDenied, PolicyGate
-from .state_store import append_jsonl, read_json, read_jsonl, write_json
+from .state_store import append_jsonl, read_json, read_jsonl, write_json, exclusive
+from functools import wraps
+
+
+def serialized_queue(function):
+    @wraps(function)
+    def invoke(self, *args, **kwargs):
+        with exclusive(self.workspace.state_dir / ".queue.lock"):
+            self._load_queue()
+            return function(self, *args, **kwargs)
+    return invoke
 from .workspace import IsolationViolation, Workspace, check_command
 
 #: Roles approved in the issue; parsed from ``lab/role_profiles.md`` through the
@@ -66,6 +77,11 @@ class Task:
         return {"task_id": self.task_id, "kind": self.kind, "role": self.role,
                 "payload": self.payload, "state": self.state,
                 "created_at": self.created_at, "attempts": self.attempts}
+
+    @property
+    def approval_scope(self):
+        return hashlib.sha256(json.dumps({"task_id": self.task_id, "kind": self.kind,
+            "role": self.role, "payload": self.payload}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass
@@ -151,13 +167,14 @@ class Orchestrator:
             if isinstance(item, dict) and {"task_id", "kind", "role"} <= item.keys():
                 task = Task(**item)
                 if task.state == RunState.RUNNING.value:
-                    task.state = RunState.PENDING.value
+                    task.state = RunState.PAUSED.value
                 tasks.append(task)
         self.queue = tasks
 
     def _save_queue(self) -> None:
         write_json(self._queue_path, [task.as_dict() for task in self.queue])
 
+    @serialized_queue
     def enqueue(self, kind: str, role: str = "reviewer", payload: dict | None = None,
                 task_id: str = "") -> Task:
         if role not in ROLES:
@@ -166,6 +183,15 @@ class Orchestrator:
         task = Task(task_id=task_id or f"t-{len(self.queue) + 1:04d}", kind=kind, role=role,
                     payload=payload or {},
                     created_at=datetime.now(timezone.utc).isoformat())
+        for existing in self.queue:
+            if existing.task_id == task.task_id:
+                if existing.approval_scope != task.approval_scope:
+                    raise ValueError("Task identity reused for a different scope")
+                if existing.state in {RunState.BLOCKED.value, RunState.PAUSED.value} and self.gate.active_grant(
+                        self.actor, Action.EXECUTE_APPROVED_TASK, task.task_id, scope=task.approval_scope):
+                    existing.state = RunState.PENDING.value
+                    self._save_queue()
+                return existing
         self.queue.append(task)
         self._save_queue()
         return task
@@ -205,6 +231,7 @@ class Orchestrator:
             report["lease"] = self.leases.lease.as_dict() if self.leases.lease else None
         return report
 
+    @serialized_queue
     def run_once(self, *, model: str = "ollama:qwen2.5-coder",
                  provider: str = "ollama", executor=None) -> dict:
         """Execute one queued task end-to-end, fail-closed at every gate."""
@@ -272,36 +299,47 @@ class Orchestrator:
                         created_at=datetime.now(timezone.utc).isoformat())
         task.state = RunState.RUNNING.value
         task.attempts += 1
-        if not standing:
-            self._save_queue()
+        invoked = False
         try:
+            if not standing:
+                self._save_queue()
             if self.leases is not None and self.leases.lease is not None:
-                try:
-                    self.leases.heartbeat()
-                except Exception:
-                    pass
+                self.leases.heartbeat()
+                self.leases.assert_usable()
             # The gate rules *as the task's role*, so a read-only reviewer can
             # never execute change work and a QA result stays separate from the
             # independent review (Issue i.0.0.2.50, L1).
-            execution_action = (Action.WRITE_REPORT if task.kind in _REPORT_KINDS
-                                 else Action.LOCAL_FIX)
+            execution_action = (Action.WRITE_REPORT if task.kind in _REPORT_KINDS else
+                                Action.RUN_TESTS if task.kind in {"test", "verify"} else Action.LOCAL_FIX)
             self.gate.require(execution_action, actor=task.role, subject=task.task_id)
+            if execution_action == Action.LOCAL_FIX:
+                self.gate.require(Action.EXECUTE_APPROVED_TASK, actor=self.actor,
+                                  subject=task.task_id, scope=task.approval_scope)
+            if hasattr(active_executor, "timeout"):
+                active_executor.timeout = min(active_executor.timeout, max(.01, self.timeout_seconds - (time.monotonic() - self.started)))
+            if hasattr(active_executor, "resource_lease"):
+                active_executor.resource_lease = self.leases.assert_usable().as_dict() if self.leases is not None else None
+            remaining_tokens = self.budget.max_tokens_per_day - self.budget.usage()["known_tokens_last_day"]
+            if hasattr(active_executor, "max_tokens"):
+                active_executor.max_tokens = remaining_tokens
+            invoked = True
             task_result = active_executor(task, model=model, provider=provider,
                                           workspace=self.workspace)
             if self.leases is not None and self.leases.lease is not None:
-                try:
-                    self.leases.heartbeat()
-                except Exception:
-                    pass
+                self.leases.heartbeat()
+                self.leases.assert_usable()
+            if self._expired():
+                raise TimeoutError("Laboratory run timeout exceeded")
             task.state = RunState.COMPLETED.value
-            tokens_used = 0
-            try:
-                tokens_used = int(task_result.get("tokens_used")
-                                  or task_result.get("result", {}).get("tokens_used")
-                                  or 0)
-            except Exception:
-                tokens_used = 0
-            self.budget.record_run(tokens=tokens_used, status="completed", detail=task.task_id)
+            tokens_used = task_result.get("tokens_used")
+            if tokens_used is None and isinstance(task_result.get("result"), dict):
+                tokens_used = task_result["result"].get("tokens_used")
+            if type(tokens_used) is not int or tokens_used < 0:
+                tokens_used = None
+            exceeded = tokens_used is not None and tokens_used > remaining_tokens
+            self.budget.record_run(tokens=tokens_used, status="failed" if exceeded else "completed", detail=task.task_id)
+            if exceeded:
+                raise QuotaExceeded("Role executor exceeded the requested token budget")
             self._record_result(task, RunState.COMPLETED.value, result=task_result)
             result.update({"state": RunState.COMPLETED.value, "task": task.as_dict(),
                            "reason": f"task {task.task_id} executed by role "
@@ -315,19 +353,21 @@ class Orchestrator:
                            "reason": str(error)})
         except Exception as error:
             task.state = RunState.FAILED.value
-            self.budget.record_run(status="failed", detail=str(error))
+            self.budget.record_run(tokens=None if invoked else 0, status="failed", detail=str(error))
             self._record_result(task, RunState.FAILED.value, reason=str(error))
             result.update({"state": RunState.FAILED.value, "task": task.as_dict(),
                            "reason": str(error)})
         finally:
-            if not standing:
-                self._save_queue()
-            if self.leases is not None and self.leases.lease is not None:
-                self.leases.release(reason="run finished")
+            try:
+                if not standing:
+                    self._save_queue()
+            finally:
+                if self.leases is not None and self.leases.lease is not None:
+                    self.leases.release(reason="run finished")
 
         # Keep the next agent's context small: one-line hand-off after every run.
         try:
-            self.write_handoff(summary=f"task {task.task_id} executed, "
+            self.write_handoff(summary=f"task {task.task_id}: {task.state}, "
                                          f"{task.kind} checked",
                                next_steps=[], model="")
         except Exception:

@@ -2313,8 +2313,19 @@ def test_update_critical_mutations_install_and_canary():
             page.locator("[data-testid='update-promote-canary']").click()
         with page.expect_response("**/api/system/update/rolling/rollback"):
             page.locator("[data-testid='update-rollback-canary']").click()
+
+        # Issue #362: recovery is admitted only in EMERGENCY, and the UI mirrors
+        # the server STATE_OPERATION_POLICY. In NORMAL the control must be
+        # disabled; the click wiring is proven in the state that allows it.
+        recovery = page.locator("[data-testid='update-recover-normal']")
+        expect(recovery).to_be_disabled()
+        page.unroute("**/api/status")
+        _mock_status(page, {"system": {"state": "EMERGENCY"}})
+        page.goto(f"{BASE_URL}/settings?tab=update")
+        expect(page.locator("[data-testid='settings-update']")).to_be_visible()
+        expect(recovery).to_be_enabled()
         with page.expect_response("**/api/system/recovery/normal"):
-            page.locator("[data-testid='update-recover-normal']").click()
+            recovery.click()
 
         assert "install" in post_calls, post_calls
         assert "promote" in post_calls, post_calls

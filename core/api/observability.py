@@ -285,7 +285,8 @@ def metrics():
     statuses = {status.value: sum(job.status == status for job in store.jobs.values()) for status in JobStatus}
     scene_statuses = {status.value: sum(scene.status == status for job in store.jobs.values() for scene in job.scenes)
                       for status in StageStatus}
-    return {"jobs_total": len(store.jobs), "jobs_by_status": statuses, "queue_ready": task_queue.depth(),
+    module_executions = {name: worker.get("module_inventory", []) for name, worker in store.workers.items()}
+    return {"module_overview": module_executions, "jobs_total": len(store.jobs), "jobs_by_status": statuses, "queue_ready": task_queue.depth(),
             "queue_inflight": task_queue.inflight_depth(),
             "queue_dead_letter": len(task_queue.dead_letters()),
             "jobs_scheduled": sum(job.status == JobStatus.NEW and not _job_is_due(job) for job in store.jobs.values()),
@@ -313,6 +314,11 @@ def prometheus_metrics():
         node = _prometheus_label(name)
         role = _prometheus_label(worker.get("role", ""))
         lines.append(f'vertep_worker_up{{node="{node}",role="{role}"}} {up}')
+        for module in worker.get("module_inventory", []):
+            label = _prometheus_label(module.get("name", ""))
+            for metric in ("executions", "successes", "failures", "latency_seconds"):
+                value = float(module.get("metrics", {}).get(metric, 0))
+                lines.append(f'vertep_module_{metric}{{node="{node}",module="{label}"}} {value}')
     return Response("\n".join(lines) + "\n", media_type="text/plain")
 
 

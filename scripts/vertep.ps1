@@ -1,4 +1,4 @@
-param([ValidateSet("status", "update", "test", "module")][string]$Command = "status",
+param([ValidateSet("status", "update", "test", "module", "backup")][string]$Command = "status",
       [Parameter(ValueFromRemainingArguments=$true)][string[]]$ModuleArguments)
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $coreUrl = if ($env:VERTEP_CORE_URL) { $env:VERTEP_CORE_URL } else { "http://127.0.0.1:8080" }
@@ -8,6 +8,7 @@ if ($env:ADMIN_PASSWORD) {
   $headers.Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
 }
 switch ($Command) {
+  "backup" { & python "$root/scripts/vertep-cli.py" backup @ModuleArguments; exit $LASTEXITCODE }
   "module" { & python "$root/scripts/vertep-cli.py" module @ModuleArguments; exit $LASTEXITCODE }
   "status" { Invoke-RestMethod "$coreUrl/api/status" -Headers $headers | ConvertTo-Json -Depth 8 }
   "update" { git -C $root pull --ff-only; docker compose -f "$root/docker-compose.yml" up -d --build }

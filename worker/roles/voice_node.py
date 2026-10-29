@@ -23,7 +23,7 @@ def _module_enabled() -> bool:
 def _get_module() -> AudioModule:
     global _audio_module
     if _audio_module is None:
-        _audio_module = AudioModule()
+        _audio_module = AudioModule(executor=lambda task: _original_execute("voice", task, _migration=True))
     return _audio_module
 
 

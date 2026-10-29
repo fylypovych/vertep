@@ -6,6 +6,12 @@ import urllib.request
 import sys
 from pathlib import Path
 
+if len(sys.argv) > 1 and sys.argv[1] == "backup":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from core.backup import main
+    sys.argv = [sys.argv[0], *sys.argv[2:]]
+    raise SystemExit(main())
+
 parser = argparse.ArgumentParser(prog="vertep-cli")
 parser.add_argument("--url", default=os.getenv("VERTEP_CORE_URL", "http://127.0.0.1:8080"))
 sub = parser.add_subparsers(dest="command", required=True)

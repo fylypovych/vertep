@@ -17,9 +17,12 @@ policy without a token and the production transport stays a thin ``gh`` wrapper.
 """
 
 import json
+import hashlib
+from functools import wraps
 import os
 import re
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -29,17 +32,37 @@ from pathlib import Path
 from .policy import (Action, PolicyDenied, PolicyGate, reserve_identifier,
                      validate_lab_finding)
 from .state_store import append_jsonl, read_json, read_jsonl, write_json
+from .state_store import exclusive
+
+
+def serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with exclusive(self.state_dir / ".governance.lock"):
+            return method(self, *args, **kwargs)
+    return call
 
 _ISSUER = {"i": Action.CREATE_I_ISSUE, "ir": Action.CREATE_IR_ISSUE,
            "var": Action.CREATE_VAR_ISSUE}
 _IDENTIFIER = {kind: re.compile(rf"^{kind}\.\d+\.\d+\.\d+\.\d+$")
                for kind in _ISSUER}
+
+
+def issue_scope(kind, title, identifier="", metadata=None):
+    """Owner-review digest of an implementation/proposal creation request."""
+    return hashlib.sha256(json.dumps({"kind": kind, "title": str(title).strip(),
+        "identifier": str(identifier).strip(), "metadata": metadata or {}},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 #: Reviewer identities that cannot count as an independent review.
 _SELF_REVIEWERS = frozenset({"lab", "self", "author", "автор", "me", "same"})
 
 
 class GovernanceError(RuntimeError):
     """A governance rule refused the operation."""
+
+
+class RemoteRejected(GovernanceError):
+    """The remote server explicitly refused a request without creating an effect."""
 
 
 @dataclass
@@ -57,6 +80,12 @@ class IssueTransport:
         if self.dry_run:
             return []
         raise NotImplementedError
+
+    def get_issue(self, number):
+        raise GovernanceError("Remote read-back is required before acceptance/transfer")
+
+    def identifiers(self):
+        return []
 
     def close_issue(self, issue, comment: str = "") -> dict:
         """Close an issue — reachable only through a delegated, gated decision."""
@@ -97,20 +126,37 @@ class GhIssueTransport(IssueTransport):
         if self.dry_run:
             return []
         output = self._gh("issue", "list", "--repo", self.repository, "--state", "all",
-                          "--search", title, "--json", "number,title", "--limit", "20")
+                          "--search", title, "--json", "number,title,body,state", "--limit", "100")
         try:
             return json.loads(output or "[]")
         except ValueError:
             return []
 
+    def get_issue(self, number):
+        return json.loads(self._gh("issue", "view", str(number), "--repo", self.repository, "--json", "number,title,body,state"))
+
+    def _request(self, method, path, payload=None):
+        args = ["api", f"repos/{self.repository}{path}", "--method", method]
+        if payload is None:
+            return json.loads(self._gh(*args))
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8", delete=False) as stream:
+            json.dump(payload, stream, ensure_ascii=False)
+            name = stream.name
+        try:
+            return json.loads(self._gh(*args, "--input", name))
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def identifiers(self):
+        if self.dry_run:
+            return []
+        output = self._gh("api", "--paginate", f"repos/{self.repository}/issues?state=all&per_page=100", "--jq", '.[] | (.title + " " + (.body // ""))')
+        return re.findall(r"(?:i|ir|ri|rt|lab|var)\.\d+\.\d+\.\d+\.\d+", output)
+
     def close_issue(self, issue, comment: str = "") -> dict:
         if self.dry_run:
             return {"number": issue, "state": "closed", "dry_run": True}
-        command = ["issue", "close", str(issue), "--repo", self.repository]
-        if comment:
-            command.extend(["--comment", str(comment)])
-        self._gh(*command)
-        return {"number": issue, "state": "closed", "dry_run": False}
+        return GitHubApiTransport.close_issue(self, issue, comment)
 
 
 class GitHubApiTransport(IssueTransport):
@@ -154,7 +200,8 @@ class GitHubApiTransport(IssueTransport):
                 detail = error.read()[:200].decode("utf-8", "replace").strip()
             except Exception:  # pragma: no cover - the body is optional
                 detail = ""
-            raise GovernanceError(
+            error_class = RemoteRejected if 400 <= error.code < 500 and error.code != 408 else GovernanceError
+            raise error_class(
                 f"github refused {method} {path}: HTTP {error.code} {detail}".strip()) from error
         except (urllib.error.URLError, OSError, TimeoutError) as error:
             raise GovernanceError(f"github transport unreachable: {error}") from error
@@ -195,8 +242,28 @@ class GitHubApiTransport(IssueTransport):
             if candidate and (candidate == needle or needle in candidate
                               or candidate in needle):
                 found.append({"number": item.get("number"),
+                              "body": item.get("body", ""), "state": item.get("state", ""),
                               "title": item.get("title")})
         return found
+
+    def get_issue(self, number):
+        return self._request("GET", f"/issues/{int(number)}")
+
+    def identifiers(self):
+        if self.dry_run:
+            return []
+        result = []
+        page = 1
+        while True:
+            data = self._request("GET", f"/issues?state=all&per_page=100&page={page}")
+            if not isinstance(data, list):
+                raise GovernanceError("Invalid remote issue inventory")
+            for item in data:
+                if not item.get("pull_request"):
+                    result.extend(re.findall(r"(?:i|ir|ri|rt|lab|var)\.\d+\.\d+\.\d+\.\d+", str(item.get("title", "")) + " " + str(item.get("body", ""))))
+            if len(data) < 100:
+                return result
+            page += 1
 
     def close_issue(self, issue, comment: str = "") -> dict:
         if self.dry_run:
@@ -206,8 +273,18 @@ class GitHubApiTransport(IssueTransport):
         except (TypeError, ValueError) as error:
             raise GovernanceError(
                 f"closing an issue needs its GitHub number, got {issue!r}") from error
+        remote = self.get_issue(number)
+        if not isinstance(remote, dict) or remote.get("number") != number:
+            raise GovernanceError("Remote close target is unconfirmed")
+        if str(remote.get("state", "")).lower() == "closed":
+            return {"number": number, "state": "closed", "dry_run": False, "already": True}
         if comment:
-            self._request("POST", f"/issues/{number}/comments", {"body": comment})
+            marker = f"<!-- vertep-lab-close:{hashlib.sha256((str(number) + comment).encode()).hexdigest()} -->"
+            comments = self._request("GET", f"/issues/{number}/comments?per_page=100")
+            if not isinstance(comments, list):
+                raise GovernanceError("Remote close comment history is unconfirmed")
+            if not any(marker in str(item.get("body", "")) for item in comments):
+                self._request("POST", f"/issues/{number}/comments", {"body": comment + "\n\n" + marker})
         data = self._request("PATCH", f"/issues/{number}", {"state": "closed"})
         state = str(data.get("state", "closed")).lower() if isinstance(data, dict) else "closed"
         return {"number": number, "state": state, "dry_run": False}
@@ -257,6 +334,11 @@ class Governance:
     def known_identifiers(self) -> set:
         """Identifiers already held by an issue, so a number is never reused."""
         taken: set = set()
+        for value in self.transport.identifiers():
+            taken.add(re.sub(r"^(?:ri|rt)\.", "ir.", value))
+        for intent in (read_json(self.state_dir / "issue-intents.json", {}) or {}).values():
+            if intent.get("identifier"):
+                taken.add(intent["identifier"])
         for record in self.created():
             for source in (record, record.get("finding") or {},
                            record.get("issue") or {}, record.get("metadata") or {}):
@@ -264,6 +346,38 @@ class Governance:
                 if value:
                     taken.add(str(value))
         return taken
+
+    def _create_effect(self, key, title, body, labels, identifier):
+        path = self.state_dir / "issue-intents.json"
+        intents = read_json(path, {}) or {}
+        full_title = f"{identifier} — {title}"
+        content_hash = hashlib.sha256(json.dumps({"title": full_title, "body": body, "labels": labels}, sort_keys=True).encode()).hexdigest()
+        marker = f"<!-- vertep-lab-operation:{hashlib.sha256((key + content_hash).encode()).hexdigest()} -->"
+        complete_body = body + "\n\n" + marker
+        expected_hash = hashlib.sha256(complete_body.encode()).hexdigest()
+        prior = intents.get(key)
+        if prior and prior["content_hash"] != content_hash:
+            raise GovernanceError("Approval/idempotency key reused for a different scope")
+        duplicates = self.transport.find_duplicates(title)
+        if prior:
+            for issue in duplicates:
+                if issue.get("title") == full_title and marker in issue.get("body", ""):
+                    if hashlib.sha256(issue["body"].encode()).hexdigest() != expected_hash:
+                        raise GovernanceError("Remote issue body changed during recovery")
+                    return {**issue, "expected_body_sha256": expected_hash}
+            if prior.get("state") in {"sending", "uncertain"}:
+                raise GovernanceError("Remote create outcome is unconfirmed; source remains open")
+        if duplicates:
+            return None
+        intents[key] = {"identifier": identifier, "content_hash": content_hash, "state": "sending"}
+        write_json(path, intents)
+        try:
+            created = self.transport.create_issue(full_title, complete_body, labels=labels)
+            return {**created, "expected_body_sha256": expected_hash}
+        except BaseException as error:
+            intents[key]["state"] = "reserved" if isinstance(error, RemoteRejected) else "uncertain"
+            write_json(path, intents)
+            raise
 
     def _record_by_identifier(self, identifier: str) -> dict | None:
         for record in self.created():
@@ -289,6 +403,7 @@ class Governance:
         return payload if isinstance(payload, dict) else {}
 
     # -- findings --------------------------------------------------------
+    @serialized
     def propose_lab_issue(self, finding: dict, *, key: str = "") -> dict:
         """Validate and publish a ``lab`` finding; every other write is refused."""
         from .policy import reserve_identifier
@@ -298,6 +413,8 @@ class Governance:
 
         existing = self._already_created(decision_key)
         if existing is not None:
+            if existing.get("finding") != finding:
+                raise GovernanceError("Idempotency key reused for a different issue scope")
             # A retry or restart must never duplicate an issue.
             self.gate.trail.append(actor=self.actor, action="create_lab_issue",
                                    subject=decision_key, decision="DUPLICATE",
@@ -321,16 +438,7 @@ class Governance:
             return {"created": False, "reason": str(error),
                     "decision": error.decision.as_dict()}
 
-        duplicates = self.transport.find_duplicates(str(finding.get("title", "")))
-        if duplicates:
-            self.gate.trail.append(actor=self.actor, action="create_lab_issue",
-                                   subject=decision_key, decision="REJECTED",
-                                   rule="duplicate_check",
-                                   reason=f"{len(duplicates)} similar issue(s)")
-            return {"created": False, "reason": "duplicate finding",
-                    "duplicates": duplicates}
-
-        existing_numbers = []
+        existing_numbers = list(self.known_identifiers())
         for rec in self.created():
             for candidate in (rec.get("lab_id"), rec.get("identifier"),
                               rec.get("key"),
@@ -345,8 +453,13 @@ class Governance:
         except Exception:
             lab_id = decision_key
 
-        issue = self.transport.create_issue(str(finding.get("title", "")),
-                                            render_lab_body(finding), labels=("lab",))
+        pending = (read_json(self.state_dir / "issue-intents.json", {}) or {}).get(decision_key)
+        if pending:
+            lab_id = pending["identifier"]
+        issue = self._create_effect(decision_key, str(finding.get("title", "")),
+                                   render_lab_body(finding) + f"\n\n{lab_id}", ("lab",), lab_id)
+        if issue is None:
+            return {"created": False, "reason": "duplicate finding"}
         record = {"key": decision_key,
                   "created_at": datetime.now(timezone.utc).isoformat(),
                   "actor": self.actor, "finding": finding, "issue": issue,
@@ -386,6 +499,8 @@ class Governance:
         if not isinstance(evidence, dict):
             raise GovernanceError("evidence must be an object")
         problems: list[str] = []
+        from .evidence import verify
+        problems.extend(verify(evidence, self.actor, issue, self.state_dir))
         missing = [key for key in required if not str(evidence.get(key, "")).strip()]
         if missing:
             problems.append("missing " + ", ".join(missing))
@@ -398,9 +513,11 @@ class Governance:
             problems.append("test_results must report passed, failed and skipped")
         else:
             try:
-                passed = int(test_results.get("passed"))
-                failed = int(test_results.get("failed"))
-                skipped = int(test_results.get("skipped"))
+                if any(type(test_results.get(key)) is not int for key in ("passed", "failed", "skipped")):
+                    raise ValueError("integer counters required")
+                passed = test_results["passed"]
+                failed = test_results["failed"]
+                skipped = test_results["skipped"]
             except (TypeError, ValueError):
                 passed = failed = skipped = -1
                 problems.append("test_results must use integer counters")
@@ -425,6 +542,7 @@ class Governance:
                               rule="evidence_submitted", reason="evidence recorded")
         return {"accepted": True, "record": record}
 
+    @serialized
     def delegate_close_ir(self, issue: str, evidence: dict | None = None) -> dict:
         """Owner-delegated close of an ``ir`` after complete, independent proof.
 
@@ -456,12 +574,23 @@ class Governance:
         except PolicyDenied as error:
             return {"allowed": False, "reason": str(error),
                     "rule": error.decision.rule}
+        if self.transport.dry_run:
+            return {"allowed": True, "closed": False, "rule": "dry_run_not_real_acceptance"}
+        recorded_target = (self._record_by_identifier(issue) or {}).get("issue", {}).get("number")
+        target = evidence.get("issue_number") or recorded_target
+        if recorded_target and str(target) != str(recorded_target):
+            return {"allowed": False, "closed": False, "rule": "mismatched_remote_target"}
+        target = target or (int(issue) if str(issue).isdigit() else None)
+        if not target:
+            return {"allowed": False, "closed": False, "rule": "unconfirmed_remote_target"}
         comment = ("Закрито за делегованим рішенням власника: повний доказ "
                    f"({evidence.get('version')} / {evidence.get('commit')}), "
                    "тести пройдено, незалежний review "
                    f"({evidence.get('reviewer')}).")
         try:
-            close = self.transport.close_issue(issue, comment=comment)
+            close = self.transport.close_issue(target, comment=comment)
+            if close.get("state") != "closed" or close.get("dry_run"):
+                raise GovernanceError("Remote close was not confirmed")
         except Exception as error:  # fail closed: the issue simply stays open
             self.gate.trail.append(actor=self.actor, action="delegate_close_ir",
                                    subject=issue, decision="FAILED",
@@ -484,6 +613,7 @@ class Governance:
         return {"allowed": True, "closed": closed_state, "issue": issue,
                 "close": close, "record": record}
 
+    @serialized
     def create_issue(self, kind: str, title: str, *, identifier: str = "",
                      key: str = "", metadata: dict | None = None) -> dict:
         """Create exactly one approved ``i``/``ir``/``var`` issue, once.
@@ -502,9 +632,14 @@ class Governance:
         identifier = str(identifier or "").strip()
         subject = identifier or title
         decision_key = str(key or "").strip() or subject
+        scope = issue_scope(kind, title, identifier, metadata) if kind in {"i", "var"} else None
 
         existing = self._already_created(decision_key)
         if existing is not None:
+            if (existing.get("title") != title or existing.get("kind") != kind or
+                    (identifier and existing.get("identifier") != identifier) or
+                    (existing.get("metadata") or {}) != (metadata or {})):
+                raise GovernanceError("Idempotency key reused for a different issue scope")
             self.gate.trail.append(actor=self.actor, action=f"create_{kind}_issue",
                                    subject=subject, decision="DUPLICATE",
                                    rule="idempotent_retry",
@@ -513,11 +648,20 @@ class Governance:
                     "identifier": existing.get("identifier", ""),
                     "issue": existing.get("issue", existing), "record": existing}
 
+        try:
+            self.gate.require(_ISSUER[kind], actor=self.actor, subject=subject, scope=scope)
+        except PolicyDenied as error:
+            return {"allowed": False, "reason": str(error), "rule": error.decision.rule,
+                    "approval_scope": scope}
+
         taken = self.known_identifiers()
+        pending = (read_json(self.state_dir / "issue-intents.json", {}) or {}).get(decision_key)
+        if pending and not identifier:
+            identifier = pending["identifier"]
         if identifier:
             if not _IDENTIFIER[kind].match(identifier):
                 raise GovernanceError(f"identifier must look like {kind}.A.B.C.D")
-            if identifier in taken:
+            if identifier in taken and not (pending and pending["identifier"] == identifier):
                 self.gate.trail.append(actor=self.actor,
                                        action=f"create_{kind}_issue", subject=subject,
                                        decision="REJECTED", rule="identifier_used",
@@ -528,23 +672,14 @@ class Governance:
             identifier = reserve_identifier(kind, taken)
 
         try:
-            self.gate.require(_ISSUER[kind], actor=self.actor, subject=subject)
+            self.gate.require(_ISSUER[kind], actor=self.actor, subject=subject, scope=scope)
         except PolicyDenied as error:
             return {"allowed": False, "reason": str(error),
                     "rule": error.decision.rule}
 
-        duplicates = self.transport.find_duplicates(title)
-        if duplicates:
-            self.gate.trail.append(actor=self.actor, action=f"create_{kind}_issue",
-                                   subject=subject, decision="REJECTED",
-                                   rule="duplicate_check",
-                                   reason=f"{len(duplicates)} similar issue(s)")
-            return {"allowed": True, "created": False, "reason": "duplicate issue",
-                    "duplicates": duplicates}
-
-        issue = self.transport.create_issue(
-            title, render_issue_body(kind, title, identifier, metadata),
-            labels=(kind,))
+        issue = self._create_effect(decision_key, title, render_issue_body(kind, title, identifier, metadata), (kind,), identifier)
+        if issue is None:
+            return {"allowed": True, "created": False, "reason": "duplicate issue"}
         record = {"key": decision_key, "identifier": identifier, "kind": kind,
                   "title": title,
                   "created_at": datetime.now(timezone.utc).isoformat(),
@@ -580,6 +715,7 @@ class Governance:
         payload = read_json(self._transfers_path, default={}) or {}
         return payload if isinstance(payload, dict) else {}
 
+    @serialized
     def consolidate_ir(self, source: dict, successors: list, *,
                        reason: str = "") -> dict:
         """Transfer the remainder of a failed ``ir`` and close it — fail closed.
@@ -642,6 +778,20 @@ class Governance:
                     "reason": "remaining criteria must be transferred exactly once"
                               + (f"; missing {missing}" if missing else "")}
 
+        # Reserve the entire plan before the first remote effect, including
+        # automatically assigned numbers. Retries cannot change its scope.
+        plans_path = self.state_dir / "transfer-intents.json"
+        plans = read_json(plans_path, {}) or {}
+        scope = hashlib.sha256(json.dumps({"source": source, "successors": successors,
+                                          "reason": reason}, sort_keys=True).encode()).hexdigest()
+        previous = plans.get(source_id)
+        if previous:
+            if previous["scope"] != scope:
+                return {"allowed": False, "created": [], "closed": False,
+                        "rule": "scope", "reason": "transfer retry changed its approved scope"}
+            for entry, identifier in zip(planned, previous["identifiers"]):
+                entry["source"] = {**entry["source"], "identifier": identifier}
+
         # Resolve identifiers through the shared continuous series (§4.2).
         taken = self.known_identifiers() | {source_id}
         for entry in planned:
@@ -656,7 +806,8 @@ class Governance:
                     # a second one.
                     record = self._record_by_identifier(identifier) or {}
                     link = record.get("metadata") or {}
-                    if link.get("transferred_from") != source_id:
+                    intent = (read_json(self.state_dir / "issue-intents.json", {}) or {}).get(identifier)
+                    if link.get("transferred_from") != source_id and not (intent and intent.get("identifier") == identifier):
                         return {"allowed": False, "created": [], "closed": False,
                                 "rule": "identifier_used",
                                 "reason": f"identifier {identifier} is already used"}
@@ -664,6 +815,9 @@ class Governance:
                 identifier = reserve_identifier("ir", taken)
             taken.add(identifier)
             entry["identifier"] = identifier
+
+        plans[source_id] = {"scope": scope, "identifiers": [entry["identifier"] for entry in planned]}
+        write_json(plans_path, plans)
 
         # Authorisation before any effect: the owner approves the transfer and
         # the close of exactly this source issue.
@@ -710,6 +864,14 @@ class Governance:
                         "reason": f"link {source_id} → {record.get('identifier')} "
                                   "missing; source stays open"}
             covered.extend(metadata.get("transferred_criteria") or [])
+            try:
+                remote = self.transport.get_issue(record["issue"]["number"])
+                remote_hash = hashlib.sha256(str(remote.get("body", "")).encode()).hexdigest()
+                if remote_hash != record["issue"]["expected_body_sha256"]:
+                    raise GovernanceError("Remote successor body differs from approved coverage")
+            except Exception as error:
+                return {"allowed": True, "created": created, "closed": False,
+                        "rule": "verification", "reason": f"Remote coverage unconfirmed: {error}"}
         if set(covered) != set(remaining) or len(covered) != len(set(covered)):
             return {"allowed": True, "created": created, "closed": False,
                     "rule": "verification",
@@ -719,8 +881,14 @@ class Governance:
                    f"Перенесено залишок {sorted(remaining)} до "
                    f"{', '.join(created)}; перевірено зв'язки й повноту перенесення.")
         try:
+            source_record = self._record_by_identifier(source_id) or {}
+            source_number = source.get("number") or source_record.get("issue", {}).get("number")
+            if self.transport.dry_run or not source_number:
+                raise GovernanceError("Verified numeric source issue is required before transfer close")
             close = self.transport.close_issue(
-                source.get("number") or source_id, comment=comment)
+                source_number, comment=comment)
+            if close.get("state") != "closed" or close.get("dry_run"):
+                raise GovernanceError("Remote source close was not confirmed")
         except Exception as error:
             return {"allowed": True, "created": created, "closed": False,
                     "rule": "transport_error",

@@ -30,7 +30,7 @@ from typing import Iterable
 
 from .audit import AuditTrail
 from .roles import RoleProfile, load_role_profiles
-from .state_store import append_jsonl, read_json, read_jsonl, write_json
+from .state_store import append_jsonl, read_json, read_jsonl, write_json, state_transaction
 
 #: Actions the laboratory may always perform inside its own isolated copy.
 STANDING_PERMISSIONS = frozenset({
@@ -52,6 +52,7 @@ GATED_ACTIONS = frozenset({
     "create_lab_issue", "create_issue", "create_i_issue", "create_ir_issue",
     "create_var_issue", "standalone_verification", "delegate_close_ir",
     "consolidate_ir",
+    "execute_approved_task",
 })
 
 ISSUE_TYPES = ("lab", "i", "ir", "var")
@@ -88,6 +89,7 @@ class Action(str, Enum):
     STANDALONE_VERIFICATION = "standalone_verification"
     DELEGATE_CLOSE_IR = "delegate_close_ir"
     CONSOLIDATE_IR = "consolidate_ir"
+    EXECUTE_APPROVED_TASK = "execute_approved_task"
     PUSH = "push"
     RELEASE = "release"
     CREATE_BRANCH = "create_branch"
@@ -226,6 +228,7 @@ class PolicyGate:
     def _save_grants(self, grants: Iterable[Grant]) -> None:
         write_json(self._grants_path, [grant.as_dict() for grant in grants])
 
+    @state_transaction(".grants.lock")
     def register_grant(self, *, actor: str, action: str, subject: str, approved_by: str,
                        expires_at: str, environment: str = "lab", scope_version: str = "",
                        grant_id: str = "") -> Grant:
@@ -256,6 +259,7 @@ class PolicyGate:
                           reason=f"grant {grant.grant_id} until {expires_at}")
         return grant
 
+    @state_transaction(".grants.lock")
     def revoke_grant(self, grant_id: str, actor: str = "owner") -> bool:
         """Revoke a grant; the revocation is effective for every later decision."""
         remaining: list[Grant] = []

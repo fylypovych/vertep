@@ -6,6 +6,12 @@ from fastapi.testclient import TestClient
 from lab.api import create_app
 
 
+@pytest.fixture(autouse=True)
+def signed_review_boundary(tmp_path, monkeypatch):
+    monkeypatch.setenv("LAB_EVIDENCE_ROOT", str(tmp_path))
+    monkeypatch.setenv("LAB_REVIEW_TRUST_ROOT", str(tmp_path / "trusted-reviewers"))
+
+
 def build_client(tmp_path):
     """Build the laboratory API on a temporary state directory and working copy.
 
@@ -226,11 +232,12 @@ def _finding():
 
 
 def _complete_evidence():
-    return {"version": "0.0.2.70", "commit": "abc1234",
+    from tests.lab_evidence_fixture import signed_contract_evidence
+    return signed_contract_evidence({"version": "0.0.2.70", "commit": "abc1234", "identifier": "ir.0.0.0.1", "issue_number": 101,
             "environment": "lab-vm ubuntu-24.04",
             "expected": "усі тести зелені", "actual": "усі тести зелені",
             "reviewer": "qa-agent",
-            "test_results": {"passed": 12, "failed": 0, "skipped": 0}}
+            "test_results": {"passed": 12, "failed": 0, "skipped": 0}})
 
 
 def test_panel_reads_expose_the_cli_state(monkeypatch, tmp_path):
@@ -292,8 +299,10 @@ def test_notifications_write_is_an_owner_act(monkeypatch, tmp_path):
 
 
 def test_ir_close_endpoint_requires_owner_and_complete_evidence(monkeypatch, tmp_path):
+    from tests.test_lab_ir_acceptance import _FakeTransport
     monkeypatch.setenv("LAB_OWNER_TOKEN", "secret")
     client = _activate(build_client(tmp_path))
+    client.app.state.context["governance"].transport = _FakeTransport()
     client.post("/api/lab/grants", json={
         "actor": "lab", "action": "create_ir_issue", "subject": "ir.0.0.0.1",
         "approved_by": "owner", "expires_at": "2099-01-01T00:00:00+00:00",
@@ -338,8 +347,10 @@ def test_ir_close_refused_for_incomplete_evidence(monkeypatch, tmp_path):
 
 
 def test_consolidation_endpoint_requires_owner(monkeypatch, tmp_path):
+    from tests.test_lab_ir_acceptance import _FakeTransport
     monkeypatch.setenv("LAB_OWNER_TOKEN", "secret")
     client = _activate(build_client(tmp_path))
+    client.app.state.context["governance"].transport = _FakeTransport()
     source = {"identifier": "ir.0.0.0.3", "title": "ir з залишком",
               "number": None,
               "remaining_criteria": ["U2 browser scenario", "U3 reports"]}

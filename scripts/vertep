@@ -412,7 +412,7 @@ case "${1:-status}" in
     esac
     ;;
   backup)
-    python3 "$ROOT/core/backup/__init__.py" "${@:2}"
+    python3 "$ROOT/scripts/vertep-cli.py" backup "${@:2}"
     ;;
   *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback|backup|module}"; exit 2 ;;
 esac

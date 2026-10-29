@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .state_store import append_jsonl, read_json, read_jsonl, write_json
+from .state_store import state_transaction
 
 
 class QuotaExceeded(RuntimeError):
@@ -128,8 +129,11 @@ class BudgetLedger:
         now = now or datetime.now(timezone.utc)
         hourly = self._within(self.runs, timedelta(hours=1), now)
         daily = self._within(self.runs, timedelta(days=1), now)
+        unknown = any(run.get("tokens") is None or run.get("status") == "running" for run in daily)
+        known = sum(int(run.get("tokens") or 0) for run in daily)
         return {"runs_last_hour": len(hourly), "runs_last_day": len(daily),
-                "tokens_last_day": sum(int(run.get("tokens", 0)) for run in daily),
+                "tokens_last_day": None if unknown else known,
+                "known_tokens_last_day": known, "usage_unknown": unknown,
                 "max_runs_per_hour": self.max_runs_per_hour,
                 "max_runs_per_day": self.max_runs_per_day,
                 "max_tokens_per_day": self.max_tokens_per_day,
@@ -161,9 +165,20 @@ class BudgetLedger:
                      {"at": datetime.now(timezone.utc).isoformat(),
                       "seconds": int(seconds), "reason": reason})
 
+    @state_transaction(".budget.lock")
     def reserve_run(self, now: datetime | None = None) -> dict:
         """Claim one run slot; raises when paused or over quota."""
         now = now or datetime.now(timezone.utc)
+        self.runs = read_jsonl(self.state_dir / "runs.jsonl")
+        limits_path = self.state_dir / "budget.json"
+        if limits_path.exists():
+            try:
+                limits = json.loads(limits_path.read_text(encoding="utf-8"))
+                for key in self._PERSISTED_LIMITS:
+                    if key in limits:
+                        object.__setattr__(self, key, limits[key])
+            except (OSError, ValueError, TypeError) as exc:
+                raise QuotaExceeded("Persisted budget policy is unreadable") from exc
         if self.paused(now):
             raise LabPaused(f"laboratory is paused until {self.pause_until}")
         usage = self.usage(now)
@@ -171,6 +186,8 @@ class BudgetLedger:
             raise QuotaExceeded("hourly run limit reached")
         if usage["runs_last_day"] >= self.max_runs_per_day:
             raise QuotaExceeded("daily run limit reached")
+        if usage["usage_unknown"]:
+            raise LabPaused("Previous request usage is unknown; reconcile before another model call")
         if usage["tokens_last_day"] >= self.max_tokens_per_day:
             raise QuotaExceeded("daily token limit reached")
         record = {"started_at": now.isoformat(), "tokens": 0, "status": "running"}
@@ -178,11 +195,13 @@ class BudgetLedger:
         append_jsonl(self.state_dir / "runs.jsonl", record)
         return record
 
-    def record_run(self, *, tokens: int = 0, status: str = "completed",
+    @state_transaction(".budget.lock")
+    def record_run(self, *, tokens: int | None = 0, status: str = "completed",
                     detail: str = "") -> None:
+        self.runs = read_jsonl(self.state_dir / "runs.jsonl")
         for run in reversed(self.runs):
             if run.get("status") == "running":
-                run["tokens"] = int(tokens)
+                run["tokens"] = int(tokens) if tokens is not None else None
                 run["status"] = status
                 run["finished_at"] = datetime.now(timezone.utc).isoformat()
                 if detail:
@@ -203,11 +222,14 @@ class BudgetLedger:
             raise PaidModelDenied(f"paid provider {provider} is outside the allow-list")
         # External providers require explicit configuration
         if provider in EXTERNAL_PROVIDERS:
-            if provider == "openai":
+            if provider in {"openai", "openai-compatible"}:
                 base_url = os.getenv("LAB_OPENAI_BASE_URL", "").strip()
                 if not base_url:
                     raise PaidModelDenied(
                         f"external provider {provider} requires LAB_OPENAI_BASE_URL environment variable")
+                from urllib.parse import urlparse
+                if (urlparse(base_url).hostname or "").lower() in {"api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com"}:
+                    raise PaidModelDenied("Official paid route is outside laboratory policy")
         return provider in {item.lower() for item in self.allowed_providers}
 
     def require_model(self, provider: str, model: str = "") -> None:

@@ -214,6 +214,9 @@ class SceneRecord(BaseModel):
     attempts: list[AttemptRecord] = Field(default_factory=list)
 
 class ArtifactRecord(BaseModel):
+    owner: str | None = None
+    project: str | None = None
+    acl: list[str] = Field(default_factory=list)
     artifact_id: str
     kind: str
     path: str
@@ -280,6 +283,9 @@ class StoryboardVersion(BaseModel):
     approved_script: dict[str, Any] | None = Field(default=None)
 
 class JobCreate(BaseModel):
+    owner: str | None = None
+    project: str | None = None
+    acl: list[str] = Field(default_factory=list)
     workflow_template: str | None = None
     topic: str = Field(min_length=1, max_length=500)
     character_id: str = Field(default="did_samogon", pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
@@ -324,6 +330,9 @@ class JobEvent(BaseModel):
 
 
 class Job(BaseModel):
+    owner: str | None = None
+    project: str | None = None
+    acl: list[str] = Field(default_factory=list)
     workflow_execution_id: str | None = None
     job_id: str
     topic: str

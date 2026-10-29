@@ -25,6 +25,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import hashlib
 
 ROLE_EXECUTOR_CONTRACT = "role-executor/1"
 
@@ -50,6 +51,8 @@ class EndpointRoleExecutor:
         self.enabled = bool(enabled)
         self.timeout = timeout
         self.contract_version = contract_version
+        self.resource_lease = None
+        self.max_tokens = None
         self._opener = opener or urllib.request.urlopen
 
     def __call__(self, task, *, model: str = "", provider: str = "",
@@ -65,9 +68,17 @@ class EndpointRoleExecutor:
             # Isolation is checked on our side before anything is sent.
             workspace.require_isolated()
         payload = self._payload(task, model=model, provider=provider, workspace=workspace)
+        operation = hashlib.sha256(json.dumps({key: payload["task"].get(key) for key in ("task_id", "kind", "role", "payload")}, sort_keys=True).encode()).hexdigest()
+        payload["operation_id"] = operation
+        payload["limits"] = {"max_requests": 1, "timeout_seconds": self.timeout}
+        if self.max_tokens is not None:
+            payload["limits"]["max_tokens"] = self.max_tokens
+        if self.resource_lease is not None:
+            payload["resource_lease"] = self.resource_lease
         request = urllib.request.Request(
             f"{self.endpoint}/invoke", data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json",
+                     "Idempotency-Key": operation,
                      "X-Vertep-Contract": self.contract_version,
                      **({"X-Lab-Executor-Token": self.token} if self.token else {})},
             method="POST")

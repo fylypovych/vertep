@@ -141,14 +141,15 @@ class LabProvider(LocalModelProvider):
             raise RuntimeError("Lab granted a non-local inference endpoint")
         self.manager.assert_usable()
         try:
-            result = OllamaProvider(self.name, lease.endpoint, lease.model)._infer(task)
+            self.manager.heartbeat()
             self.manager.assert_usable()
-            self.manager.release()
+            result = OllamaProvider(self.name, lease.endpoint, lease.model)._infer(task)
+            self.manager.heartbeat()
+            self.manager.assert_usable()
             return result
-        except Exception:
-            # Do not release uncertain remote compute merely because HTTP failed.
-            self.manager.abandon("Inference outcome uncertain")
-            raise
+        finally:
+            if self.manager.lease is not None:
+                self.manager.release(reason="inference finished")
 
 
 def configured_router(path, local_execute, compute_execute=None):
