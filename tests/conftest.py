@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -78,15 +79,24 @@ def pytest_unconfigure(config):
         shutil.rmtree(_TEST_STATE_ROOT, ignore_errors=True)
 
 
+def _finish_executor_work(pool) -> None:
+    """Fence both existing worker threads, including their completion callbacks."""
+    barrier = threading.Barrier(3)
+    futures = [pool.submit(barrier.wait, 30) for _ in range(2)]
+    barrier.wait(timeout=30)
+    for future in futures:
+        future.result(timeout=30)
+
+
 @pytest.fixture(autouse=True)
-def reset_in_process_api_state():
+def reset_in_process_api_state(monkeypatch):
     """Do not leak process-local API state between otherwise isolated tests."""
-    from core.app import executor, request_windows, setup_request_windows, store, task_queue
+    from core.state import executor, request_windows, setup_request_windows, store, task_queue
+    from core.api.real_tests import _run_executor
 
     def finish_background_work() -> None:
-        barriers = [executor.submit(lambda: None) for _ in range(2)]
-        for barrier in barriers:
-            barrier.result(timeout=30)
+        _finish_executor_work(_run_executor)
+        _finish_executor_work(executor)
 
     def reset() -> None:
         finish_background_work()
@@ -94,6 +104,20 @@ def reset_in_process_api_state():
         setup_request_windows.clear()
         store.jobs.clear()
         store.workers.clear()
+        # OAuth refresh/revoke now persists across provider instances. Every
+        # test is a separate installation, while restarts inside a test keep it.
+        from core.first_run import ensure_secret_store, _write_encrypted_secrets
+        secrets = ensure_secret_store()
+        oauth = secrets.pop("publisher_oauth", {})
+        before_secrets = dict(secrets)
+        for platform in ("youtube", "tiktok", "facebook", "instagram", "threads"):
+            for suffix in ("access_token", "refresh_token", "client_id", "client_secret"):
+                secrets.pop(f"{platform}_{suffix}", None)
+        for credential in oauth:
+            secrets.pop(credential.lower(), None)
+            secrets.pop(credential.lower().replace("_access_token", "_refresh_token"), None)
+        if oauth or secrets != before_secrets:
+            _write_encrypted_secrets(secrets)
         # File-backed repository persists workers/channels to disk; drop those
         # so a worker written by one test cannot leak into another test's fleet.
         repository = getattr(store, "repository", None)
@@ -117,8 +141,9 @@ def reset_in_process_api_state():
                 task_queue._sequence = 0
                 task_queue._generation = 0
         # Очищення стану Telegram
-        from core.app import (_telegram_pending_brands, _telegram_pending_character,
-                              _telegram_system_callbacks)
+        from core.telegram.handlers import _telegram_pending_brands
+        from core.telegram.handlers import _telegram_pending_character
+        from core.telegram.handlers import _telegram_system_callbacks
         _telegram_pending_brands.clear()
         _telegram_pending_character.clear()
         _telegram_system_callbacks.clear()
@@ -163,6 +188,10 @@ def reset_in_process_api_state():
 
     reset()
     yield
+    # Finish effects while their test transports/auth are still installed;
+    # restore patches before normal state cleanup touches storage.
+    finish_background_work()
+    monkeypatch.undo()
     reset()
 
 

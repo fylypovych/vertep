@@ -1,13 +1,19 @@
 import json
 import os
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterable
 
 from .models import Job, Channel
 
+_workers_io_lock = threading.RLock()
+
 
 class StateRepository(ABC):
+    def completed_tasks(self) -> list[dict]:
+        return []
+
     @abstractmethod
     def next_job_sequence(self, year: int, current: int) -> int: ...
 
@@ -52,6 +58,21 @@ class StateRepository(ABC):
 
 
 class FileRepository(StateRepository):
+    def completed_tasks(self) -> list[dict]:
+        latest = {}
+        try:
+            for line in (self.root / ".tasks.jsonl").read_text(encoding="utf-8").splitlines():
+                try:
+                    record = json.loads(line)
+                    latest[record["task"]["task_id"]] = record
+                except (ValueError, KeyError, TypeError):
+                    continue
+        except FileNotFoundError:
+            return []
+        return [{"task_id": record["task"]["task_id"], "job_id": record["task"]["job_id"],
+            "task_type": record["task"].get("task"), "node_name": record.get("node_name")}
+            for record in latest.values() if record.get("status") == "COMPLETED"]
+
     def __init__(self, root: str | Path):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -91,20 +112,21 @@ class FileRepository(StateRepository):
         return None
 
     def save_worker(self, worker: dict) -> None:
-        try:
-            current = json.loads(self.worker_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            current = {}
-        current[worker["node_name"]] = worker
-        temporary = self.worker_file.with_suffix(".tmp")
-        temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.worker_file)
+        from .atomic_write import atomic_write_json
+        with _workers_io_lock:
+            try:
+                current = json.loads(self.worker_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                current = {}
+            current[worker["node_name"]] = worker
+            atomic_write_json(self.worker_file, current)
 
     def load_workers(self, role: str | None = None, status: str | None = None, capability: str | None = None) -> Iterable[dict]:
-        try:
-            workers = list(json.loads(self.worker_file.read_text(encoding="utf-8")).values())
-        except (OSError, ValueError):
-            workers = []
+        with _workers_io_lock:
+            try:
+                workers = list(json.loads(self.worker_file.read_text(encoding="utf-8")).values())
+            except (OSError, ValueError):
+                workers = []
         if role:
             workers = [worker for worker in workers if worker.get("role") == role]
         if status:
@@ -163,6 +185,11 @@ class FileRepository(StateRepository):
 
 
 class MemoryRepository(StateRepository):
+    def completed_tasks(self) -> list[dict]:
+        return [{"task_id": record["task"]["task_id"], "job_id": record["task"]["job_id"],
+            "task_type": record["task"].get("task"), "node_name": record.get("node_name")}
+            for record in self.tasks.values() if record["status"] == "COMPLETED"]
+
     def __init__(self):
         self.jobs: dict[str, Job] = {}
         self.workers: dict[str, dict] = {}
@@ -224,6 +251,11 @@ class MemoryRepository(StateRepository):
 
 
 class PostgresRepository(StateRepository):
+    def completed_tasks(self) -> list[dict]:
+        with self.psycopg.connect(self.dsn) as connection:
+            rows = connection.execute("SELECT task_id,job_id,task_type,node_name FROM task_attempts WHERE status='COMPLETED'").fetchall()
+        return [dict(zip(("task_id", "job_id", "task_type", "node_name"), row)) for row in rows]
+
     """Optional backend. Importing the project never requires psycopg."""
 
     def __init__(self, dsn: str):

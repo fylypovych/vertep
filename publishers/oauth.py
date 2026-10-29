@@ -8,6 +8,7 @@ required environment variable names.
 
 import os
 import time
+import hashlib
 from typing import Optional
 
 # Helper to fetch a secret either from the environment or from the
@@ -64,12 +65,47 @@ class BaseTokenProvider:
         self._cached_token: Optional[str] = None
         self._token_expires_at: float = 0.0
         self._cached_scopes: list[str] = []
+        self._scopes_known = False
+
+    def _durable(self) -> tuple[dict, str]:
+        from core.first_run import ensure_secret_store
+        stored = ensure_secret_store()
+        return (stored.get("publisher_oauth", {}).get(self.credential_env, {}),
+                stored.get(self.credential_env.lower(), ""))
+
+    def _persist(self, token: str, *, revoked=False, refresh=None) -> None:
+        from core.first_run import ensure_secret_store, _secret_lock, _write_encrypted_secrets
+        with _secret_lock:
+            stored = ensure_secret_store()
+            stored.setdefault("publisher_oauth", {})[self.credential_env] = {
+                "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
+                "expires_at": self._token_expires_at, "scopes": self._cached_scopes,
+                "revoked": revoked, "scopes_known": self._scopes_known}
+            stored[self.credential_env.lower()] = "" if revoked else token
+            if refresh:
+                stored[self.refresh_env.lower()] = refresh
+            if revoked and self.refresh_env:
+                stored[self.refresh_env.lower()] = ""
+            _write_encrypted_secrets(stored)
 
     # ---------------------------------------------------------------------
     def access_token(self) -> str:
         """Return a valid access token, refreshing it if needed.
         """
         now = time.time()
+        state, persisted_token = self._durable()
+        if state.get("revoked"):
+            self._cached_token = None
+            return ""
+        if persisted_token and state.get("expires_at", 0) > now:
+            self._cached_token = persisted_token
+            self._token_expires_at = state["expires_at"]
+            self._cached_scopes = list(state.get("scopes") or [])
+            self._scopes_known = bool(state.get("scopes_known"))
+            return persisted_token
+        if state and state.get("expires_at", 0) <= now:
+            self._cached_token = None
+            return self.try_refresh() or ""
         if self._cached_token and now < self._token_expires_at:
             return self._cached_token
         token = _get_secret(self.credential_env) or ""
@@ -90,9 +126,15 @@ class BaseTokenProvider:
         Returns an empty list when the token has expired or scopes are not
         available (e.g. static tokens without an introspection endpoint).
         """
+        state, _ = self._durable()
+        if state and not state.get("revoked") and state.get("expires_at", 0) > time.time():
+            return list(state.get("scopes") or [])
         if self._cached_token and time.time() < self._token_expires_at and self._token_scopes:
             return list(self._token_scopes)
         return []
+
+    def scopes_known(self) -> bool:
+        return self._scopes_known or bool(self._durable()[0].get("scopes_known"))
 
     @property
     def _token_scopes(self):
@@ -138,6 +180,7 @@ class BaseTokenProvider:
             expires_in = body.get("expires_in", 3600)
             self._token_expires_at = time.time() + int(expires_in) - 60
             self._record_scopes(body.get("scope"))
+            self._persist(new_token, refresh=body.get("refresh_token"))
         return new_token
 
     def _record_scopes(self, scope) -> None:
@@ -155,6 +198,7 @@ class BaseTokenProvider:
         else:
             return
         self._token_scopes = scopes
+        self._scopes_known = True
 
     # ---------------------------------------------------------------------
     def revoke(self) -> bool:
@@ -165,12 +209,13 @@ class BaseTokenProvider:
         failed.  Clearing the locally cached token is always performed.
         """
         cached_access = self._cached_token
+        refresh = self.refresh_token()
         self._cached_token = None
         self._token_expires_at = 0.0
         self._cached_scopes = []
+        self._persist(cached_access or _get_secret(self.credential_env) or "", revoked=True)
         if not getattr(self, 'revoke_url', ''):
             return False
-        refresh = self.refresh_token()
         client_id = _get_secret(self.client_id_env) or "" if self.client_id_env else ""
         client_secret = _get_secret(self.client_secret_env) or "" if self.client_secret_env else ""
         token = refresh or cached_access
@@ -203,6 +248,8 @@ class BaseTokenProvider:
         self._cached_token = None
         self._token_expires_at = 0.0
         self._cached_scopes = []
+        if self.token_url and self.refresh_token():
+            return self.try_refresh()
         token = _get_secret(self.credential_env) or ""
         if token:
             self._cached_token = token
@@ -253,6 +300,7 @@ class YouTubeTokenProvider(BaseTokenProvider):
             expires_in = body.get("expires_in", 3600)
             self._token_expires_at = time.time() + int(expires_in) - 60
             self._record_scopes(body.get("scope"))
+            self._persist(new_token, refresh=body.get("refresh_token"))
         return new_token
 
 

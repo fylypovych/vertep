@@ -96,6 +96,8 @@ def test_remote_role_aggregates_self_test_and_heartbeat(roles_file, monkeypatch)
                                  _node("gpu", "gpu-02", "PENDING_SELF_TEST")])
     monkeypatch.setattr(role_runtime.store, "load_workers", lambda: [
         {"node_id": "gpu-01", "status": "READY",
+         "role": "gpu", "capabilities": ["image_generation"], "tested_capabilities": ["image_generation"],
+         "self_test": {"status": "PASSED", "role": "gpu", "checked_at": role_runtime.datetime.now(role_runtime.timezone.utc).isoformat()},
          "last_seen": role_runtime.datetime.now(role_runtime.timezone.utc).isoformat()},
         {"node_id": "gpu-02", "status": "READY",
          "last_seen": role_runtime.datetime.now(role_runtime.timezone.utc).isoformat()},
@@ -154,7 +156,7 @@ def test_dispatch_blocks_locally_deployed_broken_role(roles_file, monkeypatch, t
     assert role_runtime_blocks({}) is False
 
 
-def test_dispatch_does_not_block_an_unmeasured_role(roles_file, monkeypatch):
+def test_dispatch_blocks_an_unmeasured_deployed_role(roles_file, monkeypatch):
     from core.dispatcher import role_runtime_blocks
     from core.first_run import config_root
 
@@ -163,8 +165,8 @@ def test_dispatch_does_not_block_an_unmeasured_role(roles_file, monkeypatch):
     plan_path.write_text(json.dumps({"role": "core", "additional_roles": ["text"]}), encoding="utf-8")
     monkeypatch.setenv("NODE_ROLE", "core")
     monkeypatch.setattr(role_runtime, "_local_evidence", lambda: None)
-    # Fail-open: the per-node self-test guard stays the authoritative gate.
-    assert role_runtime_blocks("text") is False
+    # A deployed role with UNKNOWN evidence cannot be advertised as ready.
+    assert role_runtime_blocks("text") is True
 
 
 def test_system_roles_endpoint_exposes_runtime_status(roles_file, monkeypatch):

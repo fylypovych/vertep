@@ -329,6 +329,20 @@ def test_a_dirty_worktree_is_reported_as_not_a_released_sha(report_module):
     assert "dirty worktree" in verdict["detail"]
 
 
+def test_unit_evidence_cannot_be_labelled_pinned_when_a_runtime_is_available(report_module):
+    row = next(row for row in report_module.acceptance_rows() if row["id"] == "recovery")
+    verdict = report_module.evaluate_row(row,
+        outcomes={test: "PASSED" for test in row["tests"]},
+        capabilities={report_module.RUNTIME: True}, identity=_identity(report_module))
+    assert verdict["status"] == report_module.PASS
+    assert verdict["evidence_kind"] == "unit_or_disposable"
+    pinned = next(row for row in report_module.acceptance_rows() if row["id"] == "real_submit_route")
+    unavailable = report_module.evaluate_row(pinned, outcomes={}, capabilities={},
+        identity=_identity(report_module))
+    assert unavailable["status"] == report_module.NOT_RUN
+    assert unavailable["evidence_kind"] == "pinned_runtime"
+
+
 def test_a_browser_harness_that_cannot_reach_the_state_store_is_not_a_harness(
         report_module, tmp_path, monkeypatch):
     """A reachable CORE alone would let the system-state checkpoint skip silently.

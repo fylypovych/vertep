@@ -1,3 +1,6 @@
+
+import core.api.setup as _owner_core_api_setup
+import httpx as _owner_httpx
 import asyncio
 import importlib
 from pathlib import Path
@@ -37,13 +40,13 @@ def test_ai_backend_validation_checks_model_and_credentials(monkeypatch):
             calls.append(("GET", url, kwargs))
             return Response({"data": [{"id": "gpt-production"}]})
 
-    monkeypatch.setattr(core_app.httpx, "AsyncClient", Client)
-    asyncio.run(core_app._validate_ai_backend(
+    monkeypatch.setattr(_owner_httpx, "AsyncClient", Client)
+    asyncio.run(_owner_core_api_setup._validate_ai_backend(
         "openai", "https://ai.example/v1", "gpt-production", "secret-key"))
     assert calls[0][1] == "https://ai.example/v1/models"
     assert calls[0][2]["headers"]["Authorization"] == "Bearer secret-key"
     with pytest.raises(ValueError, match="API key"):
-        asyncio.run(core_app._validate_ai_backend(
+        asyncio.run(_owner_core_api_setup._validate_ai_backend(
             "external", "https://ai.example/v1", "gpt-production", ""))
 
 
@@ -67,8 +70,8 @@ def test_ollama_validation_can_install_selected_model(monkeypatch):
             calls.append((url, kwargs["json"]))
             return Response({"status": "success"})
 
-    monkeypatch.setattr(core_app.httpx, "AsyncClient", Client)
-    asyncio.run(core_app._validate_ai_backend(
+    monkeypatch.setattr(_owner_httpx, "AsyncClient", Client)
+    asyncio.run(_owner_core_api_setup._validate_ai_backend(
         "ollama", "http://ollama:11434", "llama3.2", ""))
     assert calls == [("http://ollama:11434/api/pull", {"name": "llama3.2", "stream": False})]
 
@@ -78,17 +81,17 @@ def test_managed_ollama_validation_is_deferred_until_deployment(monkeypatch):
         def __init__(self, *args, **kwargs):
             raise AssertionError("managed Ollama must not be contacted before its container is deployed")
 
-    monkeypatch.setattr(core_app.httpx, "AsyncClient", Client)
-    asyncio.run(core_app._validate_ai_backend("ollama", None, "llama3.2", ""))
+    monkeypatch.setattr(_owner_httpx, "AsyncClient", Client)
+    asyncio.run(_owner_core_api_setup._validate_ai_backend("ollama", None, "llama3.2", ""))
 
 
 def test_ai_backend_rejects_empty_backend_value():
     """i.0.0.1.51: with the UI fallback removed, an empty selection must fail
     closed server-side instead of provisioning "ollama" silently."""
     with pytest.raises(ValueError, match="Unsupported AI backend"):
-        asyncio.run(core_app._validate_ai_backend("", None, "llama3.2", ""))
+        asyncio.run(_owner_core_api_setup._validate_ai_backend("", None, "llama3.2", ""))
     with pytest.raises(ValueError, match="Unsupported AI backend"):
-        asyncio.run(core_app._validate_ai_backend("anthropic", None, "claude", ""))
+        asyncio.run(_owner_core_api_setup._validate_ai_backend("anthropic", None, "claude", ""))
 
 
 def test_first_run_creates_registration_token_before_committing_setup(monkeypatch):
@@ -117,7 +120,7 @@ def test_first_run_creates_registration_token_before_committing_setup(monkeypatc
     monkeypatch.setattr(setup_mod, "create_registration_token", create_token)
     monkeypatch.setattr(setup_mod, "complete_setup", complete)
 
-    result = asyncio.run(core_app.first_run_complete(Request()))
+    result = asyncio.run(_owner_core_api_setup.first_run_complete(Request()))
 
     assert events == ["validate", "token", "complete"]
     assert result["registration_token"] == {"token": "one-time"}

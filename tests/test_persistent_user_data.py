@@ -1,3 +1,5 @@
+
+import core.state as _owner_core_state
 import json
 from pathlib import Path
 import core.persistent_data as pd
@@ -99,7 +101,7 @@ def test_persistent_api_resources_survive_recreate(monkeypatch, tmp_path):
     import core.app as core_app
     import core.state
     monkeypatch.setattr(core.state.workflow_registry, "root", storage_wf)
-    monkeypatch.setattr(core_app.workflow_registry, "root", storage_wf)
+    monkeypatch.setattr(_owner_core_state.workflow_registry, "root", storage_wf)
     (storage_wf / "image").mkdir(parents=True, exist_ok=True)
     (storage_wf / "image" / "demo.json").write_text('{"1": {"class_type": "LoadImage", "inputs": {"image": "demo.png"}}}', encoding="utf-8")
     pd.ensure_persistent_user_data()

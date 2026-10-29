@@ -8,9 +8,61 @@ introduced.
 from __future__ import annotations
 
 import re
+import ast
+import json
 from pathlib import Path
 
 CORE = Path(__file__).resolve().parent.parent / "core"
+
+
+def test_composition_root_has_no_endpoint_or_business_definitions():
+    source = (CORE / "app.py").read_text(encoding="utf-8")
+    assert len(source.splitlines()) <= 300
+    tree = ast.parse(source)
+    assert not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                   for node in tree.body)
+    assignments = [node for node in tree.body if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    assert len(assignments) == 1
+    assignment = assignments[0]
+    assert isinstance(assignment, ast.Assign)
+    assert [target.id for target in assignment.targets] == ["app"]
+    assert isinstance(assignment.value, ast.Call)
+    assert isinstance(assignment.value.func, ast.Name) and assignment.value.func.id == "FastAPI"
+
+
+def test_all_method_path_contracts_match_the_before_extraction_snapshot():
+    from core.app import app
+    before = json.loads((Path(__file__).parent / "fixtures/api-routes-before-366.json").read_text())
+    after = sorted([method, route.path] for route in app.routes
+                   for method in (getattr(route, "methods", None) or ["MOUNT"]))
+    # #368 intentionally adds execution routes. Keep the #366 snapshot intact
+    # and assert the exact union so removals and accidental additions still fail.
+    execution = [
+        ["POST", "/api/tasks/claim/workflow"],
+        ["POST", "/api/tasks/renew/workflow"],
+        ["POST", "/api/tasks/result/workflow"],
+        ["GET", "/api/workflow-execution/templates"],
+        ["GET", "/api/workflow-execution/{job_id}"],
+        ["POST", "/api/workflow-execution/{job_id}/action"],
+    ]
+    assert after == sorted(before + execution)
+
+
+def test_api_and_telegram_cannot_resolve_the_composition_root_at_runtime():
+    for directory in (CORE / "api", CORE / "telegram"):
+        for path in directory.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    assert all(alias.name != "core.app" for alias in node.names), path
+                if isinstance(node, ast.ImportFrom):
+                    assert node.module != "core.app", path
+                    assert not (node.module == "core" and any(alias.name == "app" for alias in node.names)), path
+                if isinstance(node, ast.Constant):
+                    assert node.value != "core.app", path
+                if isinstance(node, ast.Attribute):
+                    assert not (isinstance(node.value, ast.Name) and node.value.id == "sys"
+                                and node.attr == "modules"), path
 
 
 def test_core_api_modules_do_not_import_core_app():

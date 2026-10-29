@@ -25,6 +25,8 @@ Declared acceptance rows (also consumed by ``scripts/media-acceptance-report.py`
 
 from __future__ import annotations
 
+import core.telegram.handlers as _owner_core_telegram_handlers
+
 import base64
 import hashlib
 import json
@@ -178,8 +180,8 @@ class TestFirstRunAcceptance:
             "answer_callback": lambda self, callback_id, text=None, **kw: answers.append(text),
             "send_message": lambda self, chat_id, text, markup=None: None,
         })()
-        with patch.object(app_module, "TelegramAdapter", lambda: adapter):
-            app_module._handle_video_callback(
+        with patch.object(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter):
+            _owner_core_telegram_handlers._handle_video_callback(
                 {"id": "cb-foreign", "message": {"chat": {"id": "999"}}},
                 "999", "vid_ok", f"{job_id}:1")
         assert answers and "заборонено" in answers[-1].lower()
@@ -397,7 +399,7 @@ class TestInFlightBoundaries:
 
     def test_expired_lease_requeues_and_fences_the_stale_result(self, fleet, monkeypatch):
         """The watchdog requeues an expired lease; the old holder loses the claim."""
-        from core.app import handle_expired_storyboard_lease
+        from core.runtime import handle_expired_storyboard_lease
 
         job_id = harness.create_job(fleet, topic="Lease expiry")
         harness.wait_for_status(fleet, job_id, "SCRIPT_QUEUED")
@@ -552,10 +554,18 @@ class TestPartialPublish:
         # receipt correlation: a receipt for another video version cannot satisfy the task
         forged = harness.sandbox_receipt("telegram", retry)
         forged["video_version"] = 99
-        harness.submit_publish_receipt(fleet, job_id, retry, forged)
+        artifact = harness.role_executor._artifact("publication.json", "publication_receipt", json.dumps(forged).encode())
+        rejected = fleet.post("/api/tasks/result", json={"job_id": job_id, "task_id": retry["task_id"],
+            "node_name": harness.PUBLISHER_NODE, "success": True, "artifacts": [artifact]})
+        assert rejected.status_code == 400, rejected.text
         job = harness.get_job(fleet, job_id)
-        assert any("PUBLISH telegram FAILED: RECEIPT REJECTED" in line
-                   for line in job["events"]), job["events"][-3:]
+        assert job["status"] == "PUBLISHING"
+        assert retry["task_id"] in job["publish_task_ids"]
+        assert task_queue.inflight_active(retry["task_id"])
+        permanent = harness.sandbox_receipt("telegram", retry, status="FAILED", error="telegram permanent failure")
+        permanent["retryable"] = False
+        harness.submit_publish_receipt(fleet, job_id, retry, permanent)
+        job = harness.get_job(fleet, job_id)
         assert job["status"] == "FAILED"
         assert job["published_to"] == ["youtube"], (
             "the delivered channel must survive the failed one")

@@ -14,9 +14,10 @@ from .manifest import ModuleManifest
 class ModuleRegistry:
     """Registry of installed modules on CORE."""
 
-    def __init__(self) -> None:
+    def __init__(self, system_versions: dict | None = None) -> None:
         self._modules: Dict[str, ModuleManifest] = {}
         self._capability_index: Dict[str, List[str]] = {}  # capability -> [module_names]
+        self.system_versions = system_versions or {}
 
     def register_module(self, manifest: ModuleManifest, force: bool = False) -> bool:
         """Register a module in the registry.
@@ -29,11 +30,42 @@ class ModuleRegistry:
             True if registration succeeded
         """
         name = manifest.name
+        graph = {key: [dep.get("name") if isinstance(dep, dict) else dep for dep in value.dependencies]
+                 for key, value in {**self._modules, name: manifest}.items()}
+        visiting, visited = set(), set()
+
+        def cyclic(node):
+            if node in visiting:
+                return True
+            if node in visited:
+                return False
+            visiting.add(node)
+            if any(cyclic(dep) for dep in graph.get(node, [])):
+                return True
+            visiting.remove(node)
+            visited.add(node)
+            return False
+
+        if cyclic(name):
+            return False
 
         # Check dependencies
         for dep in manifest.dependencies:
-            if dep not in self._modules and not self._is_system_dependency(dep):
+            dependency = dep if isinstance(dep, dict) else {"name": dep}
+            dep_name = dependency["name"]
+            if dep_name == name:
+                return False
+            if dep_name not in self._modules and not self._is_system_dependency(dep_name):
                 return False  # Dependency not met
+            from packaging.version import Version
+            version = self._modules[dep_name].version if dep_name in self._modules else self.system_versions.get(dep_name)
+            if dependency.get("min_version") or dependency.get("max_version"):
+                if version is None:
+                    return False
+                if dependency.get("min_version") and Version(version) < Version(dependency["min_version"]):
+                    return False
+                if dependency.get("max_version") and Version(version) > Version(dependency["max_version"]):
+                    return False
 
         # Check version compatibility
         if name in self._modules and not force:
@@ -42,6 +74,13 @@ class ModuleRegistry:
             if existing.version == manifest.version:
                 return False  # Already registered with same version
 
+        # Replacement must invalidate capabilities removed by the new version.
+        if name in self._modules:
+            old = self._modules[name]
+            for cap in old.capabilities:
+                self._capability_index[cap] = [module for module in self._capability_index.get(cap, []) if module != name]
+                if not self._capability_index[cap]:
+                    self._capability_index.pop(cap)
         self._modules[name] = manifest
 
         # Update capability index
@@ -57,6 +96,9 @@ class ModuleRegistry:
         """Unregister a module from the registry."""
         if name not in self._modules:
             return False
+        for other in self._modules.values():
+            if other.name != name and any((dep.get("name") if isinstance(dep, dict) else dep) == name for dep in other.dependencies):
+                return False
 
         manifest = self._modules.pop(name)
 

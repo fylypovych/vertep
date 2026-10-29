@@ -1,3 +1,5 @@
+
+import core.telegram.handlers as _owner_core_telegram_handlers
 from unittest.mock import patch, MagicMock, Mock
 
 import importlib
@@ -10,7 +12,8 @@ from types import SimpleNamespace
 
 import httpx
 from fastapi.testclient import TestClient
-from core.app import app, store
+from core.app import app
+from core.telegram.handlers import store
 from core.dispatcher import available_worker
 from core.models import Job, JobStatus, StoryboardScene, StoryboardVersion, WorkerState, utc_now
 from worker import role_executor
@@ -98,7 +101,7 @@ def _complete_script_task(client, job_id, node_name="text-worker", headers=None)
 
 def _create_job_in_store(topic="Test topic", min_vram_mb=0, character_id="did_samogon", priority=5):
     """Create a Job directly in the store without triggering the pipeline."""
-    from core.app import store
+    from core.telegram.handlers import store
     job = store.create(
         topic=topic,
         character_id=character_id,
@@ -793,7 +796,7 @@ def test_storyboard_expired_lease_requeues_within_budget(monkeypatch):
     STORYBOARD_QUEUED (within the retry budget), rather than leaving the job
     stranded in STORYBOARD_GENERATING forever."""
     from core.state import task_queue
-    from core.app import handle_expired_storyboard_lease
+    from core.runtime import handle_expired_storyboard_lease
     # This module autouse-mocks StoryboardService.queue to jump straight to
     # PENDING_APPROVAL; the T4 recovery path calls the real queue, so undo
     # the fixture monkeypatches for the duration of this test and re-apply
@@ -845,7 +848,7 @@ def test_storyboard_expired_lease_exhausts_budget(monkeypatch):
     """Issue #64 T4: after OLLAMA_STORYBOARD_MAX_RETRIES expired leases the
     job must land in STORYBOARD_FAILED, not silently stay in GENERATING."""
     from core.state import task_queue
-    from core.app import handle_expired_storyboard_lease
+    from core.runtime import handle_expired_storyboard_lease
     monkeypatch.undo()
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "2")
@@ -1107,7 +1110,7 @@ def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tm
     """
     module = importlib.import_module('core.app')
     adapter = Mock()
-    monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+    monkeypatch.setattr(_owner_core_telegram_handlers, 'TelegramAdapter', lambda: adapter)
     monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
     monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "brands"))
     (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
@@ -1122,12 +1125,12 @@ def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tm
     (workflows_root / "image" / "demo.json").write_text(json.dumps({"nodes": []}), encoding="utf-8")
     monkeypatch.setenv("WORKFLOWS_ROOT", str(workflows_root))
     pending = {'audit-chat': {'pending': {'text': 'topic', 'source_id': 's1', 'message': {'chat': {'id': '42'}}}, 'brand_id': 'brand01'}}
-    monkeypatch.setattr(module, '_telegram_pending_character', pending)
-    monkeypatch.setattr(module, 'load_character', lambda *a, **kw: None)
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_telegram_pending_character', pending)
+    monkeypatch.setattr(_owner_core_telegram_handlers, 'load_character', lambda *a, **kw: None)
     job = SimpleNamespace(job_id='job-123', model_dump=lambda **kw: {'job_id': 'job-123'})
-    monkeypatch.setattr(module, '_create_job_from_telegram', Mock(return_value=job))
-    monkeypatch.setattr(module, '_queue_storyboard', Mock())
-    result = module._handle_character_selection({'id': 'cb'}, 'audit-chat', 'test-char')
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_create_job_from_telegram', Mock(return_value=job))
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_queue_storyboard', Mock())
+    result = _owner_core_telegram_handlers._handle_character_selection({'id': 'cb'}, 'audit-chat', 'test-char')
     assert result.get('job_id') == 'job-123'
     client = TestClient(app)
     resp = client.post("/api/jobs", json={
@@ -1338,7 +1341,7 @@ def test_system_test_full_uses_job_scenes(monkeypatch):
     """Issue #94.2: system_test must use Job.scenes (Pydantic) not job.get('plan')."""
     import sys
     from types import ModuleType as _Mod
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import Job, SceneRecord, StageStatus, utc_now
     store.jobs.clear()
     store.jobs["job-1"] = Job(
@@ -1358,7 +1361,7 @@ def test_system_test_full_uses_job_scenes(monkeypatch):
     _cm = _Mod("core.certificates")
     _cm.list_certificates = lambda: []
     sys.modules["core.certificates"] = _cm
-    monkeypatch.setattr("core.app._call_core_api", lambda *a, **kw: {})
+    monkeypatch.setattr("core.telegram.handlers._call_core_api", lambda *a, **kw: {})
     try:
         resp = _tc.post("/api/system/test", json={"scope": "full"})
         assert resp.status_code == 200
@@ -1376,7 +1379,7 @@ def test_system_test_full_unhealthy_on_empty_provider_matrix(monkeypatch):
     """Issue #94.3: full result UNHEALTHY when provider matrix is empty."""
     import sys
     from types import ModuleType as _Mod
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import Job, SceneRecord, StageStatus, utc_now
     store.jobs.clear()
     store.jobs["job-1"] = Job(
@@ -1415,7 +1418,7 @@ def test_system_test_full_unhealthy_on_zero_certificates(monkeypatch):
     """Issue #94.3: full result UNHEALTHY when certificate count is zero."""
     import sys
     from types import ModuleType as _Mod
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import Job, SceneRecord, StageStatus, utc_now
     store.jobs.clear()
     store.jobs["job-1"] = Job(
@@ -1454,7 +1457,7 @@ def test_system_test_full_unhealthy_on_failed_tasks(monkeypatch):
     """Issue #94.3: full result UNHEALTHY when task results contain failures."""
     import sys
     from types import ModuleType as _Mod
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import Job, SceneRecord, StageStatus, utc_now
     store.jobs.clear()
     store.jobs["job-1"] = Job(
@@ -1492,11 +1495,11 @@ def test_system_test_full_unhealthy_on_failed_tasks(monkeypatch):
         import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_system_test_full_healthy_when_all_ok(monkeypatch):
-    """Issue #94.3: full result HEALTHY when all inventory and task checks pass."""
+def test_system_test_full_inventory_without_execution_is_not_healthy(monkeypatch):
+    """Inventory alone cannot satisfy measured Full Self-Test (#364)."""
     import sys
     from types import ModuleType as _Mod
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import Job, SceneRecord, StageStatus, utc_now
     store.jobs.clear()
     store.jobs["job-1"] = Job(
@@ -1523,8 +1526,9 @@ def test_system_test_full_healthy_when_all_ok(monkeypatch):
         resp = _tc.post("/api/system/test", json={"scope": "full"})
         assert resp.status_code == 200
         data = resp.json()
-        assert data["result"] == "HEALTHY"
-        assert "full_test_failures" not in data
+        assert data["result"] == "UNHEALTHY"
+        assert "runtime_probes(no_execution_evidence)" in data["full_test_failures"]
+        assert "task_results(no_verified_artifacts)" in data["full_test_failures"]
     finally:
         store.jobs.clear()
         sys.modules.pop("core.certificates", None)
@@ -1539,7 +1543,7 @@ def test_system_test_full_unhealthy_on_unconfigured_publisher_slot(monkeypatch):
     """
     import sys
     from types import ModuleType as _Mod
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import Job, SceneRecord, StageStatus, utc_now
     store.jobs.clear()
     store.jobs["job-1"] = Job(
@@ -1587,7 +1591,7 @@ def test_system_test_full_counts_ready_and_running_stage_statuses(monkeypatch, t
     """READY is completed and RUNNING is pending in the actual StageStatus model."""
     import sys
     from types import ModuleType as _Mod
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import Job, SceneRecord, StageStatus, utc_now
     store.jobs.clear()
     store.jobs["job-stage-stats"] = Job(
@@ -1608,7 +1612,7 @@ def test_system_test_full_counts_ready_and_running_stage_statuses(monkeypatch, t
     try:
         response = _tc.post("/api/system/test", json={"scope": "full"})
         stats = response.json()["task_results"]
-        assert stats == {"completed": 1, "failed": 0, "pending": 1}
+        assert stats == {"completed": 1, "failed": 0, "pending": 1, "verified_artifacts": []}
     finally:
         store.jobs.clear()
         sys.modules.pop("core.certificates", None)
@@ -1623,6 +1627,7 @@ def test_system_test_full_unhealthy_on_expired_certificate(monkeypatch, tmp_path
                         lambda: {"tts": {"configured": True}})
     certificates = _Mod("core.certificates")
     certificates.list_certificates = lambda: [{"cert_id": "expired", "expires_in_days": -1}]
+    certificates.certificate_execution_probes = lambda: []
     sys.modules["core.certificates"] = certificates
     monkeypatch.setenv("STORAGE_ROOT", str(tmp_path))
     try:
@@ -1635,7 +1640,8 @@ def test_system_test_full_unhealthy_on_expired_certificate(monkeypatch, tmp_path
 
 def test_vid_ok_rejects_wrong_chat(monkeypatch):
     from unittest.mock import Mock
-    from core.app import _handle_video_callback, store
+    from core.telegram.handlers import _handle_video_callback
+    from core.telegram.handlers import store
     from core.models import Job, JobStatus, utc_now
     store.jobs.clear()
     job = Job(job_id="vid-1", topic="test", character_id="ch", priority=1,
@@ -1644,7 +1650,7 @@ def test_vid_ok_rejects_wrong_chat(monkeypatch):
     store.jobs["vid-1"] = job
     adapter = Mock()
     adapter.answer_callback = Mock(return_value={"status": "ok"})
-    monkeypatch.setattr("core.app.TelegramAdapter", lambda: adapter)
+    monkeypatch.setattr("core.telegram.handlers.TelegramAdapter", lambda: adapter)
     cb = {"id": "cb-vid", "data": "vid_ok:vid-1", "message": {"chat": {"id": "222"}}}
     _handle_video_callback(cb, "222", "vid_ok", "vid-1")
     text = adapter.answer_callback.call_args[0][1]
@@ -1653,7 +1659,8 @@ def test_vid_ok_rejects_wrong_chat(monkeypatch):
 
 def test_vid_ok_accepts_correct_chat(monkeypatch):
     from unittest.mock import Mock
-    from core.app import _handle_video_callback, store
+    from core.telegram.handlers import _handle_video_callback
+    from core.telegram.handlers import store
     from core.models import Job, JobStatus, utc_now
     store.jobs.clear()
     job = Job(job_id="vid-2", topic="test", character_id="ch", priority=1,
@@ -1662,7 +1669,7 @@ def test_vid_ok_accepts_correct_chat(monkeypatch):
     store.jobs["vid-2"] = job
     adapter = Mock()
     adapter.answer_callback = Mock(return_value={"status": "ok"})
-    monkeypatch.setattr("core.app.TelegramAdapter", lambda: adapter)
+    monkeypatch.setattr("core.telegram.handlers.TelegramAdapter", lambda: adapter)
     import core.pipeline as _pipe
     monkeypatch.setattr(_pipe, "approve_video", lambda store, job, actor, **kw: job)
     cb = {"id": "cb-vid-ok", "data": "vid_ok:vid-2", "message": {"chat": {"id": "111"}}}
@@ -1674,7 +1681,8 @@ def test_vid_ok_accepts_correct_chat(monkeypatch):
 def test_vid_ok_accepts_source_with_message_id(monkeypatch):
     """Telegram source stores chat and message IDs; ownership uses the chat segment."""
     from unittest.mock import Mock
-    from core.app import _handle_video_callback, store
+    from core.telegram.handlers import _handle_video_callback
+    from core.telegram.handlers import store
     from core.models import Job, JobStatus, utc_now
     store.jobs.clear()
     job = Job(job_id="vid-3", topic="test", character_id="ch", priority=1,
@@ -1683,7 +1691,7 @@ def test_vid_ok_accepts_source_with_message_id(monkeypatch):
     store.jobs["vid-3"] = job
     adapter = Mock()
     adapter.answer_callback = Mock(return_value={"status": "ok"})
-    monkeypatch.setattr("core.app.TelegramAdapter", lambda: adapter)
+    monkeypatch.setattr("core.telegram.handlers.TelegramAdapter", lambda: adapter)
     import core.pipeline as _pipe
     monkeypatch.setattr(_pipe, "approve_video", lambda store, job, actor, **kw: job)
     cb = {"id": "cb-vid-ok-message", "data": "vid_ok:vid-3", "message": {"chat": {"id": "111"}}}
@@ -1955,7 +1963,7 @@ def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypa
     adapter = Mock()
     adapter.configured.return_value = True
     adapter.get_me.return_value = {"ok": True, "result": {"username": "testbot"}}
-    monkeypatch.setattr(app_module, 'TelegramAdapter', lambda: adapter)
+    monkeypatch.setattr(_owner_core_telegram_handlers, 'TelegramAdapter', lambda: adapter)
 
     # Enable webhook
     monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
@@ -2041,7 +2049,7 @@ def test_storyboard_lease_loss_releases_worker_and_records_repository(monkeypatc
     whose QUEUED record is also present.  No task is left in flight, no Worker
     stays BUSY on a phantom task, and the audit trail shows the release.
     """
-    from core.app import handle_expired_storyboard_lease
+    from core.runtime import handle_expired_storyboard_lease
     from core.state import task_queue
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("NODE_API_TOKEN", "worker-token")

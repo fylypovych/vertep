@@ -57,9 +57,15 @@ def get_system_state() -> dict:
         value = json.loads(path.read_text(encoding="utf-8"))
         state = SystemState(value["state"])
         return {**value, "state": state.value}
-    except (OSError, ValueError, KeyError, TypeError):
+    except FileNotFoundError:
         return {"state": SystemState.NORMAL.value, "updated_at": None, "reason": None,
                 "operation_id": None}
+    except (OSError, ValueError, KeyError, TypeError):
+        # An absent initial record is NORMAL; an existing unreadable/unknown
+        # record is not permission to resume mutations. Reuse the established
+        # emergency recovery policy without introducing a new server mode.
+        return {"state": SystemState.EMERGENCY.value, "updated_at": None,
+                "reason": "Невідомий або пошкоджений запис стану системи; потрібне відновлення", "operation_id": None}
 
 
 def set_system_state(state: SystemState | str, reason: str, operation_id: str | None = None,

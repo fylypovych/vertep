@@ -1,4 +1,8 @@
 from datetime import datetime, timezone
+from datetime import timedelta
+from threading import RLock
+from uuid import uuid4
+from functools import wraps
 import os
 
 from .models import Job, JobStatus
@@ -6,6 +10,14 @@ from .models import Job, JobStatus
 # Runtime readiness states that qualify a node for dispatch when emitted by its
 # durable self-test record (enrollment separated from runtime readiness).
 RUNTIME_READY_STATUSES = {"ONLINE", "READY", "FREE", "BUSY"}
+
+
+def _dispatcher_locked(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return call
 
 
 def current_tested_capabilities(worker: dict, now: datetime | None = None) -> set[str]:
@@ -260,6 +272,7 @@ class TaskResponse:
     capabilities_matched: set[str] = field(default_factory=set)
     declined_reason: str | None = None
     shadow_result: dict | None = None
+    lease_id: str = ""
 
 
 class Dispatcher:
@@ -280,18 +293,76 @@ class Dispatcher:
         self._node_resources: dict[str, dict] = {}
         # Shadow results: task_id -> {role_result, module_result, parity_ok}
         self._shadow_results: dict[str, dict] = {}
+        self._lock = RLock()
+        self._transports = {}
 
-    def register_node(self, node_id: str, capabilities: set, resources: dict, role: str) -> None:
+    @_dispatcher_locked
+    def register_transport(self, node_id: str, transport) -> None:
+        """Attach a worker transport with submit(request, lease) and cancel(lease)."""
+        if node_id not in self._node_registry:
+            raise ValueError("Worker must register before attaching transport")
+        self._transports[node_id] = transport
+
+    def submit_task(self, task: TaskRequest):
+        """Assign then send to the selected worker; never fabricate a result."""
+        with self._lock:
+            response = self.assign_task(task)
+            if not response.accepted:
+                raise RuntimeError(response.declined_reason)
+            lease = dict(self._task_leases[task.task_id])
+            transport = self._transports.get(response.worker_id)
+            if transport is None:
+                self.revoke_task(task.task_id)
+                raise RuntimeError("Selected worker has no execution transport")
+            try:
+                future = transport.submit(task, lease)
+            except Exception:
+                self.revoke_task(task.task_id)
+                raise
+            return lease, future
+
+    def accept_result(self, task_id: str, worker_id: str, lease_id: str) -> bool:
+        """Fence late results from revoked/expired/reassigned attempts."""
+        with self._lock:
+            if not self.owns_lease(task_id, worker_id, lease_id):
+                return False
+            self._task_leases.pop(task_id)
+            return True
+
+    def owns_lease(self, task_id: str, worker_id: str, lease_id: str) -> bool:
+        with self._lock:
+            lease = self._task_leases.get(task_id)
+            worker = self._node_registry.get(worker_id)
+            now = datetime.now(timezone.utc)
+            return bool(lease and worker and lease["worker_id"] == worker_id and lease["lease_id"] == lease_id
+                        and lease["expires_at"] > now and (now - worker["last_heartbeat"]).total_seconds() <= 45)
+
+    def renew_lease(self, task_id: str, worker_id: str, lease_id: str) -> bool:
+        with self._lock:
+            lease = self._task_leases.get(task_id)
+            now = datetime.now(timezone.utc)
+            if not lease or lease["worker_id"] != worker_id or lease["lease_id"] != lease_id or lease["expires_at"] <= now:
+                return False
+            lease["expires_at"] = now + timedelta(minutes=self.config.get("lease_duration_minutes", 30))
+            return True
+
+    @_dispatcher_locked
+    def register_node(self, node_id: str, capabilities: set, resources: dict, role: str, protocol_version: str = "1.0.0") -> None:
         """Register a worker node with its capabilities and resources."""
+        from core.protocol.task import compatible_protocol
+        if not compatible_protocol(protocol_version):
+            raise ValueError("Incompatible worker protocol")
         self._node_registry[node_id] = {
             "capabilities": capabilities,
             "resources": resources,
             "role": role,
+            "protocol_version": protocol_version,
             "last_heartbeat": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
         }
         self._node_capabilities[node_id] = capabilities
         self._node_resources[node_id] = resources
 
+    @_dispatcher_locked
     def unregister_node(self, node_id: str) -> None:
         """Unregister a worker node and revoke its active tasks."""
         self._node_registry.pop(node_id, None)
@@ -302,10 +373,17 @@ class Dispatcher:
                 self.revoke_task(task_id)
 
     def assign_task(self, task: TaskRequest) -> TaskResponse:
+        with self._lock:
+            return self._assign_task(task)
+
+    def _assign_task(self, task: TaskRequest) -> TaskResponse:
         """Assign a task to the best available worker.
 
         In shadow mode, records the assignment for parity comparison.
         """
+        existing = self._task_leases.get(task.task_id)
+        if existing and existing["expires_at"] > datetime.now(timezone.utc):
+            return TaskResponse(accepted=False, declined_reason="Task already has an owner")
         required_cap = task.capabilities_required or {task.task_type}
         candidates = self._find_candidates(required_cap, task)
         if not candidates:
@@ -327,9 +405,10 @@ class Dispatcher:
             "worker_id": candidate["node_id"],
             "expires_at": expires_at,
             "task_id": task.task_id,
+            "lease_id": str(uuid4()),
         }
         self._node_registry[candidate["node_id"]]["last_heartbeat"] = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
-        if task.shadow_mode:
+        if getattr(task, "shadow_mode", False):
             self._shadow_results[task.task_id] = {
                 "task_type": task.task_type,
                 "worker": candidate["node_id"],
@@ -341,6 +420,7 @@ class Dispatcher:
             accepted=True,
             worker_id=candidate["node_id"],
             capabilities_matched=candidate["capabilities"],
+            lease_id=self._task_leases[task.task_id]["lease_id"],
         )
 
     def record_shadow_result(self, task_id: str, source: str, result: dict) -> None:
@@ -381,10 +461,26 @@ class Dispatcher:
     def _find_candidates(self, required_cap: set, task: TaskRequest) -> list[dict]:
         candidates = []
         for node_id, info in self._node_registry.items():
+            transport = self._transports.get(node_id)
+            if transport is not None and not transport.is_available():
+                continue
+            if (datetime.now(timezone.utc) - info["last_heartbeat"]).total_seconds() > 45:
+                continue
+            if any(lease["worker_id"] == node_id and lease["expires_at"] > datetime.now(timezone.utc)
+                   for lease in self._task_leases.values()):
+                continue
             capabilities = info["capabilities"]
             if not required_cap.issubset(capabilities):
                 continue
             resources = info["resources"]
+            if resources.get("busy"):
+                continue
+            payload = getattr(task, "payload", {})
+            if payload.get("module_name") and resources.get("module_versions", {}).get(payload["module_name"]) != payload.get("module_version"):
+                continue
+            requirements = payload.get("resource_requirements", {})
+            if (resources.get("cpu_cores") or 0) < requirements.get("min_cpu_cores", 0) or (resources.get("ram_mb") or 0) < requirements.get("min_ram_mb", 0):
+                continue
             if task.vram_mb is not None:
                 min_vram = task.vram_mb
                 if resources.get("vram_mb", 0) < min_vram:
@@ -403,15 +499,20 @@ class Dispatcher:
 
     def revoke_task(self, task_id: str) -> bool:
         """Revoke/cancel a task lease."""
-        if task_id in self._task_leases:
-            del self._task_leases[task_id]
+        with self._lock:
+            lease = self._task_leases.pop(task_id, None)
+            if lease is None:
+                return False
+            transport = self._transports.get(lease["worker_id"])
+            if transport is not None:
+                transport.cancel(dict(lease))
             return True
-        return False
 
     def query_worker_status(self, node_id: str) -> dict | None:
         """Query the status of a worker node."""
         return self._node_registry.get(node_id)
 
+    @_dispatcher_locked
     def heartbeat(self, node_id: str) -> None:
         """Process a heartbeat from a worker node."""
         if node_id in self._node_registry:

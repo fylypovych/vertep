@@ -480,6 +480,13 @@ async def system_test(payload: dict | None = None):
         try:
             from adapters.providers import provider_matrix
             result["provider_matrix"] = provider_matrix()
+            from ..dispatcher import current_tested_capabilities
+            from .workers import workers as measured_workers
+            result["runtime_probes"] = [{"node_id": worker.get("node_name"), "role": worker.get("role"),
+                "checked_at": worker["self_test"]["checked_at"], "evidence": worker["self_test"]["evidence"]}
+                for worker in measured_workers() if worker.get("status") in {"READY", "FREE", "BUSY"}
+                and current_tested_capabilities(worker)
+                and (worker.get("self_test") or {}).get("evidence")]
         except Exception as error:
             result["provider_matrix_error"] = str(error)
 
@@ -491,6 +498,8 @@ async def system_test(payload: dict | None = None):
                 "expiring_soon": sum(1 for c in certs if c.get("expires_in_days", 999) < 30),
                 "expired": sum(1 for c in certs if c.get("expires_in_days", 999) < 0)
             }
+            from ..certificates import certificate_execution_probes
+            result["certificates"]["execution_probes"] = certificate_execution_probes()
         except Exception as error:
             result["certificates_error"] = str(error)
 
@@ -529,7 +538,30 @@ async def system_test(payload: dict | None = None):
                     elif status in {StageStatus.PENDING.value, StageStatus.RUNNING.value,
                                     StageStatus.PAUSED.value}:
                         task_stats["pending"] += 1
-            result["task_results"] = task_stats
+            import hashlib
+            verified = []
+            for job in recent_jobs:
+                base = (store.root / job.job_id).resolve()
+                for artifact in job.artifacts:
+                    path = (base / artifact.path).resolve()
+                    if not path.is_relative_to(base) or not path.is_file() or not artifact.task_id:
+                        continue
+                    data = path.read_bytes()
+                    if len(data) == artifact.size and hashlib.sha256(data).hexdigest() == artifact.sha256:
+                        verified.append({"job_id": job.job_id, "task_id": artifact.task_id,
+                            "sha256": artifact.sha256, "bytes": len(data), "kind": artifact.kind})
+            recent = {job.job_id: job for job in recent_jobs}
+            for completed in store.repository.completed_tasks():
+                job = recent.get(completed["job_id"])
+                if completed.get("task_type") != "script" or not job or not job.script:
+                    continue
+                path = store.root / job.job_id / "script.json"
+                if path.is_file() and json.loads(path.read_text(encoding="utf-8")) == job.script:
+                    data = path.read_bytes()
+                    verified.append({"job_id": job.job_id, "task_id": completed["task_id"],
+                        "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "kind": "script"})
+            task_stats["completed"] = max(task_stats["completed"], len({item["task_id"] for item in verified}))
+            result["task_results"] = {**task_stats, "verified_artifacts": verified}
         except Exception as error:
             result["task_results_error"] = str(error)
 
@@ -546,9 +578,14 @@ async def system_test(payload: dict | None = None):
             else:
                 unavailable = [name for name, provider in pm.items()
                                if isinstance(provider, dict)
-                               and provider.get("configured") is False]
+                               and provider.get("configured") is False
+                               and {"tts": "voice", "llm": "text", "compute": "gpu", "image": "gpu",
+                                    "video": "gpu", "publisher": "publisher"}.get(name)
+                               not in {probe["role"] for probe in result.get("runtime_probes", [])}]
                 if unavailable:
                     full_failures.append("providers(unavailable: " + ", ".join(unavailable) + ")")
+        if not result.get("runtime_probes"):
+            full_failures.append("runtime_probes(no_execution_evidence)")
         if "certificates_error" in result:
             full_failures.append("certificates")
         elif isinstance(result.get("certificates"), dict):
@@ -557,6 +594,9 @@ async def system_test(payload: dict | None = None):
                 full_failures.append("certificates(zero)")
             elif isinstance(certs, dict) and certs.get("expired", 0) > 0:
                 full_failures.append(f"certificates({certs['expired']} expired)")
+            probes = certs.get("execution_probes") or []
+            if not probes or any(not probe.get("signature_verified") for probe in probes):
+                full_failures.append("certificates(signature_not_verified)")
         if "storage_error" in result:
             full_failures.append("storage")
         elif isinstance(result.get("storage"), dict) and not result["storage"].get("writable", False):
@@ -567,6 +607,8 @@ async def system_test(payload: dict | None = None):
             ts = result["task_results"]
             if isinstance(ts, dict) and ts.get("failed", 0) > 0:
                 full_failures.append(f"task_results({ts['failed']} failed)")
+            if not ts.get("verified_artifacts"):
+                full_failures.append("task_results(no_verified_artifacts)")
         if full_failures:
             result["result"] = "UNHEALTHY"
             result["full_test_failures"] = full_failures

@@ -18,6 +18,7 @@ HTTP flow with ``FakeTransport``.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -193,3 +194,18 @@ class ComfyUIDistributedProvider(ComputeProvider):
         # the prompt stays abandoned either way: a removal that worked makes the waiter
         # stop, and a removal that did not must not deliver a late result as success.
         return True
+
+
+def configured_compute_execute(provider: dict, task: dict) -> list[dict]:
+    """Run one configured ComfyUI provider task; execution stays outside CORE."""
+    compute = ComfyUIDistributedProvider(
+        url=provider["endpoint"],
+        token=os.getenv(provider.get("key_env", "")),
+    )
+    if not compute.configured():
+        raise RuntimeError("ComfyUI compute is not configured")
+    task_type = {"image_generation": "image", "video_generation": "video"}[task["type"]]
+    data, filename, kind = compute.generate_output(task["workflow"], task.get("topic", ""), task_type)
+    if not data:
+        raise ValueError("ComfyUI returned empty output")
+    return [{"filename": filename, "kind": kind, "data_base64": base64.b64encode(data).decode()}]

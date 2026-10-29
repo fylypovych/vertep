@@ -14,6 +14,8 @@ disk-backed ``FileRepository`` (no mock store) and prove:
 
 from __future__ import annotations
 
+import core.telegram.handlers as _owner_core_telegram_handlers
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -84,13 +86,13 @@ class TestClaimLease:
         import core.app as app_module
         root, store, job = _produce_v1(tmp_path)
         _register_scene_image(store, job)
-        app_module.store = store
+        _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
         assert job.video_regenerating is True
         with patch("core.pipeline.providers") as mp:
             _render(mp)
-            app_module._finalize_video_regenerate(job)
+            _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
         assert current.active_video_version == 2
         # the lease is released, so a further attempt is admissible again
@@ -173,12 +175,12 @@ class TestRenderFencing:
                 store.jobs[job.job_id].status = JobStatus.CANCELLED
                 store._save(store.jobs[job.job_id])
 
-        app_module.store = store
+        _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
         with patch("core.pipeline.providers") as mp:
             _render(mp, on_render=_cancel_mid_render)
-            app_module._finalize_video_regenerate(job)
+            _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
         # cancelled Job is not resurrected, no version v2 exists, claim released
         assert current.status == JobStatus.CANCELLED
@@ -198,12 +200,12 @@ class TestRenderFencing:
                 store.jobs[job.job_id].status = JobStatus.PAUSED
                 store._save(store.jobs[job.job_id])
 
-        app_module.store = store
+        _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
         with patch("core.pipeline.providers") as mp:
             _render(mp, on_render=_pause_mid_render)
-            app_module._finalize_video_regenerate(job)
+            _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
         assert current.status == JobStatus.PAUSED
         assert current.active_video_version == 1

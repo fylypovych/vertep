@@ -52,6 +52,16 @@ STATUS_GROUPS: dict[str, set[str]] = {
 def create_job(request: JobCreate):
     if not jobs_may_be_created():
         raise HTTPException(503, f"New jobs are disabled while system is {get_system_state()['state']}")
+    if request.workflow_template:
+        from core.workflow.runtime import workflow_runtime
+        runtime = workflow_runtime()
+        if runtime is None:
+            raise HTTPException(409, "Workflow templates are not configured")
+        try:
+            job_id = runtime.create(request.workflow_template, request.model_dump(exclude={"workflow_template"}))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        return {"job_id": job_id, "workflow_template": request.workflow_template, **runtime.engine.get_job_status(job_id)}
     try:
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), request.character_id)
     except Exception as error:

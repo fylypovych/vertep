@@ -69,8 +69,13 @@ export class SecretsSectionComponent implements OnInit {
   newSecretValue = '';
 
   readonly secretNames = [
+    'money_printer_token',
     'telegram_bot_token', 'youtube_client_secret', 'facebook_access_token',
     'tiktok_client_secret', 'smtp_password', 'external_ai_api_key',
+    'youtube_access_token', 'youtube_refresh_token', 'youtube_client_id',
+    'tiktok_access_token', 'tiktok_refresh_token', 'tiktok_client_id',
+    'instagram_access_token', 'instagram_refresh_token', 'instagram_client_id', 'instagram_client_secret',
+    'threads_access_token', 'threads_refresh_token', 'threads_client_id', 'threads_client_secret',
   ];
 
   constructor(

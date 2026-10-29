@@ -1091,11 +1091,12 @@ def test_moneyprinter_is_not_part_of_any_node_role():
         assert "moneyprinter" not in definition["services"], role
 
 
-def test_compose_keeps_the_runtime_opt_in():
+@pytest.mark.parametrize("compose_path", ["deploy/docker-compose.yml", "docker-compose.moneyprinter.yml"])
+def test_compose_keeps_the_runtime_opt_in(compose_path):
     import yaml
 
     compose = yaml.safe_load(
-        (REPO_ROOT / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")
+        (REPO_ROOT / compose_path).read_text(encoding="utf-8")
     )
     service = compose["services"]["moneyprinter"]
 
@@ -1108,6 +1109,12 @@ def test_compose_keeps_the_runtime_opt_in():
 )
     assert "moneyprinter_api_key" in compose["secrets"]
     assert "moneyprinter-tasks" in compose["volumes"]
+    if compose_path == "docker-compose.moneyprinter.yml":
+        assert set(compose["services"]) == {"moneyprinter"}
+        assert service["build"]["dockerfile"] == "docker/moneyprinter/Dockerfile"
+        assert service["platform"] == "linux/amd64"
+        assert "VERTEP_VERSION" in service["image"] and "latest" not in service["image"]
+        assert set(service["environment"]) == {"MONEYPRINTER_API_KEY_FILE", "VERTEP_MONEYPRINTER_IMAGE_DIGEST"}
 
     # Optional means optional: without `--profile moneyprinter` the whole platform must
     # still come up on Native, so nothing that CORE needs may depend on this service.
@@ -1231,13 +1238,26 @@ def test_compose_does_not_make_the_app_root_read_only():
 
 _COPY_IGNORE = shutil.ignore_patterns(
     ".git", "web-v2", "logs", ".codeatlas", ".local", ".opencode", ".kilo",
-    "__pycache__", "*.pyc", ".pytest_cache", ".test-update", "node_modules",
+    "__pycache__", "*.pyc", ".pytest_cache", ".pytest_tmp", ".test-update", "node_modules",
 )
 
 
 def _repo_copy(destination: Path) -> Path:
     shutil.copytree(REPO_ROOT, destination, ignore=_COPY_IGNORE)
     return destination
+
+
+def test_repo_copy_can_live_in_disposable_state_without_copying_itself(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "VERSION").write_text("0.0.2.87")
+    state = source / ".pytest_tmp"
+    state.mkdir()
+    (state / "temporary-output").write_text("execution artifact")
+    monkeypatch.setitem(_repo_copy.__globals__, "REPO_ROOT", source)
+    copy = _repo_copy(state / "run" / "repo")
+    assert (copy / "VERSION").read_text() == "0.0.2.87"
+    assert not (copy / ".pytest_tmp").exists()
 
 
 def _qualify_checks(root: Path) -> dict:

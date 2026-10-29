@@ -1,7 +1,7 @@
 """Issue #49 — shared Web/Telegram video regeneration path and API revision contract.
 
 The Web ``/video/regenerate`` endpoint and the Telegram ``vid_regen`` callback
-both funnel into a single ``core.app._finalize_video_regenerate`` function that
+both funnel into a single ``core.telegram.handlers._finalize_video_regenerate`` function that
 re-assembles from persisted artifacts. These tests verify, deterministically
 against an isolated store:
 
@@ -15,6 +15,8 @@ against an isolated store:
 """
 
 from __future__ import annotations
+
+import core.telegram.handlers as _owner_core_telegram_handlers
 
 from pathlib import Path
 from unittest.mock import patch
@@ -95,11 +97,11 @@ class TestSharedRegenerationAndApi:
         root, store, job = _produce_v1(tmp_path)
         scene_image = _register_scene_image(store, job)
         v1_sha = _digest_file(root / job.job_id / "final" / "video-v1.mp4")
-        app_module.store = store  # shared path reads the module-global store
+        _owner_core_telegram_handlers.store = store  # shared path reads the module-global store
         monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers") as mp:
             _render(mp)
-            app_module._finalize_video_regenerate(job)
+            _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
         assert current.active_video_version == 2
         assert len(current.video_versions) == 2
@@ -119,7 +121,7 @@ class TestSharedRegenerationAndApi:
         original_post = jobs_mod.store
         jobs_mod.store = store
         monkeypatch.setattr(
-            "core.app._finalize_video_regenerate",
+            "core.telegram.handlers._finalize_video_regenerate",
             lambda j: _write_file(store.root / j.job_id / "final" / "video-v2.mp4") or j)
         try:
             client = TestClient(app, raise_server_exceptions=False)
@@ -247,11 +249,11 @@ class TestSharedRegenerationAndApi:
         with store.lock:
             job.status = JobStatus.CANCELLED
             store._save(job)
-        app_module.store = store
+        _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers") as mp:
             _render(mp)
-            app_module._finalize_video_regenerate(job)
+            _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
         assert current.status == JobStatus.CANCELLED
         assert current.active_video_version == 1

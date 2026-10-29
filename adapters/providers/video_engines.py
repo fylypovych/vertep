@@ -373,6 +373,11 @@ class RemoteVideoEngine(VideoEngine):
                 if token is not None
                 else os.getenv(self.env_token, "")
             )
+            self.secret_source = "env" if self._token else "unset"
+            if token is None and not self._token and self.name == "money-printer":
+                from core.first_run import ensure_secret_store
+                self._token = ensure_secret_store().get("money_printer_token", "")
+                self.secret_source = "secret-store" if self._token else "unset"
             self._transport = transport or HttpTransport()
             self._poll_interval = poll_interval
             self._timeout = timeout

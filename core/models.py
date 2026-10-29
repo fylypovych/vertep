@@ -280,6 +280,7 @@ class StoryboardVersion(BaseModel):
     approved_script: dict[str, Any] | None = Field(default=None)
 
 class JobCreate(BaseModel):
+    workflow_template: str | None = None
     topic: str = Field(min_length=1, max_length=500)
     character_id: str = Field(default="did_samogon", pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
     priority: int = Field(default=5, ge=1, le=10)
@@ -323,6 +324,7 @@ class JobEvent(BaseModel):
 
 
 class Job(BaseModel):
+    workflow_execution_id: str | None = None
     job_id: str
     topic: str
     character_id: str
@@ -444,6 +446,9 @@ class Job(BaseModel):
     voice_task_snapshot: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class WorkerHeartbeat(BaseModel):
+    protocol_version: str = "1.0.0"
+    module_inventory: list[dict[str, Any]] = Field(default_factory=list)
+    cpu_cores: int = Field(default=0, ge=0)
     node_name: str
     runtime_instance_id: str | None = None
     gpu_name: str = "demo"
@@ -482,6 +487,9 @@ class WorkerHeartbeat(BaseModel):
     # (Issue i.0.0.1.17): reported by the Worker so CORE can confirm the switch
     # reached the node that actually runs the task.
     provider_config: dict[str, str] = Field(default_factory=dict)
+    provider_config_revision: str = ""
+    provider_activation_error: bool = False
+    provider_engine_revision: str = ""
 
 class ModelProgressReport(BaseModel):
     """Progress/cancel channel for a node-local model pull or delete."""

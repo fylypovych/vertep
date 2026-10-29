@@ -1,3 +1,35 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.2.88
+- **#360 Voice (`i.0.0.3.60`)**: додано каталог stock `espeak-ng` (provider/model/language/voice/speed) у `services/tts_service.py`; непідтримувані комбінації відхиляються з 422, а вимірювання справжнього WAV підтверджують вплив voice/language/speed.
+- **#360**: `core/api/tasks.py` перевіряє issued snapshot та чинний owner/lease до заміни файлів, реєстрації результату й ack; missing/mismatch/stale/foreign/expired result повертає 400/409 і не змінює прийнятий artifact, Worker/scene/queue ownership.
+- **#360**: Voice loss/lease/restart відновлюється зі збереженням audio stage; cancel/stale/duplicate повертає 409, фактична assembly дає відео з декодованим audio stream і хешем Worker contract.
+- **#361 Publisher (`i.0.0.3.61`)**: додано durability publication ledger у `publishers/base.py`: fsync intent до upload, persisted receipt до CORE ack, reconciliation за runtime identity; CORE restart не скасовує живий lease.
+- **#361**: ambiguous/lost upload response зберігається як `UPLOADING`/`outcome_unknown`; повторний Worker не робить сліпий повтор upload, а невідомий результат не оголошується PUBLISHED.
+- **#361**: результат публікації перевіряє receipt (job/task/channel/version/hash) і active owner/lease до cleanup/ack; retry використовує фактичний queue `not_before`, exhaustion обмежений, permanent/NOT_CONFIGURED не повторюються.
+- **#361**: approved artifact доставляється в окремий filesystem Publisher-а з перевіркою access/version/hash/size/corruption до upload для п'яти чинних платформ.
+- **#361**: OAuth у `publishers/oauth.py` зберігає encrypted credential state з expiry/refresh/scopes/revoke/reconnect; непридатні або revoked credentials блокують upload, а Settings показує ready/missing scopes/error без secrets.
+- **#362 CORE access (`i.0.0.3.62`)**: додано `tests/test_core_access_acceptance.py` та actual-backend `tests/test_core_access_browser_e2e.py` для 30 погоджених resource×role×state клітинок; заборонена дія не змінює ресурс.
+- **#362**: невідомий або пошкоджений state file більше не повертає дозвільний NORMAL, використовується EMERGENCY; header не показує NORMAL до першої authoritative відповіді, recovery використовує чинну `start_recovery` policy.
+- **#362**: Browser перевіряє session/CSRF/logout, WAITING_FOR_SYSTEM, recovery health gate, transport faults і unknown state проти фактичного CORE без `page.route`.
+- **#363 Providers і MPT Settings (`i.0.0.3.63`)**: provider switch у `core/provider_switch.py` виконує persist→deliver→apply→verify з журналом транзакції, повторним task і restart; невдала активація повертає попередній effective config на CORE і Worker.
+- **#363**: недоступний MPT не переходить мовчки в Native, snapshot і secrets не потрапляють у Job/logs; busy Worker не змінює config активного task, непідтверджене відновлення повертає 503.
+- **#364 Node і Setup (`i.0.0.3.64`)**: enrollment після втраченої response проходить штатний retry без дублювання node identity; старий JWT відхиляється, renew/revoke працюють через API.
+- **#364**: readiness і self-test семи ролей походять з actual runtime probes, Full Self-Test фіксує durable audit, stale/revoked/UNKNOWN не вважаються ready.
+- **#364**: Setup/Fleet Browser проходить deployment request→manifest→enrollment→reload, реальні 403/423 і retry; role matrix зараховує лише обов'язкові PG/Redis/Ollama/GPU/Docker checks.
+- **#365 MPT pinned upstream (`i.0.0.3.65`)**: додано `docker-compose.moneyprinter.yml` (optional profile `moneyprinter`, pinned Dockerfile, Linux/amd64, окремий tasks volume, Docker secret, digest gate), оновлено `.dockerignore` і `docs/moneyprinter-runtime.md`; compose profile/merge/validation проходять.
+- **#365**: report `scripts/issue-122-acceptance-report.py` розділяє докази `unit_or_disposable` і `pinned_runtime`; фактичний pinned execution лишається BLOCKED, бо на host відсутні Docker Engine/BuildKit, digest не вигадувався.
+- **#366 CORE composition root (`i.0.0.3.66`)**: `core/app.py` скорочено до 56 рядків; auth/session, SSE, Telegram, system API, lifespan і web UI mounts винесено в `core/api/auth.py`, `core/api/events.py`, `core/api/telegram.py`, `core/lifecycle.py`, `core/runtime.py`, `core/web_ui.py`.
+- **#366**: прибрано `core.app` imports, `sys.modules` runtime coupling і re-export shims з `core/telegram/handlers.py`; відновлено `POST /api/session`, збережено dispatch table і wait helpers.
+- **#366**: додано `tests/test_app_structure.py` (line budget, заборонені залежності, повний method/path snapshot, заборона top-level mutable) та `tests/test_executor_isolation.py`; snapshot маршрутів зафіксовано в `tests/fixtures/api-routes-before-366.json`.
+- **#367 Architecture contracts (`i.0.0.3.67`)**: review шести контрактів зафіксовано в `docs/architecture/contracts-review-367.md` з Git blob версіями та уточненнями retry/timeout/lease/module signature; пакет погоджено власником 29.10.2026.
+- **#368 Architecture 2.0 execution (`i.0.0.3.68`)**: Workflow Engine виконує DAG через Dispatcher/Worker (`core/workflow/*`, `core/dispatcher.py`, `worker/protocol/transport.py`) з parallel/retry/timeout/pause/approval/revision і persisted state у file/Redis/PostgreSQL (`core/workflow/database_state.py`).
+- **#368**: module system (`core/module/packages.py`, `worker/module_runtime.py`, CLI `vertep module install|info|list|uninstall`) приймає лише підписані Ed25519 packages від довіреного signer, перевіряє SemVer/dependencies/capabilities і блокує dispatch після uninstall.
+- **#368**: версійний CORE↔Worker протокол (`core/api/workflow_execution.py`, `worker/protocol/handler.py`) виконує registration/assignment/claim/progress/result/renew/cancel з lease generation, одним owner і відхиленням stale result.
+- **#368**: GPU routing (`core/gpu/backends.py`, `core/gpu/router.py`, `worker/gpu_routing.py`) використовує налаштований allowlist/priority/readiness/capacity для local_model/lab/ollama/comfyui/openai, зберігає local-only режим і показує вичерпання providers як явну помилку task.
+- **#368**: Telegram пропонує погоджений workflow template до старту генерації (`core/telegram/workflows.py`); legacy generation pipeline не змінений.
+- Додано acceptance-документи `docs/core-access-acceptance.md`, `docs/provider-node-acceptance.md`, `docs/voice-publisher-acceptance.md`, `docs/mpt-composition-acceptance.md`, `docs/architecture/execution-acceptance-368.md`.
+- CI: `browser-e2e.yml` запускає нове recovery/enrollment/OAuth Browser покриття, `ci.yml` додає workflow PostgreSQL state і delivery/voice/publisher process acceptance.
+- Прибрано тимчасові `releases/audit-*.md` і `releases/evidence-*.md` попередніх версій; їхні висновки перенесено в документи приймання.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.86
 - Повністю переписано README відповідно до поточних CORE/Worker, Web UI та session API, provider layer, MoneyPrinterTurbo, модульної архітектури й окремої LAB.
 - Уточнено production і source/demo встановлення, межі реального приймання `ir`, правила публікації та вимоги до evidence.

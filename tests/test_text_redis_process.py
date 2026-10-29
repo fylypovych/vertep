@@ -64,13 +64,14 @@ def contour(tmp_path, monkeypatch, request):
     harness.write_character(characters, "processchar", voice={"provider": "mock", "voice": "uk",
                                                            "model": "process-model", "language": "uk"})
     requests = []
+    script_response = {"title": "Controlled Text output", "description": "", "hashtags": [],
+                       "scenes": [{"prompt": "controlled image", "video_prompt": "controlled video",
+                                   "voiceover": "", "duration": 4}]}
     class Ollama(BaseHTTPRequestHandler):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(body)
-            script = {"title": "Controlled Text output", "description": "", "hashtags": [],
-                      "scenes": [{"prompt": "controlled image", "video_prompt": "controlled video",
-                                  "voiceover": "", "duration": 4}]}
+            script = script_response
             data = json.dumps({"response": json.dumps(script)}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -140,7 +141,7 @@ def contour(tmp_path, monkeypatch, request):
         start("core")
         assert api.get("/api/status").json()["queue"]["backend"] == "redis"
         yield {"api": api, "redis": r, "restart": restart, "stop": stop, "start": start,
-               "requests": requests, "root": tmp_path,
+               "requests": requests, "root": tmp_path, "script_response": script_response,
                "loss": getattr(request, "param", "heartbeat"),
                "redis_identity": r.info("server")["redis_version"],
                "redis_binary_sha256": hashlib.sha256(Path(binary).read_bytes()).hexdigest()}

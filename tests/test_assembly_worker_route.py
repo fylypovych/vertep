@@ -190,6 +190,7 @@ def _job(job_id: str = "job-122", status: JobStatus = JobStatus.VIDEO_GENERATION
 def assembly_state(tmp_path, monkeypatch):
     """Isolate CORE state: a local queue and a JobStore whose Job has one scene."""
     monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path / "config"))
     job = _job()
     job_dir = tmp_path / "jobs" / job.job_id
     for name in ("references", "images", "video", "audio", "subtitles", "final", "frames",
@@ -237,6 +238,8 @@ def _register_worker(store, name: str = "gpu-01") -> dict:
         "capabilities": ["video_assembly", "video_generation", "image_generation"],
         "supported_tasks": ["image", "video", "assembly"], "current_job": None,
         "current_task": None, "last_seen": utc_now(),
+        "tested_capabilities": ["video_assembly", "video_generation", "image_generation"],
+        "self_test": {"status": "PASSED", "role": "gpu", "checked_at": utc_now()},
     }
     store.workers[name] = worker
     store.save_worker(worker)

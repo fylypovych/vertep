@@ -67,6 +67,48 @@ def _overrides_file(config: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def test_secret_reference_matches_node_provisioning_but_rejects_identity_drift(isolated_config, monkeypatch):
+    from core.engine_config import engine_snapshot_fields, verify_engine_snapshot, EngineSnapshotMismatch
+    from core.api.job_helpers import assembly_worker_mismatch
+    from adapters.providers.video_engines import MoneyPrinterEngine
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
+    core_engine = MoneyPrinterEngine(url="http://runtime:8098", token="core-only-value")
+    core_engine.secret_source = "secret-store"
+    worker_engine = MoneyPrinterEngine(url="http://runtime:8098", token="worker-only-value")
+    snapshot = engine_snapshot_fields(core_engine)
+    reported = {**engine_snapshot_fields(worker_engine), "ready": True}
+    verify_engine_snapshot(worker_engine, snapshot)
+    assert assembly_worker_mismatch(reported, snapshot) is None
+    for reference in ({"env": "OTHER_TOKEN", "configured": True, "source": "env"},
+                      {"env": "MONEY_PRINTER_TOKEN", "configured": False, "source": "unset"},
+                      {"env": "MONEY_PRINTER_TOKEN", "configured": True, "source": "unknown"}):
+        changed = {**snapshot, "secret_reference": reference}
+        with pytest.raises(EngineSnapshotMismatch):
+            verify_engine_snapshot(worker_engine, changed)
+        assert assembly_worker_mismatch(reported, changed) == "secret_reference_mismatch"
+
+
+def test_failed_rollback_persistence_is_not_reported_as_restored(isolated_config, monkeypatch):
+    import core.provider_switch as switching
+    monkeypatch.delenv("PIPER_URL", raising=False)
+    original = switching._write_overrides
+    calls = []
+    def write(overrides, **kwargs):
+        calls.append(dict(overrides))
+        if len(calls) == 2:
+            raise OSError("controlled persistence outage")
+        return original(overrides, **kwargs)
+    with monkeypatch.context() as fault:
+        fault.setattr(switching, "_write_overrides", write)
+        with pytest.raises(ProviderSwitchError) as failed:
+            switch_provider("tts", "piper")
+        assert failed.value.status_code == 503
+        assert os.environ["TTS_PROVIDER"] == "none"
+    apply_provider_overrides()
+    assert load_provider_overrides() == {}
+    assert json.loads((isolated_config / "provider-activation.json").read_text())["status"] == "ROLLED_BACK"
+
+
 def test_switch_persists_applies_and_verifies(isolated_config):
     result = switch_provider("tts", "mock", actor="tester")
     assert result["changed"] is True
@@ -233,13 +275,16 @@ def test_provider_matrix_endpoint_returns_options(isolated_config):
 
 def test_provider_switch_endpoint_success(isolated_config):
     response = client.post("/api/settings/providers/tts", json={"backend": "mock"})
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
+    assert response.json()["worker_activation"]["status"] == "AWAITING_WORKER"
     body = response.json()
     assert body["slot"] == "tts"
     assert body["backend"] == "mock"
     assert body["changed"] is True
-    assert body["matrix"]["tts"]["backend"] == "mock"
-    assert body["effective_config"]["backend"] == "mock"
+    assert body["matrix"]["tts"]["backend"] == "none"
+    assert body["matrix"]["tts"]["selected_backend"] == "mock"
+    assert body["effective_config"]["backend"] == "none"
+    assert body["effective_config"]["selected"] == "mock"
     assert body["effective_config"]["persisted"] == "mock"
     assert body["executor_config"] == {"TTS_PROVIDER": "mock"}
     assert _overrides_file(isolated_config)["overrides"]["TTS_PROVIDER"] == "mock"
@@ -515,21 +560,22 @@ def test_applying_the_engine_through_the_real_api_is_verified_by_the_runtime(iso
             "backend": "money-printer", "endpoint": endpoint,
         })
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
+    assert response.json()["worker_activation"]["status"] == "AWAITING_WORKER"
     body = response.json()
     assert body["changed"] is True
     assert body["backend"] == "money-printer"
     effective = body["effective_engine"]
-    assert effective["effective"] == "money-printer"
-    assert effective["selected"] == effective["effective"]
-    assert effective["agree"] is True
-    assert effective["ready"] is True
+    assert effective["effective"] == "native"
+    assert effective["selected"] == "money-printer"
+    assert effective["agree"] is False
+    assert effective["ready"] is False
     assert effective["probed"] is True
     assert effective["endpoint"] == endpoint
     assert load_provider_overrides()["MONEY_PRINTER_URL"] == endpoint
     # The read model reports the same engine the apply proved.
     read_model = client.get("/api/settings/video-engine").json()
-    assert read_model["effective"] == "money-printer"
+    assert read_model["selected"] == "money-printer" and read_model["effective"] == "native"
     assert read_model["config_revision"] == effective["config_revision"]
 
 
@@ -569,8 +615,9 @@ def test_the_applied_choice_is_reproduced_after_a_restart_of_the_core(isolated_c
         apply_provider_overrides()
 
         read_model = client.get("/api/settings/video-engine").json()
-        assert read_model["selected"] == read_model["effective"] == "money-printer"
-        assert read_model["agree"] is True
+        assert read_model["selected"] == "money-printer" and read_model["effective"] == "native"
+        assert read_model["worker_activation"]["status"] == "AWAITING_WORKER"
+        assert read_model["agree"] is False
         assert read_model["endpoint"] == endpoint
         # The secret is restored as a reference only — no value is ever reported.
         assert read_model["secret"] == {
@@ -579,7 +626,7 @@ def test_the_applied_choice_is_reproduced_after_a_restart_of_the_core(isolated_c
         # Readiness is only claimed when the runtime is probed again, so the restored
         # choice is verified on the actual executor rather than assumed.
         assert read_model["probed"] is False
-        assert client.get("/api/settings/video-engine?probe=true").json()["ready"] is True
+        assert client.get("/api/settings/video-engine?probe=true").json()["ready"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +640,7 @@ def test_the_applied_choice_is_reproduced_after_a_restart_of_the_core(isolated_c
 #: stock heartbeat channel and must make the real executor observe it.
 _WORKER_APPLY_EXECUTOR = r"""
 import json, os
+os.environ["NODE_CAPABILITIES"] = "speech_synthesis,video_generation"
 from pathlib import Path
 from worker import service as worker_service
 from adapters.providers import providers as registry
@@ -602,8 +650,9 @@ import httpx
 core = os.environ["CORE_URL"]
 token = os.environ["NODE_TOKEN"]
 node = os.environ.get("WORKER_NODE", "voice-01")
+role = "voice" if node.startswith("voice") else "gpu"
 try:
-    r = httpx.post(f"{core}/api/workers/heartbeat", json={"node_name": node},
+    r = httpx.post(f"{core}/api/workers/heartbeat", json={"node_name": node, "role": role, "capabilities": ["speech_synthesis", "video_generation"]},
                    headers={"X-Vertep-Token": token}, timeout=10)
     r.raise_for_status()
     control = r.json()
@@ -611,7 +660,7 @@ except Exception as e:
     Path(os.environ["REPORT_PATH"]).write_text(json.dumps({"error": str(e)}), encoding="utf-8")
     raise
 config = control.get("provider_config") or {}
-applied = worker_service.apply_provider_config(config)
+applied = worker_service.apply_provider_config(config, control.get("provider_config_revision", ""))
 observed = worker_service.executor_provider_config()
 # The Worker reports what its executors really observe. A delivery this node
 # could not activate is reported with the backend it restored, so CORE never
@@ -621,7 +670,10 @@ report_config.update(applied)
 # Mirror the real Worker loop (worker/service.py): after applying the delivered
 # config it reports the effective executor config back on the next heartbeat.
 ack = httpx.post(f"{core}/api/workers/heartbeat",
-                 json={"node_name": node, "provider_config": report_config},
+                 json={"node_name": node, "role": role, "provider_config": report_config, "capabilities": ["speech_synthesis", "video_generation"],
+                       "provider_config_revision": worker_service._PROVIDER_CONFIG_REVISION,
+                       "provider_engine_revision": worker_service.executor_engine_revision(),
+                       "provider_activation_error": worker_service._PROVIDER_ACTIVATION_ERROR},
                  headers={"X-Vertep-Token": token}, timeout=10)
 ack.raise_for_status()
 engine = registry.video_engine()
@@ -721,7 +773,7 @@ def test_a_separate_worker_process_applies_and_reapplies_the_switched_engine(
         response = httpx.post(f"{base}/api/settings/providers/video_engine",
                               json={"backend": "money-printer", "endpoint": endpoint},
                               headers={"Authorization": auth}, timeout=30)
-        assert response.status_code == 200, response.text
+        assert response.status_code == 202, response.text
         assert provider_executor_config()["VERTEP_VIDEO_ENGINE"] == "money-printer"
         # Only bare selection/endpoint values travel to the executor: no secret.
         assert "MONEY_PRINTER_TOKEN" not in provider_executor_config()
@@ -850,6 +902,7 @@ def _tts_runtime_on_loopback():
 #: provider in the process that actually executes tasks.
 _WORKER_EXECUTE_TASK = r"""
 import json, os
+os.environ["NODE_CAPABILITIES"] = "speech_synthesis,video_generation"
 from pathlib import Path
 import httpx
 from worker import service as worker_service
@@ -864,12 +917,15 @@ try:
     control = httpx.post(f"{core}/api/workers/heartbeat", json={"node_name": node},
                          headers={"X-Vertep-Token": token}, timeout=10)
     control.raise_for_status()
-    applied = worker_service.apply_provider_config(control.json().get("provider_config") or {})
+    applied = worker_service.apply_provider_config(control.json().get("provider_config") or {}, control.json().get("provider_config_revision", ""))
     observed = worker_service.executor_provider_config()
     task = json.loads(os.environ["TASK_PAYLOAD"])
     artifacts = execute_role_task("voice", task)
     ack = httpx.post(f"{core}/api/workers/heartbeat",
-                     json={"node_name": node, "provider_config": observed},
+                     json={"node_name": node, "role": "voice", "provider_config": observed, "capabilities": ["speech_synthesis", "video_generation"],
+                           "provider_config_revision": worker_service._PROVIDER_CONFIG_REVISION,
+                           "provider_engine_revision": worker_service.executor_engine_revision(),
+                           "provider_activation_error": worker_service._PROVIDER_ACTIVATION_ERROR},
                      headers={"X-Vertep-Token": token}, timeout=10)
     ack.raise_for_status()
     contract = (artifacts[0].get("contract") or {}) if artifacts else {}
@@ -936,7 +992,7 @@ def test_a_task_runs_in_the_worker_process_that_applied_the_switched_provider(
         response = httpx.post(f"{base}/api/settings/providers/tts",
                               json={"backend": "mock"},
                               headers={"Authorization": auth}, timeout=30)
-        assert response.status_code == 200, response.text
+        assert response.status_code == 202, response.text
         assert response.json()["executor_config"]["TTS_PROVIDER"] == "mock"
 
         report = _run_worker_task(base, "voice-01", tmp_path / "run1", task)
@@ -982,8 +1038,10 @@ def test_a_worker_that_cannot_activate_the_switched_provider_keeps_its_previous_
         response = httpx.post(f"{base}/api/settings/providers/tts",
                               json={"backend": "piper"},
                               headers={"Authorization": auth}, timeout=30)
-        assert response.status_code == 200, response.text
-        assert response.json()["effective_config"]["backend"] == "piper"
+        assert response.status_code == 202, response.text
+        assert response.json()["worker_activation"]["status"] == "AWAITING_WORKER"
+        assert response.json()["effective_config"]["backend"] == "none"
+        assert response.json()["effective_config"]["selected"] == "piper"
 
         # The Worker node knows no runtime address and starts without a
         # selection of its own, so it cannot use Piper.
@@ -992,15 +1050,14 @@ def test_a_worker_that_cannot_activate_the_switched_provider_keeps_its_previous_
         assert report["observed"]["TTS_PROVIDER"] == "none"
 
         # CORE sees the contradiction and never claims success for this node.
-        assert executor_backend_mismatches("tts") == [
-            {"node_name": "voice-01", "observed": "none", "expected": "piper"}]
-        with pytest.raises(ProviderSwitchError):
-            effective_provider_config("tts", node_name="voice-01")
+        assert executor_backend_mismatches("tts") == []
+        assert effective_provider_config("tts", node_name="voice-01")["backend"] == "none"
+        assert load_provider_overrides() == {}
 
         # The read model states the failed activation instead of reporting the
         # switched provider as effective on the node that runs the tasks.
         read_model = client.get("/api/settings/providers").json()
-        assert read_model["worker_activation"]["tts"]["ok"] is False
-        assert read_model["worker_activation"]["tts"]["mismatches"] == [
-            {"node_name": "voice-01", "observed": "none", "expected": "piper"}]
+        assert read_model["activation"]["status"] == "ROLLED_BACK"
+        assert read_model["matrix"]["tts"]["backend"] == "none"
+        assert read_model["worker_activation"]["tts"]["mismatches"] == []
         assert read_model["worker_acks"]["voice-01"]["TTS_PROVIDER"] == "none"

@@ -1,5 +1,7 @@
 """End-to-end integration tests for Vertep deployment roles and workflows."""
 
+import core.first_run as _owner_core_first_run
+
 import importlib.util
 import json
 import re
@@ -120,7 +122,7 @@ def test_setup_alias_preserves_token(monkeypatch):
     from core import app as core_app
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(core_app, "is_configured", lambda: False)
+    monkeypatch.setattr(_owner_core_first_run, "is_configured", lambda: False)
     client = TestClient(core_app.app)
     response = client.get("/setup?token=one-time-code", follow_redirects=False)
     assert response.status_code == 307

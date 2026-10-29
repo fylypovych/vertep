@@ -68,7 +68,7 @@ def test_built_inventory_delivery_readiness_dispatch_and_media_trace(
     from adapters.comfyui_runtime import pinned_document
     from worker.service import role_self_test
     from worker.role_executor import execute_role_task
-    from core.app import store
+    from core.telegram.handlers import store
 
     config = tmp_path / "config"
     # The bundle pins and standard deployment generator deliver expected files;

@@ -4,6 +4,7 @@ import os
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 
 from ..first_run import config_root, integration_secret_status, set_integration_secret
 from ..logging_config import secret_redact
@@ -24,15 +25,19 @@ def provider_backends():
     a provider as effective while the node executing the tasks still uses the
     previous one.
     """
-    from ..provider_switch import executor_backend_mismatches, worker_provider_acks
+    from ..provider_switch import executor_backend_mismatches, worker_provider_acks, provider_activation
 
-    matrix = provider_matrix()
+    from ..provider_switch import provider_status_matrix
+    matrix = provider_status_matrix()
     activation: dict[str, dict] = {}
+    current = provider_activation()
     for slot in matrix:
         mismatches = executor_backend_mismatches(slot)
         activation[slot] = {"ok": not mismatches, "mismatches": mismatches}
+        if current.get("slot") == slot and current.get("status") in {"AWAITING_WORKER", "APPLYING"}:
+            activation[slot].update({"ok": False, "status": current["status"]})
     return {"matrix": matrix, "worker_acks": worker_provider_acks(),
-            "worker_activation": activation}
+            "worker_activation": activation, "activation": current}
 
 
 @router.get("/api/settings/video-engine")
@@ -46,7 +51,13 @@ def effective_video_engine(probe: bool = False):
     """
     from ..engine_config import effective_engine_config
 
-    return effective_engine_config(probe=probe)
+    from ..provider_switch import provider_activation
+    activation = provider_activation()
+    result = effective_engine_config(probe=probe)
+    if activation.get("slot") == "video_engine" and activation.get("status") in {"APPLYING", "AWAITING_WORKER"}:
+        result.update({"effective": activation.get("previous_backend"), "agree": False,
+            "ready": False, "reason": "worker_activation_pending"})
+    return {**result, "worker_activation": activation}
 
 
 @router.post("/api/settings/providers/{slot}")
@@ -62,12 +73,17 @@ def switch_provider_backend(slot: str, payload: dict):
     actor = str(payload.get("actor") or "").strip()[:120] or f"web:settings:{slot}"
     endpoint = payload.get("endpoint")
     try:
-        return switch_provider(
+        result = switch_provider(
             slot,
             str(payload.get("backend") or ""),
             actor=actor,
             endpoint=str(endpoint) if endpoint is not None else None,
         )
+        from ..provider_switch import provider_status_matrix
+        result["matrix"] = provider_status_matrix()
+        if result.get("worker_activation", {}).get("status") == "AWAITING_WORKER":
+            return JSONResponse(result, status_code=202)
+        return result
     except ProviderSwitchError as error:
         raise HTTPException(error.status_code, error.message) from error
 
@@ -104,6 +120,9 @@ def secret_settings():
 def update_secret_setting(name: str, payload: IntegrationSecretUpdate):
     try:
         result = {"secrets": set_integration_secret(name, payload.value), "values_exposed": False}
+        if name == "money_printer_token":
+            from ..provider_switch import reset_provider_registry
+            reset_provider_registry()
         if name == "telegram_bot_token":
             from ..telegram_pump import restart_polling
             restart_polling()
@@ -116,6 +135,9 @@ def update_secret_setting(name: str, payload: IntegrationSecretUpdate):
 def delete_secret_setting(name: str):
     try:
         result = {"secrets": set_integration_secret(name, None), "values_exposed": False}
+        if name == "money_printer_token":
+            from ..provider_switch import reset_provider_registry
+            reset_provider_registry()
         if name == "telegram_bot_token":
             from ..telegram_pump import restart_polling
             restart_polling()

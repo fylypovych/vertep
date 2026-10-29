@@ -566,7 +566,7 @@ def test_late_storyboard_result_after_reclaim_is_rejected(client, monkeypatch):
     expired = task_queue.requeue_expired(now=time.time() - 1)
     requeued = [task for task in expired if task.get("job_id") == job.job_id]
     assert len(requeued) == 1
-    from core.app import handle_expired_storyboard_lease
+    from core.runtime import handle_expired_storyboard_lease
     assert handle_expired_storyboard_lease(store, requeued[0]) is True
     replacement = job.storyboard_task_id
     assert replacement and replacement != first["task_id"]

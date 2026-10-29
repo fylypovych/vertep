@@ -23,7 +23,11 @@ INTEGRATION_SECRET_NAMES = frozenset({
     "smtp_password", "telegram_bot_token", "youtube_client_secret",
     "facebook_access_token", "tiktok_client_secret", "external_ai_api_key",
     "license_key", "ssh_private_key",
+    "money_printer_token",
     "youtube_refresh_token", "youtube_client_id",
+    "youtube_access_token", "tiktok_access_token", "tiktok_refresh_token", "tiktok_client_id",
+    "instagram_access_token", "instagram_refresh_token", "instagram_client_id", "instagram_client_secret",
+    "threads_access_token", "threads_refresh_token", "threads_client_id", "threads_client_secret",
 })
 
 
@@ -520,6 +524,10 @@ def set_integration_secret(name: str, value: str | None) -> dict[str, bool]:
             stored.pop(name, None)
         else:
             stored[name] = value
+        # An explicit credential replacement supersedes the previous OAuth
+        # expiry/revocation record; a cache reset alone must not resurrect it.
+        if name.endswith("_access_token"):
+            stored.get("publisher_oauth", {}).pop(name.upper(), None)
         stored["updated_at"] = datetime.now(timezone.utc).isoformat()
         _write_encrypted_secrets(stored)
         return {key: bool(stored.get(key)) for key in sorted(INTEGRATION_SECRET_NAMES)}

@@ -8,7 +8,9 @@ real API upload through an injectable ``HttpTransport``.
 from __future__ import annotations
 
 import os
+import re
 import uuid
+import httpx
 
 from publishers.transport import HttpTransport
 
@@ -65,13 +67,26 @@ class Publisher:
 
     def configured(self) -> bool:
         mock = os.getenv("PUBLISHER_MOCK", "false").lower() == "true"
-        return mock or bool(os.getenv(self.credential_env, ""))
+        from publishers.oauth import _get_secret
+        provider = self._token_provider()
+        return mock or bool(_get_secret(self.credential_env)) or bool(provider and provider.refresh_token())
 
-    def ready(self) -> bool:
+    def _token_provider(self):
+        from publishers import oauth
+        providers = {"youtube": oauth.YouTubeTokenProvider, "tiktok": oauth.TikTokTokenProvider,
+                     "facebook": oauth.FacebookTokenProvider, "instagram": oauth.InstagramTokenProvider,
+                     "threads": oauth.ThreadsTokenProvider}
+        factory = providers.get(self.channel)
+        return factory(self.transport) if factory else None
+
+    def ready(self, metadata: dict | None = None) -> bool:
         """Return True when credentials are present and (if OAuth) a token is available."""
         if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
             return True
         if not self.configured():
+            return False
+        metadata = metadata or {}
+        if self._missing_identifier(metadata):
             return False
         token_provider = self._token_provider() if hasattr(self, "_token_provider") else None
         if token_provider is None:
@@ -81,7 +96,7 @@ class Publisher:
                 return False
             # Only enforce scopes when the token provider actually reports them;
             # unknown scopes (empty list) stay backward compatible.
-            if self.token_scopes():
+            if self.token_scopes() or token_provider.scopes_known():
                 return not self.missing_scopes()
             return True
         except Exception:
@@ -99,6 +114,15 @@ class Publisher:
             except Exception:
                 return []
         return []
+
+    def _missing_identifier(self, metadata: dict) -> str | None:
+        identifiers = {"facebook": ("FACEBOOK_PAGE_ID", ("page_id", "facebook_page_id")),
+                       "instagram": ("INSTAGRAM_USER_ID", ("instagram_user_id",)),
+                       "threads": ("THREADS_USER_ID", ("threads_user_id",))}
+        required = identifiers.get(self.channel)
+        if required and not (os.getenv(required[0]) or any(metadata.get(key) for key in required[1])):
+            return required[0]
+        return None
 
     def missing_scopes(self) -> list[str]:
         """Return the subset of ``required_scopes`` not granted by the current token."""
@@ -128,8 +152,12 @@ class Publisher:
                 "status": "NOT_CONFIGURED",
                 "error": f"{self.credential_env} is missing",
             }
+        missing_identifier = self._missing_identifier(metadata)
+        if missing_identifier and os.getenv("PUBLISHER_MOCK", "false").lower() != "true":
+            return {"channel": self.channel, "status": "FAILED", "retryable": False,
+                    "error": f"{missing_identifier} is required for publishing"}
         # Issue #167.2: unsuitable credentials (missing OAuth scopes) block upload
-        if not self.ready():
+        if not self.ready(metadata):
             missing = self.missing_scopes()
             if missing:
                 return {
@@ -148,7 +176,12 @@ class Publisher:
             return self._publish_live(video_path, metadata)
         except Exception as error:  # noqa: BLE001 — surface to caller as FAILED
             from core.logging_config import secret_redact
-            return {"channel": self.channel, "status": "FAILED", "error": secret_redact(str(error))}
+            status = re.search(r"HTTP (\d{3})", str(error))
+            retryable = (int(status[1]) in {408, 425, 429} or int(status[1]) >= 500) if status else not isinstance(error, ValueError)
+            unknown = isinstance(error, (httpx.ReadError, httpx.ReadTimeout, httpx.WriteError,
+                                         httpx.WriteTimeout, httpx.RemoteProtocolError))
+            return {"channel": self.channel, "status": "FAILED", "error": secret_redact(str(error)),
+                    "retryable": retryable and not unknown, "outcome_unknown": unknown}
 
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         raise NotImplementedError(

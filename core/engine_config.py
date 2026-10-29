@@ -78,6 +78,10 @@ def required_engine_fields(engine_id: str) -> list[dict[str, Any]]:
     if not endpoint_env:
         return []
     secret_env = _SECRET_ENV_BY_ENGINE.get(engine_id)
+    secret_configured = bool(os.getenv(secret_env or "", ""))
+    if engine_id == "money-printer" and not secret_configured:
+        from .first_run import integration_secret_status
+        secret_configured = integration_secret_status().get("money_printer_token", False)
     identity = _url_identity(os.getenv(endpoint_env, ""))
     return [
         {
@@ -91,7 +95,7 @@ def required_engine_fields(engine_id: str) -> list[dict[str, Any]]:
             "name": "token",
             "env": secret_env,
             "value": None,
-            "configured": bool(os.getenv(secret_env or "", "")),
+            "configured": secret_configured,
             "secret": True,
         },
     ]
@@ -154,11 +158,11 @@ def secret_reference(engine) -> dict[str, Any]:
     env_name = _SECRET_ENV_BY_ENGINE.get(engine_id)
     if not env_name:
         return {"env": None, "configured": False, "source": "none"}
-    value = os.getenv(env_name, "")
+    value = getattr(engine, "_token", "") or os.getenv(env_name, "")
     return {
         "env": env_name,
         "configured": bool(value),
-        "source": "env" if value else "unset",
+        "source": getattr(engine, "secret_source", "env" if value else "unset"),
     }
 
 
@@ -247,6 +251,24 @@ def engine_snapshot_fields(engine) -> dict[str, Any]:
     return fields
 
 
+def same_engine_fact(name: str, expected: Any, actual: Any) -> bool:
+    if name == "secret_reference" and isinstance(expected, dict) and isinstance(actual, dict):
+        # Provisioning may be encrypted CORE storage and node-local env. The
+        # logical reference and presence must agree; credential bytes/source
+        # are deliberately not part of an attempt's execution identity.
+        for reference in (expected, actual):
+            if not set(reference).issubset({"env", "configured", "source"}):
+                return False
+            if "env" not in reference or not isinstance(reference.get("configured"), bool):
+                return False
+            if reference.get("source") not in {None, "env", "secret-store", "unset", "none"}:
+                return False
+            if reference["configured"] and reference.get("source") in {"unset", "none"}:
+                return False
+        return expected["env"] == actual["env"] and expected["configured"] == actual["configured"]
+    return expected == actual
+
+
 def verify_engine_snapshot(engine, snapshot: dict | None, *,
                            extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Refuse an attempt whose dispatched snapshot drifted on this executor.
@@ -268,7 +290,7 @@ def verify_engine_snapshot(engine, snapshot: dict | None, *,
     for name, value in fields.items():
         if snapshot.get(name) in (None, ""):
             continue
-        if snapshot[name] != value:
+        if not same_engine_fact(name, snapshot[name], value):
             raise EngineSnapshotMismatch(name, snapshot[name], value)
     for name, value in (extra or {}).items():
         if name in snapshot and snapshot[name] != value:

@@ -9,8 +9,12 @@ back when verification fails.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import hashlib
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +25,7 @@ from .first_run import config_root
 
 _OVERRIDE_FILE = "provider-overrides.json"
 _SWITCHABLE_SLOTS = frozenset({"llm", "tts", "compute", "image", "video", "video_engine"})
+_switch_lock = threading.Lock()
 #: Env var that holds the endpoint of each external video engine (Issue #122 P8).
 _ENDPOINT_ENV_BY_SLOT = {
     ("video_engine", engine): env
@@ -87,8 +92,132 @@ def provider_executor_config() -> dict[str, str]:
     heartbeat response can carry it to the node that actually runs the task.
     """
     overrides = load_provider_overrides()
+    try:
+        transaction = json.loads(_activation_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        transaction = {}
+    if transaction.get("status") == "ROLLED_BACK" and transaction.get("targets"):
+        for key, value in transaction.get("delivery_before", {}).items():
+            overrides.setdefault(key, value)
     return {key: overrides[key] for key in sorted(overrides)
             if key in _PROVIDER_EXECUTOR_ENV_ALLOWLIST}
+
+
+def provider_config_revision(config: dict | None = None) -> str:
+    return hashlib.sha256(json.dumps(config if config is not None else provider_executor_config(),
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _activation_path() -> Path:
+    return config_root() / "provider-activation.json"
+
+
+def _activation_record(value: dict) -> None:
+    atomic_write_json(_activation_path(), value)
+
+
+def provider_activation() -> dict:
+    try:
+        value = json.loads(_activation_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {key: value.get(key) for key in ("status", "slot", "targets", "previous_backend", "previous_configured")}
+
+
+def provider_status_matrix() -> dict:
+    """Public read model distinguishes persisted selection from confirmed effect."""
+    from adapters.providers import provider_matrix
+    matrix = provider_matrix()
+    activation = provider_activation()
+    slot = activation.get("slot")
+    if slot in matrix and activation.get("status") in {"APPLYING", "AWAITING_WORKER"}:
+        matrix[slot] = {**matrix[slot], "selected_backend": matrix[slot].get("backend"),
+            "backend": activation.get("previous_backend"), "configured": activation.get("previous_configured"),
+            "activation_status": activation["status"]}
+    return matrix
+
+
+def reconcile_provider_activation(node_name: str, worker: dict) -> None:
+    """Finish a deferred activation only from the executor's revision-bound ack."""
+    try:
+        transaction = json.loads(_activation_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if transaction.get("status") != "AWAITING_WORKER" or not _switch_lock.acquire(blocking=False):
+        return
+    try:
+        capability = _SLOT_CAPABILITY.get(transaction.get("slot"))
+        if capability and capability not in worker.get("capabilities", []):
+            return
+        expected = provider_executor_config()
+        if worker.get("provider_config_revision") != provider_config_revision(expected):
+            return
+        observed = worker.get("provider_config") or {}
+        engine_mismatch = False
+        if transaction.get("slot") == "video_engine":
+            from .engine_config import engine_config_revision
+            engine_mismatch = worker.get("provider_engine_revision") != engine_config_revision()
+        if worker.get("provider_activation_error") or engine_mismatch or any(observed.get(k, "") != v for k, v in expected.items()):
+            _write_overrides(transaction["previous"], actor="worker-activation-rollback", slot=transaction["slot"])
+            for key, value in transaction["environment"].items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            reset_provider_registry()
+            _activation_record({**transaction, "status": "ROLLED_BACK", "targets": [node_name]})
+        else:
+            _activation_record({**transaction, "status": "COMMITTED", "targets": [node_name]})
+    finally:
+        _switch_lock.release()
+
+
+def _verify_workers(slot: str, revision: str, expected: dict[str, str], targets: list[str]) -> None:
+    from .state import store
+    deadline = time.monotonic() + float(os.getenv("PROVIDER_ACTIVATION_TIMEOUT_SECONDS", "45"))
+    pending = set(targets)
+    while pending:
+        for name in list(pending):
+            worker = store.workers.get(name, {})
+            if worker.get("provider_config_revision") != revision:
+                continue
+            observed = worker.get("provider_config") or {}
+            engine_mismatch = False
+            if slot == "video_engine":
+                from .engine_config import engine_config_revision
+                engine_mismatch = worker.get("provider_engine_revision") != engine_config_revision()
+            if worker.get("provider_activation_error") or engine_mismatch or any(observed.get(k, "") != v for k, v in expected.items()):
+                raise ProviderSwitchError(409, f"Worker не підтвердив активацію слота '{slot}'; попередню конфігурацію відновлено")
+            pending.remove(name)
+        if pending and time.monotonic() >= deadline:
+            raise ProviderSwitchError(409, f"Час очікування активації слота '{slot}' вичерпано; попередню конфігурацію відновлено")
+        if pending:
+            time.sleep(0.05)
+
+
+_SLOT_CAPABILITY = {"tts": "speech_synthesis", "llm": "text_generation",
+    "video_engine": "video_generation", "compute": "image_generation",
+    "image": "image_generation", "video": "video_generation"}
+
+
+def _switch_targets(slot: str, env_name: str) -> list[str]:
+    from .state import store
+    now = datetime.now(timezone.utc)
+    targets = []
+    for name, worker in list(store.workers.items()):
+        if not worker.get("runtime_instance_id") or worker.get("desired_state") in {"REVOKED", "DISABLED"}:
+            continue
+        try:
+            seen = datetime.fromisoformat(worker["last_seen"].replace("Z", "+00:00"))
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=timezone.utc)
+            if (now - seen).total_seconds() > int(os.getenv("HEARTBEAT_TIMEOUT", "45")):
+                continue
+        except (KeyError, ValueError, TypeError):
+            continue
+        if _SLOT_CAPABILITY.get(slot) in worker.get("capabilities", []):
+            targets.append(name)
+    return targets
 
 
 def _write_overrides(overrides: dict[str, str], actor: str | None = None,
@@ -126,6 +255,18 @@ def _save_snapshot(overrides: dict[str, str], actor: str | None = None,
 
 def apply_provider_overrides() -> dict[str, str]:
     """Apply persisted overrides to the live process environment."""
+    try:
+        transaction = json.loads(_activation_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        transaction = {}
+    if transaction.get("status") == "APPLYING":
+        _write_overrides(transaction["previous"], actor="restart-recovery", slot=transaction["slot"])
+        for key, value in transaction["environment"].items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        _activation_record({**transaction, "status": "ROLLED_BACK"})
     applied: dict[str, str] = {}
     for env_name, value in load_provider_overrides().items():
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", env_name):
@@ -143,6 +284,33 @@ def reset_provider_registry() -> None:
 
 
 def switch_provider(slot: str, backend: str, actor: str = "web",
+                    endpoint: str | None = None) -> dict[str, Any]:
+    if not _switch_lock.acquire(blocking=False):
+        raise ProviderSwitchError(409, "Інша активація провайдера вже виконується")
+    try:
+        try:
+            pending = json.loads(_activation_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pending = {}
+        if pending.get("status") == "AWAITING_WORKER":
+            if pending.get("slot") != slot:
+                raise ProviderSwitchError(409, "Провайдер очікує підтвердження Worker")
+            # A new explicit choice supersedes the unconfirmed selection from
+            # the last confirmed baseline, never from an unverified backend.
+            _write_overrides(pending["previous"], actor=actor, slot=slot)
+            for key, value in pending["environment"].items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            reset_provider_registry()
+            _activation_record({**pending, "status": "ROLLED_BACK"})
+        return _switch_provider(slot, backend, actor, endpoint)
+    finally:
+        _switch_lock.release()
+
+
+def _switch_provider(slot: str, backend: str, actor: str = "web",
                     endpoint: str | None = None) -> dict[str, Any]:
     """Switch one provider slot to another backend with verify-and-rollback.
 
@@ -190,6 +358,8 @@ def switch_provider(slot: str, backend: str, actor: str = "web",
     previous_value = os.environ.get(env_name)
     had_override = env_name in overrides
     old_override = overrides.get(env_name)
+    previous_overrides = dict(overrides)
+    targets = _switch_targets(slot, env_name)
     endpoint_had_override = endpoint_env in overrides
     endpoint_old_override = overrides.get(endpoint_env)
 
@@ -201,7 +371,16 @@ def switch_provider(slot: str, backend: str, actor: str = "web",
     overrides[env_name] = requested
     if endpoint_env:
         overrides[endpoint_env] = endpoint_value
+    transaction = {"status": "APPLYING", "slot": slot, "previous": previous_overrides,
+        "environment": {env_name: previous_value}, "targets": targets, "previous_backend": before.get("backend"),
+        "previous_configured": before.get("configured")}
+    if endpoint_env:
+        transaction["environment"][endpoint_env] = endpoint_before
+    transaction["delivery_before"] = {key: value if value is not None else
+        str(before.get("backend") or "") if key == env_name else ""
+        for key, value in transaction["environment"].items()}
     try:
+        _activation_record(transaction)
         _write_overrides(overrides, actor=actor, slot=slot)
     except OSError as error:
         raise ProviderSwitchError(500, f"Could not persist the provider switch: {error}") from error
@@ -219,17 +398,36 @@ def switch_provider(slot: str, backend: str, actor: str = "web",
             raise ProviderSwitchError(
                 500, f"Backend '{requested}' did not take effect for slot '{slot}'")
         effective = _verify_effective_engine(slot, requested)
-    except ProviderSwitchError as error:
+        expected = provider_executor_config()
+        _verify_workers(slot, provider_config_revision(expected), expected, targets)
+        _activation_record({**transaction, "status": "COMMITTED" if targets else "AWAITING_WORKER"})
+    except Exception as failure:
+        if not isinstance(failure, ProviderSwitchError):
+            logging.getLogger(__name__).error("Provider activation failed (%s)", type(failure).__name__)
+        error = failure if isinstance(failure, ProviderSwitchError) else ProviderSwitchError(409, "Не вдалося активувати провайдера; попередню конфігурацію відновлено")
         extra_env = ((endpoint_env, endpoint_had_override, endpoint_old_override,
                       endpoint_before),) if endpoint_env else ()
         _rollback(env_name, overrides, had_override, old_override,
                   previous_value, actor=actor, slot=slot, extra_env=extra_env)
+        _activation_record({**transaction, "status": "ROLLED_BACK"})
+        restored = provider_executor_config()
+        try:
+            _verify_workers(slot, provider_config_revision(restored), restored, targets)
+        except ProviderSwitchError as rollback_error:
+            raise ProviderSwitchError(503, "Попередню конфігурацію збережено; відновлення на Worker ще не підтверджено") from rollback_error
         raise error
 
+    reported = effective_provider_config(slot)
+    if not targets:
+        reported.update({"selected": requested, "backend": before.get("backend"), "pending": True})
+        if "effective_engine" in effective:
+            effective["effective_engine"] = {**effective["effective_engine"], "effective": before.get("backend"),
+                "ready": False, "agree": False, "reason": "worker_activation_pending"}
     return {"slot": slot, "backend": requested, "changed": True,
             "env": env_name, "matrix": provider_matrix(),
-            "effective_config": effective_provider_config(slot),
-            "executor_config": provider_executor_config(), **effective}
+            "effective_config": reported,
+            "executor_config": provider_executor_config(),
+            "worker_activation": {"status": "VERIFIED" if targets else "AWAITING_WORKER", "nodes": targets}, **effective}
 
 
 def worker_provider_acks() -> dict[str, dict[str, str]]:
@@ -408,10 +606,11 @@ def _rollback(env_name: str, overrides: dict[str, str], had_override: bool,
             overrides[name] = old_extra
         else:
             overrides.pop(name, None)
+    persistence_error = None
     try:
         _write_overrides(overrides, actor=actor, slot=slot)
-    except OSError:
-        pass
+    except OSError as error:
+        persistence_error = error
     if previous_value is None:
         os.environ.pop(env_name, None)
     else:
@@ -424,3 +623,5 @@ def _rollback(env_name: str, overrides: dict[str, str], had_override: bool,
         else:
             os.environ[name] = previous_extra
     reset_provider_registry()
+    if persistence_error is not None:
+        raise ProviderSwitchError(503, "Не вдалося зберегти попередню конфігурацію провайдера") from persistence_error

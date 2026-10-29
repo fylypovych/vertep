@@ -6,7 +6,16 @@ Defines the contract for task assignment, lifecycle, and status reporting.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional, Set
+
+
+PROTOCOL_VERSION = "1.0.0"
+
+
+def compatible_protocol(version: str) -> bool:
+    import re
+    return isinstance(version, str) and bool(re.fullmatch(r"1\.\d+\.\d+", version))
 
 
 @dataclass
@@ -23,6 +32,8 @@ class TaskRequest:
     timeout_minutes: int = 60
     lease_duration_minutes: int = 30
     approval_required: bool = False
+    protocol_version: str = PROTOCOL_VERSION
+    lease_id: str = ""
 
 
 @dataclass
@@ -33,6 +44,8 @@ class TaskResponse:
     declined_reason: str = ""
     worker_id: str = ""
     capabilities_matched: Set[str] = field(default_factory=set)
+    protocol_version: str = PROTOCOL_VERSION
+    lease_id: str = ""
 
 
 @dataclass
@@ -43,6 +56,8 @@ class TaskClaim:
     worker_id: str
     claimed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     lease_expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=30))
+    lease_id: str = ""
+    protocol_version: str = PROTOCOL_VERSION
 
 
 @dataclass
@@ -54,6 +69,8 @@ class TaskProgress:
     progress_percent: float = 0.0
     output_artifact_ref: str = ""
     error: Optional[str] = None
+    lease_id: str = ""
+    protocol_version: str = PROTOCOL_VERSION
 
 
 @dataclass
@@ -66,6 +83,8 @@ class TaskComplete:
     execution_time_seconds: float = 0.0
     success: bool = True
     error: Optional[str] = None
+    lease_id: str = ""
+    protocol_version: str = PROTOCOL_VERSION
 
 
 @dataclass
@@ -75,3 +94,16 @@ class TaskCancel:
     task_id: str
     cancelled_by: str  # "worker" or "core"
     immediate_cleanup: bool = True
+    lease_id: str = ""
+    protocol_version: str = PROTOCOL_VERSION
+
+
+@dataclass
+class TaskFail:
+    task_id: str
+    worker_id: str
+    error_type: str
+    error_message: str
+    retryable: bool = False
+    lease_id: str = ""
+    protocol_version: str = PROTOCOL_VERSION

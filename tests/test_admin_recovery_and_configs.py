@@ -1,3 +1,5 @@
+
+import core.state as _owner_core_state
 import json
 
 from fastapi.testclient import TestClient
@@ -12,7 +14,7 @@ def test_brand_and_workflow_delete_endpoints(monkeypatch, tmp_path):
     character_root = tmp_path / "characters"
     monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
     monkeypatch.setenv("CHARACTERS_ROOT", str(character_root))
-    monkeypatch.setattr(core_app.workflow_registry, "root", workflow_root)
+    monkeypatch.setattr(_owner_core_state.workflow_registry, "root", workflow_root)
     client = TestClient(core_app.app)
 
     brand = {"id": "test_brand", "name": "Тестовий бренд", "enabled": True,
@@ -34,8 +36,8 @@ def test_workflow_delete_rejects_character_reference(monkeypatch, tmp_path):
     (character / "generation.json").write_text(
         json.dumps({"workflow": "workflows/image/test.json"}), encoding="utf-8")
     monkeypatch.setenv("CHARACTERS_ROOT", str(character_root))
-    monkeypatch.setattr(core_app.workflow_registry, "root", workflow_root)
-    core_app.workflow_registry.save(
+    monkeypatch.setattr(_owner_core_state.workflow_registry, "root", workflow_root)
+    _owner_core_state.workflow_registry.save(
         "image", "test.json", {"1": {"class_type": "SaveImage", "inputs": {}}})
 
     response = TestClient(core_app.app).delete("/api/workflows/image/test.json")

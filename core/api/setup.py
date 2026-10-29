@@ -82,7 +82,7 @@ def first_run_status():
 
 
 @router.get("/api/setup/health")
-def first_run_health():
+def first_run_health(role: str | None = None):
     """Role-aware readiness report for the First Run Wizard.
 
     Delegates to the shared ``health_checks`` library instead of re-checking
@@ -94,7 +94,9 @@ def first_run_health():
     """
     from ..health_checks import run_checks, health_status
 
-    role = os.getenv("NODE_ROLE", "core")
+    role = role or os.getenv("NODE_ROLE", "core")
+    if role not in REQUIRED_HEALTH_CHECKS:
+        raise HTTPException(422, "Непідтримувана роль вузла")
     required = REQUIRED_HEALTH_CHECKS.get(role, frozenset())
     raw = run_checks(role)
     checks: dict[str, str] = {}
@@ -115,11 +117,7 @@ def first_run_health():
                 checks[name] = "OPTIONAL"
         else:
             checks[name] = str(value)
-    ready = all(
-        (checks[name] == "OK") if name in required
-        else not str(checks[name]).startswith(_BLOCKING_PREFIXES)
-        for name in checks
-    ) and required.issubset(checks)
+    ready = bool(required) and all(checks.get(name) == "OK" for name in required)
     return {"ready": ready, "checks": checks,
             "status": health_status(raw), "role": role}
 

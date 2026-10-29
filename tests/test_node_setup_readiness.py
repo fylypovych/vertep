@@ -92,7 +92,7 @@ def test_role_blocks_dispatch_for_offline_degraded(monkeypatch, tmp_path):
          "runtime_status": "ONLINE", "capabilities": ["image_generation"],
          "revoked_at": None}])
     monkeypatch.setattr(role_runtime.store, "load_workers", lambda: [
-        {"node_id": "gpu-01", "status": "READY", "last_seen": datetime.now(timezone.utc).isoformat()}], raising=False)
+        {"node_id": "gpu-01", **_make_worker("gpu", "image_generation", datetime.now(timezone.utc).isoformat())}], raising=False)
     chosen = available_worker([worker], job)
     assert chosen is not None
     assert chosen["node_name"] == "gpu-01"

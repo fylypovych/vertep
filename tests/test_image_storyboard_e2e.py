@@ -1,7 +1,8 @@
 import base64, time
 import pytest
 from fastapi.testclient import TestClient
-from core.app import app, store
+from core.app import app
+from core.telegram.handlers import store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from worker import role_executor
 from core.script_agent import ScriptAgent

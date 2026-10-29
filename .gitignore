@@ -44,6 +44,7 @@ RELEASE_IDENTITY.json
 
 # Test output (transient)
 /test-results/
+/.seed-initialized
 /agents
 
 # Media acceptance harness output (transient): `VERTEP_MEDIA_EVIDENCE`,

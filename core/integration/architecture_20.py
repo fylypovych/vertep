@@ -32,13 +32,13 @@ def initialize_architecture_20(core_dir: str | None = None) -> dict[str, Any]:
 
     # Initialize Workflow Engine
     state = __import__("core.workflow.state", fromlist=["WorkflowState"]).WorkflowState()
-    engine = WorkflowEngine(state)
+    dispatcher = Dispatcher()
+    engine = WorkflowEngine(state, dispatcher)
 
     # Initialize Module Registry
     module_registry = ModuleRegistry()
 
     # Initialize Dispatcher
-    dispatcher = Dispatcher()
 
     # Initialize GPU Provider Registry with local fallback
     gpu_registry = GPUProviderRegistry()

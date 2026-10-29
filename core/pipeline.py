@@ -76,7 +76,7 @@ class JobStore:
                         message="STALE VIDEO REGENERATION CLAIM RELEASED",
                         type="status", state=original_status.value))
                     self.repository.save_job(job)
-                if original_status == JobStatus.PUBLISHING:
+                if original_status == JobStatus.PUBLISHING and not job.publish_task_ids:
                     job.status = JobStatus.READY
                     job.events.append(f"{utc_now()} PUBLISHING INTERRUPTED; RETURNED TO READY")
                     job.event_log.append(JobEvent(message="PUBLISHING INTERRUPTED; RETURNED TO READY",
@@ -97,6 +97,10 @@ class JobStore:
                         job.event_log.append(JobEvent(message="VIDEO RECOVERED; REQUIRES APPROVAL",
                                                       type="status", state="VIDEO_PENDING_APPROVAL"))
                     self.repository.save_job(job)
+                elif original_status == JobStatus.TTS_GENERATING and job.tts_active_task_ids:
+                    # Issued Voice work is reconciled against the real queue at
+                    # startup; replaying assets here can silently skip narration.
+                    pass
                 elif original_status in {JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_READY,
                                           JobStatus.ASSET_GENERATION, JobStatus.ASSETS_READY,
                                           JobStatus.TTS_GENERATING, JobStatus.TTS_READY,
@@ -188,6 +192,9 @@ class JobStore:
         return self.update(job, status, event)
 
     def _save(self, job: Job) -> None:
+        if os.getenv("WORKFLOW_DEFINITIONS_ROOT"):
+            from core.workflow.runtime import workflow_runtime
+            workflow_runtime().observe_legacy_job(job)
         self.repository.save_job(job)
 
     def save_worker(self, worker: dict) -> None:

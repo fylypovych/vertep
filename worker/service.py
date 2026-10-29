@@ -1,6 +1,7 @@
 import os
 import time
 import base64
+import hashlib
 import socket
 import subprocess
 import json
@@ -48,6 +49,7 @@ def verify_gpu_runtime_inventory() -> dict | None:
 
 def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = None) -> dict:
     started = time.monotonic()
+    evidence = {}
     try:
         if role == "core":
             additional = {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",") if item.strip()}
@@ -73,6 +75,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
                                                      "Vertep worker self-test", "image")
             if kind != "image" or len(data) < 16:
                 raise RuntimeError("GPU workflow returned no image")
+            evidence = {"kind": kind, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
         elif role == "text":
             response = httpx.post(f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/generate",
                                   json={"model": os.getenv("OLLAMA_MODEL", "llama3.2"),
@@ -80,6 +83,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
             response.raise_for_status()
             if not response.json().get("response"):
                 raise RuntimeError("Ollama returned no text")
+            evidence = {"text_sha256": hashlib.sha256(response.json()["response"].encode()).hexdigest()}
         elif role == "voice":
             url = os.getenv("TTS_HEALTH_URL")
             if not url or httpx.get(url, timeout=15).status_code >= 400:
@@ -91,6 +95,12 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
                 encoded = response.json().get("audio_base64")
                 if not isinstance(encoded, str) or not encoded:
                     raise RuntimeError("TTS runtime did not return audio")
+                audio = base64.b64decode(encoded, validate=True)
+            else:
+                audio = response.content
+            if not audio:
+                raise RuntimeError("TTS runtime returned empty audio")
+            evidence = {"bytes": len(audio), "sha256": hashlib.sha256(audio).hexdigest()}
         elif role == "publisher":
             if not os.getenv("PUBLISHER_HEALTH_URL"):
                 raise RuntimeError("Publisher runtime is not configured")
@@ -103,8 +113,11 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
             receipt = response.json()
             if not receipt.get("publication_id"):
                 raise RuntimeError("Publisher returned no receipt")
+            evidence = {"publication_id": receipt["publication_id"]}
         elif role == "monitoring":
-            httpx.get(os.getenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy"), timeout=15).raise_for_status()
+            response = httpx.get(os.getenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy"), timeout=15)
+            response.raise_for_status()
+            evidence = {"http_status": response.status_code, "sha256": hashlib.sha256(response.content).hexdigest()}
         elif role == "backup":
             root = Path(os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups")))
             root.mkdir(parents=True, exist_ok=True)
@@ -115,14 +128,16 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
                 path = Path(output.name)
             if path.read_bytes() != b"vertep-backup-self-test":
                 raise RuntimeError("Backup storage read-after-write failed")
+            evidence = {"operation": "write-fsync-read", "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
             path.unlink()
         else:
             raise RuntimeError(f"No self-test is implemented for role {role}")
         return {"status": "PASSED", "role": role, "checked_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": int((time.monotonic() - started) * 1000)}
+                "duration_ms": int((time.monotonic() - started) * 1000), "evidence": evidence}
     except Exception as error:
+        from core.logging_config import secret_redact
         return {"status": "FAILED", "role": role, "checked_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": int((time.monotonic() - started) * 1000), "error": str(error)[:500]}
+                "duration_ms": int((time.monotonic() - started) * 1000), "error": secret_redact(str(error))[:500]}
 
 
 def bind_self_test(test: dict, request: dict | None, version: str | None) -> dict:
@@ -246,13 +261,17 @@ def _executor_resolves(key: str, value: str) -> bool:
     executor reads.
     """
     expected = str(value).strip().lower()
+    required = {"VERTEP_VIDEO_ENGINE": "video_generation", "TTS_PROVIDER": "speech_synthesis"}.get(key)
+    if required and required not in node_capabilities():
+        return True
     from adapters.providers import providers as registry
 
     if key == "VERTEP_VIDEO_ENGINE":
         engine = registry.video_engine()
         if str(getattr(engine, "engine_id", "") or "").strip().lower() != expected:
             return False
-        return bool(engine.configured())
+        from core.engine_config import verify_effective_engine
+        return verify_effective_engine(engine=engine)["ready"] is True
     if key == "TTS_PROVIDER":
         provider = registry.tts()
         if str(getattr(provider, "provider", "") or "").strip().lower() != expected:
@@ -286,7 +305,11 @@ def _restore_provider_env(previous: dict[str, str | None]) -> None:
         pass
 
 
-def apply_provider_config(config: dict | None) -> dict[str, str]:
+_PROVIDER_CONFIG_REVISION = ""
+_PROVIDER_ACTIVATION_ERROR = False
+
+
+def apply_provider_config(config: dict | None, revision: str = "") -> dict[str, str]:
     """Apply the non-secret provider selection delivered by CORE (Issue i.0.0.1.17).
 
     The stock heartbeat response carries the allowlisted subset of the persisted
@@ -302,6 +325,9 @@ def apply_provider_config(config: dict | None) -> dict[str, str]:
     really observes, so CORE never records a success for a backend that never
     became effective on the node that runs the tasks (Issue #181.3).
     """
+    global _PROVIDER_CONFIG_REVISION, _PROVIDER_ACTIVATION_ERROR
+    _PROVIDER_CONFIG_REVISION = revision
+    _PROVIDER_ACTIVATION_ERROR = False
     applied: dict[str, str] = {}
     if not isinstance(config, dict):
         return applied
@@ -322,8 +348,12 @@ def apply_provider_config(config: dict | None) -> dict[str, str]:
             providers_module._providers = None
         except Exception:  # noqa: BLE001 - a stale cache must not break the loop
             pass
-        failed = [key for key, value in applied.items() if not _executor_resolves(key, value)]
+        try:
+            failed = [key for key, value in applied.items() if not _executor_resolves(key, value)]
+        except Exception:
+            failed = list(applied)
         if failed:
+            _PROVIDER_ACTIVATION_ERROR = True
             _restore_provider_env(previous)
             observed = executor_provider_config()
             for key in failed:
@@ -344,6 +374,14 @@ def executor_provider_config() -> dict[str, str]:
 
     return {key: os.environ[key] for key in sorted(_PROVIDER_EXECUTOR_ENV_ALLOWLIST)
             if os.environ.get(key)}
+
+
+def executor_engine_revision() -> str:
+    try:
+        from core.engine_config import engine_config_revision
+        return engine_config_revision()
+    except Exception:
+        return "unknown"
 
 
 _MODEL_CATALOG_CACHE: dict = {"value": {}, "loaded": False, "checked_at": 0.0}
@@ -767,6 +805,15 @@ def renew_if_needed(core: str, node_name: str, credential: str, verify: str | bo
     return str(credentials["jwt"])
 
 def submit_result(client: httpx.Client, core: str, result: dict) -> None:
+    if result.get("architecture_workflow"):
+        response = client.post(f"{core}/api/tasks/result/workflow", json={
+            "node_name": result["node_name"], "task_id": result["task_id"],
+            "lease_id": result["lease_id"], "protocol_version": "1.0.0",
+            "result": result.get("artifacts"), "error": result.get("error") if not result.get("success") else None,
+        }, timeout=90)
+        if response.status_code != 409:
+            response.raise_for_status()
+        return
     response = client.post(f"{core}/api/tasks/result", json=result, timeout=90)
     if response.status_code == 409:
         return
@@ -900,6 +947,9 @@ def worker_status(metrics: dict, require_gpu: bool, busy: bool = False) -> str:
 def execute_task(adapter: ComputeProvider, task: dict, node_name: str) -> dict:
     try:
         artifacts = execute_role_task(configured_role(), task)
+        if task.get("architecture_workflow"):
+            return {"job_id": task["job_id"], "task_id": task["task_id"], "node_name": node_name,
+                    "success": True, "artifacts": artifacts}
         images = [{"filename": item["filename"], "image_base64": item["data_base64"]}
                   for item in artifacts if item["kind"] == "image"]
         return {"job_id": task["job_id"], "task_id": task["task_id"], "node_name": node_name, "success": True,
@@ -1006,6 +1056,7 @@ def main() -> None:
                                "cert": (str(pki / "node.crt"), str(pki / "node.key"))})
     with httpx.Client(**client_options) as client:
         desired_state = None
+        workflow_execution_enabled = False
         active_self_test_request: dict | None = None
         next_self_test = time.monotonic() + (15 if self_test["status"] != "PASSED"
                                              else float(os.getenv("SELF_TEST_INTERVAL_SECONDS", "300")))
@@ -1015,7 +1066,14 @@ def main() -> None:
                 payload.update(metrics)
                 payload.update(host_metrics())
                 payload["model_catalog"] = text_model_catalog()
+                from worker.module_runtime import inventory as module_inventory
+                payload["module_inventory"] = module_inventory()
+                payload["protocol_version"] = "1.0.0"
+                payload["cpu_cores"] = os.cpu_count() or 1
                 payload["provider_config"] = executor_provider_config()
+                payload["provider_config_revision"] = _PROVIDER_CONFIG_REVISION
+                payload["provider_activation_error"] = _PROVIDER_ACTIVATION_ERROR
+                payload["provider_engine_revision"] = executor_engine_revision()
                 if future is None and time.monotonic() >= next_self_test:
                     payload["self_test"] = bind_self_test(
                         role_self_test(configured_role(), metrics, adapter),
@@ -1024,7 +1082,10 @@ def main() -> None:
                                                          else float(os.getenv("SELF_TEST_INTERVAL_SECONDS", "300")))
                 if payload.get("self_test", {}).get("status") != "PASSED":
                     payload.update({"status": "ERROR", "current_job": None, "current_task": None})
-                    client.post(f"{core}/api/workers/heartbeat", json=payload).raise_for_status()
+                    response = client.post(f"{core}/api/workers/heartbeat", json=payload)
+                    response.raise_for_status()
+                    control = response.json()
+                    apply_provider_config(control.get("provider_config"), control.get("provider_config_revision", ""))
                     time.sleep(15)
                     continue
                 if future is None and worker_status(metrics, require_gpu) == "ERROR":
@@ -1036,6 +1097,8 @@ def main() -> None:
                     payload["status"] = worker_status(metrics, require_gpu)
                 if future and future.done():
                     result = future.result()
+                    if active_task and active_task.get("architecture_workflow"):
+                        result.update(architecture_workflow=True, lease_id=active_task["lease_id"])
                     submit_result(client, core, result)
                     payload.update({"current_job": None, "status": "READY"})
                     payload["current_task"] = None
@@ -1058,16 +1121,28 @@ def main() -> None:
                                                                                            if "assembly" in supported_tasks
                                                                                            else None),
                                                                            "voice_catalog": payload.get("voice_catalog")}).json().get("task")
+                        if not task and workflow_execution_enabled:
+                            workflow_response = client.post(f"{core}/api/tasks/claim/workflow", json={"node_name": payload["node_name"], "protocol_version": "1.0.0"})
+                            workflow_response.raise_for_status()
+                            task = workflow_response.json().get("task")
                         if task:
                             logger.info("Task claimed", extra={"job_id": task["job_id"], "node_name": payload["node_name"]})
                             payload.update({"current_job": task["job_id"], "current_task": task["task_id"], "status": "BUSY"})
                             active_task = task
                             future = pool.submit(execute_task, adapter, task, payload["node_name"])
                 if future is not None and active_task:
-                    client.post(f"{core}/api/tasks/renew", json={"node_name": payload["node_name"],
+                    if active_task.get("architecture_workflow"):
+                        renewed = client.post(f"{core}/api/tasks/renew/workflow", json={"node_name": payload["node_name"],
+                            "task_id": active_task["task_id"], "lease_id": active_task["lease_id"], "protocol_version": "1.0.0"})
+                        renewed.raise_for_status()
+                        cancellations = [{"task_id": active_task["task_id"]}] if renewed.json().get("cancelled") else []
+                    else:
+                        client.post(f"{core}/api/tasks/renew", json={"node_name": payload["node_name"],
                                                                   "task_id": active_task["task_id"]}).raise_for_status()
-                    cancellations = client.get(f"{core}/api/tasks/cancellations/{payload['node_name']}").json()
+                        cancellations = client.get(f"{core}/api/tasks/cancellations/{payload['node_name']}").json()
                     if any(item["task_id"] == active_task["task_id"] for item in cancellations):
+                        from worker.gpu_routing import cancel as cancel_gpu_inference
+                        cancel_gpu_inference(active_task["task_id"])
                         if active_task.get("task") == "assembly":
                             # Issue #122 P6: the assembly attempt talks to an
                             # external engine, so cancellation is forwarded to that
@@ -1092,6 +1167,7 @@ def main() -> None:
                         heartbeat_response = client.post(f"{core}/api/workers/heartbeat", json=payload)
                 heartbeat_response.raise_for_status()
                 control = heartbeat_response.json()
+                workflow_execution_enabled = bool(control.get("workflow_execution_enabled"))
                 fence_ack = sync_cancel_fence(control)
                 if fence_ack:
                     payload["cancel_fence_ack"] = fence_ack
@@ -1102,11 +1178,11 @@ def main() -> None:
                 update_target = control.get("update_target_version")
                 rollback_target = control.get("rollback_target_version")
                 restart_operation_id = control.get("restart_operation_id")
-                if isinstance(control.get("provider_config"), dict):
+                if future is None and isinstance(control.get("provider_config"), dict):
                     # Issue i.0.0.1.17: the persisted switch reaches the executor
                     # that actually runs the task through the stock heartbeat
                     # channel — no new provider integration, no secret travels.
-                    apply_provider_config(control.get("provider_config"))
+                    apply_provider_config(control.get("provider_config"), control.get("provider_config_revision", ""))
                     payload["provider_config"] = executor_provider_config()
                 if control.get("model_command"):
                     handle_model_command(control.get("model_command"), core,

@@ -84,7 +84,7 @@ class _EnvRuntime(_Runtime):
 
 
 @pytest.fixture
-def registry(monkeypatch):
+def registry(monkeypatch, tmp_path):
     """A controllable provider registry for the video-engine slot.
 
     The fake matrix reports the *selected* backend from the environment, while the
@@ -92,6 +92,7 @@ def registry(monkeypatch):
     real process has between a persisted choice and a resolved factory.
     """
     import adapters.providers as providers_module
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path / "config"))
 
     current = {"engine": _Native()}
 
@@ -117,6 +118,14 @@ def registry(monkeypatch):
     from core.provider_switch import _write_overrides
 
     _write_overrides({}, actor="test-setup", slot="video_engine")
+    # Unit boundary: executor delivery is covered by the separate-process suite.
+    # These tests exercise runtime verification and persistence after delivery.
+    monkeypatch.setattr("core.provider_switch._switch_targets", lambda *args: ["unit-executor"])
+    def acknowledge(slot, revision, expected, targets):
+        from core.provider_switch import provider_config_revision
+        assert revision == provider_config_revision(expected)
+        assert targets == ["unit-executor"]
+    monkeypatch.setattr("core.provider_switch._verify_workers", acknowledge)
     return current
 
 

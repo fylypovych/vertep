@@ -16,6 +16,7 @@ class GPUProviderRegistry:
 
     def __init__(self) -> None:
         self._providers: dict[str, GPUProvider] = {}
+        self._priorities: dict[str, int] = {}
         self._priority_order: list[str] = []  # Ordered by priority (lower = higher priority)
         self._capability_index: dict[str, list[str]] = (
             {}  # capability -> [provider_names]
@@ -37,6 +38,7 @@ class GPUProviderRegistry:
             return False
 
         self._providers[name] = provider
+        self._priorities[name] = priority
 
         # Insert into priority order (maintain sorted order)
         inserted = False
@@ -64,6 +66,7 @@ class GPUProviderRegistry:
             return False
 
         provider = self._providers.pop(name, None)
+        self._priorities.pop(name, None)
 
         # Remove from priority order
         if name in [p for p, _ in self._providers.items()]:
@@ -108,17 +111,7 @@ class GPUProviderRegistry:
         Rebuilds order from _priority_order which stores priority levels.
         """
         # Simple approach: return providers sorted by their priority
-        result: list[str] = []
-        seen: set[str] = set()
-
-        # This is a simplified version - full implementation would track
-        # each provider's specific priority value
-        for name, prov in self._providers.items():
-            if name not in seen:
-                seen.add(name)
-                result.append(name)
-
-        return result
+        return sorted(self._providers, key=lambda name: self._priorities[name])
 
     def list_providers(self) -> list[str]:
         """List all registered provider names."""

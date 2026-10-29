@@ -209,7 +209,13 @@ def control_node(node_id: str, command: NodeAction):
 @router.post("/api/nodes/{node_id}/revoke")
 def disable_node(node_id: str):
     try:
-        return revoke_node(node_id)
+        record = revoke_node(node_id)
+        worker = store.workers.get(node_id)
+        if worker:
+            worker.update({"status": "REVOKED", "runtime_status": "REVOKED", "tested_capabilities": [],
+                "desired_state": "REVOKED", "revoked_at": record.get("revoked_at")})
+            store.save_worker(worker)
+        return record
     except KeyError:
         # Fleet member known only to the runtime store (e.g. enrolled-then-offboarded
         # before a registry record materialised): remove it from active fleet control.
@@ -256,7 +262,9 @@ async def submit_node_self_test(node_id: str, request: Request):
     if live:
         live["runtime_status"] = record["runtime_status"]
         live["self_test_capabilities"] = record["self_test_capabilities"]
-        live["self_test"] = {"status": status, "capabilities": record["self_test_capabilities"]}
+        live["self_test"] = {"status": status.upper(), "role": live.get("role"),
+            "checked_at": record["last_self_test_at"], "capabilities": record["self_test_capabilities"]}
+        live["tested_capabilities"] = record["self_test_capabilities"] if status == "passed" else []
         live.setdefault("self_test_at", record["last_self_test_at"])
         store.save_worker(live)
     return record

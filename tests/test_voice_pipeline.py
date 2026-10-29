@@ -31,7 +31,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from adapters.ffmpeg import FFmpegAdapter
-from core.app import app, store
+from core.app import app
+from core.telegram.handlers import store
 from core.dispatcher import available_worker
 from core.models import (Job, JobStatus, StageName, StageStatus, StoryboardScene,
                          StoryboardVersion, utc_now)

@@ -15,6 +15,7 @@ from .task import (
     TaskRequest,
     TaskResponse,
     TaskCancel,
+    compatible_protocol,
 )
 
 
@@ -35,6 +36,8 @@ class WorkerProtocolHandler:
 
         Should validate the task, check capabilities, and accept or decline.
         """
+        if not compatible_protocol(request.protocol_version) or self.current_task is not None:
+            return TaskResponse(accepted=False, declined_reason="Incompatible protocol or busy worker")
         # Check if worker has required capabilities
         required = request.capabilities_required or {request.task_type}
         if not required.issubset(self.capabilities):
@@ -56,12 +59,14 @@ class WorkerProtocolHandler:
             worker_id=self.worker_id,
             lease_expires_at=datetime.now(timezone.utc)
             + timedelta(minutes=request.lease_duration_minutes),
+            lease_id=request.lease_id,
         )
 
         return TaskResponse(
             accepted=True,
             worker_id=self.worker_id,
             capabilities_matched=required,
+            lease_id=request.lease_id,
         )
 
     def handle_heartbeat(self, data: dict) -> None:
@@ -74,14 +79,12 @@ class WorkerProtocolHandler:
         # Extend lease if have active task
         if self.current_task and self.current_task.lease_expires_at:
             now = datetime.now(timezone.utc)
-            # Extend lease by half if close to expiry
-            if (self.current_task.lease_expires_at - now).total_seconds() < 60:
-                self.current_task = TaskClaim(
-                    task_id=self.current_task.task_id,
-                    worker_id=self.worker_id,
-                    lease_expires_at=now
-                    + timedelta(minutes=self.current_task.lease_expires_at.minute // 30 * 30 + 30),
-                )
+            if self.current_task.lease_expires_at <= now:
+                return
+            if data.get("lease_id") == self.current_task.lease_id and data.get("lease_expires_at"):
+                expires = datetime.fromisoformat(data["lease_expires_at"].replace("Z", "+00:00"))
+                if expires.tzinfo is not None and expires > now:
+                    self.current_task.lease_expires_at = expires
 
     def handle_progress(self, progress: TaskProgress) -> None:
         """Process progress update from worker on current task."""
@@ -91,12 +94,12 @@ class WorkerProtocolHandler:
 
     def handle_task_complete(self, complete: TaskComplete) -> None:
         """Process task completion from worker."""
-        if self.current_task and self.current_task.task_id == complete.task_id:
+        if self.current_task and self.current_task.task_id == complete.task_id and self.current_task.lease_id == complete.lease_id and complete.worker_id == self.worker_id and compatible_protocol(complete.protocol_version):
             self.current_task = None
             # Would notify CORE of completion
 
     def handle_task_cancel(self, cancel: TaskCancel) -> None:
         """Process task cancellation."""
-        if self.current_task and self.current_task.task_id == cancel.task_id:
+        if self.current_task and self.current_task.task_id == cancel.task_id and self.current_task.lease_id == cancel.lease_id and compatible_protocol(cancel.protocol_version):
             self.current_task = None
             # Would clean up resources

@@ -214,7 +214,7 @@ def test_api_logs_endpoint_redacts(monkeypatch):
 
 def test_error_api_responses_redact():
     """Error API responses must redact secrets."""
-    from core.app import _json_error
+    from core.api.auth import _json_error
 
     result = _json_error("api_key=leaked-value", status=400)
     body = json.loads(result.body)
@@ -233,7 +233,7 @@ def test_secret_corpus_never_crosses_real_surfaces(monkeypatch, tmp_path):
     from core.logging_config import configure_logging, read_logs
     from core.api.observability import logs as api_logs
     from core import operations
-    from core.app import _json_error
+    from core.api.auth import _json_error
     from core.real_tests.runner import RealTestRunner
     from core.real_tests.models import TestRun, CheckResult, CheckStatus
     from adapters.telegram import TelegramAdapter

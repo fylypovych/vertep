@@ -20,8 +20,13 @@ class LocalModelProvider(GPUProvider):
     - Development and testing environments
     """
 
-    def __init__(self, configured: bool = False) -> None:
+    is_local = True
+
+    def __init__(self, configured: bool = False, execute=None, cancel=None, resources=None) -> None:
         self._configured = configured
+        self._execute = execute
+        self._cancel = cancel
+        self._resources = resources or {}
 
     @property
     def name(self) -> str:
@@ -54,7 +59,7 @@ class LocalModelProvider(GPUProvider):
 
         Returns available status based on configuration.
         """
-        if not self._configured:
+        if not self._configured or self._execute is None:
             return {"available": False, "details": "Local model not configured"}
 
         model = request.get("model", "")
@@ -73,36 +78,30 @@ class LocalModelProvider(GPUProvider):
     def submit_inference(self, task: dict[str, Any]) -> dict[str, Any]:
         """Submit inference to local model.
 
-        In a full implementation, this would execute the actual model.
-        For now, simulates task submission.
+        Requires an explicitly configured executor and returns its real output.
         """
         task_id = task.get("task_id", "unknown")
-        task_type = task.get("type", "")
 
-        # Simulate successful submission
-        return {
-            "task_id": task_id,
-            "status": "queued",
-            "result_ref": f"local://{task_id}/result",
-            "vram_used_mb": self.min_vram_mb,
-        }
+        if not self._configured or self._execute is None:
+            raise RuntimeError("Local model execution is not configured")
+        return {"task_id": task_id, "status": "complete", "artifacts": self._execute(task)}
 
     def cancel_inference(self, task_id: str) -> dict[str, Any]:
         """Cancel a local inference task.
 
         Returns cancellation acknowledgment.
         """
-        return {
-            "task_id": task_id,
-            "cancelled": True,
-            "cleanup": True,
-        }
+        if self._cancel is None:
+            return {"task_id": task_id, "cancelled": False, "cleanup": False}
+        return self._cancel(task_id)
 
     def get_resource_usage(self) -> dict[str, Any]:
         """Get current VRAM/CPU usage for local models.
 
         Returns current allocation status.
         """
+        if self._resources:
+            return dict(self._resources)
         return {
             "vram_total_mb": self.min_vram_mb,
             "vram_used_mb": self.min_vram_mb if self._configured else 0,

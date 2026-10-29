@@ -1,0 +1,36 @@
+# Додатковий optional runtime для локального Docker stack.
+# docker compose -f docker-compose.moneyprinter.yml --profile moneyprinter up -d moneyprinter
+services:
+  moneyprinter:
+    build:
+      context: .
+      dockerfile: docker/moneyprinter/Dockerfile
+      args:
+        VERTEP_VERSION: ${VERTEP_VERSION:?Set VERTEP_VERSION from VERSION}
+    image: ${VERTEP_MONEYPRINTER_IMAGE:-vertep/moneyprinter:${VERTEP_VERSION:?Set VERTEP_VERSION from VERSION}}
+    platform: linux/amd64
+    profiles: [moneyprinter]
+    environment:
+      MONEYPRINTER_API_KEY_FILE: /run/secrets/moneyprinter_api_key
+      VERTEP_MONEYPRINTER_IMAGE_DIGEST: ${VERTEP_MONEYPRINTER_IMAGE_DIGEST:-}
+    secrets: [moneyprinter_api_key]
+    volumes:
+      - moneyprinter-tasks:/opt/moneyprinter/storage
+    expose: ["8098"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://localhost:8098/health"]
+      interval: 20s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  moneyprinter-tasks: {}
+
+secrets:
+  moneyprinter_api_key:
+    file: ${MONEYPRINTER_API_KEY_FILE_HOST:-./config/moneyprinter-api.key}

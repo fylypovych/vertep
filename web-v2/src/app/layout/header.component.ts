@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, HostListener, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, OnInit, OnDestroy, HostListener, signal } from '@angular/core';
 import { Router, NavigationEnd, RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { filter, Subscription } from 'rxjs';
@@ -35,8 +35,8 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
 export class HeaderComponent implements OnInit, OnDestroy {
   title = 'Дашборд';
   subtitle = 'Огляд системи Vertep';
-  systemState = 'Нормальний';
-  systemOk = true;
+  systemState = 'Невизначений';
+  systemOk = false;
   isDark = false;
   userInitialSig = signal('A');
   showProfileMenu = false;
@@ -51,6 +51,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
     private auth: AuthApiService,
     private system: SystemApiService,
     private policy: PolicyService,
+    private changeDetector: ChangeDetectorRef,
   ) {}
 
   ngOnInit(): void {
@@ -107,18 +108,20 @@ export class HeaderComponent implements OnInit, OnDestroy {
   private loadSystemState(): void {
     this.system.status().subscribe({
       next: (s) => {
-        const state = (s.system?.state?.toUpperCase() ?? 'NORMAL') as SystemMode;
+        const state = (s.system?.state?.toUpperCase() ?? 'UNAVAILABLE') as SystemMode;
         const labels: Record<string, string> = {
           NORMAL: 'Нормальний', OK: 'Працює', HEALTHY: 'Працює',
           MAINTENANCE: 'Обслуговування', UPDATING: 'Оновлення',
           EMERGENCY: 'Аварія', FAILED: 'Помилка', ERROR: 'Помилка',
           RECOVERING: 'Відновлення', READ_ONLY: 'Тільки читання',
+          UNAVAILABLE: 'Недоступний',
         };
-        this.systemState = labels[state] ?? state;
+        this.systemState = labels[state] ?? 'Невідомий';
         this.systemOk = ['NORMAL', 'OK', 'HEALTHY'].includes(state);
         this.systemReason = s.system?.reason || null;
+        this.changeDetector.markForCheck();
       },
-      error: () => { this.systemState = 'Недоступний'; this.systemOk = false; },
+      error: () => { this.systemState = 'Недоступний'; this.systemOk = false; this.changeDetector.markForCheck(); },
     });
   }
 

@@ -14,7 +14,8 @@ from fastapi.testclient import TestClient
 from adapters.tts import TTSAdapter
 from adapters.ffmpeg import FFmpegAdapter
 from adapters.llm import LLMAdapter
-from core.app import _hash_secret, app
+from core.security import _hash_secret
+from core.app import app
 from core.models import Job, JobStatus, StageName, StageStatus
 from core.pipeline import prepare_job
 from core.repository import FileRepository, MemoryRepository
@@ -364,7 +365,7 @@ def test_api_routes_have_unique_method_path_pairs():
 
 def test_node_drain_preserves_runtime_control(monkeypatch):
     from core.api.nodes import control_node
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import NodeAction
 
     worker = {"node_name": "test-node", "status": "READY"}

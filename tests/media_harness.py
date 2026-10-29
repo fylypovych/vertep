@@ -407,7 +407,7 @@ def voice_cancel_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dic
 def voice_worker_loss_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
     """Drop the Voice Worker registration and let recovery requeue the task."""
     task = _claim_voice(client, job_id, node_name=node_name)
-    from core.app import store
+    from core.telegram.handlers import store
     store.workers.pop(node_name, None)
     from core.api.job_helpers import _recover_stale_workers
     _recover_stale_workers()
@@ -470,7 +470,7 @@ def voice_duplicate_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> 
 def voice_stale_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
     """Lose the lease and then submit a late audio result; it must be refused."""
     task = _claim_voice(client, job_id, node_name=node_name)
-    from core.app import store
+    from core.telegram.handlers import store
     store.workers.pop(node_name, None)
     from core.api.job_helpers import _recover_stale_workers
     _recover_stale_workers()
@@ -486,7 +486,7 @@ def voice_stale_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict
 def voice_restart_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
     """Restart CORE while the Voice Worker owns the audio lease."""
     task = _claim_voice(client, job_id, node_name=node_name)
-    from core.app import store
+    from core.telegram.handlers import store
     from core.orchestration import recover_after_restart
     job = store.jobs[job_id]
     recovered = recover_after_restart(job)
@@ -727,7 +727,8 @@ def claim_publish(client, job_id: str, *, node_name: str = PUBLISHER_NODE,
 def sandbox_receipt(channel: str, task: dict, *, status: str = "PUBLISHED",
                     error: str | None = None) -> dict:
     """A publisher receipt correlated with the task's durable publish intent."""
-    receipt = {"channel": channel, "status": status, "timestamp": time.time()}
+    receipt = {"channel": channel, "status": status, "timestamp": time.time(),
+               "job_id": task["job_id"], "task_id": task["task_id"]}
     if status == "PUBLISHED":
         receipt.update({"id": f"mock-{channel}", "remote_id": f"mock-{channel}",
                         "url": f"https://example.invalid/{channel}/mock"})
@@ -897,7 +898,7 @@ def record_row(name: str, expected, actual, **payload) -> None:
 
 def drain_executor() -> None:
     """Wait until the CORE background executor is idle."""
-    from core.app import executor
+    from core.telegram.handlers import executor
     for _ in range(2):
         executor.submit(lambda: None).result(timeout=30)
 
@@ -1025,7 +1026,7 @@ def text_restart_row(client, job_id: str, *, node_name: str = TEXT_NODE) -> dict
     heartbeat(client, node_name, role="text", vram_mb=0,
               capabilities=["text_generation"], supported_tasks=["text"])
     task = claim_task(client, job_id, node_name, task="storyboard")
-    from core.app import store
+    from core.telegram.handlers import store
     job = store.jobs[job_id]
     recovered = recover_after_restart(job)
     return {"task": task, "recovered_status": recovered.status}

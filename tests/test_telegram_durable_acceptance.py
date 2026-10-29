@@ -348,6 +348,7 @@ class TestContentCallbackAcceptance:
 
             receipt = {
                 "channel": CHANNEL_TYPE,
+                "job_id": fixtures["job_id"], "task_id": task["task_id"],
                 "status": "PUBLISHED",
                 "remote_id": "controlled-remote-1",
                 "url": "https://example.invalid/watch/controlled-remote-1",
@@ -386,6 +387,7 @@ class TestContentCallbackAcceptance:
             task_id = next(iter(job["publish_task_ids"]))
             receipt = {
                 "channel": CHANNEL_TYPE,
+                "job_id": fixtures["job_id"], "task_id": task_id,
                 "status": "PUBLISHED",
                 "remote_id": "controlled-remote-2",
                 "url": "https://example.invalid/watch/controlled-remote-2",

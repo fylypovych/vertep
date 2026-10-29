@@ -2,6 +2,7 @@ import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SystemApiService } from '../../core/api/system.api';
 import { ToastService } from '../../core/services/toast.service';
+import { PolicyService } from '../../core/services/policy.service';
 import { UpdateStatus, UpdateReadiness, RollingStatus } from '../../core/models';
 import { LoadingStateComponent } from '../../shared/loading-state.component';
 import { ErrorStateComponent } from '../../shared/error-state.component';
@@ -85,7 +86,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
           <button (click)="cancelRolling()" data-testid="update-cancel-rolling" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Скасувати поетапне оновлення</button>
           <button (click)="promoteCanary()" data-testid="update-promote-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Підтвердити canary</button>
           <button (click)="rollbackCanary()" data-testid="update-rollback-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відкотити canary</button>
-          <button (click)="recoverToNormal()" data-testid="update-recover-normal" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відновити нормальний стан</button>
+          <button (click)="recoverToNormal()" [disabled]="!policy.can('start_recovery').allowed" [title]="policy.disabledReason('start_recovery') || 'Відновити нормальний стан'" data-testid="update-recover-normal" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Відновити нормальний стан</button>
         </div>
       }
     </div>
@@ -99,7 +100,7 @@ export class UpdateSectionComponent implements OnInit {
   error = signal<string | null>(null);
   installing = signal(false);
 
-  constructor(private system: SystemApiService, private toast: ToastService) {}
+  constructor(private system: SystemApiService, private toast: ToastService, readonly policy: PolicyService) {}
 
   ngOnInit(): void { this.loadAll(); }
 
@@ -126,5 +127,8 @@ export class UpdateSectionComponent implements OnInit {
   cancelRolling(): void { this.system.cancelRolling().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
   promoteCanary(): void { this.system.promoteCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
   rollbackCanary(): void { this.system.rollbackCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
-  recoverToNormal(): void { this.system.recoverToNormal().subscribe({ next: () => this.loadAll(), error: (err) => this.error.set(err.message) }); }
+  recoverToNormal(): void {
+    if (!this.policy.can('start_recovery').allowed) return;
+    this.system.recoverToNormal().subscribe({ next: () => { this.policy.refresh(); this.loadAll(); }, error: (err) => this.error.set(err.message) });
+  }
 }

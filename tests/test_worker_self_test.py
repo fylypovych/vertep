@@ -128,7 +128,7 @@ def test_dispatch_skips_a_locally_deployed_broken_role(monkeypatch, tmp_path):
         "node_id": "gpu-01", "role": "gpu", "status": "READY", "runtime_status": "ONLINE",
         "capabilities": ["image_generation"], "revoked_at": None}])
     monkeypatch.setattr(role_runtime.store, "load_workers", lambda: [
-        {"node_id": "gpu-01", "status": "READY", "last_seen": now.isoformat()}], raising=False)
+        healthy], raising=False)
     assert available_worker([healthy], job())["node_name"] == "gpu-01"
 
 

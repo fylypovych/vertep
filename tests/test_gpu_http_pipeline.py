@@ -472,7 +472,7 @@ def _claim_image_storyboard_task(client, node_name="gpu-http"):
 def _dispatched_image_task(monkeypatch):
     """Drive CORE to the point where a real GPU image task is claimable."""
     from core.models import JobStatus, StoryboardScene, StoryboardVersion
-    from core.app import store
+    from core.telegram.handlers import store
 
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
@@ -763,7 +763,7 @@ def _register_gpu(client, node_name, *, vram_mb=32768, auth=None):
 def _video_job(monkeypatch, *, min_vram_mb=16384, scenes=1, topic="HTTP video render"):
     """Create a real video Job in ASSET_GENERATION with queued scene tasks."""
     from core.api.job_helpers import _enqueue_job_task
-    from core.app import store
+    from core.telegram.handlers import store
     from core.models import JobStatus, SceneRecord
     from core.orchestration import StageName, StageStatus, transition_stage
 
@@ -831,7 +831,7 @@ def test_core_imports_a_verified_video_scene_from_a_real_http_render(comfyui, mo
     after re-verifying it structurally.
     """
     from worker import role_executor
-    from core.app import store
+    from core.telegram.handlers import store
 
     _video_runtime(comfyui)
     client, job, task, node_name, _auth = _dispatched_video_task(monkeypatch)
@@ -906,7 +906,7 @@ def test_core_records_a_render_timeout_as_a_failed_attempt(comfyui, monkeypatch)
 def test_core_refuses_a_late_result_of_an_imported_attempt(comfyui, monkeypatch):
     """A result that arrives twice must never overwrite the accepted render."""
     from worker import role_executor
-    from core.app import store
+    from core.telegram.handlers import store
 
     _video_runtime(comfyui)
     client, job, task, node_name, _auth = _dispatched_video_task(monkeypatch)

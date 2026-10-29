@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.telegram.handlers as _owner_core_telegram_handlers
 
 
 def _callback(callback_id: str, chat_id: str, data: str) -> dict:
@@ -86,7 +87,7 @@ def main() -> None:
 
             from core.telegram import handlers
             handlers._handle_system_callback = _crash
-        result = app._handle_telegram_callback(_callback(callback_id, chat_id, data))
+        result = _owner_core_telegram_handlers._handle_telegram_callback(_callback(callback_id, chat_id, data))
         payload = {"ok": True}
         if isinstance(result, dict):
             payload["result"] = result

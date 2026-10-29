@@ -254,6 +254,7 @@ class StoryboardService:
         job.script = normalize_script({
             "title": storyboard.title, "description": storyboard.description,
             "hashtags": storyboard.hashtags,
+            "platforms": (job.script or {}).get("platforms") or {},
             "scenes": [scene.model_dump(exclude={"index", "scene_id", "artifact_id", "image_prompt", "image_artifact_id", "image_version"}) for scene in storyboard.scenes],
         }, job.topic)
         job.approved = True

@@ -58,7 +58,10 @@ def test_voices_endpoint_lists_installed_voices():
     assert body["speed_range"] == {"min": 80, "max": 450}
 
 
-def test_voices_endpoint_is_empty_when_no_voice_table():
+def test_voices_endpoint_is_empty_when_no_voice_table(monkeypatch):
+    # With a real binary available, the stock CLI is now an authoritative
+    # catalog source too. This case requires both sources to be unavailable.
+    monkeypatch.setattr(tts_service.shutil, "which", lambda name: None)
     client = _client_with_voices([])
     response = client.get("/voices")
     assert response.status_code == 200

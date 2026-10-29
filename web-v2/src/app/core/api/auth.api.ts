@@ -121,23 +121,21 @@ export class AuthApiService {
   }
 
   getSetupStatus(token: string): Observable<SetupStatus> {
-    return this.http.get<SetupStatus>(`${this.baseUrl}/setup/status`, {
-      headers: this.getHeaders(),
-      params: { token },
+    return this.http.get<SetupStatus>(`${this.baseUrl}/setup`, {
+      headers: { ...this.getHeaders(), 'X-Vertep-Setup-Token': token },
     }).pipe(catchError(this.handleError));
   }
 
-  getSetupHealth(token: string): Observable<SetupHealth> {
+  getSetupHealth(token: string, role?: string): Observable<SetupHealth> {
     return this.http.get<SetupHealth>(`${this.baseUrl}/setup/health`, {
-      headers: this.getHeaders(),
-      params: { token },
+      headers: { ...this.getHeaders(), 'X-Vertep-Setup-Token': token },
+      params: role ? { role } : {},
     }).pipe(catchError(this.handleError));
   }
 
   completeSetup(token: string, payload: Record<string, unknown>): Observable<SetupCompleteResult> {
     return this.http.post<SetupCompleteResult>(`${this.baseUrl}/setup/complete`, payload, {
-      headers: this.getHeaders(),
-      params: { token },
+      headers: { ...this.getHeaders(), 'X-Vertep-Setup-Token': token },
     }).pipe(catchError(this.handleError));
   }
 }

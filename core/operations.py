@@ -403,14 +403,17 @@ def cancel_operation(operation_id: str, reason: str | None = None) -> dict[str, 
 
 
 def audit_entry(operation_id: str, phase: str, message: str | None = None,
-                actor: str | None = None) -> dict[str, Any]:
+                actor: str | None = None, confirmation: str | None = None) -> dict[str, Any]:
     """Append an audit line for an operation phase transition."""
     operation = get_operation(operation_id)
+    actor = actor or (operation or {}).get("requested_by")
     # Audit lines are an operator-visible surface, so secret-shaped text in
     # messages and error payloads must be masked before it is persisted.
     entry = {"operation_id": operation_id, "phase": phase,
              "timestamp": _now(), "message": _redact(message or ""),
              "actor": actor,
+             "chat": actor.split(":", 1)[1] if actor and actor.startswith("telegram:") else None,
+             "confirmation": confirmation,
              "operation_type": (operation or {}).get("type"),
              "target": (operation or {}).get("target"),
              "status": (operation or {}).get("status"),

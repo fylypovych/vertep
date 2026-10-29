@@ -46,7 +46,9 @@ def check_postgres(database_url: str | None = None) -> tuple[bool | None, str]:
         with psycopg.connect(url, connect_timeout=5) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT 1")
-        return True, "ok"
+                if cursor.fetchone() != (1,):
+                    return False, "SELECT 1 did not return 1"
+        return True, "SELECT 1 = 1"
     except Exception as error:
         return False, str(error)[:200]
 
@@ -58,8 +60,9 @@ def check_redis(redis_url: str | None = None) -> tuple[bool | None, str]:
     try:
         import redis
         client = redis.Redis.from_url(url, socket_timeout=5)
-        client.ping()
-        return True, "ok"
+        if client.ping() is not True:
+            return False, "Redis did not acknowledge PING"
+        return True, "PING = PONG"
     except Exception as error:
         return False, str(error)[:200]
 
@@ -89,10 +92,10 @@ def check_gpu() -> tuple[bool | None, str]:
 def check_cuda() -> tuple[bool, str]:
     try:
         if os.getenv("GPU_VENDOR") == "amd":
-            output = subprocess.run(["rocminfo", "--version"], capture_output=True,
+            output = subprocess.run(["rocminfo", "--version"], check=True, capture_output=True,
                                     text=True, timeout=10).stdout.strip()
-            return True, output or os.getenv("ROCM_VERSION", "ROCm")
-        output = subprocess.run(["nvcc", "--version"], capture_output=True, text=True, timeout=10).stdout
+            return (True, output) if output else (False, "ROCm не повернув версію runtime")
+        output = subprocess.run(["nvcc", "--version"], check=True, capture_output=True, text=True, timeout=10).stdout
         if "release" in output:
             return True, output.splitlines()[0]
         return False, "nvcc not found"
@@ -180,5 +183,10 @@ def run_checks(role: str | None = None) -> dict:
 
 
 def health_status(checks: dict) -> str:
+    from .api.setup import REQUIRED_HEALTH_CHECKS
+    required = REQUIRED_HEALTH_CHECKS.get(checks.get("role"))
+    if required is not None:
+        return "HEALTHY" if all(isinstance(checks.get(name), tuple) and checks[name][0] is True
+            for name in required) else "UNHEALTHY"
     failures = [name for name, value in checks.items() if isinstance(value, tuple) and value[0] is False]
     return "UNHEALTHY" if failures else "HEALTHY"

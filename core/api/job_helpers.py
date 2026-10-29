@@ -637,7 +637,8 @@ def assembly_worker_mismatch(reported: dict | None, snapshot: dict | None) -> st
             continue
         if name not in reported:
             return "engine_state_incomplete"
-        if reported.get(name) != snapshot.get(name):
+        from ..engine_config import same_engine_fact
+        if not same_engine_fact(name, snapshot.get(name), reported.get(name)):
             return f"{name}_mismatch"
     if reported.get("ready") is not True:
         return f"engine_not_ready:{reported.get('reason') or 'unknown'}"
@@ -882,14 +883,15 @@ def _handle_tts_failure(job, scene, task_id: str, node_name: str, error: str | N
     """
     used = _tts_attempts_used(job, scene) + 1
     job.tts_attempts[scene.scene_id] = used
-    task_queue.ack(task_id)
+    task_queue.discard(task_id)
     job.tts_active_task_ids.pop(task_id, None)
+    job.voice_task_snapshot.pop(task_id, None)
     scene.assigned_worker = None
     # Clear worker state to match voice task worker loss recovery pattern
     worker = store.workers.get(node_name)
     if worker:
         worker.update({"current_job": None, "current_task": None,
-                       "last_seen": utc_now()})
+                       "status": worker.get("desired_state") or "READY", "last_seen": utc_now()})
         store.save_worker(worker)
     store.repository.record_task(_tts_task_for(job, scene) | {"task_id": task_id},
                                  "FAILED", node_name, error)
@@ -1063,7 +1065,8 @@ def _publish_task_for(job, channel: str) -> dict:
             "publish_intent": intent,
             "metadata": {"job_id": job.job_id, "topic": job.topic,
                          "character_id": job.character_id, "brand_id": job.brand_id,
-                         **(job.script or {})},
+                         **(job.script or {}),
+                         **((job.script or {}).get("platforms", {}).get(channel) or {})},
             "task_type": "publish"}
 
 
@@ -1324,6 +1327,11 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
             # Only pop the task_id after successful validation and processing
             if task_id and job.publish_task_ids.get(task_id) == channel:
                 job.publish_task_ids.pop(task_id, None)
+            if receipt.get("retryable") is False:
+                if not receipt.get("outcome_unknown"):
+                    job.publish_intent.pop(channel, None)
+                job_store.event(job, f"PUBLISH {channel} PERMANENT FAILURE; NO RETRY")
+                return
             _enqueue_with_backoff(f"FAILED: {job.publish_error}")
     else:
         error = secret_redact(str(result.get("error") or "UNKNOWN PUBLISH ERROR"))
@@ -1332,7 +1340,7 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
         _enqueue_with_backoff(error)
 
 
-def _recover_stale_workers() -> None:
+def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
     now = datetime.now(timezone.utc)
     timeout = int(os.getenv("HEARTBEAT_TIMEOUT", "45"))
     for worker in store.workers.values():
@@ -1341,7 +1349,8 @@ def _recover_stale_workers() -> None:
         except (KeyError, TypeError, ValueError):
             worker["status"] = "OFFLINE"
             continue
-        if (now - last_seen).total_seconds() <= timeout or worker.get("status") == "OFFLINE":
+        forced = worker.get("node_name") in (lost_nodes or set())
+        if not forced and ((now - last_seen).total_seconds() <= timeout or worker.get("status") == "OFFLINE"):
             continue
         worker["status"] = "OFFLINE"
         current_job = worker.get("current_job")
@@ -1384,13 +1393,14 @@ def _recover_stale_workers() -> None:
             worker["current_task"] = None
             store.save_worker(worker)
         elif job and current_task in job.publish_task_ids and job.status == JobStatus.PUBLISHING:
-            task_queue.release(current_task)
+            task_queue.discard(current_task)
             channel = job.publish_task_ids.pop(current_task, None)
             job.assigned_worker = None
             _enqueue_publish_task(store, job, channel)
             store.event(job, f"PUBLISH TASK {current_task} REQUEUED FOR {channel}")
             worker["current_job"] = None
             worker["current_task"] = None
+            store.save_worker(worker)
         elif job and current_task in job.tts_active_task_ids and job.status == JobStatus.TTS_GENERATING:
             # Deterministic worker-loss recovery for Voice tasks: release the
             # lease, mark the scene lost and re-dispatch the remaining TTS so
@@ -1400,7 +1410,7 @@ def _recover_stale_workers() -> None:
             # forever, and once the budget is spent the scene fails the TTS
             # stage instead of looping.
             scene = next((s for s in job.scenes if s.scene_id == job.tts_active_task_ids.get(current_task)), None)
-            task_queue.release(current_task)
+            task_queue.discard(current_task)
             job.tts_active_task_ids.pop(current_task, None)
             # Issue #197/#165.2: drop the issued voice-task snapshot for the lost
             # lease so a late result cannot validate against a stale snapshot and
@@ -1423,6 +1433,7 @@ def _recover_stale_workers() -> None:
             store.event(job, f"{worker.get('node_name')} OFFLINE; TTS TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
+            store.save_worker(worker)
         elif job and job.storyboard_task_id == current_task and job.status in {JobStatus.STORYBOARD_QUEUED,
                                                                                JobStatus.STORYBOARD_GENERATING}:
             # Retire the lost attempt before issuing a replacement ID.

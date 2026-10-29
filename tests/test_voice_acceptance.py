@@ -21,7 +21,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from adapters.ffmpeg import FFmpegAdapter
-from core.app import app, store
+from core.app import app
+from core.telegram.handlers import store
 from core.api.job_helpers import _persist_tts_contract, _tts_task_for, _validate_tts_contract
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
 from core.script_agent import ScriptAgent

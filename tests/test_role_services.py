@@ -15,16 +15,34 @@ def _restore(client, snapshot_id):
     return client.post(f"/snapshots/{snapshot_id}/restore/confirm", params={"token": token})
 
 
-def test_tts_service_returns_valid_wav(monkeypatch):
-    class Result:
-        stdout = b"RIFF" + b"\0" * 128
-
+def test_tts_service_returns_valid_wav(monkeypatch, tmp_path):
+    import io
+    import wave
+    from types import SimpleNamespace
+    audio = io.BytesIO()
+    with wave.open(audio, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(b"\0\0" * 1600)
+    calls = []
+    def espeak(command, **kwargs):
+        calls.append(command)
+        if "--voices" in command:
+            return SimpleNamespace(stdout="Pty Language Age/Gender VoiceName File\n5 uk --/M Ukrainian zle/uk\n")
+        return SimpleNamespace(stdout=audio.getvalue())
+    monkeypatch.setattr(tts_service, "VOICES", [])
+    monkeypatch.setattr(tts_service, "_VOICE_DATA_DIR", str(tmp_path / "not-installed"))
     monkeypatch.setattr(tts_service.shutil, "which", lambda _: "/usr/bin/espeak-ng")
-    monkeypatch.setattr(tts_service.subprocess, "run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(tts_service.subprocess, "run", espeak)
     response = TestClient(tts_service.app).post(
         "/synthesize", json={"text": "Вітаю", "voice": "uk", "speed": 150})
     assert response.status_code == 200
-    assert base64.b64decode(response.json()["audio_base64"]).startswith(b"RIFF")
+    with wave.open(io.BytesIO(base64.b64decode(response.json()["audio_base64"]))) as result:
+        assert result.getnchannels() == 1 and result.getframerate() == 16000
+        assert result.getnframes() == 1600
+    assert any("--voices" in call for call in calls)
+    assert any("--stdout" in call and "uk" in call for call in calls)
 
 
 def test_publisher_service_is_idempotent_and_never_fakes_live_success(monkeypatch, tmp_path):

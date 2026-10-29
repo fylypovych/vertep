@@ -350,6 +350,43 @@ def execute_publisher(task: dict) -> list[dict]:
     metadata = task.get("metadata", {})
     delivery_contract = task.get("delivery_contract") or {}
     publish_intent = task.get("publish_intent") or {}
+    ledger_path = None
+    identity = {"job_id": task["job_id"], "channel": channel,
+                "video_version": publish_intent.get("video_version"),
+                "video_sha256": publish_intent.get("video_sha256")}
+    if task.get("task_id") and identity["video_version"] is not None and identity["video_sha256"]:
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        ledger_path = Path(os.getenv("JOB_ROOT", "/data/jobs")) / task["job_id"] / "publication-ledger" / f"{key}.json"
+        if ledger_path.is_file():
+            previous = json.loads(ledger_path.read_text(encoding="utf-8"))
+            if previous.get("intent") != identity:
+                raise RuntimeError("Publication ledger intent mismatch")
+            if previous.get("state") == "UPLOADING":
+                raise RuntimeError("Unknown upload outcome; reconciliation required before another upload")
+            cached_receipt = previous.get("receipt")
+        else:
+            cached_receipt = None
+    else:
+        cached_receipt = None
+    def save_ledger(state, receipt=None):
+        if ledger_path is None:
+            return
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = ledger_path.with_name(f".{ledger_path.name}.{uuid.uuid4().hex}.tmp")
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump({"intent": identity, "state": state, "receipt": receipt}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, ledger_path)
+    def receipt_artifact(receipt):
+        receipt.update({"job_id": task["job_id"], "task_id": task.get("task_id"),
+                        "channel": channel,
+                        "video_version": publish_intent.get("video_version"),
+                        "video_sha256": publish_intent.get("video_sha256")})
+        return [_artifact("publication.json", "publication_receipt",
+                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+    if cached_receipt and cached_receipt.get("status") == "PUBLISHED":
+        return receipt_artifact(cached_receipt)
     if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
         receipt = {
             "channel": channel, "status": "PUBLISHED",
@@ -361,16 +398,14 @@ def execute_publisher(task: dict) -> list[dict]:
             "video_sha256": publish_intent.get("video_sha256"),
             "upload": {"mode": "mock", "bytes": os.path.getsize(video_path) if video_path and os.path.isfile(video_path) else 0},
         }
-        return [_artifact("publication.json", "publication_receipt",
-                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+        return receipt_artifact(receipt)
     from publishers import LIVE_PUBLISHERS
     publisher = LIVE_PUBLISHERS.get(channel)
     if publisher is None or not publisher.configured():
         receipt = {"channel": channel, "status": "NOT_CONFIGURED",
                    "error": f"{publisher.credential_env if publisher else 'unknown'} is missing",
                    "timestamp": _time.time()}
-        return [_artifact("publication.json", "publication_receipt",
-                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+        return receipt_artifact(receipt)
     # Issue #199/#166.4: verify the approved artifact against the delivery
     # contract before any upload.  A missing/corrupt/mismatched file must not
     # reach the adapter.  If the file is not available locally (disposable
@@ -378,6 +413,21 @@ def execute_publisher(task: dict) -> list[dict]:
     try:
         expected_sha = (delivery_contract.get("sha256") or delivery_contract.get("video_sha256"))
         expected_size = delivery_contract.get("size_bytes") or delivery_contract.get("size")
+        if task.get("task_id") and publish_intent:
+            expected_version = delivery_contract.get("version", delivery_contract.get("video_version"))
+            if (not expected_sha or expected_size is None or expected_version is None
+                    or str(expected_version) != str(publish_intent.get("video_version"))
+                    or expected_sha != publish_intent.get("video_sha256")
+                    or publish_intent.get("job_id") != task["job_id"]
+                    or publish_intent.get("channel") != channel):
+                raise ValueError("delivery contract does not match issued publish intent")
+        if task.get("task_id") and delivery_contract and _core_base_url():
+            # A Publisher host never writes to CORE's absolute filesystem path.
+            # Its disposable copy is authenticated and checked before upload.
+            source_name = Path(video_path).name
+            video_path = str(Path(os.getenv("JOB_ROOT", "/data/jobs")) / task["job_id"] / "publish-inputs" / source_name)
+            if not os.path.isfile(video_path):
+                _fetch_approved_input(task, source_name, Path(video_path), str(expected_sha or ""))
         if video_path and not os.path.isfile(video_path):
             # Fetch approved video from CORE for disposable Publisher node
             from pathlib import Path as _Path
@@ -395,14 +445,13 @@ def execute_publisher(task: dict) -> list[dict]:
     except ValueError as error:
         receipt = {"channel": channel, "status": "FAILED", "error": str(error),
                    "timestamp": _time.time()}
-        return [_artifact("publication.json", "publication_receipt",
-                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+        return receipt_artifact(receipt)
     except (OSError, RuntimeError) as error:
         receipt = {"channel": channel, "status": "FAILED", "error": str(error),
                    "timestamp": _time.time()}
-        return [_artifact("publication.json", "publication_receipt",
-                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
+        return receipt_artifact(receipt)
     try:
+        save_ledger("UPLOADING")
         result = publisher.publish(video_path, metadata)
     except Exception as error:
         # Transient failures (network, rate limit) should raise so worker retries
@@ -425,8 +474,9 @@ def execute_publisher(task: dict) -> list[dict]:
     if publish_intent.get("video_sha256"):
         result.setdefault("video_sha256", publish_intent["video_sha256"])
     result.setdefault("remote_id", result.get("id"))
-    return [_artifact("publication.json", "publication_receipt",
-                      json.dumps(result, sort_keys=True).encode("utf-8"))]
+    save_ledger("UPLOADING" if result.get("outcome_unknown") else
+                "PUBLISHED" if result.get("status") == "PUBLISHED" else "FAILED", result)
+    return receipt_artifact(result)
 
 
 def execute_backup(task: dict) -> list[dict]:
@@ -758,7 +808,10 @@ ROLE_TASKS = {"text": {"text", "script", "storyboard"}, "voice": {"voice"}, "pub
               "backup": {"backup"}, "gpu": {"image", "video", "assembly"}}
 
 
-def execute_role_task(role: str, task: dict) -> list[dict]:
+def execute_role_task(role: str, task: dict, *, _routing: bool = False) -> list[dict]:
+    if task.get("module_name"):
+        from worker.module_runtime import execute_module
+        return execute_module(task["module_name"], task)
     task_type = task.get("task", role)
     allowed = set(ROLE_TASKS.get(role, set()))
     if role == "core":
@@ -766,6 +819,15 @@ def execute_role_task(role: str, task: dict) -> list[dict]:
         allowed = {task for local_role in local_roles for task in ROLE_TASKS.get(local_role, set())}
     if task_type not in allowed:
         raise PermissionError(f"Role {role} is not authorized to execute {task_type}")
+    if not _routing and task.get("task") in {"script", "text", "image", "video"}:
+        from worker.gpu_routing import router_for
+        router = router_for(role, execute_role_task)
+        if router is not None:
+            capability = {"script": "text_generation", "text": "text_generation", "image": "image_generation", "video": "video_generation"}[task["task"]]
+            result = router.execute(capability, task)
+            if result.get("status") not in {"complete", "completed"}:
+                raise RuntimeError("Provider has not completed inference")
+            return result["artifacts"]
     executor = EXECUTORS.get(task_type)
     if not executor:
         raise ValueError(f"No role executor for task type {task_type}")

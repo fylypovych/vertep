@@ -3034,11 +3034,12 @@ def test_real_backend_video_engine_applies_a_runtime_and_returns_to_native():
                         lambda response: "/api/settings/providers/video_engine" in response.url
                         and response.request.method == "POST") as applied:
                     page.click("[data-testid='video-engine-apply']")
-                assert applied.value.status == 200, applied.value.text()
+                assert applied.value.status == 202, applied.value.text()
+                assert applied.value.json()["worker_activation"]["status"] == "AWAITING_WORKER"
                 expect(page.get_by_test_id("video-engine-effective")).to_have_text(
-                    "MoneyPrinterTurbo", timeout=20000)
-                assert _engine_state(page)["effective"] == "money-printer", \
-                    "the apply must be effective on the running CORE, not only on screen"
+                    "Очікує підтвердження Worker", timeout=20000)
+                assert _engine_state(page)["selected"] == "money-printer"
+                assert _engine_state(page)["effective"] == "native"
 
                 page.select_option("[data-testid='video-engine-select']", "native")
                 with page.expect_response(

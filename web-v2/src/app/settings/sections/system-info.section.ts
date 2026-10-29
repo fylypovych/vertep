@@ -19,7 +19,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <tr *ngFor="let entry of backendsList(); trackBy: trackSlot" class="border-t" [attr.data-testid]="'backend-row-' + entry[0]">
         <td class="py-1">{{ entry[0] }}</td>
         <td>{{ entry[1]?.['configured'] ? 'Так' : 'Ні' }}</td>
-        <td [attr.data-testid]="'backend-current-' + entry[0]">{{ entry[1]?.['backend'] || '-' }}</td>
+        <td [attr.data-testid]="'backend-current-' + entry[0]">{{ entry[1]?.['backend'] || '-' }}<small *ngIf="entry[1]?.['activation_status']" class="block text-amber-700">Очікує Worker: {{ entry[1]?.['selected_backend'] }}</small></td>
         <td>
           <ng-container *ngIf="switchable(entry[0], entry[1])">
             <select class="border rounded px-2 py-1 mr-2" [attr.data-testid]="'backend-select-' + entry[0]"
@@ -28,7 +28,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
               <option *ngFor="let option of entry[1]?.['options'] || []" [value]="option">{{ option }}</option>
             </select>
             <button class="px-2 py-1 bg-emerald-600 text-white rounded text-sm"
-                    [disabled]="switching() || choice(entry[0], entry[1]) === entry[1]?.['backend']"
+                    [disabled]="switching() || (choice(entry[0], entry[1]) === entry[1]?.['backend'] && choice(entry[0], entry[1]) === (entry[1]?.['selected_backend'] || entry[1]?.['backend']))"
                     (click)="switchBackend(entry[0], choice(entry[0], entry[1]))"
                     [attr.data-testid]="'backend-switch-' + entry[0]">Застосувати</button>
           </ng-container>
@@ -100,7 +100,11 @@ export class SystemInfoSectionComponent implements OnInit {
         const status = { ...(this.status() as unknown as Record<string, unknown>) };
         if (result.matrix) status['providers'] = result.matrix;
         this.status.set(status as unknown as SystemStatus);
-        this.toast.show(`Слот ${slot}: ${result.backend}`, 'success');
+        if (result.worker_activation?.status === 'AWAITING_WORKER') {
+          this.toast.show('Конфігурацію збережено; очікується підтвердження Worker.', 'info');
+        } else {
+          this.toast.show(`Слот ${slot}: ${result.backend}`, 'success');
+        }
       },
       error: (err) => {
         this.switching.set(false);

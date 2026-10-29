@@ -27,7 +27,19 @@ def _available_voices() -> list[str]:
     """
     directory = _VOICE_DATA_DIR
     if not os.path.isdir(directory):
-        return []
+        executable = shutil.which(os.getenv("ESPEAK_EXECUTABLE", "espeak-ng"))
+        if not executable:
+            return []
+        try:
+            result = subprocess.run([executable, "--voices"], check=True,
+                                    capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        # Stock espeak-ng distributes language files, not .idx/.list files.
+        # Exclude MBROLA voices: that separate engine is not this runtime.
+        return sorted({parts[1] for line in result.stdout.splitlines()[1:]
+                       if len(parts := line.split()) >= 5
+                       and not parts[4].replace("\\", "/").startswith("mb/")})
     voices: list[str] = []
     for name in sorted(os.listdir(directory)):
         if not name.endswith(".idx") and not name.endswith(".list"):
@@ -145,8 +157,14 @@ def _validate_language(language: str | None) -> None:
 
 @app.post("/synthesize")
 def synthesize(request: SynthesisRequest) -> dict:
+    if request.provider not in {None, "espeak-ng"} or request.model not in {None, "espeak-ng"}:
+        raise HTTPException(422, "Provider/model не підтримується цим espeak runtime")
     _validate_voice(request.voice)
     _validate_language(request.language)
+    if not (VOICES or _available_voices()):
+        raise HTTPException(503, "Каталог голосів espeak-ng недоступний")
+    if request.language and request.voice.split("-")[0].lower() != request.language.lower():
+        raise HTTPException(422, "Мова не відповідає вибраному голосу")
     executable = shutil.which(os.getenv("ESPEAK_EXECUTABLE", "espeak-ng"))
     if not executable:
         raise HTTPException(503, "espeak-ng недоступний")

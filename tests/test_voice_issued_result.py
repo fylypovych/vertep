@@ -27,7 +27,8 @@ from fastapi.testclient import TestClient
 from core.api.job_helpers import (
     _persist_tts_contract, _tts_task_for, _voice_task_for, _validate_tts_contract,
 )
-from core.app import app, store
+from core.app import app
+from core.telegram.handlers import store
 from core.dispatcher import available_worker
 from core.models import Job, JobStatus, SceneRecord, StageName, StageStatus, utc_now
 from core.orchestration import initialize_plan, transition_stage

@@ -12,8 +12,9 @@ from fastapi import APIRouter, HTTPException, Request
 from ..first_run import config_root
 from ..health_checks import health_status as _health_status
 from ..models import ModelProgressReport, WorkerHeartbeat, worker_transition_allowed, utc_now
-from ..node_registry import node_roles, registered_nodes
-from ..provider_switch import provider_executor_config
+from ..node_registry import node_roles, registered_nodes, record_self_test
+from ..provider_switch import provider_executor_config, provider_config_revision, _PROVIDER_EXECUTOR_ENV_ALLOWLIST
+from ..provider_switch import reconcile_provider_activation
 from ..pull_executor import ingest_model_progress, pending_model_command
 from ..rolling_update import assert_not_fenced, reconcile_rollout, rollout_status
 from ..security import _valid_worker_request
@@ -35,6 +36,9 @@ _MODEL_LIFECYCLE_FIELDS = ("model_command", "model_command_ack",
 def heartbeat(payload: WorkerHeartbeat, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
+    from core.protocol.task import compatible_protocol
+    if not compatible_protocol(payload.protocol_version):
+        raise HTTPException(409, "Incompatible worker protocol")
     data = payload.model_dump()
     if data["status"] in {"ONLINE", "FREE"}:
         data["status"] = "READY"
@@ -78,6 +82,11 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     drain_operation_id = (previous or {}).get("drain_operation_id")
     restart_operation_id = (previous or {}).get("restart_operation_id")
     previous_instance_id = (previous or {}).get("runtime_instance_id")
+    if (previous_instance_id and data.get("runtime_instance_id")
+            and previous_instance_id != data["runtime_instance_id"] and (previous or {}).get("current_task")):
+        # A restarted Worker cannot finish the previous process's issued work.
+        # Reconcile it before the fresh heartbeat replaces durable ownership.
+        _recover_stale_workers(lost_nodes={payload.node_name})
     if desired == "DRAINING" and drain_operation_id and get_system_state()["state"] == "NORMAL":
         desired = None
         drain_operation_id = None
@@ -135,7 +144,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     # override.
     if isinstance(data.get("provider_config"), dict):
         data["provider_config"] = {str(key): str(value)
-                                   for key, value in data["provider_config"].items()}
+                                   for key, value in data["provider_config"].items()
+                                   if key in _PROVIDER_EXECUTOR_ENV_ALLOWLIST}
         data["provider_config_at"] = utc_now()
     if data.get("desired_state") in {"DISABLED", "REVOKED"}:
         # Cache lifecycle: a disabled or revoked node keeps no model cache.
@@ -143,8 +153,27 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             data.pop(field, None)
         data.pop("model_command_ack", None)
     data["last_seen"] = utc_now()
+    if self_test.get("status") in {"PASSED", "FAILED"}:
+        registered = next((node for node in registered_nodes() if node["node_id"] == payload.node_name), None)
+        if registered and not registered.get("revoked_at"):
+            from ..dispatcher import current_tested_capabilities
+            attested = current_tested_capabilities(data)
+            runtime_status = "ONLINE" if attested else "OFFLINE"
+            if (registered.get("runtime_status") != runtime_status or
+                    (previous or {}).get("self_test", {}).get("checked_at") != self_test.get("checked_at")):
+                record_self_test(payload.node_name, "passed" if attested else "failed", sorted(attested))
     store.workers[payload.node_name] = data
     store.save_worker(data)
+    reconcile_provider_activation(payload.node_name, data)
+    if os.getenv("WORKFLOW_DEFINITIONS_ROOT"):
+        from core.workflow.runtime import workflow_runtime
+        workflow = workflow_runtime()
+        try:
+            workflow.register(data)
+        except (ValueError, KeyError, TypeError):
+            # Preserve legacy heartbeat while withholding an invalid module or
+            # untested worker from the workflow dispatcher.
+            workflow.dispatcher.unregister_node(payload.node_name)
     rollout = reconcile_rollout(store.workers)
     data = store.workers[payload.node_name]
     store.save_worker(data)
@@ -154,6 +183,7 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     if node_record and node_record.get("phase") in {"SELF_TESTING", "ROLLING_BACK"}:
         active_request = node_record.get("self_test_request")
     return {"accepted": True, "workers": len(store.workers),
+            "workflow_execution_enabled": bool(os.getenv("WORKFLOW_DEFINITIONS_ROOT")),
             "desired_state": data.get("desired_state"),
             "self_test_requested_at": data.get("self_test_requested_at"),
             "self_test_request": active_request,
@@ -171,7 +201,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             # stock heartbeat response so the Worker executor that actually runs
             # text/voice/compute tasks observes the same non-secret config the
             # switch applied in CORE.  Secrets are never included.
-            "provider_config": provider_executor_config()}
+            "provider_config": provider_executor_config(),
+            "provider_config_revision": provider_config_revision()}
 
 
 @router.post("/api/workers/model-progress")
@@ -233,6 +264,10 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
             item["status"] = "OFFLINE"
         node_id = item.get("node_id") or item.get("node_name")
         record = registry.get(node_id, {})
+        if record.get("revoked_at") or record.get("status") == "REVOKED":
+            item["status"] = "REVOKED"
+            item["runtime_status"] = "REVOKED"
+            item["tested_capabilities"] = []
         item["certificate_serial"] = record.get("certificate_serial")
         item["certificate_expires_at"] = record.get("certificate_expires_at")
         item["credential_generation"] = record.get("credential_generation")
@@ -242,12 +277,17 @@ def workers(role: str | None = None, status: str | None = None, capability: str 
         # detail: a node that last reported PENDING_SELF_TEST / OFFLINE must
         # still carry that status in the listing even after its live record
         # goes offline, so dispatch never treats a stale record as ready.
-        if record.get("runtime_status"):
+        if record.get("runtime_status") and item.get("status") != "REVOKED":
             item["runtime_status"] = record["runtime_status"]
         else:
             item.setdefault("runtime_status", None)
         item["self_test_capabilities"] = record.get("self_test_capabilities") or []
         item["last_self_test_at"] = record.get("last_self_test_at")
+        if record and item.get("status") not in {"REVOKED", "OFFLINE", "BUSY"}:
+            from ..dispatcher import current_tested_capabilities
+            if not current_tested_capabilities(item):
+                item["status"] = "ERROR"
+                item["runtime_status"] = "UNKNOWN"
         item["update_state"] = {
             "desired_state": item.pop("desired_state", None),
             "update_target_version": item.pop("update_target_version", None),

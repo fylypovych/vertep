@@ -17,11 +17,47 @@ Vertep- образів і не потрапляє в жодну роль в `con
 - ключ генерує `bootstrap.sh` у `config/moneyprinter-api.key` (права `0600`), але
   сам профіль лишається вимкненим.
 
-Увімкнення:
+Увімкнення у встановленому runtime bundle:
 
 ```bash
 COMPOSE_PROFILES=moneyprinter docker compose up -d moneyprinter
 ```
+
+### Додатковий контейнер у локальному checkout
+
+`docker-compose.moneyprinter.yml` додає до локального stack один optional container,
+який збирається з того самого pinned `docker/moneyprinter/Dockerfile`.
+Він не успадковує `.env` платформи; storage tasks зберігається в окремому named volume.
+Для disposable запуску на Linux Docker host:
+
+```bash
+export VERTEP_VERSION="$(cat VERSION)"
+key_dir="$(mktemp -d)"
+openssl rand -hex 32 > "${key_dir}/api_key"
+chmod 0444 "${key_dir}/api_key"
+export MONEYPRINTER_API_KEY_FILE_HOST="${key_dir}/api_key"
+docker compose -f docker-compose.moneyprinter.yml --profile moneyprinter build moneyprinter
+export VERTEP_MONEYPRINTER_IMAGE_DIGEST="$(docker image inspect "vertep/moneyprinter:${VERTEP_VERSION}" --format '{{.Id}}')"
+docker compose -f docker-compose.moneyprinter.yml --profile moneyprinter up -d moneyprinter
+```
+
+Приватний каталог `mktemp -d` захищає ключ на host; файл, змонтований як Docker secret,
+доступний для читання runtime uid 10001. Ключ не потрапляє до build context.
+У Settings endpoint цього контейнера — `http://moneyprinter:8098`; той самий ключ
+підключається через чинний secret-reference flow CORE та node-local provisioning Worker.
+До підтвердження digest, upstream і self-test контейнер не звітує ready.
+Цей standalone запуск не потребує `.env` основного stack. Для спільного керування
+з уже налаштованим локальним stack використовуйте обидва файли:
+`-f docker-compose.yml -f docker-compose.moneyprinter.yml`.
+
+Повна disposable build/self-test перевірка з evidence:
+
+```bash
+python scripts/moneyprinter-runtime-check.py --timeout 900 --evidence moneyprinter-runtime-evidence
+```
+
+Вона потребує доступного Linux Docker Engine та BuildKit/buildx. Успішний `compose config` перевіряє
+конфігурацію, але не доводить build чи pinned upstream execution.
 
 Жоден host-порт не публікується: рантайм доступний лише всередині compose-мережі.
 

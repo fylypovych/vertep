@@ -20,7 +20,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from core.app import app, store
+from core.app import app
+from core.telegram.handlers import store
 from core.operations import (advance_operation, begin_operation, cancel_operation,
                              complete_operation, create_operation,
                              fail_operation, get_operation)

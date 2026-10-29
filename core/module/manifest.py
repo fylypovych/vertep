@@ -22,6 +22,26 @@ class ModuleManifest:
         resource_requirements: Dict[str, Any],
         description: str = "",
     ) -> None:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Module name must be a nonempty string")
+        if not isinstance(capabilities, list) or any(not isinstance(cap, str) or not cap for cap in capabilities):
+            raise ValueError("Capabilities must be nonempty strings")
+        if not isinstance(dependencies, list):
+            raise ValueError("Dependencies must be a list")
+        for dep in dependencies:
+            if isinstance(dep, str) and dep:
+                continue
+            if not isinstance(dep, dict) or not isinstance(dep.get("name"), str) or not dep["name"]:
+                raise ValueError("Invalid module dependency")
+            for field in ("min_version", "max_version"):
+                if field in dep:
+                    self._validate_version(dep[field])
+        if not isinstance(resource_requirements, dict):
+            raise ValueError("Resource requirements must be an object")
+        for key in ("min_vram_mb", "min_cpu_cores", "min_ram_mb"):
+            value = resource_requirements.get(key, 0)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"Invalid module resource requirement: {key}")
         self.name = name
         self.version = self._validate_version(version)
         self.capabilities = capabilities or []
@@ -32,8 +52,8 @@ class ModuleManifest:
     @staticmethod
     def _validate_version(version: str) -> str:
         """Validate semver format A.B.C.D."""
-        if not re.match(r"^\d+\.\d+\.\d+\.\d+$", version):
-            raise ValueError(f"Invalid version format: {version}. Expected A.B.C.D")
+        if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", version):
+            raise ValueError(f"Invalid version format: {version}. Expected SemVer or legacy A.B.C.D")
         return version
 
     def to_dict(self) -> dict:
@@ -50,6 +70,7 @@ class ModuleManifest:
     @classmethod
     def from_dict(cls, data: dict) -> "ModuleManifest":
         """Create manifest from dictionary."""
+        data = data.get("manifest", data)
         return cls(
             name=data["name"],
             version=data["version"],

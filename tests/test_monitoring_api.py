@@ -533,7 +533,7 @@ def test_prometheus_metrics_returns_valid_text(monkeypatch, tmp_path):
 
 def test_prometheus_metrics_re_exports_worker_availability(monkeypatch, tmp_path):
     """CORE aggregates outbound-only workers so Prometheus can alert on them."""
-    from core.app import store
+    from core.telegram.handlers import store
     client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
     for node, role in (("gpu-1", "gpu"), ("text-1", "text")):
         resp = client.post("/api/workers/heartbeat", json={

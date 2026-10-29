@@ -1,4 +1,6 @@
 """Tests for Telegram approval flow: script, storyboard, and video approval."""
+
+import core.telegram.handlers as _owner_core_telegram_handlers
 import importlib
 import threading
 from types import SimpleNamespace
@@ -71,46 +73,46 @@ class TestScriptCallbackHandlers:
     def test_sc_ok_approves(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("SCRIPT_PENDING_APPROVAL")
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "event", lambda j, e: j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: j)
         cb = {"id": "cb-1", "data": "sc_ok:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_script_callback(cb, "42", "sc_ok", "2026-000001")
+        _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_ok", "2026-000001")
         assert adapter.answer_callback.called
 
     def test_sc_reject_cancels(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("SCRIPT_PENDING_APPROVAL")
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
         cb = {"id": "cb-2", "data": "sc_reject:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_script_callback(cb, "42", "sc_reject", "2026-000001")
+        _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_reject", "2026-000001")
         assert job.status.value == "CANCELLED"
 
     def test_sc_edit_sets_flag(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("SCRIPT_PENDING_APPROVAL")
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "event", lambda j, e: None)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: None)
         cb = {"id": "cb-3", "data": "sc_edit:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_script_callback(cb, "42", "sc_edit", "2026-000001")
+        _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_edit", "2026-000001")
         assert job.script_revision_chat_id == "42"
         assert job.script_revision_pending is True
 
     def test_sc_not_found(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
-        monkeypatch.setattr(module.store, "jobs", {})
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {})
         cb = {"id": "cb-4", "data": "sc_ok:nope", "message": {"chat": {"id": "42"}}}
-        module._handle_script_callback(cb, "42", "sc_ok", "nope")
+        _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_ok", "nope")
         assert adapter.answer_callback.called
         assert "не знайдено" in adapter.answer_callback.call_args[0][1]
 
@@ -120,62 +122,62 @@ class TestVideoCallbackHandlers:
         from core.models import VideoVersion
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("VIDEO_PENDING_APPROVAL")
         job.active_video_version = 1
         job.video_versions = [VideoVersion(version=1, path="final/video-v1.mp4", sha256="abc")]
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "event", lambda j, e: j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: j)
         cb = {"id": "cb-1", "data": "vid_ok:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_video_callback(cb, "42", "vid_ok", "2026-000001")
+        _owner_core_telegram_handlers._handle_video_callback(cb, "42", "vid_ok", "2026-000001")
         assert job.status.value == "READY"
         assert job.video_versions[0].approved is True
 
     def test_vid_reject_cancels(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("VIDEO_PENDING_APPROVAL")
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
         cb = {"id": "cb-2", "data": "vid_reject:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_video_callback(cb, "42", "vid_reject", "2026-000001")
+        _owner_core_telegram_handlers._handle_video_callback(cb, "42", "vid_reject", "2026-000001")
         assert job.status.value == "CANCELLED"
 
     def test_vid_reject_stale_version_does_not_cancel_current_video(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("VIDEO_PENDING_APPROVAL")
         job.active_video_version = 2
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
         cb = {"id": "cb-stale-reject", "data": "vid_reject:2026-000001:1",
               "message": {"chat": {"id": "42"}}}
-        module._handle_video_callback(cb, "42", "vid_reject", "2026-000001:1")
+        _owner_core_telegram_handlers._handle_video_callback(cb, "42", "vid_reject", "2026-000001:1")
         assert job.status.value == "VIDEO_PENDING_APPROVAL"
         assert "stale" in adapter.answer_callback.call_args[0][1].lower()
 
     def test_vid_edit_sets_flag(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("VIDEO_PENDING_APPROVAL")
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "event", lambda j, e: None)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: None)
         cb = {"id": "cb-3", "data": "vid_edit:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_video_callback(cb, "42", "vid_edit", "2026-000001")
+        _owner_core_telegram_handlers._handle_video_callback(cb, "42", "vid_edit", "2026-000001")
         assert job.video_revision_chat_id == "42"
         assert job.video_revision_pending is True
 
     def test_vid_not_found(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
-        monkeypatch.setattr(module.store, "jobs", {})
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {})
         cb = {"id": "cb-4", "data": "vid_ok:nope", "message": {"chat": {"id": "42"}}}
-        module._handle_video_callback(cb, "42", "vid_ok", "nope")
+        _owner_core_telegram_handlers._handle_video_callback(cb, "42", "vid_ok", "nope")
         assert adapter.answer_callback.called
         assert "не знайдено" in adapter.answer_callback.call_args[0][1]
 
@@ -184,30 +186,30 @@ class TestRevisionTextHandlers:
     def test_script_revision_clears_flag(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("SCRIPT_PENDING_APPROVAL")
         job.script_revision_chat_id = "42"
         job.script_revision_pending = True
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "event", lambda j, e: None)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: None)
         msg = {"text": "Змінити заголовок", "chat": {"id": "42"}, "message_id": 1}
-        module._handle_telegram_message("42", "1", "Змінити заголовок", msg)
+        _owner_core_telegram_handlers._handle_telegram_message("42", "1", "Змінити заголовок", msg)
         assert job.script_revision_chat_id is None
         assert job.script_revision_pending is False
 
     def test_video_revision_clears_flag(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("VIDEO_PENDING_APPROVAL")
         job.video_revision_chat_id = "42"
         job.video_revision_pending = True
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "event", lambda j, e: None)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: None)
         msg = {"text": "Змінити тривалість", "chat": {"id": "42"}, "message_id": 1}
-        module._handle_telegram_message("42", "1", "Змінити тривалість", msg)
+        _owner_core_telegram_handlers._handle_telegram_message("42", "1", "Змінити тривалість", msg)
         assert job.video_revision_chat_id is None
         assert job.video_revision_pending is False
 
@@ -258,24 +260,24 @@ class TestCallbackIdempotency:
     def test_double_sc_ok_no_crash(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("SCRIPT_APPROVED")
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "event", lambda j, e: j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: j)
         cb = {"id": "cb-1", "data": "sc_ok:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_script_callback(cb, "42", "sc_ok", "2026-000001")
+        _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_ok", "2026-000001")
         assert adapter.answer_callback.called
 
     def test_double_vid_ok_no_crash(self, monkeypatch):
         module = importlib.import_module("core.app")
         adapter = Mock()
-        monkeypatch.setattr(module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job = _make_job("READY")
-        monkeypatch.setattr(module.store, "jobs", {"2026-000001": job})
-        monkeypatch.setattr(module.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
-        monkeypatch.setattr(module.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
+        monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
         cb = {"id": "cb-1", "data": "vid_ok:2026-000001", "message": {"chat": {"id": "42"}}}
-        module._handle_video_callback(cb, "42", "vid_ok", "2026-000001")
+        _owner_core_telegram_handlers._handle_video_callback(cb, "42", "vid_ok", "2026-000001")
         assert adapter.answer_callback.called

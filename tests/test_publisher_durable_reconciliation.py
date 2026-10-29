@@ -29,7 +29,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from core.app import app, store
+from core.app import app
+from core.telegram.handlers import store
 from core.api.job_helpers import (
     _enqueue_publish_task, _match_publish_receipt, _publish_task_for,
 )
@@ -51,8 +52,9 @@ _WORKER_TOKEN = "publisher-durable-worker-token"
 
 
 @pytest.fixture(autouse=True)
-def _worker_token(monkeypatch):
+def _worker_token(monkeypatch, tmp_path):
     monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
+    monkeypatch.setenv("JOB_ROOT", str(tmp_path / "publisher-worker"))
 
 
 def _worker_headers():

@@ -28,6 +28,8 @@ class ModuleDiscovery:
             resources: Resource information (vram_mb, cpu_cores, etc.)
         """
         # Update internal cache
+        for cap in list(self._cached_capabilities):
+            self._cached_capabilities[cap] = [worker for worker in self._cached_capabilities[cap] if worker != worker_id]
         for cap in capabilities:
             if cap not in self._cached_capabilities:
                 self._cached_capabilities[cap] = []

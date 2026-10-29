@@ -669,6 +669,8 @@ def evaluate_row(row: dict[str, Any], *, outcomes: dict[str, str],
         "title": row["title"],
         "owner": row["owner"],
         "status": status,
+        "evidence_kind": ("authorised_real_stand" if STAND in row["needs"] else
+                          "pinned_runtime" if RUNTIME in row["needs"] else "unit_or_disposable"),
         "detail": detail,
         "needs": list(row["needs"]),
         "missing_needs": missing_needs,
@@ -750,13 +752,17 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- config revision: `{identity['config_revision']}`",
         f"- generated: {identity['generated_at']}",
         "",
+        "`unit_or_disposable` перевіряє локальні contracts/orchestration. Його PASS не є "
+        "доказом pinned upstream execution; для цього потрібні окремі рядки `pinned_runtime`.",
+        "",
         "| Criterion | Status | Owner | Detail | Trace |",
         "|---|---|---|---|---|",
     ]
     for row in report["rows"]:
+        evidence = f" (evidence: {row['evidence_kind']})" if row.get("evidence_kind") else ""
         lines.append(
             f"| {row['id']} — {row['title']} | **{row['status']}** | {row['owner']} | "
-            f"{row['detail']} | `{row['trace_id']}` |"
+            f"{row['detail']}{evidence} | `{row['trace_id']}` |"
         )
     summary = report["summary"]
     lines += [

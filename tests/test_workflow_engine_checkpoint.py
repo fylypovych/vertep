@@ -6,11 +6,25 @@ restore from checkpoint, and integration with backup snapshots.
 
 import json
 import tempfile
+from time import monotonic, sleep
 from pathlib import Path
 
 from core.workflow.dsl import validate_workflow
 from core.workflow.engine import WorkflowEngine
 from core.workflow.state import WorkflowState
+from core.dispatcher import Dispatcher
+from worker.protocol.transport import RoleWorkerTransport
+
+
+def _drive_worker(engine, job_id):
+    deadline = monotonic() + 3
+    while monotonic() < deadline:
+        engine.tick()
+        result = engine.get_job_status(job_id)
+        if result["status"] == "COMPLETED":
+            return result
+        sleep(.005)
+    raise AssertionError(engine.get_job_status(job_id))
 
 
 def test_workflow_state_save_and_load(tmp_path):
@@ -131,25 +145,38 @@ def test_workflow_engine_create_and_status(tmp_path):
 
 def test_workflow_engine_start_and_complete(tmp_path):
     state = WorkflowState(storage_backend="file", state_root=str(tmp_path / "state"))
-    engine = WorkflowEngine(state)
+    dispatcher = Dispatcher()
+    dispatcher.register_node("test-worker", {"text"}, {}, "text")
+    transport = RoleWorkerTransport("text", execute=lambda role, payload: {"text": "worker output"})
+    dispatcher.register_transport("test-worker", transport)
+    engine = WorkflowEngine(state, dispatcher)
     definition = {
         "name": "test-workflow",
         "tasks": [
-            {"id": "t1", "dependencies": []},
+            {"id": "t1", "dependencies": [], "type": "text"},
         ],
     }
     job_id = engine.create_job(definition)
-    result = engine.start_job(job_id)
+    try:
+        engine.start_job(job_id)
+        result = _drive_worker(engine, job_id)
+    finally:
+        transport.close()
     assert result["status"] == "COMPLETED"
     assert result["tasks"]["t1"]["status"] == "COMPLETED"
+    assert result["tasks"]["t1"]["output"] == {"text": "worker output"}
 
 
 def test_workflow_engine_pause_resume(tmp_path):
     state = WorkflowState(storage_backend="file", state_root=str(tmp_path / "state"))
-    engine = WorkflowEngine(state)
+    dispatcher = Dispatcher()
+    dispatcher.register_node("test-worker", {"text"}, {}, "text")
+    transport = RoleWorkerTransport("text", execute=lambda role, payload: "resumed output")
+    dispatcher.register_transport("test-worker", transport)
+    engine = WorkflowEngine(state, dispatcher)
     definition = {
         "name": "test-workflow",
-        "tasks": [{"id": "t1", "dependencies": []}],
+        "tasks": [{"id": "t1", "dependencies": [], "type": "text"}],
     }
     job_id = engine.create_job(definition)
     # Manually set to IN_PROGRESS to test pause
@@ -157,8 +184,13 @@ def test_workflow_engine_pause_resume(tmp_path):
     engine.state.save_job(job_id, engine._jobs[job_id])
     paused = engine.pause_job(job_id)
     assert paused["status"] == "PAUSED"
-    resumed = engine.resume_job(job_id)
-    assert resumed["status"] == "COMPLETED"  # auto-executes on resume
+    try:
+        engine.resume_job(job_id)
+        resumed = _drive_worker(engine, job_id)
+    finally:
+        transport.close()
+    assert resumed["status"] == "COMPLETED"
+    assert resumed["tasks"]["t1"]["output"] == "resumed output"
 
 
 def test_workflow_engine_cancel(tmp_path):

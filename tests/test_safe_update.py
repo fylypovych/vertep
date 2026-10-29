@@ -1,3 +1,5 @@
+
+import core.telegram.handlers as _owner_core_telegram_handlers
 import base64
 import hashlib
 import shutil
@@ -61,13 +63,13 @@ def test_fleet_readiness_requires_every_registered_worker_to_ack_drain(monkeypat
     monkeypatch.setattr(system_module, "registered_nodes", lambda: [
         {"node_id": "gpu-1", "revoked_at": None}, {"node_id": "gpu-2", "revoked_at": None}])
     from core import app as core_app
-    monkeypatch.setattr(core_app.store, "save_worker", lambda worker: None)
-    monkeypatch.setattr(core_app.store, "load_workers", lambda **kwargs: [])
-    monkeypatch.setattr(core_app.store.repository, "load_jobs", lambda: [])
-    monkeypatch.setattr(core_app.store, "jobs", {})
-    monkeypatch.setattr(core_app.store, "workers", {})
-    monkeypatch.setattr(core_app.task_queue, "inflight_depth", lambda: 0)
-    core_app.store.workers.update({
+    monkeypatch.setattr(_owner_core_telegram_handlers.store, "save_worker", lambda worker: None)
+    monkeypatch.setattr(_owner_core_telegram_handlers.store, "load_workers", lambda **kwargs: [])
+    monkeypatch.setattr(_owner_core_telegram_handlers.store.repository, "load_jobs", lambda: [])
+    monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {})
+    monkeypatch.setattr(_owner_core_telegram_handlers.store, "workers", {})
+    monkeypatch.setattr(_owner_core_telegram_handlers.task_queue, "inflight_depth", lambda: 0)
+    _owner_core_telegram_handlers.store.workers.update({
         "gpu-1": {"node_name": "gpu-1", "status": "READY", "current_task": None},
         "gpu-2": {"node_name": "gpu-2", "status": "BUSY", "current_task": "task-1"},
     })
@@ -75,7 +77,7 @@ def test_fleet_readiness_requires_every_registered_worker_to_ack_drain(monkeypat
     readiness = update_readiness()
     assert not readiness["ready"]
     assert readiness["unacknowledged_workers"] == ["gpu-1", "gpu-2"]
-    for worker in core_app.store.workers.values():
+    for worker in _owner_core_telegram_handlers.store.workers.values():
         worker.update({"status": "DRAINING", "current_task": None})
     readiness = update_readiness()
     assert readiness["ready"]

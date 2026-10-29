@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from core.app import _hash_secret, app
+from core.security import _hash_secret
+from core.app import app
 from core.update_manager import request_update, update_status
 from worker.service import request_local_update
 

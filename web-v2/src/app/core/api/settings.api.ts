@@ -73,6 +73,7 @@ export interface ProviderMatrixResponse {
 }
 
 export interface ProviderSwitchResponse {
+  worker_activation?: { status: string; nodes?: string[] };
   slot: string;
   backend: string;
   changed: boolean;
@@ -95,6 +96,7 @@ export interface EngineField {
 }
 
 export interface EffectiveEngineConfig {
+  worker_activation?: { status: string; slot?: string };
   selected: string;
   effective: string;
   agree: boolean;
@@ -160,6 +162,10 @@ export class SettingsApiService {
 
   integrations(): Observable<IntegrationStatusResponse> {
     return this.http.get<IntegrationStatusResponse>(`${this.baseUrl}/integrations`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
+  reconnectPublisher(channel: string): Observable<{ channel: string; reconnected: boolean; ready: boolean; configured?: boolean; missing_scopes?: string[]; error?: string }> {
+    return this.http.post<{ channel: string; reconnected: boolean; ready: boolean; configured?: boolean; missing_scopes?: string[]; error?: string }>(`${this.baseUrl}/settings/publisher/${encodeURIComponent(channel)}/reconnect`, {}, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   telegramStatus(): Observable<TelegramStatus> {

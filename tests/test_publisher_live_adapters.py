@@ -6,6 +6,9 @@ the ``DefaultPublisherProvider`` routing integration.
 """
 
 import httpx
+import hashlib
+from pathlib import Path
+import pytest
 
 from publishers import (
     FakeTransport,
@@ -17,6 +20,11 @@ from publishers import (
 )
 from publishers.oauth import YouTubeTokenProvider
 from adapters.publisher import PUBLISHERS
+
+
+@pytest.fixture(autouse=True)
+def isolated_worker(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOB_ROOT", str(tmp_path / "publisher-worker"))
 
 
 def _mp4(tmp_path, name="video.mp4", size=64):
@@ -437,7 +445,7 @@ def test_end_to_end_publish_receives_receipt_for_all_platforms(monkeypatch, tmp_
     _video_sha = _hashlib.sha256(open(video, "rb").read()).hexdigest()
     delivery_contract = {
         "job_id": "job-e2e", "video_version": "v1", "video_sha256": _video_sha,
-        "channel": "youtube",
+        "channel": "youtube", "size": Path(video).stat().st_size,
     }
     publish_intent = {"video_version": "v1", "video_sha256": _video_sha}
 
@@ -504,7 +512,7 @@ def test_end_to_end_publish_receives_receipt_for_all_platforms(monkeypatch, tmp_
             "video_path": video,
             "metadata": metadata,
             "delivery_contract": delivery_contract,
-            "publish_intent": publish_intent,
+            "publish_intent": {**publish_intent, "job_id": "job-e2e", "channel": channel},
             "node_name": "publisher-1",
         }
         artifacts = execute_publisher(task)
@@ -529,7 +537,7 @@ def test_end_to_end_partial_failure_one_platform_fails(monkeypatch, tmp_path):
     from worker.role_executor import execute_publisher
 
     video = _mp4(tmp_path, size=512)
-    publish_intent = {"video_version": "v1", "video_sha256": "abc123"}
+    publish_intent = {"video_version": "v1", "video_sha256": hashlib.sha256(Path(video).read_bytes()).hexdigest()}
 
     # Instagram returns FAILED (e.g. API error), others succeed
     instagram_pub = InstagramPublisher(transport=FakeTransport([
@@ -592,8 +600,8 @@ def test_end_to_end_partial_failure_one_platform_fails(monkeypatch, tmp_path):
             "channel": channel,
             "video_path": video,
             "metadata": metadata,
-            "delivery_contract": {},
-            "publish_intent": publish_intent,
+            "delivery_contract": {"version": "v1", "sha256": publish_intent["video_sha256"], "size": Path(video).stat().st_size},
+            "publish_intent": {**publish_intent, "job_id": "job-pf", "channel": channel},
             "node_name": "publisher-1",
         }
         artifacts = execute_publisher(task)

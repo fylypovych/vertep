@@ -31,7 +31,7 @@ cleanup_stale_compose_replacements(){
 sync_host_runtime(){
   local release_root=$1
   install -d -m 0750 "$ROOT/scripts" "$ROOT/core"
-  for executor in update-agent.py update-runtime-env.py vertep safe-extract.py \
+  for executor in update-agent.py update-runtime-env.py vertep vertep-cli.py safe-extract.py \
                   release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py; do
     [[ -f "$release_root/scripts/$executor" ]] || continue
     install -m 0750 "$release_root/scripts/$executor" "$ROOT/scripts/$executor"
@@ -79,6 +79,10 @@ build_runtime_compose(){
   [[ "${GPU_VENDOR:-none}" == nvidia && -f "$release_root/docker-compose.nvidia.yml" ]] && compose+=(-f "$release_root/docker-compose.nvidia.yml")
 }
 case "${1:-status}" in
+  module)
+    shift
+    exec python3 "$ROOT/scripts/vertep-cli.py" module "$@"
+    ;;
   status)
     if [[ "$role" == "worker" ]]; then
       payload=$(curl -fsS "${core_tls[@]}" --connect-timeout 3 -H "X-Vertep-Token: ${NODE_API_TOKEN:-}" "$core_url/api/node/status/${NODE_NAME:-unknown}" 2>/dev/null || printf '{}')
@@ -410,5 +414,5 @@ case "${1:-status}" in
   backup)
     python3 "$ROOT/core/backup/__init__.py" "${@:2}"
     ;;
-  *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback|backup}"; exit 2 ;;
+  *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback|backup|module}"; exit 2 ;;
 esac

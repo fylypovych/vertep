@@ -13,6 +13,8 @@ R3 — video approval is bound to the reviewed version and its SHA256 (HTTP body
 
 from __future__ import annotations
 
+import core.telegram.handlers as _owner_core_telegram_handlers
+
 import threading
 from pathlib import Path
 from unittest.mock import patch
@@ -170,7 +172,7 @@ class TestR1VideoRevisionDrivesGeneration:
 
 class TestR2RegisteredOrderedIntegrityInputs:
     def test_scene_index_order_wins_over_lexicographic_names(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         for index, name in ((1, "sb-1-1.png"), (2, "sb-1-10.png"), (10, "sb-1-2.png")):
@@ -181,7 +183,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
             "sb-1-1.png", "sb-1-10.png", "sb-1-2.png"]
 
     def test_non_png_and_newest_artifact_per_scene_are_used(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "frame.webp")
@@ -195,7 +197,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         """Issue #177.1: a video scene with only a non-video artifact is an
         incomplete required set — the collector must block, not silently skip
         the scene and render a partial input list."""
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         job.task_type = "video"
@@ -211,7 +213,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         """Issue #177.1 safe probe: two required image scenes, the second has
         only an audio artifact — the set is incomplete, so re-assembly must be
         blocked instead of returning the first input alone."""
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "frame.png")
@@ -221,7 +223,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert any("scene 2 (no required" in line for line in job.events)
 
     def test_corrupted_scene_among_healthy_ones_blocks_reassembly(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "good.png")
@@ -234,7 +236,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
     def test_corrupted_current_is_not_substituted_by_a_historical_artifact(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _add_scene_artifact(store, job, 1, "old.png")
@@ -247,7 +249,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
     def test_missing_current_is_not_substituted_by_a_historical_artifact(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _add_scene_artifact(store, job, 1, "old.png")
@@ -264,10 +266,10 @@ class TestR2RegisteredOrderedIntegrityInputs:
         corrupted = _register_scene(store, job, 1, "bad.png")
         corrupted.write_bytes(b"tampered")
         store._save(job)
-        app_module.store = store
+        _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers"):
-            app_module._finalize_video_regenerate(job)
+            _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
         assert current.status == JobStatus.VIDEO_FAILED
         assert current.active_video_version == 1
@@ -275,7 +277,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in current.events)
 
     def test_missing_artifact_file_is_reported(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         path = _register_scene(store, job, 1, "gone.png")
@@ -285,7 +287,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
     def test_scene_without_registered_artifact_blocks_reassembly(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "good.png")
@@ -300,7 +302,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert any("scene 2 (no registered artifact)" in line for line in job.events)
 
     def test_unresolved_artifact_id_blocks_reassembly(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "good.png")
@@ -321,7 +323,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         re-rendered from the older revision (Issue #119 historical-substitution
         regression, reproduced by the #177 audit probe).
         """
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _add_scene_artifact(store, job, 1, "old.png")
@@ -333,7 +335,7 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert any("current artifact id unresolved" in line for line in job.events)
 
     def test_complete_registered_set_renders_every_scene(self, tmp_path, monkeypatch):
-        from core.app import _collect_reassembly_inputs
+        from core.telegram.handlers import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "a.png")
@@ -350,10 +352,10 @@ class TestR2RegisteredOrderedIntegrityInputs:
         job.scenes.append(SceneRecord(scene_id="scene-2", index=2, prompt="Kadr",
                                       artifact_ids=[]))
         store._save(job)
-        monkeypatch.setattr(app_module, "store", store)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "store", store)
         monkeypatch.setattr("core.state.store", store)
         with patch("core.pipeline.providers"):
-            app_module._finalize_video_regenerate(job)
+            _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
         assert current.status == JobStatus.VIDEO_FAILED
         assert current.active_video_version == 1
@@ -514,13 +516,13 @@ class TestVideoActionsAreChatBound:
         import core.app as app_module
         store, job = self._job(tmp_path)
         adapter = Mock()
-        monkeypatch.setattr(app_module, "store", store)
-        monkeypatch.setattr(app_module, "TelegramAdapter", lambda: adapter)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "store", store)
+        monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
         job.status = JobStatus.VIDEO_REVISION_REQUESTED
         store._save(job)
         callback = {"id": "cb", "data": f"{action}:{job.job_id}",
                     "message": {"chat": {"id": "999"}}}
-        app_module._handle_video_callback(callback, "999", action, job.job_id)
+        _owner_core_telegram_handlers._handle_video_callback(callback, "999", action, job.job_id)
         assert adapter.answer_callback.called
         assert "Доступ заборонено" in adapter.answer_callback.call_args_list[-1][0][1]
 

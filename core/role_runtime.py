@@ -83,7 +83,7 @@ def role_blocks_dispatch(role: str) -> bool:
     """
     if role not in locally_deployed_roles():
         return False
-    return role_runtime_status(role)["runtime_status"] in {"OFFLINE", "DEGRADED"}
+    return role_runtime_status(role)["runtime_status"] != "READY"
 
 
 def _local_role() -> str:
@@ -115,11 +115,13 @@ def _local_evidence() -> dict | None:
     except Exception:
         return None
     names = [name for name, value in checks.items() if isinstance(value, tuple)]
+    from .api.setup import REQUIRED_HEALTH_CHECKS
+    required = REQUIRED_HEALTH_CHECKS.get(_local_role(), frozenset(names))
     evidence = {
         "checked_at": checks.get("checked_at"),
         "checks_ok": health_status(checks) == "HEALTHY",
-        "failed_checks": [name for name in names if checks[name][0] is False],
-        "services_total": None,
+        "failed_checks": [name for name in required if not isinstance(checks.get(name), tuple) or checks[name][0] is not True],
+        "services_total": 0,
         "services_missing": [],
         "services_unhealthy": [],
     }
@@ -175,7 +177,8 @@ def _remote_status(role: str) -> tuple[str, list[dict]]:
         runtime_status = record.get("runtime_status") or "PENDING_SELF_TEST"
         heartbeat = workers.get(node_id)
         online = _heartbeat_fresh(heartbeat, now, timeout)
-        node_live = runtime_status in _LIVE and online
+        from .dispatcher import current_tested_capabilities
+        node_live = runtime_status in _LIVE and online and bool(current_tested_capabilities(heartbeat or {}, now))
         if node_live:
             live += 1
         nodes.append({

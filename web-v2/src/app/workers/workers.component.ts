@@ -1,4 +1,4 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
@@ -6,6 +6,7 @@ import { Subscription, timer } from 'rxjs';
 import { WorkersApiService } from '../core/api/workers.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
+import { PolicyService } from '../core/services/policy.service';
 import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
 import { roleLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
@@ -21,7 +22,7 @@ import { RemoteState } from '../core/state/remote-state';
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-page">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">Вузли Vertep</h3>
-        <button (click)="openWizard()" data-testid="create-worker-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+        <button (click)="openWizard()" [disabled]="!policy.can('update_worker').allowed" data-testid="create-worker-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
           Додати вузол
         </button>
       </div>
@@ -221,7 +222,7 @@ export class WorkersComponent implements OnInit {
   private pollTimer: Subscription | null = null;
   private pollingInterval = 5000;
 
-  constructor(private workersApi: WorkersApiService, private toast: ToastService, private confirm: ConfirmService) {}
+  constructor(private workersApi: WorkersApiService, private toast: ToastService, private confirm: ConfirmService, readonly policy: PolicyService, private changeDetector: ChangeDetectorRef) {}
 
   ngOnInit(): void {
     this.loadWorkers();
@@ -314,6 +315,7 @@ export class WorkersComponent implements OnInit {
   }
 
   generateToken(): void {
+    if (!this.policy.can('update_worker').allowed) return;
     if (!this.wizard.role) return;
     this.creating = true;
     this.workersApi.generateToken(this.wizard.role).subscribe({
@@ -326,6 +328,7 @@ export class WorkersComponent implements OnInit {
         this.error.set(err.message);
         this.creating = false;
         this.toast.show(err.message || 'Помилка генерації токена', 'error');
+        this.changeDetector.markForCheck();
       },
     });
   }

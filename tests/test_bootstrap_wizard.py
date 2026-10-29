@@ -1,4 +1,6 @@
 """i.0.0.0.11 — Bootstrap Installer & First Run Wizard: smoke, config, and contract tests."""
+
+import core.api.setup as _owner_core_api_setup
 import json
 import os
 import re
@@ -486,7 +488,7 @@ class TestSetupBackendFieldAlignment:
         monkeypatch.setattr(setup_mod, "create_registration_token",
                             lambda *a, **k: {"token": "one-time"})
         with pytest.raises(HTTPException, match="422"):
-            asyncio.run(core_app.first_run_complete(Request()))
+            asyncio.run(_owner_core_api_setup.first_run_complete(Request()))
 
     def test_backend_selection_is_not_silently_dropped(self, monkeypatch):
         """i.0.0.0.98: the wizard must send ``ai_backend`` and the server must
@@ -518,7 +520,7 @@ class TestSetupBackendFieldAlignment:
         monkeypatch.setattr(setup_mod, "complete_setup", fake_complete)
         monkeypatch.setattr(setup_mod, "create_registration_token",
                             lambda *a, **k: {"token": "one-time"})
-        asyncio.run(core_app.first_run_complete(Request()))
+        asyncio.run(_owner_core_api_setup.first_run_complete(Request()))
         assert captured["backend"] == "ollama"
         assert captured["complete_backend"] == "ollama"
 

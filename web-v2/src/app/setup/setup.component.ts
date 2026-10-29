@@ -37,7 +37,7 @@ export class SetupComponent {
         this.status.set(s);
         this.roleEntries = Object.entries(s.roles).map(([id, r]) => ({ id, ...r }));
         if (this.roleEntries.length) this.form.role = this.roleEntries[0].id;
-        if (s.selected_role) this.form.role = s.selected_role;
+        if (s.selected_role && this.roleEntries.some(role => role.id === s.selected_role)) this.form.role = s.selected_role;
         if (s.backends && s.backends.length) this.form.backend_options = s.backends;
         this.hardwareJson = JSON.stringify(s.hardware, null, 2);
         this.loading.set(false);
@@ -55,7 +55,7 @@ export class SetupComponent {
   loadHealth(attempt = 1): void {
     this.healthLoading.set(true);
     this.healthError.set(null);
-    this.auth.getSetupHealth(this.setupToken).subscribe({
+    this.auth.getSetupHealth(this.setupToken, this.form.role).subscribe({
       next: (h) => { this.health.set(h); this.healthLoading.set(false); },
       error: (err) => {
         if (attempt < 3) {

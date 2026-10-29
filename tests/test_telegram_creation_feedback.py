@@ -1,3 +1,5 @@
+
+import core.telegram.handlers as _owner_core_telegram_handlers
 import importlib
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -10,15 +12,15 @@ def test_creation_failure_error_is_sanitized_and_keeps_retry(monkeypatch):
     paths or secrets, and preserves the pending selection for retry."""
     module = importlib.import_module('core.app')
     adapter = Mock()
-    monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+    monkeypatch.setattr(_owner_core_telegram_handlers, 'TelegramAdapter', lambda: adapter)
     pending = {'audit-chat': {'pending': {}, 'brand_id': 'brand01'}}
-    monkeypatch.setattr(module, '_telegram_pending_character', pending)
-    monkeypatch.setattr(module, 'load_character', Mock(return_value=None))
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_telegram_pending_character', pending)
+    monkeypatch.setattr(_owner_core_telegram_handlers, 'load_character', Mock(return_value=None))
     leaky = OSError(2, "No such file or directory: "
                     "/data/storage/jobs/2024-000001/job.json api_key=sk-LEAKEDSECRET")
-    monkeypatch.setattr(module, '_create_job_from_telegram', Mock(side_effect=leaky))
-    monkeypatch.setattr(module, '_queue_storyboard', Mock())
-    result = module._handle_character_selection({'id': 'callback'}, 'audit-chat', 'did_samogon')
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_create_job_from_telegram', Mock(side_effect=leaky))
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_queue_storyboard', Mock())
+    result = _owner_core_telegram_handlers._handle_character_selection({'id': 'callback'}, 'audit-chat', 'did_samogon')
     assert result['status'] == 'creation_failed'
     assert '/data/storage' not in result['error']
     assert '2024-000001' not in result['error']
@@ -34,17 +36,17 @@ def test_creation_failure_error_is_sanitized_and_keeps_retry(monkeypatch):
 def test_character_selection_reports_saved_job_or_keeps_retry(monkeypatch, failure):
     module = importlib.import_module('core.app')
     adapter = Mock()
-    monkeypatch.setattr(module, 'TelegramAdapter', lambda: adapter)
+    monkeypatch.setattr(_owner_core_telegram_handlers, 'TelegramAdapter', lambda: adapter)
     pending = {'audit-chat': {'pending': {}, 'brand_id': 'brand01'}}
-    monkeypatch.setattr(module, '_telegram_pending_character', pending)
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_telegram_pending_character', pending)
     load = Mock(side_effect=ValueError('invalid') if failure == 'character' else None)
-    monkeypatch.setattr(module, 'load_character', load)
+    monkeypatch.setattr(_owner_core_telegram_handlers, 'load_character', load)
     job = SimpleNamespace(job_id='job-audit', model_dump=lambda **kw: {'job_id': 'job-audit'})
     create = Mock(side_effect=OSError('storage unavailable') if failure == 'storage' else None, return_value=job)
-    monkeypatch.setattr(module, '_create_job_from_telegram', create)
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_create_job_from_telegram', create)
     queue = Mock()
-    monkeypatch.setattr(module, '_queue_storyboard', queue)
-    result = module._handle_character_selection({'id': 'callback'}, 'audit-chat', 'did_samogon')
+    monkeypatch.setattr(_owner_core_telegram_handlers, '_queue_storyboard', queue)
+    result = _owner_core_telegram_handlers._handle_character_selection({'id': 'callback'}, 'audit-chat', 'did_samogon')
     messages = [call.args[1] for call in adapter.send_message.call_args_list]
     assert adapter.answer_callback.call_count == 1
     if failure:

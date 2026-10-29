@@ -7,6 +7,7 @@ cancellations, dead-letter queue and result submission). Extracted from
 import base64
 import binascii
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -31,6 +32,8 @@ from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
                           assembly_worker_mismatch, engine_release_hold)
 
 router = APIRouter()
+from .workflow_execution import router as workflow_execution_router
+router.include_router(workflow_execution_router)
 
 
 @router.post("/api/tasks/claim")
@@ -327,6 +330,27 @@ def task_input(task_id: str, reference: str, request: Request):
         raise HTTPException(401, "Token is not valid for this worker")
     job = next((item for item in store.jobs.values() if task_id in item.assembly_task_ids),
                None)
+    publish_job = next((item for item in store.jobs.values() if task_id in item.publish_task_ids), None)
+    if publish_job is not None:
+        worker = store.workers.get(node_name)
+        if (not worker or worker.get("current_task") != task_id
+                or worker.get("current_job") != publish_job.job_id
+                or not task_queue.inflight_active(task_id)):
+            raise HTTPException(409, "Publish input is no longer owned by this worker")
+        channel = publish_job.publish_task_ids[task_id]
+        intent = publish_job.publish_intent.get(channel) or {}
+        version = next((v for v in publish_job.video_versions
+                        if v.version == intent.get("video_version") and v.approved), None)
+        if version is None or publish_job.active_video_version != version.version:
+            raise HTTPException(409, "Published input version is no longer approved")
+        source = Path(publish_job.output_path or "")
+        if reference != source.name or not source.is_file():
+            raise HTTPException(404, "Approved publish input is unavailable")
+        data = source.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != intent.get("video_sha256") or len(data) != intent.get("video_size"):
+            raise HTTPException(409, "Approved publish input is corrupt")
+        return Response(data, media_type="video/mp4", headers={"x-vertep-sha256": digest})
     if job is None:
         raise HTTPException(404, "Task is not an assembly attempt")
     if job.assembly_task_id != task_id or job.assembly_cancel_requested:
@@ -694,7 +718,8 @@ def task_result(result: TaskResult, request: Request):
             _progress(job, "VIDEO_PENDING_APPROVAL")
         return job
     if result.task_id in job.publish_task_ids:
-        from ..api.job_helpers import _handle_publish_result
+        from ..api.job_helpers import (_handle_publish_result, _validate_publication_receipt,
+                                       _match_publish_receipt)
         # Owner/lease check: the result must belong to the active publish task
         # and to the worker that currently owns it.  A mismatched or duplicate
         # result is rejected without releasing the Worker or acking the task,
@@ -706,10 +731,27 @@ def task_result(result: TaskResult, request: Request):
             and worker.get("current_task") == result.task_id
             and worker.get("current_job") == job.job_id
         )
-        if not owns_task or active_channel is None:
+        if not owns_task or active_channel is None or not task_queue.inflight_active(result.task_id):
             store.event(job, f"PUBLISH RESULT {result.task_id} REJECTED: "
                              f"owner/lease mismatch (node={result.node_name})")
             raise HTTPException(409, "Publish result does not match the active task lease")
+        if result.success:
+            try:
+                artifact = next(a for a in result.artifacts or [] if a.get("kind") == "publication_receipt")
+                receipt = json.loads(base64.b64decode(artifact["data_base64"], validate=True))
+                valid, detail = _validate_publication_receipt(receipt, active_channel)
+                if not valid:
+                    raise ValueError(detail)
+                intent = job.publish_intent.get(active_channel) or {}
+                for field, expected in {"job_id": job.job_id, "task_id": result.task_id,
+                                        "video_version": intent.get("video_version"),
+                                        "video_sha256": intent.get("video_sha256")}.items():
+                    if expected is not None and str(receipt.get(field)) != str(expected):
+                        raise ValueError(f"Publish receipt {field} does not match issued task")
+                if _match_publish_receipt(job, active_channel, receipt)[0] == "reject":
+                    raise ValueError("Publish receipt does not match issued intent")
+            except (StopIteration, KeyError, TypeError, ValueError) as error:
+                raise HTTPException(400, "Invalid issued publication receipt") from error
         if worker:
             desired_status = worker.get("desired_state")
             next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
@@ -753,6 +795,11 @@ def task_result(result: TaskResult, request: Request):
         scene = _scene_for_task(job, result.task_id)
         if not scene or scene.assigned_worker != result.node_name:
             raise HTTPException(409, "TTS result does not match the active task")
+        owned, reason = _text_task_lease(job, result.task_id, result.node_name)
+        if not owned:
+            raise HTTPException(409, reason)
+        if result.task_id not in (job.voice_task_snapshot or {}):
+            raise HTTPException(409, "No issued voice-task snapshot for this result")
         if job.status in {JobStatus.CANCELLED, JobStatus.PAUSED}:
             raise HTTPException(409, f"Job is {job.status.value}")
         if not result.success:

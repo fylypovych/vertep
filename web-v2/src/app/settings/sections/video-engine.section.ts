@@ -57,7 +57,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
                 (click)="apply()">Застосувати</button>
         <button class="px-3 py-1 bg-slate-700 text-white rounded text-sm"
                 data-testid="video-engine-return-native"
-                [disabled]="!canEdit() || applying() || cfg.effective === 'native'"
+                [disabled]="!canEdit() || applying() || (cfg.effective === 'native' && cfg.selected === 'native')"
                 (click)="returnNative()">Повернути Vertep Native</button>
       </div>
       <p *ngIf="lockedReason() as reason" class="mt-2 text-amber-700 text-sm" data-testid="video-engine-locked">{{ reason }}</p>
@@ -110,7 +110,9 @@ export class VideoEngineSectionComponent implements OnInit {
     return options.find(option => option.id === id)?.label ?? id ?? '—';
   }
 
-  readonly effectiveLabel = computed(() => this.labelOf(this.config()?.effective));
+  readonly effectiveLabel = computed(() => this.config()?.worker_activation?.slot === 'video_engine'
+    && this.config()?.worker_activation?.status === 'AWAITING_WORKER'
+    ? 'Очікує підтвердження Worker' : this.labelOf(this.config()?.effective));
 
   readonly endpointField = computed<EngineField | null>(
     () => this.activeFields().find(field => field.name === 'endpoint') ?? null,
@@ -139,7 +141,7 @@ export class VideoEngineSectionComponent implements OnInit {
   readonly canApply = computed(() => {
     const config = this.config();
     if (!config || !this.canEdit() || this.applying()) return false;
-    return this.choice() !== config.effective || this.endpointChanged();
+    return this.choice() !== config.effective || this.choice() !== config.selected || this.endpointChanged();
   });
 
   /** The inputs of the engine the operator is choosing, falling back to the effective one. */
@@ -161,6 +163,7 @@ export class VideoEngineSectionComponent implements OnInit {
       native_engine: 'Vertep Native не потребує зовнішнього runtime',
       runtime_not_ready: 'runtime не готовий',
       unknown: 'невідома причина',
+      worker_activation_pending: 'очікується підтвердження Worker',
     };
     return labels[reason] ?? reason;
   }
@@ -210,7 +213,9 @@ export class VideoEngineSectionComponent implements OnInit {
       next: (result) => {
         this.applying.set(false);
         const applied = result.effective_engine ?? null;
-        if (applied?.effective && applied.effective !== target) {
+        if (result.worker_activation?.status === 'AWAITING_WORKER') {
+          this.rollbackNotice.set('Конфігурацію збережено; активацію на Worker ще не підтверджено.');
+        } else if (applied?.effective && applied.effective !== target) {
           this.rollbackNotice.set(
             `Застосування не підтверджено: рух залишився на «${this.labelOf(applied.effective)}».`,
           );
@@ -222,7 +227,9 @@ export class VideoEngineSectionComponent implements OnInit {
       error: (err) => {
         this.applying.set(false);
         this.applyError.set(err?.error?.detail || err?.message || 'Не вдалося застосувати движок');
-        this.rollbackNotice.set('Попередній движок збережено.');
+        this.rollbackNotice.set(!err?.status || err.status >= 500
+          ? 'Відновлення ще не підтверджено; перевіряю стан у CORE.'
+          : 'Попередній движок збережено.');
         this.load(false);
       },
     });

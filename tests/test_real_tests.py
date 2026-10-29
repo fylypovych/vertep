@@ -2155,16 +2155,65 @@ def test_backup_snapshot_version_integrity():
     assert "fail" in content.lower() or "error" in content.lower()
 
 
-def test_backup_browser_telegram_rbac():
-    """Issue #257 #186.7: Browser/Telegram adapter RBAC/system-state."""
-    import pathlib
-    backup_path = pathlib.Path("services/backup_service.py")
-    content = backup_path.read_text(encoding="utf-8")
-    # RBAC checks
-    assert "admin" in content.lower() or "role" in content.lower() or "auth" in content.lower()
-    # System state checks
-    assert "system" in content.lower()
-    # Telegram/web integration is handled at API layer, not service directly
+def test_backup_browser_telegram_rbac(monkeypatch, tmp_path):
+    """The preserved API/Telegram boundary enforces role and system-state gates."""
+    import json
+    from unittest.mock import Mock
+    from fastapi.testclient import TestClient
+    from core.app import app
+    from core.api import backups
+    from core.telegram import handlers
+    from core.telegram_store import save_telegram_settings
+    from core.security import _hash_secret
+    from core.system_state import set_system_state, get_system_state
+
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "installation.json").write_text('{"completed_at":"2026-01-01"}')
+    (config / "users.json").write_text('{}')
+    monkeypatch.setenv("CONFIG_ROOT", str(config))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "update"))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    monkeypatch.setenv("INTERNAL_API_KEY", "disposable-backup-rbac-key")
+    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {
+        "password_hash": _hash_secret("backup-reader-password"), "role": "viewer"}}))
+    save_telegram_settings(allowed_chat_ids="42,99", admin_chat_ids="42")
+    calls = []
+    async def backup_service(method, environment, path, payload=None, params=None):
+        calls.append((method, environment, path, payload))
+        return {"snapshot_id": "rbac-proof"}
+    # Only the external Backup Service is controlled; CORE guards remain real.
+    monkeypatch.setattr(backups, "_internal_api", backup_service)
+    client = TestClient(app)
+    assert client.post("/api/system/backups", auth=("reader", "backup-reader-password")).status_code == 403
+    assert calls == []
+    set_system_state("READ_ONLY", "backup guard proof")
+    assert client.post("/api/system/backups").status_code == 423
+    assert calls == [] and get_system_state()["state"] == "READ_ONLY"
+    set_system_state("NORMAL", "backup positive proof")
+    assert client.post("/api/system/backups").json()["snapshot_id"] == "rbac-proof"
+    assert len(calls) == 1
+
+    adapter = Mock()
+    monkeypatch.setattr(handlers, "TelegramAdapter", lambda: adapter)
+    def internal_http(method, path, payload=None, timeout=30):
+        response = client.request(method, path, json=payload, headers={"Authorization": "",
+            "x-vertep-internal-key": "disposable-backup-rbac-key"})
+        return response.json() if response.status_code < 400 else {"_error": f"HTTP {response.status_code}"}
+    monkeypatch.setattr(handlers, "_call_core_api", internal_http)
+    def callback(identifier, chat):
+        return {"id": identifier, "data": "sys_backup_confirm", "from": {"id": int(chat)},
+                "message": {"chat": {"id": chat}}}
+    handlers._handle_telegram_callback(callback("backup-viewer", "99"))
+    assert "заборонено" in adapter.answer_callback.call_args.args[1].lower()
+    assert len(calls) == 1
+    handlers._handle_telegram_callback(callback("backup-admin", "42"))
+    assert "Backup створено" in adapter.answer_callback.call_args.args[1]
+    assert len(calls) == 2
+    set_system_state("READ_ONLY", "backup Telegram guard proof")
+    handlers._handle_telegram_callback(callback("backup-admin-read-only", "42"))
+    assert "HTTP 423" in adapter.answer_callback.call_args.args[1]
+    assert len(calls) == 2 and get_system_state()["state"] == "READ_ONLY"
 
 
 def test_mpt_lifecycle_exists():
