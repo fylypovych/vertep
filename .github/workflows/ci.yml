@@ -214,7 +214,9 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq redis-server espeak-ng ffmpeg
           redis-server --version
           espeak-ng --version
-          python -m pytest -q -o junit_family=legacy --junitxml=media-evidence/${{ github.run_id }}-${{ github.run_attempt }}/junit.xml --basetemp=media-evidence/${{ github.run_id }}-${{ github.run_attempt }}/runtime-tests tests/test_full_media_harness.py tests/test_text_redis_process.py tests/test_delivery_process_acceptance.py tests/test_voice_http_acceptance.py tests/test_publisher_http_boundary.py tests/test_publisher_oauth_state.py tests/test_media_acceptance_report.py
+          RUN_DIR="media-evidence/${{ github.run_id }}-${{ github.run_attempt }}"
+          mkdir -p "$RUN_DIR"
+          python -m pytest -q -o junit_family=legacy --junitxml="$RUN_DIR/junit.xml" --basetemp="$RUNNER_TEMP/media-runtime-tests" tests/test_full_media_harness.py tests/test_text_redis_process.py tests/test_delivery_process_acceptance.py tests/test_voice_http_acceptance.py tests/test_publisher_http_boundary.py tests/test_publisher_oauth_state.py tests/test_media_acceptance_report.py
       - name: Render the media acceptance report
         run: |
           python scripts/media-acceptance-report.py \

@@ -27,6 +27,24 @@ def wait_for(predicate, timeout=30):
     pytest.fail("Timed out waiting for disposable process boundary")
 
 
+def stop_process(process, timeout=30):
+    """Stop a disposable service; a graceful shutdown that hangs is killed.
+
+    The crash acceptance kills CORE while a restore mutation is still running, so
+    uvicorn can hold the graceful shutdown longer than any fixed short wait.  The
+    test needs the process gone (that is the simulated crash), not a specific
+    signal transition.
+    """
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=timeout)
+
+
 @pytest.fixture
 def backup_process(tmp_path):
     processes, handles, clients = [], [], []
@@ -62,9 +80,7 @@ def backup_process(tmp_path):
         return process, api
     yield {"launch": launch, "root": tmp_path, "storage": storage, "config": config}
     for process in processes:
-        if process.poll() is None:
-            process.terminate()
-            process.wait(timeout=15)
+        stop_process(process)
     for client in clients:
         client.close()
     for handle in handles:
@@ -152,8 +168,7 @@ def test_core_caller_fences_writers_and_unhealthy_restore_cannot_enter_normal(ba
     assert api.get(f"/api/system/backups/{sid}/restore/progress").json()["status"] == "error"
     operations = json.loads((root / "restore-state/operations.json").read_text(encoding="utf-8"))
     assert operations[sid]["emergency_confirmed"] is True
-    process.terminate()
-    process.wait(timeout=15)
+    stop_process(process)
     _, restarted = backup_process["launch"](core_env, core_port, "core.app:app", "/api/session",
                                            {"Authorization": auth})
     assert restarted.get("/api/system/state").json()["state"] == "EMERGENCY"
@@ -192,8 +207,7 @@ def test_crash_and_competing_process_keep_restore_fence(backup_process):
             response = competitor.post(f"/snapshots/{sid}/restore/confirm", params={"token": competitor_token})
             assert response.status_code == 409, response.text
             assert competitor.get(f"/snapshots/{sid}/restore/progress").json()["status"] == "running"
-            process.terminate()
-            process.wait(timeout=15)
+            stop_process(process)
         finally:
             (root / "tool-release").write_text("release own test transport", encoding="utf-8")
         with pytest.raises(httpx.HTTPError):

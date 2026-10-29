@@ -173,7 +173,11 @@ def test_standard_apply_rescues_before_actual_recreate_and_consumer_reads_back(c
         monkeypatch.setenv(environment, str(roots[label]))
     monkeypatch.setenv("JOB_ROOT", str(tmp_path / "storage/jobs"))
     # Changing the mounts forces Compose itself to recreate the old worker.
+    # The service must publish a real health state: ``wait_for_healthy`` treats a
+    # missing HEALTHCHECK as "never healthy" instead of guessing.
     services = {"worker": {"image": IMAGE, "command": ["sleep", "3600"],
+                "healthcheck": {"test": ["CMD", "true"], "interval": "1s",
+                                "timeout": "2s", "retries": 5},
                 "volumes": [f"{roots[label]}:/app/{label}" for label in roots]}}
     for service in deployment.BOOTSTRAP_SERVICES:
         services[service] = {"image": IMAGE, "command": ["sleep", "3600"], "profiles": ["unused"]}

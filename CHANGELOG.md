@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.2.89
+- Виправлено CI job `media-acceptance`: evidence-каталог створюється до запуску pytest, а `--basetemp` винесено в `$RUNNER_TEMP`; тимчасові каталоги тестів більше не залежать від evidence-каталогу і помилка `FileNotFoundError ... runtime-tests` не виникає.
+- Release `prepare`: compose acceptance `tests/test_apply_deployment_docker.py` задає реальний `HEALTHCHECK` для тестового worker, тому `wait_for_healthy` отримує фактичний health state замість 600-секундного таймауту.
+- Release `prepare`: process acceptance `tests/test_backup_process_acceptance.py` завершує disposable uvicorn процес із kill-fallback, тому завислий graceful shutdown під час симуляції crash не валить тест.
+- Release `prepare`: disposable PostgreSQL у `tests/test_workflow_postgres_state.py` використовує власний каталог unix socket (`-k`), а причина завершення процесу повідомляється разом із tail логу.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.88
 - **#360 Voice (`i.0.0.3.60`)**: додано каталог stock `espeak-ng` (provider/model/language/voice/speed) у `services/tts_service.py`; непідтримувані комбінації відхиляються з 422, а вимірювання справжнього WAV підтверджують вплив voice/language/speed.
 - **#360**: `core/api/tasks.py` перевіряє issued snapshot та чинний owner/lease до заміни файлів, реєстрації результату й ack; missing/mismatch/stale/foreign/expired result повертає 400/409 і не змінює прийнятий artifact, Worker/scene/queue ownership.

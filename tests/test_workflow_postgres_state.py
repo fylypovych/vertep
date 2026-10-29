@@ -36,16 +36,29 @@ def test_postgres_workflow_output_and_approval_survive_reconnect(tmp_path):
             pytest.fail("Actual PostgreSQL is required for workflow acceptance")
         pytest.skip("Disposable PostgreSQL binaries are unavailable")
     data = tmp_path / "postgres"
+    socket_dir = tmp_path / "socket"
+    socket_dir.mkdir()
     initialized = subprocess.run([str(pg_bin / ("initdb" + suffix)), "-D", str(data), "-U", "vertep", "-A", "trust", "--encoding=UTF8", "--no-locale"], capture_output=True, text=True)
     assert initialized.returncode == 0, initialized.stderr
     pg_port = port()
-    log = (tmp_path / "postgres.log").open("w", encoding="utf-8")
-    process = subprocess.Popen([str(pg_bin / ("postgres" + suffix)), "-D", str(data), "-h", "127.0.0.1", "-p", str(pg_port)], stdout=log, stderr=log)
+    log_path = tmp_path / "postgres.log"
+    log = log_path.open("w", encoding="utf-8")
+    # -k keeps the unix socket inside the disposable tree; hosted runners do not
+    # always have /var/run/postgresql writable, and a missing socket directory
+    # makes PostgreSQL exit before it ever accepts TCP.
+    process = subprocess.Popen([str(pg_bin / ("postgres" + suffix)), "-D", str(data), "-h", "127.0.0.1", "-p", str(pg_port), "-k", str(socket_dir)], stdout=log, stderr=log)
     url = f"postgresql://vertep@127.0.0.1:{pg_port}/postgres"
+
+    def log_tail():
+        try:
+            return log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+        except OSError:
+            return ""
+
     try:
         import psycopg
         def ready():
-            assert process.poll() is None
+            assert process.poll() is None, f"PostgreSQL exited with {process.returncode}: {log_tail()}"
             try:
                 with psycopg.connect(url, connect_timeout=1) as connection:
                     return connection.execute("SELECT 1").fetchone() == (1,)
@@ -55,5 +68,9 @@ def test_postgres_workflow_output_and_approval_survive_reconnect(tmp_path):
         assert_durable_state(url)
     finally:
         subprocess.run([str(pg_bin / ("pg_ctl" + suffix)), "-D", str(data), "-m", "fast", "stop"], capture_output=True, timeout=20)
-        process.wait(timeout=20)
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=20)
         log.close()
