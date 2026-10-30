@@ -94,6 +94,51 @@ def challenge(api, sid):
     return response.json()["confirmation_token"]
 
 
+def _docker(command, *, timeout=120):
+    return subprocess.run(["docker", *command], text=True, capture_output=True,
+                          timeout=timeout, check=False)
+
+
+def _published_port(container: str, port: str) -> int:
+    result = _docker(["port", container, port])
+    assert result.returncode == 0, result.stderr
+    return int(result.stdout.strip().rsplit(":", 1)[1])
+
+
+@pytest.fixture
+def connected_restore_dependencies():
+    """Disposable real dependencies for the healthy CORE restore boundary.
+
+    A successful transition to NORMAL is deliberately run only when the CI job
+    supplies a PostgreSQL service and a Linux Docker daemon.  A stub HTTP
+    endpoint must not stand in for either Redis, Docker or Ollama health.
+    """
+    required = os.getenv("VERTEP_REQUIRE_CONNECTED_RESTORE") == "1"
+    database_url = os.getenv("VERTEP_CONNECTED_RESTORE_DATABASE_URL", "")
+    if not required:
+        pytest.skip("connected healthy restore environment is not required locally")
+    if not database_url:
+        pytest.fail("VERTEP_CONNECTED_RESTORE_DATABASE_URL is required")
+    if _docker(["info"]).returncode != 0:
+        pytest.fail("Linux Docker daemon is required for connected restore acceptance")
+    containers = []
+    try:
+        for image, port in (("redis:7.4-alpine", "6379"), ("ollama/ollama:0.5.7", "11434")):
+            started = _docker(["run", "-d", "--rm", "-p", f"127.0.0.1::{port}", image], timeout=300)
+            assert started.returncode == 0, started.stderr
+            containers.append(started.stdout.strip())
+        redis_port = _published_port(containers[0], "6379/tcp")
+        ollama_port = _published_port(containers[1], "11434/tcp")
+        ollama_url = f"http://127.0.0.1:{ollama_port}"
+        wait_for(lambda: httpx.get(f"{ollama_url}/api/tags", timeout=1).status_code == 200,
+                 timeout=90)
+        yield {"database_url": database_url, "redis_url": f"redis://127.0.0.1:{redis_port}/15",
+               "ollama_url": ollama_url}
+    finally:
+        for container in containers:
+            _docker(["rm", "-f", container])
+
+
 def test_real_restore_confirmation_restart_and_tamper(backup_process):
     data = backup_process["storage"] / "record.json"
     original = b'{"version":1,"artifact":"approved-output"}'
@@ -172,6 +217,57 @@ def test_core_caller_fences_writers_and_unhealthy_restore_cannot_enter_normal(ba
     _, restarted = backup_process["launch"](core_env, core_port, "core.app:app", "/api/session",
                                            {"Authorization": auth})
     assert restarted.get("/api/system/state").json()["state"] == "EMERGENCY"
+
+
+def test_connected_healthy_restore_returns_normal_after_core_restart(
+        backup_process, connected_restore_dependencies):
+    """#379 P2/P3: real CORE and Backup Service restore data, report progress
+    and enter NORMAL only after their configured Docker/PostgreSQL/Redis/Ollama
+    health checks pass.  The restarted CORE reads the durable NORMAL result.
+    """
+    root = backup_process["root"]
+    config = root / "healthy-core-config"
+    config.mkdir()
+    (config / "users.json").write_text("{}", encoding="utf-8")
+    (config / "installation.json").write_text('{"completed_at":"2026-01-01"}', encoding="utf-8")
+    with socket.socket() as socket_probe:
+        socket_probe.bind(("127.0.0.1", 0))
+        core_port = socket_probe.getsockname()[1]
+    internal_key = "synthetic-healthy-restore-key"
+    dependencies = connected_restore_dependencies
+    _, service = backup_process["launch"]({"BACKUP_CORE_URL": f"http://127.0.0.1:{core_port}",
+                                           "INTERNAL_API_KEY": internal_key})
+    core_env = {
+        "CONFIG_ROOT": str(config), "UPDATE_STATE_DIR": str(root / "healthy-core-update"),
+        "STORAGE_ROOT": str(root / "healthy-core-storage"), "JOB_ROOT": str(root / "healthy-core-jobs"),
+        "SYSTEM_STATE_BACKEND": "file", "BACKUP_URL": str(service.base_url).rstrip("/"),
+        "INTERNAL_API_KEY": internal_key, "ADMIN_USER": "admin", "ADMIN_PASSWORD": "healthy-restore-admin",
+        "USERS_JSON": "", "DATABASE_URL": dependencies["database_url"],
+        "REDIS_URL": dependencies["redis_url"], "OLLAMA_URL": dependencies["ollama_url"],
+        "CORE_ADDRESS": "", "PROMETHEUS_URL": "",
+    }
+    auth = "Basic " + base64.b64encode(b"admin:healthy-restore-admin").decode()
+    process, api = backup_process["launch"](core_env, core_port, "core.app:app", "/api/session",
+                                           {"Authorization": auth})
+    data = backup_process["storage"] / "connected-record.json"
+    original = b"approved connected restore record"
+    data.write_bytes(original)
+    created = api.post("/api/system/backups")
+    assert created.status_code == 200, created.text
+    sid = created.json()["snapshot_id"]
+    token = api.post(f"/api/system/backups/{sid}/restore").json()["confirmation_token"]
+    assert api.get("/api/system/state").json()["state"] == "MAINTENANCE"
+    assert api.post("/api/jobs", json={"topic": "blocked during restore"}).status_code == 423
+    data.write_bytes(b"mutated connected record")
+    confirmed = api.post(f"/api/system/backups/{sid}/restore/confirm", params={"token": token})
+    assert confirmed.status_code == 200, confirmed.text
+    assert data.read_bytes() == original
+    assert api.get(f"/api/system/backups/{sid}/restore/progress").json()["status"] == "done"
+    assert api.get("/api/system/state").json()["state"] == "NORMAL"
+    stop_process(process)
+    _, restarted = backup_process["launch"](core_env, core_port, "core.app:app", "/api/session",
+                                             {"Authorization": auth})
+    assert restarted.get("/api/system/state").json()["state"] == "NORMAL"
 
 
 def test_crash_and_competing_process_keep_restore_fence(backup_process):

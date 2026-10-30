@@ -161,6 +161,14 @@ def test_repository_passes_static_release_gates():
     assert all(check["passed"] for check in report["checks"])
 
 
+def test_release_workflow_qualifies_and_preserves_the_built_artifact_root():
+    """#380 B1: checkout-root qualification is not a release artifact gate."""
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert 'qualify-release.py --root . --artifact-root "${{ runner.temp }}/runtime"' in workflow
+    assert "runtime-artifact-qualification-${{ github.sha }}" in workflow
+    assert "${{ runner.temp }}/runtime" in workflow
+
+
 def test_role_isolation_failure_is_reported(tmp_path):
     root = ROOT
     # Issue #36-adjacent: node_roles.json is pretty-printed, so a text replace of a

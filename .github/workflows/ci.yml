@@ -188,6 +188,56 @@ jobs:
       - name: Run PostgreSQL backfill integration and unit tests
         run: python -m pytest -q tests/test_backfill_postgres.py tests/test_backfill.py tests/test_persistent_user_data.py tests/test_workflow_postgres_state.py
 
+  fleet-persistence-runtime-acceptance:
+    # #378/#379: these two remaining boundaries need a real PostgreSQL epoch,
+    # Linux process groups and Docker-backed healthy CORE dependencies.  They
+    # are fail-closed rather than local skips.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      VERTEP_REQUIRE_DISTRIBUTED_UPDATE_FENCE: "1"
+      VERTEP_UPDATE_LEASE_DATABASE_URL: postgresql://vertep:ci-only@localhost:5432/vertep
+      VERTEP_REQUIRE_CONNECTED_RESTORE: "1"
+      VERTEP_CONNECTED_RESTORE_DATABASE_URL: postgresql://vertep:ci-only@localhost:5432/vertep
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vertep
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: vertep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vertep"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run actual PostgreSQL fencing and connected healthy restore
+        run: >-
+          python -m pytest -q -o junit_family=legacy
+          --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"
+          --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"
+          tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply
+          tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart
+      - name: Upload fleet and connected restore evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fleet-persistence-runtime-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/fleet-persistence-runtime.xml
+            ${{ runner.temp }}/fleet-persistence-runtime/**/backup-process-*.log
+          if-no-files-found: error
+
   media-acceptance:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

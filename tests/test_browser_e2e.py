@@ -24,16 +24,30 @@ BASE_URL = os.getenv("VERTEP_URL", "http://127.0.0.1:8080")
 
 
 def _has_live_server() -> bool:
-    """Return True only when the app host/port is reachable."""
+    """Return True only when the app host exposes the SPA fallback.
+
+    A bare ``python -m http.server`` can answer on the configured port while
+    returning 404 for every client-side route.  That is not a usable Browser
+    E2E host and previously turned an absent harness into false product
+    failures.  The CORE app serves an unknown client route through its SPA.
+    """
     import urllib.parse
+    import urllib.error
+    import urllib.request
 
     parsed = urllib.parse.urlparse(BASE_URL)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         with socket.create_connection((host, port), timeout=1):
-            return True
+            pass
     except OSError:
+        return False
+    probe_url = BASE_URL.rstrip("/") + "/__vertep_spa_probe__"
+    try:
+        with urllib.request.urlopen(probe_url, timeout=2) as response:
+            return response.status < 400
+    except (urllib.error.URLError, OSError):
         return False
 
 

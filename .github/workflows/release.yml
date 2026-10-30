@@ -200,6 +200,17 @@ jobs:
         env:
           SOURCE_COMMIT_SHA: ${{ github.sha }}
         run: python scripts/qualify-release.py --root . --artifact-root "${{ runner.temp }}/runtime" --expected-source-sha "$SOURCE_COMMIT_SHA" --output qualification.json
+      - name: Preserve built artifact-root qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-artifact-qualification-${{ github.sha }}
+          path: |
+            qualification.json
+            ${{ runner.temp }}/runtime
+            ${{ runner.temp }}/images.json
+            ${{ runner.temp }}/SHA256SUMS-*
+          if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -43,11 +43,19 @@ def node_dependencies(tmp_path, redis_url, record_property):
     record_property("postgres_binary_sha256", hashlib.sha256((pg_bin / ("postgres" + suffix)).read_bytes()).hexdigest())
     record_property("docker_dependency", "controlled external CLI; no container build claim")
     data = tmp_path / "postgres-data"
+    # PostgreSQL otherwise uses /var/run/postgresql for its Unix socket even
+    # when every client in this acceptance fixture connects through TCP.  The
+    # hosted runner does not grant that directory to the disposable initdb
+    # owner, so use a per-run directory rather than a privileged workaround.
+    socket_dir = tmp_path / "postgres-socket"
+    socket_dir.mkdir(mode=0o700)
     initialized = subprocess.run([str(pg_bin / ("initdb" + suffix)), "-D", str(data), "-U", "vertep", "-A", "trust", "--encoding=UTF8", "--no-locale"], capture_output=True, text=True)
     assert initialized.returncode == 0, initialized.stderr
     pg_port = port()
     log = (tmp_path / "postgres.log").open("w", encoding="utf-8")
-    pg = subprocess.Popen([str(pg_bin / ("postgres" + suffix)), "-D", str(data), "-h", "127.0.0.1", "-p", str(pg_port)], stdout=log, stderr=log)
+    pg = subprocess.Popen([str(pg_bin / ("postgres" + suffix)), "-D", str(data),
+                           "-h", "127.0.0.1", "-k", str(socket_dir), "-p", str(pg_port)],
+                          stdout=log, stderr=log)
     dsn = f"postgresql://vertep@127.0.0.1:{pg_port}/postgres"
     def postgres_ready():
         import psycopg

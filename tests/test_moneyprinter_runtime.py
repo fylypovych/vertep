@@ -2390,6 +2390,20 @@ def test_ci_runs_the_disposable_runtime_verification():
     assert "--evidence moneyprinter-runtime-evidence" in workflow
 
 
+def test_runtime_evidence_keeps_the_verified_self_test_matrix(tmp_path):
+    """The uploaded runtime artifact must retain the observed gate results,
+    not merely an image inventory (#381 M1/M5)."""
+    check = _load_runtime_check()
+    runtime = {"upstream": "pinned", "bridge_schema": 2}
+    self_test = {"status": "passed", "checks": _media_report(bytes=2048, duration_seconds=9.0)}
+    check.write_evidence(tmp_path, "sha256:" + "a" * 64, runtime, self_test,
+                         {"digest": "sha256:" + "b" * 64})
+    snapshot = json.loads((tmp_path / "runtime-snapshot.json").read_text(encoding="utf-8"))
+    assert snapshot["image_digest"] == "sha256:" + "a" * 64
+    assert snapshot["runtime"] == runtime
+    assert snapshot["self_test"] == self_test
+
+
 def test_wrapper_forwards_a_scene_clip_as_multipart(monkeypatch, tmp_path):
     """P3: the wrapper builds the pinned multipart envelope from raw bytes."""
     client = _wrapper_client(monkeypatch, tmp_path)

@@ -43,7 +43,8 @@ def test_text_role_original_path_when_flag_off(monkeypatch):
 
 def test_text_role_module_path_when_flag_on(monkeypatch):
     _set_flag("VERTEP_TEXT_MODULE_ENABLED", "true")
-    artifacts = text_execute({"task": "text", "topic": "hello"})
+    _mock_httpx_post(monkeypatch, {"response": "Вітаю"})
+    artifacts = text_execute({"task_id": "text-module-role", "task": "text", "topic": "hello"})
     assert len(artifacts) == 1
     assert artifacts[0]["kind"] == "text"
 

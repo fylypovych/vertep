@@ -70,6 +70,11 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.92
+- Оновлено CI та release workflow (`.github/workflows/ci.yml`, `.github/workflows/release.yml`).
+- Додано та оновлено тести: `test_backup_process_acceptance`, `test_browser_e2e`, `test_core_rollout_coordinator`, `test_moneyprinter_runtime`, `test_node_process_acceptance`, `test_release_qualification`, `test_worker_roles`.
+- Оновлено `requirements.txt` та `scripts/moneyprinter-runtime-check.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.81
 - Додано `GET`/`POST /api/system/state` у `core/api/system.py` — незмінний method/path контракт стану системи (Issue #168.2): GET повертає поточний стан, POST переводить систему в `EMERGENCY`.
 - Додано `PUT /api/workers` у `core/api/workers.py` — незмінний method/path контракт оновлення worker (Issue #168.2) з валідацією payload та 404 для невідомого вузла.

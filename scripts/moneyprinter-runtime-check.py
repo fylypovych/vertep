@@ -504,10 +504,12 @@ def collect_sbom(port: int, api_key: str) -> dict:
         raise CheckFailure(f"runtime did not publish an SBOM: {error}") from error
 
 
-def write_evidence(directory: Path, image_digest_value: str, runtime: dict, sbom: dict) -> None:
+def write_evidence(directory: Path, image_digest_value: str, runtime: dict,
+                   self_test: dict, sbom: dict) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "runtime-snapshot.json").write_text(
-        json.dumps({"image_digest": image_digest_value, **runtime}, indent=2),
+        json.dumps({"image_digest": image_digest_value, "runtime": runtime,
+                    "self_test": self_test}, indent=2),
         encoding="utf-8",
     )
     (directory / "sbom.json").write_text(json.dumps(sbom, indent=2), encoding="utf-8")
@@ -613,7 +615,7 @@ def main() -> int:
             raise CheckFailure("the published SBOM has no digest")
 
         if arguments.evidence:
-            write_evidence(Path(arguments.evidence), digest, runtime, sbom)
+            write_evidence(Path(arguments.evidence), digest, runtime, self_test, sbom)
 
         log("all gates passed")
         return 0

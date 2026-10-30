@@ -16,11 +16,22 @@ import os
 import shutil
 import sys
 import tarfile
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).parents[1]
+
+
+def _distributed_fence_dsn() -> str | None:
+    """Return the disposable PostgreSQL boundary only when CI requires it."""
+    dsn = os.getenv("VERTEP_UPDATE_LEASE_DATABASE_URL", "")
+    required = os.getenv("VERTEP_REQUIRE_DISTRIBUTED_UPDATE_FENCE") == "1"
+    if required and not dsn:
+        pytest.fail("VERTEP_UPDATE_LEASE_DATABASE_URL is required for PostgreSQL fencing")
+    return dsn or None
 
 
 def _load(path: Path, name: str):
@@ -327,6 +338,55 @@ def test_mid_apply_fence_store_loss_stops_the_real_mutation(tmp_path, monkeypatc
             agent.run_fenced([sys.executable, "-c", script, str(marker)],
                              tmp_path, state_dir, lease)
     assert not marker.exists(), "the apply ran on while its fence store was unavailable"
+
+
+def test_postgres_epoch_takeover_stops_active_host_apply(tmp_path, monkeypatch):
+    """A real PostgreSQL epoch takeover kills an already-started host apply.
+
+    This is deliberately separate from the file-lease regressions above: a
+    second database connection advances the exact epoch read by ``run_fenced``.
+    The command is a real child process and its delayed write must not survive
+    the fenced process group.
+    """
+    dsn = _distributed_fence_dsn()
+    if not dsn:
+        pytest.skip("disposable PostgreSQL fencing environment is not configured")
+    import psycopg
+
+    agent = _load(ROOT / "scripts" / "update-agent.py", "update_agent_postgres_fence")
+    from core.update_lease import UpdateLease
+
+    monkeypatch.setenv("UPDATE_DATABASE_URL", dsn)
+    monkeypatch.setenv("UPDATE_REQUIRE_DISTRIBUTED_FENCE", "true")
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.02")
+    monkeypatch.setenv("UPDATE_FENCE_KILL_TIMEOUT", "5")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    marker = tmp_path / "delayed-side-effect.txt"
+    operation_id, replacement = "a" * 32, "b" * 32
+    script = (
+        "import sys, time\n"
+        "time.sleep(1.0)\n"
+        "open(sys.argv[1], 'w', encoding='utf-8').write('applied')\n"
+    )
+
+    def take_over_epoch():
+        time.sleep(0.15)
+        with psycopg.connect(dsn, autocommit=True) as connection:
+            connection.execute(
+                "UPDATE update_fences SET epoch=epoch+1, operation_id=%s WHERE name='global'",
+                (replacement,),
+            )
+
+    with UpdateLease(state_dir, operation_id) as lease:
+        takeover = threading.Thread(target=take_over_epoch)
+        takeover.start()
+        with pytest.raises(RuntimeError, match="distributed update fence was lost"):
+            agent.run_fenced([sys.executable, "-c", script, str(marker)],
+                             tmp_path, state_dir, lease)
+        takeover.join(timeout=5)
+        assert not takeover.is_alive(), "PostgreSQL takeover thread did not finish"
+    assert not marker.exists(), "an apply fenced by PostgreSQL still mutated the runtime"
 
 
 def test_driver_never_reports_version_without_executor_output(
