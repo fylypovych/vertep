@@ -63,23 +63,37 @@ Server(("0.0.0.0",8080), Handler).serve_forever()
     config_path = tmp_path / "prometheus.yml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     port = _free_port()
+    prometheus_url = os.getenv("VERTEP_MONITORING_PROMETHEUS_URL", f"http://127.0.0.1:{port}")
+    prometheus_publish = os.getenv(
+        "VERTEP_MONITORING_PROMETHEUS_PUBLISH", f"127.0.0.1:{port}:9090",
+    )
+    host_gateway = os.getenv("VERTEP_MONITORING_HOST_GATEWAY", "host-gateway")
     docker("network", "create", name)
-    def launch(alias, image, *args, options=()):
+    def launch(alias, image, *args, options=(), files=()):
         container = name + "-" + alias
         containers.append(container)
-        docker("run", "-d", "--name", container, "--network", name,
+        # ``docker`` may address a remote Linux daemon from a Windows runner.
+        # A Windows temporary path is not a valid bind source there, so copy
+        # disposable config files into the created container before it starts.
+        # This keeps the real images and their production paths intact.
+        docker("create", "--name", container, "--network", name,
                "--network-alias", alias, *options, image, *args)
+        for source, destination in files:
+            docker("cp", source, f"{container}:{destination}")
+        docker("start", container)
         return container
     try:
         launch("core", "python:3.12-slim", "python", "/proxy.py", monitoring_core["port"],
-               options=("--add-host", "host.docker.internal:host-gateway", "-v", f"{proxy}:/proxy.py:ro"))
+               options=("--add-host", f"host.docker.internal:{host_gateway}"),
+               files=((proxy, "/proxy.py"),))
         launch("node-exporter", "prom/node-exporter:v1.8.2")
         launch("log-store", "grafana/loki:3.5.2", "-config.file=/etc/loki/config.yml",
-               options=("-v", f"{ROOT / 'monitoring/loki.yml'}:/etc/loki/config.yml:ro"))
+               files=((ROOT / "monitoring/loki.yml", "/etc/loki/config.yml"),))
         prom = launch("prometheus", "prom/prometheus:v3.5.0", "--config.file=/etc/prometheus/prometheus.yml",
-                      options=("-p", f"127.0.0.1:{port}:9090", "-v", f"{config_path}:/etc/prometheus/prometheus.yml:ro",
-                               "-v", f"{ROOT / 'monitoring/alerts.yml'}:/etc/prometheus/alerts.yml:ro"))
-        with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=10) as api:
+                      options=("-p", prometheus_publish),
+                      files=((config_path, "/etc/prometheus/prometheus.yml"),
+                             (ROOT / "monitoring/alerts.yml", "/etc/prometheus/alerts.yml")))
+        with httpx.Client(base_url=prometheus_url, timeout=10) as api:
             def ready():
                 try:
                     return api.get("/-/ready").status_code == 200

@@ -10,6 +10,7 @@ not a PASS) — CI runs them for real in the ``local-contracts`` job.
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import uuid
@@ -36,7 +37,18 @@ def _docker_available() -> bool:
         return False
 
 
-docker_gate = pytest.mark.skipif(not _docker_available(), reason="Docker daemon is not available")
+REQUIRE_DOCKER = os.getenv("VERTEP_REQUIRE_APPLY_DEPLOYMENT_DOCKER") == "1"
+docker_gate = pytest.mark.skipif(
+    not _docker_available() and not REQUIRE_DOCKER,
+    reason="Docker daemon is not available",
+)
+
+
+@pytest.fixture(autouse=True)
+def require_actual_docker():
+    """A required acceptance run must fail rather than silently skip Docker."""
+    if REQUIRE_DOCKER and not _docker_available():
+        pytest.fail("Linux Docker daemon is required for deployment acceptance")
 
 IMAGE = "alpine:3.20"
 COMPOSE_TEMPLATE = """services:
