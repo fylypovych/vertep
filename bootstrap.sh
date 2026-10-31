@@ -81,6 +81,9 @@ verify_container_runtime() {
   compose_version=$(docker compose version --short 2>/dev/null) \
     || fail "Docker Compose version could not be determined"
   compose_version=${compose_version#v}
+  # Ubuntu's docker-compose-v2 reports its full package version; the exact
+  # package pin is verified separately with dpkg-query below.
+  compose_version=${compose_version%%+*}
 
   expected_docker_version=${DOCKER_APT_VERSION%%-*}
   expected_compose_version=${COMPOSE_APT_VERSION%%+*}

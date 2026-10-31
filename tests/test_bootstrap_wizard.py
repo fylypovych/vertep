@@ -650,12 +650,18 @@ class TestBootstrapDockerCompose:
         result = self._run_effective_runtime_check()
         assert result.returncode == 0, result.stderr
 
+    def test_ubuntu_compose_package_suffix_matches_the_pin(self):
+        # Ubuntu 24.04 docker-compose-v2 reports the full package version.
+        result = self._run_effective_runtime_check(compose="2.40.3+ds1-0ubuntu1~24.04.1")
+        assert result.returncode == 0, result.stderr
+
     @pytest.mark.parametrize(
         ("version", "expected_error"),
         [
             ({"client": "29.1.2"}, "Docker Client version mismatch"),
             ({"server": "29.1.2"}, "Docker Server version mismatch"),
             ({"compose": "v2.40.2"}, "Docker Compose runtime version mismatch"),
+            ({"compose": "2.40.2+ds1-0ubuntu1~24.04.1"}, "Docker Compose runtime version mismatch"),
         ],
     )
     def test_effective_runtime_version_drift_fails_closed(self, version, expected_error):

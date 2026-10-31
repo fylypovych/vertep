@@ -70,6 +70,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.95
+- `bootstrap.sh`: перевірка фактичної версії Docker Compose відкидає суфікс Ubuntu-пакета (`2.40.3+ds1-0ubuntu1~24.04.1` → `2.40.3`), тому bootstrap більше не зупиняється з хибною помилкою «Docker Compose runtime version mismatch»; точний pin пакета й надалі перевіряється через `dpkg-query`.
+- `tests/test_bootstrap_wizard.py`: додано перевірки, що Ubuntu-суфікс закріпленої версії приймається, а інша версія з таким суфіксом відхиляється.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.94
 - `scripts/issue-122-acceptance-report.py`: створення `MoneyPrinterEngine` у перевірці можливостей середовища перенесено в захищений блок; хост без доступного config root (CI runner без `/data`) отримує RUNTIME=недоступний замість аварійного завершення, тому CI job `moneyprinter-pinned-runtime` формує criterion report (#385 M5).
 - `tests/test_issue_122_acceptance_report.py`: додано тест, що недоступний для створення engine означає відсутній runtime, а не падіння звіту.
