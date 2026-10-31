@@ -132,7 +132,10 @@ def validate_replay_state(manifest: dict, trusted: dict | None) -> dict:
     if not isinstance(previous, int):
         raise RuntimeError("Stored update replay state is invalid")
     if sequence < previous:
-        raise RuntimeError("Update manifest release sequence was replayed")
+        raise RuntimeError(
+            "Update manifest release sequence was replayed. If a newer release was withdrawn on "
+            "purpose, publish a fix with a higher version; only as a last resort run "
+            "update-agent.py --reset-replay-state --reason '<why>' (audited).")
     if sequence == previous and any(trusted.get(key) != candidate.get(key)
                                     for key in ("version", "sha256", "key_id")):
         raise RuntimeError("Update manifest equivocates at an accepted release sequence")
@@ -159,6 +162,14 @@ def _read_small_response(request: urllib.request.Request, *, timeout: int,
                     raise RuntimeError(f"Update server returned HTTP {response.status}")
                 return response.read(maximum + 1)
         except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code in {403, 429}:
+                # A rate limit (unauthenticated GitHub API allows 60 requests/hour per IP)
+                # does not clear in two seconds; retrying only burns the remaining quota.
+                reset = error.headers.get("X-RateLimit-Reset") if error.headers else None
+                raise RuntimeError(
+                    f"Сервер оновлень відхилив запит (HTTP {error.code}, ймовірно ліміт запитів "
+                    f"GitHub API; скидання: {reset or 'невідомо'}); повторні спроби скасовано"
+                ) from error
             if attempt == attempts:
                 raise RuntimeError(
                     f"Не вдалося прочитати відповідь сервера оновлень після {attempts} спроб: {error}"

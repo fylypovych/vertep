@@ -460,11 +460,13 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             transition(state_dir, state, "CHECKING", "Signed release manifest verified", 15)
             force_apply = action == "update" and (root / "fail-apply").exists()
             if action == "update" and (state["update_available"] or force_apply):
-                if not skip_drain:
-                    wait_for_drain(state_dir, state, lease)
-                transition(state_dir, state, "DOWNLOADING", "Downloading and verifying update package", 38)
+                # Download and verify while the system still serves jobs: maintenance
+                # must only cover the drain, the backup and the apply, never the network.
+                transition(state_dir, state, "DOWNLOADING", "Downloading and verifying update package", 18)
                 package = download_package(
                     manifest, state_dir / "packages" / f"vertep-{manifest['version']}.tar.gz")
+                if not skip_drain:
+                    wait_for_drain(state_dir, state, lease)
                 transition(state_dir, state, "UPDATING", "Backup and package installation started", 50)
                 assert_mutation_allowed(state_dir, lease)
                 output = run_fenced(host_command(root, "apply-update",
@@ -520,16 +522,48 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                     pass
 
 
+def reset_replay_state(state_dir: Path, reason: str) -> None:
+    """Operator escape hatch: forget the accepted release sequence.
+
+    The replay guard refuses any manifest older than one already seen, so a withdrawn
+    release cannot simply be replaced by the previous one. When that is really what the
+    operator intends, this removes the stored sequence under the update lease and records
+    the operator's reason in the tamper-evident audit log. It is never run automatically.
+    """
+    from core.update_lease import UpdateLease
+    replay_path = state_dir / "trusted-release.json"
+    with UpdateLease(state_dir, "reset-replay-state") as lease:
+        lease.assert_current()
+        try:
+            previous = json.loads(replay_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = None
+        replay_path.unlink(missing_ok=True)
+        append_audit(state_dir, {
+            "operation_id": None, "phase": "OPERATOR", "action": "reset-replay-state",
+            "message": f"Update replay state reset by operator: {reason}; previous={previous}"})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Process signed Vertep update requests")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--skip-drain", action="store_true", help="Skip drain wait for worker nodes")
+    parser.add_argument("--reset-replay-state", action="store_true",
+                        help="Forget the accepted release sequence (audited operator action)")
+    parser.add_argument("--reason", default="",
+                        help="Why the replay state is reset (required with --reset-replay-state)")
     args = parser.parse_args()
     root, state_dir = args.root.resolve(), args.state_dir.resolve()
     sys.path.insert(0, str(root))
     if not (root / "scripts" / "vertep").is_file():
         raise SystemExit("Invalid Vertep installation root")
+    if args.reset_replay_state:
+        if len(args.reason.strip()) < 10:
+            raise SystemExit("--reset-replay-state requires --reason with at least 10 characters")
+        reset_replay_state(state_dir, args.reason.strip())
+        print("Update replay state was reset and the action was recorded in the audit log.")
+        return
     recover_if_interrupted(root, state_dir)
     requests = state_dir / "requests"
     requests.mkdir(parents=True, exist_ok=True)

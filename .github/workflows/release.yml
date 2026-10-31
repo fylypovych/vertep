@@ -109,7 +109,6 @@ jobs:
             VERTEP_ENVIRONMENT=production
           tags: |
             ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:${{ needs.prepare.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:latest
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
@@ -152,6 +151,7 @@ jobs:
         shell: bash
         env:
           RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.RUNTIME_SIGNING_PRIVATE_KEY }}
+          RUNTIME_MANIFEST_VALIDITY_DAYS: ${{ vars.RUNTIME_MANIFEST_VALIDITY_DAYS }}
           EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
           SOURCE_COMMIT_SHA: ${{ github.sha }}
         run: |
@@ -184,7 +184,13 @@ jobs:
             --repository "${{ github.repository }}" \
             --private-key "${{ runner.temp }}/runtime-signing.pem" \
             --output "${{ runner.temp }}/update-manifest-$version.json"
-          python - "${{ runner.temp }}/update-manifest-$version.json" "$version" <<'PY'
+          # Validate the way an appliance will: with its enforcement flags (they are set
+          # in the installed .env) and from the real upgrade source, the previously
+          # released version, not from the new version itself.
+          previous="$(git tag --list --sort=-v:refname \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$version" | head -1 || true)"
+          REQUIRE_ROLLING_COMPATIBILITY=true REQUIRE_UPDATE_KEY_LIFECYCLE=true \
+          python - "${{ runner.temp }}/update-manifest-$version.json" "${previous:-$version}" <<'PY'
           import json, sys
           from pathlib import Path
           from core.update_protocol import validate_manifest
@@ -239,10 +245,60 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="$(tr -d '\r\n' < VERSION)"
+          repo="$GITHUB_REPOSITORY"
+          # `releases/latest` is what bootstrap.sh and every update agent read, so a release
+          # must only become visible after all assets are uploaded: create it as a draft,
+          # verify the assets, then publish.
+          find_release() {
+            gh api "repos/$repo/releases?per_page=100" \
+              --jq ".[] | select(.tag_name==\"$version\") | \"\(.id) \(.draft)\""
+          }
+          old_id=""; old_draft=""
+          read -r old_id old_draft < <(find_release | head -1) || true
+          if [ -n "$old_id" ]; then
+            if [ "$old_draft" = "true" ]; then
+              # Leftover draft of a failed earlier attempt; it was never public.
+              gh api -X DELETE "repos/$repo/releases/$old_id"
+            else
+              echo "Release $version is already published" >&2
+              exit 1
+            fi
+          fi
           gh release create "$version" \
+            --draft --verify-tag \
             --title "Vertep $version" \
             --notes-file "releases/$version.md" \
             "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
             "${{ runner.temp }}/manifest-$version.json" \
             "${{ runner.temp }}/update-manifest-$version.json" \
             "${{ runner.temp }}/SHA256SUMS-$version"
+          release_id=""
+          read -r release_id _ < <(find_release | head -1) || true
+          [ -n "$release_id" ] || { echo "Draft release $version was not created" >&2; exit 1; }
+          uploaded="$(gh api "repos/$repo/releases/$release_id" \
+            --jq '[.assets[] | select(.state=="uploaded") | .name] | join("\n")')"
+          for name in "vertep-runtime-$version.tar.gz" "manifest-$version.json" \
+                      "update-manifest-$version.json" "SHA256SUMS-$version"; do
+            printf '%s\n' "$uploaded" | grep -Fxq "$name" \
+              || { echo "Draft release $version is missing asset $name" >&2; exit 1; }
+          done
+          gh api -X PATCH "repos/$repo/releases/$release_id" \
+            -F draft=false -f make_latest=true >/dev/null
+      # `:latest` moves only after the release is public: a release that fails
+      # qualification or publication must never leave `:latest` on its images.
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Move latest image tags to the published release
+        continue-on-error: true
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          prefix="ghcr.io/${{ github.repository_owner }}/vertep-"
+          for metadata in "${{ runner.temp }}"/image-metadata/*.json; do
+            name="$(jq -er '.name' "$metadata")"
+            docker buildx imagetools create -t "${prefix}${name}:latest" "${prefix}${name}:${version}"
+          done

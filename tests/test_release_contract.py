@@ -75,6 +75,32 @@ def test_release_contract_binds_roles_images_files_and_sbom(tmp_path):
         validate_release_contract(signed, bundle, public_key)
 
 
+def test_database_compatibility_follows_shipped_migrations(tmp_path):
+    db = tmp_path / "db"
+    db.mkdir()
+    for name in ("001_initial.sql", "009_late.sql", "010_data.backfill.py", "012_newest.sql"):
+        (db / name).write_text("", encoding="utf-8")
+    (db / "README.md").write_text("ignored", encoding="utf-8")
+    builder = contract_builder()
+    assert builder.database_compatibility(db) == {
+        "database_schema": 12, "database_strategy": "expand",
+        "rollback_safe": True, "minimum_version": "0.0.0.1"}
+
+    (db / "compatibility.json").write_text(json.dumps(
+        {"strategy": "contract", "rollback_safe": False, "minimum_version": "0.0.2.90"}),
+        encoding="utf-8")
+    declared = builder.database_compatibility(db)
+    assert (declared["database_strategy"], declared["rollback_safe"],
+            declared["minimum_version"]) == ("contract", False, "0.0.2.90")
+
+    (db / "compatibility.json").write_text(json.dumps({"strategy": "drop-all"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="strategy"):
+        builder.database_compatibility(db)
+    (db / "compatibility.json").write_text(json.dumps({"rollback": True}), encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown keys"):
+        builder.database_compatibility(db)
+
+
 def test_release_contract_rejects_unpinned_role_service(tmp_path):
     bundle, image_lock, private_key, _ = release_fixture(tmp_path)
     images = json.loads(image_lock.read_text(encoding="utf-8"))

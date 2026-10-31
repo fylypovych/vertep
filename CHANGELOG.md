@@ -70,6 +70,18 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.97
+- `bootstrap.sh`: повторний запуск на встановленій системі з release layout робить знімок (конфігурація, `.env`, дамп PostgreSQL, `SHA256SUMS`), активує нову версію так само, як `vertep apply-update`, і при помилці після активації автоматично виконує `vertep rollback`.
+- `bootstrap.sh`: відмовляє в downgrade встановленої системи на старіший реліз (обхід лише через `VERTEP_ALLOW_DOWNGRADE=1`); перевірка доступності та визначення релізу виконуються одним запитом до GitHub API з повторними спробами.
+- `core/update_protocol.py`: HTTP 403/429 від сервера оновлень (ліміт GitHub API) більше не повторюється марно, а повідомляється з часом скидання ліміту; помилка replay підказує аудитований спосіб скидання.
+- `scripts/update-agent.py`: пакет завантажується й перевіряється до переходу в maintenance/drain; додано аудитовану операторську команду `--reset-replay-state --reason`.
+- `.github/workflows/release.yml`: Release створюється як draft і публікується лише після перевірки всіх артефактів; теги `:latest` образів переносяться тільки після публікації; маніфест оновлення перевіряється з прапорцями appliance від попередньої версії.
+- `.github/workflows/release-expiry.yml`: щотижнева перевірка строку дії підписаного маніфесту останнього релізу (помилка, якщо лишилося менше 60 днів).
+- `scripts/build-runtime-bundle.py`, `scripts/runtime-contract.py`, `db/README.md`: `database_schema` визначається з найбільшого номера міграції в `db/`, стратегію можна оголосити в `db/compatibility.json`; строк дії маніфесту задається `RUNTIME_MANIFEST_VALIDITY_DAYS` (30–730, типово 365).
+- `scripts/release.py`: run_id release workflow визначається як новий запуск після dispatch, таймаут workflow повідомляється явно; публічні `.pem` дозволено, приватні ключі будь-якого типу блокуються.
+- `.gitignore`: ігноруються `fastagent.secrets.yaml`.
+- `tests/test_release_hardening.py`, `tests/test_release_contract.py`: регресійні тести для наведених змін; заголовки ключів у тесті сканера секретів складаються під час виконання, тому сам файл не спрацьовує на перевірку секретів.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.96
 - `docker/backup/Dockerfile`: в образ `backup-service` додано `psutil==7.0.0`; без нього сервіс падав під час старту (`ModuleNotFoundError: No module named 'psutil'` у `recover_interrupted_restore`) і перезапускався по колу після встановлення 0.0.2.94.
 - `docker/publisher/Dockerfile`: в образ `publisher` копіюються `core/__init__.py` і `core/logging_config.py`, бо збереження квитанції публікації імпортує `core.logging_config.redact_payload`.

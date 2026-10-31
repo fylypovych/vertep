@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -27,7 +28,21 @@ def _load_script(name: str):
 
 
 generate = _load_script("generate-sbom.py").generate
-build_contract = _load_script("runtime-contract.py").build_contract
+_runtime_contract = _load_script("runtime-contract.py")
+build_contract = _runtime_contract.build_contract
+database_compatibility = _runtime_contract.database_compatibility
+
+
+def manifest_validity_days() -> int:
+    """Lifetime of the signed manifest; update checks fail once it has expired.
+
+    The default stays one year. The release workflow can raise or lower it through the
+    repository variable RUNTIME_MANIFEST_VALIDITY_DAYS (30..730).
+    """
+    days = int(os.getenv("RUNTIME_MANIFEST_VALIDITY_DAYS") or "365")
+    if not 30 <= days <= 730:
+        raise ValueError("RUNTIME_MANIFEST_VALIDITY_DAYS must be between 30 and 730")
+    return days
 
 
 FILES = {
@@ -102,10 +117,8 @@ def build(root: Path, output: Path, version: str, sequence: int,
         json.dumps(sbom, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     contract = build_contract(
         output, version, sequence, "stable", "config/node_roles.json",
-        output / "images.json", "sbom.cdx.json", datetime.now(timezone.utc), 365,
-        {"core_api": 1, "worker_api": 1, "database_schema": 9,
-         "database_strategy": "expand", "rollback_safe": True,
-         "minimum_version": "0.0.0.1"},
+        output / "images.json", "sbom.cdx.json", datetime.now(timezone.utc), manifest_validity_days(),
+        {"core_api": 1, "worker_api": 1, **database_compatibility(root / "db")},
         source_commit_sha,
     )
     signed = sign_release_contract(contract, private_key)

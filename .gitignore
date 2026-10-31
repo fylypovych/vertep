@@ -58,3 +58,7 @@ RELEASE_IDENTITY.json
 /moneyprinter-runtime-check
 /.kilo_publish_repro/state
 /.pytest_tmp
+
+# Local AI-agent tool secrets must never reach the public repository.
+fastagent.secrets.yaml
+**/fastagent.secrets.yaml

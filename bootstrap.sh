@@ -14,7 +14,22 @@ MIN_DISK_MB=${VERTEP_MIN_DISK_MB:-20480}
 DOCKER_APT_VERSION='29.1.3-0ubuntu3~24.04.2'
 COMPOSE_APT_VERSION='2.40.3+ds1-0ubuntu1~24.04.1'
 
-fail(){ printf 'VERTEP: %s\n' "$*" >&2; exit 1; }
+# Rollback state for an already installed system (see snapshot_installed_system).
+snapshot_taken=false
+bootstrap_mutated=false
+rolling_back=false
+rollback_after_failure(){
+  # Only after the new release was activated: before that the system is unchanged and
+  # `vertep rollback` would wrongly step back one more release.
+  [[ $bootstrap_mutated == true && $snapshot_taken == true && $rolling_back == false ]] || return 0
+  rolling_back=true
+  printf 'VERTEP: bootstrap failed; restoring the previous release\n' >&2
+  "$INSTALL_ROOT/scripts/vertep" rollback >&2 \
+    || printf 'VERTEP: automatic rollback failed; run: sudo vertep rollback\n' >&2
+  systemctl start vertep-update.path vertep-update.timer vertep-deployment.path \
+    vertep-watchdog.timer >/dev/null 2>&1 || true
+}
+fail(){ printf 'VERTEP: %s\n' "$*" >&2; rollback_after_failure; exit 1; }
 progress(){ printf '\n==> %s\n' "$*"; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run bootstrap as root (curl … | sudo bash)"
 # Quiesce automatic runtime writers before changing the installed release.
@@ -37,7 +52,10 @@ ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 disk_mb=$(df -Pm /opt 2>/dev/null | awk 'NR==2{print $4}' || df -Pm / | awk 'NR==2{print $4}')
 (( ram_mb >= MIN_RAM_MB )) || fail "at least ${MIN_RAM_MB} MB RAM is required (found ${ram_mb})"
 (( disk_mb >= MIN_DISK_MB )) || fail "at least ${MIN_DISK_MB} MB free disk is required (found ${disk_mb})"
-curl -fsS --connect-timeout 10 "$DOWNLOAD_ORIGIN" >/dev/null || fail "Vertep release service is unreachable or no release is published"
+# One request serves both the reachability probe and the release resolution below:
+# the unauthenticated GitHub API allows only 60 requests/hour per IP address.
+release_probe=$(curl -fsS --connect-timeout 10 --retry 3 --retry-delay 5 "$DOWNLOAD_ORIGIN") \
+  || fail "Vertep release service is unreachable or no release is published"
 download_host=${DOWNLOAD_ORIGIN#*://}; download_host=${download_host%%/*}
 getent ahosts "$download_host" | head -1 >/dev/null 2>&1 \
   || fail "DNS cannot resolve the Vertep repository"
@@ -156,11 +174,67 @@ fi
 progress "Preparing immutable Vertep runtime"
 install -d -m 0750 "$INSTALL_ROOT"/{data,config,logs,backups,storage,models,runtime,tls}
 
+# An installed system must never be moved to an older release by re-running bootstrap
+# (for example after a release was withdrawn and `latest` fell back): the database may
+# already be on a newer schema. The update agent has the same guard; bootstrap did not.
+refuse_downgrade(){
+  local candidate=$1 installed
+  installed=$(awk -F= '$1=="VERTEP_VERSION"{v=substr($0,index($0,"=")+1)} END{print v}' \
+    "$INSTALL_ROOT/.env" 2>/dev/null || true)
+  [[ -n $installed && $installed != "$candidate" ]] || return 0
+  if [[ $(printf '%s\n%s\n' "$installed" "$candidate" | sort -V | tail -1) == "$installed" ]]; then
+    [[ ${VERTEP_ALLOW_DOWNGRADE:-} == 1 ]] \
+      || fail "installed Vertep $installed is newer than release $candidate; refusing to downgrade (set VERTEP_ALLOW_DOWNGRADE=1 to override)"
+  fi
+}
+
+# A system that the update agent already moved to the immutable release layout runs from
+# `$INSTALL_ROOT/current`, not from the flat files bootstrap copies. Re-running bootstrap must
+# therefore snapshot it (so `vertep rollback` works) and activate the new release the same
+# way `vertep apply-update` does, or `.env` and `current` would describe different releases.
+snapshot_installed_system(){
+  [[ -L "$INSTALL_ROOT/current" && -f "$INSTALL_ROOT/.env" ]] || return 0
+  local target=$1 backup running=()
+  backup="$INSTALL_ROOT/backups/bootstrap-$(date +%Y%m%d-%H%M%S)"
+  progress "Backing up the installed system before changing it"
+  install -d -m 0700 "$backup"
+  printf '%s\n' "$target" > "$backup/target-version"
+  tar --exclude=.git --exclude=./backups --exclude=./runtime --exclude=./releases \
+    --exclude=./current --exclude=./models --exclude=./storage --exclude=./data \
+    --exclude=./logs --exclude='*.pyc' -czf "$backup/application.tar.gz" -C "$INSTALL_ROOT" .
+  cp -a "$INSTALL_ROOT/.env" "$INSTALL_ROOT/config" "$backup/"
+  local old_compose=(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/current/docker-compose.yml")
+  mapfile -t running < <("${old_compose[@]}" ps --status running --services 2>/dev/null || true)
+  if [[ " ${running[*]:-} " == *" postgres "* ]]; then
+    "${old_compose[@]}" exec -T postgres pg_dump -U vertep vertep > "$backup/postgres.sql" \
+      || fail "database backup failed; the installed system was not modified"
+    [[ -s "$backup/postgres.sql" ]] \
+      || fail "database backup is empty; the installed system was not modified"
+    touch "$backup/database-restore-required"
+  fi
+  (cd "$backup" && find . -type f ! -name SHA256SUMS -print0 \
+    | sort -z | xargs -0 sha256sum > SHA256SUMS)
+  printf '%s\n' "$backup" > "$INSTALL_ROOT/.vertep-last-good"
+  snapshot_taken=true
+}
+activate_installed_release(){
+  local payload=$1 target=$2 active
+  [[ -L "$INSTALL_ROOT/current" ]] || return 0
+  active=$(basename "$(readlink "$INSTALL_ROOT/current")")
+  [[ $active != "$target" ]] || return 0
+  if [[ ! -d "$INSTALL_ROOT/releases/$target" ]]; then
+    python3 "$INSTALL_ROOT/scripts/release-layout.py" prepare "$INSTALL_ROOT" "$payload::$target" >/dev/null
+  fi
+  python3 "$INSTALL_ROOT/scripts/release-layout.py" activate "$INSTALL_ROOT" "$target"
+  bootstrap_mutated=true
+}
+
 if [[ "$DOWNLOAD_ORIGIN" == *"api.github.com"* ]]; then
   progress "Resolving signed GitHub runtime release"
-  release_json=$(curl -fsS "$DOWNLOAD_ORIGIN")
+  release_json=$release_probe
   tag=$(printf '%s' "$release_json" | jq -er '.tag_name')
   version=${tag#v}
+  refuse_downgrade "$version"
   asset_name="vertep-runtime-${version}.tar.gz"
   bundle_url=$(printf '%s' "$release_json" | jq -er --arg name "$asset_name" \
     '.assets[] | select(.name == $name) | .browser_download_url') \
@@ -222,7 +296,9 @@ PY
   [[ $(jq -er '.version' "$manifest_tmp") == "$version" ]] \
     || fail "GitHub release tag and runtime manifest version differ"
   chmod -R u+rX,g+rX,o-rwx "$bundle_root"
+  snapshot_installed_system "$version"
   cp -a "$bundle_root"/. "$INSTALL_ROOT/"
+  activate_installed_release "$bundle_root" "$version"
 else
   manifest_tmp=$(mktemp); trap 'rm -f "$manifest_tmp"' EXIT
   curl -fsS "$DOWNLOAD_ORIGIN/v1/runtime/stable/manifest.json" -o "$manifest_tmp"
@@ -263,6 +339,7 @@ PY
     (.sbom.format == "CycloneDX-JSON")
   ' "$manifest_tmp" >/dev/null || fail "runtime manifest contract is invalid"
   version=$(jq -er '.version' "$manifest_tmp")
+  refuse_downgrade "$version"
   compose_sha=$(jq -er '.files["docker-compose.yml"].sha256' "$manifest_tmp")
   compose_amd_sha=$(jq -er '.files["docker-compose.amd.yml"].sha256' "$manifest_tmp")
   compose_nvidia_sha=$(jq -er '.files["docker-compose.nvidia.yml"].sha256' "$manifest_tmp")

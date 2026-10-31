@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +16,46 @@ from core.release_contract import sign_release_contract, validate_release_contra
 
 def _metadata(path: Path) -> dict:
     return {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+
+
+_MIGRATION_RE = re.compile(r"^(\d{3})_.+\.(?:sql|backfill\.py)$")
+_VERSION_RE = re.compile(r"^\d+(?:\.\d+){2,3}$")
+
+
+def database_compatibility(db_dir: Path) -> dict:
+    """Database part of the compatibility block, derived from the shipped migrations.
+
+    ``database_schema`` is the highest migration number in ``db_dir``, so it can
+    never lag behind the migrations the release actually applies. The migration
+    strategy, rollback safety and minimum upgrade source cannot be inferred from
+    SQL; the release author declares them in the optional ``db/compatibility.json``
+    (``strategy``, ``rollback_safe``, ``minimum_version``). Without that file the
+    previous defaults apply: an additive (expand) and rollback-safe release.
+    """
+    numbers = [int(match.group(1)) for path in db_dir.iterdir()
+               if (match := _MIGRATION_RE.match(path.name))]
+    if not numbers:
+        raise ValueError(f"No database migrations found in {db_dir}")
+    declared: dict = {}
+    declaration = db_dir / "compatibility.json"
+    if declaration.is_file():
+        declared = json.loads(declaration.read_text(encoding="utf-8"))
+        if not isinstance(declared, dict):
+            raise ValueError("db/compatibility.json must be a JSON object")
+    unknown = set(declared) - {"strategy", "rollback_safe", "minimum_version"}
+    if unknown:
+        raise ValueError("db/compatibility.json has unknown keys: " + ", ".join(sorted(unknown)))
+    strategy = declared.get("strategy", "expand")
+    rollback_safe = declared.get("rollback_safe", True)
+    minimum_version = declared.get("minimum_version", "0.0.0.1")
+    if strategy not in {"none", "expand", "contract"}:
+        raise ValueError("db/compatibility.json strategy must be none, expand or contract")
+    if not isinstance(rollback_safe, bool):
+        raise ValueError("db/compatibility.json rollback_safe must be boolean")
+    if not isinstance(minimum_version, str) or not _VERSION_RE.fullmatch(minimum_version):
+        raise ValueError("db/compatibility.json minimum_version is not a release version")
+    return {"database_schema": max(numbers), "database_strategy": strategy,
+            "rollback_safe": rollback_safe, "minimum_version": minimum_version}
 
 
 def build_contract(artifact_root: Path, version: str, sequence: int, channel: str,

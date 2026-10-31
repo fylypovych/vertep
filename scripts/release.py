@@ -18,10 +18,13 @@ SECRET_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"-----BEGIN (?:RSA |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"),
 ]
 FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519"}
-FORBIDDEN_SUFFIXES = {".pem", ".p12", ".pfx"}
+FORBIDDEN_SUFFIXES = {".p12", ".pfx"}
+# A .pem file may be committed only when it is verifiably public material, such as the
+# release verification key (`installer/update-public.pem`) or a keyring entry.
+PUBLIC_PEM_MARKERS = ("-----BEGIN PUBLIC KEY-----", "-----BEGIN CERTIFICATE-----")
 
 
 def run(root: Path, command: list[str], *, capture: bool = True) -> str:
@@ -150,6 +153,11 @@ def scan_staged_secrets(root: Path) -> None:
         try:
             content = git(root, "show", f":{relative}")
         except subprocess.CalledProcessError:
+            continue
+        if path.suffix.lower() == ".pem" and not (
+                any(marker in content for marker in PUBLIC_PEM_MARKERS)
+                and not any(pattern.search(content) for pattern in SECRET_PATTERNS)):
+            problems.append(f"заборонене ім’я файла із секретом: {relative}")
             continue
         if any(pattern.search(content) for pattern in SECRET_PATTERNS):
             problems.append(f"можливий секрет у файлі: {relative}")
@@ -374,12 +382,15 @@ def orchestrate_release(
         wait_for_gates(root, local_sha, timeout=gate_timeout)
     run_id = trigger.run(root, workflow="Vertep Release", sha=local_sha)
     deadline = time.time() + timeout
+    result: dict = {}
     while time.time() < deadline:
         result = trigger.wait(root, run_id=run_id, timeout=min(30, max(1, deadline - time.time())))
         if result.get("conclusion") in {"success", "failure", "cancelled"}:
             break
         time.sleep(5)
     conclusion = result.get("conclusion", "timeout")
+    if conclusion == "timeout":
+        raise RuntimeError("Release workflow не завершився за відведений час")
     if conclusion == "failure":
         failed = trigger.failed_jobs(root, run_id=run_id)
         raise RuntimeError(f"Release workflow завершився з помилкою: {failed or conclusion}")
@@ -392,20 +403,30 @@ def orchestrate_release(
 class GitHubActionsTrigger:
     """Trigger and monitor a GitHub Actions workflow run via the `gh` CLI."""
 
+    @staticmethod
+    def _dispatch_run_ids(root: Path, workflow: str) -> set[str]:
+        result = gh_run_json(root, [
+            "run", "list", "--workflow", workflow, "--branch", "main",
+            "--event", "workflow_dispatch", "--limit", "30", "--json", "databaseId",
+        ])
+        return {str(item["databaseId"]) for item in result} if isinstance(result, list) else set()
+
     def run(self, root: Path, *, workflow: str, sha: str) -> str:
         # GitHub workflow_dispatch accepts branch/tag refs, not bare commit SHAs.
         # Using "main" — prepare_release already pushed HEAD there.
+        # The run created by this dispatch is the one that was not listed before it; taking
+        # the newest run after a fixed sleep could pick up an unrelated, earlier run.
+        known = self._dispatch_run_ids(root, workflow)
         gh_run(root, ["workflow", "run", workflow, "--ref", "main"])
-        time.sleep(20)
-        result = gh_run_json(root, [
-            "run", "list", "--workflow", workflow, "--limit", "1",
-            "--json", "databaseId",
-        ])
-        if not result:
-            raise RuntimeError(
-                f"Не вдалося отримати run_id для workflow «{workflow}»"
-            )
-        return str(result[0]["databaseId"])
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            time.sleep(5)
+            fresh = self._dispatch_run_ids(root, workflow) - known
+            if fresh:
+                return max(fresh, key=int)
+        raise RuntimeError(
+            f"Не вдалося отримати run_id для workflow «{workflow}»"
+        )
 
     def wait(self, root: Path, *, run_id: str, timeout: int) -> dict:
         deadline = time.time() + timeout

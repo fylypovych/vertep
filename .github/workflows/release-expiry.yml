@@ -1,0 +1,36 @@
+name: Release Expiry Watch
+
+# The signed update manifest of every release expires (365 days after the build).
+# When the newest release expires, every appliance's update check fails with
+# "Update manifest has expired". This weekly check fails early so that a new
+# release is published long before that happens.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MIN_DAYS_LEFT: "60"
+    steps:
+      - name: Check expiry of the latest release manifest
+        shell: bash
+        run: |
+          version="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          gh release download "$version" --repo "$GITHUB_REPOSITORY" \
+            --pattern "update-manifest-*.json" --output manifest.json
+          expires="$(jq -er '.expires_at' manifest.json)"
+          left=$(( ( $(date -d "$expires" +%s) - $(date +%s) ) / 86400 ))
+          echo "Latest release $version: update manifest expires $expires ($left days left)"
+          if [ "$left" -lt "$MIN_DAYS_LEFT" ]; then
+            echo "::error::The update manifest of release $version expires in $left days; publish a new release"
+            exit 1
+          fi
