@@ -393,8 +393,10 @@ def available_capabilities() -> dict[str, bool]:
     from adapters.providers.video_engines import MoneyPrinterEngine
 
     docker = shutil.which("docker") is not None
-    engine = MoneyPrinterEngine()
     try:
+        # Constructing the engine reads its secret store; a host without the
+        # appliance config root cannot reach a configured runtime either.
+        engine = MoneyPrinterEngine()
         runtime_listening = bool(engine.configured()) and bool(
             engine.capabilities().get("ready")
         )

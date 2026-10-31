@@ -115,6 +115,17 @@ def test_every_criterion_cites_at_least_one_test_or_names_a_missing_environment(
 
 def test_a_real_stand_is_never_available_without_an_authorisation(report_module):
     assert report_module.available_capabilities()[report_module.STAND] is False
+
+
+def test_an_engine_that_cannot_be_constructed_is_an_absent_runtime(report_module, monkeypatch):
+    """A host without a writable config root renders the report instead of crashing."""
+    import adapters.providers.video_engines as engines
+
+    def unavailable(*_args, **_kwargs):
+        raise PermissionError("[Errno 13] Permission denied: '/data'")
+
+    monkeypatch.setattr(engines, "MoneyPrinterEngine", unavailable)
+    assert report_module.available_capabilities()[report_module.RUNTIME] is False
     assert report_module.STAND in report_module.capability_reasons()
 
 

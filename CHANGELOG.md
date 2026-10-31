@@ -70,6 +70,10 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.94
+- `scripts/issue-122-acceptance-report.py`: створення `MoneyPrinterEngine` у перевірці можливостей середовища перенесено в захищений блок; хост без доступного config root (CI runner без `/data`) отримує RUNTIME=недоступний замість аварійного завершення, тому CI job `moneyprinter-pinned-runtime` формує criterion report (#385 M5).
+- `tests/test_issue_122_acceptance_report.py`: додано тест, що недоступний для створення engine означає відсутній runtime, а не падіння звіту.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.93
 - `core/api/_internal.py`: додано opt-in propagate_client_errors для внутрішніх викликів, де 4xx upstream є результатом для викликача.
 - `core/api/backups.py`: restore challenge/progress/confirm повертають 404/409/422 Backup Service замість узагальненої 502; відмова challenge не залишає durable restore fence.
