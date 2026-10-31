@@ -3,7 +3,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl postgresql-client redis-tools \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --home /nonexistent vertep
-RUN pip install --no-cache-dir fastapi==0.115.6 uvicorn[standard]==0.34.0 'cryptography>=41.0.7,<47'
+RUN pip install --no-cache-dir fastapi==0.115.6 uvicorn[standard]==0.34.0 'cryptography>=41.0.7,<47' psutil==7.0.0
 COPY services /app/services
 RUN install -d -o 10001 -g 10001 /data/backups
 USER 10001:10001

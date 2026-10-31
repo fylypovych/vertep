@@ -70,6 +70,11 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.96
+- `docker/backup/Dockerfile`: в образ `backup-service` додано `psutil==7.0.0`; без нього сервіс падав під час старту (`ModuleNotFoundError: No module named 'psutil'` у `recover_interrupted_restore`) і перезапускався по колу після встановлення 0.0.2.94.
+- `docker/publisher/Dockerfile`: в образ `publisher` копіюються `core/__init__.py` і `core/logging_config.py`, бо збереження квитанції публікації імпортує `core.logging_config.redact_payload`.
+- `tests/test_service_image_dependencies.py`: новий тест перевіряє, що образи tts/publisher/backup встановлюють або копіюють кожен модуль, який імпортує їхній сервіс, включно з імпортами всередині функцій.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.95
 - `bootstrap.sh`: перевірка фактичної версії Docker Compose відкидає суфікс Ubuntu-пакета (`2.40.3+ds1-0ubuntu1~24.04.1` → `2.40.3`), тому bootstrap більше не зупиняється з хибною помилкою «Docker Compose runtime version mismatch»; точний pin пакета й надалі перевіряється через `dpkg-query`.
 - `tests/test_bootstrap_wizard.py`: додано перевірки, що Ubuntu-суфікс закріпленої версії приймається, а інша версія з таким суфіксом відхиляється.
