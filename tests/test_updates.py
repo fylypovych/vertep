@@ -70,7 +70,7 @@ def test_update_agent_restart_uses_privileged_runtime_command(monkeypatch, tmp_p
     request_path.write_text(json.dumps({"request_id": "b" * 32, "action": "restart"}),
                             encoding="utf-8")
     calls = []
-    monkeypatch.setattr(agent, "run", lambda command, root, extra_env=None:
+    monkeypatch.setattr(agent, "run_fenced", lambda command, root, state_dir, lease, extra_env=None:
                         calls.append((command, extra_env)) or "runtime healthy")
     assert agent.process_request(root, state, request_path) is True
     result = json.loads((state / "status.json").read_text(encoding="utf-8"))

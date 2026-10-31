@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -283,6 +285,84 @@ def _activate(version: str, previous) -> None:
         json.dumps({"current": version, "previous": previous}), encoding="utf-8")
 
 
+def _runtime_record() -> dict:
+    try:
+        value = json.loads((ROOT / "runtime" / "instance.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _probe(record: dict):
+    import urllib.request
+
+    if not record.get("port"):
+        return None
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{record['port']}/api/health", timeout=1) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _stop_runtime() -> None:
+    import signal
+    import time
+
+    record = _runtime_record()
+    if not record.get("pid") or _probe(record) is None:
+        return
+    try:
+        os.kill(int(record["pid"]), signal.SIGTERM)
+    except OSError:
+        pass
+    deadline = time.monotonic() + 15
+    while _probe(record) is not None:
+        if time.monotonic() > deadline:
+            raise SystemExit("running runtime instance did not stop")
+        time.sleep(0.05)
+
+
+def _operation_id() -> str:
+    status = os.environ.get("VERTEP_UPDATE_STATUS_FILE")
+    try:
+        return str(json.loads(Path(status).read_text(encoding="utf-8")).get("request_id") or "")
+    except (OSError, TypeError, ValueError):
+        return ""
+
+
+def _start_runtime() -> dict:
+    import time
+
+    previous = _runtime_record().get("instance")
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "vertep-runtime.py"), str(ROOT), _operation_id()],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=os.name != "nt", creationflags=flags)
+    expected = (ROOT / "current" / "VERSION").read_text(encoding="utf-8").strip()
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        record = _runtime_record()
+        health = _probe(record) if record.get("instance") != previous else None
+        if health and health.get("version") == expected:
+            return health
+        time.sleep(0.05)
+    raise SystemExit("runtime health check failed")
+
+
+def _restart_runtime() -> None:
+    delay = ROOT / "restart-delay"
+    if delay.is_file():
+        import time
+        time.sleep(float(delay.read_text(encoding="utf-8") or 0))
+    _stop_runtime()
+    _start_runtime()
+
+
 def main() -> None:
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
     if action == "apply-update":
@@ -300,19 +380,65 @@ def main() -> None:
         shutil.rmtree(staging, ignore_errors=True)
         if (ROOT / "fail-migration").exists():
             raise SystemExit(9)
+        _restart_runtime()
     elif action == "rollback":
         previous = _activation().get("previous")
         if not previous:
             raise SystemExit("no immutable previous release is available")
         _activate(previous, None)
+        _restart_runtime()
     elif action == "restart-runtime":
-        (ROOT / "runtime-restarted").write_text("restarted", encoding="utf-8")
+        _restart_runtime()
+    elif action == "start-runtime":
+        _start_runtime()
+    elif action == "stop-runtime":
+        _stop_runtime()
     else:
         raise SystemExit(f"unsupported action: {action}")
 
 
 if __name__ == "__main__":
     main()
+'''
+
+_DISPOSABLE_RUNTIME = '''#!/usr/bin/env python3
+"""Disposable running Vertep runtime: serves health for the active release."""
+
+import json
+import os
+import sys
+import uuid
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(sys.argv[1])
+RECORD = {"instance": uuid.uuid4().hex, "pid": os.getpid(),
+          "version": (ROOT / "current" / "VERSION").read_text(encoding="utf-8").strip(),
+          "operation_id": sys.argv[2] if len(sys.argv) > 2 else "",
+          "started_at": datetime.now(timezone.utc).isoformat()}
+
+
+class Health(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"status": "ok", **RECORD}).encode("utf-8")
+        self.send_response(200 if self.path == "/api/health" else 404)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        return None
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
+RECORD["port"] = server.server_address[1]
+runtime = ROOT / "runtime"
+runtime.mkdir(exist_ok=True)
+temporary = runtime / f".instance.{os.getpid()}.tmp"
+temporary.write_text(json.dumps(RECORD), encoding="utf-8")
+os.replace(temporary, runtime / "instance.json")
+server.serve_forever()
 '''
 
 _DISPOSABLE_BASH_CONSUMER = """#!/bin/bash
@@ -338,6 +464,7 @@ def disposable_deployment():
         scripts = root / "scripts"
         scripts.mkdir(parents=True, exist_ok=True)
         (scripts / "vertep-host.py").write_text(_DISPOSABLE_HOST_CONSUMER, encoding="utf-8")
+        (scripts / "vertep-runtime.py").write_text(_DISPOSABLE_RUNTIME, encoding="utf-8")
         if os.name == "nt":
             (scripts / "vertep").write_text(_DISPOSABLE_HOST_CONSUMER, encoding="utf-8")
         else:
@@ -362,6 +489,13 @@ def disposable_deployment():
             shutil.copytree(release, current)
         (root / ".activation.json").write_text(
             json.dumps({"current": current_version, "previous": None}), encoding="utf-8")
+        subprocess.run([sys.executable, str(scripts / "vertep-host.py"), "start-runtime"],
+                       check=True, timeout=60)
+        built.append(root)
         return root
 
-    return build
+    built: list[Path] = []
+    yield build
+    for root in built:
+        subprocess.run([sys.executable, str(root / "scripts" / "vertep-host.py"), "stop-runtime"],
+                       timeout=60)

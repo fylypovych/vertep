@@ -1,7 +1,6 @@
 """Тести для worker/roles/ — role launchers з feature flag перемиканням."""
 
 import base64
-import os
 
 from worker.roles.text_node import execute as text_execute, health_check as text_health
 from worker.roles.gpu_node import execute as gpu_execute, health_check as gpu_health
@@ -24,16 +23,12 @@ class _Response:
         return self.value
 
 
-def _set_flag(flag, value):
-    os.environ[flag] = value
-
-
 def _mock_httpx_post(monkeypatch, response_value):
     monkeypatch.setattr(role_executor.httpx, "post", lambda *args, **kwargs: _Response(response_value))
 
 
 def test_text_role_original_path_when_flag_off(monkeypatch):
-    _set_flag("VERTEP_TEXT_MODULE_ENABLED", "false")
+    monkeypatch.setenv("VERTEP_TEXT_MODULE_ENABLED", "false")
     _mock_httpx_post(monkeypatch, {"response": "Вітаю"})
     artifacts = text_execute({"task": "text", "topic": "hello"})
     assert len(artifacts) == 1
@@ -42,7 +37,7 @@ def test_text_role_original_path_when_flag_off(monkeypatch):
 
 
 def test_text_role_module_path_when_flag_on(monkeypatch):
-    _set_flag("VERTEP_TEXT_MODULE_ENABLED", "true")
+    monkeypatch.setenv("VERTEP_TEXT_MODULE_ENABLED", "true")
     _mock_httpx_post(monkeypatch, {"response": "Вітаю"})
     artifacts = text_execute({"task_id": "text-module-role", "task": "text", "topic": "hello"})
     assert len(artifacts) == 1
@@ -55,14 +50,14 @@ def test_text_role_health_check():
 
 
 def test_gpu_role_original_path_when_flag_off(monkeypatch):
-    _set_flag("VERTEP_IMAGE_MODULE_ENABLED", "false")
+    monkeypatch.setenv("VERTEP_IMAGE_MODULE_ENABLED", "false")
     _mock_httpx_post(monkeypatch, {"data": base64.b64encode(b"img").decode()})
     artifacts = gpu_execute({"task": "image", "topic": "кіт", "workflow": "wf.json"})
     assert len(artifacts) == 1
 
 
-def test_gpu_role_module_path_when_flag_on():
-    _set_flag("VERTEP_IMAGE_MODULE_ENABLED", "true")
+def test_gpu_role_module_path_when_flag_on(monkeypatch):
+    monkeypatch.setenv("VERTEP_IMAGE_MODULE_ENABLED", "true")
 
     class FakeProvider:
         def generate_output(self, workflow, topic, task_type="image"):
@@ -70,7 +65,7 @@ def test_gpu_role_module_path_when_flag_on():
 
     from modules.image.image_module import ImageModule
     import worker.roles.gpu_node as gpu_node_mod
-    gpu_node_mod._image_module = ImageModule(provider=FakeProvider())
+    monkeypatch.setattr(gpu_node_mod, "_image_module", ImageModule(provider=FakeProvider()))
     artifacts = gpu_execute({"task": "image", "topic": "кіт", "workflow": "wf.json"})
     assert len(artifacts) == 1
 
@@ -81,14 +76,14 @@ def test_gpu_role_health_check():
 
 
 def test_voice_role_original_path_when_flag_off(monkeypatch):
-    _set_flag("VERTEP_AUDIO_MODULE_ENABLED", "false")
+    monkeypatch.setenv("VERTEP_AUDIO_MODULE_ENABLED", "false")
     _mock_httpx_post(monkeypatch, {"audio_base64": base64.b64encode(b"wav").decode(), "mime_type": "audio/wav"})
     artifacts = voice_execute({"task": "voice", "topic": "привіт", "voice": "anna"})
     assert len(artifacts) == 1
 
 
-def test_voice_role_module_path_when_flag_on():
-    _set_flag("VERTEP_AUDIO_MODULE_ENABLED", "true")
+def test_voice_role_module_path_when_flag_on(monkeypatch):
+    monkeypatch.setenv("VERTEP_AUDIO_MODULE_ENABLED", "true")
 
     class FakeTTSProvider:
         def synthesize(self, text, voice="default", speed=150):
@@ -96,7 +91,7 @@ def test_voice_role_module_path_when_flag_on():
 
     from modules.audio.audio_module import AudioModule
     import worker.roles.voice_node as voice_node_mod
-    voice_node_mod._audio_module = AudioModule(provider=FakeTTSProvider())
+    monkeypatch.setattr(voice_node_mod, "_audio_module", AudioModule(provider=FakeTTSProvider()))
     artifacts = voice_execute({"task": "voice", "topic": "привіт", "voice": "anna"})
     assert len(artifacts) == 1
 

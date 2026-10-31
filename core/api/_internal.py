@@ -49,13 +49,25 @@ def _sync_internal_api(
         return None
 
 
+_CLIENT_ERROR_STATUSES = {404, 409, 422}
+
+
 async def _internal_api(
     method: str,
     base_environment: str,
     path: str,
     payload: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
+    *,
+    propagate_client_errors: bool = False,
 ) -> dict[str, Any]:
+    """Call an internal service and translate its failures for API callers.
+
+    By default every upstream failure becomes a sanitized 502/503/504.  Routes
+    where the upstream 4xx is itself the meaningful caller outcome (restore
+    challenge/confirmation refusals) opt into ``propagate_client_errors`` so the
+    caller receives the rejection instead of a generic gateway error.
+    """
     base = os.getenv(base_environment, "").rstrip("/")
     if not base:
         raise HTTPException(503, f"Сервіс не налаштований: {base_environment} не встановлено")
@@ -78,6 +90,19 @@ async def _internal_api(
         )
     except httpx.HTTPStatusError as error:
         status = error.response.status_code
+        if propagate_client_errors and status in _CLIENT_ERROR_STATUSES:
+            # Sanitized: no raw upstream response body or URL. The upstream
+            # refusal status is the caller's own outcome, so it is preserved.
+            raise HTTPException(
+                status, f"Сервіс {base_environment} відхилив запит (HTTP {status})"
+            )
+        if propagate_client_errors and status in (401, 403):
+            # An upstream credential refusal is not the caller losing a session,
+            # so it surfaces as a conflict rather than an endpoint 401 logout.
+            raise HTTPException(
+                409,
+                f"Сервіс {base_environment} відхилив внутрішній запит",
+            )
         # Sanitized: no raw upstream response body or URL.
         raise HTTPException(
             502, f"Сервіс {base_environment} повернув помилку (HTTP {status})"

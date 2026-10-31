@@ -805,7 +805,9 @@ def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkey
                                                  path.write_bytes(b"package"), path)[-1])
     commands = []
     monkeypatch.setattr(agent, "run", lambda cmd, root, **kw: commands.append(cmd) or "")
-    def timed_out(*_args, **_kwargs):
+    def timed_out(cmd, *_args, **_kwargs):
+        if "rollback" in cmd:
+            return commands.append(cmd) or ""
         raise RuntimeError("Command timed out after 1 seconds")
     monkeypatch.setattr(agent, "run_fenced", timed_out)
 

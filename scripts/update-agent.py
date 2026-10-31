@@ -389,8 +389,8 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             if action == "restart":
                 transition(state_dir, state, "RESTARTING", "Restarting active Vertep services", 70)
                 assert_mutation_allowed(state_dir, lease)
-                output = run(host_command(root, "restart-runtime"),
-                             root, {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
+                output = run_fenced(host_command(root, "restart-runtime"), root, state_dir, lease,
+                                    {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
                 merge_runtime_progress(state_dir, state)
                 state["log"].extend(output.splitlines()[-100:])
                 state.update({"state": "SUCCEEDED", "phase": "NORMAL", "progress": 100,
@@ -400,7 +400,8 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             if action == "rollback":
                 transition(state_dir, state, "RECOVERING", "Restoring the previous release", 40)
                 assert_mutation_allowed(state_dir, lease)
-                output = run(host_command(root, "rollback"), root)
+                output = run_fenced(host_command(root, "rollback"), root, state_dir, lease,
+                                    {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
                 state["log"].extend(output.splitlines()[-100:])
                 state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
                               "message": "Previous release restored", "updated_at": now()})
@@ -487,8 +488,9 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                 try:
                     transition(state_dir, state, "RECOVERING", "Health check failed; rolling back")
                     assert_mutation_allowed(state_dir, lease)
-                    state["log"].extend(run(
-                        host_command(root, "rollback"), root
+                    state["log"].extend(run_fenced(
+                        host_command(root, "rollback"), root, state_dir, lease,
+                        {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")}
                     ).splitlines()[-100:])
                     state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
                                   "message": "Попередню версію відновлено автоматично"})

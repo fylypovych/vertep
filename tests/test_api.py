@@ -1246,6 +1246,92 @@ def test_backup_restore_confirmation_through_core_proxy(monkeypatch):
     assert bad.status_code == 422
 
 
+def _failing_internal_request(status, body="SECRET=leaked-data\nstacktrace-here"):
+    async def fake_request(self, method, url, **kwargs):
+        raise httpx.HTTPStatusError(
+            f"HTTP {status}", request=None,
+            response=_FakeResponse(status, {"detail": "upstream detail"}, text=body),
+        )
+    return fake_request
+
+
+def test_backup_restore_challenge_refusals_reach_caller_without_mutation(monkeypatch):
+    """Issue #379 P3: a refused challenge keeps its 4xx and leaves no fence."""
+    from core.system_state import get_system_state, set_system_state, SystemState
+
+    monkeypatch.setenv("BACKUP_URL", "http://backup:8080")
+    for status in (404, 409, 422):
+        set_system_state(SystemState.NORMAL, "restore-refusal baseline")
+        monkeypatch.setattr(httpx.AsyncClient, "request",
+                            _failing_internal_request(status))
+        resp = _tc.post("/api/system/backups/snap-missing/restore", json={})
+        assert resp.status_code == status, resp.text
+        detail = resp.json()["detail"]
+        assert f"HTTP {status}" in detail
+        assert "SECRET" not in detail and "leaked-data" not in detail
+        assert "backup:8080" not in detail and "upstream detail" not in detail
+        state = get_system_state()
+        assert state["state"] == "NORMAL"
+        assert state["operation_id"] is None
+
+
+def test_backup_restore_refusal_preserves_previous_state(monkeypatch):
+    """Issue #379 P3: the fence rolls back to the state it replaced."""
+    from core.system_state import get_system_state, set_system_state, SystemState
+
+    monkeypatch.setenv("BACKUP_URL", "http://backup:8080")
+    set_system_state(SystemState.RECOVERING, "recovering before restore", "update:7")
+    monkeypatch.setattr(httpx.AsyncClient, "request",
+                        _failing_internal_request(422))
+    resp = _tc.post("/api/system/backups/snap-missing/restore", json={})
+    assert resp.status_code == 422, resp.text
+    state = get_system_state()
+    assert state["state"] == "RECOVERING"
+    assert state["operation_id"] == "update:7"
+    set_system_state(SystemState.NORMAL, "restore-refusal cleanup")
+
+
+def test_backup_restore_progress_and_confirm_client_errors_propagate(monkeypatch):
+    """Issue #379 P3: version/integrity/token refusals reach the caller."""
+    monkeypatch.setenv("BACKUP_URL", "http://backup:8080")
+    targets = (
+        ("get", "/api/system/backups/snap-1/restore/progress"),
+        ("post", "/api/system/backups/snap-1/restore/confirm?token=tok123"),
+    )
+    for method, path in targets:
+        for status in (404, 409, 422):
+            monkeypatch.setattr(httpx.AsyncClient, "request",
+                                _failing_internal_request(status))
+            resp = getattr(_tc, method)(path)
+            assert resp.status_code == status, resp.text
+            detail = resp.json()["detail"]
+            assert f"HTTP {status}" in detail
+            assert "leaked-data" not in detail and "backup:8080" not in detail
+        # An upstream credential refusal is not the caller's session expiring.
+        for status in (401, 403):
+            monkeypatch.setattr(httpx.AsyncClient, "request",
+                                _failing_internal_request(status))
+            resp = getattr(_tc, method)(path)
+            assert resp.status_code == 409, resp.text
+            assert "внутрішній запит" in resp.json()["detail"]
+        # Upstream server failures stay a gateway error.
+        monkeypatch.setattr(httpx.AsyncClient, "request",
+                            _failing_internal_request(500))
+        resp = getattr(_tc, method)(path)
+        assert resp.status_code == 502, resp.text
+
+
+def test_non_restore_internal_routes_keep_gateway_mapping(monkeypatch):
+    """Issue #379 P3: only restore routes opt into 4xx propagation."""
+    monkeypatch.setenv("CERTIFICATE_MANAGER_URL", "http://certificates:8080")
+    for status in (404, 409, 422, 401):
+        monkeypatch.setattr(httpx.AsyncClient, "request",
+                            _failing_internal_request(status))
+        resp = _tc.get("/api/system/certificates")
+        assert resp.status_code == 502, resp.text
+        assert "повернув помилку" in resp.json()["detail"]
+
+
 def test_internal_api_sanitizes_upstream_errors(monkeypatch):
     """Issue #101: _internal_api must not leak raw upstream response text."""
     import core.app as core_app

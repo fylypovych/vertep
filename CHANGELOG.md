@@ -70,6 +70,19 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.93
+- `core/api/_internal.py`: додано opt-in propagate_client_errors для внутрішніх викликів, де 4xx upstream є результатом для викликача.
+- `core/api/backups.py`: restore challenge/progress/confirm повертають 404/409/422 Backup Service замість узагальненої 502; відмова challenge не залишає durable restore fence.
+- `tests/test_api.py`: перевірено pass-through 404/409/422, відкат стану, мапінг upstream 401/403 у 409, збереження 502 для 5xx і незмінність інших internal-роутів.
+- `tests/test_backup_process_acceptance.py`: real-process CORE та Backup Service приймає RBAC 401/403, 404 challenge з відкатом стану, receipt format/encryption/size, відсутній receipt і tampered snapshot без мутації даних.
+- `scripts/update-agent.py`: restart, явний rollback і автоматичний rollback після помилки apply виконуються через `run_fenced`; rollback отримує `VERTEP_UPDATE_STATUS_FILE`, тому ack корелює з операцією (#383 F1/F2).
+- `tests/conftest.py`: disposable host consumer керує реально запущеним runtime-процесом із health endpoint; update/restart/rollback замінюють running instance замість запису marker-файла (#383 F1).
+- `tests/test_core_rollout_coordinator.py`: перевірено фактичну заміну running instance для update/restart/rollback і зупинку consumer при cancel під час активного restart без відкладеного ефекту (#383 F1/F2).
+- `tests/test_updates.py`, `tests/test_update_security.py`: тести оновлено під fenced restart/rollback.
+- `tests/test_worker_roles.py`: прапорці `VERTEP_*_MODULE_ENABLED` і module-одинаки задаються через `monkeypatch`, тому більше не протікають у наступні тести (#386 C3).
+- `tests/test_workflow_http_process.py`: після uninstall інвентар модулів має точно збігатися зі станом до install (#386 C3).
+- `.github/workflows/ci.yml`, `scripts/qualify_bootstrap_lifecycle.py`, `tests/test_qualify_bootstrap_lifecycle.py`: додано CI job `bootstrap-lifecycle-acceptance` (amd64/arm64) для #384 B2; MPT CI додатково запускає `test_mpt_recovery`/`test_mpt_media_matrix` і формує criterion report (#385 M5).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.92
 - Оновлено CI та release workflow (`.github/workflows/ci.yml`, `.github/workflows/release.yml`).
 - Додано та оновлено тести: `test_backup_process_acceptance`, `test_browser_e2e`, `test_core_rollout_coordinator`, `test_moneyprinter_runtime`, `test_node_process_acceptance`, `test_release_qualification`, `test_worker_roles`.

@@ -311,6 +311,41 @@ jobs:
           path: infrastructure-qualification.json
           if-no-files-found: warn
 
+  bootstrap-lifecycle-acceptance:
+    # #384 B2: exercise the real Docker executor under both supported Linux
+    # architectures. B1 publication and B3 host TLS remain separate gates.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.architecture == 'arm64'
+      - name: Install acceptance dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run disposable bootstrap and update executor acceptance
+        run: >-
+          python scripts/qualify_bootstrap_lifecycle.py
+          --architecture "${{ matrix.architecture }}"
+          --junit "$RUNNER_TEMP/bootstrap-lifecycle-${{ matrix.architecture }}.xml"
+          --output "$RUNNER_TEMP/bootstrap-lifecycle-${{ matrix.architecture }}.json"
+      - name: Upload bootstrap lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bootstrap-lifecycle-${{ github.sha }}-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}/bootstrap-lifecycle-${{ matrix.architecture }}.xml
+            ${{ runner.temp }}/bootstrap-lifecycle-${{ matrix.architecture }}.json
+          if-no-files-found: error
+
   persistence-trust-acceptance:
     # #374/#375: these checks must run against the runner's Linux Docker
     # daemon.  A local skipped Docker marker is never acceptance evidence.
@@ -372,11 +407,17 @@ jobs:
       - name: Verify MPT bridge regressions
         run: >-
           python -m pytest -q tests/test_moneyprinter_runtime.py
-          tests/test_assembly_worker_route.py tests/test_issue_122_acceptance_report.py
+          tests/test_assembly_worker_route.py tests/test_mpt_recovery.py
+          tests/test_mpt_media_matrix.py tests/test_issue_122_acceptance_report.py
       - name: Build and execute pinned MoneyPrinterTurbo
         run: >-
           python scripts/moneyprinter-runtime-check.py --timeout 900
           --evidence moneyprinter-runtime-evidence
+      - name: Render MPT criterion evidence report
+        run: >-
+          python scripts/issue-122-acceptance-report.py
+          --only contract,media,integration,recovery,lifecycle_state,security,configuration,delivery
+          --out moneyprinter-runtime-evidence/criterion-report
       - name: Upload pinned runtime evidence
         if: always()
         uses: actions/upload-artifact@v7

@@ -270,6 +270,98 @@ def test_connected_healthy_restore_returns_normal_after_core_restart(
     assert restarted.get("/api/system/state").json()["state"] == "NORMAL"
 
 
+def test_core_caller_surfaces_restore_refusals_without_mutation(backup_process):
+    """#379 P3: restore refusals (RBAC, version, integrity, missing snapshot)
+    reach the real CORE caller with their own status and never mutate data.
+    """
+    root = backup_process["root"]
+    config = root / "refusal-core-config"
+    config.mkdir()
+    (config / "users.json").write_text("{}", encoding="utf-8")
+    (config / "installation.json").write_text('{"completed_at":"2026-01-01"}', encoding="utf-8")
+    from core.security import _hash_secret
+    viewer_password = "refusal-viewer-password"
+    with socket.socket() as socket_probe:
+        socket_probe.bind(("127.0.0.1", 0))
+        core_port = socket_probe.getsockname()[1]
+    internal_key = "synthetic-refusal-internal-key"
+    _, service = backup_process["launch"]({
+        "BACKUP_CORE_URL": f"http://127.0.0.1:{core_port}",
+        "INTERNAL_API_KEY": internal_key,
+    })
+    core_env = {
+        "CONFIG_ROOT": str(config), "UPDATE_STATE_DIR": str(root / "refusal-core-update"),
+        "STORAGE_ROOT": str(root / "refusal-core-storage"), "JOB_ROOT": str(root / "refusal-core-jobs"),
+        "SYSTEM_STATE_BACKEND": "file", "BACKUP_URL": str(service.base_url).rstrip("/"),
+        "INTERNAL_API_KEY": internal_key, "ADMIN_USER": "admin",
+        "ADMIN_PASSWORD": "refusal-process-admin", "DATABASE_URL": "", "REDIS_URL": "",
+        "CORE_ADDRESS": "", "OLLAMA_URL": "http://127.0.0.1:1", "PROMETHEUS_URL": "",
+        "USERS_JSON": json.dumps({
+            "reader": {"password_hash": _hash_secret(viewer_password), "role": "viewer"}}),
+    }
+    admin_auth = "Basic " + base64.b64encode(b"admin:refusal-process-admin").decode()
+    viewer_auth = "Basic " + base64.b64encode(
+        f"reader:{viewer_password}".encode("utf-8")).decode()
+    _, api = backup_process["launch"](core_env, core_port, "core.app:app", "/api/session",
+                                      {"Authorization": admin_auth})
+    data = backup_process["storage"] / "refusal-record.json"
+    original = b"approved refusal record"
+    data.write_bytes(original)
+    missing = "missing-snapshot"
+
+    # RBAC rejects before the Backup Service is asked and before any fence.
+    with httpx.Client(base_url=api.base_url, timeout=30) as anonymous:
+        assert anonymous.post(f"/api/system/backups/{missing}/restore").status_code == 401
+    with httpx.Client(base_url=api.base_url, timeout=30, headers={"Authorization": viewer_auth}) as viewer:
+        assert viewer.post(f"/api/system/backups/{missing}/restore").status_code == 403
+    state = api.get("/api/system/state").json()
+    assert state["state"] == "NORMAL" and state["operation_id"] is None
+
+    # A refused challenge keeps its own 4xx and releases the restore fence.
+    refused = api.post(f"/api/system/backups/{missing}/restore")
+    assert refused.status_code == 404, refused.text
+    assert "HTTP 404" in refused.json()["detail"]
+    assert "не знайдено" not in refused.json()["detail"]
+    state = api.get("/api/system/state").json()
+    assert state["state"] == "NORMAL" and state["operation_id"] is None
+
+    created = api.post("/api/system/backups")
+    assert created.status_code == 200, created.text
+    sid = created.json()["snapshot_id"]
+    challenged = api.post(f"/api/system/backups/{sid}/restore")
+    assert challenged.status_code == 200, challenged.text
+    token = challenged.json()["confirmation_token"]
+    assert api.get("/api/system/state").json()["state"] == "MAINTENANCE"
+    snapshots_before = sorted(path.name for path in (root / "backups").glob("*.vtbackup"))
+    receipt_path = root / "backups" / f"{sid}.json"
+    archive = root / "backups" / f"{sid}.vtbackup"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    def refusal(label, status_check=409):
+        response = api.post(f"/api/system/backups/{sid}/restore/confirm", params={"token": token})
+        assert response.status_code == status_check, f"{label}: {response.text}"
+        assert f"HTTP {status_check}" in response.json()["detail"], label
+        assert data.read_bytes() == original, label
+        assert api.get(f"/api/system/backups/{sid}/restore/progress").json()["status"] != "done", label
+        assert sorted(path.name for path in (root / "backups").glob("*.vtbackup")) == snapshots_before, label
+        assert api.get("/api/system/state").json()["state"] == "MAINTENANCE", label
+        return response
+
+    for label, changed in (
+        ("format", {**receipt, "format": "VERTEP-BACKUP-v0"}),
+        ("encryption", {**receipt, "encryption": "ROT13"}),
+        ("size", {**receipt, "size_bytes": int(receipt.get("size_bytes", 0)) + 1}),
+    ):
+        receipt_path.write_text(json.dumps(changed), encoding="utf-8")
+        refusal(label)
+    receipt_path.unlink()
+    refusal("missing-receipt")
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    archive.write_bytes(archive.read_bytes() + b"synthetic tampering")
+    response = refusal("tampered")
+    assert "Checksum" not in response.json()["detail"]
+
+
 def test_crash_and_competing_process_keep_restore_fence(backup_process):
     root = backup_process["root"]
     data = backup_process["storage"] / "record.json"

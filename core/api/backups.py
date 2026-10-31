@@ -42,7 +42,10 @@ async def restore_progress_proxy(snapshot_id: str):
     if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
         raise HTTPException(422, "Invalid snapshot identifier")
     return await _internal_api(
-        "GET", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore/progress"
+        "GET",
+        "BACKUP_URL",
+        f"/snapshots/{snapshot_id}/restore/progress",
+        propagate_client_errors=True,
     )
 
 
@@ -61,10 +64,28 @@ async def restore_system_backup(snapshot_id: str):
         raise HTTPException(409, "Active jobs must be drained before restore")
     # The owner already requested restore; freeze writes before obtaining its
     # snapshot-bound challenge. Cancellation/failure must not imply NORMAL.
-    set_system_state(SystemState.MAINTENANCE, f"Restore confirmation for {snapshot_id}", f"restore:{snapshot_id}")
-    return await _internal_api(
-        "POST", "BACKUP_URL", f"/snapshots/{snapshot_id}/restore"
-    )
+    previous = dict(state)
+    operation_id = f"restore:{snapshot_id}"
+    set_system_state(SystemState.MAINTENANCE, f"Restore confirmation for {snapshot_id}", operation_id)
+    try:
+        return await _internal_api(
+            "POST",
+            "BACKUP_URL",
+            f"/snapshots/{snapshot_id}/restore",
+            propagate_client_errors=True,
+        )
+    except HTTPException as error:
+        # A rejection of the challenge itself did not start a restore: release
+        # the durable fence so the caller's refusal leaves the state untouched.
+        if 400 <= int(error.status_code) < 500:
+            current = get_system_state()
+            if str(current.get("operation_id") or "") == operation_id:
+                set_system_state(
+                    previous["state"],
+                    previous.get("reason") or "",
+                    previous.get("operation_id"),
+                )
+        raise
 
 
 @router.post("/api/system/backups/{snapshot_id}/restore/confirm")
@@ -84,4 +105,5 @@ async def confirm_system_backup(snapshot_id: str, token: str):
         "BACKUP_URL",
         f"/snapshots/{snapshot_id}/restore/confirm",
         params={"token": token},
+        propagate_client_errors=True,
     )

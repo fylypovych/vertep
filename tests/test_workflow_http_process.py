@@ -120,6 +120,9 @@ def test_signed_module_discovery_dispatch_and_uninstall(workflow_contour, monkey
     raw = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     package = {**content, "signer": "owner", "signature": base64.b64encode(key.sign(raw)).decode()}
     manager = ModulePackages(root, {"owner": public})
+    # Built-in migration modules may be enabled by the CI environment; they are
+    # part of the baseline the uninstall must leave untouched.
+    baseline = inventory()
     manager.install(package)
     (context["root"] / "dag/module.json").write_text(json.dumps({"name": "Module", "tasks": [{"id": "module", "type": "custom", "module": "example", "input": {"text": "actual module"}}]}))
     def report():
@@ -138,7 +141,8 @@ def test_signed_module_discovery_dispatch_and_uninstall(workflow_contour, monkey
     assert completed["status"] == "COMPLETED"
     assert base64.b64decode(completed["tasks"]["module"]["output"][0]["data_base64"]) == b"ACTUAL MODULE"
     manager.uninstall("example")
-    assert inventory() == []
+    # Uninstalling this signed package removes exactly it and nothing else.
+    assert inventory() == baseline
     report()
     # Registration of the changed inventory is performed on the stock poll path.
     assert api.post("/api/tasks/claim/workflow", json={"node_name": "text-process"}).status_code == 200

@@ -97,6 +97,20 @@ def _active_version(root: Path) -> str:
     return (root / "current" / "VERSION").read_text(encoding="utf-8").strip()
 
 
+def _health(root: Path, record: dict | None = None) -> dict | None:
+    """Probe the running runtime instance (the recorded one by default)."""
+    import urllib.request
+
+    if record is None:
+        record = json.loads((root / "runtime" / "instance.json").read_text(encoding="utf-8"))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"http://127.0.0.1:{record['port']}/api/health", timeout=1) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except OSError:
+        return None
+
+
 def _journal(state_dir: Path) -> list[dict]:
     path = state_dir / "audit.jsonl"
     if not path.is_file():
@@ -139,8 +153,18 @@ def test_core_target_executes_through_real_deployment_not_monkeypatched(
     queued = json.loads(request_file.read_text(encoding="utf-8"))
     assert queued["action"] == "update" and queued["target_version"] == "0.0.0.2"
     assert _active_version(root) == "0.0.0.1"
+    before = _health(root)
+    assert before["version"] == "0.0.0.1"
 
     assert agent.process_request(root, state_dir, request_file, skip_drain=True) is True
+
+    # The running instance was stopped and a new one serves the target version,
+    # acknowledging the operation that replaced it.
+    after = _health(root)
+    assert after["instance"] != before["instance"] and after["pid"] != before["pid"]
+    assert after["version"] == "0.0.0.2"
+    assert after["operation_id"] == operation_id
+    assert _health(root, before) is None, "the previous runtime instance is still serving"
 
     # The runtime instance itself was replaced; the previous release is kept.
     assert _active_version(root) == "0.0.0.2"
@@ -229,6 +253,8 @@ def test_failed_apply_rolls_back_runtime_instance_and_can_be_retried(
     status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
     assert status["state"] == "ROLLED_BACK"
     assert _active_version(root) == "0.0.0.1"
+    rolled_back = _health(root)
+    assert rolled_back["version"] == "0.0.0.1" and rolled_back["operation_id"] == "f" * 32
     assert not failed.exists()
     journal = _journal(state_dir)
     assert journal and all(event.get("operation_id") == "f" * 32 for event in journal)
@@ -241,8 +267,76 @@ def test_failed_apply_rolls_back_runtime_instance_and_can_be_retried(
                                  "target_version": "0.0.0.3"}), encoding="utf-8")
     assert agent.process_request(root, state_dir, retry, skip_drain=True) is True
     assert _active_version(root) == "0.0.0.3"
+    retried = _health(root)
+    assert retried["version"] == "0.0.0.3" and retried["instance"] != rolled_back["instance"]
+    assert _health(root, rolled_back) is None
     status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
     assert status["state"] == "SUCCEEDED" and status["request_id"] == "a" * 32
+
+
+def test_restart_request_replaces_running_runtime_instance(
+        agent, disposable_deployment, tmp_path, monkeypatch):
+    """A restart request is executed by the host consumer on the running
+    runtime: the old instance stops, a new one serves health for the same
+    release and acknowledges the restart operation (#174.4, #193.1)."""
+    from worker.service import request_local_update
+
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    monkeypatch.setenv("UPDATE_REQUEST_DIR", str(requests))
+    before = _health(root)
+    operation_id = "c" * 32
+
+    request_local_update("current", action="restart", request_id=operation_id)
+    assert agent.process_request(
+        root, state_dir, requests / f"{operation_id}.json", skip_drain=True) is True
+
+    after = _health(root)
+    assert after["instance"] != before["instance"] and after["pid"] != before["pid"]
+    assert after["version"] == "0.0.0.1" and after["operation_id"] == operation_id
+    assert _health(root, before) is None
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["request_id"] == operation_id and status["state"] == "SUCCEEDED"
+
+
+def test_cancel_during_active_restart_stops_consumer_without_delayed_restart(
+        agent, disposable_deployment, tmp_path, monkeypatch):
+    """A cancel fence written while the host consumer is already restarting
+    kills the consumer; the running instance is untouched and no delayed
+    restart lands after the cancelled ack (#175.2, #193.4, #193.6)."""
+    from worker.service import request_local_update
+
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    monkeypatch.setenv("UPDATE_REQUEST_DIR", str(requests))
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.05")
+    monkeypatch.setenv("UPDATE_FENCE_KILL_TIMEOUT", "5")
+    (root / "restart-delay").write_text("2", encoding="utf-8")
+    before = _health(root)
+    operation_id = "e" * 32
+    request_local_update("current", action="restart", request_id=operation_id)
+
+    def cancel() -> None:
+        time.sleep(0.5)
+        (state_dir / "cancel-fence.json").write_text(
+            json.dumps({"operation_id": operation_id}), encoding="utf-8")
+
+    canceller = threading.Thread(target=cancel)
+    canceller.start()
+    assert agent.process_request(
+        root, state_dir, requests / f"{operation_id}.json", skip_drain=True) is False
+    canceller.join()
+
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED" and "cancelled" in status["message"]
+    time.sleep(3)
+    assert _health(root) == before, "a cancelled restart still replaced the runtime"
 
 
 def test_interrupted_apply_recovers_previous_runtime_instance_after_restart(
@@ -462,8 +556,13 @@ def test_core_rollback_runs_through_host_agent_with_bound_evidence(
     rollback_request = state_dir / "requests" / f"{operation_id}.json"
     queued = json.loads(rollback_request.read_text(encoding="utf-8"))
     assert queued["action"] == "rollback" and queued["target_version"] == "0.0.0.1"
+    updated = _health(root)
+    assert updated["version"] == "0.0.0.2"
     assert agent.process_request(root, state_dir, rollback_request, skip_drain=True) is True
     assert _active_version(root) == "0.0.0.1"
+    restored = _health(root)
+    assert restored["version"] == "0.0.0.1" and restored["operation_id"] == operation_id
+    assert _health(root, updated) is None, "the rolled-back instance is still serving"
 
     rollout = rollout_status()
     reported = driver.drive_once(host, "core", rollout)
