@@ -134,60 +134,79 @@ def _terminate_process(process) -> None:
                            capture_output=True, text=True, timeout=timeout)
         else:
             import signal
-            # Try to kill the entire process group first
-            try:
-                pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError, OSError):
-                # Fallback: kill the process and its children recursively
-                _kill_process_tree(pid, signal.SIGTERM)
-            # Wait for the process to exit
-            try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                # Force kill if still alive
-                try:
-                    os.killpg(pgid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError, OSError):
-                    _kill_process_tree(pid, signal.SIGKILL)
-                process.wait(timeout=5)
+            pgid = os.getpgid(pid)
+            # Use kill command to terminate the entire process group - more reliable in containers
+            _kill_process_group(pgid, signal.SIGTERM)
+            # Wait for ALL processes in the group to exit
+            _wait_for_group_exit(pgid, timeout)
     except Exception:
-        # Last resort
-        try:
-            process.kill()
-        except Exception:
-            pass
-
-
-def _kill_process_tree(pid: int, sig: int) -> None:
-    """Recursively kill a process and all its children using /proc on Linux."""
-    try:
-        # Read children from /proc/<pid>/task/<pid>/children
-        children_path = f"/proc/{pid}/task/{pid}/children"
-        if os.path.exists(children_path):
-            with open(children_path, "r") as f:
-                children = f.read().strip().split()
-            for child_pid_str in children:
-                try:
-                    child_pid = int(child_pid_str)
-                    _kill_process_tree(child_pid, sig)
-                except (ValueError, ProcessLookupError, PermissionError, OSError):
-                    pass
-    except (OSError, IOError):
-        pass
-    # Kill the process itself
-    try:
-        os.kill(pid, sig)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
-    try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
+        # Last resort - try to kill the parent at least
         try:
             process.kill()
             process.wait(timeout=5)
         except Exception:
             pass
+
+
+def _kill_process_group(pgid: int, sig: int) -> None:
+    """Kill an entire process group using the kill command (works in containers)."""
+    # Try kill -SIG -pgid (sends signal to entire process group)
+    try:
+        subprocess.run(["kill", f"-{sig}", f"-{pgid}"],
+                       capture_output=True, timeout=5)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    # Also try pkill as fallback
+    try:
+        subprocess.run(["pkill", f"-{sig}", "-g", str(pgid)],
+                       capture_output=True, timeout=5)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    # Also try os.killpg as last resort for the group
+    try:
+        import signal
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _wait_for_group_exit(pgid: int, timeout: float) -> None:
+    """Wait for all processes in a process group to exit."""
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        # Check if any process in the group is still alive
+        alive = _get_group_pids(pgid)
+        if not alive:
+            return
+        time.sleep(0.1)
+    # Force kill with SIGKILL if still alive
+    _kill_process_group(pgid, 9)  # SIGKILL
+    # Wait a bit more
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        alive = _get_group_pids(pgid)
+        if not alive:
+            return
+        time.sleep(0.1)
+
+
+def _get_group_pids(pgid: int) -> list[int]:
+    """Get all PIDs in a process group by reading /proc."""
+    pids = []
+    try:
+        # Read all PIDs from /proc
+        for entry in os.listdir("/proc"):
+            if entry.isdigit():
+                pid = int(entry)
+                try:
+                    if os.getpgid(pid) == pgid:
+                        pids.append(pid)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+    except (OSError, IOError):
+        pass
+    return pids
 
 
 def _collect(process, timeout: float) -> str:

@@ -70,6 +70,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.3.4
+- `scripts/update-agent.py`: покращено `_terminate_process` для контейнерів — використання `kill -SIG -pgid` та `pkill -g pgid` для надійного вбивання цілої групи процесів; очікування завершення всіх процесів групи, а не лише батьківського; виправляє тест `test_run_fenced_kills_child_processes_of_apply` на arm64 (Issue #388 B2/B4).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.3
 - `scripts/update-agent.py`: виправлено `_terminate_process` для надійного вбивання всього дерева процесів на arm64 контейнерах; додано fallback через `/proc` для рекурсивного вбивання дочірніх процесів, якщо `os.killpg` не спрацював (PermissionError), що виправляє тест `test_run_fenced_kills_child_processes_of_apply` (Issue #388 B2/B4).
 
