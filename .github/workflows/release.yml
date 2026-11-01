@@ -264,17 +264,23 @@ jobs:
               exit 1
             fi
           fi
-          gh release create "$version" \
-            --draft --verify-tag \
-            --title "Vertep $version" \
-            --notes-file "releases/$version.md" \
-            "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
-            "${{ runner.temp }}/manifest-$version.json" \
-            "${{ runner.temp }}/update-manifest-$version.json" \
-            "${{ runner.temp }}/SHA256SUMS-$version"
-          release_id=""
-          read -r release_id _ < <(find_release | head -1) || true
+          gh api "repos/$repo/git/ref/tags/$version" >/dev/null \
+            || { echo "Tag $version does not exist" >&2; exit 1; }
+          # The draft id comes from the create response itself: the release list is
+          # eventually consistent and may not show a just-created draft yet.
+          release_id="$(gh api -X POST "repos/$repo/releases" \
+            -f tag_name="$version" -f name="Vertep $version" \
+            -F body=@"releases/$version.md" -F draft=true -F prerelease=false \
+            --jq .id)"
           [ -n "$release_id" ] || { echo "Draft release $version was not created" >&2; exit 1; }
+          for file in "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
+                      "${{ runner.temp }}/manifest-$version.json" \
+                      "${{ runner.temp }}/update-manifest-$version.json" \
+                      "${{ runner.temp }}/SHA256SUMS-$version"; do
+            gh api -X POST \
+              "https://uploads.github.com/repos/$repo/releases/$release_id/assets?name=$(basename "$file")" \
+              -H "Content-Type: application/octet-stream" --input "$file" >/dev/null
+          done
           uploaded="$(gh api "repos/$repo/releases/$release_id" \
             --jq '[.assets[] | select(.state=="uploaded") | .name] | join("\n")')"
           for name in "vertep-runtime-$version.tar.gz" "manifest-$version.json" \

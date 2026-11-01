@@ -117,6 +117,14 @@ def main() -> int:
     host: dict = {}
     try:
         report["environment"]["container_architecture"] = docker_architecture(args.architecture)
+        # The host executor runs first: the root executor container writes into the
+        # mounted checkout (e.g. logs/), which the unprivileged host run could not reopen.
+        args.junit.parent.mkdir(parents=True, exist_ok=True)
+        result = command(sys.executable, "-m", "pytest", "-q", "-o", "junit_family=legacy",
+                         f"--junitxml={args.junit}", *HOST_TARGETS)
+        host = {"machine": platform.machine(), "returncode": result.returncode,
+                "pytest": junit_summary(args.junit)}
+
         evidence = args.output.parent.resolve() / f"executor-{args.architecture}"
         evidence.mkdir(parents=True, exist_ok=True)
         result = command(*executor_command(args.architecture, evidence))
@@ -127,12 +135,6 @@ def main() -> int:
         if (evidence / "executor.xml").is_file():
             executor["pytest"] = junit_summary(evidence / "executor.xml")
             executor["junit"] = str(evidence / "executor.xml")
-
-        args.junit.parent.mkdir(parents=True, exist_ok=True)
-        result = command(sys.executable, "-m", "pytest", "-q", "-o", "junit_family=legacy",
-                         f"--junitxml={args.junit}", *HOST_TARGETS)
-        host = {"machine": platform.machine(), "returncode": result.returncode,
-                "pytest": junit_summary(args.junit)}
         report["criteria"] = criteria(executor, host, args.architecture)
     except (OSError, RuntimeError, ET.ParseError) as error:
         report["error"] = str(error)

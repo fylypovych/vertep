@@ -70,6 +70,13 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.2.99
+- `.github/workflows/release.yml`: draft GitHub Release створюється через API, а його `id` береться з відповіді, а не зі списку релізів (список оновлюється із затримкою, через що реліз 0.0.2.97 впав з «Draft release … was not created»); перед створенням перевіряється наявність tag, артефакти завантажуються прямо в draft.
+- `tests/test_standard_host_consumer_docker.py`: тестовий маніфест містить образ GPU-сервісу `comfyui`, якого вимагає `update-runtime-env.py`; при невдачі тест виводить повне повідомлення й лог update-agent та стан контейнерів; сценарій невдалого перенесення legacy-інсталяції перевіряє, що відмова сталася саме через symlink (#387).
+- `scripts/qualify_bootstrap_lifecycle.py`: хостовий Docker-тест виконується до контейнерного, бо root-контейнер створював у checkout файли (`logs/core.jsonl`), недоступні непривілейованому процесу (#388 B2).
+- `scripts/moneyprinter-recovery-check.py`, `tests/test_moneyprinter_recovery_check.py`: на справжньому pinned MPT-контейнері перевіряються idempotency `submit_key`, відновлення відповідності ключа після рестарту контейнера, відмова підробленого голосу до POST і `unknown` для невідомого ключа; кількість upstream-задач рахується в pinned-сховищі (#389 M3/M4).
+- `.github/workflows/ci.yml`: job `moneyprinter-pinned-runtime` зберігає зібраний образ і запускає перевірку відновлення (таймаут 60 хв); `tests/test_release.py` оновлено під новий спосіб створення релізу.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.98
 - `tests/conftest.py`: фікстура `signed_update_server` — справжній HTTPS-сервер оновлень з RSA-підписаними маніфестами; update-agent сам перевіряє підпис, sha256 і replay (#387 F1).
 - `tests/test_core_rollout_coordinator.py`: сценарії rollout більше не підміняють `validate_manifest`/replay; додано перевірку, що підроблений маніфест відхиляється до будь-якої мутації й не перезапускає runtime (#387 F1/F2).

@@ -80,8 +80,11 @@ def _payload(base: Path, version: str, image: dict) -> Path:
     shutil.copyfile(ROOT / "config" / "node_roles.json", payload / "config" / "node_roles.json")
     (payload / "VERSION").write_text(version + "\n", encoding="utf-8")
     (payload / "docker-compose.yml").write_text(COMPOSE, encoding="utf-8")
+    # A signed release always pins the image of the selected GPU service as well;
+    # update-runtime-env.py refuses a manifest without it.
     (payload / "manifest.json").write_text(
-        json.dumps({"version": version, "images": {"worker": image}}), encoding="utf-8")
+        json.dumps({"version": version, "images": {"worker": image, "comfyui": image}}),
+        encoding="utf-8")
     return payload
 
 
@@ -160,6 +163,18 @@ def _status(state_dir: Path) -> dict:
     return json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
 
 
+def _explain(state_dir: Path, installation=None) -> str:
+    """Full executor outcome for an assertion message (pytest truncates dict reprs)."""
+    status = _status(state_dir)
+    lines = [f"state={status.get('state')} phase={status.get('phase')}",
+             f"message={status.get('message')}", "log:", *status.get("log", [])[-60:]]
+    if installation is not None:
+        lines.append(subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"label=com.docker.compose.project={installation.project}",
+             "--format", "{{.ID}} {{.Image}} {{.Status}}"], capture_output=True, text=True).stdout)
+    return "\n".join(str(line) for line in lines)
+
+
 def test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker(
         installation, signed_update_server, tmp_path, monkeypatch):
     root = installation.root
@@ -181,7 +196,7 @@ def test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker(
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
     update_id = "1" * 32
     assert agent.process_request(root, state_dir, _request(state_dir, update_id, "update", "0.0.0.2"),
-                                 skip_drain=True) is True, _status(state_dir)
+                                 skip_drain=True) is True, _explain(state_dir, installation)
     status = _status(state_dir)
     assert status["state"] == "SUCCEEDED" and status["request_id"] == update_id
     updated = installation.container()
@@ -195,7 +210,7 @@ def test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker(
     # restart: the same release, a new running instance, correlated with the request
     restart_id = "2" * 32
     assert agent.process_request(root, state_dir, _request(state_dir, restart_id, "restart"),
-                                 skip_drain=True) is True, _status(state_dir)
+                                 skip_drain=True) is True, _explain(state_dir, installation)
     assert _status(state_dir)["request_id"] == restart_id
     restarted = installation.container()
     assert restarted and restarted != updated
@@ -204,7 +219,7 @@ def test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker(
     # rollback: the previous immutable release and its image are running again
     rollback_id = "3" * 32
     assert agent.process_request(root, state_dir, _request(state_dir, rollback_id, "rollback"),
-                                 skip_drain=True) is True, _status(state_dir)
+                                 skip_drain=True) is True, _explain(state_dir, installation)
     status = _status(state_dir)
     assert status["state"] == "ROLLED_BACK" and status["request_id"] == rollback_id
     restored = installation.container()
@@ -233,9 +248,9 @@ def test_standard_consumer_refuses_a_tampered_release_without_touching_the_worke
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))), tamper=True)
     request_id = "4" * 32
     assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
-                                 skip_drain=True) is False
+                                 skip_drain=True) is False, _explain(state_dir, installation)
     status = _status(state_dir)
-    assert status["state"] == "FAILED" and status["request_id"] == request_id
+    assert status["state"] == "FAILED" and status["request_id"] == request_id, _explain(state_dir, installation)
     assert "signature" in status["message"].lower()
     assert installation.container() == before
     assert installation.served_version(before) == "0.0.0.1"
@@ -263,7 +278,10 @@ def test_failed_legacy_rescue_blocks_the_destructive_recreate(
     request_id = "5" * 32
     assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
                                  skip_drain=True) is False
-    assert _status(state_dir)["request_id"] == request_id
+    status = _status(state_dir)
+    assert status["request_id"] == request_id
+    # The refusal must come from the legacy rescue, not from an unrelated failure.
+    assert any("symlink" in str(line) for line in status.get("log", [])), _explain(state_dir, installation)
     assert installation.container() == before, "a failed rescue still recreated the worker"
     assert installation.served_version(before) == "0.0.0.1"
     assert installation.consumer_records(before) == records == _records_digest(root)

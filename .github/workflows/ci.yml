@@ -399,7 +399,7 @@ jobs:
     # #376: this is the only proof that builds and executes the agreed pinned
     # upstream; fixture/stand-in tests cannot make this job green.
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -415,8 +415,12 @@ jobs:
           tests/test_mpt_media_matrix.py tests/test_issue_122_acceptance_report.py
       - name: Build and execute pinned MoneyPrinterTurbo
         run: >-
-          python scripts/moneyprinter-runtime-check.py --timeout 900
+          python scripts/moneyprinter-runtime-check.py --timeout 900 --keep
           --evidence moneyprinter-runtime-evidence
+      - name: Recover pinned submits across a runtime restart
+        run: >-
+          python scripts/moneyprinter-recovery-check.py --timeout 900
+          --evidence moneyprinter-runtime-evidence/recovery.json
       - name: Render MPT criterion evidence report
         run: >-
           python scripts/issue-122-acceptance-report.py

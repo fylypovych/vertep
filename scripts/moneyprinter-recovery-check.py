@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Pinned MoneyPrinterTurbo submit recovery check (#389 M3/M4).
+
+``moneyprinter-runtime-check.py`` proves the pinned runtime once.  This check reuses
+its image and container helpers and drives the *real* pinned runtime through the
+recovery paths of the bridge contract:
+
+1. a submit with a durable ``x-vertep-submit-key`` creates one upstream task;
+2. a repeat with the same key (a lost response retried) is answered from the
+   durable record and creates no second upstream task;
+3. the runtime container is restarted, and the key still reconciles to the same
+   task id with the approved voice staged;
+4. a tampered staged voice is refused before the upstream is contacted, so the
+   upstream task count does not change;
+5. an unknown key reconciles to ``unknown`` instead of a false success.
+
+Every step is executed against the running container; the upstream task count is
+read from the pinned task storage.  Evidence is written as JSON.  Exit code 0 means
+every step held.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import secrets
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+APP_DIR = "/opt/moneyprinter"
+VERTEP_DIR = "/opt/vertep"
+TASKS_DIR = f"{APP_DIR}/storage/tasks"
+
+
+def _runtime_check():
+    spec = importlib.util.spec_from_file_location(
+        "moneyprinter_runtime_check", ROOT / "scripts" / "moneyprinter-runtime-check.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PRELUDE = f"""
+import hashlib, json, sys, tempfile
+from pathlib import Path
+import httpx
+from services.moneyprinter_service import (
+    _stage_probe_clip, _submit_route_payload, _voice_dir, _write_voice_tone,
+    PROBE_SCENES, VOICE_MARKER_PREFIX, headers, read_api_key)
+
+WRAPPER = "http://127.0.0.1:8098"
+AUTH = headers(read_api_key())
+
+
+def tasks():
+    root = Path({TASKS_DIR!r})
+    return sorted(path.name for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
+
+
+def submit(key, materials, marker):
+    response = httpx.post(f"{{WRAPPER}}/api/v1/videos", headers={{**AUTH, "x-vertep-submit-key": key}},
+                          content=json.dumps(_submit_route_payload(materials, marker)).encode(),
+                          timeout=180)
+    try:
+        body = response.json()
+    except ValueError:
+        body = {{"text": response.text[:500]}}
+    return {{"status": response.status_code, "body": body}}
+
+
+def reconcile(key):
+    response = httpx.get(f"{{WRAPPER}}/api/v1/videos/{{key}}", headers=AUTH, timeout=60)
+    return {{"status": response.status_code, "body": response.json()}}
+
+
+def stage_voice(seconds):
+    staging = Path(tempfile.mkdtemp(prefix="vertep-recovery-voice-"))
+    voice = staging / "voice.wav"
+    _write_voice_tone(voice, seconds=seconds)
+    response = httpx.post(f"{{WRAPPER}}/api/v1/voice", headers={{**AUTH, "x-vertep-filename": "voice.wav"}},
+                          content=voice.read_bytes(), timeout=60)
+    response.raise_for_status()
+    return response.json()["data"]["voice"]
+"""
+
+PREPARE = """
+staging = Path(tempfile.mkdtemp(prefix="vertep-recovery-"))
+materials = []
+for label, colour, seconds in PROBE_SCENES:
+    clip = staging / f"{label}.mp4"
+    _stage_probe_clip(clip, seconds=seconds, colour=colour)
+    upload = httpx.post(f"{WRAPPER}/api/v1/video_materials", headers={**AUTH, "x-vertep-filename": clip.name},
+                        content=clip.read_bytes(), timeout=120)
+    upload.raise_for_status()
+    materials.append({"provider": "local", "url": upload.json()["data"]["file"], "duration": seconds})
+marker = stage_voice(sum(seconds for _, _, seconds in PROBE_SCENES))
+print(json.dumps({"materials": materials, "marker": marker, "tasks": tasks()}))
+"""
+
+SUBMIT = """
+arguments = json.loads(sys.argv[1])
+result = submit(arguments["key"], arguments["materials"], arguments["marker"])
+print(json.dumps({**result, "tasks": tasks()}))
+"""
+
+RECONCILE = """
+arguments = json.loads(sys.argv[1])
+print(json.dumps({**reconcile(arguments["key"]), "tasks": tasks()}))
+"""
+
+TAMPER = """
+arguments = json.loads(sys.argv[1])
+marker = stage_voice(2)
+digest_and_suffix = marker[len(VOICE_MARKER_PREFIX):]
+staged = _voice_dir() / digest_and_suffix
+staged.write_bytes(staged.read_bytes() + b"tampered after approval")
+before = tasks()
+result = submit(arguments["key"], arguments["materials"], marker)
+print(json.dumps({**result, "tasks_before": before, "tasks": tasks()}))
+"""
+
+
+class Container:
+    def __init__(self, check, name: str):
+        self.check, self.name = check, name
+
+    def run(self, step: str, arguments: dict | None = None) -> dict:
+        result = subprocess.run(
+            ["docker", "exec", "-i", "-w", VERTEP_DIR, "-e", f"PYTHONPATH={APP_DIR}:{VERTEP_DIR}",
+             self.name, "python3", "-", json.dumps(arguments or {})],
+            input=PRELUDE + step, capture_output=True, text=True, timeout=900)
+        if result.returncode:
+            raise self.check.CheckFailure(
+                f"step failed in the pinned container: {result.stderr.strip()[-2000:]}")
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def require(condition: bool, message: str, evidence: dict) -> None:
+    evidence.setdefault("assertions", []).append({"check": message, "passed": bool(condition)})
+    if not condition:
+        raise AssertionError(message)
+
+
+def scenario(container: Container, restart, evidence: dict) -> None:
+    prepared = container.run(PREPARE)
+    materials, marker = prepared["materials"], prepared["marker"]
+    key = f"recovery-{secrets.token_hex(6)}"
+
+    first = container.run(SUBMIT, {"key": key, "materials": materials, "marker": marker})
+    evidence["first_submit"] = first
+    require(first["status"] == 200, "first submit is accepted", evidence)
+    task_id = first["body"]["data"]["task_id"]
+    require(bool(task_id), "first submit names an upstream task", evidence)
+
+    # A lost response is retried with the same key: no second upstream task.
+    time.sleep(3)
+    before_retry = container.run(RECONCILE, {"key": key})["tasks"]
+    retried = container.run(SUBMIT, {"key": key, "materials": materials, "marker": marker})
+    evidence["retried_submit"] = retried
+    require(retried["status"] == 200 and retried["body"].get("message") == "reconciled",
+            "a repeated submit key is reconciled", evidence)
+    require(retried["body"]["data"]["task_id"] == task_id, "the retry names the same task", evidence)
+    require(retried["tasks"] == before_retry, "the retry created no upstream task", evidence)
+
+    # The runtime container restarts; the durable key still maps to the task.
+    restart()
+    after = container.run(RECONCILE, {"key": key})
+    evidence["reconciled_after_restart"] = after
+    require(after["status"] == 200 and after["body"]["state"] == "submitted",
+            "the key reconciles to submitted after a runtime restart", evidence)
+    require(after["body"]["data"].get("task_id") == task_id,
+            "the reconciled task id survived the restart", evidence)
+    require(after["body"].get("voice_staged") is True,
+            "the approved voice is still staged after the restart", evidence)
+    resubmitted = container.run(SUBMIT, {"key": key, "materials": materials, "marker": marker})
+    evidence["resubmitted_after_restart"] = resubmitted
+    require(resubmitted["body"].get("data", {}).get("task_id") == task_id
+            and resubmitted["tasks"] == after["tasks"],
+            "a retry after the restart still creates no second task", evidence)
+
+    # A tampered approved voice never reaches the upstream.
+    tampered = container.run(TAMPER, {"key": f"tampered-{secrets.token_hex(6)}", "materials": materials})
+    evidence["tampered_voice"] = tampered
+    require(tampered["status"] == 503 and tampered["body"].get("reason") == "voice_staging_failed",
+            "a tampered staged voice is refused", evidence)
+    require(tampered["tasks"] == tampered["tasks_before"],
+            "the tampered attempt created no upstream task", evidence)
+
+    unknown = container.run(RECONCILE, {"key": f"unknown-{secrets.token_hex(6)}"})
+    evidence["unknown_key"] = unknown
+    require(unknown["status"] == 404 and unknown["body"].get("state") == "unknown",
+            "an unknown key reconciles to unknown", evidence)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--evidence", default="", help="JSON evidence file to write")
+    arguments = parser.parse_args()
+    check = _runtime_check()
+    evidence: dict = {"issue": 389, "sha": subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()}
+    name = f"moneyprinter-recovery-check-{secrets.token_hex(4)}"
+    key_directory = Path(tempfile.mkdtemp(prefix="vertep-mpt-recovery-key-"))
+    _key_file, api_key = check.write_api_key(key_directory)
+    started = False
+    status = 1
+    try:
+        if not check.docker_available():
+            raise check.CheckFailure("docker is not available on this host")
+        if subprocess.run(["docker", "image", "inspect", check.IMAGE_NAME],
+                          capture_output=True).returncode != 0:
+            check.build_image((ROOT / "VERSION").read_text(encoding="utf-8").strip())
+        digest = check.image_digest(check.IMAGE_NAME)
+        evidence["image_digest"] = digest
+        check.start_container(name, digest, key_directory)
+        started = True
+
+        def ready() -> None:
+            port = check.mapped_port(name)
+            check.wait_for_wrapper(port, api_key, time.monotonic() + arguments.timeout)
+
+        def restart() -> None:
+            check.docker("restart", name)
+            ready()
+
+        ready()
+        scenario(Container(check, name), restart, evidence)
+        evidence["result"] = "PASS"
+        status = 0
+    except (AssertionError, check.CheckFailure, subprocess.SubprocessError) as error:
+        evidence["result"] = "FAIL"
+        evidence["error"] = str(error)
+        if started:
+            check.report_container_log(name)
+    finally:
+        if started:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        if arguments.evidence:
+            Path(arguments.evidence).parent.mkdir(parents=True, exist_ok=True)
+            Path(arguments.evidence).write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+                                                encoding="utf-8")
+        print(json.dumps({key: evidence.get(key) for key in ("result", "error", "assertions")},
+                         ensure_ascii=False))
+    return status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
