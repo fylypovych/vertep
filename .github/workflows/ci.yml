@@ -198,6 +198,7 @@ jobs:
       VERTEP_REQUIRE_DISTRIBUTED_UPDATE_FENCE: "1"
       VERTEP_UPDATE_LEASE_DATABASE_URL: postgresql://vertep:ci-only@localhost:5432/vertep
       VERTEP_REQUIRE_CONNECTED_RESTORE: "1"
+      VERTEP_REQUIRE_STANDARD_HOST_CONSUMER: "1"
       VERTEP_CONNECTED_RESTORE_DATABASE_URL: postgresql://vertep:ci-only@localhost:5432/vertep
     services:
       postgres:
@@ -228,6 +229,7 @@ jobs:
           --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"
           tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply
           tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart
+          tests/test_standard_host_consumer_docker.py
       - name: Upload fleet and connected restore evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -312,10 +314,11 @@ jobs:
           if-no-files-found: warn
 
   bootstrap-lifecycle-acceptance:
-    # #384 B2: exercise the real Docker executor under both supported Linux
-    # architectures. B1 publication and B3 host TLS remain separate gates.
+    # #384/#388 B2: the executor trust matrix runs inside a linux/<arch> container
+    # (QEMU for arm64); the Docker apply executor runs on the host daemon.
+    # B1 publication and B3 host TLS remain separate gates.
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -344,6 +347,7 @@ jobs:
           path: |
             ${{ runner.temp }}/bootstrap-lifecycle-${{ matrix.architecture }}.xml
             ${{ runner.temp }}/bootstrap-lifecycle-${{ matrix.architecture }}.json
+            ${{ runner.temp }}/executor-${{ matrix.architecture }}/**
           if-no-files-found: error
 
   persistence-trust-acceptance:

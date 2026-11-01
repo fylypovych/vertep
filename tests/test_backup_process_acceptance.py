@@ -356,10 +356,70 @@ def test_core_caller_surfaces_restore_refusals_without_mutation(backup_process):
         refusal(label)
     receipt_path.unlink()
     refusal("missing-receipt")
+    for label, changed in (
+        ("identity", {**receipt, "snapshot_id": "another-snapshot"}),
+        ("type", {**receipt, "file": "another-snapshot.vtbackup"}),
+    ):
+        receipt_path.write_text(json.dumps(changed), encoding="utf-8")
+        refusal(label)
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
-    archive.write_bytes(archive.read_bytes() + b"synthetic tampering")
+    pristine = archive.read_bytes()
+    archive.write_bytes(pristine[: len(pristine) // 2])
+    refusal("partial")
+    archive.write_bytes(pristine + b"synthetic tampering")
     response = refusal("tampered")
     assert "Checksum" not in response.json()["detail"]
+
+    # Retry: once the snapshot is intact again the same confirmation token passes
+    # every integrity gate and the restore really runs.  This caller has no
+    # PostgreSQL/Redis, so the post-restore health gate must refuse NORMAL; the
+    # healthy completion is proven by the connected CI test.
+    archive.write_bytes(pristine)
+    data.write_bytes(b"changed after snapshot")
+    retried = api.post(f"/api/system/backups/{sid}/restore/confirm", params={"token": token})
+    assert retried.status_code == 502, retried.text
+    assert data.read_bytes() == original, "the retried restore did not run"
+    progress = api.get(f"/api/system/backups/{sid}/restore/progress").json()
+    assert progress["status"] == "error" and "health check" in progress["message"]
+    assert api.get("/api/system/state").json()["state"] == "EMERGENCY"
+    assert sorted(path.name for path in (root / "backups").glob("*.vtbackup")) == snapshots_before
+
+def test_core_caller_reports_a_failed_remote_copy_without_a_successful_receipt(backup_process):
+    """#386.6: a configured remote copy that fails reaches the CORE caller as an
+    error, and no snapshot is reported as created."""
+    root = backup_process["root"]
+    config = root / "remote-core-config"
+    config.mkdir()
+    (config / "users.json").write_text("{}", encoding="utf-8")
+    (config / "installation.json").write_text('{"completed_at":"2026-01-01"}', encoding="utf-8")
+    with socket.socket() as socket_probe:
+        socket_probe.bind(("127.0.0.1", 0))
+        core_port = socket_probe.getsockname()[1]
+    internal_key = "synthetic-remote-internal-key"
+    _, service = backup_process["launch"]({
+        "BACKUP_CORE_URL": f"http://127.0.0.1:{core_port}",
+        "INTERNAL_API_KEY": internal_key,
+        "BACKUP_REMOTE_CMD": "exit 3",
+    })
+    _, api = backup_process["launch"]({
+        "CONFIG_ROOT": str(config), "UPDATE_STATE_DIR": str(root / "remote-core-update"),
+        "STORAGE_ROOT": str(root / "remote-core-storage"), "JOB_ROOT": str(root / "remote-core-jobs"),
+        "SYSTEM_STATE_BACKEND": "file", "BACKUP_URL": str(service.base_url).rstrip("/"),
+        "INTERNAL_API_KEY": internal_key, "ADMIN_USER": "admin",
+        "ADMIN_PASSWORD": "remote-process-admin", "DATABASE_URL": "", "REDIS_URL": "",
+        "CORE_ADDRESS": "", "OLLAMA_URL": "http://127.0.0.1:1", "PROMETHEUS_URL": "",
+    }, core_port, "core.app:app", "/api/session",
+        {"Authorization": "Basic " + base64.b64encode(b"admin:remote-process-admin").decode()})
+    before = sorted(path.name for path in (root / "backups").glob("*.json"))
+
+    response = api.post("/api/system/backups")
+    assert response.status_code >= 400, response.text
+    assert "BACKUP_REMOTE_CMD" not in response.text, "the caller must not leak the command"
+    assert sorted(path.name for path in (root / "backups").glob("*.json")) == before
+    listed = api.get("/api/system/backups")
+    if listed.status_code == 200:
+        assert all(item.get("remote_copy") is not True for item in listed.json().get("backups", listed.json())
+                   if isinstance(item, dict))
 
 
 def test_crash_and_competing_process_keep_restore_fence(backup_process):

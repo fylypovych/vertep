@@ -36,3 +36,28 @@ def test_junit_summary_keeps_skips_visible(tmp_path):
         encoding="utf-8",
     )
     assert target.junit_summary(report) == {"passed": 1, "failed": 1, "error": 1, "skipped": 1}
+
+
+def test_executor_matrix_runs_inside_the_requested_architecture(tmp_path):
+    target = module()
+    argv = target.executor_command("arm64", tmp_path)
+    assert argv[:5] == ["docker", "run", "--rm", "--platform", "linux/arm64"]
+    script = argv[-1]
+    # The recorded machine comes from the same container that runs the tests.
+    assert "platform.machine()" in script and "/evidence/machine" in script
+    assert all(name in script for name in target.EXECUTOR_TARGETS)
+
+
+def _clean(passed=10):
+    return {"passed": passed, "failed": 0, "error": 0, "skipped": 0}
+
+
+def test_b2_passes_only_with_matching_executor_architecture_and_no_skips():
+    target = module()
+    host = {"returncode": 0, "pytest": _clean()}
+    good = {"returncode": 0, "machine": "aarch64", "pytest": _clean()}
+    assert target.criteria(good, host, "arm64")["B2"] == "PASS"
+    assert target.criteria({**good, "machine": "x86_64"}, host, "arm64")["B2"] == "FAIL"
+    assert target.criteria({**good, "pytest": {**_clean(), "skipped": 1}}, host, "arm64")["B2"] == "FAIL"
+    assert target.criteria(good, {**host, "returncode": 1}, "arm64")["B2"] == "FAIL"
+    assert target.criteria(good, host, "arm64")["B3"] == "NOT_RUN"

@@ -73,26 +73,6 @@ def _release_package(tmp_path: Path, version: str) -> Path:
     return archive
 
 
-def _signed_manifest(monkeypatch, version: str, archive: Path) -> None:
-    """Stub only the signed-manifest network transport."""
-    import core.update_protocol as protocol
-
-    monkeypatch.setattr(
-        protocol, "fetch_manifest",
-        lambda channel: {"version": version, "channel": "stable", "required": False})
-    monkeypatch.setattr(
-        protocol, "validate_manifest",
-        lambda manifest, public_key, expected_channel=None: None)
-    monkeypatch.setattr(protocol, "validate_replay_state", lambda manifest, trusted: None)
-
-    def download(_manifest, path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(archive, path)
-        return path
-
-    monkeypatch.setattr(protocol, "download_package", download)
-
-
 def _active_version(root: Path) -> str:
     return (root / "current" / "VERSION").read_text(encoding="utf-8").strip()
 
@@ -119,7 +99,7 @@ def _journal(state_dir: Path) -> list[dict]:
 
 
 def test_core_target_executes_through_real_deployment_not_monkeypatched(
-        driver, agent, disposable_deployment, tmp_path, monkeypatch):
+        driver, agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
     """CORE target execution goes through the real process_request → run_fenced
     flow with a disposable installation whose host consumer replaces the active
     runtime instance, producing a correlated version change and a bound
@@ -130,7 +110,7 @@ def test_core_target_executes_through_real_deployment_not_monkeypatched(
     state_dir.mkdir()
     _prepare(root, state_dir, monkeypatch)
     archive = _release_package(tmp_path, "0.0.0.2")
-    _signed_manifest(monkeypatch, "0.0.0.2", archive)
+    signed_update_server.publish("0.0.0.2", archive)
 
     from core.rolling_update import reconcile_rollout, rollout_status, start_rollout
 
@@ -200,7 +180,7 @@ def test_core_target_executes_through_real_deployment_not_monkeypatched(
 
 
 def test_worker_request_reaches_host_consumer_and_reports_correlated_result(
-        agent, disposable_deployment, tmp_path, monkeypatch):
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
     """A Worker update request reaches the standard host consumer, replaces the
     runtime instance and is acknowledged with a correlated result (#175.1)."""
     from worker.service import request_local_update
@@ -212,7 +192,7 @@ def test_worker_request_reaches_host_consumer_and_reports_correlated_result(
     _prepare(root, state_dir, monkeypatch)
     monkeypatch.setenv("UPDATE_REQUEST_DIR", str(requests))
     archive = _release_package(tmp_path, "0.0.0.2")
-    _signed_manifest(monkeypatch, "0.0.0.2", archive)
+    signed_update_server.publish("0.0.0.2", archive)
 
     request_local_update("0.0.0.2")
     request_file = next(requests.glob("*.json"))
@@ -232,7 +212,7 @@ def test_worker_request_reaches_host_consumer_and_reports_correlated_result(
 
 
 def test_failed_apply_rolls_back_runtime_instance_and_can_be_retried(
-        agent, disposable_deployment, tmp_path, monkeypatch):
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
     """A fault during the host apply restores the previous runtime instance,
     journals the correlated failure and leaves the node ready for a retry
     (#175.2)."""
@@ -242,7 +222,7 @@ def test_failed_apply_rolls_back_runtime_instance_and_can_be_retried(
     requests.mkdir(parents=True)
     _prepare(root, state_dir, monkeypatch)
     archive = _release_package(tmp_path, "0.0.0.2")
-    _signed_manifest(monkeypatch, "0.0.0.2", archive)
+    signed_update_server.publish("0.0.0.2", archive)
     (root / "fail-migration").write_text("1", encoding="utf-8")
 
     failed = requests / ("f" * 32 + ".json")
@@ -261,7 +241,7 @@ def test_failed_apply_rolls_back_runtime_instance_and_can_be_retried(
 
     (root / "fail-migration").unlink()
     retry_archive = _release_package(tmp_path, "0.0.0.3")
-    _signed_manifest(monkeypatch, "0.0.0.3", retry_archive)
+    signed_update_server.publish("0.0.0.3", retry_archive)
     retry = requests / ("a" * 32 + ".json")
     retry.write_text(json.dumps({"request_id": "a" * 32, "action": "update",
                                  "target_version": "0.0.0.3"}), encoding="utf-8")
@@ -340,7 +320,7 @@ def test_cancel_during_active_restart_stops_consumer_without_delayed_restart(
 
 
 def test_interrupted_apply_recovers_previous_runtime_instance_after_restart(
-        agent, disposable_deployment, tmp_path, monkeypatch):
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
     """A host apply interrupted by a restart is recovered by rolling the active
     runtime instance back to the previous release (#175.2, #193.2)."""
     root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
@@ -349,7 +329,7 @@ def test_interrupted_apply_recovers_previous_runtime_instance_after_restart(
     requests.mkdir(parents=True)
     _prepare(root, state_dir, monkeypatch)
     archive = _release_package(tmp_path, "0.0.0.2")
-    _signed_manifest(monkeypatch, "0.0.0.2", archive)
+    signed_update_server.publish("0.0.0.2", archive)
 
     request_file = requests / ("b" * 32 + ".json")
     request_file.write_text(json.dumps({"request_id": "b" * 32, "action": "update",
@@ -513,7 +493,7 @@ def test_driver_never_reports_version_without_executor_output(
 
 
 def test_core_rollback_runs_through_host_agent_with_bound_evidence(
-        driver, agent, disposable_deployment, tmp_path, monkeypatch):
+        driver, agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
     """Rollback runs through the standard host consumer and restores the
     previous runtime instance with a bound self-test (#193.2)."""
     root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
@@ -521,7 +501,7 @@ def test_core_rollback_runs_through_host_agent_with_bound_evidence(
     state_dir.mkdir()
     _prepare(root, state_dir, monkeypatch)
     archive = _release_package(tmp_path, "0.0.0.2")
-    _signed_manifest(monkeypatch, "0.0.0.2", archive)
+    signed_update_server.publish("0.0.0.2", archive)
 
     from core.rolling_update import (reconcile_rollout, rollback_ready_nodes,
                                      rollout_status, start_rollout)
@@ -574,7 +554,7 @@ def test_core_rollback_runs_through_host_agent_with_bound_evidence(
 
 
 def test_workers_first_core_last_ordering_and_canary_promotion(
-        driver, agent, disposable_deployment, tmp_path, monkeypatch):
+        driver, agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
     """Workers run before CORE, the canary waits for an explicit promotion and
     the whole flow is proven by the real executor (#193.2)."""
     root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
@@ -582,7 +562,7 @@ def test_workers_first_core_last_ordering_and_canary_promotion(
     state_dir.mkdir()
     _prepare(root, state_dir, monkeypatch)
     archive = _release_package(tmp_path, "0.0.0.2")
-    _signed_manifest(monkeypatch, "0.0.0.2", archive)
+    signed_update_server.publish("0.0.0.2", archive)
 
     from core.rolling_update import (cancel_rollout, promote_rollout, reconcile_rollout,
                                      rollout_status, start_rollout)
@@ -649,3 +629,30 @@ def test_cancel_fence_blocks_host_request_enqueue(driver, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="Mutation blocked"):
         driver.enqueue_host_request(tmp_path, "update", "0.0.0.2", "b" * 32)
     assert not (tmp_path / "requests" / f"{'b' * 32}.json").exists()
+
+
+def test_tampered_signed_manifest_is_refused_before_any_host_mutation(
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
+    """The real signature check of the update agent refuses a manifest whose
+    package digest was altered after signing; nothing is downloaded, applied or
+    restarted, and the refusal is correlated with the request (#193.4)."""
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    signed_update_server.publish("0.0.0.2", _release_package(tmp_path, "0.0.0.2"), tamper=True)
+    before = _health(root)
+    request = requests / ("9" * 32 + ".json")
+    request.write_text(json.dumps({"request_id": "9" * 32, "action": "update",
+                                   "target_version": "0.0.0.2"}), encoding="utf-8")
+
+    assert agent.process_request(root, state_dir, request, skip_drain=True) is False
+
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED" and status["request_id"] == "9" * 32
+    assert "signature" in status["message"].lower()
+    assert _active_version(root) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+    assert not (state_dir / "packages").exists() or not any((state_dir / "packages").iterdir())
+    assert _health(root) == before, "a refused manifest still restarted the runtime"

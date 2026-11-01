@@ -111,30 +111,46 @@ def disposable_core(tmp_path_factory):
     # would make its health probe depend on a service that is not part of the
     # scenario.
     env.pop("REDIS_URL", None)
-    log = (base / "core.log").open("wb")
-    process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "core.app:app", "--host", "127.0.0.1",
-         "--port", str(port)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+    log = (base / "core.log").open("ab")
     url = f"http://127.0.0.1:{port}"
+    running = {}
 
     def healthy():
         try:
             return httpx.get(f"{url}/api/health", timeout=1).status_code == 200
         except httpx.HTTPError:
             return False
-    try:
-        _wait_until(healthy, timeout=60, message="CORE to become healthy")
-    except BaseException:
-        log.close()
+
+    def stop():
+        process = running.pop("process", None)
+        if process is None:
+            return
         process.terminate()
-        pytest.fail((base / "core.log").read_text(encoding="utf-8", errors="replace"),
-                    pytrace=False)
-    yield {"url": url, "state_dir": state_dir, "root": base}
-    process.terminate()
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+    def start():
+        running["process"] = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "core.app:app", "--host", "127.0.0.1",
+             "--port", str(port)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+        try:
+            _wait_until(healthy, timeout=60, message="CORE to become healthy")
+        except BaseException:
+            stop()
+            log.close()
+            pytest.fail((base / "core.log").read_text(encoding="utf-8", errors="replace"),
+                        pytrace=False)
+
+    def restart():
+        """Replace the CORE process; only durable state survives."""
+        stop()
+        start()
+
+    start()
+    yield {"url": url, "state_dir": state_dir, "root": base, "restart": restart}
+    stop()
     log.close()
 
 
@@ -150,25 +166,18 @@ def _release_package(base: Path, version: str) -> Path:
     return archive
 
 
-def _run_host_agent(base: Path, root: Path, state_dir: Path, monkeypatch) -> bool:
-    """Run the real update-agent for the queued Browser mutation."""
+def _run_host_agent(base: Path, root: Path, state_dir: Path, monkeypatch, update_server,
+                    version: str = TARGET_VERSION) -> bool:
+    """Run the real update-agent for the queued Browser mutation.
+
+    The release is published on a real HTTPS origin with a signed manifest, so the
+    agent verifies the signature, digest and replay state itself.
+    """
     spec = importlib.util.spec_from_file_location(
         "update_agent_browser_e2e", ROOT / "scripts" / "update-agent.py")
     agent = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent)
-    import core.update_protocol as protocol
-    monkeypatch.setattr(protocol, "fetch_manifest",
-                        lambda _channel: {"version": TARGET_VERSION, "channel": "stable",
-                                          "required": False})
-    monkeypatch.setattr(protocol, "validate_manifest",
-                        lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(protocol, "validate_replay_state",
-                        lambda *_args, **_kwargs: None)
-    archive = _release_package(base, TARGET_VERSION)
-    monkeypatch.setattr(
-        protocol, "download_package",
-        lambda _manifest, path: (path.parent.mkdir(parents=True, exist_ok=True),
-                                 shutil.copyfile(archive, path), path)[-1])
+    update_server.publish(version, _release_package(base, version))
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
     monkeypatch.setenv("VERTEP_ROOT", str(root))
     requests = sorted((state_dir / "requests").glob("*.json"))
@@ -189,7 +198,7 @@ def _attach_collectors(page):
 
 
 def test_update_center_browser_drives_real_core_and_host_executor(
-        disposable_core, disposable_deployment, monkeypatch):
+        disposable_core, disposable_deployment, signed_update_server, monkeypatch):
     base, state_dir = Path(disposable_core["root"]), disposable_core["state_dir"]
     root = disposable_deployment(base / "runtime", CURRENT_VERSION)
     url = disposable_core["url"]
@@ -217,7 +226,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
 
         # 2) The real host executor applies the update; only then does the
         #    operation reach SUCCEEDED (nothing here writes the status directly).
-        assert _run_host_agent(base, root, state_dir, monkeypatch) is True
+        assert _run_host_agent(base, root, state_dir, monkeypatch, signed_update_server) is True
         assert (root / "current" / "VERSION").read_text(encoding="utf-8").strip() == TARGET_VERSION
         assert not request_file.exists()
         status = httpx.get(f"{url}/api/system/update", auth=(ADMIN_USER, ADMIN_PASSWORD)).json()
@@ -236,13 +245,38 @@ def test_update_center_browser_drives_real_core_and_host_executor(
                 lambda response: "/api/system/update/run" in response.url) as failed:
             page.get_by_test_id("update-install").click()
         assert failed.value.ok, failed.value.text()
-        assert _run_host_agent(base, root, state_dir, monkeypatch) is False
+        assert _run_host_agent(base, root, state_dir, monkeypatch, signed_update_server) is False
         assert (root / "current" / "VERSION").read_text(encoding="utf-8").strip() == CURRENT_VERSION
         status = httpx.get(f"{url}/api/system/update", auth=(ADMIN_USER, ADMIN_PASSWORD)).json()
         assert status["state"] == "ROLLED_BACK"
         page.reload()
         expect(page.get_by_test_id("update-recovery-state")).to_be_visible()
         expect(page.get_by_test_id("update-progress")).to_contain_text("100%")
+
+        # 5) Retry after the recovered failure: a new request, a new signed release
+        #    and a correlated success.
+        (root / "fail-apply").unlink()
+        with page.expect_response(
+                lambda response: "/api/system/update/run" in response.url) as retried:
+            page.get_by_test_id("update-install").click()
+        assert retried.value.ok, retried.value.text()
+        retry_request = retried.value.json()["request_id"]
+        assert _run_host_agent(base, root, state_dir, monkeypatch, signed_update_server,
+                               FAIL_TARGET_VERSION) is True
+        assert (root / "current" / "VERSION").read_text(encoding="utf-8").strip() == FAIL_TARGET_VERSION
+
+        # 6) After a CORE process restart the Browser still shows the terminal
+        #    result of that exact operation from durable state alone.
+        disposable_core["restart"]()
+        status = httpx.get(f"{url}/api/system/update", auth=(ADMIN_USER, ADMIN_PASSWORD)).json()
+        assert status["state"] == "SUCCEEDED" and status["request_id"] == retry_request
+        # A new process may not know the previous session; sign in again as a user would.
+        session = context.request.post(
+            f"{url}/api/session", headers={"Authorization": f"Basic {credentials}"})
+        assert session.ok, session.text()
+        page.reload()
+        expect(page.get_by_test_id("update-progress")).to_contain_text("100%")
+        expect(page.get_by_test_id("update-progress")).to_contain_text("Update completed")
 
         assert page_errors == [], f"pageerror: {page_errors}"
         assert console_errors == [], f"console.error: {console_errors}"

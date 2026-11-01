@@ -499,3 +499,101 @@ def disposable_deployment():
     for root in built:
         subprocess.run([sys.executable, str(root / "scripts" / "vertep-host.py"), "stop-runtime"],
                        timeout=60)
+
+
+class SignedUpdateServer:
+    """A real HTTPS update origin publishing RSA-signed release manifests."""
+
+    def __init__(self, root: Path):
+        import datetime as _dt
+        import functools
+        import ipaddress
+        import ssl
+        from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        self.root = Path(root)
+        self.files = self.root / "origin"
+        self.files.mkdir(parents=True, exist_ok=True)
+        self.sequence = 0
+        self._signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.public_key = self.root / "update-public.pem"
+        self.public_key.write_bytes(self._signing_key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+        tls_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+        now = _dt.datetime.now(_dt.timezone.utc)
+        certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                       .public_key(tls_key.public_key()).serial_number(x509.random_serial_number())
+                       .not_valid_before(now - _dt.timedelta(minutes=5))
+                       .not_valid_after(now + _dt.timedelta(days=1))
+                       .add_extension(x509.SubjectAlternativeName(
+                           [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+                       .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                       .sign(tls_key, hashes.SHA256()))
+        self.certificate = self.root / "update-origin.crt"
+        self.certificate.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        tls_key_path = self.root / "update-origin.key"
+        tls_key_path.write_bytes(tls_key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption()))
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self.certificate, tls_key_path)
+
+        class Quiet(SimpleHTTPRequestHandler):
+            def log_message(self, *_args):
+                return None
+
+        self._server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), functools.partial(Quiet, directory=str(self.files)))
+        self._server.socket = context.wrap_socket(self._server.socket, server_side=True)
+        self.url = f"https://127.0.0.1:{self._server.server_address[1]}"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def environment(self) -> dict[str, str]:
+        return {"VERTEP_UPDATE_SERVER": self.url, "SSL_CERT_FILE": str(self.certificate),
+                "UPDATE_PUBLIC_KEY": str(self.public_key), "UPDATE_CHANNEL": "stable",
+                "UPDATE_HTTP_RETRIES": "1"}
+
+    def publish(self, version: str, package: Path, *, tamper: bool = False) -> dict:
+        """Serve ``package`` as the signed stable release ``version``."""
+        import base64
+        import hashlib
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from core.update_protocol import canonical_manifest
+
+        self.sequence += 1
+        relative = f"v1/packages/vertep-{version}.tar.gz"
+        target = self.files / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(package, target)
+        manifest = {"version": version, "channel": "stable", "required": False,
+                    "package": relative, "release_sequence": self.sequence,
+                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+        manifest["signature"] = base64.b64encode(self._signing_key.sign(
+            canonical_manifest(manifest), padding.PKCS1v15(), hashes.SHA256())).decode()
+        if tamper:
+            manifest["sha256"] = "0" * 64
+        latest = self.files / "v1" / "releases" / "stable" / "latest.json"
+        latest.parent.mkdir(parents=True, exist_ok=True)
+        latest.write_text(json.dumps(manifest), encoding="utf-8")
+        return manifest
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@pytest.fixture
+def signed_update_server(tmp_path, monkeypatch):
+    """Real HTTPS update origin; the update agent verifies its signature itself."""
+    server = SignedUpdateServer(tmp_path / "update-origin")
+    for key, value in server.environment().items():
+        monkeypatch.setenv(key, value)
+    yield server
+    server.close()
