@@ -27,8 +27,10 @@ import os
 import re
 import struct
 import subprocess
+import threading
 import wave
 import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -39,6 +41,7 @@ import pytest
 from adapters.ffmpeg import FFmpegAdapter
 from adapters.providers.base import FIXED_SUBMIT_FIELDS, BridgeContractError
 from adapters.providers.video_engines import MONEY_PRINTER_CONTRACT, MoneyPrinterEngine
+from publishers.transport import HttpTransport
 
 #: Scene geometry: both edges clear the pinned minimum material edge (470px) and the
 #: ratio is the portrait aspect the fixed §9.4 submit set asks for.
@@ -220,7 +223,6 @@ class PinnedRuntime:
         self.materials.mkdir(parents=True, exist_ok=True)
         self.requests: list[tuple[str, str, dict]] = []
         self.submits: list[dict] = []
-        self.without_voice_staging = False
         self.corrupt_download: bytes | None = None
         self._assembly = FFmpegAdapter()
 
@@ -241,13 +243,7 @@ class PinnedRuntime:
         path = url.split(":8000", 1)[-1]
         self.requests.append((method, path, dict(kwargs)))
         if path == "/runtime":
-            return httpx.Response(200, json=_runtime_snapshot(
-                capabilities={
-                    "task_local_voice": not self.without_voice_staging,
-                    "reason": ("upstream_voice_staging_unsupported"
-                               if self.without_voice_staging else None),
-                },
-            ))
+            return httpx.Response(200, json=_runtime_snapshot())
         if path == "/api/v1/voice":
             return self._stage_voice(kwargs)
         if path == "/api/v1/video_materials":
@@ -328,10 +324,12 @@ class PinnedRuntime:
 
 # #389 M1: with VERTEP_MPT_PINNED_URL/VERTEP_MPT_PINNED_TOKEN the same tests drive
 # the real pinned runtime container instead of the stand-in (CI job
-# ``moneyprinter-pinned-runtime``). Fault injection exists only in the stand-in.
+# ``moneyprinter-pinned-runtime``). #392 moved the corrupt-download fault to M3; the
+# voice-staging capability negative has its own real HTTP boundary below and therefore
+# no stand-in-only skip.
 PINNED_URL = os.getenv("VERTEP_MPT_PINNED_URL", "").rstrip("/")
 PINNED_TOKEN = os.getenv("VERTEP_MPT_PINNED_TOKEN", "")
-STAND_IN_FAULTS = {"without_voice_staging", "corrupt_download"}
+STAND_IN_FAULTS = {"corrupt_download"}
 
 
 class LivePinnedRuntime:
@@ -346,7 +344,8 @@ class LivePinnedRuntime:
 
     def __setattr__(self, name: str, value) -> None:
         if name in STAND_IN_FAULTS:
-            pytest.skip(f"{name} is a stand-in fault injection; not applicable to the pinned runtime")
+            pytest.skip(f"{name} is a stand-in fault injection; not applicable to the "
+                        f"pinned runtime (tracked by #392 M3)")
         object.__setattr__(self, name, value)
 
     def _send(self, method: str, url: str, kwargs: dict) -> httpx.Response:
@@ -874,17 +873,64 @@ def test_only_local_staged_materials_reach_the_runtime(engine, runtime, tmp_path
     assert all(uploaded for uploaded in uploads)
 
 
-def test_a_runtime_without_voice_staging_is_refused_before_dispatch(engine, runtime,
-                                                                   tmp_path):
-    """§9.6: a runtime that would have to narrate on its own is refused, not accepted."""
-    assets = _approved_assets(tmp_path)
-    runtime.without_voice_staging = True
+class _CapabilityFaultRuntime(BaseHTTPRequestHandler):
+    """A real HTTP endpoint that withholds the approved-voice capability.
 
-    with pytest.raises(BridgeContractError) as refusal:
-        engine.render(tmp_path / "final" / "video-v1.mp4", **assets)
+    #392 M1: the pinned runtime cannot be told to drop its staging capability, so the
+    fault is injected at the HTTP boundary instead of into the render. The engine talks
+    over a real socket to a real HTTP server; only the capability answer is faulted, and
+    the render the engine would have requested is never substituted.
+    """
+
+    requests: list[str] = []
+
+    def do_GET(self) -> None:  # noqa: N802 - name imposed by BaseHTTPRequestHandler
+        type(self).requests.append(self.path)
+        if self.path != "/runtime":
+            self.send_error(404)
+            return
+        payload = json.dumps(_runtime_snapshot(capabilities={
+            "task_local_voice": False,
+            "reason": "upstream_voice_staging_unsupported",
+            "detail": "the runtime cannot place the approved voice in the task",
+        })).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_args) -> None:
+        """Keep the test output quiet; the recorded requests are the evidence."""
+
+
+def test_a_runtime_without_voice_staging_is_refused_before_dispatch(tmp_path):
+    """§9.6: a runtime that would have to narrate on its own is refused, not accepted.
+
+    The refusal is proven over a real HTTP boundary with a controlled capability fault,
+    not through the stand-in object: the engine must stop on the ``/runtime`` answer and
+    must never upload a material, stage a voice or submit a task.
+    """
+    _CapabilityFaultRuntime.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _CapabilityFaultRuntime)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        engine = MoneyPrinterEngine(
+            url=f"http://127.0.0.1:{server.server_address[1]}",
+            token="capability-fault",
+            transport=HttpTransport(),
+        )
+        assets = _approved_assets(tmp_path)
+        with pytest.raises(BridgeContractError) as refusal:
+            engine.render(tmp_path / "final" / "video-v1.mp4", **assets)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
     assert refusal.value.code == "upstream_voice_staging_unsupported"
-    assert [path for _, path, _ in runtime.requests] == ["/runtime"], (
+    assert _CapabilityFaultRuntime.requests == ["/runtime"], (
         "a runtime that cannot take the approved voice was contacted further"
     )
 

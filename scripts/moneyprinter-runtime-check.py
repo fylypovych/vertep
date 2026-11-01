@@ -38,6 +38,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -504,12 +505,35 @@ def collect_sbom(port: int, api_key: str) -> dict:
         raise CheckFailure(f"runtime did not publish an SBOM: {error}") from error
 
 
+def evidence_identity() -> dict:
+    """Identity of the tree the snapshot belongs to (#392 M5).
+
+    The pinned acceptance report may only cite this snapshot for the exact SHA, upstream
+    pin, bridge contract and configuration revision it was produced with, so they are
+    recorded next to the runtime report instead of being inferred later.
+    """
+    from adapters.providers.base import BRIDGE_SCHEMA_VERSION
+    from adapters.providers.runtime_manifest import PINNED_UPSTREAM_REFERENCE
+    from core.engine_config import engine_config_revision
+
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    return {
+        "vertep_sha": (completed.stdout or "").strip(),
+        "vertep_version": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        "config_revision": engine_config_revision(),
+        "pinned_upstream": PINNED_UPSTREAM_REFERENCE,
+        "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
 def write_evidence(directory: Path, image_digest_value: str, runtime: dict,
                    self_test: dict, sbom: dict) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "runtime-snapshot.json").write_text(
-        json.dumps({"image_digest": image_digest_value, "runtime": runtime,
-                    "self_test": self_test}, indent=2),
+        json.dumps({**evidence_identity(), "image_digest": image_digest_value,
+                    "runtime": runtime, "self_test": self_test}, indent=2),
         encoding="utf-8",
     )
     (directory / "sbom.json").write_text(json.dumps(sbom, indent=2), encoding="utf-8")

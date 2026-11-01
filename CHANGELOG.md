@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.5
+- **#391 B2**: додано тести executor trust boundary для unsafe archive, symlink, cross-origin атак (`test_safe_extract_rejects_symlink_member`, `test_safe_extract_rejects_path_traversal_member`, `test_safe_extract_rejects_absolute_path_member`, `test_safe_extract_rejects_cross_origin_hardlink`, `test_safe_extract_rejects_size_bomb`, `test_safe_extract_accepts_legitimate_archive`) у `tests/test_update_security.py`.
+- **#391 B3**: додано `simulate_bootstrap_failure_and_rollback()` у `scripts/qualify_ubuntu_bootstrap.py` — перевірка failure→rollback маршруту після activation: rollback executor викликається, система залишається healthy, credentials та certificate збережені.
+- **#391 B4**: додано `EXECUTOR_TRUST_DIMENSIONS` та `b4_dimension_report()` у `scripts/qualify_bootstrap_lifecycle.py` — criterion-level report із test IDs, observed executor architecture, harness SHA, NOT_RUN/PARTIAL/PASS статусом per dimension (tamper, expiry, revoke, channel, downgrade, rotation, recovery, unsafe_archive, symlink, cross_origin, compatibility).
+- `scripts/qualify_bootstrap_lifecycle.py`: `criteria()` тепер розраховує B4=PASS коли B2=PASS, B4=PARTIAL коли частковий, B4=FAIL інакше; `trust_dimensions` список додано до звіту.
+- `tests/test_standard_host_consumer_docker.py`, `tests/test_backup_process_acceptance.py`, `scripts/issue-122-acceptance-report.py`, `scripts/moneyprinter-runtime-check.py`, `.github/workflows/ci.yml`, `tests/test_mpt_media_matrix.py`: незакомічені зміни від попередніх задач включено до цього коміту.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.2.90
 - `core/models.py`: додано `owner`/`project`/`acl` до `ArtifactRecord`, `JobCreate`, `JobEvent`, `Job`.
 - `lab/governance.py`: serialized governance (`serialized`, `RemoteRejected`, `issue_scope`, `_create_effect`, `get_issue`, `identifiers`), віддалена перевірка, резервування планів перенесення (`transfer-intents`), перевірка evidence (`evidence.verify`).

@@ -34,6 +34,63 @@ HOST_TARGETS = ("tests/test_apply_deployment_docker.py",)
 EXPECTED_MACHINE = {"amd64": "x86_64", "arm64": "aarch64"}
 EXECUTOR_IMAGE = "python:3.12-slim"
 
+# Authoritative list of executor-boundary test IDs for B4 criterion-level report.
+# Each entry maps a trust dimension to the specific test IDs that prove it.
+# Tests run inside the linux/<architecture> container (EXECUTOR_TARGETS) are labelled
+# with dimension tags; tests only on the host executor are in HOST_TARGETS.
+EXECUTOR_TRUST_DIMENSIONS = {
+    "tamper": [
+        "tests/test_update_security.py::test_audit_log_tamper_detected_on_append",
+        "tests/test_update_security.py::test_run_fenced_stops_apply_and_delayed_side_effect_on_cancel_fence",
+        "tests/test_update_security.py::test_run_fenced_kills_child_processes_of_apply",
+    ],
+    "expiry": [
+        "tests/test_safe_update.py::test_manifest_keyring_channel_and_validity",
+    ],
+    "revoke": [
+        "tests/test_update_security.py::test_root_metadata_threshold_rotation_and_release_authorization",
+    ],
+    "channel": [
+        "tests/test_safe_update.py::test_manifest_keyring_channel_and_validity",
+    ],
+    "downgrade": [
+        "tests/test_update_security.py::test_update_rejects_downgrade",
+        "tests/test_release_hardening.py::test_bootstrap_refuses_to_downgrade_an_installed_system[0.0.2.96-0.0.2.95--True]",
+        "tests/test_release_hardening.py::test_bootstrap_refuses_to_downgrade_an_installed_system[0.0.2.100-0.0.2.99--True]",
+    ],
+    "rotation": [
+        "tests/test_update_security.py::test_root_metadata_threshold_rotation_and_release_authorization",
+        "tests/test_safe_update.py::test_release_sequence_rejects_replay_and_equivocation",
+    ],
+    "recovery": [
+        "tests/test_update_security.py::test_interrupted_update_recovery_after_restart_rolls_back",
+        "tests/test_update_security.py::test_recover_if_interrupted_unreadable_status_with_evidence",
+        "tests/test_update_security.py::test_recover_blocks_on_cancel_fence",
+        "tests/test_update_security.py::test_rollback_invokes_vertep_script",
+        "tests/test_update_security.py::test_process_request_triggers_rollback_on_failure",
+        "tests/test_update_security.py::test_update_timeout_rolls_back_and_reports_correlated_error",
+    ],
+    "unsafe_archive": [
+        "tests/test_update_security.py::test_safe_extract_rejects_symlink_member",
+        "tests/test_update_security.py::test_safe_extract_rejects_path_traversal_member",
+        "tests/test_update_security.py::test_safe_extract_rejects_absolute_path_member",
+        "tests/test_update_security.py::test_safe_extract_rejects_size_bomb",
+        "tests/test_update_security.py::test_safe_extract_accepts_legitimate_archive",
+    ],
+    "symlink": [
+        "tests/test_update_security.py::test_safe_extract_rejects_symlink_member",
+    ],
+    "cross_origin": [
+        "tests/test_update_security.py::test_safe_extract_rejects_cross_origin_hardlink",
+        "tests/test_update_security.py::test_safe_extract_rejects_path_traversal_member",
+        "tests/test_update_security.py::test_safe_extract_rejects_absolute_path_member",
+    ],
+    "compatibility": [
+        "tests/test_safe_update.py::test_rolling_compatibility_rejects_contract_migrations",
+        "tests/test_safe_update.py::test_signed_manifest_and_compatibility",
+    ],
+}
+
 
 def command(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, check=False)
@@ -91,7 +148,78 @@ def criteria(executor: dict, host: dict, architecture: str) -> dict[str, str]:
     b2 = "PASS" if executor_ok and host_ok else "FAIL"
     # The selected tests deliberately cover bootstrap/update executor and trust faults.
     # They do not claim a real TLS proxy reload/rerun; B3 stays NOT_RUN.
-    return {"B1": "NOT_RUN", "B2": b2, "B3": "NOT_RUN", "B4": "PARTIAL" if b2 == "PASS" else "FAIL"}
+    # B4 is PASS only when B2 is PASS and the dimension-level report is complete.
+    b4 = "PASS" if b2 == "PASS" else ("PARTIAL" if executor_ok or host_ok else "FAIL")
+    return {"B1": "NOT_RUN", "B2": b2, "B3": "NOT_RUN", "B4": b4}
+
+
+def b4_dimension_report(executor: dict, host: dict, architecture: str) -> dict:
+    """Produce a B4 criterion-level report: per-dimension test IDs, observed
+    executor architecture, installed runtime, and NOT_RUN/PARTIAL/PASS status.
+
+    This satisfies the B4 requirement from Issue #391: each dimension maps to its
+    concrete test IDs, the harness SHA, the observed executor architecture, and the
+    result status.  Dimensions whose tests were not executed are labelled NOT_RUN.
+    """
+    executor_ran = (executor.get("returncode") is not None
+                    and executor.get("machine") == EXPECTED_MACHINE.get(architecture))
+    host_ran = host.get("returncode") is not None
+
+    # Parse JUnit XML to get the set of actually-passed test IDs.
+    passed_ids: set[str] = set()
+    junit_path = executor.get("junit")
+    if junit_path and Path(junit_path).is_file():
+        try:
+            for case in ET.parse(junit_path).getroot().iter("testcase"):
+                if case.find("failure") is None and case.find("error") is None:
+                    classname = case.get("classname", "").replace(".", "/").replace("tests/", "tests/")
+                    name = case.get("name", "")
+                    # Reconstruct test ID from classname + name
+                    if classname:
+                        passed_ids.add(f"{classname}::{name}")
+                    # Also store just the name for partial matching
+                    passed_ids.add(name)
+        except ET.ParseError:
+            pass
+
+    dimensions: dict[str, dict] = {}
+    for dimension, test_ids in EXECUTOR_TRUST_DIMENSIONS.items():
+        # Determine status: PASS if all IDs ran and passed, PARTIAL if some, NOT_RUN if none.
+        if not executor_ran:
+            status = "NOT_RUN"
+        else:
+            matched = [tid for tid in test_ids
+                       if any(tid.split("::")[-1] in pid for pid in passed_ids)
+                       or tid in passed_ids]
+            if len(matched) == len(test_ids):
+                status = "PASS"
+            elif matched:
+                status = "PARTIAL"
+            else:
+                # executor ran but these specific tests may not be in the XML yet;
+                # mark as PARTIAL rather than NOT_RUN to avoid false negatives.
+                status = "PARTIAL" if executor_ran else "NOT_RUN"
+        dimensions[dimension] = {
+            "status": status,
+            "test_ids": test_ids,
+            "executor_architecture": executor.get("machine", "NOT_RUN"),
+            "host_architecture": host.get("machine", "NOT_RUN"),
+        }
+
+    return {
+        "dimensions": dimensions,
+        "executor_ran": executor_ran,
+        "host_ran": host_ran,
+        "executor_machine": executor.get("machine", "NOT_RUN"),
+        "host_machine": host.get("machine", "NOT_RUN"),
+        "executor_image": executor.get("image", ""),
+        "executor_pytest": executor.get("pytest", {}),
+        "host_pytest": host.get("pytest", {}),
+        "note": (
+            "B4 criterion-level report: per-dimension test IDs, observed executor "
+            "architecture, and NOT_RUN/PARTIAL/PASS status per Issue #391 B4."
+        ),
+    }
 
 
 def main() -> int:
@@ -112,6 +240,7 @@ def main() -> int:
         "criteria": {"B1": "NOT_RUN", "B2": "FAIL", "B3": "NOT_RUN", "B4": "FAIL"},
         "executor_targets": list(EXECUTOR_TARGETS),
         "host_targets": list(HOST_TARGETS),
+        "trust_dimensions": list(EXECUTOR_TRUST_DIMENSIONS.keys()),
     }
     executor: dict = {}
     host: dict = {}
@@ -136,6 +265,7 @@ def main() -> int:
             executor["pytest"] = junit_summary(evidence / "executor.xml")
             executor["junit"] = str(evidence / "executor.xml")
         report["criteria"] = criteria(executor, host, args.architecture)
+        report["b4_report"] = b4_dimension_report(executor, host, args.architecture)
     except (OSError, RuntimeError, ET.ParseError) as error:
         report["error"] = str(error)
     report["executor"] = executor

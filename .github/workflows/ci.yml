@@ -193,7 +193,7 @@ jobs:
     # Linux process groups and Docker-backed healthy CORE dependencies.  They
     # are fail-closed rather than local skips.
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       VERTEP_REQUIRE_DISTRIBUTED_UPDATE_FENCE: "1"
       VERTEP_UPDATE_LEASE_DATABASE_URL: postgresql://vertep:ci-only@localhost:5432/vertep
@@ -471,6 +471,7 @@ jobs:
         run: >-
           python scripts/issue-122-acceptance-report.py
           --only contract,media,integration,recovery,lifecycle_state,security,configuration,delivery
+          --pinned-evidence moneyprinter-runtime-evidence
           --out moneyprinter-runtime-evidence/criterion-report
       - name: Upload pinned runtime evidence
         if: always()

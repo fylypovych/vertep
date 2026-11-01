@@ -3150,6 +3150,60 @@ def test_backup_restore_runs_the_two_phase_flow_through_the_ui():
         browser.close()
 
 
+def test_backup_restore_refusal_reaches_the_user_and_a_retry_completes():
+    """#390 P3: a refusal of the destructive phase (CORE 409, e.g. a tampered
+    snapshot) is shown to the Web user as an error, never as a running or completed
+    restore, and a retry of the same snapshot then completes."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors, console_errors = _attach_error_collector(page)
+        page.route("**/api/**", lambda route: route.fulfill(json={}))
+        _mock_session(page)
+        _mock_status(page)
+
+        confirm_calls: list[str] = []
+        page.route("**/api/system/backups", lambda route: (
+            route.fulfill(json={"snapshots": [
+                {"snapshot_id": "snap-1", "created_at": "2026-09-08T10:00:00Z"},
+            ]}) if route.request.method == "GET" else route.fulfill(json={"status": "done"})
+        ))
+        page.route("**/api/system/backups/snap-1/restore", lambda route: route.fulfill(json={
+            "status": "confirmation_required", "confirmation_token": "tok-abc",
+            "snapshot_id": "snap-1",
+        }))
+
+        def handle_confirm(route):
+            confirm_calls.append(route.request.url)
+            if len(confirm_calls) == 1:
+                route.fulfill(status=409, json={"detail": "Сервіс BACKUP_URL відхилив запит (HTTP 409)"})
+            else:
+                route.fulfill(json={"status": "running", "snapshot_id": "snap-1"})
+
+        page.route("**/api/system/backups/snap-1/restore/progress", lambda route: route.fulfill(
+            json={"status": "done", "progress": 100, "message": "Готово"}))
+        page.route("**/api/system/backups/snap-1/restore/confirm**", handle_confirm)
+
+        page.goto(f"{BASE_URL}/settings?tab=backup")
+        expect(page.locator("[data-testid='backup-restore-button']")).to_be_visible()
+
+        page.click("[data-testid='backup-restore-button']")
+        page.get_by_role("button", name="Підтвердити").click()
+        refusal = page.locator("[data-testid='backup-restore-error']")
+        expect(refusal).to_contain_text("HTTP 409")
+        expect(page.get_by_text("Виконую відновлення...")).to_have_count(0)
+        expect(page.get_by_role("status")).not_to_contain_text("Відновлення завершено")
+        expect(page.locator("[data-testid='backup-restore-button']")).to_be_enabled()
+
+        page.click("[data-testid='backup-restore-button']")
+        page.get_by_role("button", name="Підтвердити").click()
+        expect(page.get_by_role("status")).to_contain_text("Відновлення завершено")
+        expect(refusal).to_have_count(0)
+        assert len(confirm_calls) == 2, confirm_calls
+        _assert_no_js_errors(page_errors, console_errors)
+        browser.close()
+
+
 def test_backup_create_smoke_through_real_backend_without_route_mocks():
     """i.0.0.1.60: Web UI→CORE /api/system/backups→separate Backup service.
 

@@ -28,7 +28,11 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
       @if (creating.error()) {
         <app-error-state [message]="creating.error()!" [showRetry]="false" />
       }
-      @if (restore.progress() !== null) {
+      @if (restore.error()) {
+        <div data-testid="backup-restore-error">
+          <app-error-state [message]="restore.error()!" [showRetry]="false" />
+        </div>
+      } @else if (restore.progress() !== null) {
         <div class="mb-4 p-3 bg-blue-50 rounded-lg">
           <p class="text-sm text-blue-700">{{ restore.message() }}</p>
         </div>

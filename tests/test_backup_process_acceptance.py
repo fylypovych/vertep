@@ -384,32 +384,114 @@ def test_core_caller_surfaces_restore_refusals_without_mutation(backup_process):
     assert api.get("/api/system/state").json()["state"] == "EMERGENCY"
     assert sorted(path.name for path in (root / "backups").glob("*.vtbackup")) == snapshots_before
 
-def test_core_caller_reports_a_failed_remote_copy_without_a_successful_receipt(backup_process):
-    """#386.6: a configured remote copy that fails reaches the CORE caller as an
-    error, and no snapshot is reported as created."""
+def _core_caller(backup_process, label: str, backup_overrides: dict | None = None):
+    """A real Backup Service process and a real CORE process wired as in production."""
     root = backup_process["root"]
-    config = root / "remote-core-config"
+    config = root / f"{label}-core-config"
     config.mkdir()
     (config / "users.json").write_text("{}", encoding="utf-8")
     (config / "installation.json").write_text('{"completed_at":"2026-01-01"}', encoding="utf-8")
     with socket.socket() as socket_probe:
         socket_probe.bind(("127.0.0.1", 0))
         core_port = socket_probe.getsockname()[1]
-    internal_key = "synthetic-remote-internal-key"
+    internal_key = f"synthetic-{label}-internal-key"
     _, service = backup_process["launch"]({
-        "BACKUP_CORE_URL": f"http://127.0.0.1:{core_port}",
-        "INTERNAL_API_KEY": internal_key,
-        "BACKUP_REMOTE_CMD": "exit 3",
-    })
+        "BACKUP_CORE_URL": f"http://127.0.0.1:{core_port}", "INTERNAL_API_KEY": internal_key,
+        **(backup_overrides or {})})
+    password = f"{label}-process-admin"
     _, api = backup_process["launch"]({
-        "CONFIG_ROOT": str(config), "UPDATE_STATE_DIR": str(root / "remote-core-update"),
-        "STORAGE_ROOT": str(root / "remote-core-storage"), "JOB_ROOT": str(root / "remote-core-jobs"),
+        "CONFIG_ROOT": str(config), "UPDATE_STATE_DIR": str(root / f"{label}-core-update"),
+        "STORAGE_ROOT": str(root / f"{label}-core-storage"), "JOB_ROOT": str(root / f"{label}-core-jobs"),
         "SYSTEM_STATE_BACKEND": "file", "BACKUP_URL": str(service.base_url).rstrip("/"),
-        "INTERNAL_API_KEY": internal_key, "ADMIN_USER": "admin",
-        "ADMIN_PASSWORD": "remote-process-admin", "DATABASE_URL": "", "REDIS_URL": "",
-        "CORE_ADDRESS": "", "OLLAMA_URL": "http://127.0.0.1:1", "PROMETHEUS_URL": "",
+        "INTERNAL_API_KEY": internal_key, "ADMIN_USER": "admin", "ADMIN_PASSWORD": password,
+        "DATABASE_URL": "", "REDIS_URL": "", "CORE_ADDRESS": "", "OLLAMA_URL": "http://127.0.0.1:1",
+        "PROMETHEUS_URL": "",
     }, core_port, "core.app:app", "/api/session",
-        {"Authorization": "Basic " + base64.b64encode(b"admin:remote-process-admin").decode()})
+        {"Authorization": "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()})
+    return api, internal_key
+
+
+class _TelegramAnswers:
+    """Captures what the Telegram handler answers; no live Telegram is involved."""
+
+    answers: list[str] = []
+
+    def answer_callback(self, callback_id, text, *args, **kwargs):
+        self.answers.append(text)
+        return {"ok": True}
+
+    def send_message(self, chat_id, text, *args, **kwargs):
+        self.answers.append(text)
+        return {"ok": True}
+
+
+def test_telegram_restore_caller_reports_refusals_and_retry_through_core(
+        backup_process, monkeypatch, tmp_path):
+    """#390 P3: the Telegram restore caller drives the real CORE and Backup Service
+    processes: a tampered or missing snapshot is refused back to the chat without
+    mutation, and a retry with an intact snapshot runs the restore."""
+    import core.telegram.handlers as handlers
+    from core.operations import list_operations
+
+    root = backup_process["root"]
+    api, internal_key = _core_caller(backup_process, "telegram")
+    monkeypatch.setenv("CORE_API_URL", str(api.base_url).rstrip("/"))
+    monkeypatch.setenv("INTERNAL_API_KEY", internal_key)
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "telegram-operations"))
+    _TelegramAnswers.answers = []
+    monkeypatch.setattr(handlers, "TelegramAdapter", _TelegramAnswers)
+
+    data = backup_process["storage"] / "telegram-record.json"
+    original = b"approved telegram record"
+    data.write_bytes(original)
+    created = api.post("/api/system/backups")
+    assert created.status_code == 200, created.text
+    sid = created.json()["snapshot_id"]
+    archive = root / "backups" / f"{sid}.vtbackup"
+    pristine = archive.read_bytes()
+
+    def execute(snapshot_id: str) -> str:
+        handlers._sys_restore_execute({"id": f"cb-{len(_TelegramAnswers.answers)}"}, "42",
+                                      "sys_restore_execute", snapshot_id)
+        return _TelegramAnswers.answers[-1]
+
+    def operation_for(snapshot_id: str) -> dict:
+        return next(item for item in list_operations(200)
+                    if item.get("type") == "restore" and item.get("target") == snapshot_id)
+
+    # A missing snapshot is refused at the challenge.
+    answer = execute("missing-snapshot")
+    assert answer.startswith("❌") and "404" in answer, answer
+    assert operation_for("missing-snapshot")["status"] == "FAILED"
+
+    # A tampered archive is refused at the confirmation, without touching data.
+    data.write_bytes(b"changed after snapshot")
+    archive.write_bytes(pristine + b"synthetic tampering")
+    answer = execute(sid)
+    assert answer.startswith("❌") and "409" in answer, answer
+    assert operation_for(sid)["status"] == "FAILED"
+    assert data.read_bytes() == b"changed after snapshot"
+    assert archive.read_bytes() == pristine + b"synthetic tampering"
+
+    # Retry with the intact snapshot: the restore really runs.  This CORE has no
+    # PostgreSQL/Redis, so its post-restore health gate refuses NORMAL and the chat
+    # is told so instead of being told the restore succeeded.
+    archive.write_bytes(pristine)
+    answer = execute(sid)
+    assert data.read_bytes() == original, "the retried Telegram restore did not run"
+    assert answer.startswith("❌"), answer
+    assert api.get(f"/api/system/backups/{sid}/restore/progress").json()["status"] == "error"
+    assert api.get("/api/system/state").json()["state"] == "EMERGENCY"
+    statuses = [item["status"] for item in list_operations(200)
+                if item.get("type") == "restore" and item.get("target") == sid]
+    assert statuses.count("FAILED") == 2 and "COMPLETED" not in statuses
+
+
+def test_core_caller_reports_a_failed_remote_copy_without_a_successful_receipt(backup_process):
+    """#386.6: a configured remote copy that fails reaches the CORE caller as an
+    error, and no snapshot is reported as created."""
+    root = backup_process["root"]
+    api, _ = _core_caller(backup_process, "remote", {"BACKUP_REMOTE_CMD": "exit 3"})
     before = sorted(path.name for path in (root / "backups").glob("*.json"))
 
     response = api.post("/api/system/backups")

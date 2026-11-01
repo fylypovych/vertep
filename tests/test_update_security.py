@@ -900,3 +900,145 @@ def test_process_request_triggers_rollback_on_failure(tmp_path, monkeypatch):
     assert result is False
     status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
     assert status.get("state") in {"FAILED", "ROLLED_BACK"}
+
+
+# ── Fault-injection: unsafe archive / symlink / cross-origin ───────────────
+
+
+def _safe_extract_module():
+    """Load safe-extract.py as a module for executor trust boundary tests."""
+    spec = importlib.util.spec_from_file_location(
+        "safe_extract", Path(__file__).parents[1] / "scripts" / "safe-extract.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def _make_tar(tmp_path: Path, members: list[tuple]) -> Path:
+    """Build a tar.gz at tmp_path/archive.tar.gz.
+
+    Each member is (name, content_bytes | None, is_symlink, link_target | None).
+    content_bytes=None and is_symlink=False means directory.
+    """
+    import tarfile as _tf
+    import io
+    archive = tmp_path / "archive.tar.gz"
+    with _tf.open(str(archive), "w:gz") as tar:
+        for name, content, is_symlink, link_target in members:
+            info = _tf.TarInfo(name=name)
+            if is_symlink:
+                info.type = _tf.SYMTYPE
+                info.linkname = link_target or ""
+                tar.addfile(info)
+            elif content is None:
+                info.type = _tf.DIRTYPE
+                tar.addfile(info)
+            else:
+                data = content if isinstance(content, bytes) else content.encode()
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    return archive
+
+
+def test_safe_extract_rejects_symlink_member(tmp_path):
+    """safe-extract.py must refuse any archive member that is a symlink,
+    preventing a symlink-following path-traversal attack on the install root."""
+    module = _safe_extract_module()
+    archive = _make_tar(
+        tmp_path,
+        [("legit.txt", b"ok", False, None),
+         ("evil-link", None, True, "/etc/passwd")],
+    )
+    dest = tmp_path / "dest"
+    with pytest.raises(ValueError, match="Unsafe archive member"):
+        module.safe_extract(archive, dest, maximum_bytes=10 * 1024 * 1024)
+    # No files should have been extracted before the rejection
+    assert not dest.exists() or not (dest / "evil-link").exists()
+
+
+def test_safe_extract_rejects_path_traversal_member(tmp_path):
+    """safe-extract.py must refuse members whose resolved path escapes the
+    destination root, closing the unsafe-archive cross-origin attack vector."""
+    import tarfile as _tf
+    import io
+    module = _safe_extract_module()
+    archive = tmp_path / "traverse.tar.gz"
+    with _tf.open(str(archive), "w:gz") as tar:
+        # Use a hardlink-style entry that escapes via '..'
+        info = _tf.TarInfo(name="../escape.txt")
+        data = b"escaped"
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    dest = tmp_path / "dest"
+    with pytest.raises(ValueError, match="Unsafe archive member"):
+        module.safe_extract(archive, dest, maximum_bytes=10 * 1024 * 1024)
+
+
+def test_safe_extract_rejects_absolute_path_member(tmp_path):
+    """Absolute paths in archive members must be rejected (unsafe archive)."""
+    import tarfile as _tf
+    import io
+    module = _safe_extract_module()
+    archive = tmp_path / "absolute.tar.gz"
+    with _tf.open(str(archive), "w:gz") as tar:
+        info = _tf.TarInfo(name="/etc/cron.d/vertep-evil")
+        data = b"* * * * * root id"
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    dest = tmp_path / "dest"
+    with pytest.raises(ValueError, match="Unsafe archive member"):
+        module.safe_extract(archive, dest, maximum_bytes=10 * 1024 * 1024)
+
+
+def test_safe_extract_rejects_cross_origin_hardlink(tmp_path):
+    """A hardlink (LNKTYPE) that escapes the destination must be refused,
+    closing the cross-origin extraction attack vector."""
+    import tarfile as _tf
+    import io
+    module = _safe_extract_module()
+    archive = tmp_path / "hardlink.tar.gz"
+    with _tf.open(str(archive), "w:gz") as tar:
+        # First add a real file
+        info = _tf.TarInfo(name="real.txt")
+        data = b"content"
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+        # Then a hardlink pointing outside
+        lnk = _tf.TarInfo(name="link.txt")
+        lnk.type = _tf.LNKTYPE
+        lnk.linkname = "../outside.txt"
+        tar.addfile(lnk)
+    dest = tmp_path / "dest"
+    with pytest.raises(ValueError, match="Unsafe archive member"):
+        module.safe_extract(archive, dest, maximum_bytes=10 * 1024 * 1024)
+
+
+def test_safe_extract_rejects_size_bomb(tmp_path):
+    """An archive whose uncompressed total exceeds the configured limit
+    must be rejected before writing to disk (unsafe archive — zip/tar bomb)."""
+    module = _safe_extract_module()
+    archive = _make_tar(
+        tmp_path,
+        [("a.txt", b"A" * 100, False, None),
+         ("b.txt", b"B" * 100, False, None)],
+    )
+    dest = tmp_path / "dest"
+    with pytest.raises(ValueError, match="size limit"):
+        module.safe_extract(archive, dest, maximum_bytes=150)
+
+
+def test_safe_extract_accepts_legitimate_archive(tmp_path):
+    """A clean archive with regular files and directories must be extracted
+    correctly — verifying the executor happy path is not broken."""
+    module = _safe_extract_module()
+    archive = _make_tar(
+        tmp_path,
+        [("subdir/", None, False, None),
+         ("subdir/config.json", b'{"v":1}', False, None),
+         ("run.sh", b"#!/bin/bash\necho ok", False, None)],
+    )
+    dest = tmp_path / "dest"
+    module.safe_extract(archive, dest, maximum_bytes=10 * 1024 * 1024)
+    assert (dest / "subdir" / "config.json").read_bytes() == b'{"v":1}'
+    assert (dest / "run.sh").exists()
