@@ -4,6 +4,7 @@ Worker-facing task lifecycle endpoints (owning a task, renewing a lease,
 cancellations, dead-letter queue and result submission). Extracted from
 ``core/app.py``.
 """
+from .workflow_execution import router as workflow_execution_router
 import base64
 import binascii
 import hashlib
@@ -22,17 +23,29 @@ from ..orchestration import (all_scenes_ready, cancel_scene, fail_scene,
 from ..security import _valid_worker_request
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state
-from .job_helpers import (_enqueue_job_task, _finalize_and_notify,
-                          _character_voice_enabled, _dispatch_tts, _has_voice_worker,
-                          _handle_tts_failure, _job_is_due, _ordered_scene_files,
-                          _pending_voice_scenes, _redact_payload,
-                          _persist_tts_contract,
-                          _scene_for_task, _select_worker, _serialize_job_result,
-                          _task_for, _tts_task_for, _voice_task_for, _validate_tts_contract,
-                          assembly_worker_mismatch, engine_release_hold)
+from .job_helpers import (
+    _enqueue_job_task,
+    _finalize_and_notify,
+    _character_voice_enabled,
+    _dispatch_tts,
+    _has_voice_worker,
+    _handle_tts_failure,
+    _job_is_due,
+    _ordered_scene_files,
+    _pending_voice_scenes,
+    _redact_payload,
+    _persist_tts_contract,
+    _scene_for_task,
+    _select_worker,
+    _serialize_job_result,
+    _task_for,
+    _tts_task_for,
+    _voice_task_for,
+    _validate_tts_contract,
+    assembly_worker_mismatch,
+    engine_release_hold)
 
 router = APIRouter()
-from .workflow_execution import router as workflow_execution_router
 router.include_router(workflow_execution_router)
 
 
@@ -60,7 +73,11 @@ def claim_task(payload: TaskClaim, request: Request):
     if desired_state in {"DRAINING", "QUARANTINED", "UPDATING", "ROLLBACK",
                          "DISABLED", "RESTARTING", "REVOKED", "SELF_TESTING"} \
             or worker_data.get("current_task"):
-        return {"task": None, "worker_state": desired_state or worker_data.get("status", "BUSY")}
+        return {
+            "task": None,
+            "worker_state": desired_state or worker_data.get(
+                "status",
+                "BUSY")}
     held_tasks = []
     scan_limit = max(1, task_queue.depth())
     for _ in range(scan_limit):
@@ -75,7 +92,11 @@ def claim_task(payload: TaskClaim, request: Request):
                     or job.active_storyboard_version != sb_version:
                 task_queue.ack(task["task_id"])
                 continue
-            worker = _select_worker([worker_data], job, task_type="image", min_vram_mb=task.get("min_vram_mb")) if job else None
+            worker = _select_worker(
+                [worker_data],
+                job,
+                task_type="image",
+                min_vram_mb=task.get("min_vram_mb")) if job else None
             if not worker:
                 held_tasks.append(task["task_id"])
                 continue
@@ -87,14 +108,20 @@ def claim_task(payload: TaskClaim, request: Request):
             store.workers[payload.node_name]["current_job"] = job.job_id
             store.workers[payload.node_name]["current_task"] = task["task_id"]
             store.save_worker(store.workers[payload.node_name])
-            store.event(job, f"{payload.node_name} IMAGE STORYBOARD CLAIMED {task.get('scene_id')}")
+            store.event(
+                job, f"{payload.node_name} IMAGE STORYBOARD CLAIMED {task.get('scene_id')}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
         if task.get("task") == "storyboard":
-            if job.status != JobStatus.STORYBOARD_QUEUED or job.storyboard_task_id != task.get("task_id"):
+            if job.status != JobStatus.STORYBOARD_QUEUED or job.storyboard_task_id != task.get(
+                    "task_id"):
                 task_queue.ack(task["task_id"])
                 continue
-            worker = _select_worker([worker_data], job, task_type="text", min_vram_mb=0) if job else None
+            worker = _select_worker(
+                [worker_data],
+                job,
+                task_type="text",
+                min_vram_mb=0) if job else None
             if not worker:
                 held_tasks.append(task["task_id"])
                 continue
@@ -111,16 +138,24 @@ def claim_task(payload: TaskClaim, request: Request):
             # job stays in STORYBOARD_QUEUED while the worker is actively
             # generating, and a concurrent second claim sees a claimable task.
             job.assigned_worker = payload.node_name
-            store.update(job, JobStatus.STORYBOARD_GENERATING,
-                         f"STORYBOARD TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
-            store.event(job, f"{payload.node_name} STORYBOARD CLAIMED {task['task_id']}")
+            store.update(
+                job,
+                JobStatus.STORYBOARD_GENERATING,
+                f"STORYBOARD TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
+            store.event(
+                job, f"{payload.node_name} STORYBOARD CLAIMED {task['task_id']}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
         if task.get("task") == "script":
-            if job.status != JobStatus.SCRIPT_QUEUED or job.script_task_id != task.get("task_id"):
+            if job.status != JobStatus.SCRIPT_QUEUED or job.script_task_id != task.get(
+                    "task_id"):
                 task_queue.ack(task["task_id"])
                 continue
-            worker = _select_worker([worker_data], job, task_type="text", min_vram_mb=0) if job else None
+            worker = _select_worker(
+                [worker_data],
+                job,
+                task_type="text",
+                min_vram_mb=0) if job else None
             if not worker:
                 held_tasks.append(task["task_id"])
                 continue
@@ -132,17 +167,26 @@ def claim_task(payload: TaskClaim, request: Request):
             store.workers[payload.node_name]["current_job"] = job.job_id
             store.workers[payload.node_name]["current_task"] = task["task_id"]
             store.save_worker(store.workers[payload.node_name])
-            store.event(job, f"{payload.node_name} SCRIPT CLAIMED {task['task_id']}")
+            store.event(
+                job, f"{payload.node_name} SCRIPT CLAIMED {task['task_id']}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             job.assigned_worker = payload.node_name
-            store.update(job, JobStatus.SCRIPT_GENERATING, f"SCRIPT TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
+            store.update(
+                job,
+                JobStatus.SCRIPT_GENERATING,
+                f"SCRIPT TASK {task['task_id']} ASSIGNED TO {payload.node_name}")
             return {"task": task}
         if task.get("task") == "publish":
             channel = task.get("channel")
-            if job.status != JobStatus.PUBLISHING or job.publish_task_ids.get(task.get("task_id")) != channel:
+            if job.status != JobStatus.PUBLISHING or job.publish_task_ids.get(
+                    task.get("task_id")) != channel:
                 task_queue.ack(task["task_id"])
                 continue
-            worker = _select_worker([worker_data], job, task_type="publish", min_vram_mb=0) if job else None
+            worker = _select_worker(
+                [worker_data],
+                job,
+                task_type="publish",
+                min_vram_mb=0) if job else None
             if not worker:
                 held_tasks.append(task["task_id"])
                 continue
@@ -154,11 +198,13 @@ def claim_task(payload: TaskClaim, request: Request):
             store.workers[payload.node_name]["current_job"] = job.job_id
             store.workers[payload.node_name]["current_task"] = task["task_id"]
             store.save_worker(store.workers[payload.node_name])
-            store.event(job, f"{payload.node_name} PUBLISH CLAIMED {task['task_id']} for {channel}")
+            store.event(
+                job, f"{payload.node_name} PUBLISH CLAIMED {task['task_id']} for {channel}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
         if task.get("task") == "assembly":
-            version = job.assembly_task_ids.get(task.get("task_id")) if job else None
+            version = job.assembly_task_ids.get(
+                task.get("task_id")) if job else None
             if (version is None or job.assembly_task_id != task.get("task_id")
                     or job.status not in {JobStatus.ASSEMBLY, JobStatus.VIDEO_GENERATION}):
                 # The attempt was cancelled, superseded or already imported: the
@@ -172,27 +218,35 @@ def claim_task(payload: TaskClaim, request: Request):
                 task_queue.ack(task["task_id"])
                 continue
             mismatch = assembly_worker_mismatch(
-                payload.video_engine, task.get("engine_snapshot") or job.video_engine_snapshot)
+                payload.video_engine,
+                task.get("engine_snapshot") or job.video_engine_snapshot)
             if mismatch:
                 # The node cannot prove it runs the exact configuration this attempt was
                 # dispatched with, so the task stays queued instead of being rendered by a
                 # runtime nobody approved (Issue #122 P5/P7).
-                store.event(job, f"ASSEMBLY {task['task_id']} HELD: {payload.node_name} "
-                                 f"cannot run the dispatched engine ({mismatch})")
+                store.event(
+                    job, f"ASSEMBLY {task['task_id']} HELD: {payload.node_name} "
+                    f"cannot run the dispatched engine ({mismatch})")
                 held_tasks.append(task["task_id"])
                 continue
-            hold = engine_release_hold(task.get("engine_snapshot") or job.video_engine_snapshot)
+            hold = engine_release_hold(
+                task.get("engine_snapshot") or job.video_engine_snapshot)
             if hold:
                 # A cancelled attempt on this very runtime was never proven released: the
                 # pinned runtime keeps rendering until it observes the abort, so the lease
                 # is not handed to another render on the strength of a logical cancel
                 # (Issue #122 P6/§5).
-                store.event(job, f"ASSEMBLY {task['task_id']} HELD: the runtime of "
-                                 f"{hold.get('job_id')} has an unconfirmed release "
-                                 f"({hold.get('submit_key')}: {hold.get('reason')})")
+                store.event(
+                    job, f"ASSEMBLY {task['task_id']} HELD: the runtime of "
+                    f"{hold.get('job_id')} has an unconfirmed release "
+                    f"({hold.get('submit_key')}: {hold.get('reason')})")
                 held_tasks.append(task["task_id"])
                 continue
-            worker = _select_worker([worker_data], job, task_type="assembly", min_vram_mb=0)
+            worker = _select_worker(
+                [worker_data],
+                job,
+                task_type="assembly",
+                min_vram_mb=0)
             if not worker:
                 held_tasks.append(task["task_id"])
                 continue
@@ -205,11 +259,13 @@ def claim_task(payload: TaskClaim, request: Request):
             store.workers[payload.node_name]["current_task"] = task["task_id"]
             store.save_worker(store.workers[payload.node_name])
             job.assigned_worker = payload.node_name
-            store.event(job, f"{payload.node_name} ASSEMBLY CLAIMED {task['task_id']} FOR v{version}")
+            store.event(
+                job, f"{payload.node_name} ASSEMBLY CLAIMED {task['task_id']} FOR v{version}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
         scene = _scene_for_task(job, task.get("task_id", ""))
-        is_tts = job.status == JobStatus.TTS_GENERATING and task.get("task") == "voice"
+        is_tts = job.status == JobStatus.TTS_GENERATING and task.get(
+            "task") == "voice"
         effective_task_type = task.get("task") if is_tts else job.task_type
         effective_min_vram = task.get("min_vram_mb") if is_tts else None
         voice_requirements = None
@@ -225,8 +281,12 @@ def claim_task(payload: TaskClaim, request: Request):
                 "language": task.get("language"),
                 "speed": task.get("speed"),
             }
-        worker = _select_worker([worker_data], job, task_type=effective_task_type, min_vram_mb=effective_min_vram,
-                                voice_requirements=voice_requirements) if job else None
+        worker = _select_worker(
+            [worker_data],
+            job,
+            task_type=effective_task_type,
+            min_vram_mb=effective_min_vram,
+            voice_requirements=voice_requirements) if job else None
         if job and worker:
             for held_task_id in held_tasks:
                 task_queue.release(held_task_id)
@@ -234,7 +294,9 @@ def claim_task(payload: TaskClaim, request: Request):
         else:
             held_tasks.append(task["task_id"])
             continue
-        if not ((job.status == JobStatus.ASSET_GENERATION and scene) or (is_tts and scene)):
+        if not (
+            (job.status == JobStatus.ASSET_GENERATION and scene) or (
+                is_tts and scene)):
             task_queue.ack(task["task_id"])
             continue
         if is_tts:
@@ -244,7 +306,8 @@ def claim_task(payload: TaskClaim, request: Request):
             store.workers[payload.node_name]["current_job"] = job.job_id
             store.workers[payload.node_name]["current_task"] = task["task_id"]
             store.save_worker(store.workers[payload.node_name])
-            store.event(job, f"{payload.node_name} TTS ASSIGNED TO {scene.scene_id}")
+            store.event(
+                job, f"{payload.node_name} TTS ASSIGNED TO {scene.scene_id}")
             store.repository.record_task(task, "CLAIMED", payload.node_name)
             return {"task": task}
         start_scene(scene, task["task_id"], payload.node_name)
@@ -266,28 +329,34 @@ def claim_task(payload: TaskClaim, request: Request):
 def renew_task(payload: TaskRenew, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
-    text_job = next((job for job in store.jobs.values()
-                     if payload.task_id in {job.script_task_id, job.storyboard_task_id}), None)
+    text_job = next((job for job in store.jobs.values() if payload.task_id in {
+                    job.script_task_id, job.storyboard_task_id}), None)
     if text_job is not None:
-        owned, _ = _text_task_lease(text_job, payload.task_id, payload.node_name)
+        owned, _ = _text_task_lease(
+            text_job, payload.task_id, payload.node_name)
         if not owned:
-            raise HTTPException(409, "Task is no longer assigned to this worker")
+            raise HTTPException(
+                409, "Task is no longer assigned to this worker")
         return {"renewed": task_queue.renew(payload.task_id)}
-    job = next((job for job in store.jobs.values() if payload.task_id in job.active_task_ids), None)
+    job = next((job for job in store.jobs.values()
+               if payload.task_id in job.active_task_ids), None)
     if job is not None and _scene_for_task(job, payload.task_id):
         scene = _scene_for_task(job, payload.task_id)
         if scene.assigned_worker != payload.node_name:
-            raise HTTPException(409, "Task is no longer assigned to this worker")
+            raise HTTPException(
+                409, "Task is no longer assigned to this worker")
         return {"renewed": task_queue.renew(payload.task_id)}
     # Issue #122 P6: an assembly attempt is long-running, so its lease must be
-    # renewable too. Ownership is fenced on the Job mapping and the worker record.
+    # renewable too. Ownership is fenced on the Job mapping and the worker
+    # record.
     assembly_job = next((job for job in store.jobs.values()
                          if payload.task_id in job.assembly_task_ids), None)
     if assembly_job is not None:
         worker = store.workers.get(payload.node_name)
         if not worker or worker.get("current_task") != payload.task_id \
                 or worker.get("current_job") != assembly_job.job_id:
-            raise HTTPException(409, "Task is no longer assigned to this worker")
+            raise HTTPException(
+                409, "Task is no longer assigned to this worker")
         return {"renewed": task_queue.renew(payload.task_id)}
     raise HTTPException(409, "Task is no longer assigned to this worker")
 
@@ -328,35 +397,44 @@ def task_input(task_id: str, reference: str, request: Request):
     node_name = request.headers.get("x-vertep-node", "")
     if not node_name or not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
-    job = next((item for item in store.jobs.values() if task_id in item.assembly_task_ids),
-               None)
-    publish_job = next((item for item in store.jobs.values() if task_id in item.publish_task_ids), None)
+    job = next((item for item in store.jobs.values()
+               if task_id in item.assembly_task_ids), None)
+    publish_job = next((item for item in store.jobs.values()
+                       if task_id in item.publish_task_ids), None)
     if publish_job is not None:
         worker = store.workers.get(node_name)
         if (not worker or worker.get("current_task") != task_id
                 or worker.get("current_job") != publish_job.job_id
                 or not task_queue.inflight_active(task_id)):
-            raise HTTPException(409, "Publish input is no longer owned by this worker")
+            raise HTTPException(
+                409, "Publish input is no longer owned by this worker")
         channel = publish_job.publish_task_ids[task_id]
         intent = publish_job.publish_intent.get(channel) or {}
-        version = next((v for v in publish_job.video_versions
-                        if v.version == intent.get("video_version") and v.approved), None)
+        version = next((v for v in publish_job.video_versions if v.version == intent.get(
+            "video_version") and v.approved), None)
         if version is None or publish_job.active_video_version != version.version:
-            raise HTTPException(409, "Published input version is no longer approved")
+            raise HTTPException(
+                409, "Published input version is no longer approved")
         source = Path(publish_job.output_path or "")
         if reference != source.name or not source.is_file():
             raise HTTPException(404, "Approved publish input is unavailable")
         data = source.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
-        if digest != intent.get("video_sha256") or len(data) != intent.get("video_size"):
+        if digest != intent.get("video_sha256") or len(
+                data) != intent.get("video_size"):
             raise HTTPException(409, "Approved publish input is corrupt")
-        return Response(data, media_type="video/mp4", headers={"x-vertep-sha256": digest})
+        return Response(
+            data,
+            media_type="video/mp4",
+            headers={
+                "x-vertep-sha256": digest})
     if job is None:
         raise HTTPException(404, "Task is not an assembly attempt")
     if job.assembly_task_id != task_id or job.assembly_cancel_requested:
         raise HTTPException(409, "Attempt is no longer running")
     worker = store.workers.get(node_name)
-    if not worker or worker.get("current_task") != task_id or worker.get("current_job") != job.job_id:
+    if not worker or worker.get("current_task") != task_id or worker.get(
+            "current_job") != job.job_id:
         raise HTTPException(409, "Task is not owned by this worker")
     snapshot = job.video_engine_snapshot or {}
     if not _approved_input_references(snapshot):
@@ -404,8 +482,18 @@ def dead_letter_tasks():
 
 
 @router.get("/api/tasks/queue")
-def queue_tasks(limit: int = Query(default=50, ge=1, le=500), offset: int = Query(default=0, ge=0),
-                include_dead_letter: bool = True, refresh: int | None = Query(default=None, ge=0)):
+def queue_tasks(
+    limit: int = Query(
+            default=50,
+            ge=1,
+            le=500),
+        offset: int = Query(
+            default=0,
+            ge=0),
+        include_dead_letter: bool = True,
+        refresh: int | None = Query(
+            default=None,
+            ge=0)):
     def _summary(task: dict) -> dict:
         job = store.jobs.get(task.get("job_id"))
         return {
@@ -428,18 +516,27 @@ def queue_tasks(limit: int = Query(default=50, ge=1, le=500), offset: int = Quer
     def _scheduled() -> list[dict]:
         rows = []
         for job in store.jobs.values():
-            if job.status == JobStatus.NEW and job.scheduled_for and not _job_is_due(job):
-                rows.append({"job_id": job.job_id, "topic": job.topic,
-                             "job_status": job.status.value, "task_type": job.task_type,
-                             "priority": job.priority, "scheduled_for": job.scheduled_for,
+            if job.status == JobStatus.NEW and job.scheduled_for and not _job_is_due(
+                    job):
+                rows.append({"job_id": job.job_id,
+                             "topic": job.topic,
+                             "job_status": job.status.value,
+                             "task_type": job.task_type,
+                             "priority": job.priority,
+                             "scheduled_for": job.scheduled_for,
                              "required_tags": list(job.required_tags or [])})
-        return sorted(rows, key=lambda row: (row["scheduled_for"], row["job_id"]))
+        return sorted(
+            rows,
+            key=lambda row: (
+                row["scheduled_for"],
+                row["job_id"]))
 
     ready = [_summary(t) for t in task_queue.ready_tasks()]
     inflight = [_summary(t) for t in task_queue.inflight_tasks()]
     scheduled = _scheduled()
     dead_letter_all = [_summary(t) for t in task_queue.dead_letters()]
-    dead_letter = dead_letter_all[offset:offset + limit] if include_dead_letter else []
+    dead_letter = dead_letter_all[offset:offset +
+                                  limit] if include_dead_letter else []
     generation = task_queue.generation()
     return {
         "scheduled": scheduled,
@@ -452,7 +549,10 @@ def queue_tasks(limit: int = Query(default=50, ge=1, le=500), offset: int = Quer
             "inflight": len(inflight),
             "dead_letter": len(dead_letter_all),
         },
-        "pagination": {"offset": offset, "limit": limit, "dead_letter_total": len(dead_letter_all)},
+        "pagination": {
+            "offset": offset,
+            "limit": limit,
+            "dead_letter_total": len(dead_letter_all)},
         "generation": generation,
         "unchanged": refresh is not None and refresh == generation,
         "refreshed_at": utc_now(),
@@ -470,7 +570,9 @@ def retry_dead_letter_task(task_id: str):
         raise HTTPException(404, "Dead-letter task not found")
     job = store.jobs.get(queued.get("job_id"))
     scene_id = queued.get("scene_id")
-    scene = next((item for item in job.scenes if item.scene_id == scene_id), None) if job else None
+    scene = next(
+        (item for item in job.scenes if item.scene_id == scene_id),
+        None) if job else None
     if not job or not scene:
         task_queue.discard(queued["task_id"])
         raise HTTPException(409, "Job or scene no longer exists")
@@ -480,12 +582,14 @@ def retry_dead_letter_task(task_id: str):
     job.active_task_id = queued["task_id"]
     if job.stages[StageName.ASSETS.value].status == StageStatus.FAILED:
         transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
-    store.update(job, JobStatus.ASSET_GENERATION, f"DEAD-LETTER TASK {task_id} REQUEUED")
+    store.update(job, JobStatus.ASSET_GENERATION,
+                 f"DEAD-LETTER TASK {task_id} REQUEUED")
     store.repository.record_task(queued, "QUEUED")
     return queued
 
 
-def _text_task_lease(job, task_id: str, node_name: str) -> tuple[bool, str | None]:
+def _text_task_lease(
+        job, task_id: str, node_name: str) -> tuple[bool, str | None]:
     """Ownership contract for a script/storyboard result (Issue i.0.0.1.2).
 
     A text-task result is accepted only when the submitting node holds the whole
@@ -524,18 +628,38 @@ def task_result(result: TaskResult, request: Request):
         worker = store.workers.get(result.node_name)
         if worker:
             desired_status = worker.get("desired_state")
-            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            next_status = desired_status if desired_status in {
+                "DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status,
+                           "current_job": None,
+                           "current_task": None,
+                           "last_seen": utc_now()})
             store.save_worker(worker)
         try:
-            handle_image_result(store, job, result.task_id, result.success, result.image_base64, result.error, result.artifacts or result.images)
+            handle_image_result(
+                store,
+                job,
+                result.task_id,
+                result.success,
+                result.image_base64,
+                result.error,
+                result.artifacts or result.images)
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
         from ..state import task_queue as _tq2
         _tq2.ack(result.task_id)
-        store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "image", "kind": "image_storyboard"}, "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
+        store.repository.record_task({"job_id": job.job_id,
+                                      "task_id": result.task_id,
+                                      "task": "image",
+                                      "kind": "image_storyboard"},
+                                     "COMPLETED" if result.success else "FAILED",
+                                     result.node_name,
+                                     result.error)
         if not result.success:
-            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "kind": "image_storyboard"}, result.error)
+            _tq2.dead_letter({"job_id": job.job_id,
+                              "task_id": result.task_id,
+                              "kind": "image_storyboard"},
+                             result.error)
         return job
     if job.storyboard_task_id == result.task_id:
         from ..storyboard import StoryboardService
@@ -551,14 +675,20 @@ def task_result(result: TaskResult, request: Request):
             return job
         terminal_error = None
         try:
-            accepted = StoryboardService(store).handle_result(job.job_id, result.task_id, result.success,
-                                                              result.artifacts, result.error, result.node_name,
-                                                              cancelled=result.cancelled)
+            accepted = StoryboardService(store).handle_result(
+                job.job_id,
+                result.task_id,
+                result.success,
+                result.artifacts,
+                result.error,
+                result.node_name,
+                cancelled=result.cancelled)
         except RuntimeError as error:
             if result.success or job.status != JobStatus.STORYBOARD_FAILED:
                 raise HTTPException(400, str(error)) from error
             # A failed result that exhausts the budget is still an accepted
-            # result: finish its lease and owner before returning the failed Job.
+            # result: finish its lease and owner before returning the failed
+            # Job.
             job.storyboard_task_id = None
             job.active_task_id = None
             accepted = job
@@ -574,14 +704,26 @@ def task_result(result: TaskResult, request: Request):
         worker = store.workers.get(result.node_name)
         if worker:
             desired_status = worker.get("desired_state")
-            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            next_status = desired_status if desired_status in {
+                "DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status,
+                           "current_job": None,
+                           "current_task": None,
+                           "last_seen": utc_now()})
             store.save_worker(worker)
         from ..state import task_queue as _tq2
         _tq2.ack(result.task_id)
-        store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
+        store.repository.record_task({"job_id": job.job_id,
+                                      "task_id": result.task_id,
+                                      "task": "storyboard"},
+                                     "COMPLETED" if result.success else "FAILED",
+                                     result.node_name,
+                                     result.error)
         if not result.success:
-            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "storyboard"}, result.error)
+            _tq2.dead_letter({"job_id": job.job_id,
+                              "task_id": result.task_id,
+                              "task": "storyboard"},
+                             result.error)
         if terminal_error is not None:
             raise HTTPException(400, terminal_error)
         return job
@@ -598,31 +740,52 @@ def task_result(result: TaskResult, request: Request):
                              f"{reason} (node={result.node_name})")
             return job
         if result.cancelled:
-            store.event(job, f"SCRIPT RESULT {result.task_id} REJECTED: "
-                             f"cancelled result cannot complete a script (node={result.node_name})")
+            store.event(
+                job, f"SCRIPT RESULT {result.task_id} REJECTED: "
+                f"cancelled result cannot complete a script (node={result.node_name})")
             return job
         worker = store.workers.get(result.node_name)
         if worker:
             desired_status = worker.get("desired_state")
-            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            next_status = desired_status if desired_status in {
+                "DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status,
+                           "current_job": None,
+                           "current_task": None,
+                           "last_seen": utc_now()})
             store.save_worker(worker)
         try:
-            _handle_script_result(store, job, {"success": result.success, "task_id": result.task_id,
-                                               "error": result.error, "worker_name": result.node_name}, result.artifacts or [])
+            _handle_script_result(store,
+                                  job,
+                                  {"success": result.success,
+                                   "task_id": result.task_id,
+                                   "error": result.error,
+                                   "worker_name": result.node_name},
+                                  result.artifacts or [])
         except (ValueError, RuntimeError) as error:
             raise HTTPException(400, str(error)) from error
         from ..state import task_queue as _tq2
         _tq2.ack(result.task_id)
-        store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "script"},
-                                     "COMPLETED" if result.success else "FAILED", result.node_name, result.error)
+        store.repository.record_task({"job_id": job.job_id,
+                                      "task_id": result.task_id,
+                                      "task": "script"},
+                                     "COMPLETED" if result.success else "FAILED",
+                                     result.node_name,
+                                     result.error)
         if not result.success and job.status != JobStatus.SCRIPT_FAILED:
-            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "script"}, result.error)
+            _tq2.dead_letter({"job_id": job.job_id,
+                              "task_id": result.task_id,
+                              "task": "script"},
+                             result.error)
         return job
     if result.task_id in job.assembly_task_ids:
-        from .job_helpers import (_assembly_retry_task, _assembly_worker_owns,
-                                  _clear_assembly_staging, _enqueue_assembly_task,
-                                  _handle_assembly_result, _release_worker)
+        from .job_helpers import (
+            _assembly_retry_task,
+            _assembly_worker_owns,
+            _clear_assembly_staging,
+            _enqueue_assembly_task,
+            _handle_assembly_result,
+            _release_worker)
         from ..state import task_queue as _tq2
         # Fencing first: a result from a node that no longer owns the attempt (lease
         # expired, node reassigned, attempt cancelled) is refused without touching
@@ -631,7 +794,10 @@ def task_result(result: TaskResult, request: Request):
         if not _assembly_worker_owns(job, result.task_id, result.node_name):
             store.event(job, f"ASSEMBLY RESULT {result.task_id} REJECTED: "
                              f"fencing mismatch (node={result.node_name})")
-            raise HTTPException(409, "Assembly result does not match the active attempt lease")
+            raise HTTPException(
+                409, "Assembly result does not match the active attempt lease")
+        # Cancel check BEFORE any side effect: discard the result without writing
+        # the video file or registering a version (Issue #122 §5).
         if job.assembly_cancel_requested:
             _tq2.ack(result.task_id)
             job.assembly_task_ids.pop(result.task_id, None)
@@ -641,7 +807,8 @@ def task_result(result: TaskResult, request: Request):
             store.repository.record_task(
                 {"job_id": job.job_id, "task_id": result.task_id, "task": "assembly"},
                 "CANCELLED", result.node_name, None)
-            store.event(job, f"ASSEMBLY RESULT {result.task_id} DISCARDED: attempt cancelled")
+            store.event(
+                job, f"ASSEMBLY RESULT {result.task_id} DISCARDED: attempt cancelled")
             return job
         _release_worker(store.workers.get(result.node_name))
         if not result.success:
@@ -659,22 +826,36 @@ def task_result(result: TaskResult, request: Request):
                 task = _assembly_retry_task(job)
 
                 if task is not None:
-                    _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id,
-                                      "task": "assembly"}, result.error)
+                    _tq2.dead_letter({"job_id": job.job_id,
+                                      "task_id": result.task_id,
+                                      "task": "assembly"},
+                                     result.error)
                     _enqueue_assembly_task(job, task, new_attempt=True)
-                    store.update(job, JobStatus.ASSEMBLY,
-                                 f"ASSEMBLY RETRY {job.assembly_attempt}/{job.max_retries}")
+                    store.update(
+                        job,
+                        JobStatus.ASSEMBLY,
+                        f"ASSEMBLY RETRY {job.assembly_attempt}/{job.max_retries}")
                     return job
             _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id,
                               "task": "assembly"}, result.error)
-            transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED, result.error or "assembly failed")
-            store.update(job, JobStatus.FAILED, f"ASSEMBLY FAILED: {result.error or 'unknown'}")
-            # Terminal failure: no retry will reuse the staged copies, so they go.
+            transition_stage(
+                job,
+                StageName.ASSEMBLY,
+                StageStatus.FAILED,
+                result.error or "assembly failed")
+            store.update(
+                job,
+                JobStatus.FAILED,
+                f"ASSEMBLY FAILED: {result.error or 'unknown'}")
+            # Terminal failure: no retry will reuse the staged copies, so they
+            # go.
             _clear_assembly_staging(store.root, job.job_id)
             return job
         try:
-            _handle_assembly_result(job, {"success": True, "task_id": result.task_id,
-                                          "worker_name": result.node_name},
+            _handle_assembly_result(job,
+                                    {"success": True,
+                                     "task_id": result.task_id,
+                                     "worker_name": result.node_name},
                                     result.artifacts or [])
         except (ValueError, RuntimeError) as error:
             _tq2.ack(result.task_id)
@@ -686,16 +867,23 @@ def task_result(result: TaskResult, request: Request):
             store.repository.record_task(
                 {"job_id": job.job_id, "task_id": result.task_id, "task": "assembly"},
                 "FAILED", result.node_name, str(error))
-            store.event(job, f"ASSEMBLY RESULT {result.task_id} REJECTED: {error}")
+            store.event(
+                job, f"ASSEMBLY RESULT {result.task_id} REJECTED: {error}")
             if job.assembly_attempt <= job.max_retries:
                 task = _assembly_retry_task(job)
 
                 if task is not None:
                     _enqueue_assembly_task(job, task, new_attempt=True)
-                    store.update(job, JobStatus.ASSEMBLY,
-                                 f"ASSEMBLY RETRY {job.assembly_attempt}/{job.max_retries}")
+                    store.update(
+                        job,
+                        JobStatus.ASSEMBLY,
+                        f"ASSEMBLY RETRY {job.assembly_attempt}/{job.max_retries}")
                     return job
-            transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED, str(error))
+            transition_stage(
+                job,
+                StageName.ASSEMBLY,
+                StageStatus.FAILED,
+                str(error))
             store.update(job, JobStatus.FAILED, f"ASSEMBLY REJECTED: {error}")
             _clear_assembly_staging(store.root, job.job_id)
             return job
@@ -709,7 +897,8 @@ def task_result(result: TaskResult, request: Request):
         transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
         version = job.active_video_version
         store.update(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{version})")
-        store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, f"VIDEO PENDING APPROVAL (v{version})")
+        store.update(job, JobStatus.VIDEO_PENDING_APPROVAL,
+                     f"VIDEO PENDING APPROVAL (v{version})")
         if job.source.startswith("telegram:"):
             from ..pipeline import _send_video_approval_to_telegram
             _send_video_approval_to_telegram(job)
@@ -718,8 +907,10 @@ def task_result(result: TaskResult, request: Request):
             _progress(job, "VIDEO_PENDING_APPROVAL")
         return job
     if result.task_id in job.publish_task_ids:
-        from ..api.job_helpers import (_handle_publish_result, _validate_publication_receipt,
-                                       _match_publish_receipt)
+        from ..api.job_helpers import (
+            _handle_publish_result,
+            _validate_publication_receipt,
+            _match_publish_receipt)
         # Owner/lease check: the result must belong to the active publish task
         # and to the worker that currently owns it.  A mismatched or duplicate
         # result is rejected without releasing the Worker or acking the task,
@@ -731,80 +922,142 @@ def task_result(result: TaskResult, request: Request):
             and worker.get("current_task") == result.task_id
             and worker.get("current_job") == job.job_id
         )
-        if not owns_task or active_channel is None or not task_queue.inflight_active(result.task_id):
+        if not owns_task or active_channel is None or not task_queue.inflight_active(
+                result.task_id):
             store.event(job, f"PUBLISH RESULT {result.task_id} REJECTED: "
                              f"owner/lease mismatch (node={result.node_name})")
-            raise HTTPException(409, "Publish result does not match the active task lease")
+            raise HTTPException(
+                409, "Publish result does not match the active task lease")
         if result.success:
             try:
-                artifact = next(a for a in result.artifacts or [] if a.get("kind") == "publication_receipt")
-                receipt = json.loads(base64.b64decode(artifact["data_base64"], validate=True))
-                valid, detail = _validate_publication_receipt(receipt, active_channel)
+                artifact = next(a for a in result.artifacts or []
+                                if a.get("kind") == "publication_receipt")
+                receipt = json.loads(
+                    base64.b64decode(
+                        artifact["data_base64"],
+                        validate=True))
+                valid, detail = _validate_publication_receipt(
+                    receipt, active_channel)
                 if not valid:
                     raise ValueError(detail)
                 intent = job.publish_intent.get(active_channel) or {}
                 for field, expected in {"job_id": job.job_id, "task_id": result.task_id,
                                         "video_version": intent.get("video_version"),
                                         "video_sha256": intent.get("video_sha256")}.items():
-                    if expected is not None and str(receipt.get(field)) != str(expected):
-                        raise ValueError(f"Publish receipt {field} does not match issued task")
-                if _match_publish_receipt(job, active_channel, receipt)[0] == "reject":
-                    raise ValueError("Publish receipt does not match issued intent")
+                    if expected is not None and str(
+                            receipt.get(field)) != str(expected):
+                        raise ValueError(
+                            f"Publish receipt {field} does not match issued task")
+                if _match_publish_receipt(job, active_channel, receipt)[
+                        0] == "reject":
+                    raise ValueError(
+                        "Publish receipt does not match issued intent")
             except (StopIteration, KeyError, TypeError, ValueError) as error:
-                raise HTTPException(400, "Invalid issued publication receipt") from error
+                raise HTTPException(
+                    400, "Invalid issued publication receipt") from error
         if worker:
             desired_status = worker.get("desired_state")
-            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-            worker.update({"status": next_status, "current_job": None, "current_task": None, "last_seen": utc_now()})
+            next_status = desired_status if desired_status in {
+                "DRAINING", "QUARANTINED"} else "READY"
+            worker.update({"status": next_status,
+                           "current_job": None,
+                           "current_task": None,
+                           "last_seen": utc_now()})
             store.save_worker(worker)
         channel = active_channel
         try:
-            _handle_publish_result(store, job, {"success": result.success, "task_id": result.task_id,
-                                               "error": result.error}, result.artifacts or [], channel)
+            _handle_publish_result(store,
+                                   job,
+                                   {"success": result.success,
+                                    "task_id": result.task_id,
+                                    "error": result.error},
+                                   result.artifacts or [],
+                                   channel)
         except (ValueError, RuntimeError) as error:
             raise HTTPException(400, str(error)) from error
         from ..state import task_queue as _tq2
         _tq2.ack(result.task_id)
         if result.success:
-            store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "publish",
-                                          "channel": channel}, "COMPLETED", result.node_name, result.error)
+            store.repository.record_task(
+                {
+                    "job_id": job.job_id,
+                    "task_id": result.task_id,
+                    "task": "publish",
+                    "channel": channel},
+                "COMPLETED",
+                result.node_name,
+                result.error)
         else:
-            store.repository.record_task({"job_id": job.job_id, "task_id": result.task_id, "task": "publish",
-                                          "channel": channel}, "FAILED", result.node_name, result.error)
-            _tq2.dead_letter({"job_id": job.job_id, "task_id": result.task_id, "task": "publish",
-                              "channel": channel}, result.error)
+            store.repository.record_task(
+                {
+                    "job_id": job.job_id,
+                    "task_id": result.task_id,
+                    "task": "publish",
+                    "channel": channel},
+                "FAILED",
+                result.node_name,
+                result.error)
+            _tq2.dead_letter({"job_id": job.job_id,
+                              "task_id": result.task_id,
+                              "task": "publish",
+                              "channel": channel},
+                             result.error)
         remaining = list(job.publish_task_ids.keys())
         if not remaining:
-            all_published = all(r.get("status") == "PUBLISHED" for r in job.publication_results.values())
-            not_configured = any(r.get("status") == "NOT_CONFIGURED" for r in job.publication_results.values())
-            failed = any(r.get("status") == "FAILED" for r in job.publication_results.values())
+            all_published = all(
+                r.get("status") == "PUBLISHED" for r in job.publication_results.values())
+            not_configured = any(
+                r.get("status") == "NOT_CONFIGURED" for r in job.publication_results.values())
+            failed = any(
+                r.get("status") == "FAILED" for r in job.publication_results.values())
             if all_published and job.publication_results:
                 transition_stage(job, StageName.PUBLISH, StageStatus.READY)
                 store.update(job, JobStatus.PUBLISHED, "PUBLISHED")
             elif not_configured and not failed and not all_published:
-                transition_stage(job, StageName.PUBLISH, StageStatus.FAILED, "NOT CONFIGURED")
-                store.update(job, JobStatus.FAILED, "PUBLISHING FAILED OR NOT CONFIGURED")
+                transition_stage(
+                    job,
+                    StageName.PUBLISH,
+                    StageStatus.FAILED,
+                    "NOT CONFIGURED")
+                store.update(
+                    job,
+                    JobStatus.FAILED,
+                    "PUBLISHING FAILED OR NOT CONFIGURED")
             elif failed:
-                transition_stage(job, StageName.PUBLISH, StageStatus.FAILED, job.publish_error or "publish failed")
+                transition_stage(
+                    job,
+                    StageName.PUBLISH,
+                    StageStatus.FAILED,
+                    job.publish_error or "publish failed")
                 store.update(job, JobStatus.FAILED, "PUBLISHING FAILED")
             else:
-                store.event(job, f"PUBLISH: {len(job.publication_results)} channel(s) resolved, no pending tasks")
+                store.event(
+                    job,
+                    f"PUBLISH: {len(job.publication_results)} channel(s) resolved, no pending tasks")
         return job
     is_tts = result.task_id in job.tts_active_task_ids
     if is_tts:
         scene = _scene_for_task(job, result.task_id)
         if not scene or scene.assigned_worker != result.node_name:
-            raise HTTPException(409, "TTS result does not match the active task")
+            raise HTTPException(
+                409, "TTS result does not match the active task")
         owned, reason = _text_task_lease(job, result.task_id, result.node_name)
         if not owned:
             raise HTTPException(409, reason)
         if result.task_id not in (job.voice_task_snapshot or {}):
-            raise HTTPException(409, "No issued voice-task snapshot for this result")
+            raise HTTPException(
+                409, "No issued voice-task snapshot for this result")
         if job.status in {JobStatus.CANCELLED, JobStatus.PAUSED}:
             raise HTTPException(409, f"Job is {job.status.value}")
         if not result.success:
-            _handle_tts_failure(job, scene, result.task_id, result.node_name, result.error)
-            return store.event(job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
+            _handle_tts_failure(
+                job,
+                scene,
+                result.task_id,
+                result.node_name,
+                result.error)
+            return store.event(
+                job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
         artifacts = result.artifacts or []
         if not artifacts:
             raise HTTPException(400, "Successful TTS result has no artifact")
@@ -813,24 +1066,33 @@ def task_result(result: TaskResult, request: Request):
         total_size = 0
         for artifact_index, artifact in enumerate(artifacts, 1):
             try:
-                encoded = artifact.get("data_base64") or artifact.get("image_base64")
+                encoded = artifact.get(
+                    "data_base64") or artifact.get("image_base64")
                 data = base64.b64decode(encoded, validate=True)
             except (KeyError, TypeError, ValueError, binascii.Error) as error:
                 raise HTTPException(400, "Invalid base64 artifact") from error
             total_size += len(data)
-            max_artifact_bytes = int(os.getenv("MAX_ARTIFACT_BYTES", "26214400"))
+            max_artifact_bytes = int(
+                os.getenv(
+                    "MAX_ARTIFACT_BYTES",
+                    "26214400"))
             if total_size > max_artifact_bytes:
                 raise HTTPException(413, "Artifacts are too large")
-            supplied_name = Path(artifact.get("filename", f"{scene.scene_id}.wav")).name
+            supplied_name = Path(
+                artifact.get(
+                    "filename",
+                    f"{scene.scene_id}.wav")).name
             suffix = Path(supplied_name).suffix.lower()
             allowed_suffixes = {".wav", ".ogg", ".mp3", ".aac", ".m4a"}
             if suffix not in allowed_suffixes:
-                raise HTTPException(400, f"Unsupported audio artifact type: {suffix}")
+                raise HTTPException(
+                    400, f"Unsupported audio artifact type: {suffix}")
             try:
                 validate_media_integrity(data, suffix)
             except ValueError as error:
                 raise HTTPException(400, str(error)) from error
-            filename = f"voice-{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"voice-{scene.scene_id}-{artifact_index:03d}{suffix}"
+            filename = f"voice-{scene.scene_id}{suffix}" if len(
+                artifacts) == 1 else f"voice-{scene.scene_id}-{artifact_index:03d}{suffix}"
             audio_path = store.root / job.job_id / "audio" / filename
             # Validate the contract and the task parameters BEFORE any side effect
             # (file write, artifact registration, Worker release or ack).  A
@@ -851,13 +1113,17 @@ def task_result(result: TaskResult, request: Request):
                 # A rejected result must leave no accepted artifact and must not
                 # change Worker ownership. Keep the worker BUSY with this
                 # current_job/current_task so the Job can retry or fail loudly.
-                # The lease stays in flight (no ack) and the worker is NOT released.
-                raise HTTPException(400, f"Invalid audio contract: {error}") from error
-            prepared_images.append((audio_path, data, artifact.get("contract")))
+                # The lease stays in flight (no ack) and the worker is NOT
+                # released.
+                raise HTTPException(
+                    400, f"Invalid audio contract: {error}") from error
+            prepared_images.append(
+                (audio_path, data, artifact.get("contract")))
         temporary_images = []
         try:
             for audio_path, data, _contract in prepared_images:
-                temporary = audio_path.with_name(f".{audio_path.name}.{result.task_id[:8]}.part")
+                temporary = audio_path.with_name(
+                    f".{audio_path.name}.{result.task_id[:8]}.part")
                 temporary.write_bytes(data)
                 temporary_images.append((temporary, audio_path))
             for temporary, audio_path in temporary_images:
@@ -868,32 +1134,56 @@ def task_result(result: TaskResult, request: Request):
             # A persistence failure must not change Worker ownership. Keep the
             # worker BUSY with this current_job/current_task so the Job can retry
             # or fail loudly. The lease stays in flight (no ack).
-            raise HTTPException(500, "Could not persist audio artifacts") from error
+            raise HTTPException(
+                500, "Could not persist audio artifacts") from error
         for audio_path, data, contract in prepared_images:
-            saved_artifacts.append(register_artifact(job, store.root, audio_path, "audio",
-                                                     scene_id=scene.scene_id, task_id=result.task_id,
-                                                     node_name=result.node_name, workflow=job.workflow))
+            saved_artifacts.append(
+                register_artifact(
+                    job,
+                    store.root,
+                    audio_path,
+                    "audio",
+                    scene_id=scene.scene_id,
+                    task_id=result.task_id,
+                    node_name=result.node_name,
+                    workflow=job.workflow))
             try:
-                saved_artifacts.extend(_persist_tts_contract(store, job, scene, result,
-                                                             audio_path, data, contract))
+                saved_artifacts.extend(
+                    _persist_tts_contract(
+                        store,
+                        job,
+                        scene,
+                        result,
+                        audio_path,
+                        data,
+                        contract))
             except (ValueError, OSError) as error:
                 # A rejected result must leave no accepted artifact and must not
                 # change Worker ownership. Keep the worker BUSY with this
                 # current_job/current_task so the Job can retry or fail loudly.
-                # The lease stays in flight (no ack) and the worker is NOT released.
-                raise HTTPException(400, f"Invalid audio contract: {error}") from error
+                # The lease stays in flight (no ack) and the worker is NOT
+                # released.
+                raise HTTPException(
+                    400, f"Invalid audio contract: {error}") from error
         # Release the Worker only AFTER every artifact has been validated and
         # persisted, so a rejected result does not free the worker or ack the
         # task before the Job can retry/fail loudly.
         worker = store.workers.get(result.node_name)
         if worker:
             desired_status = worker.get("desired_state")
-            next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+            next_status = desired_status if desired_status in {
+                "DRAINING", "QUARANTINED"} else "READY"
             worker.update({"status": next_status, "current_job": None,
                            "current_task": None, "last_seen": utc_now()})
             store.save_worker(worker)
         task_queue.ack(result.task_id)
-        store.repository.record_task(_tts_task_for(job, scene) | {"task_id": result.task_id}, "COMPLETED", result.node_name)
+        store.repository.record_task(
+            _tts_task_for(
+                job,
+                scene) | {
+                "task_id": result.task_id},
+            "COMPLETED",
+            result.node_name)
         job.completed_task_ids.append(result.task_id)
         job.tts_active_task_ids.pop(result.task_id, None)
         if not job.tts_active_task_ids:
@@ -904,14 +1194,23 @@ def task_result(result: TaskResult, request: Request):
                 if ordered_images:
                     executor.submit(_finalize_and_notify, job, ordered_images)
                 else:
-                    transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED, "Missing images for assembly")
-                    store.update(job, JobStatus.FAILED, "MISSING IMAGES FOR ASSEMBLY")
+                    transition_stage(
+                        job,
+                        StageName.ASSEMBLY,
+                        StageStatus.FAILED,
+                        "Missing images for assembly")
+                    store.update(
+                        job,
+                        JobStatus.FAILED,
+                        "MISSING IMAGES FOR ASSEMBLY")
             elif job.task_type == "voice":
                 terminal = JobStatus.READY
                 return store.update(job, terminal, "VOICE TASK COMPLETED")
-        return store.event(job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
+        return store.event(
+            job, f"TTS RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
     if result.task_id in job.completed_task_ids:
-        raise HTTPException(409, "Duplicate result for an already completed task")
+        raise HTTPException(
+            409, "Duplicate result for an already completed task")
     from .job_helpers import cancelled_attempt_release, release_assembly_hold
     from adapters.providers.base import RELEASE_RELEASED
     cancelled = cancelled_attempt_release(job, result.task_id)
@@ -919,14 +1218,17 @@ def task_result(result: TaskResult, request: Request):
         # A cancelled attempt that comes back with a render is the one thing a logical
         # cancel could not prove: the render ended, so the runtime is free. The result
         # is still rejected as a late artifact of a cancelled attempt — proving the
-        # release never turns it into a second video version (Issue #122 §5, §9.8).
+        # release never turns it into a second video version (Issue #122 §5,
+        # §9.8).
         release_assembly_hold(
             job, cancelled["submit_key"], state=RELEASE_RELEASED,
             reason="late_result_of_cancelled_attempt_discarded",
         )
-        store.event(job, f"ASSEMBLY RELEASE {cancelled['submit_key']} RELEASED: the cancelled "
-                         f"attempt {result.task_id} came back with a finished render")
-        raise HTTPException(409, "Assembly result does not match the active attempt lease")
+        store.event(
+            job, f"ASSEMBLY RELEASE {cancelled['submit_key']} RELEASED: the cancelled "
+            f"attempt {result.task_id} came back with a finished render")
+        raise HTTPException(
+            409, "Assembly result does not match the active attempt lease")
     scene = _scene_for_task(job, result.task_id)
     if not scene:
         raise HTTPException(409, "Result does not match the active task")
@@ -937,7 +1239,8 @@ def task_result(result: TaskResult, request: Request):
     worker = store.workers.get(result.node_name)
     if worker:
         desired_status = worker.get("desired_state")
-        next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
+        next_status = desired_status if desired_status in {
+            "DRAINING", "QUARANTINED"} else "READY"
         worker.update({"status": next_status, "current_job": None,
                        "current_task": None, "last_seen": utc_now()})
         store.save_worker(worker)
@@ -947,46 +1250,82 @@ def task_result(result: TaskResult, request: Request):
         # result is a terminal cancellation: ack it, free the scene and never
         # retry or fail the job for it.
         task_queue.ack(result.task_id)
-        store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id},
-                                     "CANCELLED", result.node_name)
+        store.repository.record_task(
+            _task_for(
+                job,
+                scene) | {
+                "task_id": result.task_id},
+            "CANCELLED",
+            result.node_name)
         job.active_task_ids.pop(result.task_id, None)
         job.active_task_id = None
         job.assigned_worker = None
         scene.task_id = None
         scene.assigned_worker = None
         cancel_scene(scene, result.error or "cancelled by CORE")
-        return store.event(job, f"{scene.scene_id} CANCELLED (late result discarded)")
+        return store.event(
+            job, f"{scene.scene_id} CANCELLED (late result discarded)")
     if not result.success:
         task_queue.ack(result.task_id)
-        store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id}, "FAILED", result.node_name, result.error)
+        store.repository.record_task(
+            _task_for(
+                job,
+                scene) | {
+                "task_id": result.task_id},
+            "FAILED",
+            result.node_name,
+            result.error)
         fail_scene(scene, result.error or "unknown error")
         job.active_task_ids.pop(result.task_id, None)
         scene.task_id = None
         scene.assigned_worker = None
         if len(scene.attempts) < job.max_retries:
-            store.event(job, f"{scene.scene_id} FAILED, RETRY {len(scene.attempts)}/{job.max_retries}: {result.error or 'unknown error'}")
-            delay = float(os.getenv("RETRY_BACKOFF_BASE", "2")) * (2 ** max(0, job.retries - 1))
+            store.event(
+                job,
+                f"{scene.scene_id} FAILED, RETRY {len(scene.attempts)}/{job.max_retries}: {result.error or 'unknown error'}")
+            delay = float(os.getenv("RETRY_BACKOFF_BASE", "2")) * \
+                (2 ** max(0, job.retries - 1))
             _enqueue_job_task(job, scene, new_attempt=True, delay=delay)
             return job
         job.active_task_id = None
         job.assigned_worker = None
-        for sibling_task_id, sibling_scene_id in list(job.active_task_ids.items()):
-            sibling = next((item for item in job.scenes if item.scene_id == sibling_scene_id), None)
+        for sibling_task_id, sibling_scene_id in list(
+                job.active_task_ids.items()):
+            sibling = next(
+                (item for item in job.scenes if item.scene_id == sibling_scene_id), None)
             sibling_worker = sibling.assigned_worker if sibling else None
             if sibling_worker:
                 task_queue.request_cancel(sibling_worker, sibling_task_id)
             task_queue.discard(sibling_task_id)
             if sibling:
-                cancel_scene(sibling, f"Sibling {scene.scene_id} exhausted retries")
-            store.repository.record_task(_task_for(job, sibling) | {"task_id": sibling_task_id},
-                                         "CANCELLED", sibling_worker)
+                cancel_scene(
+                    sibling, f"Sibling {scene.scene_id} exhausted retries")
+            store.repository.record_task(
+                _task_for(
+                    job,
+                    sibling) | {
+                    "task_id": sibling_task_id},
+                "CANCELLED",
+                sibling_worker)
         job.active_task_ids.clear()
-        transition_stage(job, StageName.ASSETS, StageStatus.FAILED, result.error or "unknown error")
-        task_queue.dead_letter(_task_for(job, scene) | {"task_id": result.task_id}, result.error)
-        return store.update(job, JobStatus.FAILED, f"WORKER FAILED: {result.error or 'unknown error'}")
+        transition_stage(
+            job,
+            StageName.ASSETS,
+            StageStatus.FAILED,
+            result.error or "unknown error")
+        task_queue.dead_letter(
+            _task_for(
+                job,
+                scene) | {
+                "task_id": result.task_id},
+            result.error)
+        return store.update(
+            job,
+            JobStatus.FAILED,
+            f"WORKER FAILED: {result.error or 'unknown error'}")
     artifacts = result.artifacts or result.images or ([{"filename": result.filename,
-                                                         "image_base64": result.image_base64}]
-                                                       if result.image_base64 else [])
+                                                        "image_base64": result.image_base64}]
+                                                      if result.image_base64 else [])
     if not artifacts:
         raise HTTPException(400, "Successful result has no artifact")
     saved_images = []
@@ -995,16 +1334,25 @@ def task_result(result: TaskResult, request: Request):
     total_size = 0
     for artifact_index, artifact in enumerate(artifacts, 1):
         try:
-            encoded = artifact.get("data_base64") or artifact.get("image_base64")
+            encoded = artifact.get(
+                "data_base64") or artifact.get("image_base64")
             data = base64.b64decode(encoded, validate=True)
         except (KeyError, TypeError, ValueError, binascii.Error) as error:
             raise HTTPException(400, "Invalid base64 artifact") from error
         total_size += len(data)
-        max_artifact_bytes = int(os.getenv("MAX_VIDEO_ARTIFACT_BYTES", "268435456")) \
-            if job.task_type == "video" else int(os.getenv("MAX_ARTIFACT_BYTES", "26214400"))
+        max_artifact_bytes = int(
+            os.getenv(
+                "MAX_VIDEO_ARTIFACT_BYTES",
+                "268435456")) if job.task_type == "video" else int(
+            os.getenv(
+                "MAX_ARTIFACT_BYTES",
+                "26214400"))
         if total_size > max_artifact_bytes:
             raise HTTPException(413, "Artifacts are too large")
-        supplied_name = Path(artifact.get("filename", f"{scene.scene_id}.png")).name
+        supplied_name = Path(
+            artifact.get(
+                "filename",
+                f"{scene.scene_id}.png")).name
         suffix = Path(supplied_name).suffix.lower()
         artifact_contracts = {
             "video": ({".mp4", ".webm", ".mov"}, "video"),
@@ -1016,7 +1364,8 @@ def task_result(result: TaskResult, request: Request):
         allowed_suffixes, folder = artifact_contracts.get(
             job.task_type, ({".png", ".jpg", ".jpeg", ".webp", ".ppm"}, "images"))
         if suffix not in allowed_suffixes:
-            raise HTTPException(400, f"Unsupported {job.task_type} artifact type")
+            raise HTTPException(
+                400, f"Unsupported {job.task_type} artifact type")
         try:
             validate_media_integrity(data, suffix)
         except ValueError as error:
@@ -1031,13 +1380,16 @@ def task_result(result: TaskResult, request: Request):
                 raise HTTPException(400, "Invalid receipt artifact") from error
             data = json.dumps(_redact_payload(receipt), ensure_ascii=False,
                               separators=(",", ":")).encode("utf-8")
-        expected_media = "video" if folder == "video" else ("image" if folder == "images" else None)
+        expected_media = "video" if folder == "video" else (
+            "image" if folder == "images" else None)
         if expected_media:
             try:
-                validate_media_contract(artifact, data, expected=expected_media)
+                validate_media_contract(
+                    artifact, data, expected=expected_media)
             except ValueError as error:
                 raise HTTPException(400, str(error)) from error
-        filename = f"{scene.scene_id}{suffix}" if len(artifacts) == 1 else f"{scene.scene_id}-{artifact_index:03d}{suffix}"
+        filename = f"{scene.scene_id}{suffix}" if len(
+            artifacts) == 1 else f"{scene.scene_id}-{artifact_index:03d}{suffix}"
         image_path = store.root / job.job_id / folder / filename
         # The folder of a result kind is not necessarily part of the Job layout
         # created at creation time (a video scene lands in ``videos/``), so it is
@@ -1048,7 +1400,8 @@ def task_result(result: TaskResult, request: Request):
     temporary_images = []
     try:
         for image_path, data in prepared_images:
-            temporary = image_path.with_name(f".{image_path.name}.{result.task_id[:8]}.part")
+            temporary = image_path.with_name(
+                f".{image_path.name}.{result.task_id[:8]}.part")
             temporary.write_bytes(data)
             temporary_images.append((temporary, image_path))
         for temporary, image_path in temporary_images:
@@ -1056,30 +1409,66 @@ def task_result(result: TaskResult, request: Request):
     except OSError as error:
         for temporary, _ in temporary_images:
             temporary.unlink(missing_ok=True)
-        raise HTTPException(500, "Could not persist worker artifacts") from error
+        raise HTTPException(
+            500, "Could not persist worker artifacts") from error
     for image_path, _ in prepared_images:
         saved_images.append(image_path)
-        artifact_kind = {"video": "video_scene", "text": "text", "voice": "audio",
-                         "publish": "publication_receipt", "backup": "backup_receipt"}.get(
-                             job.task_type, "image")
-        saved_artifacts.append(register_artifact(job, store.root, image_path, artifact_kind,
-                                                 scene_id=scene.scene_id, task_id=result.task_id,
-                                                 node_name=result.node_name, workflow=job.workflow))
+        artifact_kind = {
+            "video": "video_scene",
+            "text": "text",
+            "voice": "audio",
+            "publish": "publication_receipt",
+            "backup": "backup_receipt"}.get(
+            job.task_type,
+            "image")
+        saved_artifacts.append(
+            register_artifact(
+                job,
+                store.root,
+                image_path,
+                artifact_kind,
+                scene_id=scene.scene_id,
+                task_id=result.task_id,
+                node_name=result.node_name,
+                workflow=job.workflow))
     if not result.success:
         task_queue.ack(result.task_id)
-        store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id}, "FAILED", result.node_name, result.error)
+        store.repository.record_task(
+            _task_for(
+                job,
+                scene) | {
+                "task_id": result.task_id},
+            "FAILED",
+            result.node_name,
+            result.error)
         fail_scene(scene, result.error or "unknown error")
         job.active_task_ids.pop(result.task_id, None)
         scene.assigned_worker = None
         if len(scene.attempts) < job.max_retries:
-            store.event(job, f"{scene.scene_id} FAILED, RETRY {len(scene.attempts)}/{job.max_retries}: {result.error or 'unknown error'}")
-            delay = float(os.getenv("RETRY_BACKOFF_BASE", "2")) * (2 ** max(0, job.retries - 1))
+            store.event(
+                job,
+                f"{scene.scene_id} FAILED, RETRY {len(scene.attempts)}/{job.max_retries}: {result.error or 'unknown error'}")
+            delay = float(os.getenv("RETRY_BACKOFF_BASE", "2")) * \
+                (2 ** max(0, job.retries - 1))
             _enqueue_job_task(job, scene, new_attempt=True)
             return job
-        transition_stage(job, StageName.ASSETS, StageStatus.FAILED, result.error or "unknown error")
-        return store.update(job, JobStatus.FAILED, f"ASSET GENERATION FAILED: {result.error or 'unknown error'}")
+        transition_stage(
+            job,
+            StageName.ASSETS,
+            StageStatus.FAILED,
+            result.error or "unknown error")
+        return store.update(
+            job,
+            JobStatus.FAILED,
+            f"ASSET GENERATION FAILED: {result.error or 'unknown error'}")
     task_queue.ack(result.task_id)
-    store.repository.record_task(_task_for(job, scene) | {"task_id": result.task_id}, "COMPLETED", result.node_name)
+    store.repository.record_task(
+        _task_for(
+            job,
+            scene) | {
+            "task_id": result.task_id},
+        "COMPLETED",
+        result.node_name)
     job.completed_task_ids.append(result.task_id)
     finish_scene(scene, [item.artifact_id for item in saved_artifacts])
     job.active_task_ids.pop(result.task_id, None)
@@ -1089,11 +1478,17 @@ def task_result(result: TaskResult, request: Request):
         transition_stage(job, StageName.ASSETS, StageStatus.READY)
         if job.task_type in {"text", "voice", "backup", "publish"}:
             terminal = JobStatus.PUBLISHED if job.task_type == "publish" else JobStatus.READY
-            return store.update(job, terminal, f"{job.task_type.upper()} TASK COMPLETED")
-        if _pending_voice_scenes(job) and _character_voice_enabled(job) and _has_voice_worker(store):
-            store.transition(job, JobStatus.TTS_GENERATING, "TTS GENERATION STARTED")
+            return store.update(
+                job, terminal, f"{job.task_type.upper()} TASK COMPLETED")
+        if _pending_voice_scenes(job) and _character_voice_enabled(
+                job) and _has_voice_worker(store):
+            store.transition(
+                job,
+                JobStatus.TTS_GENERATING,
+                "TTS GENERATION STARTED")
             _dispatch_tts(store, job)
             return job
         ordered_images = _ordered_scene_files(job)
         executor.submit(_finalize_and_notify, job, ordered_images)
-    return store.event(job, f"RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")
+    return store.event(
+        job, f"RESULT FOR {scene.scene_id} RECEIVED FROM {result.node_name}")

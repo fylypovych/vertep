@@ -30,12 +30,16 @@ from ..artifacts import register_artifact
 from ..configuration import load_character
 from ..logging_config import secret_redact
 from ..dispatcher import available_worker, can_retry
-from ..models import (JobStatus, SceneRecord, StageName, StageStatus, TaskResult,
-                      VideoVersion, utc_now)
+from ..models import (
+    JobStatus,
+    SceneRecord,
+    StageName,
+    StageStatus,
+    TaskResult,
+    utc_now)
 from ..orchestration import (all_scenes_ready, finish_scene, initialize_plan,
                              interrupt_scene, pending_scenes, transition_stage)
-from ..pipeline import JobStore, finalize_job_safe, prepare_job_safe, queue_storyboard
-from ..script_prompt import build_script_prompt
+from ..pipeline import JobStore, finalize_job_safe, prepare_job_safe, queue_storyboard, _progress
 from ..script_schema import normalize_script
 from ..state import executor, result_locks, store, task_queue, workflow_registry
 
@@ -48,7 +52,10 @@ ASSEMBLY_STAGING_DIR = ".assembly-staging"
 
 
 def _max_video_artifact_bytes() -> int:
-    return int(os.getenv("MAX_VIDEO_ARTIFACT_BYTES", str(MAX_VIDEO_ARTIFACT_BYTES)))
+    return int(
+        os.getenv(
+            "MAX_VIDEO_ARTIFACT_BYTES",
+            str(MAX_VIDEO_ARTIFACT_BYTES)))
 
 
 def _serialize_job_result(function):
@@ -63,8 +70,14 @@ def _job_is_due(job) -> bool:
     scheduler_url = os.getenv("SCHEDULER_URL", "").rstrip("/")
     if scheduler_url:
         try:
-            response = httpx.post(f"{scheduler_url}/due",
-                                  json={"jobs": [job.model_dump(mode="json")], "limit": 1}, timeout=3)
+            response = httpx.post(
+                f"{scheduler_url}/due",
+                json={
+                    "jobs": [
+                        job.model_dump(
+                            mode="json")],
+                    "limit": 1},
+                timeout=3)
             response.raise_for_status()
             return bool(response.json().get("jobs"))
         except (httpx.HTTPError, ValueError):
@@ -72,7 +85,8 @@ def _job_is_due(job) -> bool:
     if not job.scheduled_for:
         return True
     try:
-        scheduled = datetime.fromisoformat(job.scheduled_for.replace("Z", "+00:00"))
+        scheduled = datetime.fromisoformat(
+            job.scheduled_for.replace("Z", "+00:00"))
         if scheduled.tzinfo is None:
             scheduled = scheduled.replace(tzinfo=timezone.utc)
         return scheduled <= datetime.now(timezone.utc)
@@ -81,8 +95,11 @@ def _job_is_due(job) -> bool:
 
 
 def _scene_for_task(job, task_id: str):
-    scene_id = job.active_task_ids.get(task_id) or job.tts_active_task_ids.get(task_id)
-    return next((scene for scene in job.scenes if scene.scene_id == scene_id), None)
+    scene_id = job.active_task_ids.get(
+        task_id) or job.tts_active_task_ids.get(task_id)
+    return next(
+        (scene for scene in job.scenes if scene.scene_id == scene_id),
+        None)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +107,12 @@ def _scene_for_task(job, task_id: str):
 # ---------------------------------------------------------------------------
 
 
-def _engine_snapshot(job, *, version: int, submit_key: str, engine=None) -> dict:
+def _engine_snapshot(
+        job,
+        *,
+        version: int,
+        submit_key: str,
+        engine=None) -> dict:
     """Immutable engine/config decision of one assembly attempt (§9.15).
 
     The snapshot is taken when the attempt is dispatched and travels with the
@@ -116,7 +138,13 @@ def _engine_snapshot(job, *, version: int, submit_key: str, engine=None) -> dict
         "task_type": job.task_type,
         "submit_key": submit_key,
     }
-    reference = getattr(getattr(engine, "contract_profile", None), "upstream_reference", None)
+    reference = getattr(
+        getattr(
+            engine,
+            "contract_profile",
+            None),
+        "upstream_reference",
+        None)
     if reference:
         snapshot["upstream_reference"] = reference
     if getattr(engine, "engine_id", "native") != "native":
@@ -158,8 +186,8 @@ def _assembly_input_digest(job, *, materials: list[Path], audio: Path | None,
                            music: Path | None, subtitles: Path | None,
                            watermark: Path | None, script: str) -> str:
     parts = [f"script:{hashlib.sha256(script.encode('utf-8')).hexdigest()}"]
-    for label, value in (("audio", audio), ("music", music), ("subtitles", subtitles),
-                         ("watermark", watermark)):
+    for label, value in (("audio", audio), ("music", music),
+                         ("subtitles", subtitles), ("watermark", watermark)):
         parts.append(f"{label}:{_file_digest(value)}")
     for path in materials:
         parts.append(f"material:{_file_digest(path)}")
@@ -176,7 +204,10 @@ def _file_digest(path: Path | None) -> str:
     return digest.hexdigest()
 
 
-def _job_relative(job_root: Path, job_id: str, path: Path | None) -> str | None:
+def _job_relative(
+        job_root: Path,
+        job_id: str,
+        path: Path | None) -> str | None:
     """Job-scoped relative reference delivered to a Worker (§6/P3).
 
     A Worker never receives a CORE filesystem path: it receives a reference
@@ -213,7 +244,8 @@ def _stage_input(job_root: Path, job_id: str, path: Path | None) -> str | None:
         pass
     resolved = Path(path).resolve()
     job_dir = (Path(job_root) / job_id).resolve()
-    staged = job_dir / ASSEMBLY_STAGING_DIR / _file_digest(resolved) / resolved.name
+    staged = job_dir / ASSEMBLY_STAGING_DIR / \
+        _file_digest(resolved) / resolved.name
     if not staged.is_file():
         staged.parent.mkdir(parents=True, exist_ok=True)
         temporary = staged.with_name(f"{staged.name}.part")
@@ -228,10 +260,17 @@ def _clear_assembly_staging(job_root: Path, job_id: str) -> None:
     Only the staging area is removed; approved outputs, versions and artifacts of
     the Job are never touched.
     """
-    shutil.rmtree(Path(job_root) / job_id / ASSEMBLY_STAGING_DIR, ignore_errors=True)
+    shutil.rmtree(
+        Path(job_root) /
+        job_id /
+        ASSEMBLY_STAGING_DIR,
+        ignore_errors=True)
 
 
-def _snapshot_input(job_root: Path, job_id: str, reference: str | None) -> dict | None:
+def _snapshot_input(
+        job_root: Path,
+        job_id: str,
+        reference: str | None) -> dict | None:
     """One delivered approved input: its Job-relative reference and its digest."""
     if not reference:
         return None
@@ -239,8 +278,13 @@ def _snapshot_input(job_root: Path, job_id: str, reference: str | None) -> dict 
     return {"reference": reference, "sha256": _file_digest(path)}
 
 
-def _with_delivered_inputs(snapshot: dict, job_root: Path, job_id: str, *,
-                           materials: list[str], inputs: dict[str, str | None]) -> dict:
+def _with_delivered_inputs(snapshot: dict,
+                           job_root: Path,
+                           job_id: str,
+                           *,
+                           materials: list[str],
+                           inputs: dict[str,
+                                        str | None]) -> dict:
     """Add what the Worker will actually receive to the attempt snapshot (§9.15).
 
     A snapshot that names only the engine cannot prove *which* approved inputs the
@@ -250,9 +294,11 @@ def _with_delivered_inputs(snapshot: dict, job_root: Path, job_id: str, *,
     """
     snapshot = dict(snapshot)
     snapshot["materials"] = [
-        entry for entry in (_snapshot_input(job_root, job_id, reference) for reference in materials)
-        if entry
-    ]
+        entry for entry in (
+            _snapshot_input(
+                job_root,
+                job_id,
+                reference) for reference in materials) if entry]
     snapshot["inputs"] = {
         label: _snapshot_input(job_root, job_id, reference)
         for label, reference in inputs.items()
@@ -260,13 +306,27 @@ def _with_delivered_inputs(snapshot: dict, job_root: Path, job_id: str, *,
     return snapshot
 
 
-def _assembly_task_for(job, *, version: int, output: Path, materials: list[Path],
-                       audio: Path | None, music: Path | None, subtitles: Path | None,
-                       watermark: Path | None, script: str, submit_key: str,
-                       snapshot: dict, durations: list[float], aspect_ratio: str,
-                       preset: str | None, task_type: str, job_store=None) -> dict:
+def _assembly_task_for(
+        job,
+        *,
+        version: int,
+        output: Path,
+        materials: list[Path],
+        audio: Path | None,
+        music: Path | None,
+        subtitles: Path | None,
+        watermark: Path | None,
+        script: str,
+        submit_key: str,
+        snapshot: dict,
+        durations: list[float],
+        aspect_ratio: str,
+        preset: str | None,
+        task_type: str,
+        job_store=None) -> dict:
     job_root = (job_store.root if job_store is not None else store.root)
-    references = [_stage_input(job_root, job.job_id, path) for path in materials]
+    references = [_stage_input(job_root, job.job_id, path)
+                  for path in materials]
     delivered = {
         "audio": _stage_input(job_root, job.job_id, audio),
         "music": _stage_input(job_root, job.job_id, music),
@@ -282,31 +342,44 @@ def _assembly_task_for(job, *, version: int, output: Path, materials: list[Path]
         "topic": job.topic,
         "task_id": None,
         "version": version,
-        "output": _job_relative(job_root, job.job_id, output),
+        "output": _job_relative(
+            job_root,
+            job.job_id,
+            output),
         "materials": references,
         "audio": delivered["audio"],
         "music": delivered["music"],
         "subtitles": delivered["subtitles"],
         "watermark": delivered["watermark"],
-        "durations": [float(value) for value in durations],
+        "durations": [
+            float(value) for value in durations],
         "aspect_ratio": aspect_ratio,
         "preset": preset,
         "task_type": task_type,
         "script": script,
         "submit_key": submit_key,
         "engine_snapshot": _with_delivered_inputs(
-            snapshot, job_root, job.job_id, materials=references, inputs=delivered
-        ),
+            snapshot,
+            job_root,
+            job.job_id,
+            materials=references,
+            inputs=delivered),
     }
 
 
-def _enqueue_assembly_task(job, task: dict, *, new_attempt: bool = False) -> dict:
+def _enqueue_assembly_task(
+        job,
+        task: dict,
+        *,
+        new_attempt: bool = False) -> dict:
     queued = task_queue.enqueue(task, new_attempt=new_attempt)
     job.assembly_task_id = queued["task_id"]
     job.assembly_task_ids[queued["task_id"]] = int(task["version"])
     job.video_engine_snapshot = task.get("engine_snapshot")
     store.repository.record_task(queued, "QUEUED")
-    store.event(job, f"ASSEMBLY TASK {queued['task_id']} QUEUED FOR v{task['version']}")
+    store.event(
+        job,
+        f"ASSEMBLY TASK {queued['task_id']} QUEUED FOR v{task['version']}")
     return queued
 
 
@@ -314,9 +387,10 @@ def _release_worker(worker: dict | None) -> None:
     if not worker:
         return
     desired_status = worker.get("desired_state")
-    next_status = desired_status if desired_status in {"DRAINING", "QUARANTINED"} else "READY"
-    worker.update({"status": next_status, "current_job": None, "current_task": None,
-                   "last_seen": utc_now()})
+    next_status = desired_status if desired_status in {
+        "DRAINING", "QUARANTINED"} else "READY"
+    worker.update({"status": next_status, "current_job": None,
+                  "current_task": None, "last_seen": utc_now()})
     store.save_worker(worker)
 
 
@@ -409,8 +483,14 @@ def cancelled_attempt_release(job, task_id: str) -> dict | None:
     return None
 
 
-def record_assembly_release(job, *, submit_key: str, snapshot: dict | None,
-                            state: str, reason: str, task_id: str | None = None) -> dict:
+def record_assembly_release(
+        job,
+        *,
+        submit_key: str,
+        snapshot: dict | None,
+        state: str,
+        reason: str,
+        task_id: str | None = None) -> dict:
     """Record what is known about the compute of a cancelled attempt (§5).
 
     ``state`` is one of the ``RELEASE_*`` values of
@@ -435,15 +515,26 @@ def record_assembly_release(job, *, submit_key: str, snapshot: dict | None,
     return record
 
 
-def release_assembly_hold(job, submit_key: str, *, state: str, reason: str) -> dict | None:
+def release_assembly_hold(
+        job,
+        submit_key: str,
+        *,
+        state: str,
+        reason: str) -> dict | None:
     """Move a recorded release to a proven state (a late fenced result ended it)."""
     record = job.assembly_releases.get(submit_key)
     if record is None or record.get("state") == state:
         return record
-    record = {**record, "state": state, "reason": reason, "recorded_at": utc_now()}
+    record = {
+        **record,
+        "state": state,
+        "reason": reason,
+        "recorded_at": utc_now()}
     job.assembly_releases[submit_key] = record
     store.repository.save_job(job)
-    store.event(job, f"ASSEMBLY RELEASE {submit_key} {state.upper()}: {reason}")
+    store.event(
+        job,
+        f"ASSEMBLY RELEASE {submit_key} {state.upper()}: {reason}")
     return record
 
 
@@ -458,8 +549,8 @@ def unconfirmed_release_for(job, *, snapshot: dict | None) -> dict | None:
     for submit_key, record in (job.assembly_releases or {}).items():
         if record.get("state") != RELEASE_UNCONFIRMED:
             continue
-        if (record.get("engine_id") == identity["engine_id"]
-                and str(record.get("endpoint_reference") or "") == identity["endpoint_reference"]):
+        if (record.get("engine_id") == identity["engine_id"] and str(
+                record.get("endpoint_reference") or "") == identity["endpoint_reference"]):
             return {**record, "submit_key": submit_key}
     return None
 
@@ -470,7 +561,6 @@ def engine_release_hold(snapshot: dict | None) -> dict | None:
     The compute of a cancelled attempt is a property of the runtime, not of one Job,
     so a second Job must not take the same runtime either.
     """
-    identity = _engine_identity(snapshot)
     for other in store.jobs.values():
         if not isinstance(getattr(other, "assembly_releases", None), dict):
             continue
@@ -499,12 +589,14 @@ def confirm_assembly_release(job, *, submit_key: str) -> dict | None:
 
         engine = providers.video_engine()
         state = engine.release_state(submit_key)
-    except Exception as error:  # noqa: BLE001 - an unreadable state stays unconfirmed
+    except Exception:  # noqa: BLE001 - an unreadable state stays unconfirmed
         return record
     if state not in {RELEASE_RELEASED, RELEASE_NOT_APPLIED}:
         return record
-    return release_assembly_release(
-        job, submit_key, state=RELEASE_RELEASED,
+    return release_assembly_hold(
+        job,
+        submit_key,
+        state=RELEASE_RELEASED,
         reason="abort_accepted" if state == RELEASE_RELEASED else "no_remote_runtime",
     )
 
@@ -522,18 +614,27 @@ def _handle_assembly_result(job, result: dict, artifacts: list[dict]) -> None:
     task_id = result["task_id"]
     version = job.assembly_task_ids.get(task_id)
     if version is None:
-        raise ValueError(f"Assembly result {task_id} does not match a dispatched attempt")
+        raise ValueError(
+            f"Assembly result {task_id} does not match a dispatched attempt")
     if not result.get("success"):
         raise ValueError(result.get("error") or "Assembly failed")
+    # Cancel check BEFORE any side effect: discard the result without writing
+    # the video file or registering a version (Issue #122 §5).
+    if job.assembly_cancel_requested:
+        raise ValueError("Assembly result discarded: attempt cancelled")
     artifacts = list(artifacts or [])
     if len(artifacts) != 1:
         raise ValueError("Assembly must return exactly one video artifact")
     artifact = artifacts[0]
     contract = artifact.get("contract") or {}
-    if contract.get("format") != "media_contract/v1" or contract.get("kind") != "video":
-        raise ValueError("Assembly artifact must declare a video media_contract/v1")
+    if contract.get(
+            "format") != "media_contract/v1" or contract.get("kind") != "video":
+        raise ValueError(
+            "Assembly artifact must declare a video media_contract/v1")
     try:
-        data = base64.b64decode(artifact.get("data_base64") or "", validate=True)
+        data = base64.b64decode(
+            artifact.get("data_base64") or "",
+            validate=True)
     except (binascii.Error, ValueError) as error:
         raise ValueError("Assembly artifact is not valid base64") from error
     if not data:
@@ -544,12 +645,15 @@ def _handle_assembly_result(job, result: dict, artifacts: list[dict]) -> None:
         raise ValueError("Assembly artifact sha256 does not match its payload")
     if int(contract.get("size") or 0) != len(data):
         raise ValueError("Assembly artifact size does not match its payload")
-    if contract.get("video_version") is not None and int(contract["video_version"]) != version:
-        raise ValueError("Assembly artifact declares a different video version")
+    if contract.get("video_version") is not None and int(
+            contract["video_version"]) != version:
+        raise ValueError(
+            "Assembly artifact declares a different video version")
     suffix = ".mp4"
     validate_signature(data, suffix)
     validate_media_contract(contract, data, expected="video")
-    if any(int(existing.version or 0) == version for existing in job.video_versions):
+    if any(int(existing.version or 0) ==
+           version for existing in job.video_versions):
         raise ValueError(f"Video version {version} already exists")
 
     final_dir = store.root / job.job_id / "final"
@@ -561,10 +665,16 @@ def _handle_assembly_result(job, result: dict, artifacts: list[dict]) -> None:
         temporary.replace(path)
     except OSError as error:
         temporary.unlink(missing_ok=True)
-        raise RuntimeError(f"Could not import the assembled video: {error}") from error
-    record = register_artifact(job, store.root, path, "video", task_id=task_id,
-                               node_name=result.get("worker_name"),
-                               workflow=f"assembly:{contract.get('engine_id') or (job.video_engine_snapshot or {}).get('engine_id')}")
+        raise RuntimeError(
+            f"Could not import the assembled video: {error}") from error
+    register_artifact(
+        job,
+        store.root,
+        path,
+        "video",
+        task_id=task_id,
+        node_name=result.get("worker_name"),
+        workflow=f"assembly:{contract.get('engine_id') or (job.video_engine_snapshot or {}).get('engine_id')}")
     from ..pipeline import _finish_video_version
 
     _finish_video_version(job, store, path, version)
@@ -618,7 +728,9 @@ ENGINE_CLAIM_FIELDS = (
 )
 
 
-def assembly_worker_mismatch(reported: dict | None, snapshot: dict | None) -> str | None:
+def assembly_worker_mismatch(
+        reported: dict | None,
+        snapshot: dict | None) -> str | None:
     """Why this node may not run the dispatched attempt, or ``None`` when it may.
 
     Issue #122 P5/P7: the attempt was decided against one exact engine configuration
@@ -645,12 +757,20 @@ def assembly_worker_mismatch(reported: dict | None, snapshot: dict | None) -> st
     return None
 
 
-def _select_worker(workers: list[dict], job, task_type: str | None = None, min_vram_mb: int | None = None,
-                   voice_requirements: dict | None = None):
+def _select_worker(
+        workers: list[dict],
+        job,
+        task_type: str | None = None,
+        min_vram_mb: int | None = None,
+        voice_requirements: dict | None = None):
     dispatcher_url = os.getenv("DISPATCHER_URL", "").rstrip("/")
     if not dispatcher_url:
-        return available_worker(workers, job, task_type=task_type, min_vram_mb=min_vram_mb,
-                                voice_requirements=voice_requirements)
+        return available_worker(
+            workers,
+            job,
+            task_type=task_type,
+            min_vram_mb=min_vram_mb,
+            voice_requirements=voice_requirements)
     try:
         payload = {"workers": workers, "job": job.model_dump(mode="json")}
         if task_type:
@@ -679,10 +799,16 @@ def _task_for(job, scene=None) -> dict:
                               "video_prompt": scene.video_prompt,
                               "voiceover": scene.voiceover,
                               "duration": scene.duration}]}
-    return {"job_id": job.job_id, "task": job.task_type, "priority": job.priority,
-            "min_vram_mb": job.min_vram_mb, "workflow": workflow,
-            "topic": job.topic, "script": script, "task_id": task_id,
-            "scene_id": scene_id}
+    return {
+        "job_id": job.job_id,
+        "task": job.task_type,
+        "priority": job.priority,
+        "min_vram_mb": job.min_vram_mb,
+        "workflow": workflow,
+        "topic": job.topic,
+        "script": script,
+        "task_id": task_id,
+        "scene_id": scene_id}
 
 
 def _validate_workflow_reference(reference: str | None, task_type: str) -> str:
@@ -694,7 +820,12 @@ def _validate_workflow_reference(reference: str | None, task_type: str) -> str:
     return value
 
 
-def _enqueue_job_task(job, scene=None, *, new_attempt: bool = False, delay: float = 0) -> dict:
+def _enqueue_job_task(
+        job,
+        scene=None,
+        *,
+        new_attempt: bool = False,
+        delay: float = 0) -> dict:
     task = _task_for(job, scene)
     if delay:
         task["not_before"] = time.time() + delay
@@ -710,19 +841,31 @@ def _enqueue_job_task(job, scene=None, *, new_attempt: bool = False, delay: floa
 
 
 def _tts_task_for(job, scene) -> dict:
-    character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id)
+    character = load_character(
+        Path(
+            os.getenv(
+                "CHARACTERS_ROOT",
+                "characters")),
+        job.character_id)
     voice_config = character.voice or {}
-    return {"job_id": job.job_id, "task": "voice", "priority": job.priority,
-            "min_vram_mb": 0, "workflow": job.workflow or "",
-            "topic": scene.voiceover or scene.prompt or job.topic,
-            "task_id": None, "scene_id": scene.scene_id,
-            "character_id": job.character_id,
-            "voice": voice_config.get("voice"),
-            "provider": voice_config.get("provider"),
-            "language": voice_config.get("language") or character.language or "uk",
-            "model": voice_config.get("model") or voice_config.get("engine"),
-            "engine": voice_config.get("engine"),
-            "speed": voice_config.get("speed", 150)}
+    return {
+        "job_id": job.job_id,
+        "task": "voice",
+        "priority": job.priority,
+        "min_vram_mb": 0,
+        "workflow": job.workflow or "",
+        "topic": scene.voiceover or scene.prompt or job.topic,
+        "task_id": None,
+        "scene_id": scene.scene_id,
+        "character_id": job.character_id,
+        "voice": voice_config.get("voice"),
+        "provider": voice_config.get("provider"),
+        "language": voice_config.get("language") or character.language or "uk",
+        "model": voice_config.get("model") or voice_config.get("engine"),
+        "engine": voice_config.get("engine"),
+        "speed": voice_config.get(
+            "speed",
+            150)}
 
 
 def _validate_tts_contract(task: dict, data: bytes, contract) -> None:
@@ -745,12 +888,14 @@ def _validate_tts_contract(task: dict, data: bytes, contract) -> None:
     if not isinstance(contract, dict):
         raise ValueError("Audio contract is missing or not a dict")
     if contract.get("format") != "audio_contract/v1":
-        raise ValueError("Audio contract must declare format 'audio_contract/v1'")
+        raise ValueError(
+            "Audio contract must declare format 'audio_contract/v1'")
     expected = contract.get("sha256")
     if not isinstance(expected, str) or not expected:
         raise ValueError("Audio contract must declare sha256")
     if expected != hashlib.sha256(data).hexdigest():
-        raise ValueError("Audio contract sha256 does not match artifact payload")
+        raise ValueError(
+            "Audio contract sha256 does not match artifact payload")
     if not contract.get("provider"):
         raise ValueError("Audio contract must declare provider")
     if not contract.get("voice"):
@@ -761,13 +906,21 @@ def _validate_tts_contract(task: dict, data: bytes, contract) -> None:
             continue
         actual = contract.get(field)
         if actual is None:
-            raise ValueError(f"Audio contract is missing required field {field!r}")
+            raise ValueError(
+                f"Audio contract is missing required field {field!r}")
         if str(actual) != str(required):
             raise ValueError(
                 f"Audio contract {field!r}={actual!r} does not match task requirement {required!r}")
 
 
-def _persist_tts_contract(store, job, scene, result, audio_path, data, contract) -> list:
+def _persist_tts_contract(
+        store,
+        job,
+        scene,
+        result,
+        audio_path,
+        data,
+        contract) -> list:
     """Validate and persist a verifiable audio contract for a Voice Worker artifact.
 
     The contract is produced by the Voice Worker and declares which character
@@ -783,9 +936,20 @@ def _persist_tts_contract(store, job, scene, result, audio_path, data, contract)
     and result must not silently validate an artifact against a different
     voice requirement than the one the Worker was dispatched with.
     """
-    _validate_tts_contract(_voice_task_for(job, result.task_id, scene), data, contract)
+    _validate_tts_contract(
+        _voice_task_for(
+            job,
+            result.task_id,
+            scene),
+        data,
+        contract)
     contract_path = audio_path.with_suffix(".contract.json")
-    contract_path.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+    contract_path.write_text(
+        json.dumps(
+            contract,
+            ensure_ascii=False,
+            indent=2),
+        encoding="utf-8")
     return [register_artifact(job, store.root, contract_path, "audio_contract",
                               scene_id=scene.scene_id, task_id=result.task_id,
                               node_name=result.node_name)]
@@ -866,11 +1030,18 @@ def _enqueue_tts_task(job, scene, *, delay: float = 0) -> dict:
     # requirements than the ones the Worker was dispatched with.
     job.voice_task_snapshot[queued["task_id"]] = dict(task)
     store.repository.record_task(queued, "QUEUED")
-    store.event(job, f"TTS TASK {queued['task_id']} QUEUED FOR {scene.scene_id}")
+    store.event(
+        job,
+        f"TTS TASK {queued['task_id']} QUEUED FOR {scene.scene_id}")
     return queued
 
 
-def _handle_tts_failure(job, scene, task_id: str, node_name: str, error: str | None) -> None:
+def _handle_tts_failure(
+        job,
+        scene,
+        task_id: str,
+        node_name: str,
+        error: str | None) -> None:
     """Apply the separate TTS attempt budget to a failed voice result (Issue i.0.0.1.5).
 
     A failed TTS scene is retried only while its own scene-scoped budget is not
@@ -890,32 +1061,57 @@ def _handle_tts_failure(job, scene, task_id: str, node_name: str, error: str | N
     # Clear worker state to match voice task worker loss recovery pattern
     worker = store.workers.get(node_name)
     if worker:
-        worker.update({"current_job": None, "current_task": None,
-                       "status": worker.get("desired_state") or "READY", "last_seen": utc_now()})
+        worker.update({"current_job": None, "current_task": None, "status": worker.get(
+            "desired_state") or "READY", "last_seen": utc_now()})
         store.save_worker(worker)
-    store.repository.record_task(_tts_task_for(job, scene) | {"task_id": task_id},
-                                 "FAILED", node_name, error)
+    store.repository.record_task(
+        _tts_task_for(
+            job,
+            scene) | {
+            "task_id": task_id},
+        "FAILED",
+        node_name,
+        error)
     if used < _tts_max_retries(job):
         delay = _tts_backoff_seconds(job, scene)
-        store.event(job, f"{scene.scene_id} TTS FAILED, RETRY {used}/{_tts_max_retries(job)} "
-                           f"(backoff {delay:.1f}s): {error or 'unknown error'}")
+        store.event(
+            job, f"{scene.scene_id} TTS FAILED, RETRY {used}/{_tts_max_retries(job)} "
+            f"(backoff {delay:.1f}s): {error or 'unknown error'}")
         _enqueue_tts_task(job, scene, delay=delay)
         return
-    transition_stage(job, StageName.TTS, StageStatus.FAILED, error or "unknown error")
-    task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "voice",
-                            "scene_id": scene.scene_id}, error)
-    store.update(job, JobStatus.FAILED,
-                  f"TTS FAILED: {error or 'unknown error'} (budget {_tts_max_retries(job)} exhausted)")
+    transition_stage(
+        job,
+        StageName.TTS,
+        StageStatus.FAILED,
+        error or "unknown error")
+    task_queue.dead_letter({"job_id": job.job_id,
+                            "task_id": task_id,
+                            "task": "voice",
+                            "scene_id": scene.scene_id},
+                           error)
+    store.update(
+        job,
+        JobStatus.FAILED,
+        f"TTS FAILED: {error or 'unknown error'} (budget {_tts_max_retries(job)} exhausted)")
 
 
-def _script_task_for(job, system_prompt: str, character: dict | None, revision: str | None = None) -> dict:
+def _script_task_for(
+        job,
+        system_prompt: str,
+        character: dict | None,
+        revision: str | None = None) -> dict:
     return {"job_id": job.job_id, "task": "script", "priority": job.priority,
             "topic": job.topic, "task_id": None,
             "system_prompt": system_prompt, "character": character or {},
             "task_type": "text", "revision": revision}
 
 
-def _enqueue_script_task(job_store, job, system_prompt: str = "", character: dict | None = None, revision: str | None = None) -> dict | None:
+def _enqueue_script_task(
+        job_store,
+        job,
+        system_prompt: str = "",
+        character: dict | None = None,
+        revision: str | None = None) -> dict | None:
     workers = list(job_store.workers.values())
     has_text_worker = any(
         "text" in (worker.get("supported_tasks") or []) or worker.get("role") == "text"
@@ -936,13 +1132,22 @@ def _enqueue_script_task(job_store, job, system_prompt: str = "", character: dic
 
 
 def _load_character_prompt(job) -> tuple[str, dict | None]:
-    character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id)
+    character = load_character(
+        Path(
+            os.getenv(
+                "CHARACTERS_ROOT",
+                "characters")),
+        job.character_id)
     system_prompt = (character.system_prompt or "").strip()
     character_dict = character.model_dump() if character else None
     return system_prompt, character_dict
 
 
-def _generate_script_local(job_store, job, system_prompt: str, character: dict | None) -> None:
+def _generate_script_local(
+        job_store,
+        job,
+        system_prompt: str,
+        character: dict | None) -> None:
     # i.0.0.1.4 (#104): fail-closed even if a caller skips the gate — local
     # execution is dev/demo only.
     from ..local_fallback import require_no_local_execution
@@ -952,14 +1157,17 @@ def _generate_script_local(job_store, job, system_prompt: str, character: dict |
     job.script = normalize_script(script, job.topic)
     job.script_attempt = 0
     job.script_error = None
-    job_store.update(job, JobStatus.SCRIPT_GENERATING, "SCRIPT GENERATING (LOCAL FALLBACK)")
+    job_store.update(job, JobStatus.SCRIPT_GENERATING,
+                     "SCRIPT GENERATING (LOCAL FALLBACK)")
     _write_script_files(job_store, job)
-    job_store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT GENERATED (LOCAL FALLBACK)")
+    job_store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL,
+                     "SCRIPT GENERATED (LOCAL FALLBACK)")
 
 
 def _write_script_files(store, job) -> None:
     if job.script:
-        (store.root / job.job_id / "script.json").write_text(json.dumps(job.script, indent=2), encoding="utf-8")
+        (store.root / job.job_id /
+         "script.json").write_text(json.dumps(job.script, indent=2), encoding="utf-8")
         (store.root / job.job_id / "metadata.json").write_text(json.dumps({
             "title": job.script.get("title", job.topic), "language": "uk",
             "source": job.source, "character_id": job.character_id
@@ -969,7 +1177,6 @@ def _write_script_files(store, job) -> None:
 def _handle_script_result(store, job, result, artifacts) -> None:
     success = result.get("success", False)
     task_id = result.get("task_id")
-    worker_name = result.get("worker_name")
 
     if task_id and job.script_task_id == task_id:
         job.script_task_id = None
@@ -982,23 +1189,42 @@ def _handle_script_result(store, job, result, artifacts) -> None:
         job.script_attempt = (job.script_attempt or 0) + 1
         if job.script_attempt <= job.max_retries:
             system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
+            _enqueue_script_task(
+                store,
+                job,
+                system_prompt,
+                character,
+                revision=job.revision)
         else:
-            task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "script"},
-                                   error)
-            store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
+            task_queue.dead_letter(
+                {"job_id": job.job_id, "task_id": task_id, "task": "script"}, error)
+            store.update(
+                job,
+                JobStatus.SCRIPT_FAILED,
+                f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
         return
 
-    script_artifact = next((a for a in artifacts if a.get("kind") == "script"), None)
+    script_artifact = next(
+        (a for a in artifacts if a.get("kind") == "script"), None)
     if not script_artifact:
         store.event(job, "SCRIPT TASK COMPLETED BUT NO SCRIPT ARTIFACT")
         job.script_attempt = (job.script_attempt or 0) + 1
         if job.script_attempt <= job.max_retries:
             system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
+            _enqueue_script_task(
+                store,
+                job,
+                system_prompt,
+                character,
+                revision=job.revision)
         else:
-            store.update(job, JobStatus.SCRIPT_FAILED, "SCRIPT FAILED: NO ARTIFACT AFTER RETRIES")
-            task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "script"},
+            store.update(
+                job,
+                JobStatus.SCRIPT_FAILED,
+                "SCRIPT FAILED: NO ARTIFACT AFTER RETRIES")
+            task_queue.dead_letter({"job_id": job.job_id,
+                                    "task_id": task_id,
+                                    "task": "script"},
                                    "NO SCRIPT ARTIFACT AFTER RETRIES")
         return
 
@@ -1012,10 +1238,20 @@ def _handle_script_result(store, job, result, artifacts) -> None:
         job.script_attempt = (job.script_attempt or 0) + 1
         if job.script_attempt <= job.max_retries:
             system_prompt, character = _load_character_prompt(job)
-            _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
+            _enqueue_script_task(
+                store,
+                job,
+                system_prompt,
+                character,
+                revision=job.revision)
         else:
-            store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT FAILED: MALFORMED ARTIFACT AFTER RETRIES")
-            task_queue.dead_letter({"job_id": job.job_id, "task_id": task_id, "task": "script"},
+            store.update(
+                job,
+                JobStatus.SCRIPT_FAILED,
+                "SCRIPT FAILED: MALFORMED ARTIFACT AFTER RETRIES")
+            task_queue.dead_letter({"job_id": job.job_id,
+                                    "task_id": task_id,
+                                    "task": "script"},
                                    f"MALFORMED ARTIFACT: {exc}")
         return
 
@@ -1023,20 +1259,20 @@ def _handle_script_result(store, job, result, artifacts) -> None:
     job.script_attempt = 0
     job.script_error = None
     _write_script_files(store, job)
-    store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL, "SCRIPT GENERATED; AWAITING APPROVAL")
+    store.update(job, JobStatus.SCRIPT_PENDING_APPROVAL,
+                 "SCRIPT GENERATED; AWAITING APPROVAL")
     if job.source.startswith("telegram:"):
         from ..pipeline import _send_script_approval_to_telegram
         try:
             _send_script_approval_to_telegram(job)
         except Exception as exc:
-            store.event(job, f"TELEGRAM SCRIPT APPROVAL NOTIFICATION FAILED: {exc}")
+            store.event(
+                job, f"TELEGRAM SCRIPT APPROVAL NOTIFICATION FAILED: {exc}")
 
 
 def _has_publisher_worker(job_store) -> bool:
-    return any(
-        "publish" in (worker.get("supported_tasks") or []) or worker.get("role") == "publisher"
-        for worker in job_store.workers.values()
-    )
+    return any("publish" in (worker.get("supported_tasks") or []) or worker.get(
+        "role") == "publisher" for worker in job_store.workers.values())
 
 
 def _publish_task_for(job, channel: str) -> dict:
@@ -1058,15 +1294,22 @@ def _publish_task_for(job, channel: str) -> dict:
         "attempt": (job.publish_retry_count.get(channel, 0) + 1),
     }
     job.publish_intent[channel] = intent
-    return {"job_id": job.job_id, "task": "publish", "priority": job.priority,
-            "channel": channel, "topic": job.topic, "task_id": None,
+    return {"job_id": job.job_id,
+            "task": "publish",
+            "priority": job.priority,
+            "channel": channel,
+            "topic": job.topic,
+            "task_id": None,
             "video_path": job.output_path or "",
             "delivery_contract": delivery,
             "publish_intent": intent,
-            "metadata": {"job_id": job.job_id, "topic": job.topic,
-                         "character_id": job.character_id, "brand_id": job.brand_id,
+            "metadata": {"job_id": job.job_id,
+                         "topic": job.topic,
+                         "character_id": job.character_id,
+                         "brand_id": job.brand_id,
                          **(job.script or {}),
-                         **((job.script or {}).get("platforms", {}).get(channel) or {})},
+                         **((job.script or {}).get("platforms",
+                                                   {}).get(channel) or {})},
             "task_type": "publish"}
 
 
@@ -1095,7 +1338,8 @@ def _publish_delivery_contract(job) -> dict:
     return contract
 
 
-def _match_publish_receipt(job, channel: str, receipt: dict) -> tuple[str, str | None]:
+def _match_publish_receipt(
+        job, channel: str, receipt: dict) -> tuple[str, str | None]:
     """Correlate a receipt with the durable publish intent.
 
     Returns (decision, reason) where decision is one of:
@@ -1106,20 +1350,26 @@ def _match_publish_receipt(job, channel: str, receipt: dict) -> tuple[str, str |
     """
     intent = job.publish_intent.get(channel)
     if intent:
-        receipt_version = receipt.get("video_version") or receipt.get("version")
+        receipt_version = receipt.get(
+            "video_version") or receipt.get("version")
         if receipt_version is not None and intent.get("video_version") is not None \
                 and str(receipt_version) != str(intent["video_version"]):
             return "reject", (f"Receipt video_version {receipt_version!r} does not match "
                               f"intent version {intent['video_version']!r}")
         receipt_sha = receipt.get("video_sha256") or receipt.get("sha256")
-        if receipt_sha and intent.get("video_sha256") and receipt_sha != intent["video_sha256"]:
+        if receipt_sha and intent.get(
+                "video_sha256") and receipt_sha != intent["video_sha256"]:
             return "reject", "Receipt video_sha256 does not match delivery contract"
     if channel in job.published_channels:
         return "skip", "Channel already published (idempotent)"
     return "accept", None
 
 
-def _enqueue_publish_task(job_store, job, channel: str, delay: float = 0) -> dict | None:
+def _enqueue_publish_task(
+        job_store,
+        job,
+        channel: str,
+        delay: float = 0) -> dict | None:
     has_publisher = _has_publisher_worker(job_store)
     from ..local_fallback import local_fallback_allowed
     if not has_publisher and local_fallback_allowed():
@@ -1131,7 +1381,8 @@ def _enqueue_publish_task(job_store, job, channel: str, delay: float = 0) -> dic
     queued = task_queue.enqueue(task)
     job.publish_task_ids[queued["task_id"]] = channel
     job_store.repository.record_task(queued, "QUEUED")
-    job_store.event(job, f"PUBLISH TASK {queued['task_id']} QUEUED FOR {channel}")
+    job_store.event(
+        job, f"PUBLISH TASK {queued['task_id']} QUEUED FOR {channel}")
     return queued
 
 
@@ -1156,7 +1407,8 @@ def _publish_local(job_store, job, channel: str) -> dict:
     return result
 
 
-def _validate_publication_receipt(receipt: dict, expected_channel: str) -> tuple[bool, str | None]:
+def _validate_publication_receipt(
+        receipt: dict, expected_channel: str) -> tuple[bool, str | None]:
     """Validate a publication receipt schema and channel match.
 
     Returns (is_valid, error_message). Receipt must have:
@@ -1200,7 +1452,12 @@ def _redact_payload(value):
     return redact_payload(value)
 
 
-def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> None:
+def _handle_publish_result(
+        job_store,
+        job,
+        result,
+        artifacts,
+        channel: str) -> None:
     success = result.get("success", False)
     task_id = result.get("task_id")
     if job.active_task_id == task_id:
@@ -1240,19 +1497,27 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
         if attempt <= job.max_retries:
             delay = _backoff_seconds(attempt)
             job.publish_retry_count[channel] = attempt
-            job_store.event(job, f"PUBLISH {channel}: RETRY {attempt}/{job.max_retries} "
-                               f"(backoff {delay:.1f}s): {reason}")
-            job_store.update(job, JobStatus.PUBLISHING,
-                             f"PUBLISH RETRY {attempt}/{job.max_retries}: {channel} ({reason})")
+            job_store.event(
+                job, f"PUBLISH {channel}: RETRY {attempt}/{job.max_retries} "
+                f"(backoff {delay:.1f}s): {reason}")
+            job_store.update(
+                job,
+                JobStatus.PUBLISHING,
+                f"PUBLISH RETRY {attempt}/{job.max_retries}: {channel} ({reason})")
             _enqueue_publish_task(job_store, job, channel, delay=delay)
         else:
             job.publish_retry_count[channel] = attempt
-            job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED",
-                                                       "error": f"{reason} AFTER RETRIES"})
-            job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: {reason} AFTER RETRIES")
+            job.publication_results.setdefault(
+                channel, {
+                    "channel": channel, "status": "FAILED", "error": f"{reason} AFTER RETRIES"})
+            job_store.update(
+                job,
+                JobStatus.FAILED,
+                f"PUBLISH {channel} FAILED: {reason} AFTER RETRIES")
 
     if success:
-        receipt_artifact = next((a for a in artifacts if a.get("kind") == "publication_receipt"), None)
+        receipt_artifact = next(
+            (a for a in artifacts if a.get("kind") == "publication_receipt"), None)
         if not receipt_artifact:
             job_store.event(job, f"PUBLISH {channel}: NO RECEIPT ARTIFACT")
             job.publish_error = "NO RECEIPT ARTIFACT"
@@ -1265,7 +1530,8 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
             receipt = json.loads(data.decode("utf-8"))
         except (KeyError, ValueError, UnicodeDecodeError) as exc:
             detail = secret_redact(str(exc))
-            job_store.event(job, f"PUBLISH {channel}: MALFORMED RECEIPT: {detail}")
+            job_store.event(
+                job, f"PUBLISH {channel}: MALFORMED RECEIPT: {detail}")
             job.publish_error = f"MALFORMED RECEIPT: {detail}"
             _enqueue_with_backoff(f"malformed receipt: {detail}")
             return
@@ -1277,24 +1543,32 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
         # Validate receipt schema
         valid, error = _validate_publication_receipt(receipt, channel)
         if not valid:
-            job_store.event(job, f"PUBLISH {channel}: INVALID RECEIPT: {error}")
+            job_store.event(
+                job, f"PUBLISH {channel}: INVALID RECEIPT: {error}")
             job.publish_error = f"INVALID RECEIPT: {error}"
             _enqueue_with_backoff(f"invalid receipt: {error}")
             return
 
-        # Correlate the receipt with the durable publish intent (owner/lease/version).
+        # Correlate the receipt with the durable publish intent
+        # (owner/lease/version).
         decision, reason = _match_publish_receipt(job, channel, receipt)
         if decision == "reject":
-            job_store.event(job, f"PUBLISH {channel}: RECEIPT REJECTED: {reason}")
+            job_store.event(
+                job, f"PUBLISH {channel}: RECEIPT REJECTED: {reason}")
             job.publish_error = f"RECEIPT REJECTED: {reason}"
-            job.publication_results.setdefault(channel, {"channel": channel, "status": "FAILED",
-                                                       "error": f"RECEIPT REJECTED: {reason}"})
+            job.publication_results.setdefault(
+                channel, {
+                    "channel": channel, "status": "FAILED", "error": f"RECEIPT REJECTED: {reason}"})
             if task_id and job.publish_task_ids.get(task_id) == channel:
                 job.publish_task_ids.pop(task_id, None)
-            job_store.update(job, JobStatus.FAILED, f"PUBLISH {channel} FAILED: RECEIPT REJECTED")
+            job_store.update(
+                job,
+                JobStatus.FAILED,
+                f"PUBLISH {channel} FAILED: RECEIPT REJECTED")
             return
         if decision == "skip":
-            job_store.event(job, f"PUBLISH {channel}: ALREADY PUBLISHED (idempotent skip)")
+            job_store.event(
+                job, f"PUBLISH {channel}: ALREADY PUBLISHED (idempotent skip)")
             # Only pop the task_id after successful validation and processing
             if task_id and job.publish_task_ids.get(task_id) == channel:
                 job.publish_task_ids.pop(task_id, None)
@@ -1312,7 +1586,10 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
             # Only pop the task_id after successful validation and processing
             if task_id and job.publish_task_ids.get(task_id) == channel:
                 job.publish_task_ids.pop(task_id, None)
-            job_store.update(job, JobStatus.PUBLISHING, f"PUBLISH TASK {task_id} COMPLETED FOR {channel}")
+            job_store.update(
+                job,
+                JobStatus.PUBLISHING,
+                f"PUBLISH TASK {task_id} COMPLETED FOR {channel}")
         elif receipt_status == "NOT_CONFIGURED":
             job.publish_error = receipt.get("error", "NOT_CONFIGURED")
             job.publish_retry_count[channel] = 0
@@ -1330,11 +1607,13 @@ def _handle_publish_result(job_store, job, result, artifacts, channel: str) -> N
             if receipt.get("retryable") is False:
                 if not receipt.get("outcome_unknown"):
                     job.publish_intent.pop(channel, None)
-                job_store.event(job, f"PUBLISH {channel} PERMANENT FAILURE; NO RETRY")
+                job_store.event(
+                    job, f"PUBLISH {channel} PERMANENT FAILURE; NO RETRY")
                 return
             _enqueue_with_backoff(f"FAILED: {job.publish_error}")
     else:
-        error = secret_redact(str(result.get("error") or "UNKNOWN PUBLISH ERROR"))
+        error = secret_redact(
+            str(result.get("error") or "UNKNOWN PUBLISH ERROR"))
         job.publish_error = error
         job_store.event(job, f"PUBLISH TASK FAILED for {channel}: {error}")
         _enqueue_with_backoff(error)
@@ -1350,18 +1629,23 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             worker["status"] = "OFFLINE"
             continue
         forced = worker.get("node_name") in (lost_nodes or set())
-        if not forced and ((now - last_seen).total_seconds() <= timeout or worker.get("status") == "OFFLINE"):
+        if not forced and ((now - last_seen).total_seconds()
+                           <= timeout or worker.get("status") == "OFFLINE"):
             continue
         worker["status"] = "OFFLINE"
         current_job = worker.get("current_job")
         current_task = worker.get("current_task")
         job = store.jobs.get(current_job) if current_job else None
-        scene = _scene_for_task(job, current_task) if job and current_task else None
-        if job and scene and scene.assigned_worker == worker.get("node_name") and job.status == JobStatus.ASSET_GENERATION:
+        scene = _scene_for_task(
+            job, current_task) if job and current_task else None
+        if job and scene and scene.assigned_worker == worker.get(
+                "node_name") and job.status == JobStatus.ASSET_GENERATION:
             task_queue.release(current_task)
-            interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
+            interrupt_scene(
+                scene, f"Worker {worker.get('node_name')} heartbeat timed out")
             job.assigned_worker = None
-            store.event(job, f"{worker.get('node_name')} OFFLINE; TASK {current_task} REQUEUED")
+            store.event(
+                job, f"{worker.get('node_name')} OFFLINE; TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
         elif job and job.script_task_id == current_task and job.status in {JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING}:
@@ -1374,21 +1658,44 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             # result.  Without this a node that keeps dropping its heartbeat
             # re-dispatches forever without ever exhausting ``max_retries``.
             job.script_attempt = getattr(job, "script_attempt", 0) + 1
-            store.repository.record_task({"task_id": current_task, "task": "script",
-                                          "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
-                                         error="script worker heartbeat timed out")
+            store.repository.record_task(
+                {
+                    "task_id": current_task,
+                    "task": "script",
+                    "job_id": job.job_id},
+                "RELEASED",
+                worker.get("node_name"),
+                error="script worker heartbeat timed out")
             if job.script_attempt <= getattr(job, "max_retries", 3):
                 system_prompt, character = _load_character_prompt(job)
-                _enqueue_script_task(store, job, system_prompt, character, revision=job.revision)
-                store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
+                _enqueue_script_task(
+                    store,
+                    job,
+                    system_prompt,
+                    character,
+                    revision=job.revision)
+                store.event(
+                    job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} REQUEUED")
             else:
-                task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task, "task": "script"},
+                task_queue.dead_letter({"job_id": job.job_id,
+                                        "task_id": current_task,
+                                        "task": "script"},
                                        "script worker heartbeat timed out after retries")
-                store.repository.record_task({"job_id": job.job_id, "task_id": current_task, "task": "script"},
-                                             "FAILED", worker.get("node_name"), error="script worker heartbeat timed out after retries")
-                store.update(job, JobStatus.SCRIPT_FAILED,
-                             f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
-                store.event(job, f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} FAILED AFTER RETRIES")
+                store.repository.record_task(
+                    {
+                        "job_id": job.job_id,
+                        "task_id": current_task,
+                        "task": "script"},
+                    "FAILED",
+                    worker.get("node_name"),
+                    error="script worker heartbeat timed out after retries")
+                store.update(
+                    job,
+                    JobStatus.SCRIPT_FAILED,
+                    f"SCRIPT FAILED AFTER {job.script_attempt} ATTEMPTS")
+                store.event(
+                    job,
+                    f"{worker.get('node_name')} OFFLINE; SCRIPT TASK {current_task} FAILED AFTER RETRIES")
             worker["current_job"] = None
             worker["current_task"] = None
             store.save_worker(worker)
@@ -1397,7 +1704,8 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             channel = job.publish_task_ids.pop(current_task, None)
             job.assigned_worker = None
             _enqueue_publish_task(store, job, channel)
-            store.event(job, f"PUBLISH TASK {current_task} REQUEUED FOR {channel}")
+            store.event(
+                job, f"PUBLISH TASK {current_task} REQUEUED FOR {channel}")
             worker["current_job"] = None
             worker["current_task"] = None
             store.save_worker(worker)
@@ -1409,7 +1717,8 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             # that keeps dropping its lease cannot re-dispatch the same scene
             # forever, and once the budget is spent the scene fails the TTS
             # stage instead of looping.
-            scene = next((s for s in job.scenes if s.scene_id == job.tts_active_task_ids.get(current_task)), None)
+            scene = next((s for s in job.scenes if s.scene_id ==
+                         job.tts_active_task_ids.get(current_task)), None)
             task_queue.discard(current_task)
             job.tts_active_task_ids.pop(current_task, None)
             # Issue #197/#165.2: drop the issued voice-task snapshot for the lost
@@ -1419,18 +1728,26 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             job.assigned_worker = None
             if scene:
                 scene.assigned_worker = None
-                job.tts_attempts[scene.scene_id] = _tts_attempts_used(job, scene) + 1
-                interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
+                job.tts_attempts[scene.scene_id] = _tts_attempts_used(
+                    job, scene) + 1
+                interrupt_scene(
+                    scene, f"Worker {worker.get('node_name')} heartbeat timed out")
             # Issue #197/#163.3: record the lost lease in the repository so the
             # audit trail shows the task was released, not silently dropped.
             # The task is re-enqueued (not dead-lettered): the Job stays on the
             # lifecycle path and a healthy Worker re-claims it.  Only terminal
             # exhaustion dead-letters.
-            store.repository.record_task({"task_id": current_task, "task": "voice",
-                                          "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
-                                         error="voice worker heartbeat timed out")
+            store.repository.record_task(
+                {
+                    "task_id": current_task,
+                    "task": "voice",
+                    "job_id": job.job_id},
+                "RELEASED",
+                worker.get("node_name"),
+                error="voice worker heartbeat timed out")
             _dispatch_tts(store, job)
-            store.event(job, f"{worker.get('node_name')} OFFLINE; TTS TASK {current_task} REQUEUED")
+            store.event(
+                job, f"{worker.get('node_name')} OFFLINE; TTS TASK {current_task} REQUEUED")
             worker["current_job"] = None
             worker["current_task"] = None
             store.save_worker(worker)
@@ -1443,27 +1760,51 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             job.storyboard_attempt = getattr(job, "storyboard_attempt", 0) + 1
             job.storyboard_attempt_version = (
                 job.storyboards[-1].version + 1 if job.storyboards else 1)
-            store.repository.record_task({"task_id": current_task, "task": "storyboard",
-                                          "job_id": job.job_id}, "RELEASED", worker.get("node_name"),
-                                         error="storyboard worker heartbeat timed out")
-            attempts = max(1, int(os.getenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
+            store.repository.record_task(
+                {
+                    "task_id": current_task,
+                    "task": "storyboard",
+                    "job_id": job.job_id},
+                "RELEASED",
+                worker.get("node_name"),
+                error="storyboard worker heartbeat timed out")
+            attempts = max(
+                1, int(
+                    os.getenv(
+                        "OLLAMA_STORYBOARD_MAX_RETRIES", "3")))
             if job.storyboard_attempt < attempts:
-                pinned_revision = getattr(job, "storyboard_active_revision", None)
+                pinned_revision = getattr(
+                    job, "storyboard_active_revision", None)
                 job.storyboard_active_revision = pinned_revision
                 from ..pipeline import queue_storyboard as _queue_storyboard
                 _queue_storyboard(store, job, revision=pinned_revision)
-                store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
+                store.event(
+                    job,
+                    f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} REQUEUED")
             else:
-                task_queue.dead_letter({"job_id": job.job_id, "task_id": current_task,
-                                        "task": "storyboard"},
-                                       "storyboard worker heartbeat timed out (attempts exhausted)")
-                store.repository.record_task({"job_id": job.job_id, "task_id": current_task, "task": "storyboard"},
-                                             "FAILED", worker.get("node_name"), error="storyboard worker heartbeat timed out (attempts exhausted)")
+                task_queue.dead_letter(
+                    {
+                        "job_id": job.job_id,
+                        "task_id": current_task,
+                        "task": "storyboard"},
+                    "storyboard worker heartbeat timed out (attempts exhausted)")
+                store.repository.record_task(
+                    {
+                        "job_id": job.job_id,
+                        "task_id": current_task,
+                        "task": "storyboard"},
+                    "FAILED",
+                    worker.get("node_name"),
+                    error="storyboard worker heartbeat timed out (attempts exhausted)")
                 job.storyboard_task_id = None
                 job.active_task_id = None
-                store.update(job, JobStatus.STORYBOARD_FAILED,
-                             f"STORYBOARD FAILED after {attempts} attempts: task lease expired repeatedly")
-                store.event(job, f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} FAILED AFTER RETRIES")
+                store.update(
+                    job,
+                    JobStatus.STORYBOARD_FAILED,
+                    f"STORYBOARD FAILED after {attempts} attempts: task lease expired repeatedly")
+                store.event(
+                    job,
+                    f"{worker.get('node_name')} OFFLINE; STORYBOARD TASK {current_task} FAILED AFTER RETRIES")
             worker["current_job"] = None
             worker["current_task"] = None
             store.save_worker(worker)
@@ -1479,16 +1820,20 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
                 job.assembly_task_id = None
             job.assembly_attempt += 1
             job.assigned_worker = None
-            store.event(job, f"{worker.get('node_name')} OFFLINE; ASSEMBLY TASK "
-                             f"{current_task} REQUEUED")
-            retry = _assembly_retry_task(job) if job.assembly_attempt <= job.max_retries else None
+            store.event(
+                job, f"{worker.get('node_name')} OFFLINE; ASSEMBLY TASK "
+                f"{current_task} REQUEUED")
+            retry = _assembly_retry_task(
+                job) if job.assembly_attempt <= job.max_retries else None
             if retry is not None:
                 _enqueue_assembly_task(job, retry, new_attempt=True)
             else:
                 transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED,
                                  "assembly worker lost")
-                store.update(job, JobStatus.FAILED,
-                             f"ASSEMBLY FAILED: worker {worker.get('node_name')} was lost")
+                store.update(
+                    job,
+                    JobStatus.FAILED,
+                    f"ASSEMBLY FAILED: worker {worker.get('node_name')} was lost")
             worker["current_job"] = None
             worker["current_task"] = None
         elif job and current_task == job.active_task_id and job.status in {
@@ -1504,8 +1849,10 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             scene = _scene_for_task(job, current_task)
             if scene:
                 scene.assigned_worker = None
-                interrupt_scene(scene, f"Worker {worker.get('node_name')} heartbeat timed out")
-            store.event(job, f"{worker.get('node_name')} OFFLINE; TASK {current_task} RELEASED")
+                interrupt_scene(
+                    scene, f"Worker {worker.get('node_name')} heartbeat timed out")
+            store.event(
+                job, f"{worker.get('node_name')} OFFLINE; TASK {current_task} RELEASED")
             executor.submit(_prepare_and_dispatch, job)
             worker["current_job"] = None
             worker["current_task"] = None
@@ -1524,12 +1871,16 @@ def _finalize_and_notify(job, image: Path | list[Path]) -> None:
         if job.status != JobStatus.FAILED or not can_retry(job):
             break
         job.retries += 1
-        store.update(job, JobStatus.ASSETS_READY, f"ASSEMBLY RETRY {job.retries}/{job.max_retries}")
+        store.update(
+            job,
+            JobStatus.ASSETS_READY,
+            f"ASSEMBLY RETRY {job.retries}/{job.max_retries}")
     if job.status == JobStatus.READY and job.source.startswith("telegram:"):
         parts = job.source.split(":", 2)
         if len(parts) == 3 and parts[1] != "unknown":
             try:
-                TelegramAdapter().send_message(parts[1], f"JOB {job.job_id}\nSTATUS: READY")
+                TelegramAdapter().send_message(
+                    parts[1], f"JOB {job.job_id}\nSTATUS: READY")
             except httpx.HTTPError as error:
                 store.event(job, f"TELEGRAM NOTIFICATION FAILED: {error}")
 
@@ -1539,8 +1890,8 @@ def _ordered_scene_files(job) -> list[Path]:
     accepted_kinds = {"video_scene"} if job.task_type == "video" else {"image"}
     for scene in sorted(job.scenes, key=lambda value: value.index):
         for artifact_id in scene.artifact_ids:
-            artifact = next((value for value in job.artifacts
-                             if value.artifact_id == artifact_id and value.kind in accepted_kinds), None)
+            artifact = next((value for value in job.artifacts if value.artifact_id ==
+                            artifact_id and value.kind in accepted_kinds), None)
             if artifact:
                 path = store.root / job.job_id / artifact.path
                 if path.is_file():
@@ -1557,8 +1908,15 @@ def _dispatch_assets(store, job) -> None:
         if images:
             _finalize_and_notify(job, images)
         else:
-            transition_stage(job, StageName.ASSETS, StageStatus.FAILED, "Recovered image artifacts are missing")
-            store.update(job, JobStatus.FAILED, "RECOVERY FAILED: IMAGE ARTIFACTS ARE MISSING")
+            transition_stage(
+                job,
+                StageName.ASSETS,
+                StageStatus.FAILED,
+                "Recovered image artifacts are missing")
+            store.update(
+                job,
+                JobStatus.FAILED,
+                "RECOVERY FAILED: IMAGE ARTIFACTS ARE MISSING")
         return
     queued_tasks = [(scene, _enqueue_job_task(job, scene))
                     for scene in pending_scenes(job) if not scene.task_id]
@@ -1568,10 +1926,17 @@ def _dispatch_assets(store, job) -> None:
         for scene, queued_task in queued_tasks:
             task_id = queued_task["task_id"]
             task_queue.discard(task_id)
-            image = store.root / job.job_id / "images" / f"{scene.scene_id}.ppm"
+            image = store.root / job.job_id / \
+                "images" / f"{scene.scene_id}.ppm"
             _demo_image(image)
-            artifact = register_artifact(job, store.root, image, "image", scene_id=scene.scene_id,
-                                         task_id=task_id, workflow=job.workflow)
+            artifact = register_artifact(
+                job,
+                store.root,
+                image,
+                "image",
+                scene_id=scene.scene_id,
+                task_id=task_id,
+                workflow=job.workflow)
             finish_scene(scene, [artifact.artifact_id])
             job.completed_task_ids.append(task_id)
             job.active_task_ids.pop(task_id, None)
@@ -1598,18 +1963,22 @@ def _character_voice_enabled(job) -> bool:
     a synthesis task that the Voice Worker would reject.
     """
     try:
-        character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id)
+        character = load_character(
+            Path(
+                os.getenv(
+                    "CHARACTERS_ROOT",
+                    "characters")),
+            job.character_id)
         provider = (character.voice or {}).get("provider")
     except Exception:
         return False
-    return bool(provider) and str(provider).strip().lower() not in {"disabled", "off", "false"}
+    return bool(provider) and str(provider).strip(
+    ).lower() not in {"disabled", "off", "false"}
 
 
 def _has_voice_worker(store: JobStore) -> bool:
-    return any(
-        "speech_synthesis" in (worker.get("capabilities") or []) or worker.get("role") == "voice"
-        for worker in store.workers.values()
-    )
+    return any("speech_synthesis" in (worker.get("capabilities") or []) or worker.get(
+        "role") == "voice" for worker in store.workers.values())
 
 
 def _dispatch_tts(store, job) -> None:
@@ -1627,16 +1996,18 @@ def _dispatch_tts(store, job) -> None:
     if _pending_voice_scenes(job) and not _character_voice_enabled(job):
         transition_stage(job, StageName.TTS, StageStatus.READY)
         if job.task_type in {"image", "video"}:
-            store.transition(job, JobStatus.ASSETS_READY, "TTS SKIPPED; VOICE DISABLED")
+            store.transition(job, JobStatus.ASSETS_READY,
+                             "TTS SKIPPED; VOICE DISABLED")
         return
     if not job.tts_active_task_ids and not _pending_voice_scenes(job):
         transition_stage(job, StageName.TTS, StageStatus.READY)
         if job.task_type in {"image", "video"}:
-            store.transition(job, JobStatus.ASSETS_READY, "TTS SKIPPED; NO VOICEOVER")
+            store.transition(job, JobStatus.ASSETS_READY,
+                             "TTS SKIPPED; NO VOICEOVER")
         return
-    queued = [_enqueue_tts_task(job, scene)
-              for scene in _pending_voice_scenes(job)
-              if _tts_attempts_remaining(job, scene)]
+    [_enqueue_tts_task(job, scene)
+     for scene in _pending_voice_scenes(job)
+     if _tts_attempts_remaining(job, scene)]
     # Issue i.0.0.1.5: a scene whose separate TTS budget is already spent is
     # never silently re-dispatched.  It fails the TTS stage and is dead-lettered
     # instead of looping on an exhausted budget, so worker loss or a lost ack
@@ -1667,16 +2038,23 @@ def _image_storyboard_gate(store, job) -> bool:
     "approved" after a legitimate storyboard generation attempt.
     """
     if job.task_type == "video" or job.storyboards:
-        _PRE_STORYBOARD = {JobStatus.SCRIPT_APPROVED, JobStatus.STORYBOARD_QUEUED,
-                           JobStatus.STORYBOARD_GENERATING, JobStatus.STORYBOARD_FAILED}
+        _PRE_STORYBOARD = {
+            JobStatus.SCRIPT_APPROVED,
+            JobStatus.STORYBOARD_QUEUED,
+            JobStatus.STORYBOARD_GENERATING,
+            JobStatus.STORYBOARD_FAILED}
         if job.status in _PRE_STORYBOARD:
             return False
         if not job.storyboards or not job.active_storyboard_version:
-            store.event(job, "STORYBOARD GATE: No active storyboard; asset generation blocked")
+            store.event(
+                job, "STORYBOARD GATE: No active storyboard; asset generation blocked")
             return True
-        sb = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
+        sb = next((s for s in job.storyboards if s.version ==
+                  job.active_storyboard_version), None)
         if sb is None:
-            store.event(job, f"STORYBOARD GATE: Active storyboard {job.active_storyboard_version} not found; asset generation blocked")
+            store.event(
+                job,
+                f"STORYBOARD GATE: Active storyboard {job.active_storyboard_version} not found; asset generation blocked")
             return True
         if sb.image_status != "approved":
             from ..image_storyboard import queue_image_storyboard
@@ -1692,8 +2070,11 @@ def _image_storyboard_gate(store, job) -> bool:
                         _handle(store, job, tid, True, image_base64=b64)
                         from ..state import task_queue as _tq
                         _tq.ack(tid)
-                    store.event(job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
-            store.event(job, f"IMAGE STORYBOARD {sb.version} NOT APPROVED (status={sb.image_status}); waiting for approval")
+                    store.event(
+                        job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
+            store.event(
+                job,
+                f"IMAGE STORYBOARD {sb.version} NOT APPROVED (status={sb.image_status}); waiting for approval")
             return True
     return False
 
@@ -1703,12 +2084,19 @@ def _prepare_and_dispatch(job) -> None:
         if job.script and job.status == JobStatus.NEW:
             initialize_plan(job)
             assets_stage = job.stages[StageName.ASSETS.value]
-            if assets_stage.status in {StageStatus.PENDING, StageStatus.FAILED, StageStatus.PAUSED}:
+            if assets_stage.status in {
+                    StageStatus.PENDING,
+                    StageStatus.FAILED,
+                    StageStatus.PAUSED}:
                 transition_stage(job, StageName.ASSETS, StageStatus.RUNNING)
-            # Issue #36/#60: gate asset generation until image storyboard approved
+            # Issue #36/#60: gate asset generation until image storyboard
+            # approved
             if _image_storyboard_gate(store, job):
                 return
-            store.update(job, JobStatus.ASSET_GENERATION, "IMAGE TASK REDISPATCHED")
+            store.update(
+                job,
+                JobStatus.ASSET_GENERATION,
+                "IMAGE TASK REDISPATCHED")
         elif job.status in {JobStatus.NEW, JobStatus.SCRIPT_QUEUED, JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_FAILED}:
             prepare_job_safe(store, job)
         else:
@@ -1716,11 +2104,16 @@ def _prepare_and_dispatch(job) -> None:
         if job.status != JobStatus.FAILED or not can_retry(job):
             break
         job.retries += 1
-        store.update(job, JobStatus.NEW, f"AUTOMATIC RETRY {job.retries}/{job.max_retries}")
+        store.update(
+            job,
+            JobStatus.NEW,
+            f"AUTOMATIC RETRY {job.retries}/{job.max_retries}")
     if job.status == JobStatus.SCRIPT_PENDING_APPROVAL:
         _progress(job, "SCRIPT_PENDING_APPROVAL")
         return
-    if job.status in {JobStatus.VIDEO_PENDING_APPROVAL, JobStatus.VIDEO_REVISION_REQUESTED}:
+    if job.status in {
+            JobStatus.VIDEO_PENDING_APPROVAL,
+            JobStatus.VIDEO_REVISION_REQUESTED}:
         _progress(job, job.status.value)
         return
     if job.status == JobStatus.SCRIPT_APPROVED:
@@ -1729,9 +2122,12 @@ def _prepare_and_dispatch(job) -> None:
         queue_storyboard(store, job, revision=job.video_revision_upstream)
         return
     if job.status == JobStatus.STORYBOARD_APPROVED:
-        sb = next((s for s in job.storyboards if s.version == job.active_storyboard_version), None)
+        sb = next((s for s in job.storyboards if s.version ==
+                  job.active_storyboard_version), None)
         if sb and sb.image_status != "approved":
-            store.event(job, f"IMAGE STORYBOARD NOT APPROVED (status={sb.image_status}); enqueue preview images")
+            store.event(
+                job,
+                f"IMAGE STORYBOARD NOT APPROVED (status={sb.image_status}); enqueue preview images")
             from ..image_storyboard import queue_image_storyboard
             if not all(s.image_artifact_id for s in sb.scenes):
                 queue_image_storyboard(store, job, sb.version)
@@ -1745,13 +2141,18 @@ def _prepare_and_dispatch(job) -> None:
                         _handle(store, job, tid, True, image_base64=b64)
                         from ..state import task_queue as _tq
                         _tq.ack(tid)
-                    store.event(job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
-            # No explicit image approval yet — wait for user action (Issue #6 rule)
+                    store.event(
+                        job, f"IMAGE STORYBOARD {sb.version}:{sb.image_version} READY (fallback)")
+            # No explicit image approval yet — wait for user action (Issue #6
+            # rule)
             return
         # Issue #36/#60: gate asset generation until image storyboard approved
         if _image_storyboard_gate(store, job):
             return
-        store.transition(job, JobStatus.ASSET_GENERATION, "ASSET GENERATION STARTED")
+        store.transition(
+            job,
+            JobStatus.ASSET_GENERATION,
+            "ASSET GENERATION STARTED")
         _dispatch_assets(store, job)
         return
     if job.status == JobStatus.ASSET_GENERATION:
@@ -1770,25 +2171,37 @@ def _job_action(job_id: str, status: JobStatus, event: str):
     if status in {JobStatus.PAUSED, JobStatus.CANCELLED}:
         task_status = "CANCELLED" if status == JobStatus.CANCELLED else "PAUSED"
         for task_id, scene_id in list(job.active_task_ids.items()):
-            scene = next((item for item in job.scenes if item.scene_id == scene_id), None)
+            scene = next(
+                (item for item in job.scenes if item.scene_id == scene_id), None)
             worker = scene.assigned_worker if scene else None
             if worker:
                 task_queue.request_cancel(worker, task_id)
             task_queue.discard(task_id)
-            store.repository.record_task(_task_for(job, scene) | {"task_id": task_id},
-                                         task_status, worker)
+            store.repository.record_task(
+                _task_for(
+                    job,
+                    scene) | {
+                    "task_id": task_id},
+                task_status,
+                worker)
             if scene:
                 scene.status = StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED
                 scene.task_id = None
                 scene.assigned_worker = None
         for task_id, scene_id in list(job.tts_active_task_ids.items()):
-            scene = next((item for item in job.scenes if item.scene_id == scene_id), None)
+            scene = next(
+                (item for item in job.scenes if item.scene_id == scene_id), None)
             worker = scene.assigned_worker if scene else None
             if worker:
                 task_queue.request_cancel(worker, task_id)
             task_queue.discard(task_id)
-            store.repository.record_task(_tts_task_for(job, scene) | {"task_id": task_id},
-                                         task_status, worker)
+            store.repository.record_task(
+                _tts_task_for(
+                    job,
+                    scene) | {
+                    "task_id": task_id},
+                task_status,
+                worker)
             if scene:
                 scene.task_id = None
         if job.storyboard_task_id:
@@ -1797,8 +2210,8 @@ def _job_action(job_id: str, status: JobStatus, event: str):
             if worker:
                 task_queue.request_cancel(worker, task_id)
             task_queue.discard(task_id)
-            store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "storyboard"},
-                                         task_status, worker)
+            store.repository.record_task(
+                {"job_id": job.job_id, "task_id": task_id, "task": "storyboard"}, task_status, worker)
             job.storyboard_task_id = None
         if job.script_task_id:
             task_id = job.script_task_id
@@ -1806,8 +2219,8 @@ def _job_action(job_id: str, status: JobStatus, event: str):
             if worker:
                 task_queue.request_cancel(worker, task_id)
             task_queue.discard(task_id)
-            store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "script"},
-                                         task_status, worker)
+            store.repository.record_task(
+                {"job_id": job.job_id, "task_id": task_id, "task": "script"}, task_status, worker)
             job.script_task_id = None
         # Issue #122 P5/P6: an in-flight assembly attempt is fenced the same way.
         # The logical cancellation is immediate; the Worker is told to stop the
@@ -1831,7 +2244,8 @@ def _job_action(job_id: str, status: JobStatus, event: str):
                 submit_key = (snapshot.get("submit_key")
                               or job.assembly_submit_keys.get(str(version)))
                 if submit_key:
-                    state, reason = _cancel_and_release_state(job, submit_key=submit_key)
+                    state, reason = _cancel_and_release_state(
+                        job, submit_key=submit_key)
                     record_assembly_release(
                         job, submit_key=submit_key, snapshot=snapshot,
                         state=state, reason=reason, task_id=task_id,
@@ -1842,30 +2256,44 @@ def _job_action(job_id: str, status: JobStatus, event: str):
             _clear_assembly_staging(store.root, job.job_id)
             if job.stages and job.stages.get(StageName.ASSEMBLY.value) \
                     and job.stages[StageName.ASSEMBLY.value].status == StageStatus.RUNNING:
-                transition_stage(job, StageName.ASSEMBLY,
-                                 StageStatus.CANCELLED if status == JobStatus.CANCELLED
-                                 else StageStatus.PAUSED)
+                transition_stage(
+                    job,
+                    StageName.ASSEMBLY,
+                    StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
         for task_id, channel in list(job.publish_task_ids.items()):
             worker = job.assigned_worker
             if worker:
                 task_queue.request_cancel(worker, task_id)
             task_queue.discard(task_id)
-            store.repository.record_task({"job_id": job.job_id, "task_id": task_id, "task": "publish",
-                                           "channel": channel}, task_status, worker)
+            store.repository.record_task(
+                {
+                    "job_id": job.job_id,
+                    "task_id": task_id,
+                    "task": "publish",
+                    "channel": channel},
+                task_status,
+                worker)
         job.publish_task_ids.clear()
         job.active_task_ids.clear()
         job.tts_active_task_ids.clear()
         job.active_task_id = None
         job.assigned_worker = None
         if job.stages and job.stages[StageName.ASSETS.value].status == StageStatus.RUNNING:
-            transition_stage(job, StageName.ASSETS,
-                             StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
+            transition_stage(
+                job,
+                StageName.ASSETS,
+                StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
         if job.stages and job.stages[StageName.TTS.value].status == StageStatus.RUNNING:
-            transition_stage(job, StageName.TTS,
-                             StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
-        if job.stages and job.stages.get(StageName.SCRIPT.value) and job.stages[StageName.SCRIPT.value].status == StageStatus.RUNNING:
-            transition_stage(job, StageName.SCRIPT,
-                             StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
+            transition_stage(
+                job,
+                StageName.TTS,
+                StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
+        if job.stages and job.stages.get(
+                StageName.SCRIPT.value) and job.stages[StageName.SCRIPT.value].status == StageStatus.RUNNING:
+            transition_stage(
+                job,
+                StageName.SCRIPT,
+                StageStatus.CANCELLED if status == JobStatus.CANCELLED else StageStatus.PAUSED)
     elif status == JobStatus.NEW:
         for scene in job.scenes:
             if scene.status == StageStatus.PAUSED:

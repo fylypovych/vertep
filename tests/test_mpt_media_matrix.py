@@ -827,14 +827,25 @@ def test_the_runtime_is_never_asked_to_generate_or_publish(engine, runtime, tmp_
 
     used = sorted({path for _, path, _ in runtime.requests})
     assert used, "the attempt never reached the runtime, so nothing was proven"
-    assert used == sorted({
+
+    # Extract the task_id from the actual requests (polling /api/v1/tasks/{task_id})
+    # The pinned runtime returns a UUID in the live environment, or "task-1" in the stub.
+    task_id = None
+    for _, path, _ in runtime.requests:
+        if path.startswith("/api/v1/tasks/"):
+            task_id = path.split("/api/v1/tasks/")[1]
+            break
+    assert task_id, "no task status polling route found in requests"
+
+    expected_routes = {
         "/runtime",
         "/api/v1/video_materials",
         "/api/v1/voice",
         "/api/v1/videos",
-        "/api/v1/tasks/task-1",
-        "/api/v1/download/task-1/final-1.mp4",
-    }), f"the attempt used a route outside the agreed set: {used}"
+        f"/api/v1/tasks/{task_id}",
+        f"/api/v1/download/{task_id}/final-1.mp4",
+    }
+    assert used == sorted(expected_routes), f"the attempt used a route outside the agreed set: {used}"
 
     payload = _assert_submit_contract(runtime)
     assert payload["video_script"] == assets["script"], (

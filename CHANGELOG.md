@@ -70,6 +70,11 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.3.1
+- `core/api/job_helpers.py`: виправлено lint помилки (F401: прибрано невикористані імпорти `VideoVersion`, `build_script_prompt`; F841: прибрано невикористані змінні `identity`, `error`, `record`, `queued`, `worker_name`; F821: виправлено помилку `release_assembly_release` → `release_assembly_hold`; F541: виправлено f-string без плейсхолдерів; E127: виправлено over-indented continuation lines; додано відсутній імпорт `_progress` з `..pipeline`).
+- `core/api/tasks.py`: виправлено E131 continuation line alignment у функції `queue_tasks()`.
+- `tests/test_mpt_media_matrix.py`: виправлено `test_the_runtime_is_never_asked_to_generate_or_publish` для динамічного вилучення `task_id` з реальних запитів (підтримка UUID від справжнього pinned runtime).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.0
 - `scripts/vertep`: під час оновлення CORE backfills виконуються через compose-сервіс `migrate` з образу нового релізу; раніше `migrate.py` запускався в старому контейнері `core` за шляхом хоста, якого там немає, тож штатне оновлення CORE через update-agent мало падати з «PostgreSQL backfills failed» (#387 F1/F2).
 - `tests/test_standard_host_consumer_docker.py`: справжній Backup Service знімає дані, штатний consumer оновлює Worker, дані відновлюються, а контейнер Worker читає відновлені схвалення, квитанції й відповідності після оновлення, рестарту і rollback (#387 P4).
