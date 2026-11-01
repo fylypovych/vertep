@@ -105,13 +105,34 @@ def test_empty_voice_is_refused_before_post(engine, runtime, tmp_path):
         engine._stage_approved_voice(empty)
 
 
-def test_runtime_without_voice_staging_is_refused(engine, runtime, tmp_path):
+def test_runtime_without_voice_staging_is_refused(tmp_path):
     """#179.2: a runtime that cannot receive the approved voice (task_local_voice
-    false) is refused instead of letting it synthesise its own narration."""
-    runtime.without_voice_staging = True
-    with pytest.raises(BridgeContractError) as exc:
-        engine._require_task_local_voice()
+    false) is refused instead of letting it synthesise its own narration.
+
+    The capability fault is answered by a real HTTP endpoint (the stand-in no longer
+    carries this fault, #392), so the refusal is proven on the engine's own transport.
+    """
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    from publishers.transport import HttpTransport
+    from tests.test_mpt_media_matrix import _CapabilityFaultRuntime
+
+    _CapabilityFaultRuntime.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _CapabilityFaultRuntime)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        engine = MoneyPrinterEngine(url=f"http://127.0.0.1:{server.server_address[1]}",
+                                    token="capability-fault", transport=HttpTransport())
+        with pytest.raises(BridgeContractError) as exc:
+            engine._require_task_local_voice()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
     assert exc.value.code == REASON_VOICE_STAGING_UNSUPPORTED
+    assert _CapabilityFaultRuntime.requests == ["/runtime"]
 
 
 # ── #180.6: lost submit response — recovery without auto-resubmit ──

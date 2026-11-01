@@ -230,6 +230,7 @@ jobs:
           tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply
           tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart
           tests/test_standard_host_consumer_docker.py
+          tests/test_standard_core_consumer_docker.py
       - name: Upload fleet and connected restore evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -479,4 +480,6 @@ jobs:
         with:
           name: moneyprinter-pinned-runtime-${{ github.sha }}
           path: moneyprinter-runtime-evidence
-          if-no-files-found: error
+          # A failure before the runtime check may leave no evidence directory;
+          # preserve that original failing step instead of masking it here.
+          if-no-files-found: warn

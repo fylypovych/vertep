@@ -1,3 +1,7 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.6
+- **#390 F1/F2 (CORE role)**: додано `tests/test_standard_core_consumer_docker.py` — штатний `scripts/vertep` оновлює CORE-роль із PostgreSQL/Redis, міграціями й backfills; збій міграції повертає `ROLLED_BACK`, корельований із запитом, з відновленням БД із дампу.
+- `.github/workflows/ci.yml`: тест CORE-ролі підключено до job `fleet-persistence-runtime-acceptance`.
+- `tests/test_mpt_recovery.py`: виправлено регресію 0.0.3.5 — `test_runtime_without_voice_staging_is_refused` використовує реальний HTTP runtime без voice staging замість видаленого параметра.
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.5
 - **#391 B2**: додано тести executor trust boundary для unsafe archive, symlink, cross-origin атак (`test_safe_extract_rejects_symlink_member`, `test_safe_extract_rejects_path_traversal_member`, `test_safe_extract_rejects_absolute_path_member`, `test_safe_extract_rejects_cross_origin_hardlink`, `test_safe_extract_rejects_size_bomb`, `test_safe_extract_accepts_legitimate_archive`) у `tests/test_update_security.py`.
 - **#391 B3**: додано `simulate_bootstrap_failure_and_rollback()` у `scripts/qualify_ubuntu_bootstrap.py` — перевірка failure→rollback маршруту після activation: rollback executor викликається, система залишається healthy, credentials та certificate збережені.
