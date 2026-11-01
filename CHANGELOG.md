@@ -70,6 +70,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.3.2
+- `bootstrap.sh`: виправлено встановлення AMD ROCm — перевірка наявності `/dev/kfd` та `/dev/dri` перед спробою встановлення; на CI runners без AMD GPU установка пропускається, що усуває помилку "E: Unable to correct problems, you have held broken packages" (Issue #388 B3).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.1
 - `core/api/job_helpers.py`: виправлено lint помилки (F401: прибрано невикористані імпорти `VideoVersion`, `build_script_prompt`; F841: прибрано невикористані змінні `identity`, `error`, `record`, `queued`, `worker_name`; F821: виправлено помилку `release_assembly_release` → `release_assembly_hold`; F541: виправлено f-string без плейсхолдерів; E127: виправлено over-indented continuation lines; додано відсутній імпорт `_progress` з `..pipeline`).
 - `core/api/tasks.py`: виправлено E131 continuation line alignment у функції `queue_tasks()`.

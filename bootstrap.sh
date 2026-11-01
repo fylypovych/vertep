@@ -157,18 +157,27 @@ if [[ $gpu_vendor == nvidia ]]; then
   cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: \([^ ]*\).*/\1/p' | head -1); cuda=${cuda:-unavailable}
 elif [[ $gpu_vendor == amd ]]; then
   [[ $arch == amd64 ]] || fail "AMD ROCm runtime currently requires amd64"
-  progress "Installing AMD ROCm container runtime"
-  rocm_version=${VERTEP_ROCM_VERSION:-6.4.1}
-  curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key \
-    | gpg --dearmor -o /usr/share/keyrings/rocm.gpg
-  printf 'deb [arch=amd64 signed-by=/usr/share/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/%s noble main\n' "$rocm_version" \
-    > /etc/apt/sources.list.d/rocm.list
-  apt-get update -qq
-  apt-get install -y -qq rocm-hip-runtime rocminfo
-  [[ -c /dev/kfd && -d /dev/dri ]] || fail "AMD GPU devices /dev/kfd and /dev/dri are unavailable"
-  rocminfo >/dev/null || fail "ROCm runtime cannot access the AMD GPU"
-  driver=$(cat /sys/module/amdgpu/version 2>/dev/null || echo kernel)
-  cuda="rocm-$rocm_version"
+  # Skip ROCm installation if no actual AMD GPU hardware is present (e.g., CI runners)
+  if [[ ! -c /dev/kfd || ! -d /dev/dri ]]; then
+    progress "No AMD GPU hardware detected (/dev/kfd or /dev/dri missing); skipping ROCm installation"
+    gpu_vendor=none
+    gpu_name="GPU not found"
+    driver=unavailable
+    cuda=unavailable
+  else
+    progress "Installing AMD ROCm container runtime"
+    rocm_version=${VERTEP_ROCM_VERSION:-6.4.1}
+    curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key \
+      | gpg --dearmor -o /usr/share/keyrings/rocm.gpg
+    printf 'deb [arch=amd64 signed-by=/usr/share/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/%s noble main\n' "$rocm_version" \
+      > /etc/apt/sources.list.d/rocm.list
+    apt-get update -qq
+    apt-get install -y -qq rocm-hip-runtime rocminfo
+    [[ -c /dev/kfd && -d /dev/dri ]] || fail "AMD GPU devices /dev/kfd and /dev/dri are unavailable"
+    rocminfo >/dev/null || fail "ROCm runtime cannot access the AMD GPU"
+    driver=$(cat /sys/module/amdgpu/version 2>/dev/null || echo kernel)
+    cuda="rocm-$rocm_version"
+  fi
 fi
 
 progress "Preparing immutable Vertep runtime"
