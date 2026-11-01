@@ -127,21 +127,59 @@ def _terminate_process(process) -> None:
     if process is None or process.poll() is not None:
         return
     timeout = float(os.getenv("UPDATE_FENCE_KILL_TIMEOUT", "10"))
+    pid = process.pid
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                           capture_output=True, text=True)
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, text=True, timeout=timeout)
         else:
             import signal
+            # Try to kill the entire process group first
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                process.terminate()
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                # Fallback: kill the process and its children recursively
+                _kill_process_tree(pid, signal.SIGTERM)
+            # Wait for the process to exit
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Force kill if still alive
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    _kill_process_tree(pid, signal.SIGKILL)
+                process.wait(timeout=5)
     except Exception:
+        # Last resort
         try:
             process.kill()
         except Exception:
             pass
+
+
+def _kill_process_tree(pid: int, sig: int) -> None:
+    """Recursively kill a process and all its children using /proc on Linux."""
+    try:
+        # Read children from /proc/<pid>/task/<pid>/children
+        children_path = f"/proc/{pid}/task/{pid}/children"
+        if os.path.exists(children_path):
+            with open(children_path, "r") as f:
+                children = f.read().strip().split()
+            for child_pid_str in children:
+                try:
+                    child_pid = int(child_pid_str)
+                    _kill_process_tree(child_pid, sig)
+                except (ValueError, ProcessLookupError, PermissionError, OSError):
+                    pass
+    except (OSError, IOError):
+        pass
+    # Kill the process itself
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:

@@ -70,6 +70,9 @@
 
 ## Unreleased
 
+## ПРАВИЛЬНА НАЗВА: 0.0.3.3
+- `scripts/update-agent.py`: виправлено `_terminate_process` для надійного вбивання всього дерева процесів на arm64 контейнерах; додано fallback через `/proc` для рекурсивного вбивання дочірніх процесів, якщо `os.killpg` не спрацював (PermissionError), що виправляє тест `test_run_fenced_kills_child_processes_of_apply` (Issue #388 B2/B4).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.2
 - `bootstrap.sh`: виправлено встановлення AMD ROCm — перевірка наявності `/dev/kfd` та `/dev/dri` перед спробою встановлення; на CI runners без AMD GPU установка пропускається, що усуває помилку "E: Unable to correct problems, you have held broken packages" (Issue #388 B3).
 
