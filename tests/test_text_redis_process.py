@@ -100,7 +100,10 @@ def contour(tmp_path, monkeypatch, request):
         LOCAL_WORKER_FALLBACK="false", REQUIRE_WORKER_SELF_TEST="true",
         WATCHDOG_INTERVAL="0.2", HEARTBEAT_TIMEOUT="60" if getattr(request, "param", "heartbeat") == "lease" else "15", TASK_LEASE_SECONDS="15",
         OLLAMA_STORYBOARD_MAX_RETRIES="2", OLLAMA_SCRIPT_MAX_RETRIES="2", MAX_RETRIES="1",
-        LOG_ROOT=str(tmp_path / "logs"), AUTO_CLEANUP="false")
+        LOG_ROOT=str(tmp_path / "logs"), AUTO_CLEANUP="false",
+        # The contour polls every 0.1 s while it waits for a state change; the
+        # production per-client limit (300/min) is not what this boundary tests.
+        RATE_LIMIT_PER_MINUTE="100000")
     auth = "Basic " + base64.b64encode(b"admin:process-admin-password").decode()
     api = httpx.Client(base_url=f"http://127.0.0.1:{core_port}", timeout=20,
                        headers={"Authorization": auth, "x-vertep-token": TOKEN})

@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import struct
 import subprocess
 import wave
 import zlib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import numpy as np
@@ -324,13 +326,56 @@ class PinnedRuntime:
 # ---------------------------------------------------------------------------
 
 
+# #389 M1: with VERTEP_MPT_PINNED_URL/VERTEP_MPT_PINNED_TOKEN the same tests drive
+# the real pinned runtime container instead of the stand-in (CI job
+# ``moneyprinter-pinned-runtime``). Fault injection exists only in the stand-in.
+PINNED_URL = os.getenv("VERTEP_MPT_PINNED_URL", "").rstrip("/")
+PINNED_TOKEN = os.getenv("VERTEP_MPT_PINNED_TOKEN", "")
+STAND_IN_FAULTS = {"without_voice_staging", "corrupt_download"}
+
+
+class LivePinnedRuntime:
+    """Records the bridge traffic while the real pinned runtime answers it."""
+
+    def __init__(self) -> None:
+        from publishers.transport import HttpTransport
+
+        object.__setattr__(self, "requests", [])
+        object.__setattr__(self, "submits", [])
+        object.__setattr__(self, "_http", HttpTransport())
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in STAND_IN_FAULTS:
+            pytest.skip(f"{name} is a stand-in fault injection; not applicable to the pinned runtime")
+        object.__setattr__(self, name, value)
+
+    def _send(self, method: str, url: str, kwargs: dict) -> httpx.Response:
+        path = urlsplit(url).path
+        self.requests.append((method, path, dict(kwargs)))
+        if method == "POST" and path == "/api/v1/videos":
+            self.submits.append(kwargs.get("json"))
+        return getattr(self._http, method.lower())(url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> httpx.Response:
+        return self._send("POST", url, kwargs)
+
+    def get(self, url: str, **kwargs) -> httpx.Response:
+        return self._send("GET", url, kwargs)
+
+    def delete(self, url: str, **kwargs) -> httpx.Response:
+        return self._send("DELETE", url, kwargs)
+
+
 @pytest.fixture
 def runtime(tmp_path):
-    return PinnedRuntime(tmp_path)
+    return LivePinnedRuntime() if PINNED_URL else PinnedRuntime(tmp_path)
 
 
 @pytest.fixture
 def engine(runtime):
+    if PINNED_URL:
+        return MoneyPrinterEngine(url=PINNED_URL, token=PINNED_TOKEN, transport=runtime,
+                                  poll_interval=1.0, timeout=900.0)
     return MoneyPrinterEngine(url="http://engine:8000", transport=runtime,
                               poll_interval=0.01)
 

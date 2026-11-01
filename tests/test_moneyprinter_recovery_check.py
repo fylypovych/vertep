@@ -40,6 +40,18 @@ class FakeRuntime:
         if step == self.recovery.TAMPER:
             return {"status": 503, "body": {"reason": "voice_staging_failed"},
                     "tasks_before": list(self.tasks), "tasks": list(self.tasks)}
+        if step == self.recovery.MISSING:
+            before = list(self.tasks)
+            self.tasks.append(f"task-{len(self.tasks)}")
+            refused_status = 200 if self.fault == "missing-accepted" else 503
+            return {"refused": {"status": refused_status, "body": {"reason": "voice_staging_failed"}},
+                    "unknown": {"status": 404, "body": {"state": "unknown"}}, "same_marker": True,
+                    "retried": {"status": 200, "body": {}}, "tasks_before": before,
+                    "tasks": list(self.tasks)}
+        if step == self.recovery.CANCEL:
+            state = "running" if self.fault == "false-cancel" else "absent"
+            return {"status": 200, "absent_status": 404,
+                    "after": {"status": 200, "body": {"runtime_state": state}}}
         raise AssertionError(step)
 
     def restart(self):
@@ -68,3 +80,13 @@ def test_a_duplicate_upstream_task_fails_the_check():
 def test_a_key_lost_across_the_restart_fails_the_check():
     with pytest.raises(AssertionError, match="after a runtime restart"):
         run("lost-after-restart")
+
+
+def test_an_accepted_submit_without_a_staged_voice_fails_the_check():
+    with pytest.raises(AssertionError, match="missing staged voice is refused"):
+        run("missing-accepted")
+
+
+def test_a_running_task_reported_as_cancelled_fails_the_check():
+    with pytest.raises(AssertionError, match="never reports a running task"):
+        run("false-cancel")

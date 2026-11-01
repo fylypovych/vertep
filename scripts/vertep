@@ -284,7 +284,10 @@ case "${1:-status}" in
         "${compose[@]}" exec -T postgres \
           psql -v ON_ERROR_STOP=1 -U vertep -d vertep -c "INSERT INTO schema_migrations(version) VALUES('$version')"
       done
-      "${compose[@]}" exec -T core python3 "$release_root/scripts/migrate.py" || {
+      # Backfills belong to the release being activated: run them through its own
+      # `migrate` service image. The running core container is still the previous
+      # release and has no host release path mounted.
+      "${compose[@]}" run --rm --no-deps -T migrate || {
         echo "PostgreSQL backfills failed" >&2; exit 1; }
     fi
     mapfile -t selected_services < <(selected_runtime_services)

@@ -286,3 +286,113 @@ def test_failed_legacy_rescue_blocks_the_destructive_recreate(
     assert installation.served_version(before) == "0.0.0.1"
     assert installation.consumer_records(before) == records == _records_digest(root)
     assert not (root / "releases" / "0.0.0.2").exists()
+
+
+def _consumer_tree(container: str) -> dict[str, str]:
+    """sha256 of every file the running consumer sees below /data/storage."""
+    listing = _run("docker", "exec", container, "sh", "-c",
+                   "cd /data/storage && find . -type f | sort | xargs -r sha256sum")
+    return {name.removeprefix("./"): digest for digest, name in
+            (line.split(None, 1) for line in listing.splitlines() if line.strip())}
+
+
+def _host_tree(storage: Path) -> dict[str, str]:
+    return {path.relative_to(storage).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(storage.rglob("*")) if path.is_file()}
+
+
+@pytest.fixture
+def backup_service(installation, tmp_path):
+    """The real Backup Service process protecting the installation's data roots."""
+    import base64
+    import socket
+    import sys
+    import time
+
+    import httpx
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env = dict(os.environ, BACKUP_ROOT=str(tmp_path / "native-backups"),
+               BACKUP_CONFIG_ROOT=str(installation.root / "config"),
+               BACKUP_STORAGE_ROOT=str(installation.root / "storage"), BACKUP_SOURCES="",
+               BACKUP_RESTORE_STATE_DIR=str(tmp_path / "restore-state"),
+               BACKUP_ENCRYPTION_KEY=base64.b64encode(b"consumer-backup-key-32-bytes!!!!"[:32]).decode(),
+               BACKUP_PG_DUMP_CMD="", BACKUP_REDIS_DUMP_CMD="", BACKUP_CORE_URL="", CORE_ADDRESS="")
+    log = (tmp_path / "backup-service.log").open("w", encoding="utf-8")
+    process = subprocess.Popen([sys.executable, "-m", "uvicorn", "services.backup_service:app",
+                                "--host", "127.0.0.1", "--port", str(port)],
+                               cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+    client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=60)
+    deadline = time.monotonic() + 60
+    while True:
+        assert process.poll() is None, (tmp_path / "backup-service.log").read_text(encoding="utf-8")
+        try:
+            if client.get("/health").status_code == 200:
+                break
+        except httpx.HTTPError:
+            pass
+        assert time.monotonic() < deadline, "Backup Service did not become healthy"
+        time.sleep(0.2)
+    yield client
+    client.close()
+    process.terminate()
+    process.wait(timeout=15)
+    log.close()
+
+
+def test_native_restore_is_read_back_by_the_consumer_across_update_restart_and_rollback(
+        installation, backup_service, signed_update_server, tmp_path, monkeypatch):
+    """#387 P4: approvals, receipts and mappings snapshotted by the real Backup
+    Service are lost after an update, restored, and read back by the running worker
+    after the standard update, a restart and a rollback."""
+    root = installation.root
+    storage = root / "storage"
+    (storage / "receipts").mkdir()
+    (storage / "receipts" / "job-1.json").write_text('{"job": "job-1", "receipt": "pub-1"}\n',
+                                                     encoding="utf-8")
+    (storage / "mappings.json").write_text('{"job-1": "upstream-7"}\n', encoding="utf-8")
+    approved = _host_tree(storage)
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    snapshot = backup_service.post("/snapshots", json={"job_id": "consumer-proof"})
+    assert snapshot.status_code == 200, snapshot.text
+    snapshot_id = snapshot.json()["snapshot_id"]
+
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+    assert agent.process_request(root, state_dir, _request(state_dir, "6" * 32, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+
+    # Data loss after the update: an approval and a receipt disappear.
+    (storage / "records.json").write_text('{"approved": []}\n', encoding="utf-8")
+    (storage / "receipts" / "job-1.json").unlink()
+    assert _consumer_tree(installation.container()) != approved
+
+    challenge = backup_service.post(f"/snapshots/{snapshot_id}/restore")
+    assert challenge.status_code == 200, challenge.text
+    restored = backup_service.post(f"/snapshots/{snapshot_id}/restore/confirm",
+                                   params={"token": challenge.json()["confirmation_token"]})
+    assert restored.status_code == 200, restored.text
+    assert backup_service.get(f"/snapshots/{snapshot_id}/restore/progress").json()["status"] == "done"
+
+    updated = installation.container()
+    assert installation.served_version(updated) == "0.0.0.2"
+    assert _consumer_tree(updated) == approved == _host_tree(storage)
+
+    assert agent.process_request(root, state_dir, _request(state_dir, "7" * 32, "restart"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+    restarted = installation.container()
+    assert restarted != updated and _consumer_tree(restarted) == approved
+
+    assert agent.process_request(root, state_dir, _request(state_dir, "8" * 32, "rollback"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+    rolled_back = installation.container()
+    assert installation.served_version(rolled_back) == "0.0.0.1"
+    assert _consumer_tree(rolled_back) == approved

@@ -187,6 +187,11 @@ def test_update_applies_migrations_before_core_rebuild():
     migration = script.index('psql -v ON_ERROR_STOP=1 -U vertep -d vertep < "$migration"')
     core_rebuild = script.index('up -d --force-recreate --no-deps --remove-orphans')
     assert script.index("pg_isready") < migration < core_rebuild
+    # Backfills run from the activated release's own migrate image, never from a host
+    # release path inside the previous core container (it is not mounted there).
+    backfills = script.index("run --rm --no-deps -T migrate")
+    assert migration < backfills < core_rebuild
+    assert 'exec -T core python3 "$release_root/scripts/migrate.py"' not in script
     assert "systemctl enable --now vertep-update.path" in script
     assert "restart-runtime)" in script
     assert "VERTEP_UPDATE_STATUS_FILE" in script

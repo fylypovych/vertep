@@ -350,6 +350,37 @@ jobs:
             ${{ runner.temp }}/executor-${{ matrix.architecture }}/**
           if-no-files-found: error
 
+  ubuntu-bootstrap-lifecycle:
+    # #388 B3: run the real bootstrap.sh on a disposable Ubuntu 24.04 runner:
+    # pinned container runtime, latest published signed release, HTTPS handshake,
+    # certificate renewal picked up by the proxy reload, data/credentials kept
+    # across a bootstrap rerun.  The installed version is the latest *published*
+    # release; the evidence records it next to this SHA.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space for the appliance images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /opt
+      - name: Remove the runner's preinstalled Docker CE
+        # bootstrap.sh installs and verifies the pinned Ubuntu docker.io runtime.
+        run: |
+          sudo systemctl stop docker.socket docker containerd || true
+          sudo apt-get purge -y -qq docker-ce docker-ce-cli docker-ce-rootless-extras             containerd.io docker-buildx-plugin docker-compose-plugin             moby-engine moby-cli moby-buildx moby-compose moby-containerd moby-runc || true
+          sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/docker.sources
+          sudo rm -rf /var/lib/docker /var/lib/containerd
+      - name: Bootstrap, renew TLS and rerun
+        run: sudo -E python3 scripts/qualify_ubuntu_bootstrap.py --output "$RUNNER_TEMP/ubuntu-bootstrap/evidence.json"
+      - name: Upload Ubuntu bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ubuntu-bootstrap-${{ github.sha }}
+          path: ${{ runner.temp }}/ubuntu-bootstrap/
+          if-no-files-found: error
+
   persistence-trust-acceptance:
     # #374/#375: these checks must run against the runner's Linux Docker
     # daemon.  A local skipped Docker marker is never acceptance evidence.
@@ -399,7 +430,7 @@ jobs:
     # #376: this is the only proof that builds and executes the agreed pinned
     # upstream; fixture/stand-in tests cannot make this job green.
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -421,6 +452,21 @@ jobs:
         run: >-
           python scripts/moneyprinter-recovery-check.py --timeout 900
           --evidence moneyprinter-runtime-evidence/recovery.json
+      - name: Start the pinned runtime for the media matrix
+        run: python scripts/moneyprinter-recovery-check.py --timeout 900 --serve "$GITHUB_ENV"
+      - name: Run the agreed media matrix against the pinned runtime
+        # #389 M1: the same test IDs as the stand-in run, now through the real
+        # pinned submit/status/download route; stand-in fault injections are skipped.
+        run: >-
+          python -m pytest -q -rs -o junit_family=legacy
+          --junitxml=moneyprinter-runtime-evidence/media-matrix-pinned.xml
+          tests/test_mpt_media_matrix.py
+      - name: Stop the pinned runtime
+        if: always()
+        run: |
+          if [ -n "${VERTEP_MPT_PINNED_CONTAINER:-}" ]; then
+            python scripts/moneyprinter-recovery-check.py --stop "$VERTEP_MPT_PINNED_CONTAINER"
+          fi
       - name: Render MPT criterion evidence report
         run: >-
           python scripts/issue-122-acceptance-report.py

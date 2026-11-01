@@ -123,6 +123,28 @@ result = submit(arguments["key"], arguments["materials"], marker)
 print(json.dumps({**result, "tasks_before": before, "tasks": tasks()}))
 """
 
+MISSING = """
+arguments = json.loads(sys.argv[1])
+marker = stage_voice(2)
+staged = _voice_dir() / marker[len(VOICE_MARKER_PREFIX):]
+staged.unlink()
+before = tasks()
+refused = submit(arguments["key"], arguments["materials"], marker)
+unknown = reconcile(arguments["key"])
+restaged = stage_voice(2)
+retried = submit(arguments["key"], arguments["materials"], restaged)
+print(json.dumps({"refused": refused, "unknown": unknown, "same_marker": restaged == marker,
+                  "retried": retried, "tasks_before": before, "tasks": tasks()}))
+"""
+
+CANCEL = """
+arguments = json.loads(sys.argv[1])
+response = httpx.delete(f"{WRAPPER}/api/v1/videos/{arguments['key']}", headers=AUTH, timeout=60)
+absent = httpx.delete(f"{WRAPPER}/api/v1/videos/unknown-{arguments['key']}", headers=AUTH, timeout=60)
+print(json.dumps({"status": response.status_code, "absent_status": absent.status_code,
+                  "after": reconcile(arguments["key"])}))
+"""
+
 
 class Container:
     def __init__(self, check, name: str):
@@ -190,18 +212,74 @@ def scenario(container: Container, restart, evidence: dict) -> None:
     require(tampered["tasks"] == tampered["tasks_before"],
             "the tampered attempt created no upstream task", evidence)
 
+    # A missing approved voice is refused before POST; the attempt is not
+    # "recovered" by a late staging, and a retry after re-staging the same approved
+    # bytes creates exactly one task without losing the approved inputs.
+    missing = container.run(MISSING, {"key": f"missing-{secrets.token_hex(6)}", "materials": materials})
+    evidence["missing_voice"] = missing
+    require(missing["refused"]["status"] == 503
+            and missing["refused"]["body"].get("reason") == "voice_staging_failed",
+            "a missing staged voice is refused", evidence)
+    require(missing["unknown"]["status"] == 404 and missing["unknown"]["body"].get("state") == "unknown",
+            "a refused early-audio attempt is not reported as recovered", evidence)
+    require(missing["same_marker"], "re-staging the approved bytes yields the same marker", evidence)
+    require(missing["retried"]["status"] == 200
+            and len(missing["tasks"]) == len(missing["tasks_before"]) + 1,
+            "the retry after re-staging creates exactly one task", evidence)
+
+    # Cancel by the durable key: a running task is either refused with 409 and
+    # still reported as running, or cancelled; never "cancelled" while running.
+    cancelled = container.run(CANCEL, {"key": key})
+    evidence["cancel"] = cancelled
+    runtime_state = cancelled["after"]["body"].get("runtime_state")
+    require(cancelled["absent_status"] == 404, "cancelling an unknown key answers 404", evidence)
+    require((cancelled["status"] == 409 and runtime_state in {"running", "finished"})
+            # After the restart the upstream may no longer know the task at all.
+            or (cancelled["status"] in {200, 202, 204, 404} and runtime_state != "running"),
+            "cancel never reports a running task as stopped", evidence)
+
     unknown = container.run(RECONCILE, {"key": f"unknown-{secrets.token_hex(6)}"})
     evidence["unknown_key"] = unknown
     require(unknown["status"] == 404 and unknown["body"].get("state") == "unknown",
             "an unknown key reconciles to unknown", evidence)
 
 
+def serve(check, env_file: Path, timeout: int) -> int:
+    """Leave one pinned runtime running for pytest against the real container."""
+    name = f"moneyprinter-pinned-serve-{secrets.token_hex(4)}"
+    key_directory = Path(tempfile.mkdtemp(prefix="vertep-mpt-serve-key-"))
+    _key_file, api_key = check.write_api_key(key_directory)
+    if subprocess.run(["docker", "image", "inspect", check.IMAGE_NAME],
+                      capture_output=True).returncode != 0:
+        check.build_image((ROOT / "VERSION").read_text(encoding="utf-8").strip())
+    check.start_container(name, check.image_digest(check.IMAGE_NAME), key_directory)
+    port = check.mapped_port(name)
+    check.wait_for_wrapper(port, api_key, time.monotonic() + timeout)
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    with env_file.open("a", encoding="utf-8") as stream:
+        stream.write("".join(f"{key}={value}\n" for key, value in (
+            ("VERTEP_MPT_PINNED_URL", f"http://127.0.0.1:{port}"),
+            ("VERTEP_MPT_PINNED_TOKEN", api_key),
+            ("VERTEP_MPT_PINNED_CONTAINER", name))))
+    print(f"pinned runtime {name} serves http://127.0.0.1:{port}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--evidence", default="", help="JSON evidence file to write")
+    parser.add_argument("--serve", default="",
+                        help="start the pinned runtime, write its URL/token/container to this "
+                             "env file for later steps and leave it running")
+    parser.add_argument("--stop", default="", help="remove a runtime started with --serve")
     arguments = parser.parse_args()
     check = _runtime_check()
+    if arguments.stop:
+        subprocess.run(["docker", "rm", "-f", arguments.stop], capture_output=True)
+        return 0
+    if arguments.serve:
+        return serve(check, Path(arguments.serve), arguments.timeout)
     evidence: dict = {"issue": 389, "sha": subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()}
     name = f"moneyprinter-recovery-check-{secrets.token_hex(4)}"
