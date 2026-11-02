@@ -399,7 +399,6 @@ def test_native_restore_is_read_back_by_the_consumer_across_update_restart_and_r
     assert _consumer_tree(rolled_back) == approved
 
 
-
 # ---------------------------------------------------------------------------
 # #390 F1: the standard consumer updates a *running Vertep Worker* (published
 # release images) and CORE observes the new instance, version and self-test.
@@ -640,6 +639,83 @@ def test_update_timeout_and_retry_with_standard_consumer(
     updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
                                     timeout=180)
     assert updated.get("status") == "READY"
+
+
+def test_offline_target_rejected_without_mutation(fleet, signed_update_server, tmp_path, monkeypatch):
+    """#393 F1: offline target version is rejected without mutation."""
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+    before_container = fleet.container()
+
+    # Request a version that doesn't exist in update server
+    request_id = "x" * 32
+    result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "9.9.9.9"),
+                                 skip_drain=True)
+
+    assert result is False
+    status = _status(state_dir)
+    assert status["state"] == "FAILED"
+
+    # No mutation occurred
+    after_container = fleet.container()
+    assert after_container == before_container
+    assert fleet.served_version(after_container) == "0.0.0.1"
+
+
+def test_active_process_overlap_recovery_does_not_duplicate_work(installation, signed_update_server, tmp_path, monkeypatch):
+    """#393 F2: recovery from active process overlap does not duplicate work."""
+    import threading
+    import time
+
+    root = installation.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.2")
+    agent = _agent()
+
+    # Start first apply
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+    request_id_1 = "z" * 32
+
+    def cancel_during_apply() -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if any((root / "backups").glob("update-*/application.tar.gz")):
+                (state_dir / "cancel-fence.json").write_text(
+                    json.dumps({"operation_id": request_id_1}), encoding="utf-8")
+                return
+            time.sleep(0.05)
+
+    canceller = threading.Thread(target=cancel_during_apply)
+    canceller.start()
+
+    result_1 = agent.process_request(root, state_dir, _request(state_dir, request_id_1, "update", "0.0.0.2"),
+                                    skip_drain=True)
+    canceller.join()
+
+    assert result_1 is False
+    (state_dir / "cancel-fence.json").unlink()
+
+    # Recovery retry does not duplicate work - same release
+    request_id_2 = "zz" * 32
+    result_2 = agent.process_request(root, state_dir, _request(state_dir, request_id_2, "update", "0.0.0.2"),
+                                    skip_drain=True)
+    assert result_2 is True, _explain(state_dir, installation)
+
+    # Verify only one release directory created
+    releases = list((root / "releases").glob("0.0.0.2"))
+    assert len(releases) == 1, f"Expected 1 release directory, found {len(releases)}"
 
 
 def test_rollback_restores_previous_version_and_ready_state(

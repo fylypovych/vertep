@@ -1,0 +1,47 @@
+"""#393 P5: the criterion report reads JUnit and never infers PASS."""
+
+import importlib.util
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "report_criterion_390.py"
+
+
+def module():
+    spec = importlib.util.spec_from_file_location("report_criterion_390", SCRIPT)
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
+def _junit(path, results):
+    cases = []
+    for test_id, state in results.items():
+        module_path, name = test_id.split("::")
+        body = {"PASS": "", "FAIL": "<failure/>", "SKIPPED": "<skipped/>"}[state]
+        classname = module_path.removesuffix(".py").replace("/", ".")
+        cases.append(f'<testcase classname="{classname}" name="{name}">{body}</testcase>')
+    path.write_text("<testsuite>" + "".join(cases) + "</testsuite>", encoding="utf-8")
+    return path
+
+
+def test_without_junit_every_criterion_is_not_run():
+    report = module().report([])
+    assert {value["overall"] for value in report["criteria"].values()} == {"NOT_RUN"}
+
+
+def test_green_not_proof_tests_cap_the_criterion_at_partial(tmp_path):
+    target = module()
+    every = {test: "PASS" for tests in target.CRITERIA.values() for test in tests}
+    criteria = target.report([_junit(tmp_path / "all.xml", every)])["criteria"]
+    assert criteria["F3"]["overall"] == "PASS"  # no audited non-proof test in F3
+    assert criteria["F1"]["overall"] == "PARTIAL"
+    assert criteria["P4"]["overall"] == "PARTIAL"
+
+
+def test_skipped_is_not_run_and_failed_is_fail(tmp_path):
+    target = module()
+    telegram = target.CRITERIA["F3"][0]
+    skipped = target.report([_junit(tmp_path / "s.xml", {telegram: "SKIPPED"})])["criteria"]
+    assert skipped["F3"]["overall"] == "NOT_RUN"
+    failed = target.report([_junit(tmp_path / "f.xml", {telegram: "FAIL"})])["criteria"]
+    assert failed["F3"]["overall"] == "FAIL"

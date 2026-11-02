@@ -656,3 +656,140 @@ def test_tampered_signed_manifest_is_refused_before_any_host_mutation(
     assert not (root / "releases" / "0.0.0.2").exists()
     assert not (state_dir / "packages").exists() or not any((state_dir / "packages").iterdir())
     assert _health(root) == before, "a refused manifest still restarted the runtime"
+
+
+@pytest.mark.parametrize("member", ["symlink", "traversal"])
+def test_a_signed_unsafe_archive_is_refused_by_the_executor_without_activation(
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server, member):
+    """#394 B2: a correctly signed package whose archive escapes the staging root (a
+    symlink member or a ../ path) is refused by the executor's safe extraction; the
+    new release is never activated and the previous runtime keeps serving."""
+    import io
+
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    archive = tmp_path / "vertep-0.0.0.2.tar.gz"
+    with tarfile.open(archive, "w:gz") as package:
+        version = b"0.0.0.2"
+        info = tarfile.TarInfo("payload-0.0.0.2/VERSION")
+        info.size = len(version)
+        package.addfile(info, io.BytesIO(version))
+        if member == "symlink":
+            link = tarfile.TarInfo("payload-0.0.0.2/escape")
+            link.type, link.linkname = tarfile.SYMTYPE, "/etc"
+            package.addfile(link)
+        else:
+            outside = tarfile.TarInfo("../outside.txt")
+            outside.size = 1
+            package.addfile(outside, io.BytesIO(b"x"))
+    signed_update_server.publish("0.0.0.2", archive)
+    request = requests / ("6" * 32 + ".json")
+    request.write_text(json.dumps({"request_id": "6" * 32, "action": "update",
+                                   "target_version": "0.0.0.2"}), encoding="utf-8")
+
+    assert agent.process_request(root, state_dir, request, skip_drain=True) is False
+
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["request_id"] == "6" * 32 and status["state"] in {"FAILED", "ROLLED_BACK"}
+    assert _active_version(root) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+    assert not (tmp_path / "outside.txt").exists() and not (root.parent / "outside.txt").exists()
+    assert _health(root)["version"] == "0.0.0.1"
+
+
+@pytest.mark.parametrize(("dimension", "revoked", "trusted_version", "message"), [
+    ("revoke", True, 0, "revoked"),
+    ("rotation", False, 9, "rollback"),
+], ids=["revoke", "rotation"])
+def test_release_key_trust_is_enforced_by_the_executor_before_any_host_mutation(
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server,
+        dimension, revoked, trusted_version, message):
+    """#394 B2: with offline-root metadata the update executor refuses a release signed
+    by a revoked key, and root metadata rolled back below the trusted version (a key
+    rotation replayed backwards); release, packages and runtime stay unchanged."""
+    import base64
+    import hashlib
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    from core.update_trust import canonical_metadata
+
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    keyring, root_keys = tmp_path / "keyring", tmp_path / "root-keys"
+    keyring.mkdir()
+    root_keys.mkdir()
+    shutil.copyfile(signed_update_server.public_key, keyring / "release-1.pem")
+    root_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    (root_keys / "root-1.pem").write_bytes(root_key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+    metadata = {"version": 4, "expires_at": "2099-01-01T00:00:00Z", "threshold": 1,
+                "release_keys": {"release-1": {
+                    "sha256": hashlib.sha256((keyring / "release-1.pem").read_bytes()).hexdigest(),
+                    "channels": ["stable"], "revoked": revoked}}}
+    metadata["signatures"] = [{"key_id": "root-1", "signature": base64.b64encode(root_key.sign(
+        canonical_metadata(metadata), padding.PKCS1v15(), hashes.SHA256())).decode()}]
+    (tmp_path / "root.json").write_text(json.dumps(metadata), encoding="utf-8")
+    if trusted_version:
+        (state_dir / "trusted-root.json").write_text(json.dumps(
+            {"version": trusted_version, "metadata_sha256": "0" * 64}), encoding="utf-8")
+    monkeypatch.setenv("UPDATE_ROOT_METADATA", str(tmp_path / "root.json"))
+    monkeypatch.setenv("UPDATE_ROOT_KEYS", str(root_keys))
+    monkeypatch.setenv("UPDATE_PUBLIC_KEY", str(keyring))
+    signed_update_server.publish("0.0.0.2", _release_package(tmp_path, "0.0.0.2"),
+                                 key_id="release-1")
+    before = _health(root)
+    request = requests / ("7" * 32 + ".json")
+    request.write_text(json.dumps({"request_id": "7" * 32, "action": "update",
+                                   "target_version": "0.0.0.2"}), encoding="utf-8")
+
+    assert agent.process_request(root, state_dir, request, skip_drain=True) is False
+
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED" and status["request_id"] == "7" * 32
+    assert message in status["message"].lower(), (dimension, status["message"])
+    assert _active_version(root) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+    assert not (state_dir / "packages").exists() or not any((state_dir / "packages").iterdir())
+    assert _health(root) == before, f"refused {dimension} release still restarted the runtime"
+
+
+@pytest.mark.parametrize(("dimension", "version", "fields", "message"), [
+    ("expiry", "0.0.0.2", {"issued_at": "2020-01-01T00:00:00Z",
+                           "expires_at": "2020-01-02T00:00:00Z"}, "expired"),
+    ("channel", "0.0.0.2", {"channel": "beta"}, "channel"),
+    ("compatibility", "0.0.0.2", {"min_version": "9.0.0.0"}, "upgrade path"),
+    ("downgrade", "0.0.0.0", {}, "downgrade"),
+    ("cross_origin", "0.0.0.2", {"package_url": "https://evil.example/vertep-0.0.0.2.tar.gz"},
+     "outside"),
+], ids=["expiry", "channel", "compatibility", "downgrade", "cross_origin"])
+def test_validly_signed_but_untrusted_release_is_refused_before_any_host_mutation(
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server,
+        dimension, version, fields, message):
+    """#394 B2: the update executor entry refuses each trust-matrix row of a
+    correctly signed manifest; release, packages and runtime stay unchanged."""
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    signed_update_server.publish(version, _release_package(tmp_path, version), **fields)
+    before = _health(root)
+    request = requests / ("8" * 32 + ".json")
+    request.write_text(json.dumps({"request_id": "8" * 32, "action": "update",
+                                   "target_version": version}), encoding="utf-8")
+
+    assert agent.process_request(root, state_dir, request, skip_drain=True) is False
+
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED" and status["request_id"] == "8" * 32
+    assert message in status["message"].lower(), (dimension, status["message"])
+    assert _active_version(root) == "0.0.0.1"
+    assert not (root / "releases" / version).exists()
+    assert not (state_dir / "packages").exists() or not any((state_dir / "packages").iterdir())
+    assert _health(root) == before, f"refused {dimension} release still restarted the runtime"

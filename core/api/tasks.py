@@ -253,6 +253,17 @@ def claim_task(payload: TaskClaim, request: Request):
             for held_task_id in held_tasks:
                 task_queue.release(held_task_id)
             held_tasks.clear()
+            # A requeued attempt (expired lease) is still bound to its previous node;
+            # that binding is the fence, so it is dropped before the new owner takes the
+            # attempt and a late renew/result of the old node is refused (#395 M3, §5).
+            for previous in store.workers.values():
+                if (previous.get("node_name") != payload.node_name
+                        and previous.get("current_task") == task["task_id"]):
+                    previous.update(current_task=None, current_job=None,
+                                    status=previous.get("desired_state") or "READY")
+                    store.save_worker(previous)
+                    store.event(job, f"ASSEMBLY {task['task_id']} LEASE OF "
+                                     f"{previous.get('node_name')} EXPIRED; REASSIGNED")
             store.workers[payload.node_name] = worker_data
             store.workers[payload.node_name]["status"] = "BUSY"
             store.workers[payload.node_name]["current_job"] = job.job_id

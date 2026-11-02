@@ -23,6 +23,7 @@ import os
 import struct
 import subprocess
 import sys
+import time
 import zlib
 from contextlib import contextmanager
 from pathlib import Path
@@ -1273,6 +1274,39 @@ def test_a_separate_worker_process_refuses_an_attempt_whose_engine_drifted(
     assert "config_revision" in completed.stderr
     assert served == [], "a refused attempt must not pull a single approved input"
     assert not (node_root / "jobs" / finalized.job_id / "final").exists()
+
+
+def test_an_expired_lease_is_reassigned_and_the_late_owner_is_fenced(assembly_state):
+    """#395 M3: after lease expiry the attempt moves to another node with the same
+    submit key; the previous owner can neither renew nor import a late result."""
+    store, job = assembly_state["store"], assembly_state["job"]
+    queue = assembly_state["queue"]
+    _register_worker(store, "gpu-01")
+    _register_worker(store, "gpu-02")
+    task_id = _dispatch(assembly_state).assembly_task_id
+    first = _claim("gpu-01")["task"]
+
+    assert [item["task_id"] for item in queue.requeue_expired(now=time.time() + 3600)] == [task_id]
+    second = _claim("gpu-02")["task"]
+    assert second["task_id"] == task_id
+    assert second["submit_key"] == first["submit_key"], "reassignment must not resubmit upstream"
+    assert store.workers["gpu-01"]["current_task"] is None
+
+    with pytest.raises(HTTPException) as late_renew:
+        tasks_api.renew_task(TaskRenew(node_name="gpu-01", task_id=task_id), _Request())
+    assert late_renew.value.status_code == 409
+    data = _mp4(assembly_state["tmp_path"] / "render.mp4").read_bytes()
+    with pytest.raises(HTTPException) as late_result:
+        tasks_api.task_result(_result(job.job_id, task_id, data, node="gpu-01"), _Request())
+    assert late_result.value.status_code == 409
+    assert store.jobs[job.job_id].active_video_version is None
+
+    accepted = tasks_api.task_result(_result(job.job_id, task_id, data, node="gpu-02"), _Request())
+    assert accepted.active_video_version == 1
+    with pytest.raises(HTTPException) as duplicate:
+        tasks_api.task_result(_result(job.job_id, task_id, data, node="gpu-02"), _Request())
+    assert duplicate.value.status_code == 409
+    assert len(store.jobs[job.job_id].video_versions) == 1
 
 
 def test_renew_requires_the_owning_worker(assembly_state):

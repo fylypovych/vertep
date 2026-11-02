@@ -295,6 +295,20 @@ def test_update_package_github_allowlist_is_repository_scoped(monkeypatch, tmp_p
         protocol.download_package(manifest, tmp_path / "payload.tar.gz")
 
 
+def test_update_package_from_another_origin_is_refused_before_download(monkeypatch, tmp_path):
+    import core.update_protocol as protocol
+
+    monkeypatch.setenv("VERTEP_UPDATE_SERVER", "https://update.vertep.ai")
+    monkeypatch.setattr(protocol.urllib.request, "urlopen",
+                        lambda *_, **__: pytest.fail("cross-origin package was requested"))
+    destination = tmp_path / "payload.tar.gz"
+    for package in ("https://evil.example/payload.tar.gz", "http://update.vertep.ai/payload.tar.gz",
+                    "https://user:pw@update.vertep.ai/payload.tar.gz"):
+        with pytest.raises(RuntimeError, match="outside"):
+            protocol.download_package({"package": package, "sha256": "0" * 64}, destination)
+    assert not destination.exists()
+
+
 def test_manifest_read_retries_after_timeout(monkeypatch):
     import core.update_protocol as protocol
 

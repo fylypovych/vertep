@@ -48,6 +48,23 @@ class FakeRuntime:
                     "unknown": {"status": 404, "body": {"state": "unknown"}}, "same_marker": True,
                     "retried": {"status": 200, "body": {}}, "tasks_before": before,
                     "tasks": list(self.tasks)}
+        if step == self.recovery.LOST_RESPONSE:
+            before = list(self.tasks)
+            self.tasks.append(f"task-{len(self.tasks)}")
+            return {"tasks_before": before, "tasks": list(self.tasks), "reconciled": {
+                "status": 200, "body": {"state": "submitted", "data": {"task_id": self.tasks[-1]}}}}
+        if step == self.recovery.BUSY_CANCEL:
+            self.tasks.append(f"task-{len(self.tasks)}")
+            return {"submitted": {"status": 200}, "delete_status": 409,
+                    "after": {"body": {"runtime_state": "running"}}}
+        if step == self.recovery.WINDOW_ACCEPTANCE:
+            before = list(self.tasks)
+            self.tasks.append(f"task-{len(self.tasks)}")
+            survived = self.fault == "window-not-crashed"
+            return {"lost": {"status": 200} if survived else {"error": "RemoteProtocolError"},
+                    "exit_code": None if survived else 137, "window_state": "submitted",
+                    "task_id": "task-0", "task_voice_present": False,
+                    "tasks_before": before, "tasks": list(self.tasks)}
         if step == self.recovery.CANCEL:
             state = "running" if self.fault == "false-cancel" else "absent"
             return {"status": 200, "absent_status": 404,
@@ -80,6 +97,12 @@ def test_a_duplicate_upstream_task_fails_the_check():
 def test_a_key_lost_across_the_restart_fails_the_check():
     with pytest.raises(AssertionError, match="after a runtime restart"):
         run("lost-after-restart")
+
+
+def test_a_window_without_a_real_process_crash_fails_the_check():
+    """#395 M4: rewriting the record is not a stop between acceptance and staging."""
+    with pytest.raises(AssertionError, match="died before answering"):
+        run("window-not-crashed")
 
 
 def test_an_accepted_submit_without_a_staged_voice_fails_the_check():

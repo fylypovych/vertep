@@ -223,6 +223,7 @@ class PinnedRuntime:
         self.materials.mkdir(parents=True, exist_ok=True)
         self.requests: list[tuple[str, str, dict]] = []
         self.submits: list[dict] = []
+        self.keys: dict[str, str] = {}
         self.corrupt_download: bytes | None = None
         self._assembly = FFmpegAdapter()
 
@@ -249,7 +250,8 @@ class PinnedRuntime:
         if path == "/api/v1/video_materials":
             return self._upload_material(kwargs)
         if path == "/api/v1/videos":
-            return self._submit(kwargs["json"])
+            return self._submit(kwargs["json"], (kwargs.get("headers") or {}).get(
+                "x-vertep-submit-key"))
         match = re.fullmatch(r"/api/v1/tasks/(.+)", path)
         if match:
             return self._status(match.group(1))
@@ -274,10 +276,18 @@ class PinnedRuntime:
         return httpx.Response(200, json={"status": 200, "message": "success",
                                          "data": {"file": name}})
 
-    def _submit(self, payload: dict) -> httpx.Response:
+    def _submit(self, payload: dict, submit_key: str | None = None) -> httpx.Response:
+        # Same durable-key contract as the pinned wrapper: a repeated key is answered
+        # from its record instead of creating a second upstream task (§5).
+        if submit_key and submit_key in self.keys:
+            return httpx.Response(200, json={"status": 200, "message": "reconciled",
+                                             "data": {"task_id": self.keys[submit_key]}})
         self.submits.append(payload)
+        task_id = f"task-{len(self.submits)}"
+        if submit_key:
+            self.keys[submit_key] = task_id
         return httpx.Response(200, json={"status": 200, "message": "success",
-                                         "data": {"task_id": "task-1"}})
+                                         "data": {"task_id": task_id}})
 
     def _status(self, task_id: str) -> httpx.Response:
         if not self.submits:
@@ -986,83 +996,15 @@ def test_a_corrupted_download_is_never_registered(engine, runtime, tmp_path):
     assert not list((tmp_path / "final").glob("*-poststep.mp4"))
 
 
-def test_separate_core_and_worker_processes_with_pinned_mpt(tmp_path):
-    """#392 M2: separate CORE and Worker objects with different storage roots;
-    CORE does not render MPT directly; the worker submits to pinned runtime."""
-    from core.pipeline import JobStore
-    from core.repository import FileRepository
-
-    # CORE storage root
-    core_root = tmp_path / "core-storage"
-    core_root.mkdir(parents=True)
-    core_store = JobStore(root=str(core_root), repository=FileRepository(core_root))
-
-    # Worker storage root (different from CORE)
-    worker_root = tmp_path / "worker-storage"
-    worker_root.mkdir(parents=True)
-
-    # Create a job in CORE
-    job = core_store.create(
-        topic="MPT test", character_id="test_char", priority=5,
-        source="web", task_type="image", brand_id="brand01",
-    )
-    job.script = {"title": "MPT test", "scenes": [
-        {"prompt": "Kadr", "voiceover": "Text", "duration": 5}]}
-
-    # Worker has access to approved assets but not to CORE's internal state
-    assert core_root != worker_root
-    assert (core_root / job.job_id).exists()
-    assert not (worker_root / job.job_id).exists()
-
-
 def test_lease_expiry_reassigns_task_without_duplicate_submission(engine, runtime, tmp_path):
-    """#392 M3: lease expiry reassigns task without creating duplicate upstream work."""
+    """#395 M3: the node that takes over an expired attempt renders with the same
+    submit key; the pinned runtime reconciles it, so upstream work is not duplicated.
+    CORE-side reassignment/fencing: test_assembly_worker_route
+    ::test_an_expired_lease_is_reassigned_and_the_late_owner_is_fenced."""
     assets = _approved_assets(tmp_path)
-    
-    # First submit creates a task
-    submit1 = engine.render(tmp_path / "final" / "video-v1.mp4", **assets)
-    assert submit1.is_file()
-    
-    # Simulate lease expiry: same submit key with new lease should not create duplicate
-    # The runtime should respond with 409 (busy) or recognize the existing task
-    # This test validates the lease logic without actual time passage
-    from adapters.providers.video_engines import REASON_TASK_ABSENT
-    
-    # The runtime already has the task state from first submit
-    assert hasattr(runtime, "_submit_state") or True  # Task state tracked
-
-
-def test_restart_between_acceptance_and_staging_preserves_approved_inputs(tmp_path):
-    """#392 M4: restart in the acceptance→staging interval does not lose approved inputs."""
-    from core.pipeline import JobStore
-    from core.repository import FileRepository
-
-    root = tmp_path / "storage"
-    root.mkdir(parents=True)
-    store = JobStore(root=str(root), repository=FileRepository(root))
-
-    job = store.create(
-        topic="Restart test", character_id="test_char", priority=5,
-        source="web", task_type="image", brand_id="brand01",
-    )
-    job.script = {"title": "Restart test", "scenes": [
-        {"prompt": "Kadr", "voiceover": "Text", "duration": 5}]}
-
-    # Approved voice file
-    voice_path = tmp_path / "voice.wav"
-    _tone(voice_path, 1.0, VOICE_FREQUENCY)
-    voice_digest = hashlib.sha256(voice_path.read_bytes()).hexdigest()
-
-    # Stage approved voice
-    staging = root / job.job_id / "staging"
-    staging.mkdir(parents=True)
-    (staging / f"{voice_digest}.wav").write_bytes(voice_path.read_bytes())
-
-    # Simulate restart: fresh store over same root
-    restarted = JobStore(root=str(root), repository=FileRepository(root))
-    loaded = restarted.jobs[job.job_id]
-
-    # Approved inputs must survive restart
-    assert loaded.job_id == job.job_id
-    assert (staging / f"{voice_digest}.wav").exists()
-
+    key = f"job-lease-v1-{os.urandom(4).hex()}"
+    first = engine.render(tmp_path / "first" / "video-v1.mp4", submit_key=key, **assets)
+    submitted = len(runtime.submits)
+    taken_over = engine.render(tmp_path / "second" / "video-v1.mp4", submit_key=key, **assets)
+    assert len(runtime.submits) == submitted, "the reassigned attempt resubmitted upstream"
+    assert first.is_file() and taken_over.is_file()

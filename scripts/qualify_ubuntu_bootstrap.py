@@ -34,6 +34,7 @@ import re
 import socket
 import ssl
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,28 @@ def bootstrap(log: Path, overrides: dict[str, str] | None = None, *, expect_fail
 
 def active_release() -> str:
     return os.path.basename(os.readlink(INSTALL_ROOT / "current"))
+
+
+def adopt_release_layout() -> dict:
+    """Move a fresh flat bootstrap install into the immutable ``releases/`` layout.
+
+    Same steps as the legacy migration in ``vertep apply-update`` (installed
+    ``scripts/release-layout.py`` prepare + activate of the installed version), so
+    bootstrap's snapshot/activation/rollback path is reachable.  #394 B3.
+    """
+    if (INSTALL_ROOT / "current").is_symlink():
+        return {"migrated": False, "release": active_release()}
+    with tempfile.TemporaryDirectory(prefix="vertep-legacy-release.") as staging:
+        run("bash", "-c", "tar --exclude=.git --exclude=./backups --exclude=./runtime "
+            "--exclude=./releases --exclude=./current --exclude=./models --exclude=./storage "
+            "--exclude=./data --exclude=./logs --exclude='*.pyc' -cf - -C \"$1\" . "
+            "| tar -xf - -C \"$2\"", "_", str(INSTALL_ROOT), staging)
+        version = (Path(staging) / "VERSION").read_text(encoding="utf-8").strip()
+        layout = str(INSTALL_ROOT / "scripts" / "release-layout.py")
+        run("python3", layout, "prepare", str(INSTALL_ROOT), f"{staging}::{version}")
+        run("python3", layout, "activate", str(INSTALL_ROOT), version)
+    assert active_release() == version
+    return {"migrated": True, "release": version}
 
 
 def containers() -> list[dict]:
@@ -179,6 +202,7 @@ def bootstrap_failure_rollback(evidence_dir: Path) -> dict:
     healthy over HTTPS, and data, credentials and the certificate are unchanged.
     A following normal bootstrap run must succeed on the same installation.
     """
+    layout = adopt_release_layout()
     before = {"release": active_release(), "secrets": secret_fingerprints(),
               "certificate": certificate_sha256(), "markers": markers_present()}
     assert before["release"] != ROLLBACK_PROBE_RELEASE, "probe release is already active"
@@ -201,7 +225,7 @@ def bootstrap_failure_rollback(evidence_dir: Path) -> dict:
     after = {"release": active_release(), "secrets": secret_fingerprints(),
              "certificate": certificate_sha256(), "markers": markers_present()}
     result = {
-        "preflight": preflight, "failed_run": failed,
+        "release_layout": layout, "preflight": preflight, "failed_run": failed,
         "release_before": before["release"], "release_after": after["release"],
         "health_status_line": restored["health_status_line"],
         "presented_sha256": restored["presented_sha256"],

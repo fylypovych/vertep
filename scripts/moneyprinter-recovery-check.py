@@ -14,8 +14,9 @@ recovery paths of the bridge contract:
    reported as stopped while the upstream still runs it;
 5. the runtime container is restarted, and the key still reconciles to the same
    task id with the approved voice staged;
-6. a restart inside the acceptance→staging window completes the staging on the
-   retry without a second upstream task and without losing the approved input;
+6. a wrapper process killed inside the acceptance→staging window (after the upstream
+   accepted, before the voice was staged) is followed by a runtime restart; the retry
+   completes the staging without a second upstream task or losing the approved input;
 7. a tampered staged voice is refused before the upstream is contacted, so the
    upstream task count does not change;
 8. an unknown key reconciles to ``unknown`` instead of a false success.
@@ -193,22 +194,47 @@ print(json.dumps({"submitted": submitted, "delete_status": response.status_code,
                   "tasks": tasks()}))
 """
 
-# The acceptance→staging window: the wrapper has accepted the submit — the upstream
-# task exists — but the approved voice is not yet staged into the task directory. A
-# crash there is a process fault, so the durable record is put into exactly the state
-# the wrapper persists in that window ("submitted") and the runtime is restarted for
-# real before the retry. The retry must complete the staging without a second upstream
-# task and without losing the approved input.
+# The acceptance→staging window (#395 M4): a second, real wrapper process serves the
+# submit with the same durable state; its staging call is replaced by process death, so
+# it dies after the upstream accepted the task and the "submitted" record was written,
+# but before the approved voice reached the task directory. Nothing rewrites the record.
 WINDOW_ACCEPTANCE = """
+import os, socket, subprocess, time
+from services.moneyprinter_service import VOICE_TASK_FILENAME, marker_suffix
 arguments = json.loads(sys.argv[1])
-accepted = submit(arguments["key"], arguments["materials"], arguments["marker"])
-record = _submit_record(arguments["key"]) or {}
-_remember_submit(arguments["key"], task_id=record.get("task_id"),
-                 marker=arguments["marker"], state="submitted")
+CRASHING = '''
+import os, uvicorn, services.moneyprinter_service as service
+service._stage_task_voice = lambda *_args, **_kwargs: os._exit(137)
+uvicorn.run(service.app, host="127.0.0.1", port=8099, log_level="warning")
+'''
+process = subprocess.Popen([sys.executable, "-c", CRASHING])
+deadline = time.monotonic() + 120
+while True:
+    try:
+        socket.create_connection(("127.0.0.1", 8099), timeout=2).close()
+        break
+    except OSError:
+        if time.monotonic() > deadline or process.poll() is not None:
+            raise SystemExit("crashing wrapper did not start")
+        time.sleep(0.5)
+before = tasks()
+try:
+    answer = httpx.post("http://127.0.0.1:8099/api/v1/videos",
+                        headers={**AUTH, "x-vertep-submit-key": arguments["key"]},
+                        content=json.dumps(_submit_route_payload(
+                            arguments["materials"], arguments["marker"])).encode(), timeout=180)
+    lost = {"status": answer.status_code}
+except httpx.HTTPError as error:
+    lost = {"error": type(error).__name__}
+exit_code = process.wait(timeout=60)
 window = _submit_record(arguments["key"]) or {}
-print(json.dumps({"accepted": accepted, "window_state": window.get("state"),
-                  "task_id": window.get("task_id"), "tasks": tasks()}))
-"""
+task_id = window.get("task_id")
+task_voice = (Path(TASKS_DIR) / str(task_id)
+              / f"{VOICE_TASK_FILENAME}{marker_suffix(arguments['marker'])}")
+print(json.dumps({"lost": lost, "exit_code": exit_code, "window_state": window.get("state"),
+                  "task_id": task_id, "task_voice_present": task_voice.exists(),
+                  "tasks_before": before, "tasks": tasks()}))
+""".replace("TASKS_DIR", repr(TASKS_DIR))
 
 
 class Container:
@@ -299,10 +325,12 @@ def scenario(container: Container, restart, evidence: dict) -> None:
     window = container.run(WINDOW_ACCEPTANCE, {"key": window_key,
                                                "materials": materials, "marker": marker})
     evidence["window_acceptance"] = window
-    require(window["accepted"]["status"] == 200 and bool(window["task_id"]),
-            "the submit is accepted before the window restart", evidence)
-    require(window["window_state"] == "submitted",
-            "the approved voice is still unstaged when the runtime restarts", evidence)
+    require(window["exit_code"] == 137 and "status" not in window["lost"],
+            "the wrapper process died before answering the accepted submit", evidence)
+    require(bool(window["task_id"]) and len(window["tasks"]) == len(window["tasks_before"]) + 1,
+            "the upstream accepted exactly one task before the crash", evidence)
+    require(window["window_state"] == "submitted" and not window["task_voice_present"],
+            "the approved voice is not in the task directory after the crash", evidence)
     restart()
     window_after = container.run(RECONCILE, {"key": window_key})
     evidence["window_after_restart"] = window_after
@@ -316,6 +344,10 @@ def scenario(container: Container, restart, evidence: dict) -> None:
             and completed["body"]["data"].get("task_id") == window["task_id"]
             and completed["tasks"] == window_after["tasks"],
             "a restart between acceptance and staging loses no approved input", evidence)
+    staged = container.run(RECONCILE, {"key": window_key})
+    evidence["window_staged"] = staged
+    require(staged["body"].get("voice_staged") is True,
+            "the retry staged the approved voice into the accepted task", evidence)
 
     # A tampered approved voice never reaches the upstream.
     tampered = container.run(TAMPER, {"key": f"tampered-{secrets.token_hex(6)}", "materials": materials})

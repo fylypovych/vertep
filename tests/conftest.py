@@ -559,8 +559,8 @@ class SignedUpdateServer:
                 "UPDATE_PUBLIC_KEY": str(self.public_key), "UPDATE_CHANNEL": "stable",
                 "UPDATE_HTTP_RETRIES": "1"}
 
-    def publish(self, version: str, package: Path, *, tamper: bool = False) -> dict:
-        """Serve ``package`` as the signed stable release ``version``."""
+    def publish(self, version: str, package: Path, *, tamper: bool = False, **fields) -> dict:
+        """Serve ``package`` as the signed stable release ``version``; ``fields`` are signed too."""
         import base64
         import hashlib
         from cryptography.hazmat.primitives import hashes
@@ -574,7 +574,9 @@ class SignedUpdateServer:
         shutil.copyfile(package, target)
         manifest = {"version": version, "channel": "stable", "required": False,
                     "package": relative, "release_sequence": self.sequence,
-                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest(), **fields}
+        if "package_url" in manifest:  # a signed package URL on another origin
+            manifest["package"] = manifest.pop("package_url")
         manifest["signature"] = base64.b64encode(self._signing_key.sign(
             canonical_manifest(manifest), padding.PKCS1v15(), hashes.SHA256())).decode()
         if tamper:

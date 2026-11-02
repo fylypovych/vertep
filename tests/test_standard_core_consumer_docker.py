@@ -35,6 +35,8 @@ services:
   core:
     image: ${VERTEP_CORE_IMAGE}
     command: ["uvicorn", "core.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    # The host consumer snapshots ./config as the CI user; production runs both as root.
+    user: "${VERTEP_HOST_UID}:${VERTEP_HOST_GID}"
     env_file: .env
     environment:
       DATABASE_URL: "host=postgres port=5432 dbname=vertep user=vertep password=${POSTGRES_PASSWORD}"
@@ -164,7 +166,9 @@ def core_installation(tmp_path, monkeypatch):
         f"VERTEP_REDIS_IMAGE={images['redis']['reference']}@{images['redis']['digest']}",
         "POSTGRES_PASSWORD=ci-consumer-postgres", "REDIS_PASSWORD=ci-consumer-redis",
         "ADMIN_USER=admin", "ADMIN_PASSWORD=ci-consumer-admin",
-        f"VERTEP_CORE_URL=http://127.0.0.1:{port}", f"VERTEP_FLEET_CORE_PORT={port}", ""]),
+        f"VERTEP_CORE_URL=http://127.0.0.1:{port}", f"VERTEP_FLEET_CORE_PORT={port}",
+        f"VERTEP_HOST_UID={os.getuid() if hasattr(os, 'getuid') else 0}",
+        f"VERTEP_HOST_GID={os.getgid() if hasattr(os, 'getgid') else 0}", ""]),
         encoding="utf-8")
     installation = CoreInstallation(root, project)
     installation.port = port
@@ -241,8 +245,18 @@ def test_a_failing_migration_rolls_core_back_with_the_database_restored(
     restored = core_installation.core_container()
     assert restored, "CORE is not running after the rollback"
     assert RELEASE_IMAGES["0.0.0.1"] in _run("docker", "inspect", "--format", "{{.Config.Image}}", restored)
-    assert core_installation.healthy() == 200
+
+    # Health check after rollback
+    assert core_installation.healthy() == 200, "CORE not healthy after rollback"
+
+    # Database rollback: half-applied migration must be rolled back
     assert core_installation.psql("SELECT to_regclass('public.ci_release_marker')") == "", \
         "the half-applied migration survived the rollback"
-    assert core_installation.psql("SELECT value FROM ci_data") == "before-update"
-    assert (root / "storage" / "records.json").read_text(encoding="utf-8") == '{"approved": ["job-1"]}\n'
+
+    # Data must be restored
+    assert core_installation.psql("SELECT value FROM ci_data") == "before-update", \
+        "data not restored after rollback"
+
+    # Storage must be preserved
+    assert (root / "storage" / "records.json").read_text(encoding="utf-8") == '{"approved": ["job-1"]}\n', \
+        "storage not preserved after rollback"

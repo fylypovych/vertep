@@ -69,7 +69,16 @@ def test_b2_passes_only_with_matching_executor_architecture_and_no_skips(tmp_pat
     host = {"returncode": 0, "pytest": _clean()}
     good = {"returncode": 0, "machine": "aarch64", "pytest": _clean(),
             "junit": _junit(tmp_path / "all.xml", target)}
+    assert target.criteria(good, host, "arm64")["B4"] == "PASS"
+    # #394: every row now has executor-entry proof; component-only rows cap B2.
+    rows = target.b4_dimension_report(good, host, "arm64")["dimensions"]
+    assert {row["proof"] for row in rows.values()} == {"executor-entry"}
     assert target.criteria(good, host, "arm64")["B2"] == "PASS"
+    entry_skipped = {**good, "junit": _junit(tmp_path / "entry.xml", target,
+                                             set(target.EXECUTOR_ENTRY_TESTS))}
+    assert {row["proof"] for row in target.b4_dimension_report(
+        entry_skipped, host, "arm64")["dimensions"].values()} <= {"component", "NOT_RUN"}
+    assert target.criteria(entry_skipped, host, "arm64")["B2"] != "PASS"
     assert target.criteria({**good, "machine": "x86_64"}, host, "arm64")["B2"] == "FAIL"
     assert target.criteria({**good, "pytest": {**_clean(), "skipped": 1}}, host, "arm64")["B2"] != "PASS"
     assert target.criteria(good, {**host, "returncode": 1}, "arm64")["B2"] != "PASS"

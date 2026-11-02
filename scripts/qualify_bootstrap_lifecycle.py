@@ -26,13 +26,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TAMPER_EXECUTOR_TEST = ("tests/test_core_rollout_coordinator.py::"
                         "test_tampered_signed_manifest_is_refused_before_any_host_mutation")
+UNTRUSTED_EXECUTOR_TEST = ("tests/test_core_rollout_coordinator.py::"
+                           "test_validly_signed_but_untrusted_release_is_refused_before_any_host_mutation")
+KEY_TRUST_EXECUTOR_TEST = ("tests/test_core_rollout_coordinator.py::"
+                           "test_release_key_trust_is_enforced_by_the_executor_before_any_host_mutation")
+ARCHIVE_EXECUTOR_TEST = ("tests/test_core_rollout_coordinator.py::"
+                         "test_a_signed_unsafe_archive_is_refused_by_the_executor_without_activation")
+RECOVERY_EXECUTOR_TESTS = [
+    "tests/test_core_rollout_coordinator.py::test_failed_apply_rolls_back_runtime_instance_and_can_be_retried",
+    "tests/test_core_rollout_coordinator.py::test_interrupted_apply_recovers_previous_runtime_instance_after_restart",
+]
+CROSS_ORIGIN_TEST = ("tests/test_updates.py::"
+                     "test_update_package_from_another_origin_is_refused_before_download")
 EXECUTOR_TARGETS = (
     "tests/test_safe_update.py",
     "tests/test_update_security.py",
     "tests/test_bootstrap_wizard.py",
     "tests/test_release_hardening.py",
     TAMPER_EXECUTOR_TEST,
+    UNTRUSTED_EXECUTOR_TEST,
+    KEY_TRUST_EXECUTOR_TEST,
+    ARCHIVE_EXECUTOR_TEST,
+    *RECOVERY_EXECUTOR_TESTS,
+    CROSS_ORIGIN_TEST,
+    "tests/test_updates.py::test_update_package_github_allowlist_is_repository_scoped",
 )
+# #394 B4: a row is executor-boundary proof only when one of its tests drives the real
+# update agent entry (process_request) against a signed HTTPS origin and asserts that
+# release, packages and runtime stayed unchanged.  Other passing tests are component proof.
+EXECUTOR_ENTRY_TESTS = {TAMPER_EXECUTOR_TEST} | {
+    f"{UNTRUSTED_EXECUTOR_TEST}[{row}]"
+    for row in ("expiry", "channel", "compatibility", "downgrade", "cross_origin")} | {
+    f"{KEY_TRUST_EXECUTOR_TEST}[{row}]" for row in ("revoke", "rotation")} | {
+    f"{ARCHIVE_EXECUTOR_TEST}[{row}]" for row in ("symlink", "traversal")} | set(RECOVERY_EXECUTOR_TESTS)
 HOST_TARGETS = ("tests/test_apply_deployment_docker.py",)
 EXPECTED_MACHINE = {"amd64": "x86_64", "arm64": "aarch64"}
 EXECUTOR_IMAGE = "python:3.12-slim"
@@ -49,24 +75,30 @@ EXECUTOR_TRUST_DIMENSIONS = {
         "tests/test_safe_update.py::test_signed_manifest_and_compatibility",
     ],
     "expiry": [
+        f"{UNTRUSTED_EXECUTOR_TEST}[expiry]",
         "tests/test_safe_update.py::test_manifest_keyring_channel_and_validity",
     ],
     "revoke": [
+        f"{KEY_TRUST_EXECUTOR_TEST}[revoke]",
         "tests/test_update_security.py::test_root_metadata_threshold_rotation_and_release_authorization",
     ],
     "channel": [
+        f"{UNTRUSTED_EXECUTOR_TEST}[channel]",
         "tests/test_safe_update.py::test_manifest_keyring_channel_and_validity",
     ],
     "downgrade": [
+        f"{UNTRUSTED_EXECUTOR_TEST}[downgrade]",
         "tests/test_update_security.py::test_update_rejects_downgrade",
         "tests/test_release_hardening.py::test_bootstrap_refuses_to_downgrade_an_installed_system[0.0.2.96-0.0.2.95--True]",
         "tests/test_release_hardening.py::test_bootstrap_refuses_to_downgrade_an_installed_system[0.0.2.100-0.0.2.99--True]",
     ],
     "rotation": [
+        f"{KEY_TRUST_EXECUTOR_TEST}[rotation]",
         "tests/test_update_security.py::test_root_metadata_threshold_rotation_and_release_authorization",
         "tests/test_safe_update.py::test_release_sequence_rejects_replay_and_equivocation",
     ],
     "recovery": [
+        *RECOVERY_EXECUTOR_TESTS,
         "tests/test_update_security.py::test_interrupted_update_recovery_after_restart_rolls_back",
         "tests/test_update_security.py::test_recover_if_interrupted_unreadable_status_with_evidence",
         "tests/test_update_security.py::test_recover_blocks_on_cancel_fence",
@@ -77,21 +109,26 @@ EXECUTOR_TRUST_DIMENSIONS = {
         "tests/test_update_security.py::test_run_fenced_kills_child_processes_of_apply",
     ],
     "unsafe_archive": [
+        f"{ARCHIVE_EXECUTOR_TEST}[traversal]",
         "tests/test_update_security.py::test_safe_extract_rejects_symlink_member",
         "tests/test_update_security.py::test_safe_extract_rejects_path_traversal_member",
         "tests/test_update_security.py::test_safe_extract_rejects_absolute_path_member",
         "tests/test_update_security.py::test_safe_extract_rejects_size_bomb",
         "tests/test_update_security.py::test_safe_extract_accepts_legitimate_archive",
+        "tests/test_update_security.py::test_safe_extract_rejects_cross_origin_hardlink",
     ],
     "symlink": [
+        f"{ARCHIVE_EXECUTOR_TEST}[symlink]",
         "tests/test_update_security.py::test_safe_extract_rejects_symlink_member",
     ],
+    # Package URL origin check in core.update_protocol.download_package (not archive members).
     "cross_origin": [
-        "tests/test_update_security.py::test_safe_extract_rejects_cross_origin_hardlink",
-        "tests/test_update_security.py::test_safe_extract_rejects_path_traversal_member",
-        "tests/test_update_security.py::test_safe_extract_rejects_absolute_path_member",
+        f"{UNTRUSTED_EXECUTOR_TEST}[cross_origin]",
+        "tests/test_updates.py::test_update_package_from_another_origin_is_refused_before_download",
+        "tests/test_updates.py::test_update_package_github_allowlist_is_repository_scoped",
     ],
     "compatibility": [
+        f"{UNTRUSTED_EXECUTOR_TEST}[compatibility]",
         "tests/test_safe_update.py::test_rolling_compatibility_rejects_contract_migrations",
         "tests/test_safe_update.py::test_signed_manifest_and_compatibility",
     ],
@@ -153,13 +190,13 @@ def criteria(executor: dict, host: dict, architecture: str) -> dict[str, str]:
                and not any(host.get("pytest", {}).get(key) for key in ("failed", "error", "skipped")))
     # B2 is PASS only when every trust row passed on this architecture, never from totals.
     # B3 is proven by the Ubuntu bootstrap job (qualify_ubuntu_bootstrap.py), not here.
-    statuses = {row["status"] for row in
-                b4_dimension_report(executor, host, architecture)["dimensions"].values()}
-    if executor_ok and host_ok and statuses == {"PASS"}:
-        b2 = "PASS"
-    else:
-        b2 = "PARTIAL" if statuses - {"NOT_RUN"} else "FAIL"
-    b4 = "PASS" if b2 == "PASS" else ("PARTIAL" if statuses - {"NOT_RUN"} else "FAIL")
+    # B2 additionally needs executor-entry proof on every row (#394), B4 a complete report.
+    rows = b4_dimension_report(executor, host, architecture)["dimensions"].values()
+    statuses = {row["status"] for row in rows}
+    complete = executor_ok and host_ok and statuses == {"PASS"}
+    ran = "PARTIAL" if statuses - {"NOT_RUN"} else "FAIL"
+    b2 = "PASS" if complete and {row["proof"] for row in rows} == {"executor-entry"} else ran
+    b4 = "PASS" if complete else ran
     return {"B1": "NOT_RUN", "B2": b2, "B3": "NOT_RUN", "B4": b4}
 
 
@@ -190,6 +227,8 @@ def b4_dimension_report(executor: dict, host: dict, architecture: str) -> dict:
         status = "PASS" if len(passed) == len(test_ids) else ("PARTIAL" if passed else "NOT_RUN")
         dimensions[dimension] = {
             "status": status,
+            "proof": ("executor-entry" if any(test in EXECUTOR_ENTRY_TESTS for test in passed)
+                      else "component" if passed else "NOT_RUN"),
             "test_ids": test_ids,
             "missing": [test_id for test_id in test_ids if test_id not in passed_ids],
             "executor_architecture": executor.get("machine", "NOT_RUN"),
