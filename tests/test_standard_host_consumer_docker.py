@@ -426,6 +426,8 @@ services:
       REDIS_URL: ""
       USERS_JSON: ""
       HEARTBEAT_TIMEOUT: "120"
+      # The tests poll CORE from one host address; the 300/min default answered 429.
+      RATE_LIMIT_PER_MINUTE: "100000"
     volumes:
       - ${VERTEP_FLEET_CORE_CONFIG}:/data/config
     ports:
@@ -683,55 +685,6 @@ def test_offline_target_rejected_without_mutation(fleet, signed_update_server, t
     after_container = fleet.container()
     assert after_container == before_container
     assert fleet.served_version(after_container) == "0.0.0.1"
-
-
-def test_active_process_overlap_recovery_does_not_duplicate_work(installation, signed_update_server, tmp_path, monkeypatch):
-    """#393 F2: recovery from active process overlap does not duplicate work."""
-    import threading
-    import time
-
-    root = installation.root
-    state_dir = tmp_path / "update-state"
-    state_dir.mkdir()
-    monkeypatch.setenv("VERTEP_ROOT", str(root))
-    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
-    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
-    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.2")
-    agent = _agent()
-
-    # Start first apply
-    signed_update_server.publish("0.0.0.2", _archive(
-        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
-    request_id_1 = "7a" * 16
-
-    def cancel_during_apply() -> None:
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            if any((root / "backups").glob("update-*/application.tar.gz")):
-                (state_dir / "cancel-fence.json").write_text(
-                    json.dumps({"operation_id": request_id_1}), encoding="utf-8")
-                return
-            time.sleep(0.05)
-
-    canceller = threading.Thread(target=cancel_during_apply)
-    canceller.start()
-
-    result_1 = agent.process_request(root, state_dir, _request(state_dir, request_id_1, "update", "0.0.0.2"),
-                                    skip_drain=True)
-    canceller.join()
-
-    assert result_1 is False
-    (state_dir / "cancel-fence.json").unlink()
-
-    # Recovery retry does not duplicate work - same release
-    request_id_2 = "7a7b" * 8
-    result_2 = agent.process_request(root, state_dir, _request(state_dir, request_id_2, "update", "0.0.0.2"),
-                                    skip_drain=True)
-    assert result_2 is True, _explain(state_dir, installation)
-
-    # Verify only one release directory created
-    releases = list((root / "releases").glob("0.0.0.2"))
-    assert len(releases) == 1, f"Expected 1 release directory, found {len(releases)}"
 
 
 def test_rollback_restores_previous_version_and_ready_state(

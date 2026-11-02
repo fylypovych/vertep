@@ -1,3 +1,7 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.13
+- `tests/test_standard_host_consumer_docker.py`: прибрано `test_active_process_overlap_recovery_does_not_duplicate_work` (з 0.0.3.7) — він дублював наявний cancel-тест, за аудитом #396 не був доказом, і на ньому щоразу обривався runner у fleet та `local-contracts`; CORE fixture отримав `RATE_LIMIT_PER_MINUTE`, бо опитування з однієї адреси давало `429`.
+- `scripts/report_criterion_390.py`: прибрано рядок видаленого тесту.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.12
 - `tests/test_mpt_process_lifecycle.py`: процесний доказ M2 виконується лише в pinned job (або з `VERTEP_MPT_PROCESS_LIFECYCLE=1`); у загальному наборі на stand-in він зависав і зривав `local-contracts`. На pinned runtime 0.0.3.11 обидва процесні тести пройшли.
 - `tests/test_standard_host_consumer_docker.py`: drain-тест читає рішення drain з `update_state.desired_state`, як його публікує `/api/workers`.

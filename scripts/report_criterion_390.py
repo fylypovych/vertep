@@ -35,7 +35,6 @@ CRITERIA = {
         f"{HOST}::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect",
         f"{HOST}::test_db_loss_during_active_apply_blocks_mutation_and_correlates_result",
         f"{HOST}::test_recovery_does_not_overlap_with_previous_apply",
-        f"{HOST}::test_active_process_overlap_recovery_does_not_duplicate_work",
         f"{CORE}::test_standard_consumer_updates_core_with_migrations_and_backfills",
         f"{CORE}::test_a_failing_migration_rolls_core_back_with_the_database_restored",
     ],
@@ -71,8 +70,6 @@ NOT_PROOF = {
         "reads files via docker exec sha256sum, not the application reader",
     f"{HOST}::test_offline_target_rejected_without_mutation":
         "requests a version that is not published; no offline node is involved",
-    f"{HOST}::test_active_process_overlap_recovery_does_not_duplicate_work":
-        "cancel then sequential retry counting release directories; no DB/lease loss or overlap",
 }
 
 
