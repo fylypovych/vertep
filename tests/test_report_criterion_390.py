@@ -45,3 +45,13 @@ def test_skipped_is_not_run_and_failed_is_fail(tmp_path):
     assert skipped["F3"]["overall"] == "NOT_RUN"
     failed = target.report([_junit(tmp_path / "f.xml", {telegram: "FAIL"})])["criteria"]
     assert failed["F3"]["overall"] == "FAIL"
+
+
+def test_junit_of_another_sha_is_never_counted(tmp_path):
+    """#396 P5: evidence of a different commit is NOT_RUN, not PASS."""
+    target = module()
+    every = {test: "PASS" for tests in target.CRITERIA.values() for test in tests}
+    junit = _junit(tmp_path / "all.xml", every)
+    value = target.report([junit], run_sha="0" * 40)
+    assert {row["overall"] for row in value["criteria"].values()} == {"NOT_RUN"}
+    assert "error" in value and value["junit_sha256"][str(junit)]

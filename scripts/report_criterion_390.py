@@ -10,7 +10,9 @@ they still report their own result, but the criterion can never be PASS on them.
 """
 
 import argparse
+import hashlib
 import json
+import os
 import platform
 import subprocess
 import xml.etree.ElementTree as ET
@@ -59,8 +61,6 @@ CRITERIA = {
 NOT_PROOF = {
     f"{HOST}::test_update_timeout_and_retry_with_standard_consumer":
         "one successful update; no timeout or retry is exercised",
-    f"{HOST}::test_standard_consumer_drains_and_admits_workers_during_update":
-        "reads drain status and applies with skip_drain=True; no admission attempt",
     f"{HOST}::test_canary_promotion_flow_with_standard_consumer":
         "waits for the previous version after update; promotion not proven",
     f"{HOST}::test_db_loss_during_active_apply_blocks_mutation_and_correlates_result":
@@ -69,6 +69,10 @@ NOT_PROOF = {
         "starts from a signature refusal before apply; no active apply to overlap",
     f"{HOST}::test_application_consumer_reads_back_versions_and_approvals":
         "reads files via docker exec sha256sum, not the application reader",
+    f"{HOST}::test_offline_target_rejected_without_mutation":
+        "requests a version that is not published; no offline node is involved",
+    f"{HOST}::test_active_process_overlap_recovery_does_not_duplicate_work":
+        "cancel then sequential retry counting release directories; no DB/lease loss or overlap",
 }
 
 
@@ -87,8 +91,12 @@ def junit_results(paths: list[Path]) -> dict[str, str]:
     return results
 
 
-def report(paths: list[Path]) -> dict:
-    results = junit_results(paths)
+def report(paths: list[Path], run_sha: str | None = None) -> dict:
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                         capture_output=True, text=True).stdout.strip()
+    # #396 P5: JUnit is counted only for the exact SHA it was produced from.
+    foreign = bool(run_sha) and run_sha != sha
+    results = {} if foreign else junit_results(paths)
     criteria = {}
     for criterion, test_ids in CRITERIA.items():
         rows = []
@@ -108,9 +116,10 @@ def report(paths: list[Path]) -> dict:
         else:
             overall = "NOT_RUN"
         criteria[criterion] = {"overall": overall, "tests": rows}
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
-                         capture_output=True, text=True).stdout.strip()
-    return {"issue": "i.0.0.3.93", "harness_sha": sha,
+    return {"issue": "i.0.0.3.96", "harness_sha": sha, "run_sha": run_sha or sha,
+            **({"error": f"JUnit run SHA {run_sha} is not the checked-out {sha}"} if foreign else {}),
+            "junit_sha256": {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                             for path in paths if path.is_file()},
             "environment": {"system": platform.platform(), "machine": platform.machine()},
             "junit": [str(path) for path in paths], "criteria": criteria,
             "summary": {status: sum(1 for value in criteria.values() if value["overall"] == status)
@@ -121,8 +130,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--junit", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path, default=ROOT / "reports" / "criterion-390.json")
+    parser.add_argument("--run-sha", default=os.getenv("GITHUB_SHA"),
+                        help="commit the JUnit was produced from (defaults to GITHUB_SHA)")
     arguments = parser.parse_args()
-    value = report(arguments.junit)
+    value = report(arguments.junit, arguments.run_sha)
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(value["summary"]))

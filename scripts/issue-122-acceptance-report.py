@@ -64,6 +64,15 @@ PINNED_SNAPSHOT = "runtime-snapshot.json"
 PINNED_RECOVERY = "recovery.json"
 PINNED_MEDIA_MATRIX = "media-matrix-pinned.xml"
 PINNED_ARTEFACTS = (PINNED_SNAPSHOT, PINNED_RECOVERY, PINNED_MEDIA_MATRIX)
+#: #397 M2: separate CORE and Worker processes on the pinned runtime. Optional in a bundle;
+#: without it M2 stays NOT_RUN.
+PINNED_PROCESS_LIFECYCLE = "process-lifecycle-pinned.xml"
+PROCESS_LIFECYCLE_TESTS = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_core_dispatches_and_a_separate_worker_process_renders_two_revisions",
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_native_engine_regression_renders_in_core_without_a_worker[native]",
+)
 
 #: #392 moved the corrupt-download fault from the M1 media matrix to M3 recovery, so the
 #: two criteria partition the matrix instead of both claiming (or both dropping) it.
@@ -105,8 +114,8 @@ PINNED_CRITERIA: tuple[dict[str, Any], ...] = (
         "title": "Окремі CORE/Worker processes: штатний Job/approval/queue/claim → pinned "
                  "MPT → validated import, різні storage roots",
         "owner": "#389 M2 / #180.1–3",
-        "artefacts": (),
-        "tests": (),
+        "artefacts": (PINNED_PROCESS_LIFECYCLE,),
+        "tests": PROCESS_LIFECYCLE_TESTS,
     },
     {
         "id": "M3",
@@ -524,6 +533,7 @@ def load_pinned_evidence(directory: Path | None, *,
         "task_ids": {},
         "recovery": {"result": "", "assertions": []},
         "media_matrix": {"tests": {}, "failed": [], "skipped": [], "passed": []},
+        "process_lifecycle": {},
         "links": [],
     }
     if directory is None or not str(directory).strip():
@@ -640,6 +650,16 @@ def load_pinned_evidence(directory: Path | None, *,
                                  if value == "PASSED"),
             }
 
+    lifecycle_path = directory / PINNED_PROCESS_LIFECYCLE
+    if lifecycle_path.is_file():
+        evidence["artifacts"][PINNED_PROCESS_LIFECYCLE] = {
+            "sha256": _sha256_file(lifecycle_path), "bytes": lifecycle_path.stat().st_size}
+        try:
+            evidence["process_lifecycle"] = _parse_junit(lifecycle_path)
+        except (OSError, ET.ParseError) as error:
+            evidence["problems"].append(
+                f"{PINNED_PROCESS_LIFECYCLE} is not readable JUnit XML: {error}")
+
     # One Vertep SHA: the snapshot and the recovery check have to agree with each other
     # and with the tree this report describes. Missing artefacts are recorded separately:
     # absent evidence is not-run, an artefact that contradicts the tree is a failure.
@@ -701,6 +721,9 @@ def _pinned_links(evidence: dict[str, Any]) -> list[dict[str, str]]:
     add("M1", PINNED_MEDIA_MATRIX,
         "agreed §9.3 media matrix through the pinned submit/status/download route")
     add("M1", PINNED_SNAPSHOT, "self-test media pipeline and submit-route decoder report")
+    add("M2", PINNED_PROCESS_LIFECYCLE,
+        "CORE and stock worker.service processes: dispatch/claim/render/import, two "
+        "revisions, stale/duplicate approval, Native regression")
     add("M3", PINNED_RECOVERY, "submit-key, restart, cancel and unknown-key assertions")
     add("M4", PINNED_RECOVERY, "voice staging and duplicate-key assertions across a restart")
     add("voice", PINNED_RECOVERY, "approved voice staged, tampered/missing voice refused")
@@ -802,9 +825,28 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
 
     # M2 — separate CORE/Worker processes. No pinned bundle artefact records this.
     m2 = next(item for item in PINNED_CRITERIA if item["id"] == "M2")
-    row(m2, NOT_RUN,
-        "no separate CORE/Worker process evidence is recorded in the pinned bundle; "
-        "the object-level route tests stay regression, not process integration")
+    lifecycle = evidence.get("process_lifecycle") or {}
+    m2_measure = {"tests": {test: lifecycle.get(test, "NOT_RUN")
+                            for test in PROCESS_LIFECYCLE_TESTS}}
+    m2_failed = [test for test, value in m2_measure["tests"].items() if value == "FAILED"]
+    m2_open = [test for test, value in m2_measure["tests"].items() if value != "PASSED"]
+    if bundle_status == FAIL:
+        row(m2, FAIL, bundle_detail, {"measurements": m2_measure})
+    elif missing_for(m2):
+        row(m2, NOT_RUN, "pinned evidence is missing: " + ", ".join(missing_for(m2)),
+            {"measurements": m2_measure})
+    elif m2_failed:
+        row(m2, FAIL, "process lifecycle tests failed: " + ", ".join(m2_failed),
+            {"measurements": m2_measure})
+    elif m2_open:
+        row(m2, NOT_RUN, "not executed on the pinned route (skipped is not a pass): "
+            + ", ".join(m2_open), {"measurements": m2_measure})
+    else:
+        row(m2, PASS,
+            "separate CORE and worker.service processes rendered two revisions on the "
+            "pinned runtime with validated import, immutable history and stale/duplicate "
+            "approval refusal; the Native route still renders in CORE",
+            {"measurements": m2_measure})
 
     # M3 — recovery remainder.
     m3 = next(item for item in PINNED_CRITERIA if item["id"] == "M3")

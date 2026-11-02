@@ -223,17 +223,32 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Free disk space for the Vertep images
+        # Every fleet test pulls full Vertep images; a full disk kills the hosted runner
+        # ("runner received a shutdown signal") before JUnit is written (#396).
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / /var/lib/docker
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
       - name: Run actual PostgreSQL fencing and connected healthy restore
         run: >-
-          python -m pytest -q -o junit_family=legacy -o faulthandler_timeout=600
+          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600
           --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"
           --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"
           tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply
           tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart
           tests/test_standard_host_consumer_docker.py
           tests/test_standard_core_consumer_docker.py
+      - name: Disk usage after the fleet tests
+        if: always()
+        run: df -h / /var/lib/docker && docker system df
+      - name: Criterion report from this run's JUnit (#396 P5)
+        if: always()
+        run: >-
+          python scripts/report_criterion_390.py --run-sha "$GITHUB_SHA"
+          --junit "$RUNNER_TEMP/fleet-persistence-runtime.xml"
+          --output "$RUNNER_TEMP/criterion-390.json"
       - name: Upload fleet and connected restore evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -241,6 +256,7 @@ jobs:
           name: fleet-persistence-runtime-${{ github.sha }}
           path: |
             ${{ runner.temp }}/fleet-persistence-runtime.xml
+            ${{ runner.temp }}/criterion-390.json
             ${{ runner.temp }}/fleet-persistence-runtime/**/backup-process-*.log
           if-no-files-found: error
 
@@ -472,6 +488,11 @@ jobs:
           python -m pytest -q -rs -o junit_family=legacy
           --junitxml=moneyprinter-runtime-evidence/media-matrix-pinned.xml
           tests/test_mpt_media_matrix.py
+      - name: CORE/Worker process lifecycle on the pinned runtime (#397 M2)
+        run: >-
+          python -m pytest -q -rs -o junit_family=legacy
+          --junitxml=moneyprinter-runtime-evidence/process-lifecycle-pinned.xml
+          tests/test_mpt_process_lifecycle.py
       - name: Stop the pinned runtime
         if: always()
         run: |

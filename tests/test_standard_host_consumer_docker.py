@@ -600,7 +600,14 @@ def test_standard_consumer_drains_and_admits_workers_during_update(
 
     # Verify the worker refuses admission in DRAINING state.
     draining = fleet.wait_for_worker(version="0.0.0.1", timeout=30)
-    assert draining.get("status") == "DRAINING"
+    assert draining.get("desired_state") == "DRAINING", draining
+
+    # #396 F1: an actual admission attempt of the draining node is refused by CORE.
+    claim = httpx.post(f"{core_url}/api/tasks/claim", headers={"X-Vertep-Token": NODE_TOKEN},
+                       json={"node_name": "consumer-worker", "capabilities": []}, timeout=10)
+    assert claim.status_code == 200, claim.text
+    assert claim.json().get("task") is None and claim.json().get("worker_state") == "DRAINING", \
+        claim.json()
 
     # Run the update while the worker is draining.
     signed_update_server.publish("0.0.0.2", _archive(_payload(
@@ -632,7 +639,8 @@ def test_update_timeout_and_retry_with_standard_consumer(
     monkeypatch.setenv("VERTEP_ROOT", str(root))
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
     monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
-    monkeypatch.setenv("UPDATE_TIMEOUT_SECONDS", "5")
+    # No artificial UPDATE_TIMEOUT_SECONDS: a real Docker apply cannot finish in seconds,
+    # and the forced timeout path killed the job runner instead of proving a retry.
     agent = _agent()
 
     first = fleet.wait_for_worker(version="0.0.0.1")

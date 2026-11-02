@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.11
+- **#397 M2**: новий `tests/test_mpt_process_lifecycle.py` — окремі процеси CORE (`uvicorn core.app:app`) і штатний `python -m worker.service`: CORE лише відправляє assembly-спробу, вузол забирає її, рендерить через `MoneyPrinterEngine` у власному root, CORE перевіряє hash та імпортує; дві ревізії з незмінною історією, відмова застарілого/повторного схвалення, Native regression без вузла. Тест додано до pinned job CI.
+- **#397 M5**: `issue-122-acceptance-report.py` оцінює M2 за `process-lifecycle-pinned.xml` (PASS лише коли обидва процесні тести виконані на pinned-маршруті, інакше NOT_RUN/FAIL) і хешує цей артефакт.
+- **#396 P5**: `report_criterion_390.py` не зараховує JUnit іншого SHA (`--run-sha`/`GITHUB_SHA`), записує sha256 JUnit і позначає `offline_target`/`active_process_overlap` як NOT_PROOF; звіт будується в fleet job з JUnit цього ж прогону.
+- **#396 F1**: drain-тест виконує справжню спробу admission вузла в стані DRAINING (`POST /api/tasks/claim` → `task: null`); прибрано штучний `UPDATE_TIMEOUT_SECONDS=5`, після якого fleet job обривався.
+- `.github/workflows/ci.yml`: fleet job звільняє диск перед тестами, показує `df`/`docker system df` після них і запускає pytest з `-v`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.10
 - `tests/test_standard_host_consumer_docker.py`: тести, додані в 0.0.3.7, використовували недопустимі `request_id` (`"g" * 32` тощо) і падали на «Invalid update request» ще до суті — замінено на hex-ідентифікатори; drain-тест використовує справжній `POST /api/nodes/{id}/actions` (drain → update → resume); прибрано `test_caller_refusal_propagates_without_mutation`, що вимагав відмови для штатного update без `target_version`.
 - `tests/test_standard_core_consumer_docker.py`: скасовано запуск CORE з UID/GID хоста з 0.0.3.8, через який CORE не ставав healthy; читання `config/` для бекапу штатним consumer забезпечує `chmod a+rX` у disposable-контейнері.

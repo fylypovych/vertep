@@ -752,3 +752,29 @@ def test_the_markdown_report_shows_the_pinned_verdicts_and_hashes(report_module,
     for name, artifact in evidence["artifacts"].items():
         assert f"`{name}` — sha256 `{artifact['sha256']}`" in rendered
     assert "attests this tree" in rendered
+
+
+def _lifecycle_junit(directory: Path, report_module, outcome: str) -> None:
+    root = ET.Element("testsuite", name="pytest")
+    for test_id in report_module.PROCESS_LIFECYCLE_TESTS:
+        module_path, name = test_id.split("::")
+        case = ET.SubElement(root, "testcase", name=name,
+                             classname=module_path.removesuffix(".py").replace("/", "."))
+        if outcome == "FAILED":
+            ET.SubElement(case, "failure", message="failed")
+        elif outcome == "SKIPPED":
+            ET.SubElement(case, "skipped", message="not run")
+    ET.ElementTree(root).write(directory / report_module.PINNED_PROCESS_LIFECYCLE,
+                               encoding="utf-8", xml_declaration=True)
+
+
+@pytest.mark.parametrize("outcome,expected", [
+    ("PASSED", "PASS"), ("SKIPPED", "NOT_RUN"), ("FAILED", "FAIL")])
+def test_m2_is_answered_only_by_the_executed_process_lifecycle(report_module, tmp_path,
+                                                                outcome, expected):
+    """#397 M5: M2 is PASS only when both process tests ran on the pinned route."""
+    directory = _bundle(tmp_path, report_module)
+    _lifecycle_junit(directory, report_module, outcome)
+    evidence, rows = _pinned(report_module, directory)
+    assert rows["M2"]["status"] == getattr(report_module, expected)
+    assert report_module.PINNED_PROCESS_LIFECYCLE in evidence["artifacts"]
