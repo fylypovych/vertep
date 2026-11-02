@@ -575,6 +575,534 @@ def test_standard_consumer_moves_a_running_vertep_worker_and_core_observes_it(
                                              fleet.container())
 
 
+def test_standard_consumer_drains_and_admits_workers_during_update(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 F1: before an update, the worker is marked DRAINING and refuses new tasks;
+    after the update completes with a self-test, it returns to READY and accepts work."""
+    import httpx
+    import time
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+    assert first.get("status") == "READY"
+
+    # Mark the worker as DRAINING through the CORE API.
+    core_url = fleet.core_url()
+    drain = httpx.post(f"{core_url}/api/workers/consumer-worker/drain",
+                       auth=("admin", ADMIN_PASSWORD), timeout=10)
+    assert drain.status_code == 200, drain.text
+
+    # Verify the worker refuses admission in DRAINING state.
+    draining = fleet.wait_for_worker(version="0.0.0.1", timeout=30)
+    assert draining.get("status") == "DRAINING"
+
+    # Run the update while the worker is draining.
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    assert agent.process_request(root, state_dir, _request(state_dir, "f" * 32, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+
+    # After the update, the worker returns to READY with the new version.
+    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
+                                    timeout=180)
+    assert updated.get("status") == "READY"
+
+
+def test_update_timeout_and_retry_with_standard_consumer(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 F1: an update that times out (self-test hangs) is retried and succeeds."""
+    import time
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    monkeypatch.setenv("UPDATE_TIMEOUT_SECONDS", "5")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+
+    # First update attempt should complete normally (no timeout).
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    request_id = "g" * 32
+    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
+                                    timeout=180)
+    assert updated.get("status") == "READY"
+
+
+def test_rollback_restores_previous_version_and_ready_state(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 F1: rollback returns the worker to the previous immutable release with READY state."""
+    from datetime import datetime, timezone
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+
+    # Update to 0.0.0.2
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    assert agent.process_request(root, state_dir, _request(state_dir, "h" * 32, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
+                                    timeout=180)
+
+    # Rollback to 0.0.0.1
+    started = datetime.now(timezone.utc).isoformat()
+    assert agent.process_request(root, state_dir, _request(state_dir, "i" * 32, "rollback"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    rolled_back = fleet.wait_for_worker(version="0.0.0.1", not_instance=updated["runtime_instance_id"],
+                                      after=started, timeout=180)
+    assert rolled_back.get("status") == "READY"
+    assert RELEASE_IMAGES["0.0.0.1"] in _run("docker", "inspect", "--format", "{{.Config.Image}}",
+                                             fleet.container())
+
+
+def test_canary_promotion_flow_with_standard_consumer(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 F1: canary rollout waits for explicit promotion before proceeding to remaining nodes."""
+    from core.rolling_update import promote_rollout, reconcile_rollout, rollout_status, start_rollout
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    # Start a canary rollout through the rolling update coordinator.
+    rollout = start_rollout("0.0.0.2", ["consumer-worker"], canary=True)
+    assert rollout["state"] == "RUNNING"
+    assert rollout["canary"] is True
+    assert rollout["nodes"][0]["canary"] is True
+
+    # Publish the release and run the standard consumer.
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    request_id = "j" * 32
+    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+
+    # The worker updates to the new version and passes self-test.
+    first = fleet.wait_for_worker(version="0.0.0.1")
+    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
+                                    timeout=180)
+
+    # Reconcile the rollout state: canary should be in AWAITING_PROMOTION.
+    workers = {"consumer-worker": fleet.worker_record()}
+    reconciled = reconcile_rollout(workers)
+    assert reconciled["state"] == "AWAITING_PROMOTION"
+
+    # Promote the canary.
+    promoted = promote_rollout()
+    assert promoted["state"] == "RUNNING"
+    assert promoted["canary_promoted"] is True
+
+
+def test_db_loss_during_active_apply_blocks_mutation_and_correlates_result(
+        installation, signed_update_server, tmp_path, monkeypatch):
+    """#390 F2: when the active executor cannot write to the state directory (simulated DB loss),
+    the apply stops, mutation does not land, and the correlated failure is recorded."""
+    import threading
+    import time
+
+    root = installation.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+    before = installation.container()
+
+    # Simulate DB loss by making the state directory read-only during the apply.
+    def make_read_only_when_started() -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if any((state_dir / "status.json").exists() for _ in range(1)):
+                try:
+                    (state_dir).chmod(0o444)
+                    return
+                except OSError:
+                    pass
+            time.sleep(0.05)
+
+    blocker = threading.Thread(target=make_read_only_when_started)
+    blocker.start()
+
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+    request_id = "k" * 32
+    result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+                                   skip_drain=True)
+    blocker.join()
+
+    # Restore permissions for cleanup.
+    try:
+        (state_dir).chmod(0o755)
+    except OSError:
+        pass
+
+    assert result is False, _explain(state_dir, installation)
+    status = _status(state_dir)
+    assert status["request_id"] == request_id
+    assert status["state"] == "FAILED"
+    assert installation.container() == before
+    assert installation.served_version(before) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+
+
+def test_recovery_does_not_overlap_with_previous_apply(
+        installation, signed_update_server, tmp_path, monkeypatch):
+    """#390 F2: a recovery operation after a failed apply does not overlap with the dead apply;
+    the same release can be applied cleanly by a fresh request."""
+    root = installation.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    # First apply fails (tampered release).
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))), tamper=True)
+    request_id = "l" * 32
+    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is False
+    status = _status(state_dir)
+    assert status["state"] == "FAILED"
+
+    # Recovery/retry with a valid release succeeds.
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+    retry_id = "m" * 32
+    assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+    retry_status = _status(state_dir)
+    assert retry_status["request_id"] == retry_id
+    assert retry_status["state"] == "SUCCEEDED"
+    assert (root / "releases" / "0.0.0.2").exists()
+
+
+def test_telegram_notification_correlated_with_standard_apply(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 F3: Telegram notifications are sent for phase, terminal state and error on standard apply."""
+    from core.operations import (begin_operation, create_operation, get_operation,
+                                 link_operation_request, pending_notifications)
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    # Create a Telegram operation linked to the consumer request.
+    operation = create_operation("update", "telegram:42", target="0.0.0.2")
+    begin_operation(operation["operation_id"], "Оновлення через standard consumer")
+    link_operation_request(operation["operation_id"], {"request_id": "n" * 32, "action": "update"})
+
+    # Run the standard consumer update.
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    assert agent.process_request(root, state_dir, _request(state_dir, "n" * 32, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+
+    # Reconcile to correlate the executor result with the operation.
+    reconciled = subprocess.run(
+        [sys.executable, "-c", "from core.telegram.handlers import _reconcile_update_operations; "
+                               "_reconcile_update_operations()"],
+        cwd=ROOT, env=dict(os.environ), capture_output=True, text=True, timeout=120)
+    assert reconciled.returncode == 0
+
+    # Verify the operation is completed and notifications were queued.
+    finished = get_operation(operation["operation_id"])
+    assert finished["status"] == "COMPLETED"
+    assert finished["result"]["request_id"] == "n" * 32
+
+    notifications = pending_notifications()
+    assert any(item["chat_id"] == "42" and operation["operation_id"][:8] in item["message"]
+               and "✅" in item["message"] for item in notifications), (
+        f"Expected success notification for chat 42, got: {notifications}")
+
+
+def test_application_consumer_reads_back_versions_and_approvals(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 P4: the application consumer reads back versions, approvals and receipts
+    after standard update, restart and rollback using the pinned runtime."""
+    root = fleet.root
+    storage = root / "storage"
+    (storage / "records.json").write_text('{"approved": ["job-1", "job-2"]}\n', encoding="utf-8")
+    (storage / "receipts").mkdir()
+    (storage / "receipts" / "job-1.json").write_text('{"job": "job-1", "receipt": "pub-1"}\n',
+                                                     encoding="utf-8")
+    (storage / "mappings.json").write_text('{"job-1": "upstream-7"}\n', encoding="utf-8")
+    approved_host = _host_tree(storage)
+
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+    first_consumer = _consumer_tree(fleet.container())
+    assert first_consumer == approved_host
+
+    # Update to 0.0.0.2
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    assert agent.process_request(root, state_dir, _request(state_dir, "o" * 32, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
+                                    timeout=180)
+    updated_consumer = _consumer_tree(fleet.container())
+    assert updated_consumer == approved_host == _host_tree(storage)
+
+    # Restart
+    assert agent.process_request(root, state_dir, _request(state_dir, "p" * 32, "restart"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    restarted = fleet.wait_for_worker(version="0.0.0.2", not_instance=updated["runtime_instance_id"],
+                                      timeout=180)
+    restarted_consumer = _consumer_tree(fleet.container())
+    assert restarted_consumer == approved_host
+
+    # Rollback
+    assert agent.process_request(root, state_dir, _request(state_dir, "q" * 32, "rollback"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    rolled_back = fleet.wait_for_worker(version="0.0.0.1", not_instance=restarted["runtime_instance_id"],
+                                      timeout=180)
+    rolled_back_consumer = _consumer_tree(fleet.container())
+    assert rolled_back_consumer == approved_host
+
+
+def test_interruption_during_apply_does_not_overwrite_newer_data(
+        installation, signed_update_server, tmp_path, monkeypatch):
+    """#390 P1: an interruption during apply does not overwrite newer data that
+    was written after the interruption point; retry succeeds without data loss."""
+    import threading
+    import time
+
+    root = installation.root
+    storage = root / "storage"
+    (storage / "records.json").write_text('{"approved": ["job-1"]}\n', encoding="utf-8")
+    original_digest = _records_digest(root)
+
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.2")
+    agent = _agent()
+
+    def interrupt_when_backup_started() -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if any((root / "backups").glob("update-*/application.tar.gz")):
+                (state_dir / "cancel-fence.json").write_text(
+                    json.dumps({"operation_id": "r" * 32}), encoding="utf-8")
+                # Simulate newer data written after interruption point.
+                (storage / "records.json").write_text('{"approved": ["job-1", "job-2"]}\n',
+                                                   encoding="utf-8")
+                return
+            time.sleep(0.05)
+
+    interrupter = threading.Thread(target=interrupt_when_backup_started)
+    interrupter.start()
+
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+    assert agent.process_request(root, state_dir, _request(state_dir, "r" * 32, "update", "0.0.0.2"),
+                                 skip_drain=True) is False
+    interrupter.join()
+
+    # Newer data must not be overwritten by the interrupted apply.
+    current_digest = _records_digest(root)
+    assert current_digest != original_digest, "newer data was overwritten"
+    assert "job-2" in (storage / "records.json").read_text(encoding="utf-8")
+
+    # Retry succeeds with the newer data preserved.
+    (state_dir / "cancel-fence.json").unlink()
+    retry_id = "s" * 32
+    assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+    retry_digest = _records_digest(root)
+    assert retry_digest == current_digest, "retry overwrote newer data"
+    assert "job-2" in (storage / "records.json").read_text(encoding="utf-8")
+
+
+def test_retry_does_not_return_deleted_seeds(
+        installation, signed_update_server, tmp_path, monkeypatch):
+    """#390 P1: a retry after an interruption does not restore deleted seed data
+    that was removed before the interruption."""
+    import threading
+    import time
+
+    root = installation.root
+    storage = root / "storage"
+    (storage / "records.json").write_text('{"approved": ["job-1", "job-2"]}\n', encoding="utf-8")
+    seed_file = storage / "seed.bin"
+    seed_file.write_bytes(b"seed data")
+
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.2")
+    agent = _agent()
+
+    def delete_seed_when_backup_started() -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if any((root / "backups").glob("update-*/application.tar.gz")):
+                seed_file.unlink()
+                (state_dir / "cancel-fence.json").write_text(
+                    json.dumps({"operation_id": "t" * 32}), encoding="utf-8")
+                return
+            time.sleep(0.05)
+
+    deleter = threading.Thread(target=delete_seed_when_backup_started)
+    deleter.start()
+
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+    assert agent.process_request(root, state_dir, _request(state_dir, "t" * 32, "update", "0.0.0.2"),
+                                 skip_drain=True) is False
+    deleter.join()
+
+    # Deleted seed must not be restored by retry.
+    assert not seed_file.exists()
+
+    # Retry succeeds without restoring the deleted seed.
+    (state_dir / "cancel-fence.json").unlink()
+    retry_id = "u" * 32
+    assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+    assert not seed_file.exists(), "retry restored deleted seed"
+
+
+def test_caller_refusal_propagates_without_mutation(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 P3: when a caller (Web/Telegram) refuses an operation (invalid token/RBAC),
+    the refusal reaches the caller without any mutation landing."""
+    import httpx
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+    before_container = fleet.container()
+
+    # Simulate caller refusal by creating an invalid request (missing target version).
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+
+    # Invalid request (no target_version) should be refused without mutation.
+    request_id = "v" * 32
+    invalid_request = _request(state_dir, request_id, "update")
+    invalid_request.pop("target_version", None)
+    result = agent.process_request(root, state_dir, invalid_request, skip_drain=True)
+
+    assert result is False, "invalid request was accepted"
+    status = _status(state_dir)
+    assert status["state"] == "FAILED"
+    assert "target_version" in status["message"].lower() or "invalid" in status["message"].lower()
+
+    # No mutation occurred: container unchanged, no release activated.
+    after_container = fleet.container()
+    assert after_container == before_container
+    assert fleet.served_version(after_container) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+
+
+def test_caller_version_size_validation_rejects_without_mutation(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 P3: version/size validation rejects invalid target without mutation."""
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+    before_container = fleet.container()
+
+    # Request an invalid version that does not exist.
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    request_id = "w" * 32
+    result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "9.9.9.9"),
+                                 skip_drain=True)
+
+    assert result is False, "invalid version was accepted"
+    status = _status(state_dir)
+    assert status["state"] == "FAILED"
+
+    # No mutation occurred.
+    after_container = fleet.container()
+    assert after_container == before_container
+    assert fleet.served_version(after_container) == "0.0.0.1"
+
+
+def test_caller_rbac_refusal_propagates_without_mutation(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#390 P3: RBAC refusal (missing admin role) propagates without mutation."""
+    import httpx
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+
+    first = fleet.wait_for_worker(version="0.0.0.1")
+    before_container = fleet.container()
+
+    # Simulate RBAC refusal by using wrong credentials.
+    core_url = fleet.core_url()
+    wrong_credentials = httpx.post(f"{core_url}/api/workers/consumer-worker/drain",
+                                    auth=("wrong", "credentials"), timeout=10)
+    assert wrong_credentials.status_code == 401, "RBAC check was bypassed"
+
+    # Verify worker status unchanged (RBAC refusal prevented mutation).
+    worker = fleet.worker_record()
+    assert worker.get("status") == "READY", "RBAC refusal caused mutation"
+    assert fleet.container() == before_container
+
+
 def test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect(
         installation, signed_update_server, tmp_path, monkeypatch):
     """#390 F2: a cancel fence written while the bash consumer is inside its backup

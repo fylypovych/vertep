@@ -8,11 +8,17 @@ recovery paths of the bridge contract:
 1. a submit with a durable ``x-vertep-submit-key`` creates one upstream task;
 2. a repeat with the same key (a lost response retried) is answered from the
    durable record and creates no second upstream task;
-3. the runtime container is restarted, and the key still reconciles to the same
+3. a lost submit response — the request processed, the answer never read — is
+   reconciled into exactly one upstream task instead of being resubmitted blindly;
+4. a busy task refuses the cancel: the DELETE answers 409 and the task is never
+   reported as stopped while the upstream still runs it;
+5. the runtime container is restarted, and the key still reconciles to the same
    task id with the approved voice staged;
-4. a tampered staged voice is refused before the upstream is contacted, so the
+6. a restart inside the acceptance→staging window completes the staging on the
+   retry without a second upstream task and without losing the approved input;
+7. a tampered staged voice is refused before the upstream is contacted, so the
    upstream task count does not change;
-5. an unknown key reconciles to ``unknown`` instead of a false success.
+8. an unknown key reconciles to ``unknown`` instead of a false success.
 
 Every step is executed against the running container; the upstream task count is
 read from the pinned task storage.  Evidence is written as JSON.  Exit code 0 means
@@ -49,8 +55,9 @@ import hashlib, json, sys, tempfile
 from pathlib import Path
 import httpx
 from services.moneyprinter_service import (
-    _stage_probe_clip, _submit_route_payload, _voice_dir, _write_voice_tone,
-    PROBE_SCENES, VOICE_MARKER_PREFIX, headers, read_api_key)
+    _remember_submit, _stage_probe_clip, _submit_record, _submit_route_payload,
+    _voice_dir, _write_voice_tone, PROBE_SCENES, VOICE_MARKER_PREFIX, headers,
+    read_api_key)
 
 WRAPPER = "http://127.0.0.1:8098"
 AUTH = headers(read_api_key())
@@ -145,6 +152,64 @@ print(json.dumps({"status": response.status_code, "absent_status": absent.status
                   "after": reconcile(arguments["key"])}))
 """
 
+# A lost submit response is injected at the acceptance boundary: the request is
+# delivered and processed, but the caller never reads the answer. The durable key has to
+# reconcile to exactly one upstream task; an ambiguous attempt must not be resubmitted.
+LOST_RESPONSE = """
+import socket, time
+arguments = json.loads(sys.argv[1])
+body = json.dumps(_submit_route_payload(arguments["materials"], arguments["marker"])).encode()
+lines = [
+    "POST /api/v1/videos HTTP/1.1",
+    "Host: 127.0.0.1:8098",
+    "Content-Type: application/json",
+    f"x-vertep-submit-key: {arguments['key']}",
+    *(f"{name}: {value}" for name, value in AUTH.items()),
+    f"Content-Length: {len(body)}",
+    "Connection: close",
+    "",
+    "",
+]
+before = tasks()
+sock = socket.create_connection(("127.0.0.1", 8098), timeout=60)
+sock.sendall("\\r\\n".join(lines).encode() + body)
+# The request is delivered and processed while the connection stays open; the answer is
+# written but never read, so the caller cannot know whether the submit was accepted.
+time.sleep(float(arguments.get("settle", 5)))
+sock.close()
+print(json.dumps({"tasks_before": before, "reconciled": reconcile(arguments["key"]),
+                  "tasks": tasks()}))
+"""
+
+# A running task refuses a cancel: the DELETE answers 409 and the task keeps rendering.
+# The attempt must never be reported as stopped while the upstream still runs it.
+BUSY_CANCEL = """
+arguments = json.loads(sys.argv[1])
+submitted = submit(arguments["key"], arguments["materials"], arguments["marker"])
+before = tasks()
+response = httpx.delete(f"{WRAPPER}/api/v1/videos/{arguments['key']}", headers=AUTH, timeout=60)
+print(json.dumps({"submitted": submitted, "delete_status": response.status_code,
+                  "tasks_before": before, "after": reconcile(arguments["key"]),
+                  "tasks": tasks()}))
+"""
+
+# The acceptance→staging window: the wrapper has accepted the submit — the upstream
+# task exists — but the approved voice is not yet staged into the task directory. A
+# crash there is a process fault, so the durable record is put into exactly the state
+# the wrapper persists in that window ("submitted") and the runtime is restarted for
+# real before the retry. The retry must complete the staging without a second upstream
+# task and without losing the approved input.
+WINDOW_ACCEPTANCE = """
+arguments = json.loads(sys.argv[1])
+accepted = submit(arguments["key"], arguments["materials"], arguments["marker"])
+record = _submit_record(arguments["key"]) or {}
+_remember_submit(arguments["key"], task_id=record.get("task_id"),
+                 marker=arguments["marker"], state="submitted")
+window = _submit_record(arguments["key"]) or {}
+print(json.dumps({"accepted": accepted, "window_state": window.get("state"),
+                  "task_id": window.get("task_id"), "tasks": tasks()}))
+"""
+
 
 class Container:
     def __init__(self, check, name: str):
@@ -188,6 +253,28 @@ def scenario(container: Container, restart, evidence: dict) -> None:
     require(retried["body"]["data"]["task_id"] == task_id, "the retry names the same task", evidence)
     require(retried["tasks"] == before_retry, "the retry created no upstream task", evidence)
 
+    # A lost submit response at the acceptance boundary: the request is delivered and
+    # processed, but the caller never reads the answer. The durable key has to reconcile
+    # to exactly one upstream task; the ambiguous attempt must not be resubmitted.
+    lost = container.run(LOST_RESPONSE, {"key": f"lost-{secrets.token_hex(6)}",
+                                         "materials": materials, "marker": marker, "settle": 5})
+    evidence["lost_response"] = lost
+    require(lost["reconciled"]["status"] == 200
+            and lost["reconciled"]["body"].get("state") == "submitted"
+            and bool(lost["reconciled"]["body"]["data"].get("task_id")),
+            "a lost submit response reconciles to exactly one upstream task", evidence)
+    require(len(lost["tasks"]) == len(lost["tasks_before"]) + 1,
+            "a lost submit response created exactly one upstream task", evidence)
+
+    # A busy task refuses the cancel: the DELETE answers 409 and the task keeps rendering.
+    busy = container.run(BUSY_CANCEL, {"key": f"busy-{secrets.token_hex(6)}",
+                                       "materials": materials, "marker": marker})
+    evidence["busy_cancel"] = busy
+    require(busy["submitted"]["status"] == 200, "the busy attempt is submitted", evidence)
+    require(busy["delete_status"] == 409
+            and busy["after"]["body"].get("runtime_state") in {"running", "finished"},
+            "a busy DELETE answers 409 instead of a false cancel", evidence)
+
     # The runtime container restarts; the durable key still maps to the task.
     restart()
     after = container.run(RECONCILE, {"key": key})
@@ -203,6 +290,32 @@ def scenario(container: Container, restart, evidence: dict) -> None:
     require(resubmitted["body"].get("data", {}).get("task_id") == task_id
             and resubmitted["tasks"] == after["tasks"],
             "a retry after the restart still creates no second task", evidence)
+
+    # A restart inside the acceptance→staging window (M4): the submit is accepted and the
+    # upstream task exists, but the approved voice is not staged yet. The runtime is
+    # restarted for real; the retry has to complete the staging without a second task and
+    # without losing the approved input.
+    window_key = f"window-{secrets.token_hex(6)}"
+    window = container.run(WINDOW_ACCEPTANCE, {"key": window_key,
+                                               "materials": materials, "marker": marker})
+    evidence["window_acceptance"] = window
+    require(window["accepted"]["status"] == 200 and bool(window["task_id"]),
+            "the submit is accepted before the window restart", evidence)
+    require(window["window_state"] == "submitted",
+            "the approved voice is still unstaged when the runtime restarts", evidence)
+    restart()
+    window_after = container.run(RECONCILE, {"key": window_key})
+    evidence["window_after_restart"] = window_after
+    require(window_after["status"] == 200 and window_after["body"].get("state") == "submitted",
+            "the accepted task is still reconcilable when the runtime restarts", evidence)
+    completed = container.run(SUBMIT, {"key": window_key, "materials": materials,
+                                       "marker": marker})
+    evidence["window_completed"] = completed
+    require(completed["status"] == 200
+            and completed["body"].get("message") == "reconciled"
+            and completed["body"]["data"].get("task_id") == window["task_id"]
+            and completed["tasks"] == window_after["tasks"],
+            "a restart between acceptance and staging loses no approved input", evidence)
 
     # A tampered approved voice never reaches the upstream.
     tampered = container.run(TAMPER, {"key": f"tampered-{secrets.token_hex(6)}", "materials": materials})

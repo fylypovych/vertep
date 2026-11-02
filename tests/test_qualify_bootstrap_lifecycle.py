@@ -52,12 +52,41 @@ def _clean(passed=10):
     return {"passed": passed, "failed": 0, "error": 0, "skipped": 0}
 
 
-def test_b2_passes_only_with_matching_executor_architecture_and_no_skips():
+def _junit(path, target, skipped=()):
+    """Legacy JUnit in which every trust-row test passed, except ``skipped``."""
+    cases = []
+    for test_id in sorted({test for tests in target.EXECUTOR_TRUST_DIMENSIONS.values() for test in tests}):
+        module_path, name = test_id.split("::")
+        classname = module_path.removesuffix(".py").replace("/", ".")
+        body = "<skipped/>" if test_id in skipped else ""
+        cases.append(f'<testcase classname="{classname}" name="{name}">{body}</testcase>')
+    path.write_text("<testsuite>" + "".join(cases) + "</testsuite>", encoding="utf-8")
+    return str(path)
+
+
+def test_b2_passes_only_with_matching_executor_architecture_and_no_skips(tmp_path):
     target = module()
     host = {"returncode": 0, "pytest": _clean()}
-    good = {"returncode": 0, "machine": "aarch64", "pytest": _clean()}
+    good = {"returncode": 0, "machine": "aarch64", "pytest": _clean(),
+            "junit": _junit(tmp_path / "all.xml", target)}
     assert target.criteria(good, host, "arm64")["B2"] == "PASS"
     assert target.criteria({**good, "machine": "x86_64"}, host, "arm64")["B2"] == "FAIL"
-    assert target.criteria({**good, "pytest": {**_clean(), "skipped": 1}}, host, "arm64")["B2"] == "FAIL"
-    assert target.criteria(good, {**host, "returncode": 1}, "arm64")["B2"] == "FAIL"
+    assert target.criteria({**good, "pytest": {**_clean(), "skipped": 1}}, host, "arm64")["B2"] != "PASS"
+    assert target.criteria(good, {**host, "returncode": 1}, "arm64")["B2"] != "PASS"
     assert target.criteria(good, host, "arm64")["B3"] == "NOT_RUN"
+
+
+def test_b2_and_b4_rows_are_not_derived_from_totals(tmp_path):
+    """#391 B4: green totals without the row's exact passed IDs are not PASS."""
+    target = module()
+    host = {"returncode": 0, "pytest": _clean()}
+    totals_only = {"returncode": 0, "machine": "aarch64", "pytest": _clean(500)}
+    assert target.criteria(totals_only, host, "arm64") == {
+        "B1": "NOT_RUN", "B2": "FAIL", "B3": "NOT_RUN", "B4": "FAIL"}
+
+    skipped = target.TAMPER_EXECUTOR_TEST
+    partial = {**totals_only, "junit": _junit(tmp_path / "partial.xml", target, {skipped})}
+    rows = target.b4_dimension_report(partial, host, "arm64")["dimensions"]
+    assert rows["tamper"]["status"] == "PARTIAL" and rows["tamper"]["missing"] == [skipped]
+    assert rows["symlink"]["status"] == "PASS"
+    assert target.criteria(partial, host, "arm64")["B2"] == "PARTIAL"

@@ -13,7 +13,11 @@ containers.  It then proves, against the running appliance:
   reload without restarting it;
 * data written to PostgreSQL and storage, the generated credentials and the
   renewed certificate survive a second bootstrap run, after which HTTPS and
-  health still work.
+  health still work;
+* (#391 B3) a bootstrap run of another published release that fails after
+  activation is rolled back by bootstrap itself through ``vertep rollback``: the
+  previous release is active and healthy again with data, credentials and the
+  certificate unchanged, and a following normal bootstrap run succeeds.
 
 The installed version is the latest published release, not this checkout; the
 evidence records both.
@@ -62,16 +66,23 @@ def compose(*arguments: str, check: bool = True) -> subprocess.CompletedProcess:
                "-f", str(INSTALL_ROOT / "docker-compose.yml"), *arguments, check=check)
 
 
-def bootstrap(log: Path) -> dict:
+def bootstrap(log: Path, overrides: dict[str, str] | None = None, *, expect_failure: bool = False) -> dict:
     environment = {**os.environ, "VERTEP_ROLE": "core", "VERTEP_WEB_DOMAIN": "vertep.ci",
-                   "DEBIAN_FRONTEND": "noninteractive"}
+                   "DEBIAN_FRONTEND": "noninteractive", **(overrides or {})}
     started = time.monotonic()
     result = subprocess.run(["bash", str(ROOT / "bootstrap.sh")], cwd=ROOT, env=environment,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3600)
-    log.write_text(result.stdout + result.stderr, encoding="utf-8")
-    if result.returncode:
-        raise RuntimeError(f"bootstrap failed ({result.returncode}): {(result.stdout + result.stderr)[-3000:]}")
-    return {"seconds": round(time.monotonic() - started), "log": str(log)}
+    output = result.stdout + result.stderr
+    log.write_text(output, encoding="utf-8")
+    if bool(result.returncode) != expect_failure:
+        raise RuntimeError(f"bootstrap {'unexpectedly succeeded' if expect_failure else 'failed'} "
+                           f"({result.returncode}): {output[-3000:]}")
+    return {"seconds": round(time.monotonic() - started), "log": str(log),
+            "returncode": result.returncode, "output_tail": output[-2000:]}
+
+
+def active_release() -> str:
+    return os.path.basename(os.readlink(INSTALL_ROOT / "current"))
 
 
 def containers() -> list[dict]:
@@ -151,93 +162,74 @@ def renew_certificate() -> None:
     compose("exec", "-T", "core", "python3", "-c", code)
 
 
-def simulate_bootstrap_failure_and_rollback(evidence_dir: Path) -> dict:
-    """Simulate a bootstrap failure after activation and verify rollback.
+ROLLBACK_PROBE_RELEASE = os.getenv("VERTEP_ROLLBACK_PROBE_RELEASE", "0.0.2.94")
+ROLLBACK_PROBE_ORIGIN = ("https://api.github.com/repos/fylypovych/vertep/releases/tags/"
+                         + ROLLBACK_PROBE_RELEASE)
 
-    Bootstrap.sh sets ``bootstrap_mutated=true`` only after the new release is
-    activated.  The ``rollback_after_failure`` trap then calls ``vertep rollback``.
-    This step proves that the rollback path (changes ≥ 0.0.2.97) actually restores
-    a healthy appliance: HTTPS answers, data and credentials survive.
 
-    The approach:
-    1.  Record the pre-failure state (container health, HTTPS, credential fingerprints).
-    2.  Call ``bootstrap.sh`` with a synthetic ``VERTEP_INJECT_FAILURE_AFTER_ACTIVATION``
-        flag if the production script supports it; otherwise invoke ``vertep rollback``
-        directly to exercise the rollback executor path.
-    3.  Wait for the appliance to become healthy again.
-    4.  Assert data and credentials are unchanged.
+def bootstrap_failure_rollback(evidence_dir: Path) -> dict:
+    """#391 B3: a bootstrap that fails *after activation* is rolled back by bootstrap itself.
+
+    The real ``bootstrap.sh`` is run against another published signed release
+    (``ROLLBACK_PROBE_RELEASE``), so the snapshot is taken and the release is
+    really activated (``bootstrap_mutated=true``).  The run is then failed by an
+    input bootstrap validates only after activation: a node role that is absent
+    from the signed role catalog.  ``rollback_after_failure`` must call the
+    standard ``vertep rollback``; afterwards the previous release is active again,
+    healthy over HTTPS, and data, credentials and the certificate are unchanged.
+    A following normal bootstrap run must succeed on the same installation.
     """
-    # Record state before the failure injection.
-    pre_containers = containers()
-    pre_https = handshake()
-    pre_secrets = secret_fingerprints()
-    pre_cert = certificate_sha256()
-
-    # Invoke ``vertep rollback`` directly.  This is the exact binary that
-    # rollback_after_failure() calls inside bootstrap.sh, so it exercises the
-    # same rollback executor path.  The only difference is that here we call it
-    # without an in-flight bootstrap, which means bootstrap_mutated was already
-    # committed — the same situation as after a successful activation that is
-    # followed by a failed health check.
-    rollback_result = run(
-        "bash", str(INSTALL_ROOT / "scripts" / "vertep"), "rollback",
-        check=False, timeout=300,
-    )
-    rollback_evidence = {
-        "returncode": rollback_result.returncode,
-        "stdout_tail": (rollback_result.stdout + rollback_result.stderr)[-2000:],
+    before = {"release": active_release(), "secrets": secret_fingerprints(),
+              "certificate": certificate_sha256(), "markers": markers_present()}
+    assert before["release"] != ROLLBACK_PROBE_RELEASE, "probe release is already active"
+    failed = bootstrap(evidence_dir / "bootstrap-failure.log", {
+        "VERTEP_DOWNLOAD_ORIGIN": ROLLBACK_PROBE_ORIGIN, "VERTEP_ALLOW_DOWNGRADE": "1",
+        "VERTEP_ROLE": "ci-role-absent-from-catalog"}, expect_failure=True)
+    log = Path(failed["log"]).read_text(encoding="utf-8")
+    preflight = {
+        "probe_release": ROLLBACK_PROBE_RELEASE,
+        "snapshot_taken": "Backing up the installed system" in log,
+        "activated_probe_release": (INSTALL_ROOT / "releases" / ROLLBACK_PROBE_RELEASE).is_dir(),
+        "failed_after_activation": "is absent from the signed role catalog" in log,
+        "rollback_started": "restoring the previous release" in log,
+        "rollback_failed": "automatic rollback failed" in log,
     }
+    restored = wait(lambda: (v := handshake()) and " 200 " in v["health_status_line"] + " " and v,
+                    300, "HTTPS health after the bootstrap rollback")
+    rows = wait(lambda: (r := containers()) and containers_ready(r) and r, 300,
+                "healthy containers after the bootstrap rollback")
+    after = {"release": active_release(), "secrets": secret_fingerprints(),
+             "certificate": certificate_sha256(), "markers": markers_present()}
+    result = {
+        "preflight": preflight, "failed_run": failed,
+        "release_before": before["release"], "release_after": after["release"],
+        "health_status_line": restored["health_status_line"],
+        "presented_sha256": restored["presented_sha256"],
+        "containers": rows, "markers": after["markers"],
+        "credentials_preserved": before["secrets"] == after["secrets"],
+        "certificate_preserved": before["certificate"] == after["certificate"],
+    }
+    assert all(preflight[key] for key in ("snapshot_taken", "activated_probe_release",
+                                          "failed_after_activation", "rollback_started")), preflight
+    assert not preflight["rollback_failed"], "bootstrap reported a failed automatic rollback"
+    assert after["release"] == before["release"], "the previous release was not reactivated"
+    assert restored["presented_sha256"] == before["certificate"], "proxy presents another certificate"
+    assert after["markers"]["postgres_rows"] == 1 and after["markers"]["storage_file"],         "data was lost by the bootstrap rollback"
+    assert result["credentials_preserved"], "the bootstrap rollback changed credentials"
+    assert result["certificate_preserved"], "the bootstrap rollback replaced the certificate"
 
-    if rollback_result.returncode != 0:
-        # A missing .vertep-last-good is expected on a fresh-bootstrap system
-        # (no previous release to roll back to).  Record this as PARTIAL rather
-        # than a hard failure: the rollback executor path was invoked, it failed
-        # gracefully with a clear message, and the appliance is still healthy.
-        no_prior = ("No rollback revision" in rollback_result.stderr
-                    or "No rollback revision" in rollback_result.stdout)
-        rollback_evidence["note"] = (
-            "PARTIAL: no prior release recorded — rollback executor reached and "
-            "failed gracefully; appliance health verified below"
-            if no_prior else
-            "FAIL: rollback executor returned non-zero with unexpected error"
-        )
-        rollback_evidence["partial"] = no_prior
-
-    # Regardless of rollback exit-code, the appliance must still be healthy:
-    # either it stayed up (rollback not needed) or it was successfully restored.
-    post_https = wait(
-        lambda: (v := handshake()) and " 200 " in v["health_status_line"] + " " and v,
-        180, "HTTPS health after rollback attempt",
-    )
-    post_containers = wait(
-        lambda: (rows := containers()) and containers_ready(rows) and rows,
-        180, "healthy containers after rollback attempt",
-    )
-    post_secrets = secret_fingerprints()
-    post_cert = certificate_sha256()
-
-    rollback_evidence.update({
-        "pre_health": pre_https["health_status_line"],
-        "post_health": post_https["health_status_line"],
-        "pre_containers_healthy": containers_ready(pre_containers),
-        "post_containers_healthy": containers_ready(post_containers),
-        "credentials_preserved": pre_secrets == post_secrets,
-        "certificate_preserved": pre_cert == post_cert,
-        "changed_credentials": sorted(
-            k for k in pre_secrets if pre_secrets.get(k) != post_secrets.get(k)
-        ),
-    })
-
-    assert " 200 " in post_https["health_status_line"] + " ", (
-        "appliance did not recover HTTPS after rollback attempt")
-    assert containers_ready(post_containers), (
-        "containers not healthy after rollback attempt")
-    assert post_secrets == pre_secrets, (
-        "credentials changed after rollback attempt: "
-        + ", ".join(rollback_evidence["changed_credentials"]))
-    assert post_cert == pre_cert, "certificate changed after rollback attempt"
-
-    return rollback_evidence
+    result["rerun"] = bootstrap(evidence_dir / "bootstrap-after-rollback.log")
+    healthy = wait(lambda: (v := handshake()) and " 200 " in v["health_status_line"] + " " and v,
+                   300, "HTTPS health after the bootstrap rerun")
+    wait(lambda: (r := containers()) and containers_ready(r) and r, 600,
+         "healthy containers after the bootstrap rerun")
+    result["rerun"].update({"release": active_release(), "markers": markers_present(),
+                            "health_status_line": healthy["health_status_line"],
+                            "credentials_preserved": secret_fingerprints() == before["secrets"]})
+    assert result["rerun"]["release"] == before["release"], "rerun activated another release"
+    assert result["rerun"]["markers"]["postgres_rows"] == 1, "data was lost by the rerun"
+    assert result["rerun"]["credentials_preserved"], "the rerun changed credentials"
+    return result
 
 
 def main() -> int:
@@ -297,7 +289,7 @@ def main() -> int:
         assert persisted["postgres_rows"] == 1 and persisted["storage_file"], "data was lost on rerun"
         assert steps["persistence"]["certificate_kept"], "rerun replaced the renewed certificate"
         assert steps["persistence"]["credentials_kept"], "rerun changed generated credentials"
-        steps["failure_rollback"] = simulate_bootstrap_failure_and_rollback(evidence_dir)
+        steps["failure_rollback"] = bootstrap_failure_rollback(evidence_dir)
         report["result"] = "PASS"
     except (AssertionError, RuntimeError, OSError, subprocess.SubprocessError, ValueError) as error:
         report["error"] = str(error)[-4000:]

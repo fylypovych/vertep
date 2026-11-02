@@ -24,11 +24,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TAMPER_EXECUTOR_TEST = ("tests/test_core_rollout_coordinator.py::"
+                        "test_tampered_signed_manifest_is_refused_before_any_host_mutation")
 EXECUTOR_TARGETS = (
     "tests/test_safe_update.py",
     "tests/test_update_security.py",
     "tests/test_bootstrap_wizard.py",
     "tests/test_release_hardening.py",
+    TAMPER_EXECUTOR_TEST,
 )
 HOST_TARGETS = ("tests/test_apply_deployment_docker.py",)
 EXPECTED_MACHINE = {"amd64": "x86_64", "arm64": "aarch64"}
@@ -39,10 +42,11 @@ EXECUTOR_IMAGE = "python:3.12-slim"
 # Tests run inside the linux/<architecture> container (EXECUTOR_TARGETS) are labelled
 # with dimension tags; tests only on the host executor are in HOST_TARGETS.
 EXECUTOR_TRUST_DIMENSIONS = {
+    # A tampered signed manifest from the HTTPS origin is refused by the update agent
+    # before the host consumer runs; release and runtime instance stay unchanged.
     "tamper": [
-        "tests/test_update_security.py::test_audit_log_tamper_detected_on_append",
-        "tests/test_update_security.py::test_run_fenced_stops_apply_and_delayed_side_effect_on_cancel_fence",
-        "tests/test_update_security.py::test_run_fenced_kills_child_processes_of_apply",
+        TAMPER_EXECUTOR_TEST,
+        "tests/test_safe_update.py::test_signed_manifest_and_compatibility",
     ],
     "expiry": [
         "tests/test_safe_update.py::test_manifest_keyring_channel_and_validity",
@@ -69,6 +73,8 @@ EXECUTOR_TRUST_DIMENSIONS = {
         "tests/test_update_security.py::test_rollback_invokes_vertep_script",
         "tests/test_update_security.py::test_process_request_triggers_rollback_on_failure",
         "tests/test_update_security.py::test_update_timeout_rolls_back_and_reports_correlated_error",
+        "tests/test_update_security.py::test_run_fenced_stops_apply_and_delayed_side_effect_on_cancel_fence",
+        "tests/test_update_security.py::test_run_fenced_kills_child_processes_of_apply",
     ],
     "unsafe_archive": [
         "tests/test_update_security.py::test_safe_extract_rejects_symlink_member",
@@ -145,11 +151,15 @@ def criteria(executor: dict, host: dict, architecture: str) -> dict[str, str]:
                    and not any(executor.get("pytest", {}).get(key) for key in ("failed", "error", "skipped")))
     host_ok = (host.get("returncode") == 0 and host.get("pytest", {}).get("passed", 0) > 0
                and not any(host.get("pytest", {}).get(key) for key in ("failed", "error", "skipped")))
-    b2 = "PASS" if executor_ok and host_ok else "FAIL"
-    # The selected tests deliberately cover bootstrap/update executor and trust faults.
-    # They do not claim a real TLS proxy reload/rerun; B3 stays NOT_RUN.
-    # B4 is PASS only when B2 is PASS and the dimension-level report is complete.
-    b4 = "PASS" if b2 == "PASS" else ("PARTIAL" if executor_ok or host_ok else "FAIL")
+    # B2 is PASS only when every trust row passed on this architecture, never from totals.
+    # B3 is proven by the Ubuntu bootstrap job (qualify_ubuntu_bootstrap.py), not here.
+    statuses = {row["status"] for row in
+                b4_dimension_report(executor, host, architecture)["dimensions"].values()}
+    if executor_ok and host_ok and statuses == {"PASS"}:
+        b2 = "PASS"
+    else:
+        b2 = "PARTIAL" if statuses - {"NOT_RUN"} else "FAIL"
+    b4 = "PASS" if b2 == "PASS" else ("PARTIAL" if statuses - {"NOT_RUN"} else "FAIL")
     return {"B1": "NOT_RUN", "B2": b2, "B3": "NOT_RUN", "B4": b4}
 
 
@@ -165,43 +175,23 @@ def b4_dimension_report(executor: dict, host: dict, architecture: str) -> dict:
                     and executor.get("machine") == EXPECTED_MACHINE.get(architecture))
     host_ran = host.get("returncode") is not None
 
-    # Parse JUnit XML to get the set of actually-passed test IDs.
+    # Exact IDs that passed inside the executor container; skipped is not passed.
     passed_ids: set[str] = set()
     junit_path = executor.get("junit")
-    if junit_path and Path(junit_path).is_file():
-        try:
-            for case in ET.parse(junit_path).getroot().iter("testcase"):
-                if case.find("failure") is None and case.find("error") is None:
-                    classname = case.get("classname", "").replace(".", "/").replace("tests/", "tests/")
-                    name = case.get("name", "")
-                    # Reconstruct test ID from classname + name
-                    if classname:
-                        passed_ids.add(f"{classname}::{name}")
-                    # Also store just the name for partial matching
-                    passed_ids.add(name)
-        except ET.ParseError:
-            pass
+    if executor_ran and junit_path and Path(junit_path).is_file():
+        for case in ET.parse(junit_path).getroot().iter("testcase"):
+            if all(case.find(tag) is None for tag in ("failure", "error", "skipped")):
+                module = case.get("classname", "").replace(".", "/")
+                passed_ids.add(f"{module}.py::{case.get('name', '')}")
 
     dimensions: dict[str, dict] = {}
     for dimension, test_ids in EXECUTOR_TRUST_DIMENSIONS.items():
-        # Determine status: PASS if all IDs ran and passed, PARTIAL if some, NOT_RUN if none.
-        if not executor_ran:
-            status = "NOT_RUN"
-        else:
-            matched = [tid for tid in test_ids
-                       if any(tid.split("::")[-1] in pid for pid in passed_ids)
-                       or tid in passed_ids]
-            if len(matched) == len(test_ids):
-                status = "PASS"
-            elif matched:
-                status = "PARTIAL"
-            else:
-                # executor ran but these specific tests may not be in the XML yet;
-                # mark as PARTIAL rather than NOT_RUN to avoid false negatives.
-                status = "PARTIAL" if executor_ran else "NOT_RUN"
+        passed = [test_id for test_id in test_ids if test_id in passed_ids]
+        status = "PASS" if len(passed) == len(test_ids) else ("PARTIAL" if passed else "NOT_RUN")
         dimensions[dimension] = {
             "status": status,
             "test_ids": test_ids,
+            "missing": [test_id for test_id in test_ids if test_id not in passed_ids],
             "executor_architecture": executor.get("machine", "NOT_RUN"),
             "host_architecture": host.get("machine", "NOT_RUN"),
         }
