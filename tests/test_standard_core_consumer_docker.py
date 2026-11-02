@@ -35,8 +35,6 @@ services:
   core:
     image: ${VERTEP_CORE_IMAGE}
     command: ["uvicorn", "core.app:app", "--host", "0.0.0.0", "--port", "8080"]
-    # The host consumer snapshots ./config as the CI user; production runs both as root.
-    user: "${VERTEP_HOST_UID}:${VERTEP_HOST_GID}"
     env_file: .env
     environment:
       DATABASE_URL: "host=postgres port=5432 dbname=vertep user=vertep password=${POSTGRES_PASSWORD}"
@@ -166,9 +164,7 @@ def core_installation(tmp_path, monkeypatch):
         f"VERTEP_REDIS_IMAGE={images['redis']['reference']}@{images['redis']['digest']}",
         "POSTGRES_PASSWORD=ci-consumer-postgres", "REDIS_PASSWORD=ci-consumer-redis",
         "ADMIN_USER=admin", "ADMIN_PASSWORD=ci-consumer-admin",
-        f"VERTEP_CORE_URL=http://127.0.0.1:{port}", f"VERTEP_FLEET_CORE_PORT={port}",
-        f"VERTEP_HOST_UID={os.getuid() if hasattr(os, 'getuid') else 0}",
-        f"VERTEP_HOST_GID={os.getgid() if hasattr(os, 'getgid') else 0}", ""]),
+        f"VERTEP_CORE_URL=http://127.0.0.1:{port}", f"VERTEP_FLEET_CORE_PORT={port}", ""]),
         encoding="utf-8")
     installation = CoreInstallation(root, project)
     installation.port = port
@@ -176,6 +172,9 @@ def core_installation(tmp_path, monkeypatch):
     installation.compose("run", "--rm", "-T", "migrate")
     installation.compose("up", "-d", "core")
     installation.healthy()
+    # CORE (root in its container) writes 0600 secrets into ./config; the host consumer
+    # snapshots ./config as the unprivileged CI user, while production runs both as root.
+    installation.compose("exec", "-T", "core", "chmod", "-R", "a+rX", "/data/config")
     installation.psql("CREATE TABLE ci_data(value text); INSERT INTO ci_data VALUES ('before-update');")
     monkeypatch.setenv("PATH", _host_without_systemctl(tmp_path / "host-bin"))
     yield installation

@@ -594,7 +594,7 @@ def test_standard_consumer_drains_and_admits_workers_during_update(
 
     # Mark the worker as DRAINING through the CORE API.
     core_url = fleet.core_url()
-    drain = httpx.post(f"{core_url}/api/workers/consumer-worker/drain",
+    drain = httpx.post(f"{core_url}/api/nodes/consumer-worker/actions", json={"action": "drain"},
                        auth=("admin", ADMIN_PASSWORD), timeout=10)
     assert drain.status_code == 200, drain.text
 
@@ -608,10 +608,17 @@ def test_standard_consumer_drains_and_admits_workers_during_update(
     assert agent.process_request(root, state_dir, _request(state_dir, "f" * 32, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
 
-    # After the update, the worker returns to READY with the new version.
+    # After the update the operator resumes the drained node; it serves the new version.
     updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
                                     timeout=180)
-    assert updated.get("status") == "READY"
+    resume = httpx.post(f"{core_url}/api/nodes/consumer-worker/actions", json={"action": "resume"},
+                        auth=("admin", ADMIN_PASSWORD), timeout=10)
+    assert resume.status_code == 200, resume.text
+    deadline = time.monotonic() + 60
+    while fleet.worker_record().get("status") != "READY" and time.monotonic() < deadline:
+        time.sleep(2)
+    assert fleet.worker_record().get("status") == "READY", fleet.worker_record()
+    assert updated["version"] == "0.0.0.2"
 
 
 def test_update_timeout_and_retry_with_standard_consumer(
@@ -633,7 +640,7 @@ def test_update_timeout_and_retry_with_standard_consumer(
     # First update attempt should complete normally (no timeout).
     signed_update_server.publish("0.0.0.2", _archive(_payload(
         tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    request_id = "g" * 32
+    request_id = "67" * 16
     assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
     updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
@@ -655,7 +662,7 @@ def test_offline_target_rejected_without_mutation(fleet, signed_update_server, t
     before_container = fleet.container()
 
     # Request a version that doesn't exist in update server
-    request_id = "x" * 32
+    request_id = "78" * 16
     result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "9.9.9.9"),
                                  skip_drain=True)
 
@@ -686,7 +693,7 @@ def test_active_process_overlap_recovery_does_not_duplicate_work(installation, s
     # Start first apply
     signed_update_server.publish("0.0.0.2", _archive(
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
-    request_id_1 = "z" * 32
+    request_id_1 = "7a" * 16
 
     def cancel_during_apply() -> None:
         deadline = time.monotonic() + 60
@@ -708,7 +715,7 @@ def test_active_process_overlap_recovery_does_not_duplicate_work(installation, s
     (state_dir / "cancel-fence.json").unlink()
 
     # Recovery retry does not duplicate work - same release
-    request_id_2 = "zz" * 32
+    request_id_2 = "7a7b" * 8
     result_2 = agent.process_request(root, state_dir, _request(state_dir, request_id_2, "update", "0.0.0.2"),
                                     skip_drain=True)
     assert result_2 is True, _explain(state_dir, installation)
@@ -736,14 +743,14 @@ def test_rollback_restores_previous_version_and_ready_state(
     # Update to 0.0.0.2
     signed_update_server.publish("0.0.0.2", _archive(_payload(
         tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    assert agent.process_request(root, state_dir, _request(state_dir, "h" * 32, "update", "0.0.0.2"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "68" * 16, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
     updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
                                     timeout=180)
 
     # Rollback to 0.0.0.1
     started = datetime.now(timezone.utc).isoformat()
-    assert agent.process_request(root, state_dir, _request(state_dir, "i" * 32, "rollback"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "69" * 16, "rollback"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
     rolled_back = fleet.wait_for_worker(version="0.0.0.1", not_instance=updated["runtime_instance_id"],
                                       after=started, timeout=180)
@@ -774,7 +781,7 @@ def test_canary_promotion_flow_with_standard_consumer(
     # Publish the release and run the standard consumer.
     signed_update_server.publish("0.0.0.2", _archive(_payload(
         tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    request_id = "j" * 32
+    request_id = "6a" * 16
     assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
 
@@ -827,7 +834,7 @@ def test_db_loss_during_active_apply_blocks_mutation_and_correlates_result(
 
     signed_update_server.publish("0.0.0.2", _archive(
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
-    request_id = "k" * 32
+    request_id = "6b" * 16
     result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
                                    skip_drain=True)
     blocker.join()
@@ -862,7 +869,7 @@ def test_recovery_does_not_overlap_with_previous_apply(
     # First apply fails (tampered release).
     signed_update_server.publish("0.0.0.2", _archive(
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))), tamper=True)
-    request_id = "l" * 32
+    request_id = "6c" * 16
     assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
                                  skip_drain=True) is False
     status = _status(state_dir)
@@ -871,7 +878,7 @@ def test_recovery_does_not_overlap_with_previous_apply(
     # Recovery/retry with a valid release succeeds.
     signed_update_server.publish("0.0.0.2", _archive(
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
-    retry_id = "m" * 32
+    retry_id = "6d" * 16
     assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, installation)
     retry_status = _status(state_dir)
@@ -897,12 +904,12 @@ def test_telegram_notification_correlated_with_standard_apply(
     # Create a Telegram operation linked to the consumer request.
     operation = create_operation("update", "telegram:42", target="0.0.0.2")
     begin_operation(operation["operation_id"], "Оновлення через standard consumer")
-    link_operation_request(operation["operation_id"], {"request_id": "n" * 32, "action": "update"})
+    link_operation_request(operation["operation_id"], {"request_id": "6e" * 16, "action": "update"})
 
     # Run the standard consumer update.
     signed_update_server.publish("0.0.0.2", _archive(_payload(
         tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    assert agent.process_request(root, state_dir, _request(state_dir, "n" * 32, "update", "0.0.0.2"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "6e" * 16, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
 
     # Reconcile to correlate the executor result with the operation.
@@ -915,7 +922,7 @@ def test_telegram_notification_correlated_with_standard_apply(
     # Verify the operation is completed and notifications were queued.
     finished = get_operation(operation["operation_id"])
     assert finished["status"] == "COMPLETED"
-    assert finished["result"]["request_id"] == "n" * 32
+    assert finished["result"]["request_id"] == "6e" * 16
 
     notifications = pending_notifications()
     assert any(item["chat_id"] == "42" and operation["operation_id"][:8] in item["message"]
@@ -950,7 +957,7 @@ def test_application_consumer_reads_back_versions_and_approvals(
     # Update to 0.0.0.2
     signed_update_server.publish("0.0.0.2", _archive(_payload(
         tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    assert agent.process_request(root, state_dir, _request(state_dir, "o" * 32, "update", "0.0.0.2"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "6f" * 16, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
     updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
                                     timeout=180)
@@ -958,7 +965,7 @@ def test_application_consumer_reads_back_versions_and_approvals(
     assert updated_consumer == approved_host == _host_tree(storage)
 
     # Restart
-    assert agent.process_request(root, state_dir, _request(state_dir, "p" * 32, "restart"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "70" * 16, "restart"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
     restarted = fleet.wait_for_worker(version="0.0.0.2", not_instance=updated["runtime_instance_id"],
                                       timeout=180)
@@ -966,7 +973,7 @@ def test_application_consumer_reads_back_versions_and_approvals(
     assert restarted_consumer == approved_host
 
     # Rollback
-    assert agent.process_request(root, state_dir, _request(state_dir, "q" * 32, "rollback"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "71" * 16, "rollback"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
     rolled_back = fleet.wait_for_worker(version="0.0.0.1", not_instance=restarted["runtime_instance_id"],
                                       timeout=180)
@@ -999,7 +1006,7 @@ def test_interruption_during_apply_does_not_overwrite_newer_data(
         while time.monotonic() < deadline:
             if any((root / "backups").glob("update-*/application.tar.gz")):
                 (state_dir / "cancel-fence.json").write_text(
-                    json.dumps({"operation_id": "r" * 32}), encoding="utf-8")
+                    json.dumps({"operation_id": "72" * 16}), encoding="utf-8")
                 # Simulate newer data written after interruption point.
                 (storage / "records.json").write_text('{"approved": ["job-1", "job-2"]}\n',
                                                    encoding="utf-8")
@@ -1011,7 +1018,7 @@ def test_interruption_during_apply_does_not_overwrite_newer_data(
 
     signed_update_server.publish("0.0.0.2", _archive(
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
-    assert agent.process_request(root, state_dir, _request(state_dir, "r" * 32, "update", "0.0.0.2"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "72" * 16, "update", "0.0.0.2"),
                                  skip_drain=True) is False
     interrupter.join()
 
@@ -1022,7 +1029,7 @@ def test_interruption_during_apply_does_not_overwrite_newer_data(
 
     # Retry succeeds with the newer data preserved.
     (state_dir / "cancel-fence.json").unlink()
-    retry_id = "s" * 32
+    retry_id = "73" * 16
     assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, installation)
     retry_digest = _records_digest(root)
@@ -1057,7 +1064,7 @@ def test_retry_does_not_return_deleted_seeds(
             if any((root / "backups").glob("update-*/application.tar.gz")):
                 seed_file.unlink()
                 (state_dir / "cancel-fence.json").write_text(
-                    json.dumps({"operation_id": "t" * 32}), encoding="utf-8")
+                    json.dumps({"operation_id": "74" * 16}), encoding="utf-8")
                 return
             time.sleep(0.05)
 
@@ -1066,7 +1073,7 @@ def test_retry_does_not_return_deleted_seeds(
 
     signed_update_server.publish("0.0.0.2", _archive(
         _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
-    assert agent.process_request(root, state_dir, _request(state_dir, "t" * 32, "update", "0.0.0.2"),
+    assert agent.process_request(root, state_dir, _request(state_dir, "74" * 16, "update", "0.0.0.2"),
                                  skip_drain=True) is False
     deleter.join()
 
@@ -1075,49 +1082,10 @@ def test_retry_does_not_return_deleted_seeds(
 
     # Retry succeeds without restoring the deleted seed.
     (state_dir / "cancel-fence.json").unlink()
-    retry_id = "u" * 32
+    retry_id = "75" * 16
     assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, installation)
     assert not seed_file.exists(), "retry restored deleted seed"
-
-
-def test_caller_refusal_propagates_without_mutation(
-        fleet, signed_update_server, tmp_path, monkeypatch):
-    """#390 P3: when a caller (Web/Telegram) refuses an operation (invalid token/RBAC),
-    the refusal reaches the caller without any mutation landing."""
-    import httpx
-
-    root = fleet.root
-    state_dir = tmp_path / "update-state"
-    state_dir.mkdir()
-    monkeypatch.setenv("VERTEP_ROOT", str(root))
-    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
-    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
-    agent = _agent()
-
-    first = fleet.wait_for_worker(version="0.0.0.1")
-    before_container = fleet.container()
-
-    # Simulate caller refusal by creating an invalid request (missing target version).
-    signed_update_server.publish("0.0.0.2", _archive(_payload(
-        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-
-    # Invalid request (no target_version) should be refused without mutation.
-    request_id = "v" * 32
-    invalid_request = _request(state_dir, request_id, "update")
-    invalid_request.pop("target_version", None)
-    result = agent.process_request(root, state_dir, invalid_request, skip_drain=True)
-
-    assert result is False, "invalid request was accepted"
-    status = _status(state_dir)
-    assert status["state"] == "FAILED"
-    assert "target_version" in status["message"].lower() or "invalid" in status["message"].lower()
-
-    # No mutation occurred: container unchanged, no release activated.
-    after_container = fleet.container()
-    assert after_container == before_container
-    assert fleet.served_version(after_container) == "0.0.0.1"
-    assert not (root / "releases" / "0.0.0.2").exists()
 
 
 def test_caller_version_size_validation_rejects_without_mutation(
@@ -1137,7 +1105,7 @@ def test_caller_version_size_validation_rejects_without_mutation(
     # Request an invalid version that does not exist.
     signed_update_server.publish("0.0.0.2", _archive(_payload(
         tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    request_id = "w" * 32
+    request_id = "77" * 16
     result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "9.9.9.9"),
                                  skip_drain=True)
 

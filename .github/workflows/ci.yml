@@ -58,7 +58,8 @@ jobs:
 
   local-contracts:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The suite also runs the Docker-backed standard consumer tests (~16 min before #393).
+    timeout-minutes: 45
     env:
       VERTEP_STREAM_FAILURES: "1"
       VERTEP_TEST_REDIS_URL: redis://localhost:6379/0

@@ -223,6 +223,7 @@ class PinnedRuntime:
         self.materials.mkdir(parents=True, exist_ok=True)
         self.requests: list[tuple[str, str, dict]] = []
         self.submits: list[dict] = []
+        self.answers: list[dict] = []
         self.keys: dict[str, str] = {}
         self.corrupt_download: bytes | None = None
         self._assembly = FFmpegAdapter()
@@ -250,8 +251,10 @@ class PinnedRuntime:
         if path == "/api/v1/video_materials":
             return self._upload_material(kwargs)
         if path == "/api/v1/videos":
-            return self._submit(kwargs["json"], (kwargs.get("headers") or {}).get(
+            answer = self._submit(kwargs["json"], (kwargs.get("headers") or {}).get(
                 "x-vertep-submit-key"))
+            self.answers.append(answer.json())
+            return answer
         match = re.fullmatch(r"/api/v1/tasks/(.+)", path)
         if match:
             return self._status(match.group(1))
@@ -360,6 +363,7 @@ class LivePinnedRuntime:
 
         self.requests: list[tuple[str, str, dict]] = []
         self.submits: list[dict] = []
+        self.answers: list[dict] = []
         self.corrupt_download: bytes | None = None
         self._http = HttpTransport()
 
@@ -369,6 +373,8 @@ class LivePinnedRuntime:
         if method == "POST" and path == "/api/v1/videos":
             self.submits.append(kwargs.get("json"))
         response = getattr(self._http, method.lower())(url, **kwargs)
+        if method == "POST" and path == "/api/v1/videos":
+            self.answers.append(response.json())
         if (self.corrupt_download is not None and method == "GET"
                 and path.startswith(DOWNLOAD_ROUTE)):
             # A real pinned render whose downloaded bytes are faulted (#392 M3).
@@ -1004,7 +1010,10 @@ def test_lease_expiry_reassigns_task_without_duplicate_submission(engine, runtim
     assets = _approved_assets(tmp_path)
     key = f"job-lease-v1-{os.urandom(4).hex()}"
     first = engine.render(tmp_path / "first" / "video-v1.mp4", submit_key=key, **assets)
-    submitted = len(runtime.submits)
     taken_over = engine.render(tmp_path / "second" / "video-v1.mp4", submit_key=key, **assets)
-    assert len(runtime.submits) == submitted, "the reassigned attempt resubmitted upstream"
+    # Counted at the runtime's answer, not at the POST: the wrapper answers the repeated
+    # key from its durable record ("reconciled") instead of creating a second task.
+    original, repeated = runtime.answers[-2], runtime.answers[-1]
+    assert repeated.get("message") == "reconciled", repeated
+    assert repeated["data"]["task_id"] == original["data"]["task_id"],         "the reassigned attempt created a second upstream task"
     assert first.is_file() and taken_over.is_file()

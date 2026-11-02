@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.10
+- `tests/test_standard_host_consumer_docker.py`: тести, додані в 0.0.3.7, використовували недопустимі `request_id` (`"g" * 32` тощо) і падали на «Invalid update request» ще до суті — замінено на hex-ідентифікатори; drain-тест використовує справжній `POST /api/nodes/{id}/actions` (drain → update → resume); прибрано `test_caller_refusal_propagates_without_mutation`, що вимагав відмови для штатного update без `target_version`.
+- `tests/test_standard_core_consumer_docker.py`: скасовано запуск CORE з UID/GID хоста з 0.0.3.8, через який CORE не ставав healthy; читання `config/` для бекапу штатним consumer забезпечує `chmod a+rX` у disposable-контейнері.
+- `tests/test_mpt_media_matrix.py`: тест повторного призначення lease перевіряє відповідь runtime (`reconciled` і той самий `task_id`), а не кількість POST, які wrapper відповідає з durable-запису.
+- `.github/workflows/ci.yml`: `local-contracts` отримав `timeout-minutes: 45`, бо набір виконує також Docker-тести штатного consumer.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.9
 - `scripts/moneyprinter-recovery-check.py`: після падіння wrapper у вікні acceptance→staging перевірка чекає, поки upstream асинхронно створить каталог саме цього task, і вимагає рівно один новий task.
 - `.github/workflows/ci.yml` (`ubuntu-bootstrap-lifecycle`): запити `curl` у bootstrap отримують read-only токен job через `CURL_HOME`, щоб спільний ліміт GitHub API (`403`) не зривав інсталяцію; `qualify_ubuntu_bootstrap.py` не падає зі зворотним трасуванням, якщо Docker ще не встановлено.
