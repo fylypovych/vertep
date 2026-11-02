@@ -103,7 +103,9 @@ jobs:
       - name: Run test suite
         run: |
           openssl version
-          python -m pytest -q -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"
+          # The Docker-backed standard consumer tests are required in fleet-persistence-runtime-acceptance;
+          # running them here too doubled the job time past its limit.
+          python -m pytest -q -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
       - name: Збереження exact-SHA process та trust acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7

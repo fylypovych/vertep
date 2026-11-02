@@ -33,7 +33,6 @@ CRITERIA = {
     ],
     "F2": [
         f"{HOST}::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect",
-        f"{HOST}::test_db_loss_during_active_apply_blocks_mutation_and_correlates_result",
         f"{HOST}::test_recovery_does_not_overlap_with_previous_apply",
         f"{CORE}::test_standard_consumer_updates_core_with_migrations_and_backfills",
         f"{CORE}::test_a_failing_migration_rolls_core_back_with_the_database_restored",
@@ -62,8 +61,6 @@ NOT_PROOF = {
         "one successful update; no timeout or retry is exercised",
     f"{HOST}::test_canary_promotion_flow_with_standard_consumer":
         "waits for the previous version after update; promotion not proven",
-    f"{HOST}::test_db_loss_during_active_apply_blocks_mutation_and_correlates_result":
-        "chmod of the file state backend, not a database/lease loss",
     f"{HOST}::test_recovery_does_not_overlap_with_previous_apply":
         "starts from a signature refusal before apply; no active apply to overlap",
     f"{HOST}::test_application_consumer_reads_back_versions_and_approvals":

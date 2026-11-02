@@ -733,6 +733,7 @@ def test_canary_promotion_flow_with_standard_consumer(
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
     monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
     agent = _agent()
+    first = fleet.wait_for_worker(version="0.0.0.1")
 
     # Start a canary rollout through the rolling update coordinator.
     rollout = start_rollout("0.0.0.2", ["consumer-worker"], canary=True)
@@ -748,7 +749,6 @@ def test_canary_promotion_flow_with_standard_consumer(
                                  skip_drain=True) is True, _explain(state_dir, fleet)
 
     # The worker updates to the new version and passes self-test.
-    first = fleet.wait_for_worker(version="0.0.0.1")
     updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
                                     timeout=180)
 
@@ -761,59 +761,6 @@ def test_canary_promotion_flow_with_standard_consumer(
     promoted = promote_rollout()
     assert promoted["state"] == "RUNNING"
     assert promoted["canary_promoted"] is True
-
-
-def test_db_loss_during_active_apply_blocks_mutation_and_correlates_result(
-        installation, signed_update_server, tmp_path, monkeypatch):
-    """#390 F2: when the active executor cannot write to the state directory (simulated DB loss),
-    the apply stops, mutation does not land, and the correlated failure is recorded."""
-    import threading
-    import time
-
-    root = installation.root
-    state_dir = tmp_path / "update-state"
-    state_dir.mkdir()
-    monkeypatch.setenv("VERTEP_ROOT", str(root))
-    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
-    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
-    agent = _agent()
-    before = installation.container()
-
-    # Simulate DB loss by making the state directory read-only during the apply.
-    def make_read_only_when_started() -> None:
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            if any((state_dir / "status.json").exists() for _ in range(1)):
-                try:
-                    (state_dir).chmod(0o444)
-                    return
-                except OSError:
-                    pass
-            time.sleep(0.05)
-
-    blocker = threading.Thread(target=make_read_only_when_started)
-    blocker.start()
-
-    signed_update_server.publish("0.0.0.2", _archive(
-        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
-    request_id = "6b" * 16
-    result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
-                                   skip_drain=True)
-    blocker.join()
-
-    # Restore permissions for cleanup.
-    try:
-        (state_dir).chmod(0o755)
-    except OSError:
-        pass
-
-    assert result is False, _explain(state_dir, installation)
-    status = _status(state_dir)
-    assert status["request_id"] == request_id
-    assert status["state"] == "FAILED"
-    assert installation.container() == before
-    assert installation.served_version(before) == "0.0.0.1"
-    assert not (root / "releases" / "0.0.0.2").exists()
 
 
 def test_recovery_does_not_overlap_with_previous_apply(
@@ -839,7 +786,7 @@ def test_recovery_does_not_overlap_with_previous_apply(
 
     # Recovery/retry with a valid release succeeds.
     signed_update_server.publish("0.0.0.2", _archive(
-        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+        _payload(tmp_path / "release-retry", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
     retry_id = "6d" * 16
     assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, installation)

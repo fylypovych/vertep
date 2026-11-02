@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.14
+- `tests/test_standard_host_consumer_docker.py`: canary-тест фіксує попередній екземпляр вузла до оновлення, а не після нього; повторний реліз у recovery-тесті збирається у власному каталозі; прибрано `test_db_loss_during_active_apply_blocks_mutation_and_correlates_result` — `chmod` каталогу стану не моделює втрату БД, блокував сам lease і залишав нечитабельний каталог, що зривав завантаження evidence.
+- `scripts/report_criterion_390.py`: прибрано рядок видаленого тесту.
+- `.github/workflows/ci.yml`: `local-contracts` не запускає Docker-тести штатного consumer повторно — вони обов'язкові у `fleet-persistence-runtime-acceptance`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.13
 - `tests/test_standard_host_consumer_docker.py`: прибрано `test_active_process_overlap_recovery_does_not_duplicate_work` (з 0.0.3.7) — він дублював наявний cancel-тест, за аудитом #396 не був доказом, і на ньому щоразу обривався runner у fleet та `local-contracts`; CORE fixture отримав `RATE_LIMIT_PER_MINUTE`, бо опитування з однієї адреси давало `429`.
 - `scripts/report_criterion_390.py`: прибрано рядок видаленого тесту.
