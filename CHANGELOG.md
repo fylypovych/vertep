@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.12
+- `tests/test_mpt_process_lifecycle.py`: процесний доказ M2 виконується лише в pinned job (або з `VERTEP_MPT_PROCESS_LIFECYCLE=1`); у загальному наборі на stand-in він зависав і зривав `local-contracts`. На pinned runtime 0.0.3.11 обидва процесні тести пройшли.
+- `tests/test_standard_host_consumer_docker.py`: drain-тест читає рішення drain з `update_state.desired_state`, як його публікує `/api/workers`.
+- `.github/workflows/ci.yml`: fleet job фоново записує використання пам'яті й диска кожні 15 с, щоб причина обриву runner лишалась у лозі.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.11
 - **#397 M2**: новий `tests/test_mpt_process_lifecycle.py` — окремі процеси CORE (`uvicorn core.app:app`) і штатний `python -m worker.service`: CORE лише відправляє assembly-спробу, вузол забирає її, рендерить через `MoneyPrinterEngine` у власному root, CORE перевіряє hash та імпортує; дві ревізії з незмінною історією, відмова застарілого/повторного схвалення, Native regression без вузла. Тест додано до pinned job CI.
 - **#397 M5**: `issue-122-acceptance-report.py` оцінює M2 за `process-lifecycle-pinned.xml` (PASS лише коли обидва процесні тести виконані на pinned-маршруті, інакше NOT_RUN/FAIL) і хешує цей артефакт.

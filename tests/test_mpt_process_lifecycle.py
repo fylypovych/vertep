@@ -40,9 +40,12 @@ ADMIN = ("admin", "mpt-lifecycle-admin")
 NODE_TOKEN = "mpt-lifecycle-node-token"
 STAND_IN_TOKEN = "mpt-lifecycle-runtime-token"
 
+# The proof belongs to the pinned job (real runtime). The generic suite would only run the
+# stand-in, which adds minutes of real processes without being M2 evidence.
 pytestmark = pytest.mark.skipif(
-    sys.platform == "win32" and not os.getenv("VERTEP_MPT_PROCESS_LIFECYCLE"),
-    reason="process lifecycle needs POSIX FFmpeg/process groups; run on Linux CI")
+    not PINNED_URL and not os.getenv("VERTEP_MPT_PROCESS_LIFECYCLE"),
+    reason="M2 process lifecycle runs on the pinned runtime job "
+           "(or set VERTEP_MPT_PROCESS_LIFECYCLE=1 for the stand-in)")
 
 
 # The stock node loop.  Windows lacks os.getloadavg (a POSIX host metric), so only there the

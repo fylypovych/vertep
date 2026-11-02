@@ -600,7 +600,8 @@ def test_standard_consumer_drains_and_admits_workers_during_update(
 
     # Verify the worker refuses admission in DRAINING state.
     draining = fleet.wait_for_worker(version="0.0.0.1", timeout=30)
-    assert draining.get("desired_state") == "DRAINING", draining
+    # The worker list exposes the control decision under ``update_state``.
+    assert (draining.get("update_state") or {}).get("desired_state") == "DRAINING", draining
 
     # #396 F1: an actual admission attempt of the draining node is refused by CORE.
     claim = httpx.post(f"{core_url}/api/tasks/claim", headers={"X-Vertep-Token": NODE_TOKEN},
