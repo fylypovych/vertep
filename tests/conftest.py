@@ -81,6 +81,15 @@ def pytest_unconfigure(config):
         shutil.rmtree(_TEST_STATE_ROOT, ignore_errors=True)
 
 
+def pytest_runtest_logreport(report):
+    """CI diagnostics: print a failure as it happens, so a job that is cancelled or
+    times out before the final summary still shows why each test failed."""
+    if report.failed and os.getenv("VERTEP_STREAM_FAILURES") == "1":
+        sys.stderr.write(f"\n=== FAILED {report.nodeid} ({report.when}) ===\n"
+                         f"{report.longreprtext[-6000:]}\n")
+        sys.stderr.flush()
+
+
 def _finish_executor_work(pool) -> None:
     """Fence both existing worker threads, including their completion callbacks."""
     barrier = threading.Barrier(3)

@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.9
+- `scripts/moneyprinter-recovery-check.py`: після падіння wrapper у вікні acceptance→staging перевірка чекає, поки upstream асинхронно створить каталог саме цього task, і вимагає рівно один новий task.
+- `.github/workflows/ci.yml` (`ubuntu-bootstrap-lifecycle`): запити `curl` у bootstrap отримують read-only токен job через `CURL_HOME`, щоб спільний ліміт GitHub API (`403`) не зривав інсталяцію; `qualify_ubuntu_bootstrap.py` не падає зі зворотним трасуванням, якщо Docker ще не встановлено.
+- `tests/conftest.py`: при `VERTEP_STREAM_FAILURES=1` трейсбек кожного падіння друкується одразу; увімкнено для `local-contracts` і `fleet-persistence-runtime-acceptance` разом із `faulthandler_timeout=600`, щоб скасований чи завислий job показував причину.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.8
 - Видалено `debug_test.py`, випадково закомічений у 0.0.3.7: він ламав збирання тестів у `local-contracts` (Windows-шлях на Linux).
 - **#395 M3**: виправлено fencing assembly-спроби в `core/api/tasks.py` — після закінчення lease і передачі task іншому вузлу попередній власник втрачає ownership, тож його запізнілий renew/результат відхиляється (`409`); додано тест повторного призначення з тим самим `submit_key`.

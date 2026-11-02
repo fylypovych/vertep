@@ -229,6 +229,10 @@ except httpx.HTTPError as error:
 exit_code = process.wait(timeout=60)
 window = _submit_record(arguments["key"]) or {}
 task_id = window.get("task_id")
+# The upstream creates the task directory asynchronously after accepting the submit.
+deadline = time.monotonic() + 60
+while task_id and str(task_id) not in tasks() and time.monotonic() < deadline:
+    time.sleep(0.5)
 task_voice = (Path(TASKS_DIR) / str(task_id)
               / f"{VOICE_TASK_FILENAME}{marker_suffix(arguments['marker'])}")
 print(json.dumps({"lost": lost, "exit_code": exit_code, "window_state": window.get("state"),
@@ -327,7 +331,8 @@ def scenario(container: Container, restart, evidence: dict) -> None:
     evidence["window_acceptance"] = window
     require(window["exit_code"] == 137 and "status" not in window["lost"],
             "the wrapper process died before answering the accepted submit", evidence)
-    require(bool(window["task_id"]) and len(window["tasks"]) == len(window["tasks_before"]) + 1,
+    require(bool(window["task_id"]) and window["task_id"] in window["tasks"]
+            and len(window["tasks"]) == len(window["tasks_before"]) + 1,
             "the upstream accepted exactly one task before the crash", evidence)
     require(window["window_state"] == "submitted" and not window["task_voice_present"],
             "the approved voice is not in the task directory after the crash", evidence)

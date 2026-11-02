@@ -318,8 +318,12 @@ def main() -> int:
     except (AssertionError, RuntimeError, OSError, subprocess.SubprocessError, ValueError) as error:
         report["error"] = str(error)[-4000:]
     finally:
-        logs = compose("logs", "--no-color", "--tail", "200", check=False)
-        (evidence_dir / "compose-logs.txt").write_text(logs.stdout + logs.stderr, encoding="utf-8")
+        try:
+            logs = compose("logs", "--no-color", "--tail", "200", check=False)
+            text = logs.stdout + logs.stderr
+        except OSError as error:  # bootstrap failed before Docker was installed
+            text = f"compose logs unavailable: {error}"
+        (evidence_dir / "compose-logs.txt").write_text(text, encoding="utf-8")
         arguments.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({key: report.get(key) for key in ("result", "installed_version", "error")}))
     return 0 if report["result"] == "PASS" else 1

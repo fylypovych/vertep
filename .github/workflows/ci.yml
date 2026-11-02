@@ -60,6 +60,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
+      VERTEP_STREAM_FAILURES: "1"
       VERTEP_TEST_REDIS_URL: redis://localhost:6379/0
       VERTEP_REQUIRE_PKI_CALLER_ACCEPTANCE: "1"
     services:
@@ -101,7 +102,7 @@ jobs:
       - name: Run test suite
         run: |
           openssl version
-          python -m pytest -q -o junit_family=legacy --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"
+          python -m pytest -q -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"
       - name: Збереження exact-SHA process та trust acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -195,6 +196,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      VERTEP_STREAM_FAILURES: "1"
       VERTEP_REQUIRE_DISTRIBUTED_UPDATE_FENCE: "1"
       VERTEP_UPDATE_LEASE_DATABASE_URL: postgresql://vertep:ci-only@localhost:5432/vertep
       VERTEP_REQUIRE_CONNECTED_RESTORE: "1"
@@ -224,7 +226,7 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run actual PostgreSQL fencing and connected healthy restore
         run: >-
-          python -m pytest -q -o junit_family=legacy
+          python -m pytest -q -o junit_family=legacy -o faulthandler_timeout=600
           --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"
           --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"
           tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply
@@ -373,7 +375,14 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/docker.sources
           sudo rm -rf /var/lib/docker /var/lib/containerd
       - name: Bootstrap, renew TLS and rerun
-        run: sudo -E python3 scripts/qualify_ubuntu_bootstrap.py --output "$RUNNER_TEMP/ubuntu-bootstrap/evidence.json"
+        # The unauthenticated GitHub API limit is shared by the runner IP (403); the
+        # read-only job token is handed to bootstrap's curl calls via CURL_HOME only.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/curl"
+          ( umask 077; printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" > "$RUNNER_TEMP/curl/.curlrc" )
+          CURL_HOME="$RUNNER_TEMP/curl" sudo -E python3 scripts/qualify_ubuntu_bootstrap.py --output "$RUNNER_TEMP/ubuntu-bootstrap/evidence.json"
       - name: Upload Ubuntu bootstrap evidence
         if: always()
         uses: actions/upload-artifact@v7
