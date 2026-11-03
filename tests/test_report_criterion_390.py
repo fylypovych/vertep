@@ -29,12 +29,21 @@ def test_without_junit_every_criterion_is_not_run():
     assert {value["overall"] for value in report["criteria"].values()} == {"NOT_RUN"}
 
 
-def test_green_not_proof_tests_cap_the_criterion_at_partial(tmp_path):
+def test_green_not_proof_tests_never_prove_a_criterion(tmp_path):
+    """#393: a not-proof test never makes a criterion PASS on its own; it stays visible
+    with its reason. Only the criterion's proof tests decide PASS."""
     target = module()
+    not_proof = [test for test in target.CRITERIA["F1"] if test in target.NOT_PROOF]
+    assert not_proof
+    alone = target.report([_junit(tmp_path / "alone.xml", {test: "PASS" for test in not_proof})])
+    assert alone["criteria"]["F1"]["overall"] == "PARTIAL"
+
     every = {test: "PASS" for tests in target.CRITERIA.values() for test in tests}
-    criteria = target.report([_junit(tmp_path / "all.xml", every)])["criteria"]
-    assert criteria["F1"]["overall"] == "PARTIAL"
-    assert criteria["P4"]["overall"] == "PARTIAL"
+    full = target.report([_junit(tmp_path / "all.xml", every)])["criteria"]["F1"]
+    assert full["overall"] == "PASS"
+    rows = {row["test_id"]: row for row in full["tests"]}
+    assert all(rows[test]["proof"] is False and rows[test]["not_proof_reason"] for test in not_proof)
+    assert all(row["expected"] == "PASS" and row["junit"] for row in full["tests"])
 
 
 def test_open_source_subcases_keep_a_green_criterion_partial(tmp_path, monkeypatch):

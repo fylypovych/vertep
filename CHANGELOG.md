@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.21
+- Тести #402 M3 на процесному маршруті (stand-in): справжній timeout рендера 600 с із повтором за тим самим submit key, перезапуск вузла до voice staging, cancel при недосяжному runtime.
+- Звіт `issue-122-acceptance-report.py`: M3 отримує PASS лише за умови, що пройшли всі процесні сценарії, а не тільки 28 pinned assertions; для кожного сценарію — expected/actual, маршрут і траса з JUnit (task ID і кількість відправок в upstream, submit key, версії та хеші).
+- Звіт критерію 390: тести з позначкою «не доказ» видимі з причиною, але не блокують критерій; кожен рядок має `expected` і файл JUnit, звіт — посилання на CI run.
+- Виправлено тест моніторингу в браузері після перекладу станів алертів («Стан: вирішене»); Browser-тест Update Center на стандартному consumer коректно пропускається без bash/Docker.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.20
 - Оновлення: інсталяцію CORE зі старим пласким layout, яка вже рендерила відео, знову можна оновити — `release-layout.py` не враховує дані інсталяції (`storage`, `config`, `logs` тощо) у digest і не копіює їх у реліз; rollback до першої активації більше не падає через відсутній `.activation.json`.
 - Тести #401: Update Browser через стандартний consumer (збій, rollback, повтор), Browser restore через реальні CORE і Backup Service, читання застосунком після restore, workers-first rollout із timeout CORE, Native-рендер, який CORE читає після update/rollback/recreate, а також versions/approvals/квитанції/хеші/mapping для Native і MPT після recreate і restore.

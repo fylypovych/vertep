@@ -557,8 +557,21 @@ def _pinned(module, directory: Path | None) -> tuple[dict, dict[str, dict]]:
     return evidence, {row["id"]: row for row in rows}
 
 
+def _stand_in_junit(directory: Path, report_module) -> Path:
+    """The process-lifecycle JUnit with every M3 stand-in process case passed."""
+    root = ET.Element("testsuite", name="pytest")
+    for test_id in report_module.M3_STAND_IN_TESTS:
+        module_path, name = test_id.split("::")
+        ET.SubElement(root, "testcase", name=name,
+                      classname=module_path.removesuffix(".py").replace("/", "."))
+    ET.ElementTree(root).write(directory / report_module.PINNED_PROCESS_LIFECYCLE,
+                               encoding="utf-8", xml_declaration=True)
+    return directory
+
+
 def test_a_pinned_bundle_that_attests_the_tree_answers_m1_and_m3(report_module, tmp_path):
-    evidence, rows = _pinned(report_module, _bundle(tmp_path, report_module))
+    evidence, rows = _pinned(report_module, _stand_in_junit(
+        _bundle(tmp_path, report_module), report_module))
 
     assert evidence["problems"] == [], evidence["problems"]
     assert rows["M1"]["status"] == report_module.PASS
@@ -646,9 +659,9 @@ def test_two_artefacts_that_disagree_on_the_image_digest_are_not_evidence(
 
 def test_a_skipped_pinned_matrix_case_is_not_a_pass(report_module, tmp_path):
     voice = _matrix_case_name(report_module.VOICE_STAGING_NEGATIVE_TEST)
-    _, rows = _pinned(report_module, _bundle(
+    _, rows = _pinned(report_module, _stand_in_junit(_bundle(
         tmp_path, report_module, matrix=_matrix(report_module, **{voice: "SKIPPED"}),
-    ))
+    ), report_module))
 
     assert rows["M1"]["status"] == report_module.NOT_RUN
     assert "skipped is not a pass" in rows["M1"]["detail"]
@@ -778,3 +791,29 @@ def test_m2_is_answered_only_by_the_executed_process_lifecycle(report_module, tm
     evidence, rows = _pinned(report_module, directory)
     assert rows["M2"]["status"] == getattr(report_module, expected)
     assert report_module.PINNED_PROCESS_LIFECYCLE in evidence["artifacts"]
+
+
+def test_the_pinned_assertions_alone_are_not_full_m3_coverage(report_module, tmp_path):
+    """#402 M5: a green 28-assertion bundle without the process cases is not M3 PASS."""
+    _, rows = _pinned(report_module, _bundle(tmp_path, report_module))
+    assert rows["M3"]["status"] == report_module.NOT_RUN
+    assert "process cases were not executed" in rows["M3"]["detail"]
+    cases = rows["M3"]["measurements"]["stand_in_process_cases"]
+    assert all(case == {"expected": "PASSED", "route": "stand-in", "actual": "NOT_RUN",
+                        "trace": {}} for case in cases.values())
+
+
+def test_the_process_trace_is_carried_into_the_m3_row(report_module, tmp_path):
+    """#402 M5: task IDs, submit counts and imported hashes recorded by the process case."""
+    directory = _stand_in_junit(_bundle(tmp_path, report_module), report_module)
+    path = directory / report_module.PINNED_PROCESS_LIFECYCLE
+    tree = ET.parse(path)
+    case = next(tree.getroot().iter("testcase"))
+    properties = ET.SubElement(case, "properties")
+    ET.SubElement(properties, "property", name="upstream_submits", value="1")
+    ET.SubElement(properties, "property", name="upstream_task_ids", value='["task-1"]')
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+    _, rows = _pinned(report_module, directory)
+    trace = rows["M3"]["measurements"]["stand_in_process_cases"][
+        report_module.M3_STAND_IN_TESTS[0]]["trace"]
+    assert trace == {"upstream_submits": "1", "upstream_task_ids": '["task-1"]'}

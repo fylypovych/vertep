@@ -21,7 +21,7 @@ import httpx
 import pytest
 
 from tests.test_standard_host_consumer_docker import (  # noqa: F401
-    IMAGES, _agent, _archive, _payload, _pinned, _run, _status, installation)
+    IMAGES, pytestmark, _agent, _archive, _payload, _pinned, _run, _status, installation)
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRE = os.getenv("VERTEP_REQUIRE_UPDATE_BROWSER_E2E") == "1"

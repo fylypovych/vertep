@@ -144,7 +144,7 @@ while True:
         assert node_alerts()[0]["state"] == "resolved"
         evidence["after_restart_resolved"] = node_alerts()[0]
         page.reload()
-        expect(page.get_by_test_id("alerts-page")).to_contain_text("resolved")
+        expect(page.get_by_test_id("alerts-page")).to_contain_text("Стан: вирішене")
         page.screenshot(path=str(core["root"] / "monitoring-recovery.png"), full_page=True)
         (core["root"] / "monitoring-evidence.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     finally:

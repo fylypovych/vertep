@@ -102,6 +102,18 @@ M3_PROCESS_BOUNDED_FAULT_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_persistent_5xx_and_a_malformed_status_fail_the_attempt_and_the_retry_reconciles"
 )
+M3_PROCESS_UNREACHABLE_CANCEL_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_a_cancel_while_the_runtime_is_unreachable_is_held_unconfirmed"
+)
+M3_PROCESS_NODE_RESTART_BEFORE_STAGING_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_the_same_node_restarted_before_the_voice_is_staged_stages_and_submits_once"
+)
+M3_PROCESS_RENDER_TIMEOUT_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_a_render_that_outlives_the_bridge_timeout_fails_the_attempt_and_the_retry_reconciles"
+)
 M3_PROCESS_DUPLICATE_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_a_duplicate_result_of_an_imported_attempt_is_fenced_without_a_second_version"
@@ -111,7 +123,9 @@ M3_PROCESS_DUPLICATE_TEST = (
 M3_STAND_IN_TESTS = (M3_PROCESS_LEASE_TEST, M3_PROCESS_CORE_RESTART_TEST,
                      M3_PROCESS_NODE_RESTART_TEST, M3_PROCESS_NODE_RESTART_BEFORE_TASK_TEST,
                      M3_PROCESS_DUPLICATE_TEST, M3_PROCESS_TRANSIENT_FAULT_TEST,
-                     M3_PROCESS_BOUNDED_FAULT_TEST)
+                     M3_PROCESS_BOUNDED_FAULT_TEST, M3_PROCESS_UNREACHABLE_CANCEL_TEST,
+                     M3_PROCESS_NODE_RESTART_BEFORE_STAGING_TEST,
+                     M3_PROCESS_RENDER_TIMEOUT_TEST)
 
 #: #392 moved the corrupt-download fault from the M1 media matrix to M3 recovery, so the
 #: two criteria partition the matrix instead of both claiming (or both dropping) it.
@@ -695,6 +709,7 @@ def load_pinned_evidence(directory: Path | None, *,
             "sha256": _sha256_file(lifecycle_path), "bytes": lifecycle_path.stat().st_size}
         try:
             evidence["process_lifecycle"] = _parse_junit(lifecycle_path)
+            evidence["process_traces"] = _parse_junit_properties(lifecycle_path)
         except (OSError, ET.ParseError) as error:
             evidence["problems"].append(
                 f"{PINNED_PROCESS_LIFECYCLE} is not readable JUnit XML: {error}")
@@ -896,12 +911,17 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
         "submissions": evidence["submissions"],
         "task_ids": evidence["task_ids"],
         "decoder": evidence["decoder"].get("submit_route"),
+        # Kept apart from the pinned assertions: these run on the documented stand-in.
         "stand_in_process_cases": {
-            test: (evidence.get("process_lifecycle") or {}).get(test, "NOT_RUN")
+            test: {"expected": "PASSED", "route": "stand-in",
+                   "actual": (evidence.get("process_lifecycle") or {}).get(test, "NOT_RUN"),
+                   "trace": (evidence.get("process_traces") or {}).get(test, {})}
             for test in M3_STAND_IN_TESTS},
     }
     stand_in_failed = [test for test, value in m3_measure["stand_in_process_cases"].items()
-                       if value == "FAILED"]
+                       if value["actual"] == "FAILED"]
+    stand_in_missing = [test for test, value in m3_measure["stand_in_process_cases"].items()
+                        if value["actual"] != "PASSED"]
     if bundle_status == FAIL:
         row(m3, FAIL, bundle_detail, {"measurements": m3_measure})
     elif stand_in_failed:
@@ -939,10 +959,15 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
             "the pinned recovery bundle records no busy DELETE 409; a 404 on an absent "
             "task, or a refusal that also accepts 404, is not that proof",
             {"measurements": m3_measure})
+    elif stand_in_missing:
+        # #402 M5: the 28 pinned assertions alone are not full M3 coverage.
+        row(m3, NOT_RUN, "process cases were not executed: " + ", ".join(stand_in_missing),
+            {"measurements": m3_measure})
     else:
         row(m3, PASS,
             f"{m3_measure['assertions_passed']}/{m3_measure['assertions']} pinned "
-            f"recovery assertions passed, including busy DELETE 409",
+            f"recovery assertions passed, including busy DELETE 409, and "
+            f"{len(M3_STAND_IN_TESTS)} stand-in process cases passed",
             {"measurements": m3_measure})
 
     # M4 — restart inside the acceptance→staging window.
@@ -1141,6 +1166,18 @@ def _canonical_node_id(classname: str, name: str) -> str:
         path = f"{path}.py"
     chain = "::".join([*classes, name])
     return f"{path}::{chain}"
+
+
+def _parse_junit_properties(path: Path) -> dict[str, dict[str, str]]:
+    """The ``record_property`` trace of every test case (#402 M5)."""
+    traces: dict[str, dict[str, str]] = {}
+    for case in ET.parse(path).getroot().iter("testcase"):
+        node = _canonical_node_id(case.get("classname", ""), case.get("name", ""))
+        properties = {item.get("name"): item.get("value")
+                      for item in case.iter("property") if item.get("name")}
+        if properties:
+            traces[node] = properties
+    return traces
 
 
 def _parse_junit(path: Path) -> dict[str, str]:

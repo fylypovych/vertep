@@ -97,18 +97,23 @@ NOT_PROOF = {
 }
 
 
-def junit_results(paths: list[Path]) -> dict[str, str]:
-    """Exact test ID → PASS/FAIL/SKIPPED from legacy JUnit (classname tests.module)."""
+def junit_results(paths: list[Path], sources: dict[str, str] | None = None) -> dict[str, str]:
+    """Exact test ID → PASS/FAIL/SKIPPED from legacy JUnit (classname tests.module).
+
+    ``sources`` (when given) records the JUnit file each counted result came from."""
     results: dict[str, str] = {}
+    sources = {} if sources is None else sources
     for path in paths:
         for case in ET.parse(path).getroot().iter("testcase"):
             test_id = f"{case.get('classname', '').replace('.', '/')}.py::{case.get('name', '')}"
             if case.find("failure") is not None or case.find("error") is not None:
                 results[test_id] = "FAIL"
             elif case.find("skipped") is not None:
-                results.setdefault(test_id, "SKIPPED")
+                if results.setdefault(test_id, "SKIPPED") != "SKIPPED":
+                    continue
             else:
                 results[test_id] = "PASS"
+            sources[test_id] = str(path)
     return results
 
 
@@ -117,21 +122,28 @@ def report(paths: list[Path], run_sha: str | None = None) -> dict:
                          capture_output=True, text=True).stdout.strip()
     # #396 P5: JUnit is counted only for the exact SHA it was produced from.
     foreign = bool(run_sha) and run_sha != sha
-    results = {} if foreign else junit_results(paths)
+    sources: dict[str, str] = {}
+    results = {} if foreign else junit_results(paths, sources)
+    run_url = (f"{os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}/actions/runs/"
+               f"{os.getenv('GITHUB_RUN_ID')}" if os.getenv("GITHUB_RUN_ID") else None)
     criteria = {}
     for criterion, test_ids in CRITERIA.items():
         rows = []
         for test_id in test_ids:
             actual = results.get(test_id, "NOT_RUN")
             actual = "NOT_RUN" if actual == "SKIPPED" else actual
-            rows.append({"test_id": test_id, "actual": actual,
+            rows.append({"test_id": test_id, "expected": "PASS", "actual": actual,
+                         "junit": sources.get(test_id),
                          "proof": test_id not in NOT_PROOF,
                          **({"not_proof_reason": NOT_PROOF[test_id]} if test_id in NOT_PROOF else {})})
         actuals = {row["actual"] for row in rows}
+        # A row recorded as not proof stays visible with its reason but neither proves nor
+        # blocks the criterion: only the proof rows decide PASS (a FAIL anywhere still fails).
+        proof = {row["actual"] for row in rows if row["proof"]}
         open_subcases = OPEN_SUBCASES.get(criterion, [])
         if "FAIL" in actuals:
             overall = "FAIL"
-        elif actuals == {"PASS"} and all(row["proof"] for row in rows) and not open_subcases:
+        elif proof == {"PASS"} and not open_subcases:
             overall = "PASS"
         elif "PASS" in actuals:
             overall = "PARTIAL"
@@ -139,6 +151,7 @@ def report(paths: list[Path], run_sha: str | None = None) -> dict:
             overall = "NOT_RUN"
         criteria[criterion] = {"overall": overall, "tests": rows, "open_subcases": open_subcases}
     return {"issue": "i.0.0.3.96", "harness_sha": sha, "run_sha": run_sha or sha,
+            "run_url": run_url,
             **({"error": f"JUnit run SHA {run_sha} is not the checked-out {sha}"} if foreign else {}),
             "junit_sha256": {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
                              for path in paths if path.is_file()},

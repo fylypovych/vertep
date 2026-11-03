@@ -90,6 +90,7 @@ def runtime_endpoint(tmp_path, request):
     gate = threading.Event()
     gate.set()
     faults = {"interrupt_downloads": 0, "hold_submits": 0, "held": 0, "status_errors": [],
+              "unreachable_keys": False, "hold_voice": 0, "held_voice": 0,
               "release_held": threading.Event()}
 
     class Handler(BaseHTTPRequestHandler):
@@ -124,6 +125,22 @@ def runtime_endpoint(tmp_path, request):
                 self.end_headers()
                 self.wfile.write(full.content[: len(full.content) // 3])
                 self.wfile.flush()
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            elif self.path.startswith("/api/v1/videos/") and faults["unreachable_keys"]:
+                # The runtime cannot be reached for the submit-key routes: the connection
+                # closes without any answer.
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            elif (self.command == "POST" and self.path == "/api/v1/voice"
+                  and faults["hold_voice"] > 0):
+                # The narration upload never reaches the runtime: the node is stopped
+                # while it waits, before anything is staged.
+                faults["hold_voice"] -= 1
+                faults["held_voice"] += 1
+                faults["release_held"].wait(300)
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
@@ -288,6 +305,32 @@ def lifecycle(tmp_path, runtime_endpoint, request):
                     process.kill()
         for log in logs:
             log.close()
+
+
+@pytest.fixture(autouse=True)
+def _trace(request, record_property):
+    """#402 M5: every process case leaves its trace in the JUnit — the upstream task IDs and
+    submit count the runtime saw, and the versions/hashes CORE imported."""
+    if "lifecycle" not in request.fixturenames:
+        yield
+        return
+    lifecycle = request.getfixturevalue("lifecycle")
+    yield
+    stand_in = lifecycle["runtime"]["stand_in"]
+    record_property("route", "stand-in" if stand_in is not None else "pinned")
+    if stand_in is not None:
+        record_property("upstream_submits", len(stand_in.submits))
+        record_property("upstream_task_ids", json.dumps(sorted(set(stand_in.keys.values()))))
+    job_file = lifecycle["core_jobs"] / lifecycle["job_id"] / "job.json"
+    if job_file.is_file():
+        job = json.loads(job_file.read_text(encoding="utf-8"))
+        snapshot = job.get("video_engine_snapshot") or {}
+        record_property("engine", str(snapshot.get("engine_id")))
+        record_property("submit_key", str(snapshot.get("submit_key")))
+        record_property("submit_keys", json.dumps(job.get("assembly_submit_keys") or {}))
+        record_property("video_versions", json.dumps(
+            [[item["version"], item["sha256"], item.get("approved", False)]
+             for item in job.get("video_versions", [])]))
 
 
 def _job(api, job_id) -> dict:
@@ -818,4 +861,94 @@ def test_persistent_5xx_and_a_malformed_status_fail_the_attempt_and_the_retry_re
     events = "\n".join(job.get("events", []))
     assert "ASSEMBLY RETRY" in events, events[-2000:]
     assert len(stand_in.submits) == 1, "a retry after the bounded failure resubmitted upstream"
+    assert len(job["video_versions"]) == 1
+
+
+@pytest.mark.stand_in
+def test_a_cancel_while_the_runtime_is_unreachable_is_held_unconfirmed(lifecycle):
+    """#402 M3: the running attempt is cancelled while the runtime's submit-key routes are
+    unreachable. Nothing proves the release, so CORE records it UNCONFIRMED (never a false
+    RELEASED); the late result is not imported and there is one upstream task."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, gate = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["gate"]
+    faults = lifecycle["runtime"]["faults"]
+    gate.clear()
+    node = lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: len(stand_in.submits) == 1, 180, "the node's upstream submit")
+    faults["unreachable_keys"] = True
+
+    cancelled = api.post(f"/api/jobs/{job_id}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    events = _events(api, job_id)
+    assert any("ASSEMBLY RELEASE" in event and "UNCONFIRMED" in event for event in events),         events[-6:]
+    assert not any("ASSEMBLY RELEASE" in event and " RELEASED" in event for event in events)
+
+    faults["unreachable_keys"] = False
+    gate.set()
+    time.sleep(30)
+    job = _job(api, job_id)
+    assert node.poll() is None
+    assert job["status"] == JobStatus.CANCELLED.value
+    assert not job.get("video_versions"), "a cancelled attempt was imported"
+    assert len(stand_in.submits) == 1
+
+
+@pytest.mark.stand_in
+@pytest.mark.lease_seconds(20)
+def test_the_same_node_restarted_before_the_voice_is_staged_stages_and_submits_once(lifecycle):
+    """#402 M3: the node is killed while its narration upload is in flight, before anything
+    is staged or submitted. The restarted node reclaims the attempt, stages the narration
+    and submits once; one upstream task and one imported version."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, faults = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["faults"]
+    faults["hold_voice"] = 1
+    node = lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: faults["held_voice"] == 1, 180, "the node's narration upload held")
+    claims_before = sum("mpt-node ASSEMBLY CLAIMED" in event for event in _events(api, job_id))
+    node.kill()
+    node.wait(timeout=30)
+    faults["release_held"].set()
+    assert stand_in.submits == [], "a submit happened before the voice was staged"
+
+    restarted = lifecycle["start_node"]("mpt-node")
+    _wait(lambda: sum("mpt-node ASSEMBLY CLAIMED" in event
+                      for event in _events(api, job_id)) > claims_before, 240,
+          "the attempt reclaimed by the restarted node")
+    job = _wait(lambda: (job := _job(api, job_id)) and job.get("active_video_version") == 1
+                and job["status"] == JobStatus.VIDEO_PENDING_APPROVAL.value and job,
+                300, "the reclaimed attempt imported")
+    assert restarted.poll() is None
+    assert len(stand_in.submits) == 1
+    assert len(job["video_versions"]) == 1
+
+
+@pytest.mark.stand_in
+def test_a_render_that_outlives_the_bridge_timeout_fails_the_attempt_and_the_retry_reconciles(
+        lifecycle):
+    """#402 M3: the upstream keeps the task processing past the bridge's bounded render
+    timeout (600 s). The node gives up instead of waiting forever, CORE retries the
+    assembly, and the retry reconciles the same submit key: one upstream task, and the
+    version is imported only once the runtime finishes."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, gate = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["gate"]
+    gate.clear()
+    lifecycle["start_node"]()
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: len(stand_in.submits) == 1, 180, "the node's upstream submit")
+    started = time.monotonic()
+    _wait(lambda: any("ASSEMBLY RETRY" in event for event in _events(api, job_id)), 900,
+          "the attempt failed by the bounded render timeout")
+    assert time.monotonic() - started >= 550, "the attempt ended before the render timeout"
+    assert not _job(api, job_id).get("video_versions")
+
+    gate.set()
+    job = _wait(lambda: (job := _job(api, job_id)) and job.get("active_video_version") == 1
+                and job["status"] == JobStatus.VIDEO_PENDING_APPROVAL.value and job,
+                300, "the retried attempt imported")
+    assert len(stand_in.submits) == 1, "the retry after the timeout resubmitted upstream"
     assert len(job["video_versions"]) == 1
