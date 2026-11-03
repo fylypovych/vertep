@@ -156,6 +156,25 @@ class FFmpegAdapter:
             raise RuntimeError("ffprobe reported an invalid duration")
         return payload
 
+    def content_duration(self, path: Path) -> float | None:
+        """Seconds of video that are actually present in the file, read packet by packet.
+
+        Container metadata keeps the declared length of a truncated MP4, so ``probe``
+        alone accepts a file that lost most of its frames. Copying the video stream to a
+        null sink reads every packet that really exists; the last timestamp reached is
+        the content length. ``None`` when ffmpeg reports no progress at all.
+        """
+        result = subprocess.run(
+            [self._executable(), "-v", "error", "-nostats", "-i", str(path), "-map", "0:v:0",
+             "-c", "copy", "-f", "null", "-progress", "pipe:1", "-"],
+            capture_output=True, text=True, timeout=120)
+        reached = [line.split("=", 1)[1] for line in result.stdout.splitlines()
+                   if line.startswith("out_time_us=")]
+        try:
+            return int(reached[-1]) / 1_000_000 if reached else None
+        except ValueError:
+            return None
+
     # --- Issue #122: external-engine assembly primitives ---------------------
 
     PRE_CUT_FPS = 30

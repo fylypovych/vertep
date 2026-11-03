@@ -89,6 +89,7 @@ def runtime_endpoint(tmp_path, request):
     stand_in = PinnedRuntime(tmp_path)
     gate = threading.Event()
     gate.set()
+    faults = {"interrupt_downloads": 0}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -104,6 +105,22 @@ def runtime_endpoint(tmp_path, request):
                 response = httpx.Response(200, json=_ready_report())
             elif self.path.startswith("/api/v1/tasks/") and not gate.is_set():
                 response = httpx.Response(200, json={"data": {"state": 4, "progress": 50}})
+            elif self.path.startswith("/api/v1/download/") and faults["interrupt_downloads"] > 0:
+                # The connection drops mid-body: the full Content-Length is announced, a
+                # third of the bytes is sent, then the socket closes.
+                faults["interrupt_downloads"] -= 1
+                full = stand_in._answer(self.command, "http://engine:8000" + self.path, kwargs)
+                self.send_response(200)
+                self.send_header("content-type", "video/mp4")
+                self.send_header("Content-Length", str(len(full.content)))
+                self.end_headers()
+                self.wfile.write(full.content[: len(full.content) // 3])
+                self.wfile.flush()
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            elif self.path.startswith("/api/v1/videos/"):
+                response = _submit_key_route(self.command, self.path.rsplit("/", 1)[-1])
             else:
                 response = stand_in._answer(self.command, "http://engine:8000" + self.path, kwargs)
             self.send_response(response.status_code)
@@ -116,11 +133,29 @@ def runtime_endpoint(tmp_path, request):
 
         do_GET = do_POST = do_DELETE = _answer
 
+    def _submit_key_route(method: str, key: str) -> httpx.Response:
+        """The wrapper's durable submit-key routes (§5, §9.8): reconcile and abort.
+
+        A task the upstream is still processing (gate closed) refuses the abort with
+        409 and reports ``running``; an unknown key is 404 — nothing of it runs.
+        """
+        task_id = stand_in.keys.get(key)
+        if task_id is None:
+            return httpx.Response(404, json={"status": 404, "state": "unknown"})
+        running = not gate.is_set()
+        if method == "DELETE":
+            if running:
+                return httpx.Response(409, json={"status": 409, "message": "task is busy"})
+            return httpx.Response(200, json={"status": 200, "message": "cancelled"})
+        return httpx.Response(200, json={"status": 200, "state": "submitted",
+                                         "runtime_state": "running" if running else "finished",
+                                         "data": {"task_id": task_id}})
+
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield {"url": f"http://127.0.0.1:{server.server_port}", "token": STAND_IN_TOKEN,
-               "stand_in": stand_in, "gate": gate}
+               "stand_in": stand_in, "gate": gate, "faults": faults}
     finally:
         server.shutdown()
         server.server_close()
@@ -198,18 +233,32 @@ def lifecycle(tmp_path, runtime_endpoint, request):
         processes.append(process)
         return process
 
-    core = start("core", [sys.executable, "-m", "uvicorn", "core.app:app", "--host", "127.0.0.1",
-                          "--port", str(port)], core_env)
     api = httpx.Client(base_url=f"http://127.0.0.1:{port}", auth=ADMIN, timeout=30)
-    _wait(lambda: core.poll() is None and api.get("/api/health").status_code < 500, 120,
-          "CORE health")
+    cores: list[subprocess.Popen] = []
+
+    def start_core() -> subprocess.Popen:
+        process = start(f"core-{len(cores)}", [sys.executable, "-m", "uvicorn", "core.app:app",
+                                                "--host", "127.0.0.1", "--port", str(port)], core_env)
+        cores.append(process)
+        _wait(lambda: process.poll() is None and api.get("/api/health").status_code < 500, 120,
+              "CORE health")
+        return process
+
+    def restart_core() -> subprocess.Popen:
+        """A real CORE process restart on the same port and the same persisted state."""
+        cores[-1].kill()
+        cores[-1].wait(timeout=30)
+        return start_core()
+
+    core = start_core()
     try:
         yield {"api": api, "job_id": job_id, "core_jobs": core_jobs, "node_root": node_root,
                "start_node": lambda name="mpt-node": start(name, NODE_COMMAND, {
                    **node_env, "NODE_NAME": name, "JOB_ROOT": str(node_root / name / "jobs"),
                    "NODE_CONFIG_PATH": str(node_root / name / "config" / "node-credentials.json"),
                    "CONFIG_ROOT": str(node_root / name / "config")}),
-               "core": core, "runtime": runtime_endpoint, "tmp_path": tmp_path}
+               "core": core, "restart_core": restart_core, "runtime": runtime_endpoint,
+               "tmp_path": tmp_path}
     finally:
         api.close()
         for process in processes:
@@ -337,3 +386,159 @@ def test_a_node_killed_mid_render_loses_its_lease_and_another_node_finishes_the_
     v1 = job["video_versions"][0]
     produced = lifecycle["core_jobs"] / job_id / v1["path"]
     assert hashlib.sha256(produced.read_bytes()).hexdigest() == v1["sha256"]
+
+
+@pytest.mark.stand_in
+def test_a_core_restart_mid_render_drops_the_attempt_and_fences_the_late_result(lifecycle):
+    """#402 M3: CORE is killed and restarted while the node renders (the upstream task is
+    still processing). By #122 P6 CORE cannot resume a Worker-owned attempt: the restart
+    drops it and replays the Job from its approved inputs. The node's late result for the
+    dropped attempt is refused (409), nothing of it is imported, and the node does not
+    resubmit upstream — exactly one upstream task exists.
+
+    Replaying the Job through the whole pipeline needs a complete storyboard/approval
+    state, which this seeded Job does not carry; that path is outside this check."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, gate = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["gate"]
+    gate.clear()
+    node = lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: len(stand_in.submits) == 1, 180, "the node's upstream submit")
+    dropped = _job(api, job_id)["assembly_task_id"]
+    assert dropped
+
+    lifecycle["restart_core"]()
+    recovered = _job(api, job_id)
+    assert any("RECOVERED AFTER RESTART" in event for event in recovered["events"]), recovered["events"][-5:]
+    assert dropped not in (recovered.get("assembly_task_ids") or {})
+
+    gate.set()
+    core_log = lifecycle["tmp_path"] / "core-1.log"
+    _wait(lambda: '/api/tasks/result HTTP/1.1" 409' in core_log.read_text(encoding="utf-8",
+                                                                          errors="replace"),
+          300, "the node's late result refused by the restarted CORE")
+    job = _job(api, job_id)
+    assert node.poll() is None, "the node process exited"
+    assert not job.get("video_versions"), "a result of the dropped attempt was imported"
+    assert job.get("active_video_version") is None
+    assert len(stand_in.submits) == 1, "the restart caused an ambiguous upstream resubmit"
+
+
+def _events(api, job_id) -> list[str]:
+    return _job(api, job_id).get("events", [])
+
+
+@pytest.mark.stand_in
+def test_a_queued_attempt_cancelled_before_any_node_claims_it_is_released(lifecycle):
+    """#402 M3: an attempt cancelled while still queued never reaches the upstream; the
+    runtime does not know its submit key, which proves the release, and a node started
+    afterwards gets nothing to render."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in = lifecycle["runtime"]["stand_in"]
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: _job(api, job_id).get("assembly_task_id"), 60, "the queued attempt")
+
+    cancelled = api.post(f"/api/jobs/{job_id}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    events = _events(api, job_id)
+    assert any("ASSEMBLY RELEASE" in event and "RELEASED" in event for event in events), events[-6:]
+
+    node = lifecycle["start_node"]("mpt-node")
+    _wait(lambda: any(worker.get("node_name") == "mpt-node"
+                      for worker in api.get("/api/workers").json()), 120, "node registration")
+    time.sleep(20)  # a claim cycle of the node
+    job = _job(api, job_id)
+    assert node.poll() is None
+    assert job["status"] == JobStatus.CANCELLED.value
+    assert not any("ASSEMBLY CLAIMED" in event for event in job["events"])
+    assert stand_in.submits == [], "a cancelled queued attempt reached the upstream"
+
+
+@pytest.mark.stand_in
+def test_a_running_attempt_cancel_is_held_until_the_runtime_proves_the_release(lifecycle):
+    """#402 M3: cancelling while the upstream is still processing cannot be proven: the
+    abort answers busy 409 and the runtime reports ``running``, so CORE records the
+    release as unconfirmed instead of a false cancel. The node's late result is
+    discarded and nothing of the cancelled attempt is imported; one upstream task."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, gate = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["gate"]
+    gate.clear()
+    node = lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: len(stand_in.submits) == 1, 180, "the node's upstream submit")
+
+    cancelled = api.post(f"/api/jobs/{job_id}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    events = _events(api, job_id)
+    assert any("ASSEMBLY RELEASE" in event and "UNCONFIRMED" in event for event in events),         events[-6:]
+    assert not any("ASSEMBLY RELEASE" in event and " RELEASED" in event for event in events)
+
+    gate.set()  # the upstream finishes; the node completes and reports late
+    time.sleep(30)
+    job = _job(api, job_id)
+    assert node.poll() is None
+    assert job["status"] == JobStatus.CANCELLED.value
+    assert not job.get("video_versions"), "a cancelled attempt was imported"
+    assert len(stand_in.submits) == 1, "the cancel caused an upstream resubmit"
+
+
+@pytest.mark.stand_in
+def test_an_interrupted_download_is_retried_without_a_new_upstream_generation(lifecycle):
+    """#402 M3: the first download of the finished render is cut off. The truncated bytes
+    are refused, the download is retried for the same upstream task — no second
+    generation — and only the complete render is imported."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in = lifecycle["runtime"]["stand_in"]
+    lifecycle["runtime"]["faults"]["interrupt_downloads"] = 1
+    node = lifecycle["start_node"]("mpt-node")
+    job = _render(api, job_id, 1, timeout=600)
+    assert node.poll() is None
+    assert lifecycle["runtime"]["faults"]["interrupt_downloads"] == 0, "the fault never fired"
+    # The retry may happen inside the node's engine (a fresh download of the same
+    # render) or as a CORE retry of the same attempt; either way no new generation.
+    assert len(stand_in.submits) == 1, "the retry generated a second upstream render"
+    downloads = [path for method, path, _ in stand_in.requests
+                 if method == "GET" and path.startswith("/api/v1/download/")]
+    assert len(downloads) >= 2, f"the interrupted download was not retried: {downloads}"
+    v1 = job["video_versions"][0]
+    produced = lifecycle["core_jobs"] / job_id / v1["path"]
+    assert hashlib.sha256(produced.read_bytes()).hexdigest() == v1["sha256"]
+    assert len(job["video_versions"]) == 1
+
+
+def test_cleanup_keeps_approved_inputs_history_and_the_submit_key_mapping(lifecycle):
+    """#402 M4: after an imported render, the attempt staging is released and the real
+    maintenance cleanup runs; the approved inputs and the accepted version stay byte for
+    byte, and the durable submit key still reconciles to the same upstream task (a
+    duplicate key never becomes a second render)."""
+    from core.api.job_helpers import ASSEMBLY_STAGING_DIR
+
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    job_dir = lifecycle["core_jobs"] / job_id
+    approved_inputs = {path: hashlib.sha256(path.read_bytes()).hexdigest()
+                       for path in (job_dir / "video" / "scene-000.mp4", job_dir / "audio" / "voice.wav")}
+    lifecycle["start_node"]("mpt-node")
+    job = _render(api, job_id, 1)
+    v1 = job["video_versions"][0]
+    submit_key = job["video_engine_snapshot"]["submit_key"]
+    assert not (job_dir / ASSEMBLY_STAGING_DIR).exists(), "attempt staging survived the import"
+
+    cleaned = api.post("/api/maintenance/cleanup", params={"dry_run": "false"})
+    assert cleaned.status_code == 200, cleaned.text
+    assert job_id not in cleaned.json()["jobs"], "cleanup removed an active Job"
+    after = _job(api, job_id)
+    assert [item["sha256"] for item in after["video_versions"]] == [v1["sha256"]]
+    assert hashlib.sha256((job_dir / v1["path"]).read_bytes()).hexdigest() == v1["sha256"]
+    for path, digest in approved_inputs.items():
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, f"{path.name} changed"
+
+    runtime = lifecycle["runtime"]
+    reconciled = httpx.get(f"{runtime['url']}/api/v1/videos/{submit_key}",
+                           headers={"Authorization": f"Bearer {runtime['token']}"}, timeout=30)
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json()["data"]["task_id"], reconciled.json()
+    if runtime["stand_in"] is not None:
+        assert len(runtime["stand_in"].submits) == 1

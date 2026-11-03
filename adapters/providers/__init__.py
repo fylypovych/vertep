@@ -167,6 +167,10 @@ class DefaultAssemblyProvider(AssemblyProvider):
     def probe(self, path: Path) -> dict:
         return self._adapter.probe(path)
 
+    def content_duration(self, path: Path) -> float | None:
+        measure = getattr(self._adapter, "content_duration", None)
+        return measure(path) if callable(measure) else None
+
 class DefaultComputeProvider(ComputeProvider):
     """Default compute provider backed by ComfyUIAdapter."""
 

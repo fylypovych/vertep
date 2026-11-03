@@ -349,6 +349,21 @@ def wait_for_drain(state_dir: Path, state: dict, lease) -> None:
     raise RuntimeError("Timed out waiting for jobs and workers to drain")
 
 
+def _record_system_state(state: dict, system_state, message: str, request_id: str,
+                         state_dir: Path) -> None:
+    """Publish the global state while a failure is handled, without masking it.
+
+    The failure path itself may hit the same storage fault (an I/O error on the durable
+    write); the operation's correlated outcome must still be returned and recorded, so
+    the secondary error goes to the operation log instead of escaping (#401 F2).
+    """
+    from core.system_state import set_system_state
+    try:
+        set_system_state(system_state, message, request_id, state_dir)
+    except Exception as error:  # noqa: BLE001 - the outcome is recorded either way
+        state.setdefault("log", []).append(f"{now()} system state not updated: {error}")
+
+
 def recover_if_interrupted(root: Path, state_dir: Path) -> None:
     """Rollback an apply interrupted by power loss; maintenance itself is safe to resume."""
     status_path = state_dir / "status.json"
@@ -362,22 +377,26 @@ def recover_if_interrupted(root: Path, state_dir: Path) -> None:
             state = {"state": "RUNNING", "phase": "RECOVERING",
                      "message": "status.json unreadable; recovery triggered by audit/request evidence",
                      "request_id": "", "log": [], "updated_at": now()}
-            transition(state_dir, state, "RECOVERING",
-                       "Interrupted update detected (unreadable status); restoring last good release")
-            _recover_release(root, state_dir, state)
+            _recover_release(root, state_dir, state,
+                             "Interrupted update detected (unreadable status); restoring last good release")
         return
     if (state.get("state") != "RUNNING"
             or state.get("phase") not in {"UPDATING", "RESTARTING", "VERIFYING", "RECOVERING"}):
         return
-    transition(state_dir, state, "RECOVERING", "Interrupted update detected; restoring last good release")
-    _recover_release(root, state_dir, state)
+    _recover_release(root, state_dir, state, "Interrupted update detected; restoring last good release")
 
 
-def _recover_release(root: Path, state_dir: Path, state: dict) -> None:
-    """Roll back an interrupted apply under the live update lease and cancel fence."""
+def _recover_release(root: Path, state_dir: Path, state: dict, message: str) -> None:
+    """Roll back an interrupted apply under the live update lease and cancel fence.
+
+    The lease is taken before anything is written: an apply that is still running holds
+    it, so a recovery started next to it (a second agent process after a service
+    restart) is refused without rewriting the live operation's status (#401 F2).
+    """
     from core.update_lease import UpdateLease
     with UpdateLease(state_dir, str(state.get("request_id") or "recovery")) as lease:
         assert_mutation_allowed(state_dir, lease)
+        transition(state_dir, state, "RECOVERING", message)
         _attempt_rollback(root, state_dir, state)
 
 
@@ -557,13 +576,23 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                 except Exception as rollback_error:
                     state.update({"state": "FAILED", "phase": "EMERGENCY"})
                     state["log"].append(f"{now()} rollback failed: {rollback_error}")
-                    set_system_state(SystemState.EMERGENCY, "Update and rollback failed", request_id, state_dir)
+                    _record_system_state(state, SystemState.EMERGENCY, "Update and rollback failed",
+                                         request_id, state_dir)
             else:
                 state.update({"state": "FAILED", "phase": "NORMAL"})
-                set_system_state(SystemState.NORMAL, "Update stopped before installation", request_id, state_dir)
+                _record_system_state(state, SystemState.NORMAL, "Update stopped before installation",
+                                     request_id, state_dir)
             state.update({"message": str(error), "updated_at": now()})
             return False
         finally:
+            # The terminal outcome joins the tamper-evident journal: status.json is
+            # overwritten by the next operation, the journal keeps every result (#401 F2).
+            try:
+                append_audit(state_dir, {"operation_id": request_id, "phase": "OUTCOME",
+                                         "state": state.get("state"), "action": action,
+                                         "message": state.get("message")})
+            except Exception as audit_error:  # noqa: BLE001 - never mask the outcome
+                state.setdefault("log", []).append(f"{now()} outcome not journaled: {audit_error}")
             state["log"] = state.get("log", [])[-500:]
             atomic_json(state_dir / "status.json", state)
             request_path.unlink(missing_ok=True)

@@ -1002,6 +1002,23 @@ def test_a_corrupted_download_is_never_registered(engine, runtime, tmp_path):
     assert not list((tmp_path / "final").glob("*-poststep.mp4"))
 
 
+
+def test_a_truncated_download_that_still_parses_is_never_registered(engine, runtime, tmp_path):
+    """#402 M3: a render cut to half its bytes keeps the container metadata of the full
+    length, so a metadata probe accepts it. The video that is really in the file is
+    measured instead, and the truncated render is refused, never imported."""
+    assets = _approved_assets(tmp_path)
+    full = engine.render(tmp_path / "full" / "video-v1.mp4", **assets).read_bytes()
+    runtime.corrupt_download = full[: len(full) // 2]
+
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(tmp_path / "final" / "video-v1.mp4",
+                      submit_key=f"truncated-{os.urandom(4).hex()}", **assets)
+
+    assert refusal.value.code == "upstream_result_corrupted"
+    assert "truncated" in str(refusal.value)
+    assert not (tmp_path / "final" / "video-v1.mp4").exists()
+
 def test_lease_expiry_reassigns_task_without_duplicate_submission(engine, runtime, tmp_path):
     """#395 M3: the node that takes over an expired attempt renders with the same
     submit key; the pinned runtime reconciles it, so upstream work is not duplicated.

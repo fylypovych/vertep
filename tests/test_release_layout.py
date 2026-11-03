@@ -77,3 +77,27 @@ def test_prune_preserves_active_previous_and_retention_window(tmp_path):
     assert (base / "releases/1.0.4").is_dir()
     with pytest.raises(ValueError, match="at least two"):
         layout.prune(base, keep=1)
+
+
+def test_discard_removes_only_a_stale_release_left_by_a_failed_attempt(tmp_path):
+    """#401 F1: a failed apply rolls back but keeps its prepared tree; the retry of the
+    same version must be possible, while the active and rollback releases stay protected."""
+    layout = _module()
+    base = tmp_path / "appliance"
+    base.mkdir()
+    (base / ".env").write_text("x=1\n")
+    for version in ("1.0.0", "1.0.1"):
+        layout.prepare(base, _payload(tmp_path / f"payload-{version}", version), version)
+        layout.activate(base, version)
+    layout.rollback(base)  # 1.0.1 failed: 1.0.0 is active again, 1.0.1 stays on disk
+    assert (base / "releases" / "1.0.1").is_dir()
+
+    with pytest.raises(RuntimeError, match="active"):
+        layout.discard(base, "1.0.0")
+    assert layout.discard(base, "1.0.1") is True
+    assert not (base / "releases" / "1.0.1").exists()
+    assert layout.discard(base, "1.0.1") is False
+    layout.prepare(base, _payload(tmp_path / "payload-retry", "1.0.1"), "1.0.1")
+    layout.activate(base, "1.0.1")
+    with pytest.raises(RuntimeError, match="rollback target"):
+        layout.discard(base, "1.0.0")

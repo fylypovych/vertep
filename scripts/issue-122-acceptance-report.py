@@ -79,6 +79,14 @@ M3_PROCESS_LEASE_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_a_node_killed_mid_render_loses_its_lease_and_another_node_finishes_the_attempt"
 )
+#: #402 M3: CORE restarted mid-render drops the attempt and fences the node's late result.
+M3_PROCESS_CORE_RESTART_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_a_core_restart_mid_render_drops_the_attempt_and_fences_the_late_result"
+)
+#: Both process cases hold the upstream task in ``processing`` on the documented stand-in;
+#: they prove the CORE/Worker lease and restart logic, not the pinned upstream.
+M3_STAND_IN_TESTS = (M3_PROCESS_LEASE_TEST, M3_PROCESS_CORE_RESTART_TEST)
 
 #: #392 moved the corrupt-download fault from the M1 media matrix to M3 recovery, so the
 #: two criteria partition the matrix instead of both claiming (or both dropping) it.
@@ -863,14 +871,17 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
         "submissions": evidence["submissions"],
         "task_ids": evidence["task_ids"],
         "decoder": evidence["decoder"].get("submit_route"),
-        "process_lease_reassignment": (evidence.get("process_lifecycle") or {}).get(
-            M3_PROCESS_LEASE_TEST, "NOT_RUN"),
+        "stand_in_process_cases": {
+            test: (evidence.get("process_lifecycle") or {}).get(test, "NOT_RUN")
+            for test in M3_STAND_IN_TESTS},
     }
+    stand_in_failed = [test for test, value in m3_measure["stand_in_process_cases"].items()
+                       if value == "FAILED"]
     if bundle_status == FAIL:
         row(m3, FAIL, bundle_detail, {"measurements": m3_measure})
-    elif m3_measure["process_lease_reassignment"] == "FAILED":
-        row(m3, FAIL, "the process lease-expiry/reassignment case failed: "
-            + M3_PROCESS_LEASE_TEST, {"measurements": m3_measure})
+    elif stand_in_failed:
+        row(m3, FAIL, "stand-in process cases failed: " + ", ".join(stand_in_failed),
+            {"measurements": m3_measure})
     elif not evidence["present"]:
         row(m3, NOT_RUN, "no recovery.json evidence bundle was provided",
             {"measurements": m3_measure})

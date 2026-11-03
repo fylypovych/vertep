@@ -435,6 +435,9 @@ services:
   worker:
     image: ${VERTEP_WORKER_IMAGE}
     command: ["python", "-m", "worker.service"]
+    # The node writes 0600 update requests the host agent must read; in production both
+    # are root, in a CI fixture the host agent is the unprivileged test user.
+    user: "${VERTEP_FLEET_WORKER_USER:-0:0}"
     env_file: .env
     environment:
       CORE_ADDRESS: http://core:8080
@@ -444,9 +447,18 @@ services:
       BACKUP_ROOT: /tmp/backup-self-test
       DEMO_MODE: "true"
       SUPPORTED_TASKS: backup
+      # Coordinated rollout (#401 F1): enrollment and the host update-request channel.
+      REGISTRATION_TOKEN: ${VERTEP_FLEET_REGISTRATION_TOKEN:-}
+      NODE_CONFIG_PATH: /data/node-config/node-credentials.json
+      UPDATE_REQUEST_DIR: /data/update/requests
+      # Writable without root when the fixture runs the node as the test user.
+      LOG_ROOT: /tmp/vertep-logs
+      HOME: /tmp
     volumes:
       - ./:/release:ro
       - ./storage:/data/storage:ro
+      - ${VERTEP_FLEET_NODE_CONFIG}:/data/node-config
+      - ${VERTEP_FLEET_UPDATE_DIR}:/data/update
 """
 
 
@@ -488,9 +500,27 @@ class Fleet(Installation):
         raise AssertionError(f"CORE never saw worker {version} (last record: {record})")
 
 
-@pytest.fixture
-def fleet(tmp_path):
-    """A legacy flat installation running published Vertep CORE and Worker images."""
+def _wait_until(probe, timeout: float, what: str):
+    import time
+
+    deadline, last = time.monotonic() + timeout, None
+    while time.monotonic() < deadline:
+        try:
+            last = probe()
+            if last:
+                return last
+        except Exception as error:  # the service may still be starting
+            last = error
+        time.sleep(2)
+    raise AssertionError(f"timed out waiting for {what}: {last}")
+
+
+def _fleet(tmp_path: Path, *, enrolled: bool) -> "Fleet":
+    """A legacy flat installation running published Vertep CORE and Worker images.
+
+    ``enrolled`` makes the node enroll with a CORE registration token instead of the
+    shared node token, so CORE can address it in a coordinated rollout (#401 F1).
+    """
     project = f"vertep-fleet-{uuid.uuid4().hex[:10]}"
     root = tmp_path / "opt-vertep"
     core_image = _pinned(RELEASE_IMAGES["0.0.0.1"])
@@ -508,11 +538,52 @@ def fleet(tmp_path):
         f"VERTEP_CORE_IMAGE={core_image['reference']}@{core_image['digest']}\n"
         f"VERTEP_WORKER_IMAGE={worker_image['reference']}@{worker_image['digest']}\n"
         f"VERTEP_FLEET_NODE_TOKEN={NODE_TOKEN}\nVERTEP_FLEET_ADMIN_PASSWORD={ADMIN_PASSWORD}\n"
-        f"VERTEP_FLEET_CORE_CONFIG={core_config}\n", encoding="utf-8")
+        f"VERTEP_FLEET_CORE_CONFIG={core_config}\n"
+        f"VERTEP_FLEET_NODE_CONFIG={tmp_path / 'fleet-node-config'}\n"
+        f"VERTEP_FLEET_UPDATE_DIR={tmp_path / 'fleet-update'}\n", encoding="utf-8")
+    (tmp_path / "fleet-node-config").mkdir()
+    # Created by the host user: the node (root in its container) only adds request files.
+    (tmp_path / "fleet-update" / "requests").mkdir(parents=True)
     current = Fleet(root, project)
-    current.compose("up", "-d", "core", "worker")
+    if not enrolled:
+        current.compose("up", "-d", "core", "worker")
+        return current
+    import httpx
+
+    # CORE behaviour under test is the code of this tree, not the published image's: the
+    # Python packages are mounted over the image for the CORE service only.
+    override = tmp_path / "core-source.override.yml"
+    override.write_text("services:\n  core:\n    volumes:\n" + "".join(
+        f"      - {ROOT / package}:/app/{package}:ro\n"
+        for package in ("core", "adapters", "publishers", "services")), encoding="utf-8")
+    _run("docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml"),
+         "-f", str(override), "up", "-d", "core")
+    core_url = current.core_url()
+    token = _wait_until(lambda: httpx.post(
+        f"{core_url}/api/nodes/registration-tokens", json={"role": "backup", "ttl_seconds": 900},
+        auth=("admin", ADMIN_PASSWORD), timeout=10).json().get("token"), 120, "a registration token")
+    with (root / ".env").open("a", encoding="utf-8") as env:
+        env.write(f"VERTEP_FLEET_REGISTRATION_TOKEN={token}\n"
+                  f"VERTEP_FLEET_WORKER_USER={os.getuid()}:{os.getgid()}\n")
+    current.compose("up", "-d", "worker")
+    return current
+
+
+@pytest.fixture
+def fleet(tmp_path):
+    """A legacy flat installation running published Vertep CORE and Worker images."""
+    current = _fleet(tmp_path, enrolled=False)
     yield current
-    subprocess.run(["docker", "compose", "-p", project, "down", "-v", "--remove-orphans"],
+    subprocess.run(["docker", "compose", "-p", current.project, "down", "-v", "--remove-orphans"],
+                   capture_output=True)
+
+
+@pytest.fixture
+def enrolled_fleet(tmp_path):
+    """The fleet with an enrolled node, so CORE drives rollouts through its own API."""
+    current = _fleet(tmp_path, enrolled=True)
+    yield current
+    subprocess.run(["docker", "compose", "-p", current.project, "down", "-v", "--remove-orphans"],
                    capture_output=True)
 
 
@@ -631,32 +702,45 @@ def test_standard_consumer_drains_and_admits_workers_during_update(
     assert updated["version"] == "0.0.0.2"
 
 
-def test_update_timeout_and_retry_with_standard_consumer(
+def test_a_failed_standard_update_is_rolled_back_and_the_retry_succeeds(
         fleet, signed_update_server, tmp_path, monkeypatch):
-    """#390 F1: an update that times out (self-test hangs) is retried and succeeds."""
-    import time
-
+    """#401 F1: a real apply error on the standard executor, then a retry. The first
+    release pins an image digest Docker cannot pull, so the bash consumer fails and the
+    agent rolls the worker back to the running release; a corrected release is then
+    applied by a fresh request and CORE observes the new worker version."""
     root = fleet.root
     state_dir = tmp_path / "update-state"
     state_dir.mkdir()
     monkeypatch.setenv("VERTEP_ROOT", str(root))
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
     monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
-    # No artificial UPDATE_TIMEOUT_SECONDS: a real Docker apply cannot finish in seconds,
-    # and the forced timeout path killed the job runner instead of proving a retry.
     agent = _agent()
-
     first = fleet.wait_for_worker(version="0.0.0.1")
+    before = fleet.container()
 
-    # First update attempt should complete normally (no timeout).
+    good = _pinned(RELEASE_IMAGES["0.0.0.2"])
+    broken = {**good, "digest": "sha256:" + "0" * 64}
     signed_update_server.publish("0.0.0.2", _archive(_payload(
-        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    request_id = "67" * 16
-    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+        tmp_path / "release-broken", "0.0.0.2", broken, FLEET_COMPOSE)))
+    failed_id = "67" * 16
+    assert agent.process_request(root, state_dir, _request(state_dir, failed_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is False
+    failed = _status(state_dir)
+    assert failed["request_id"] == failed_id and failed["state"] in {"FAILED", "ROLLED_BACK"},         _explain(state_dir, fleet)
+    assert fleet.served_version(fleet.container()) == "0.0.0.1", _explain(state_dir, fleet)
+    assert fleet.wait_for_worker(version="0.0.0.1")["version"] == "0.0.0.1"
+
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release-fixed", "0.0.0.2", good, FLEET_COMPOSE)))
+    retry_id = "6f" * 16
+    assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
                                  skip_drain=True) is True, _explain(state_dir, fleet)
+    retried = _status(state_dir)
+    assert retried["request_id"] == retry_id and retried["state"] == "SUCCEEDED"
     updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
                                     timeout=180)
     assert updated.get("status") == "READY"
+    assert fleet.container() != before
 
 
 def test_offline_target_rejected_without_mutation(fleet, signed_update_server, tmp_path, monkeypatch):
@@ -1074,3 +1158,366 @@ def test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effec
                                  skip_drain=True) is True, _explain(state_dir, installation)
     updated = installation.container()
     assert updated != before and installation.served_version(updated) == "0.0.0.2"
+
+
+class _HostUpdateAgent:
+    """The host side of a coordinated rollout: like the ``vertep-update.path`` unit, the
+    real update agent runs on every request the node writes into its request directory."""
+
+    def __init__(self, agent, root: Path, state_dir: Path):
+        import threading
+
+        self.agent, self.root, self.state_dir = agent, root, state_dir
+        self.processed: list[str] = []
+        self.errors: list[str] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        requests = self.state_dir / "requests"
+        while not self._stop.is_set():
+            for request in sorted(requests.glob("*.json")) if requests.is_dir() else []:
+                try:
+                    self.agent.process_request(self.root, self.state_dir, request, skip_drain=True)
+                    self.processed.append(request.stem)
+                except Exception as error:  # surfaced by the test, never swallowed
+                    self.errors.append(f"{request.name}: {error!r}")
+                    try:
+                        request.unlink(missing_ok=True)
+                    except OSError as unlink_error:
+                        self.errors.append(f"{request.name}: {unlink_error!r}")
+                        self._stop.set()
+            self._stop.wait(1)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self._stop.set()
+        self._thread.join(timeout=600)
+
+
+def test_core_drives_a_canary_rollout_and_holds_it_for_promotion(
+        enrolled_fleet, signed_update_server, tmp_path, monkeypatch):
+    """#401 F1: CORE starts a canary rollout through its API. Through the node heartbeat it
+    drains and updates the enrolled node, the node writes the update request, the host
+    agent runs the standard consumer, CORE verifies a bound self-test of the new release
+    and then holds the rollout at AWAITING_PROMOTION until an explicit promotion."""
+    import httpx
+
+    fleet = enrolled_fleet
+    root, state_dir = fleet.root, tmp_path / "fleet-update"
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    first = fleet.wait_for_worker(version="0.0.0.1", timeout=240)
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    core_url = fleet.core_url()
+    admin = ("admin", ADMIN_PASSWORD)
+
+    def rollout() -> dict:
+        return httpx.get(f"{core_url}/api/system/update/rolling", auth=admin, timeout=10).json()
+
+    with _HostUpdateAgent(_agent(), root, state_dir) as host:
+        started = httpx.post(f"{core_url}/api/system/update/rolling", auth=admin, timeout=30, json={
+            "target_version": "0.0.0.2", "node_ids": ["consumer-worker"], "canary": True})
+        assert started.status_code == 200, started.text
+        assert started.json()["canary"] is True
+        try:
+            held = _wait_until(lambda: (state := rollout()).get("state") == "AWAITING_PROMOTION"
+                               and state, 600, "the canary held for promotion")
+        except AssertionError as error:
+            raise AssertionError(f"{error}; host agent errors: {host.errors}; "
+                                 f"processed: {host.processed}; rollout: {rollout()}") from None
+        assert not host.errors, host.errors
+        assert host.processed, "the node never asked the host agent for the update"
+    node = held["nodes"][0]
+    assert node["node_id"] == "consumer-worker" and node["phase"] == "READY" and node["canary"]
+    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"])
+    assert fleet.served_version(fleet.container()) == "0.0.0.2"
+
+    promoted = httpx.post(f"{core_url}/api/system/update/rolling/promote", auth=admin, timeout=30)
+    assert promoted.status_code == 200, promoted.text
+    final = _wait_until(lambda: (state := rollout()).get("state") == "SUCCEEDED" and state,
+                        120, "the promoted rollout finished")
+    assert final["canary_promoted"] is True
+    assert updated["version"] == "0.0.0.2"
+
+
+def test_a_rollout_to_an_offline_node_fails_instead_of_hanging(
+        enrolled_fleet, signed_update_server, tmp_path, monkeypatch):
+    """#401 F1: the enrolled node goes offline before CORE can update it. Without its
+    heartbeat nothing advances the rollout, so the phase timeout has to end it: CORE
+    reports the node failed and leaves RUNNING instead of waiting forever."""
+    import httpx
+
+    fleet = enrolled_fleet
+    fleet.wait_for_worker(version="0.0.0.1", timeout=240)
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    worker = fleet.container()
+    _run("docker", "stop", worker)
+    core_url, admin = fleet.core_url(), ("admin", ADMIN_PASSWORD)
+
+    started = httpx.post(f"{core_url}/api/system/update/rolling", auth=admin, timeout=30, json={
+        "target_version": "0.0.0.2", "node_ids": ["consumer-worker"],
+        "update_timeout_seconds": 60})
+    assert started.status_code == 200, started.text
+
+    def rollout() -> dict:
+        return httpx.get(f"{core_url}/api/system/update/rolling", auth=admin, timeout=10).json()
+
+    ended = _wait_until(lambda: (state := rollout()).get("state") != "RUNNING" and state, 240,
+                        "the rollout of the offline node to leave RUNNING")
+    node = ended["nodes"][0]
+    assert node["phase"] in {"FAILED", "ROLLING_BACK", "ROLLED_BACK", "ROLLBACK_FAILED"}, ended
+    assert ended["state"] != "SUCCEEDED", ended
+
+
+@pytest.fixture
+def lease_database():
+    """A disposable PostgreSQL holding the distributed update fence; it can be stopped
+    (database loss) and started again (database restart) by the test."""
+    name = f"vertep-lease-db-{uuid.uuid4().hex[:8]}"
+    _run("docker", "run", "-d", "--name", name, "-e", "POSTGRES_PASSWORD=lease-only",
+         "-e", "POSTGRES_DB=vertep", "-p", "127.0.0.1::5432", "postgres:16-alpine")
+
+    def ready() -> str:
+        port = _run("docker", "port", name, "5432").splitlines()[0].rsplit(":", 1)[1]
+        probe = subprocess.run(["docker", "exec", name, "pg_isready", "-U", "postgres", "-d", "vertep"],
+                               capture_output=True)
+        return probe.returncode == 0 and f"postgresql://postgres:lease-only@127.0.0.1:{port}/vertep"
+
+    database = {"name": name, "ready": lambda: _wait_until(ready, 120, "the lease database")}
+    database["dsn"] = database["ready"]()
+    yield database
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+
+def test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart(
+        installation, signed_update_server, lease_database, tmp_path, monkeypatch):
+    """#401 F2: the distributed update fence lives in PostgreSQL. The database is stopped
+    while the standard bash consumer is inside its backup: the fence can no longer be
+    proven, so the agent kills the consumer and its children; the failure is correlated
+    with the request and nothing of the update lands later. After the database restarts,
+    a fresh request applies the same release."""
+    import threading
+    import time
+
+    root = installation.root
+    with (root / "storage" / "bulk.bin").open("wb") as bulk:
+        for _ in range(48):
+            bulk.write(os.urandom(4 * 1024 * 1024))
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    monkeypatch.setenv("UPDATE_DATABASE_URL", lease_database["dsn"])
+    monkeypatch.setenv("UPDATE_REQUIRE_DISTRIBUTED_FENCE", "true")
+    monkeypatch.setenv("UPDATE_FENCE_CHECK_SECONDS", "0.2")
+    monkeypatch.setenv("UPDATE_FENCE_KILL_TIMEOUT", "10")
+    agent = _agent()
+    before = installation.container()
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+
+    def lose_database_when_backup_started() -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if any((root / "backups").glob("update-*/application.tar.gz")):
+                subprocess.run(["docker", "stop", "-t", "0", lease_database["name"]],
+                               capture_output=True)
+                return
+            time.sleep(0.05)
+
+    loser = threading.Thread(target=lose_database_when_backup_started)
+    loser.start()
+    request_id = "a1" * 16
+    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is False
+    loser.join()
+    status = _status(state_dir)
+    assert status["request_id"] == request_id, _explain(state_dir, installation)
+    assert "fence" in status["message"].lower(), _explain(state_dir, installation)
+    leftover = subprocess.run(["pgrep", "-f", f"{root}/scripts/vertep"], capture_output=True, text=True)
+    assert not leftover.stdout.strip(), f"consumer processes survived the lease loss: {leftover.stdout}"
+    time.sleep(10)  # a delayed effect of the killed apply would land in this window
+    assert installation.container() == before
+    assert installation.served_version(before) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+
+    _run("docker", "start", lease_database["name"])
+    monkeypatch.setenv("UPDATE_DATABASE_URL", lease_database["ready"]())
+    retry_id = "a2" * 16
+    assert agent.process_request(root, state_dir, _request(state_dir, retry_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+    assert _status(state_dir)["request_id"] == retry_id
+    assert installation.served_version(installation.container()) == "0.0.0.2"
+
+
+_RECOVERY_PROCESS = r'''
+import importlib.util, json, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("update_agent_recovery", sys.argv[1])
+agent = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(agent)
+try:
+    agent.recover_if_interrupted(Path(sys.argv[2]), Path(sys.argv[3]))
+    print(json.dumps({"recovered": True}))
+except Exception as error:
+    print(json.dumps({"refused": str(error)}))
+'''
+
+
+def test_a_recovery_started_during_an_active_apply_does_not_overlap_it(
+        installation, signed_update_server, tmp_path, monkeypatch):
+    """#401 F2: a second agent process starts (as after a service restart) while the first
+    one is still applying an update. Its interrupted-update recovery must not overlap the
+    live apply: it is refused by the held lease without touching the shared status, and
+    the active apply finishes as the only operation."""
+    import threading
+    import time
+
+    root = installation.root
+    with (root / "storage" / "bulk.bin").open("wb") as bulk:
+        for _ in range(48):
+            bulk.write(os.urandom(4 * 1024 * 1024))
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    for name, value in (("VERTEP_ROOT", str(root)), ("UPDATE_STATE_DIR", str(state_dir)),
+                        ("SYSTEM_STATE_BACKEND", "file")):
+        monkeypatch.setenv(name, value)
+    agent = _agent()
+    signed_update_server.publish("0.0.0.2", _archive(
+        _payload(tmp_path / "release", "0.0.0.2", _pinned(IMAGES["0.0.0.2"]))))
+    observed: dict = {}
+
+    def recover_while_backing_up() -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if any((root / "backups").glob("update-*/application.tar.gz")):
+                observed["before"] = _status(state_dir)
+                result = subprocess.run(
+                    [sys.executable, "-c", _RECOVERY_PROCESS, str(ROOT / "scripts" / "update-agent.py"),
+                     str(root), str(state_dir)],
+                    capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(ROOT)})
+                observed["recovery"] = json.loads(result.stdout.strip().splitlines()[-1])
+                observed["after"] = _status(state_dir)
+                return
+            time.sleep(0.05)
+
+    recoverer = threading.Thread(target=recover_while_backing_up)
+    recoverer.start()
+    request_id = "b1" * 16
+    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, installation)
+    recoverer.join()
+
+    assert "refused" in observed["recovery"], observed
+    assert "lease" in observed["recovery"]["refused"].lower(), observed
+    assert observed["after"].get("phase") != "RECOVERING", (
+        "the refused recovery rewrote the live operation's status", observed)
+    final = _status(state_dir)
+    assert final["request_id"] == request_id and final["state"] == "SUCCEEDED", final
+    assert installation.served_version(installation.container()) == "0.0.0.2"
+    journal = [json.loads(line) for line in (state_dir / "audit.jsonl").read_text().splitlines()]
+    assert not any(event.get("phase") == "RECOVERING" for event in journal), \
+        "the refused recovery was journaled as if it ran"
+
+
+_RECONCILE = ("from core.telegram.handlers import _reconcile_update_operations; "
+              "_reconcile_update_operations()")
+_OPERATION = ("import json, sys; from core.operations import get_operation, pending_notifications; "
+              "print(json.dumps({'operation': get_operation(sys.argv[1]), "
+              "'notifications': pending_notifications()}))")
+
+
+def _in_new_process(code: str, *args: str) -> str:
+    """Run CORE code in a fresh process: the durable state, not this process's memory."""
+    result = subprocess.run([sys.executable, "-c", code, *args], cwd=ROOT, env=dict(os.environ),
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    return result.stdout
+
+
+def test_telegram_operation_reports_phases_error_and_retry_across_process_restarts(
+        fleet, signed_update_server, tmp_path, monkeypatch):
+    """#401 F3: a Telegram-requested update on the standard executor. While the host agent
+    applies it, reconciliation (each run in a new process, as after a CORE restart)
+    mirrors the executor phases into the operation; the failed attempt closes it FAILED
+    with an error notification for the chat; the retry closes its own operation with a
+    success notification. Every result is read back by yet another process."""
+    import threading
+    import time
+
+    from core.operations import begin_operation, create_operation, link_operation_request
+
+    root = fleet.root
+    state_dir = tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+    fleet.wait_for_worker(version="0.0.0.1")
+    good = _pinned(RELEASE_IMAGES["0.0.0.2"])
+
+    def operation_for(request_id: str) -> str:
+        operation = create_operation("update", "telegram:42", target="0.0.0.2")
+        begin_operation(operation["operation_id"], "Оновлення через Telegram")
+        link_operation_request(operation["operation_id"], {"request_id": request_id, "action": "update"})
+        return operation["operation_id"]
+
+    def read(operation_id: str) -> dict:
+        return json.loads(_in_new_process(_OPERATION, operation_id).strip().splitlines()[-1])
+
+    def run_with_reconciliation(request_id: str, operation_id: str) -> tuple[bool, set[str]]:
+        phases, done = set(), threading.Event()
+
+        def reconcile_while_running() -> None:
+            while not done.is_set():
+                _in_new_process(_RECONCILE)
+                phase = (read(operation_id)["operation"] or {}).get("current_phase")
+                if phase:
+                    phases.add(phase)
+                time.sleep(0.5)
+
+        sampler = threading.Thread(target=reconcile_while_running)
+        sampler.start()
+        try:
+            result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update",
+                                                                     "0.0.0.2"), skip_drain=True)
+        finally:
+            done.set()
+            sampler.join()
+        _in_new_process(_RECONCILE)
+        return result, phases
+
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release-broken", "0.0.0.2", {**good, "digest": "sha256:" + "0" * 64}, FLEET_COMPOSE)))
+    failed_id = "c1" * 16
+    failed_operation = operation_for(failed_id)
+    result, phases = run_with_reconciliation(failed_id, failed_operation)
+    assert result is False
+    failed = read(failed_operation)
+    assert failed["operation"]["status"] == "FAILED", failed["operation"]
+    assert phases & {"CHECKING", "DOWNLOADING", "UPDATING", "RECOVERING"}, phases
+    assert any(item["chat_id"] == "42" and failed_operation[:8] in item["message"]
+               and "❌" in item["message"] for item in failed["notifications"]), failed["notifications"]
+
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release-fixed", "0.0.0.2", good, FLEET_COMPOSE)))
+    retry_id = "c2" * 16
+    retry_operation = operation_for(retry_id)
+    result, _ = run_with_reconciliation(retry_id, retry_operation)
+    assert result is True, _explain(state_dir, fleet)
+    retried = read(retry_operation)
+    assert retried["operation"]["status"] == "COMPLETED", retried["operation"]
+    assert retried["operation"]["result"]["request_id"] == retry_id
+    assert any(item["chat_id"] == "42" and retry_operation[:8] in item["message"]
+               and "✅" in item["message"] for item in retried["notifications"]), retried["notifications"]
+    # The failed attempt's record and notification are kept, not overwritten by the retry.
+    assert read(failed_operation)["operation"]["status"] == "FAILED"

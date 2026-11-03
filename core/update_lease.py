@@ -131,6 +131,11 @@ class UpdateLease:
         if self._database is not None:
             try:
                 self._database.execute("SELECT pg_advisory_unlock(%s)", (37031809926992,))
+            except Exception:  # noqa: BLE001 - a lost database already released the lock
+                # A session advisory lock dies with its connection. When the database was
+                # lost mid-operation the unlock cannot run, and raising here would replace
+                # the operation's correlated outcome and skip the local unlock (#401 F2).
+                pass
             finally:
                 self._database.close()
                 self._database = None

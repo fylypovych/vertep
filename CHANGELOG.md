@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.19
+- Імпорт MP4: перевірка фактичної тривалості через `content_duration`; обрізане відео відхиляється як `upstream_result_corrupted`.
+- Оновлення: `release-layout.py discard` прибирає залишки невдалого релізу перед повтором, тож retry більше не ескалює в EMERGENCY.
+- CORE watchdog викликає `advance_rollout()`, rollout з вузлом offline більше не зависає.
+- `UpdateLease`: втрата БД під час unlock не маскує результат; recovery бере lease до переходу в RECOVERING; фінальний результат пишеться в журнал (OUTCOME).
+- Нові тести #401/#402: Docker-тести fleet (rollback+retry, canary, offline, втрата lease DB, Telegram-фази), читання Job застосунком після update/rollback/retry/recreate, MPT-процесні сценарії; звіт критерію 390 з відкритими підпунктами та CI job `criterion-390-report`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.18
 - Web UI: статуси ролей (`READY`/`DEGRADED`/`OFFLINE`/`UNKNOWN`), стан і фаза оновлення, поетапне оновлення, тип і стан сповіщень показуються українською; спільні словники `runtimeStatusLabel`, `updateStateLabel`, `systemStateLabel` у `web-v2/src/app/core/presentation.ts`; у розділі «Безпека» — «У нормі», «не налаштовано», «робочий режим».
 - `core/api/observability.py`, `core/first_run.py`: рекомендації перевірки безпеки, опис стану сховища секретів і повідомлення сповіщень формуються українською.

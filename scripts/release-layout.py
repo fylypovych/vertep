@@ -116,6 +116,34 @@ def rollback(base: Path) -> None:
     _atomic_json(base / ".activation.json", {"current": Path(previous).name, "previous": None})
 
 
+def discard(base: Path, version: str) -> bool:
+    """Remove a release left behind by a failed attempt so the same version can be retried.
+
+    A failed apply is rolled back by re-activating the previous release, but the prepared
+    tree of the failed version stays in ``releases/``; ``prepare`` then refuses any retry
+    of that version. Only a release that is neither active nor the rollback target is
+    removed; anything still referenced is refused.
+    """
+    if not VERSION_RE.fullmatch(version):
+        raise ValueError("invalid release version")
+    target = base / "releases" / version
+    if not target.exists():
+        return False
+    referenced = set()
+    if (base / "current").is_symlink():
+        referenced.add(Path(os.readlink(base / "current")).name)
+    try:
+        state = json.loads((base / ".activation.json").read_text(encoding="utf-8"))
+        referenced.update(Path(str(state.get(key) or "")).name for key in ("current", "previous"))
+    except (OSError, ValueError):
+        pass
+    if version in referenced:
+        raise RuntimeError(f"release {version} is active or the rollback target")
+    shutil.rmtree(target)
+    _fsync_dir(base / "releases")
+    return True
+
+
 def prune(base: Path, keep: int = 3) -> list[str]:
     """Remove old inactive releases while preserving active and rollback targets."""
     if keep < 2:
@@ -144,7 +172,7 @@ def prune(base: Path, keep: int = 3) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("prepare", "activate", "rollback", "prune"))
+    parser.add_argument("command", choices=("prepare", "activate", "rollback", "prune", "discard"))
     parser.add_argument("base", type=Path)
     parser.add_argument("argument", nargs="?")
     args = parser.parse_args()
@@ -155,6 +183,8 @@ def main() -> None:
         activate(args.base.resolve(), args.argument)
     elif args.command == "rollback":
         rollback(args.base.resolve())
+    elif args.command == "discard":
+        print(json.dumps({"discarded": discard(args.base.resolve(), args.argument)}))
     else:
         print(json.dumps({"removed": prune(args.base.resolve(), int(args.argument or "3"))}))
 

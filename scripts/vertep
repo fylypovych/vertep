@@ -237,6 +237,9 @@ case "${1:-status}" in
       python3 "$ROOT/scripts/release-layout.py" activate "$ROOT" "$legacy_version"
       rm -rf "$legacy_staging"
     fi
+    # A failed earlier attempt of this version leaves its prepared tree behind; drop it
+    # (refused if it is still active or the rollback target) so the retry can proceed.
+    python3 "$ROOT/scripts/release-layout.py" discard "$ROOT" "$target_version" >/dev/null
     python3 "$ROOT/scripts/release-layout.py" prepare "$ROOT" "$payload::$target_version" >/dev/null
     python3 "$ROOT/scripts/release-layout.py" activate "$ROOT" "$target_version"
     release_root="$ROOT/current"

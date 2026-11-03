@@ -793,3 +793,146 @@ def test_validly_signed_but_untrusted_release_is_refused_before_any_host_mutatio
     assert not (root / "releases" / version).exists()
     assert not (state_dir / "packages").exists() or not any((state_dir / "packages").iterdir())
     assert _health(root) == before, f"refused {dimension} release still restarted the runtime"
+
+
+_WRITE_LIMITED_AGENT = r'''
+import importlib.util, json, resource, signal, sys
+from pathlib import Path
+agent_path, root, state_dir, request, limit = sys.argv[1:6]
+# A real OS write failure: every file this process writes is capped, so storing the
+# downloaded package fails like a full disk (EFBIG instead of ENOSPC).
+signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+resource.setrlimit(resource.RLIMIT_FSIZE, (int(limit), int(limit)))
+spec = importlib.util.spec_from_file_location("update_agent_limited", agent_path)
+agent = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(agent)
+print(json.dumps({"result": agent.process_request(Path(root), Path(state_dir), Path(request),
+                                                   skip_drain=True)}))
+'''
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_FSIZE is a POSIX limit")
+def test_a_write_failure_while_storing_the_package_is_journaled_and_a_retry_succeeds(
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
+    """#401 F2: the update executor itself, fed by the signed HTTPS origin, cannot store
+    the downloaded package (a real OS write failure, as on a full disk). Nothing is
+    applied, the failure is correlated with the request in status and the append-only
+    journal, and the same release is applied by a retry once writing works again."""
+    import subprocess
+
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    package = _release_package(tmp_path, "0.0.0.2")
+    payload = tmp_path / "payload-0.0.0.2"
+    (payload / "bulk.bin").write_bytes(os.urandom(512 * 1024))  # larger than the write cap
+    with tarfile.open(package, "w:gz") as archive:
+        archive.add(payload, arcname=payload.name)
+    signed_update_server.publish("0.0.0.2", package)
+    before = _health(root)
+
+    request_id = "c" * 32
+    request = requests / f"{request_id}.json"
+    request.write_text(json.dumps({"request_id": request_id, "action": "update",
+                                   "target_version": "0.0.0.2"}), encoding="utf-8")
+    child = subprocess.run(
+        [sys.executable, "-c", _WRITE_LIMITED_AGENT, str(ROOT / "scripts" / "update-agent.py"),
+         str(root), str(state_dir), str(request), str(256 * 1024)],
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(ROOT)}, timeout=300)
+    assert json.loads(child.stdout.strip().splitlines()[-1]) == {"result": False}, child.stderr[-2000:]
+
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED" and status["request_id"] == request_id, status
+    assert "file too large" in status["message"].lower() or "space" in status["message"].lower(), status
+    journal = _journal(state_dir)
+    assert any(event.get("operation_id") == request_id and event.get("state") == "FAILED"
+               for event in journal), journal[-3:]
+    assert _active_version(root) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+    assert _health(root) == before, "a failed download still restarted the runtime"
+    failed_journal = list(journal)
+
+    retry_id = "e" * 32
+    retry = requests / f"{retry_id}.json"
+    retry.write_text(json.dumps({"request_id": retry_id, "action": "update",
+                                 "target_version": "0.0.0.2"}), encoding="utf-8")
+    assert agent.process_request(root, state_dir, retry, skip_drain=True) is True
+    assert _active_version(root) == "0.0.0.2"
+    journal = _journal(state_dir)
+    assert journal[:len(failed_journal)] == failed_journal, "the append-only journal was rewritten"
+    assert any(event.get("operation_id") == retry_id for event in journal[len(failed_journal):])
+
+
+_FSYNC_FAULT_AGENT = r'''
+import errno, importlib.util, json, os, sys
+from pathlib import Path
+agent_path, root, state_dir, request = sys.argv[1:5]
+real_fsync, calls = os.fsync, {"n": 0}
+def failing_fsync(fd):
+    # The storage reports an I/O error on the durable write of the accepted release
+    # sequence (``trusted-release.json``), before anything is downloaded or applied.
+    try:
+        target = os.readlink(f"/proc/self/fd/{fd}")
+    except OSError:
+        target = ""
+    if "trusted-release" in target:
+        calls["n"] += 1
+        raise OSError(errno.EIO, "Input/output error")
+    return real_fsync(fd)
+os.fsync = failing_fsync
+spec = importlib.util.spec_from_file_location("update_agent_fsync", agent_path)
+agent = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(agent)
+print(json.dumps({"result": agent.process_request(Path(root), Path(state_dir), Path(request),
+                                                   skip_drain=True), "fsync_calls": calls["n"]}))
+'''
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="targets the faulty file through /proc")
+def test_an_fsync_fault_stops_the_update_with_a_journaled_outcome_and_a_retry_succeeds(
+        agent, disposable_deployment, tmp_path, monkeypatch, signed_update_server):
+    """#401 F2: the storage answers an I/O error on a durable write of the update executor
+    (fault injected at ``os.fsync``). The update stops before anything is applied, the
+    outcome is correlated with the request in the append-only journal, and a retry of
+    the same release succeeds once the storage is healthy again."""
+    import subprocess
+
+    root = disposable_deployment(tmp_path / "appliance", "0.0.0.1")
+    state_dir = tmp_path / "state"
+    requests = state_dir / "requests"
+    requests.mkdir(parents=True)
+    _prepare(root, state_dir, monkeypatch)
+    signed_update_server.publish("0.0.0.2", _release_package(tmp_path, "0.0.0.2"))
+    before = _health(root)
+
+    request_id = "f" * 32
+    request = requests / f"{request_id}.json"
+    request.write_text(json.dumps({"request_id": request_id, "action": "update",
+                                   "target_version": "0.0.0.2"}), encoding="utf-8")
+    child = subprocess.run(
+        [sys.executable, "-c", _FSYNC_FAULT_AGENT, str(ROOT / "scripts" / "update-agent.py"),
+         str(root), str(state_dir), str(request)],
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(ROOT)}, timeout=300)
+    assert child.stdout.strip(), child.stderr[-3000:]
+    outcome = json.loads(child.stdout.strip().splitlines()[-1])
+    assert outcome["result"] is False and outcome["fsync_calls"] >= 1, (outcome, child.stderr[-2000:])
+
+    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "FAILED" and status["request_id"] == request_id, status
+    journal = _journal(state_dir)
+    assert any(event.get("operation_id") == request_id and event.get("phase") == "OUTCOME"
+               and event.get("state") == "FAILED" for event in journal), journal[-3:]
+    assert _active_version(root) == "0.0.0.1"
+    assert not (root / "releases" / "0.0.0.2").exists()
+    assert _health(root) == before
+
+    retry_id = "9" * 32
+    retry = requests / f"{retry_id}.json"
+    retry.write_text(json.dumps({"request_id": retry_id, "action": "update",
+                                 "target_version": "0.0.0.2"}), encoding="utf-8")
+    assert agent.process_request(root, state_dir, retry, skip_drain=True) is True
+    assert _active_version(root) == "0.0.0.2"
+    assert any(event.get("operation_id") == retry_id and event.get("state") == "SUCCEEDED"
+               for event in _journal(state_dir))

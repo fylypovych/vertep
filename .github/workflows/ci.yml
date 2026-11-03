@@ -240,7 +240,7 @@ jobs:
           # #396: the runner was shut down mid-run twice; sample memory/disk so the log
           # keeps the cause even when the job dies before the summary.
           ( while true; do echo "[resources] $(date -u +%T) $(free -m | awk '/Mem:/{print "mem_used="$3"MB avail="$7"MB"}') $(df -h / | awk 'NR==2{print "disk_used="$5" free="$4}')"; sleep 15; done ) &
-          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py --deselect tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data --deselect tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds --deselect tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect
+          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py --deselect tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data --deselect tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds --deselect tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect --deselect tests/test_standard_host_consumer_docker.py::test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart
       - name: Disk usage after the fleet tests
         if: always()
         run: df -h / /var/lib/docker && docker system df
@@ -292,7 +292,8 @@ jobs:
             --basetemp="$RUNNER_TEMP/fleet-cancel-path" \
             tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data \
             tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds \
-            tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect
+            tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect \
+            tests/test_standard_host_consumer_docker.py::test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart
       - name: Audited signals
         if: always()
         run: sudo ausearch -k vertep_signal -i 2>/dev/null | tail -200 || true
@@ -302,6 +303,36 @@ jobs:
         with:
           name: fleet-cancel-path-${{ github.sha }}
           path: ${{ runner.temp }}/fleet-cancel-path.xml
+          if-no-files-found: warn
+
+  criterion-390-report:
+    # #401 P5: one criterion report over every JUnit of this SHA. The fleet, cancel-path and
+    # local-contracts jobs each run part of the matrix; read alone, the fleet report showed
+    # the accepted cancel-path and restore-caller tests as NOT_RUN.
+    needs: [fleet-persistence-runtime-acceptance, fleet-cancel-path-acceptance, local-contracts]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: "{fleet-persistence-runtime,fleet-cancel-path,local-contracts}-${{ github.sha }}"
+          path: ${{ runner.temp }}/junit
+      - name: Criterion report over all JUnit of this SHA
+        run: |
+          set -- $(find "$RUNNER_TEMP/junit" -name '*.xml' ! -path '*/backup-process-*' | sort)
+          for file in "$@"; do echo "JUnit: $file"; done
+          args=(); for file in "$@"; do args+=(--junit "$file"); done
+          python scripts/report_criterion_390.py --run-sha "$GITHUB_SHA" "${args[@]}" --output "$RUNNER_TEMP/criterion-390-all.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: criterion-390-${{ github.sha }}
+          path: ${{ runner.temp }}/criterion-390-all.json
           if-no-files-found: warn
 
   media-acceptance:

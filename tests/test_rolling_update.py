@@ -222,3 +222,32 @@ def test_cleanup_cancelled_workers_no_op_when_not_cancelled():
     _cleanup_cancelled_workers(workers, {"state": "RUNNING", "nodes": []})
     assert workers["gpu-1"]["desired_state"] == "UPDATING"
 
+
+
+def test_the_watchdog_fails_a_rollout_whose_node_went_silent(monkeypatch, tmp_path):
+    """#401 F1: a node that stops sending heartbeats never reconciles its rollout; the
+    watchdog's ``advance_rollout`` enforces the phase timeout instead of a hang."""
+    import json
+
+    from core import runtime
+
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
+    workers = {"gpu-1": {"node_name": "gpu-1", "status": "READY", "version": "1.0.0",
+                         "current_task": None, "self_test": {"status": "PASSED"}}}
+    monkeypatch.setattr(runtime.store, "workers", workers)
+    start_rollout("1.1.0", ["gpu-1"], update_timeout_seconds=60)
+    reconcile_rollout(workers)
+    assert rollout_status()["nodes"][0]["phase"] == "UPDATING"
+
+    runtime.advance_rollout()  # inside the timeout nothing changes
+    assert rollout_status()["state"] == "RUNNING"
+
+    from core.rolling_update import _path
+    state_path = _path()
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["nodes"][0]["phase_started_at"] = "2000-01-01T00:00:00+00:00"  # the node went silent
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    runtime.advance_rollout()
+    ended = rollout_status()
+    assert ended["state"] != "RUNNING", ended
+    assert ended["nodes"][0]["phase"] in {"FAILED", "ROLLING_BACK"}, ended

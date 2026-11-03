@@ -121,6 +121,42 @@ def test_update_lease_uses_postgres_epoch_fence(monkeypatch, tmp_path):
     assert any("pg_advisory_unlock" in query for query, _ in calls)
 
 
+def test_a_lost_lease_database_does_not_mask_the_outcome_or_keep_the_local_lock(monkeypatch, tmp_path):
+    """#401 F2: when PostgreSQL is gone, releasing the session lock cannot run (the lock
+    died with the connection). Leaving the lease must not raise over the operation's own
+    outcome and must still release the local lock for the next operation."""
+    class Cursor:
+        def __init__(self, row=None):
+            self.row = row
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        lost = False
+        def execute(self, query, params=()):
+            if self.lost:
+                raise ConnectionError("the connection is closed")
+            if "pg_try_advisory_lock" in query:
+                return Cursor((True,))
+            if "RETURNING epoch" in query:
+                return Cursor((3,))
+            return Cursor()
+        def close(self):
+            pass
+
+    connection = Connection()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(
+        connect=lambda *args, **kwargs: connection))
+    with pytest.raises(RuntimeError, match="update fence is unavailable"):
+        with UpdateLease(tmp_path, "first") as lease:
+            connection.lost = True
+            lease.assert_current()
+    connection.lost = False
+    with UpdateLease(tmp_path, "second") as lease:
+        assert lease.fence_epoch == 3
+
+
 def test_audit_log_is_hash_chained(tmp_path):
     spec = importlib.util.spec_from_file_location(
         "update_agent", Path(__file__).parents[1] / "scripts" / "update-agent.py")
@@ -702,8 +738,9 @@ def test_recover_blocks_on_cancel_fence(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Mutation blocked"):
         agent.recover_if_interrupted(Path("/nonexistent"), tmp_path)
     assert not attempts
+    # A blocked recovery did not run, so it must not claim RECOVERING either (#401 F2).
     status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
-    assert status["phase"] == "RECOVERING"
+    assert status["phase"] == "UPDATING"
 
 
 # ── Fault-injection: signed immutable compatibility ────────────────────────

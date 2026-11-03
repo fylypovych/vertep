@@ -259,3 +259,64 @@ def test_a_failing_migration_rolls_core_back_with_the_database_restored(
     # Storage must be preserved
     assert (root / "storage" / "records.json").read_text(encoding="utf-8") == '{"approved": ["job-1"]}\n', \
         "storage not preserved after rollback"
+
+
+def test_core_reads_back_its_jobs_and_approvals_across_update_rollback_and_recreate(
+        core_installation, signed_update_server, tmp_path, monkeypatch):
+    """#401 P1/P4: the application itself is the reader. A Job is created and approved
+    through the CORE API; after a standard update with migrations, a failed update rolled
+    back with the database restored, a retry with a fixed release, and a recreate of the CORE container, the running
+    CORE reads the same Job back through its own API — identity, approval and the
+    approval event — instead of a file or psql comparison made by the test."""
+    import httpx
+
+    root, state_dir = core_installation.root, tmp_path / "update-state"
+    _environment(monkeypatch, root, state_dir)
+    agent = _agent()
+    api = httpx.Client(base_url=f"http://127.0.0.1:{core_installation.port}",
+                       auth=("admin", "ci-consumer-admin"), timeout=30)
+
+    created = api.post("/api/jobs", json={"topic": "Readback after update", "priority": 3})
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job_id"]
+    approved = api.post(f"/api/jobs/{job_id}/approve")
+    assert approved.status_code == 200, approved.text
+
+    def read_back(stage: str) -> dict:
+        core_installation.healthy()
+        response = api.get(f"/api/jobs/{job_id}")
+        assert response.status_code == 200, f"{stage}: {response.text}"
+        job = response.json()
+        events = api.get(f"/api/jobs/{job_id}/events")
+        assert events.status_code == 200, f"{stage}: {events.text}"
+        messages = json.dumps(events.json(), ensure_ascii=False)
+        assert job["approved"] is True, f"{stage}: approval lost"
+        assert "JOB APPROVED" in messages, f"{stage}: approval event lost"
+        return {key: job[key] for key in ("job_id", "topic", "character_id", "created_at", "approved")}
+
+    original = read_back("before")
+
+    signed_update_server.publish("0.0.0.2", _archive(_core_payload(
+        tmp_path / "release", "0.0.0.2", _release_images(),
+        {"900_ci_release_marker.sql": "CREATE TABLE ci_release_marker(version text);\n"})))
+    assert agent.process_request(root, state_dir, _request(state_dir, "d1" * 16, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, core_installation)
+    assert read_back("after update") == original
+
+    signed_update_server.publish("0.0.0.3", _archive(_core_payload(
+        tmp_path / "release-broken", "0.0.0.3", _release_images(),
+        {"901_ci_broken.sql": "THIS IS NOT SQL;\n"})))
+    assert agent.process_request(root, state_dir, _request(state_dir, "d2" * 16, "update", "0.0.0.3"),
+                                 skip_drain=True) is False
+    assert _status(state_dir)["state"] == "ROLLED_BACK", _explain(state_dir, core_installation)
+    assert read_back("after rollback") == original
+
+    signed_update_server.publish("0.0.0.4", _archive(_core_payload(
+        tmp_path / "release-fixed", "0.0.0.4", _release_images(),
+        {"902_ci_retry_marker.sql": "CREATE TABLE ci_retry_marker(version text);\n"})))
+    assert agent.process_request(root, state_dir, _request(state_dir, "d3" * 16, "update", "0.0.0.4"),
+                                 skip_drain=True) is True, _explain(state_dir, core_installation)
+    assert read_back("after retry") == original
+
+    core_installation.compose("up", "-d", "--force-recreate", "core")
+    assert read_back("after recreate") == original

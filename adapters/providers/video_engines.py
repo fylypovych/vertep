@@ -1114,7 +1114,19 @@ REASON_SUBMIT_UNKNOWN,
                 f"Video duration {duration:.2f}s drifts from the approved "
                 f"{expected_duration:.2f}s",
             )
-        return {"duration": duration, "bytes": path.stat().st_size}
+        # The metadata of a truncated MP4 still declares the full length: what counts is
+        # the video that is really in the file (#402 M3, §9.5).
+        measure = getattr(self._assembly, "content_duration", None)
+        content = measure(path) if callable(measure) else None
+        declared = duration or expected_duration
+        if content is not None and declared and content < declared - (tolerance + 1.0):
+            raise BridgeContractError(
+                "upstream_result_corrupted",
+                f"Video holds only {content:.2f}s of the declared {declared:.2f}s: "
+                f"the file is truncated",
+            )
+        return {"duration": duration, "content_duration": content,
+                "bytes": path.stat().st_size}
 
 
     def render(

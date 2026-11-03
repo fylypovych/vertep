@@ -144,6 +144,19 @@ def handle_expired_script_lease(task: dict) -> bool:
     return True
 
 
+def advance_rollout() -> None:
+    """Advance an active rollout without waiting for a node heartbeat.
+
+    A rollout is reconciled on node heartbeats; a node that went offline sends none, so
+    its phase timeout would never be evaluated and the rollout would hang in RUNNING.
+    The watchdog runs this on every tick (#401 F1).
+    """
+    from .rolling_update import reconcile_rollout, rollout_status
+
+    if rollout_status().get("state") in {"RUNNING", "ROLLING_BACK"}:
+        reconcile_rollout(store.workers)
+
+
 async def _watchdog() -> None:
     global last_maintenance
     while True:
@@ -157,6 +170,7 @@ async def _watchdog() -> None:
         if not task_queue.acquire_watchdog_lock(max(2, int(float(os.getenv("WATCHDOG_INTERVAL", "5")) * 2))):
             continue
         _recover_stale_workers()
+        advance_rollout()
         for job in list(store.jobs.values()):
             if job.status == JobStatus.WAITING_FOR_SYSTEM:
                 store.update(job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
