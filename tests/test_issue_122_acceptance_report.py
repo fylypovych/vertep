@@ -558,9 +558,9 @@ def _pinned(module, directory: Path | None) -> tuple[dict, dict[str, dict]]:
 
 
 def _stand_in_junit(directory: Path, report_module) -> Path:
-    """The process-lifecycle JUnit with every M3 stand-in process case passed."""
+    """The process-lifecycle JUnit with every M3/M4 process case passed."""
     root = ET.Element("testsuite", name="pytest")
-    for test_id in report_module.M3_STAND_IN_TESTS:
+    for test_id in (*report_module.M3_STAND_IN_TESTS, report_module.M4_CLEANUP_TEST):
         module_path, name = test_id.split("::")
         ET.SubElement(root, "testcase", name=name,
                       classname=module_path.removesuffix(".py").replace("/", "."))
@@ -730,16 +730,22 @@ def test_a_restart_after_staging_does_not_stand_in_for_the_acceptance_window(
 
 
 def test_a_restart_between_acceptance_and_staging_answers_m4(report_module, tmp_path):
-    _, rows = _pinned(report_module, _bundle(
-        tmp_path, report_module,
-        recovery=_recovery(report_module, assertions=[
-            *report_module.M3_REQUIRED_ASSERTIONS,
-            "a busy DELETE answers 409 instead of a false cancel",
-            "a restart between acceptance and staging loses no approved input",
-        ]),
-    ))
+    recovery = _recovery(report_module, assertions=[
+        *report_module.M3_REQUIRED_ASSERTIONS,
+        "a busy DELETE answers 409 instead of a false cancel",
+        "a restart between acceptance and staging loses no approved input",
+    ])
+    # #402 M4: the staging-window restart alone is not the cleanup/duplicate-key lifecycle.
+    _, rows = _pinned(report_module, _bundle(tmp_path / "alone", report_module,
+                                             recovery=recovery))
+    assert rows["M4"]["status"] == report_module.NOT_RUN
+    assert "cleanup/duplicate-key cases were not executed" in rows["M4"]["detail"]
 
+    _, rows = _pinned(report_module, _stand_in_junit(
+        _bundle(tmp_path / "full", report_module, recovery=recovery), report_module))
     assert rows["M4"]["status"] == report_module.PASS
+    cases = rows["M4"]["measurements"]["lifecycle_cases"]
+    assert cases[report_module.M4_CLEANUP_TEST]["route"] == "pinned"
 
 
 def test_the_markdown_report_shows_the_pinned_verdicts_and_hashes(report_module, tmp_path):

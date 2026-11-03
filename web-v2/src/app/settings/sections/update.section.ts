@@ -84,9 +84,13 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
           <button (click)="installUpdate()" [disabled]="installing()" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
             {{ installing() ? 'Оновлення...' : 'Оновити' }}
           </button>
-          <button (click)="cancelRolling()" data-testid="update-cancel-rolling" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Скасувати поетапне оновлення</button>
-          <button (click)="promoteCanary()" data-testid="update-promote-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Підтвердити canary</button>
-          <button (click)="rollbackCanary()" data-testid="update-rollback-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відкотити canary</button>
+          @if (['RUNNING', 'AWAITING_PROMOTION', 'ROLLING_BACK'].includes(rollingStatus()?.state || '')) {
+            <button (click)="cancelRolling()" data-testid="update-cancel-rolling" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Скасувати поетапне оновлення</button>
+          }
+          @if (rollingStatus()?.state === 'AWAITING_PROMOTION') {
+            <button (click)="promoteCanary()" data-testid="update-promote-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Підтвердити canary</button>
+            <button (click)="rollbackCanary()" data-testid="update-rollback-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відкотити canary</button>
+          }
           <button (click)="recoverToNormal()" [disabled]="!policy.can('start_recovery').allowed" [title]="policy.disabledReason('start_recovery') || 'Відновити нормальний стан'" data-testid="update-recover-normal" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Відновити нормальний стан</button>
         </div>
       }

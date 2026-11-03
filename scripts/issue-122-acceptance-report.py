@@ -114,6 +114,12 @@ M3_PROCESS_RENDER_TIMEOUT_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_a_render_that_outlives_the_bridge_timeout_fails_the_attempt_and_the_retry_reconciles"
 )
+#: #402 M4: the cleanup/duplicate-key lifecycle keeps approved inputs and history. The
+#: cleanup case runs on the pinned route; the duplicate-result fence on the stand-in.
+M4_CLEANUP_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_cleanup_keeps_approved_inputs_history_and_the_submit_key_mapping"
+)
 M3_PROCESS_DUPLICATE_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_a_duplicate_result_of_an_imported_attempt_is_fenced_without_a_second_version"
@@ -981,7 +987,16 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
         "restart_assertions": [check for check in assertion_checks if "restart" in check.lower()],
         "voice_assertions": [check for check in assertion_checks if "voice" in check.lower()],
         "submissions": evidence["submissions"],
+        "lifecycle_cases": {
+            test: {"expected": "PASSED", "route": route,
+                   "actual": (evidence.get("process_lifecycle") or {}).get(test, "NOT_RUN"),
+                   "trace": (evidence.get("process_traces") or {}).get(test, {})}
+            for test, route in ((M4_CLEANUP_TEST, "pinned"),
+                                (M3_PROCESS_DUPLICATE_TEST, "stand-in"))},
     }
+    m4_cases = m4_measure["lifecycle_cases"]
+    m4_failed = [test for test, case in m4_cases.items() if case["actual"] == "FAILED"]
+    m4_missing = [test for test, case in m4_cases.items() if case["actual"] != "PASSED"]
     if bundle_status == FAIL:
         row(m4, FAIL, bundle_detail, {"measurements": m4_measure})
     elif not evidence["present"]:
@@ -1000,13 +1015,20 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
     elif failed_assertions:
         row(m4, FAIL, f"{len(failed_assertions)} pinned recovery assertions failed",
             {"measurements": m4_measure})
+    elif m4_failed:
+        row(m4, FAIL, "cleanup/duplicate-key cases failed: " + ", ".join(m4_failed),
+            {"measurements": m4_measure})
     elif not window_restart:
         row(m4, NOT_RUN,
             "the bundle restarts the runtime after staging, not between acceptance and "
             "staging; that window is not recorded", {"measurements": m4_measure})
+    elif m4_missing:
+        row(m4, NOT_RUN, "cleanup/duplicate-key cases were not executed: "
+                         + ", ".join(m4_missing), {"measurements": m4_measure})
     else:
-        row(m4, PASS, "the acceptance→staging restart is recorded and no approved input "
-                      "was lost", {"measurements": m4_measure})
+        row(m4, PASS, "the acceptance→staging restart is recorded, no approved input was "
+                      "lost, and the cleanup/duplicate-key cases passed",
+            {"measurements": m4_measure})
     return rows
 
 

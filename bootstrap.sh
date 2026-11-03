@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Vertep appliance bootstrap for a clean Ubuntu Server 24.04 host.
+# The whole script is one brace group: `curl … | bash` reads it from stdin, and bash must
+# parse it completely before anything runs, or a command that reads stdin (docker compose
+# exec during the backup) swallows the rest of the script and bootstrap stops silently.
+{
 set -Eeuo pipefail
 umask 077
 
@@ -856,3 +860,5 @@ elif command -v open >/dev/null 2>&1; then
   open "$setup_url" >/dev/null 2>&1 || true
 fi
 [[ -z $setup_token ]] || printf 'Setup code (if needed): %s\n' "$setup_token"
+exit 0
+}

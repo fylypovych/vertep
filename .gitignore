@@ -62,3 +62,4 @@ RELEASE_IDENTITY.json
 # Local AI-agent tool secrets must never reach the public repository.
 fastagent.secrets.yaml
 **/fastagent.secrets.yaml
+audit-0311.md

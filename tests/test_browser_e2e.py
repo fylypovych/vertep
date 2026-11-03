@@ -2309,8 +2309,8 @@ def test_update_critical_mutations_install_and_canary():
         page.route("**/api/system/update", lambda route: route.fulfill(json=update_status))
         page.route("**/api/system/update/readiness", lambda route: route.fulfill(
             json={"ready": True, "inflight": 0, "busy_workers": []}))
-        page.route("**/api/system/update/rolling", lambda route: route.fulfill(
-            json={"state": "IDLE", "current_batch": 0, "total_batches": 0}))
+        rolling = {"state": "IDLE", "current_batch": 0, "total_batches": 0}
+        page.route("**/api/system/update/rolling", lambda route: route.fulfill(json=rolling))
         page.route("**/api/system/update/rolling/promote", lambda route: (post_calls.append("promote"), route.fulfill(json={"ok": True}))[1])
         page.route("**/api/system/update/rolling/rollback", lambda route: (post_calls.append("rollback"), route.fulfill(json={"ok": True}))[1])
         page.route("**/api/system/update/rolling/cancel", lambda route: (post_calls.append("cancel"), route.fulfill(json={"ok": True}))[1])
@@ -2324,6 +2324,13 @@ def test_update_critical_mutations_install_and_canary():
 
         with page.expect_response("**/api/system/update/run"):
             page.locator("[data-testid='update-install']").click()
+        # Without a rollout there is nothing to cancel, promote or roll back.
+        for control in ("update-cancel-rolling", "update-promote-canary", "update-rollback-canary"):
+            expect(page.locator(f"[data-testid='{control}']")).to_have_count(0)
+        rolling.update({"state": "AWAITING_PROMOTION", "current_batch": 1, "total_batches": 2})
+        page.goto(f"{BASE_URL}/settings?tab=update")
+        expect(page.locator("[data-testid='update-promote-canary']")).to_be_visible()
+        expect(page.locator("[data-testid='update-cancel-rolling']")).to_be_visible()
         with page.expect_response("**/api/system/update/rolling/promote"):
             page.locator("[data-testid='update-promote-canary']").click()
         with page.expect_response("**/api/system/update/rolling/rollback"):
