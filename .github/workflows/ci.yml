@@ -3,6 +3,8 @@ name: CI
 on:
   push:
   pull_request:
+  # A «пуш» commit carries [skip ci]; «реліз» dispatches CI for that exact SHA (AGENTS.md §2.10).
+  workflow_dispatch:
 
 permissions:
   contents: read

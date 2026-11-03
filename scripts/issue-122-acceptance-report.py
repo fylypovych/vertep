@@ -73,6 +73,12 @@ PROCESS_LIFECYCLE_TESTS = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_native_engine_regression_renders_in_core_without_a_worker[native]",
 )
+#: #397 M3: a node killed mid-render loses its lease; the attempt is reassigned and the
+#: runtime reconciles the same submit key. Recorded in the same process-lifecycle JUnit.
+M3_PROCESS_LEASE_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_a_node_killed_mid_render_loses_its_lease_and_another_node_finishes_the_attempt"
+)
 
 #: #392 moved the corrupt-download fault from the M1 media matrix to M3 recovery, so the
 #: two criteria partition the matrix instead of both claiming (or both dropping) it.
@@ -857,9 +863,14 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
         "submissions": evidence["submissions"],
         "task_ids": evidence["task_ids"],
         "decoder": evidence["decoder"].get("submit_route"),
+        "process_lease_reassignment": (evidence.get("process_lifecycle") or {}).get(
+            M3_PROCESS_LEASE_TEST, "NOT_RUN"),
     }
     if bundle_status == FAIL:
         row(m3, FAIL, bundle_detail, {"measurements": m3_measure})
+    elif m3_measure["process_lease_reassignment"] == "FAILED":
+        row(m3, FAIL, "the process lease-expiry/reassignment case failed: "
+            + M3_PROCESS_LEASE_TEST, {"measurements": m3_measure})
     elif not evidence["present"]:
         row(m3, NOT_RUN, "no recovery.json evidence bundle was provided",
             {"measurements": m3_measure})

@@ -34,7 +34,12 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Run tests
         if: ${{ !inputs.skip_tests }}
-        run: python -m pytest -q --ignore=tests/test_browser_e2e.py
+        # The Docker-backed standard consumer acceptance is required in CI for this exact SHA
+        # (release-gate); rerunning it here shut the hosted runner down mid-run.
+        run: >-
+          python -m pytest -q --ignore=tests/test_browser_e2e.py
+          --ignore=tests/test_standard_host_consumer_docker.py
+          --ignore=tests/test_standard_core_consumer_docker.py
       - name: Validate prepared release commit
         id: version
         shell: bash

@@ -45,6 +45,8 @@ _TEST_STATE_ROOT: Path | None = None
 def pytest_configure(config):
     """Select writable, isolated host paths before test modules import core.app."""
     global _TEST_STATE_ROOT
+    config.addinivalue_line("markers", "stand_in: always render on the MPT stand-in runtime")
+    config.addinivalue_line("markers", "lease_seconds(n): CORE task lease for a process test")
     _TEST_STATE_ROOT = Path(tempfile.mkdtemp(prefix="vertep-tests-"))
     config_root_dir = _TEST_STATE_ROOT / "config"
     os.environ["JOB_ROOT"] = str(_TEST_STATE_ROOT / "jobs")

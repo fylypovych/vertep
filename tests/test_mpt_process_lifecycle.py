@@ -76,12 +76,19 @@ def _wait(predicate, timeout: float, what: str):
 
 
 @pytest.fixture
-def runtime_endpoint(tmp_path):
-    """The pinned runtime the worker renders on: real in CI, documented stand-in locally."""
-    if PINNED_URL:
-        yield {"url": PINNED_URL, "token": PINNED_TOKEN, "stand_in": None}
+def runtime_endpoint(tmp_path, request):
+    """The pinned runtime the worker renders on: real in CI, documented stand-in locally.
+
+    A test marked ``stand_in`` always gets the stand-in: it needs to hold a submitted
+    task in ``processing`` (``gate``) to kill a node mid-render, which a real upstream
+    cannot be told to do. The CORE/Worker lease logic it proves does not depend on it.
+    """
+    if PINNED_URL and not request.node.get_closest_marker("stand_in"):
+        yield {"url": PINNED_URL, "token": PINNED_TOKEN, "stand_in": None, "gate": None}
         return
     stand_in = PinnedRuntime(tmp_path)
+    gate = threading.Event()
+    gate.set()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -95,6 +102,8 @@ def runtime_endpoint(tmp_path):
                 kwargs["json"] = json.loads(body or b"{}")
             if self.path == "/health":  # the node's readiness probe of the wrapper
                 response = httpx.Response(200, json=_ready_report())
+            elif self.path.startswith("/api/v1/tasks/") and not gate.is_set():
+                response = httpx.Response(200, json={"data": {"state": 4, "progress": 50}})
             else:
                 response = stand_in._answer(self.command, "http://engine:8000" + self.path, kwargs)
             self.send_response(response.status_code)
@@ -111,7 +120,7 @@ def runtime_endpoint(tmp_path):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield {"url": f"http://127.0.0.1:{server.server_port}", "token": STAND_IN_TOKEN,
-               "stand_in": stand_in}
+               "stand_in": stand_in, "gate": gate}
     finally:
         server.shutdown()
         server.server_close()
@@ -170,6 +179,9 @@ def lifecycle(tmp_path, runtime_endpoint, request):
                 "ADMIN_USER": ADMIN[0], "ADMIN_PASSWORD": ADMIN[1], "USERS_JSON": "{}",
                 "WATCHDOG_INTERVAL": "1", "RATE_LIMIT_PER_MINUTE": "10000",
                 "OLLAMA_URL": "http://127.0.0.1:1"}
+    lease = request.node.get_closest_marker("lease_seconds")
+    if lease:
+        core_env["TASK_LEASE_SECONDS"] = str(lease.args[0])
     node_env = {**base, "CORE_ADDRESS": f"http://127.0.0.1:{port}", "NODE_NAME": "mpt-node",
                 "NODE_ROLE": "gpu", "SUPPORTED_TASKS": "assembly", "DEMO_MODE": "true",
                 "JOB_ROOT": str(node_root / "jobs"),
@@ -193,7 +205,10 @@ def lifecycle(tmp_path, runtime_endpoint, request):
           "CORE health")
     try:
         yield {"api": api, "job_id": job_id, "core_jobs": core_jobs, "node_root": node_root,
-               "start_node": lambda: start("node", NODE_COMMAND, node_env),
+               "start_node": lambda name="mpt-node": start(name, NODE_COMMAND, {
+                   **node_env, "NODE_NAME": name, "JOB_ROOT": str(node_root / name / "jobs"),
+                   "NODE_CONFIG_PATH": str(node_root / name / "config" / "node-credentials.json"),
+                   "CONFIG_ROOT": str(node_root / name / "config")}),
                "core": core, "runtime": runtime_endpoint, "tmp_path": tmp_path}
     finally:
         api.close()
@@ -238,8 +253,8 @@ def test_core_dispatches_and_a_separate_worker_process_renders_two_revisions(lif
     snapshot = first["video_engine_snapshot"]
     assert snapshot["engine_id"] == "money-printer" and snapshot["submit_key"]
     # The node rendered in its own root; CORE imported the bytes from the contract.
-    assert (lifecycle["node_root"] / "jobs" / job_id).is_dir()
-    assert not (lifecycle["node_root"] / "jobs" / job_id / v1["path"]).exists()
+    assert (lifecycle["node_root"] / "mpt-node" / "jobs" / job_id).is_dir()
+    assert not (lifecycle["node_root"] / "mpt-node" / "jobs" / job_id / v1["path"]).exists()
 
     # Revision loop: the reviewer regenerates the cut (a video revision of the same
     # approved inputs); v1 stays in the history as it was.
@@ -286,3 +301,39 @@ def test_native_engine_regression_renders_in_core_without_a_worker(lifecycle):
     stand_in = lifecycle["runtime"]["stand_in"]
     if stand_in is not None:
         assert stand_in.submits == [], "Native must not reach the external runtime"
+
+
+@pytest.mark.stand_in
+@pytest.mark.lease_seconds(20)
+def test_a_node_killed_mid_render_loses_its_lease_and_another_node_finishes_the_attempt(
+        lifecycle):
+    """#397 M3: the worker process dies while the upstream task is still processing. Its
+    lease expires, CORE hands the same attempt to another node, which renders with the
+    same submit key: the runtime reconciles it (one upstream task) and CORE imports the
+    result of the new owner only."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, gate = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["gate"]
+    gate.clear()
+    first = lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: len(stand_in.submits) == 1, 180, "the first node's upstream submit")
+    first.kill()
+    first.wait(timeout=30)
+
+    second = lifecycle["start_node"]("mpt-node-b")
+    _wait(lambda: any("mpt-node-b ASSEMBLY CLAIMED" in event
+                      for event in _job(api, job_id).get("events", [])), 240,
+          "the attempt reassigned to the second node after the lease expired")
+    gate.set()
+    job = _wait(lambda: (job := _job(api, job_id)) and job.get("active_video_version") == 1
+                and job["status"] == JobStatus.VIDEO_PENDING_APPROVAL.value and job,
+                300, "the reassigned attempt imported")
+    assert second.poll() is None
+    assert len(stand_in.submits) == 1, "the reassigned attempt created a second upstream task"
+    claims = [event for event in job["events"] if "ASSEMBLY CLAIMED" in event]
+    assert any("mpt-node ASSEMBLY CLAIMED" in event for event in claims), claims
+    assert claims[-1].startswith("mpt-node-b") or "mpt-node-b ASSEMBLY CLAIMED" in claims[-1], claims
+    v1 = job["video_versions"][0]
+    produced = lifecycle["core_jobs"] / job_id / v1["path"]
+    assert hashlib.sha256(produced.read_bytes()).hexdigest() == v1["sha256"]

@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.17
+- `AGENTS.md`: команда `пуш` створює commit з `[skip ci]` у тілі повідомлення (назва — лише версія), тому CI та Browser E2E після неї не запускаються; `тест` публікує без `[skip ci]` і запускає їх; `реліз` для commit від `пуш` спершу запускає CI та Browser E2E для того ж SHA через `workflow_dispatch`.
+- `.github/workflows/ci.yml`: додано `workflow_dispatch`.
+- `.github/workflows/release.yml`: `prepare` не запускає Docker-тести штатного consumer (`test_standard_host_consumer_docker.py`, `test_standard_core_consumer_docker.py`) — вони обов'язкові в CI для того ж SHA, а повторний запуск у release обривав runner (Release 0.0.3.15 #185 скасовано на кроці тестів).
+- **#397 M3**: процесний тест `test_a_node_killed_mid_render_loses_its_lease_and_another_node_finishes_the_attempt` — вузол убито посеред рендера, lease спливає, спробу перепризначено іншому вузлу з тим самим submit key, upstream task один, імпортовано результат нового власника; `issue-122-acceptance-report.py` враховує цей випадок у рядку M3. У `tests/conftest.py` зареєстровано маркери `stand_in` і `lease_seconds`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.16
 - `AGENTS.md`: три команди публікації замість двох — `пуш` (версійні файли, `compileall`, `git diff --check`, commit, push у `main`; повні тести виконує CI після push), `тест` (колишній `пуш`: додатково повний локальний `pytest` перед commit) і `реліз` (без змін, спирається на `тест`); оновлено §0.1, §0.4, §2.1, §2.6, §2.6.1, §2.9, §2.10, §2.18, §2.19 і розділ 4.
 
