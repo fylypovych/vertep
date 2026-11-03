@@ -89,7 +89,8 @@ def runtime_endpoint(tmp_path, request):
     stand_in = PinnedRuntime(tmp_path)
     gate = threading.Event()
     gate.set()
-    faults = {"interrupt_downloads": 0}
+    faults = {"interrupt_downloads": 0, "hold_submits": 0, "held": 0, "status_errors": [],
+              "release_held": threading.Event()}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -103,6 +104,13 @@ def runtime_endpoint(tmp_path, request):
                 kwargs["json"] = json.loads(body or b"{}")
             if self.path == "/health":  # the node's readiness probe of the wrapper
                 response = httpx.Response(200, json=_ready_report())
+            elif self.path.startswith("/api/v1/tasks/") and faults["status_errors"]:
+                # A queued upstream fault for the next status poll: an HTTP status code,
+                # or "malformed" for a 200 whose body has no integer state.
+                fault = faults["status_errors"].pop(0)
+                response = (httpx.Response(200, json={"data": {"state": "garbled"}})
+                            if fault == "malformed" else
+                            httpx.Response(fault, json={"status": fault, "message": "fault"}))
             elif self.path.startswith("/api/v1/tasks/") and not gate.is_set():
                 response = httpx.Response(200, json={"data": {"state": 4, "progress": 50}})
             elif self.path.startswith("/api/v1/download/") and faults["interrupt_downloads"] > 0:
@@ -116,6 +124,16 @@ def runtime_endpoint(tmp_path, request):
                 self.end_headers()
                 self.wfile.write(full.content[: len(full.content) // 3])
                 self.wfile.flush()
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            elif (self.command == "POST" and self.path == "/api/v1/videos"
+                  and faults["hold_submits"] > 0):
+                # The submit never reaches the upstream: the node is stopped while it
+                # waits, so no task ID exists for the attempt.
+                faults["hold_submits"] -= 1
+                faults["held"] += 1
+                faults["release_held"].wait(300)
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
@@ -258,7 +276,7 @@ def lifecycle(tmp_path, runtime_endpoint, request):
                    "NODE_CONFIG_PATH": str(node_root / name / "config" / "node-credentials.json"),
                    "CONFIG_ROOT": str(node_root / name / "config")}),
                "core": core, "restart_core": restart_core, "runtime": runtime_endpoint,
-               "tmp_path": tmp_path}
+               "tmp_path": tmp_path, "engine": engine}
     finally:
         api.close()
         for process in processes:
@@ -542,3 +560,262 @@ def test_cleanup_keeps_approved_inputs_history_and_the_submit_key_mapping(lifecy
     assert reconciled.json()["data"]["task_id"], reconciled.json()
     if runtime["stand_in"] is not None:
         assert len(runtime["stand_in"].submits) == 1
+
+
+@pytest.mark.stand_in
+@pytest.mark.lease_seconds(20)
+def test_the_same_node_restarted_after_the_task_id_reconciles_its_attempt_without_a_resubmit(
+        lifecycle):
+    """#402 M3: the node process is killed after the upstream task ID exists and the same
+    node (same name and credentials) is started again. Its old lease expires, CORE hands
+    the attempt back, and the restarted node reconciles the submit key instead of
+    creating a second upstream task; the result is imported once."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, gate = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["gate"]
+    gate.clear()
+    node = lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: len(stand_in.submits) == 1, 180, "the node's upstream submit")
+    claims_before = sum("mpt-node ASSEMBLY CLAIMED" in event for event in _events(api, job_id))
+    node.kill()
+    node.wait(timeout=30)
+
+    restarted = lifecycle["start_node"]("mpt-node")
+    _wait(lambda: sum("mpt-node ASSEMBLY CLAIMED" in event
+                      for event in _events(api, job_id)) > claims_before, 240,
+          "the attempt reclaimed by the restarted node after its lease expired")
+    gate.set()
+    job = _wait(lambda: (job := _job(api, job_id)) and job.get("active_video_version") == 1
+                and job["status"] == JobStatus.VIDEO_PENDING_APPROVAL.value and job,
+                300, "the reclaimed attempt imported")
+    assert restarted.poll() is None
+    assert len(stand_in.submits) == 1, "the node restart created a second upstream task"
+    assert len(job["video_versions"]) == 1
+    v1 = job["video_versions"][0]
+    assert hashlib.sha256((lifecycle["core_jobs"] / job_id / v1["path"]).read_bytes()).hexdigest() \
+        == v1["sha256"]
+
+
+@pytest.mark.stand_in
+def test_a_duplicate_result_of_an_imported_attempt_is_fenced_without_a_second_version(lifecycle):
+    """#402 M3: after CORE imported an attempt, the same result is delivered again (a
+    retried or duplicated node response). The fence refuses it before any side effect:
+    no second version, the imported bytes and the approval state stay as they were."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, gate = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["gate"]
+    gate.clear()
+    lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: len(stand_in.submits) == 1, 180, "the node's upstream submit")
+    task_id = _job(api, job_id)["assembly_task_id"]
+    assert task_id
+    gate.set()
+    first = _wait(lambda: (job := _job(api, job_id)) and job.get("active_video_version") == 1
+                  and job["status"] == JobStatus.VIDEO_PENDING_APPROVAL.value and job,
+                  300, "the attempt imported")
+    imported = first["video_versions"][0]
+    duplicate = httpx.post(f"{str(api.base_url).rstrip('/')}/api/tasks/result", timeout=30,
+                           headers={"x-vertep-token": NODE_TOKEN},
+                           json={"job_id": job_id, "node_name": "mpt-node", "task_id": task_id,
+                                 "success": True, "artifacts": []})
+    assert duplicate.status_code in {400, 404, 409}, duplicate.text
+    after = _job(api, job_id)
+    assert len(after["video_versions"]) == 1, "the duplicate result created a second version"
+    assert after["video_versions"][0]["sha256"] == imported["sha256"]
+    path = lifecycle["core_jobs"] / job_id / imported["path"]
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == imported["sha256"]
+    assert len(lifecycle["runtime"]["stand_in"].submits) == 1
+
+
+@pytest.mark.stand_in
+@pytest.mark.lease_seconds(20)
+def test_the_same_node_restarted_before_the_task_id_submits_once_after_the_restart(lifecycle):
+    """#402 M3: the node is killed while its submit is still in flight, before the upstream
+    created a task ID. The restarted node (same name) reclaims the attempt after the lease
+    expires and submits it once; exactly one upstream task exists and one version is
+    imported."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, faults = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["faults"]
+    faults["hold_submits"] = 1
+    node = lifecycle["start_node"]("mpt-node")
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "lifecycle"})
+    assert regenerate.status_code == 200, regenerate.text
+    _wait(lambda: faults["held"] == 1, 180, "the node's submit held before any task ID")
+    claims_before = sum("mpt-node ASSEMBLY CLAIMED" in event for event in _events(api, job_id))
+    node.kill()
+    node.wait(timeout=30)
+    faults["release_held"].set()
+    assert stand_in.submits == [], "the held submit reached the upstream"
+
+    restarted = lifecycle["start_node"]("mpt-node")
+    _wait(lambda: sum("mpt-node ASSEMBLY CLAIMED" in event
+                      for event in _events(api, job_id)) > claims_before, 240,
+          "the attempt reclaimed by the restarted node")
+    job = _wait(lambda: (job := _job(api, job_id)) and job.get("active_video_version") == 1
+                and job["status"] == JobStatus.VIDEO_PENDING_APPROVAL.value and job,
+                300, "the reclaimed attempt imported")
+    assert restarted.poll() is None
+    assert len(stand_in.submits) == 1, "the restart created more than one upstream task"
+    assert len(job["video_versions"]) == 1
+
+
+def _backup_service(tmp_path: Path, jobs: Path) -> tuple[subprocess.Popen, httpx.Client]:
+    """A real Backup Service process whose snapshot source is CORE's job storage."""
+    import base64
+
+    port = _port()
+    env = {**os.environ, "PYTHONPATH": str(ROOT), "BACKUP_ROOT": str(tmp_path / "backups"),
+           "BACKUP_SOURCES": f"jobs:{jobs}",
+           "BACKUP_RESTORE_STATE_DIR": str(tmp_path / "backup-restore-state"),
+           "BACKUP_CONFIG_ROOT": str(tmp_path / "backup-config"),
+           "BACKUP_ENCRYPTION_KEY": base64.b64encode(b"p4-synthetic-backup-key-32-bytes").decode(),
+           "BACKUP_PG_DUMP_CMD": "", "BACKUP_REDIS_DUMP_CMD": "", "BACKUP_CORE_URL": "",
+           "CORE_ADDRESS": "", "SYSTEM_STATE_BACKEND": "file",
+           "CONFIG_ROOT": str(tmp_path / "backup-config")}
+    log = (tmp_path / "backup-service.log").open("w", encoding="utf-8")
+    process = subprocess.Popen([sys.executable, "-m", "uvicorn", "services.backup_service:app",
+                                "--host", "127.0.0.1", "--port", str(port)], cwd=ROOT, env=env,
+                               stdout=log, stderr=subprocess.STDOUT)
+    client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=60)
+
+    def ready():
+        assert process.poll() is None, (tmp_path / "backup-service.log").read_text(encoding="utf-8")
+        try:
+            return client.get("/health").status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    _wait(ready, 60, "the Backup Service")
+    return process, client
+
+
+def _application_reading(api, job_id) -> dict:
+    """What the application itself reports: versions, approvals, hashes it verifies over
+    its own artifacts, and the submit-key mapping of the engine decision."""
+    job = _job(api, job_id)
+    verified = api.post(f"/api/jobs/{job_id}/artifacts/verify")
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["valid"] is True, verified.json()
+    snapshot = job.get("video_engine_snapshot") or {}
+    return {
+        "versions": [(item["version"], item["sha256"], item["approved"])
+                     for item in job["video_versions"]],
+        "active": job.get("active_video_version"),
+        "artifact_hashes": sorted((item["artifact_id"], item.get("sha256"))
+                                  for item in verified.json()["results"]),
+        "engine": snapshot.get("engine_id"), "submit_key": snapshot.get("submit_key"),
+        "submit_keys": job.get("assembly_submit_keys") or {},
+        "receipts": job.get("publication_results") or {},
+        "published_channels": sorted(job.get("published_channels") or []),
+    }
+
+
+def _publish_with_a_receipt(api, job_id) -> None:
+    """Publish the approved version through a publisher node: CORE dispatches the task
+    and accepts the node's correlated publication receipt."""
+    from tests.media_harness import sandbox_receipt
+    from worker.role_executor import _artifact
+
+    node = httpx.Client(base_url=str(api.base_url), timeout=30,
+                        headers={"x-vertep-token": NODE_TOKEN})
+    try:
+        heartbeat = node.post("/api/workers/heartbeat", json={
+            "node_name": "p4-publisher", "role": "publisher", "status": "FREE", "vram_mb": 0,
+            "capabilities": ["publishing"], "supported_tasks": ["publish"],
+            "self_test": {"status": "PASSED", "role": "publisher", "checked_at": utc_now()}})
+        assert heartbeat.status_code == 200, heartbeat.text
+        published = api.post(f"/api/jobs/{job_id}/publish", json=["youtube"])
+        assert published.status_code == 200, published.text
+        task = _wait(lambda: node.post("/api/tasks/claim", json={
+            "node_name": "p4-publisher", "vram_mb": 0, "supported_tasks": ["publish"]}
+        ).json().get("task"), 60, "the publish task")
+        receipt = sandbox_receipt("youtube", task)
+        result = node.post("/api/tasks/result", json={
+            "job_id": job_id, "task_id": task["task_id"], "node_name": "p4-publisher",
+            "success": True, "artifacts": [_artifact("publication.json", "publication_receipt",
+                                                     json.dumps(receipt).encode())]})
+        assert result.status_code == 200, result.text
+    finally:
+        node.close()
+    _wait(lambda: _job(api, job_id)["status"] == JobStatus.PUBLISHED.value, 60, "PUBLISHED")
+
+
+@pytest.mark.parametrize("lifecycle", ["native", "money-printer"], indirect=True)
+def test_the_application_reads_back_versions_approvals_receipts_hashes_and_mappings_across_recreate_and_restore(
+        lifecycle):
+    """#401 P4: CORE itself is the reader of an approved render of each engine. After a
+    CORE process recreate, and after the Backup Service restores the job storage that was
+    deleted through the API, the restarted CORE reports the same versions, approval,
+    self-verified artifact hashes and submit-key mapping."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    if lifecycle["engine"] != "native":
+        lifecycle["start_node"]()
+    job = _render(api, job_id, 1)
+    v1 = job["video_versions"][0]
+    approved = api.post(f"/api/jobs/{job_id}/video/approve",
+                        json={"actor": "lifecycle", "expected_video_version": 1,
+                              "expected_sha256": v1["sha256"]})
+    assert approved.status_code == 200, approved.text
+    _publish_with_a_receipt(api, job_id)
+    original = _application_reading(api, job_id)
+    assert original["versions"] == [(1, v1["sha256"], True)]
+    assert original["receipts"]["youtube"] and original["published_channels"] == ["youtube"]
+    if lifecycle["engine"] != "native":
+        assert original["engine"] == "money-printer" and original["submit_key"]
+
+    lifecycle["restart_core"]()
+    assert _application_reading(api, job_id) == original, "changed after a CORE recreate"
+
+    tmp_path = lifecycle["tmp_path"]
+    backup, service = _backup_service(tmp_path, lifecycle["core_jobs"])
+    try:
+        created = service.post("/snapshots", json={"job_id": job_id})
+        assert created.status_code == 200, created.text
+        sid = created.json()["snapshot_id"]
+        assert api.delete(f"/api/jobs/{job_id}").status_code == 200
+        assert api.get(f"/api/jobs/{job_id}").status_code == 404
+        token = service.post(f"/snapshots/{sid}/restore").json()["confirmation_token"]
+        confirmed = service.post(f"/snapshots/{sid}/restore/confirm", params={"token": token})
+        assert confirmed.status_code == 200, confirmed.text
+    finally:
+        service.close()
+        backup.terminate()
+        backup.wait(timeout=20)
+    lifecycle["restart_core"]()
+    assert _application_reading(api, job_id) == original, "changed after a Backup Service restore"
+
+
+@pytest.mark.stand_in
+def test_transient_429_and_5xx_status_polls_are_bounded_retries_on_the_process_route(lifecycle):
+    """#402 M3: the upstream answers the node's status polls with 429/503 a bounded
+    number of times. The node keeps polling the same task (no new upstream generation)
+    and the render is imported once the runtime answers again."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, faults = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["faults"]
+    faults["status_errors"].extend([429, 503, 502, 429])
+    lifecycle["start_node"]()
+    job = _render(api, job_id, 1)
+    assert faults["status_errors"] == [], "the node never polled through the faults"
+    assert len(stand_in.submits) == 1, "a transient fault caused a new upstream task"
+    assert len(job["video_versions"]) == 1
+
+
+@pytest.mark.stand_in
+def test_persistent_5xx_and_a_malformed_status_fail_the_attempt_and_the_retry_reconciles(
+        lifecycle):
+    """#402 M3: polls failing past the bound (6 consecutive 503) end the attempt instead of
+    holding it forever; a malformed status body is refused as a contract error. CORE
+    retries the assembly, the retry reconciles the same submit key (one upstream task)
+    and only then is a version imported."""
+    api, job_id = lifecycle["api"], lifecycle["job_id"]
+    stand_in, faults = lifecycle["runtime"]["stand_in"], lifecycle["runtime"]["faults"]
+    faults["status_errors"].extend([503] * 6 + ["malformed"])
+    lifecycle["start_node"]()
+    job = _render(api, job_id, 1)
+    assert faults["status_errors"] == []
+    events = "\n".join(job.get("events", []))
+    assert "ASSEMBLY RETRY" in events, events[-2000:]
+    assert len(stand_in.submits) == 1, "a retry after the bounded failure resubmitted upstream"
+    assert len(job["video_versions"]) == 1

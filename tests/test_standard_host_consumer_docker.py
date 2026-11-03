@@ -1276,6 +1276,74 @@ def test_a_rollout_to_an_offline_node_fails_instead_of_hanging(
     assert ended["state"] != "SUCCEEDED", ended
 
 
+def test_workers_first_rollout_times_out_on_core_rolls_the_worker_back_and_a_retry_succeeds(
+        enrolled_fleet, signed_update_server, tmp_path, monkeypatch):
+    """#401 F1: CORE orders a workers-first rollout over the worker and CORE itself. The
+    worker is updated by the standard consumer while CORE is still PENDING; CORE goes last,
+    and with no coordinator answering its phase actually times out. The timeout fails the
+    rollout and rolls the already-updated worker back through the host agent; a retry
+    over the standard executor then updates the worker again."""
+    import httpx
+
+    fleet = enrolled_fleet
+    root, state_dir = fleet.root, tmp_path / "fleet-update"
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    first = fleet.wait_for_worker(version="0.0.0.1", timeout=240)
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    core_url, admin = fleet.core_url(), ("admin", ADMIN_PASSWORD)
+
+    def rollout() -> dict:
+        return httpx.get(f"{core_url}/api/system/update/rolling", auth=admin, timeout=10).json()
+
+    def phases(state: dict) -> dict:
+        return {node["node_id"]: node["phase"] for node in state.get("nodes", [])}
+
+    with _HostUpdateAgent(_agent(), root, state_dir) as host:
+        started = httpx.post(f"{core_url}/api/system/update/rolling", auth=admin, timeout=30, json={
+            "target_version": "0.0.0.2", "node_ids": ["core", "consumer-worker"],
+            "order": "workers-first", "update_timeout_seconds": 180})
+        assert started.status_code == 200, started.text
+        assert [node["node_id"] for node in started.json()["nodes"]] == ["consumer-worker", "core"]
+
+        seen: list[dict] = []
+
+        def worker_ready():
+            state = rollout()
+            seen.append(phases(state))
+            return phases(state).get("consumer-worker") == "READY" and state
+
+        _wait_until(worker_ready, 600, "the worker updated first")
+        # CORE never left PENDING while the worker was being updated.
+        assert all(snapshot.get("core") == "PENDING" for snapshot in seen
+                   if snapshot.get("consumer-worker") != "READY"), seen
+        assert fleet.served_version(fleet.container()) == "0.0.0.2"
+
+        ended = _wait_until(lambda: (state := rollout()).get("state") in {
+            "ROLLED_BACK", "ROLLBACK_FAILED", "FAILED"} and state, 600,
+            "the CORE phase to time out and the worker to roll back")
+        assert not host.errors, host.errors
+    by_node = {node["node_id"]: node for node in ended["nodes"]}
+    assert ended["state"] == "ROLLED_BACK", ended
+    assert by_node["core"]["phase"] == "FAILED" and "timed out" in by_node["core"]["error"], ended
+    assert by_node["consumer-worker"]["phase"] == "ROLLED_BACK", ended
+    rolled_back = fleet.wait_for_worker(version="0.0.0.1", timeout=240)
+    assert fleet.served_version(fleet.container()) == "0.0.0.1"
+
+    with _HostUpdateAgent(_agent(), root, state_dir) as host:
+        retried = httpx.post(f"{core_url}/api/system/update/rolling", auth=admin, timeout=30, json={
+            "target_version": "0.0.0.2", "node_ids": ["consumer-worker"]})
+        assert retried.status_code == 200, retried.text
+        final = _wait_until(lambda: (state := rollout()).get("state") in {
+            "SUCCEEDED", "ROLLED_BACK", "ROLLBACK_FAILED", "FAILED"} and state, 600, "the retry")
+        assert not host.errors, host.errors
+    assert final["state"] == "SUCCEEDED", final
+    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=rolled_back["runtime_instance_id"])
+    assert updated["runtime_instance_id"] != first["runtime_instance_id"]
+
+
 @pytest.fixture
 def lease_database():
     """A disposable PostgreSQL holding the distributed update fence; it can be stopped

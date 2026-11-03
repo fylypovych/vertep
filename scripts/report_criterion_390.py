@@ -31,6 +31,7 @@ CRITERIA = {
         f"{HOST}::test_core_drives_a_canary_rollout_and_holds_it_for_promotion",
         f"{HOST}::test_a_rollout_to_an_offline_node_fails_instead_of_hanging",
         f"{HOST}::test_rollback_restores_previous_version_and_ready_state",
+        f"{HOST}::test_workers_first_rollout_times_out_on_core_rolls_the_worker_back_and_a_retry_succeeds",
     ],
     "F2": [
         "tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply",
@@ -50,10 +51,14 @@ CRITERIA = {
     "F3": [
         f"{HOST}::test_telegram_notification_correlated_with_standard_apply",
         f"{HOST}::test_telegram_operation_reports_phases_error_and_retry_across_process_restarts",
+        "tests/test_update_standard_browser_e2e.py::"
+        "test_update_browser_drives_the_standard_executor_with_rollback_and_retry",
     ],
     "P1": [
         f"{HOST}::test_interruption_during_apply_does_not_overwrite_newer_data",
         f"{HOST}::test_retry_does_not_return_deleted_seeds",
+        "tests/test_backup_process_acceptance.py::"
+        "test_core_reads_back_a_restored_workflow_after_a_backup_service_restore",
         f"{CORE}::test_core_reads_back_its_jobs_and_approvals_across_update_rollback_and_recreate",
     ],
     "P3": [
@@ -62,10 +67,16 @@ CRITERIA = {
         "test_telegram_restore_caller_reports_refusals_and_retry_through_core",
         "tests/test_backup_process_acceptance.py::"
         "test_connected_healthy_restore_returns_normal_after_core_restart",
+        "tests/test_backup_restore_browser_e2e.py::"
+        "test_browser_restore_runs_through_real_core_and_backup_service",
     ],
     "P4": [
         f"{HOST}::test_native_restore_is_read_back_by_the_consumer_across_update_restart_and_rollback",
         f"{HOST}::test_application_consumer_reads_back_versions_and_approvals",
+        f"{CORE}::test_core_reads_back_a_native_render_across_update_rollback_and_recreate",
+        *(f"tests/test_mpt_process_lifecycle.py::test_the_application_reads_back_versions_"
+          f"approvals_receipts_hashes_and_mappings_across_recreate_and_restore[{engine}]"
+          for engine in ("native", "money-printer")),
         f"{CORE}::test_core_reads_back_its_jobs_and_approvals_across_update_rollback_and_recreate",
     ],
 }
@@ -73,17 +84,6 @@ CRITERIA = {
 # #401 P5: source subcases with no executed test yet. A criterion with any of them open is
 # never PASS, whatever the listed tests did (absent coverage is not a pass).
 OPEN_SUBCASES = {
-    "F1": ["actual timeout -> retry on the standard executor",
-           "workers-first / CORE-last rollout order through CORE"],
-    "F3": ["Update Browser over the F1/F2 standard executor route"],
-    "P1": ["application consumer read-back after a Backup Service restore"],
-    # Version (unsupported format), size and viewer RBAC refusals and the API flow the Web UI
-    # uses (confirm -> execute -> progress -> error -> retry) are executed by the listed
-    # process tests; the Browser restore test still answers with route.fulfill.
-    "P3": ["Browser restore flow against the real CORE and Backup Service processes"],
-    # Jobs and approvals are read back by CORE itself after update/rollback/retry/recreate.
-    "P4": ["application reader of receipts/mappings/hashes, after restore, "
-           "and for pinned MPT outputs"],
 }
 
 # #393 audit: green on its own, but not proof of the row (reason recorded in the report).

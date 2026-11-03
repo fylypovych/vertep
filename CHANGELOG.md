@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.20
+- Оновлення: інсталяцію CORE зі старим пласким layout, яка вже рендерила відео, знову можна оновити — `release-layout.py` не враховує дані інсталяції (`storage`, `config`, `logs` тощо) у digest і не копіює їх у реліз; rollback до першої активації більше не падає через відсутній `.activation.json`.
+- Тести #401: Update Browser через стандартний consumer (збій, rollback, повтор), Browser restore через реальні CORE і Backup Service, читання застосунком після restore, workers-first rollout із timeout CORE, Native-рендер, який CORE читає після update/rollback/recreate, а також versions/approvals/квитанції/хеші/mapping для Native і MPT після recreate і restore.
+- Тести #402: перезапуск вузла до і після task ID, відсікання дубльованого результату, обмежені повтори при 429/5xx і malformed-статусі на процесному маршруті.
+- CI: fleet-job збирає web-v2 і запускає Browser-тести; звіт критерію 390 враховує JUnit MPT-job; відкритих підпунктів у звіті не лишилося.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.19
 - Імпорт MP4: перевірка фактичної тривалості через `content_duration`; обрізане відео відхиляється як `upstream_result_corrupted`.
 - Оновлення: `release-layout.py discard` прибирає залишки невдалого релізу перед повтором, тож retry більше не ескалює в EMERGENCY.

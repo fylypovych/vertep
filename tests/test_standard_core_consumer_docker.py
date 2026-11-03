@@ -320,3 +320,88 @@ def test_core_reads_back_its_jobs_and_approvals_across_update_rollback_and_recre
 
     core_installation.compose("up", "-d", "--force-recreate", "core")
     assert read_back("after recreate") == original
+
+
+def _seed_render_ready_job(installation: CoreInstallation) -> str:
+    """Place a Job with approved scene/narration (as the pipeline leaves it before the video
+    render) in CORE's storage and its PostgreSQL row, then restart CORE to load it."""
+    from tests.test_mpt_process_lifecycle import _seed_job
+
+    seed = installation.root.parent / "seeded-jobs"
+    seed.mkdir()
+    job_id = _seed_job(seed)
+    payload = (seed / job_id / "job.json").read_text(encoding="utf-8")
+    job = json.loads(payload)
+    # CORE (root in its container) owns ./storage/jobs; place the Job through the container.
+    installation.compose("exec", "-T", "core", "mkdir", "-p", "/data/storage/jobs")
+    _run("docker", "cp", str(seed / job_id), f"{installation.core_container()}:/data/storage/jobs/")
+    installation.psql(
+        "INSERT INTO jobs(job_id,topic,character_id,status,priority,source,created_at,payload) "
+        f"VALUES ('{job_id}', 'MPT lifecycle', 'test_char', '{job['status']}', 5, 'web', "
+        f"'{job['created_at']}', $vt${payload}$vt$::jsonb);")
+    installation.compose("restart", "core")
+    installation.healthy()
+    return job_id
+
+
+def test_core_reads_back_a_native_render_across_update_rollback_and_recreate(
+        core_installation, signed_update_server, tmp_path, monkeypatch):
+    """#401 P4: CORE renders an approved Job with the Native engine inside the released
+    container and is then the reader of that render — versions, approval and the hashes it
+    verifies over its own artifacts — after a standard update with migrations, a failed
+    update rolled back with the database restored, and a recreate of the container."""
+    import time
+
+    import httpx
+
+    from tests.test_mpt_process_lifecycle import _application_reading
+
+    root, state_dir = core_installation.root, tmp_path / "update-state"
+    _environment(monkeypatch, root, state_dir)
+    agent = _agent()
+    api = httpx.Client(base_url=f"http://127.0.0.1:{core_installation.port}",
+                       auth=("admin", "ci-consumer-admin"), timeout=60)
+    job_id = _seed_render_ready_job(core_installation)
+    regenerate = api.post(f"/api/jobs/{job_id}/video/regenerate", json={"actor": "p4"})
+    assert regenerate.status_code == 200, regenerate.text
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        job = api.get(f"/api/jobs/{job_id}").json()
+        if job.get("active_video_version") == 1 and job["status"] == "VIDEO_PENDING_APPROVAL":
+            break
+        time.sleep(2)
+    else:
+        raise AssertionError(f"the Native render never finished: {job.get('status')} "
+                             f"{job.get('events', [])[-5:]}")
+    v1 = job["video_versions"][0]
+    approved = api.post(f"/api/jobs/{job_id}/video/approve", json={
+        "actor": "p4", "expected_video_version": 1, "expected_sha256": v1["sha256"]})
+    assert approved.status_code == 200, approved.text
+
+    def read_back(stage: str) -> dict:
+        core_installation.healthy()
+        reading = _application_reading(api, job_id)
+        assert reading["versions"] == [(1, v1["sha256"], True)], stage
+        return reading
+
+    original = read_back("before")
+    # As for ./config in the fixture: CORE wrote the render as root, the host consumer
+    # snapshots ./storage as the unprivileged CI user (production runs both as root).
+    core_installation.compose("exec", "-T", "core", "chmod", "-R", "a+rwX", "/data/storage")
+    signed_update_server.publish("0.0.0.2", _archive(_core_payload(
+        tmp_path / "release", "0.0.0.2", _release_images(),
+        {"900_ci_release_marker.sql": "CREATE TABLE ci_release_marker(version text);\n"})))
+    assert agent.process_request(root, state_dir, _request(state_dir, "e1" * 16, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, core_installation)
+    assert read_back("after update") == original
+
+    signed_update_server.publish("0.0.0.3", _archive(_core_payload(
+        tmp_path / "release-broken", "0.0.0.3", _release_images(),
+        {"901_ci_broken.sql": "THIS IS NOT SQL;\n"})))
+    assert agent.process_request(root, state_dir, _request(state_dir, "e2" * 16, "update", "0.0.0.3"),
+                                 skip_drain=True) is False
+    assert _status(state_dir)["state"] == "ROLLED_BACK", _explain(state_dir, core_installation)
+    assert read_back("after rollback") == original
+
+    core_installation.compose("up", "-d", "--force-recreate", "core")
+    assert read_back("after recreate") == original

@@ -38,13 +38,14 @@ def test_green_not_proof_tests_cap_the_criterion_at_partial(tmp_path):
 
 
 def test_open_source_subcases_keep_a_green_criterion_partial(tmp_path, monkeypatch):
-    """#401 P5: one passing test is not the whole criterion (F3 terminal-success only)."""
+    """#401 P5: one passing test is not the whole criterion (an open subcase keeps it PARTIAL)."""
     target = module()
     every = {test: "PASS" for tests in target.CRITERIA.values() for test in tests}
     junit = _junit(tmp_path / "all.xml", every)
-    assert target.report([junit])["criteria"]["F3"]["overall"] == "PARTIAL"
-    monkeypatch.setitem(target.OPEN_SUBCASES, "F3", [])
-    assert target.report([junit])["criteria"]["F3"]["overall"] == "PASS"
+    monkeypatch.setitem(target.OPEN_SUBCASES, "P1", ["an unexecuted subcase"])
+    assert target.report([junit])["criteria"]["P1"]["overall"] == "PARTIAL"
+    monkeypatch.setitem(target.OPEN_SUBCASES, "P1", [])
+    assert target.report([junit])["criteria"]["P1"]["overall"] == "PASS"
 
 
 def test_skipped_is_not_run_and_failed_is_fail(tmp_path):

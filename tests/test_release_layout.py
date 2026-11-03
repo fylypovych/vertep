@@ -101,3 +101,34 @@ def test_discard_removes_only_a_stale_release_left_by_a_failed_attempt(tmp_path)
     layout.activate(base, "1.0.1")
     with pytest.raises(RuntimeError, match="rollback target"):
         layout.discard(base, "1.0.0")
+
+
+def test_a_legacy_installation_with_rendered_storage_is_rescued_as_a_release(tmp_path):
+    """A flat installation that already rendered a video carries its storage (with the
+    ``final/video.mp4`` pointer link) in the legacy payload. That data is not release
+    code: the rescue links the shared storage instead of refusing the whole update."""
+    layout = _module()
+    base = tmp_path / "appliance"
+    (base / "storage" / "jobs" / "job-1" / "final").mkdir(parents=True)
+    final = base / "storage" / "jobs" / "job-1" / "final"
+    (final / "video_v1.mp4").write_bytes(b"render")
+    (final / "video.mp4").symlink_to("video_v1.mp4")
+    legacy = _payload(tmp_path / "legacy", "1.0.0")
+    (legacy / "storage" / "jobs" / "job-1" / "final").mkdir(parents=True)
+    (legacy / "storage" / "jobs" / "job-1" / "final" / "video.mp4").symlink_to("video_v1.mp4")
+
+    release = layout.prepare(base, legacy, "1.0.0")
+    layout.activate(base, "1.0.0")
+    assert (release / "storage").is_symlink()
+    assert (base / "current" / "storage" / "jobs" / "job-1" / "final" / "video.mp4").read_bytes() \
+        == b"render"
+    assert layout.tree_digest(legacy) == layout.tree_digest(_payload(tmp_path / "bare", "1.0.0"))
+
+
+def test_rollback_before_any_activation_leaves_a_flat_installation_unchanged(tmp_path):
+    layout = _module()
+    base = tmp_path / "appliance"
+    base.mkdir()
+    (base / "VERSION").write_text("1.0.0", encoding="utf-8")
+    layout.rollback(base)
+    assert not (base / "current").exists() and (base / "VERSION").read_text() == "1.0.0"

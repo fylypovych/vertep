@@ -117,18 +117,27 @@ def connected_restore_dependencies():
     database_url = os.getenv("VERTEP_CONNECTED_RESTORE_DATABASE_URL", "")
     if not required:
         pytest.skip("connected healthy restore environment is not required locally")
-    if not database_url:
-        pytest.fail("VERTEP_CONNECTED_RESTORE_DATABASE_URL is required")
     if _docker(["info"]).returncode != 0:
         pytest.fail("Linux Docker daemon is required for connected restore acceptance")
     containers = []
     try:
+        if not database_url:
+            # A job without a PostgreSQL service (the Browser job) gets a disposable one.
+            started = _docker(["run", "-d", "--rm", "-e", "POSTGRES_PASSWORD=ci-only",
+                               "-e", "POSTGRES_USER=vertep", "-e", "POSTGRES_DB=vertep",
+                               "-p", "127.0.0.1::5432", "postgres:16-alpine"], timeout=300)
+            assert started.returncode == 0, started.stderr
+            containers.append(started.stdout.strip())
+            database_url = (f"postgresql://vertep:ci-only@127.0.0.1:"
+                            f"{_published_port(containers[-1], '5432/tcp')}/vertep")
+            wait_for(lambda: _docker(["exec", containers[-1], "pg_isready", "-U", "vertep"])
+                     .returncode == 0, timeout=90)
         for image, port in (("redis:7.4-alpine", "6379"), ("ollama/ollama:0.5.7", "11434")):
             started = _docker(["run", "-d", "--rm", "-p", f"127.0.0.1::{port}", image], timeout=300)
             assert started.returncode == 0, started.stderr
             containers.append(started.stdout.strip())
-        redis_port = _published_port(containers[0], "6379/tcp")
-        ollama_port = _published_port(containers[1], "11434/tcp")
+        redis_port = _published_port(containers[-2], "6379/tcp")
+        ollama_port = _published_port(containers[-1], "11434/tcp")
         ollama_url = f"http://127.0.0.1:{ollama_port}"
         wait_for(lambda: httpx.get(f"{ollama_url}/api/tags", timeout=1).status_code == 200,
                  timeout=90)
@@ -605,3 +614,69 @@ def test_approved_media_consumer_readback_after_actual_restore_and_restart(backu
 
 
 from tests.test_full_media_harness import client, fleet
+
+
+def connected_core(backup_process, dependencies, name: str) -> dict:
+    """A real CORE wired to a real Backup Service and healthy real dependencies, so the
+    Backup Service's post-restore health gate can pass. Returns launch helpers."""
+    root = backup_process["root"]
+    config = root / f"{name}-core-config"
+    config.mkdir()
+    (config / "users.json").write_text("{}", encoding="utf-8")
+    (config / "installation.json").write_text('{"completed_at":"2026-01-01"}', encoding="utf-8")
+    with socket.socket() as socket_probe:
+        socket_probe.bind(("127.0.0.1", 0))
+        core_port = socket_probe.getsockname()[1]
+    internal_key = f"synthetic-{name}-internal-key"
+    _, service = backup_process["launch"]({"BACKUP_CORE_URL": f"http://127.0.0.1:{core_port}",
+                                           "INTERNAL_API_KEY": internal_key})
+    password = f"{name}-restore-admin"
+    env = {
+        "CONFIG_ROOT": str(config), "UPDATE_STATE_DIR": str(root / f"{name}-core-update"),
+        "STORAGE_ROOT": str(backup_process["storage"]),
+        "WORKFLOWS_ROOT": str(backup_process["storage"] / "workflows"),
+        "JOB_ROOT": str(root / f"{name}-core-jobs"), "SYSTEM_STATE_BACKEND": "file",
+        "BACKUP_URL": str(service.base_url).rstrip("/"), "INTERNAL_API_KEY": internal_key,
+        "ADMIN_USER": "admin", "ADMIN_PASSWORD": password, "USERS_JSON": "",
+        "COOKIE_SECURE": "false", "DATABASE_URL": dependencies["database_url"],
+        "REDIS_URL": dependencies["redis_url"], "OLLAMA_URL": dependencies["ollama_url"],
+        "CORE_ADDRESS": "", "PROMETHEUS_URL": "",
+    }
+    auth = {"Authorization": "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()}
+
+    def launch():
+        return backup_process["launch"](env, core_port, "core.app:app", "/api/session", auth)
+
+    return {"launch": launch, "url": f"http://127.0.0.1:{core_port}", "auth": auth}
+
+
+#: A workflow is application data CORE keeps in the backed-up storage and serves itself.
+RESTORED_WORKFLOW = {"node1": {"class_type": "RestoreProbe", "inputs": {"seed": 401}}}
+
+
+def test_core_reads_back_a_restored_workflow_after_a_backup_service_restore(
+        backup_process, connected_restore_dependencies):
+    """#401 P1: the application is the reader of a Backup Service restore. A workflow
+    saved through the real CORE lives in the backed-up storage; after it is deleted
+    through the API, the Backup Service restores the snapshot (passing its healthy-CORE
+    gate) and the restarted CORE serves the same workflow from its own API."""
+    core = connected_core(backup_process, connected_restore_dependencies, "readback")
+    process, api = core["launch"]()
+    path = "/api/workflows/image/restore-probe.json"
+    saved = api.put(path, json=RESTORED_WORKFLOW)
+    assert saved.status_code == 200, saved.text
+    original = api.get(path).json()
+    snapshot = api.post("/api/system/backups")
+    assert snapshot.status_code == 200, snapshot.text
+    sid = snapshot.json()["snapshot_id"]
+    assert api.delete(path).status_code == 200
+    assert api.get(path).status_code == 404
+
+    token = api.post(f"/api/system/backups/{sid}/restore").json()["confirmation_token"]
+    confirmed = api.post(f"/api/system/backups/{sid}/restore/confirm", params={"token": token})
+    assert confirmed.status_code == 200, confirmed.text
+    assert api.get(f"/api/system/backups/{sid}/restore/progress").json()["status"] == "done"
+    stop_process(process)
+    _, restarted = core["launch"]()
+    assert restarted.get(path).json() == original
+    assert restarted.get("/api/system/state").json()["state"] == "NORMAL"

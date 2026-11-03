@@ -84,9 +84,34 @@ M3_PROCESS_CORE_RESTART_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_a_core_restart_mid_render_drops_the_attempt_and_fences_the_late_result"
 )
-#: Both process cases hold the upstream task in ``processing`` on the documented stand-in;
+#: #402 M3: the same node restarted after the task ID reconciles without a resubmit, and a
+#: duplicate result of an imported attempt is fenced.
+M3_PROCESS_NODE_RESTART_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_the_same_node_restarted_after_the_task_id_reconciles_its_attempt_without_a_resubmit"
+)
+M3_PROCESS_NODE_RESTART_BEFORE_TASK_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_the_same_node_restarted_before_the_task_id_submits_once_after_the_restart"
+)
+M3_PROCESS_TRANSIENT_FAULT_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_transient_429_and_5xx_status_polls_are_bounded_retries_on_the_process_route"
+)
+M3_PROCESS_BOUNDED_FAULT_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_persistent_5xx_and_a_malformed_status_fail_the_attempt_and_the_retry_reconciles"
+)
+M3_PROCESS_DUPLICATE_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_a_duplicate_result_of_an_imported_attempt_is_fenced_without_a_second_version"
+)
+#: The process cases hold the upstream task in ``processing`` on the documented stand-in;
 #: they prove the CORE/Worker lease and restart logic, not the pinned upstream.
-M3_STAND_IN_TESTS = (M3_PROCESS_LEASE_TEST, M3_PROCESS_CORE_RESTART_TEST)
+M3_STAND_IN_TESTS = (M3_PROCESS_LEASE_TEST, M3_PROCESS_CORE_RESTART_TEST,
+                     M3_PROCESS_NODE_RESTART_TEST, M3_PROCESS_NODE_RESTART_BEFORE_TASK_TEST,
+                     M3_PROCESS_DUPLICATE_TEST, M3_PROCESS_TRANSIENT_FAULT_TEST,
+                     M3_PROCESS_BOUNDED_FAULT_TEST)
 
 #: #392 moved the corrupt-download fault from the M1 media matrix to M3 recovery, so the
 #: two criteria partition the matrix instead of both claiming (or both dropping) it.

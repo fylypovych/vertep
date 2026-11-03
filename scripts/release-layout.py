@@ -39,10 +39,19 @@ def _atomic_json(path: Path, value: dict) -> None:
     _fsync_dir(path.parent)
 
 
+def _mutable(relative: str) -> bool:
+    return any(relative == name or relative.startswith(name + "/") for name in MUTABLE)
+
+
 def tree_digest(root: Path) -> str:
+    """Digest of the release code. The MUTABLE paths are installation data: ``prepare``
+    replaces them with links to the shared copies, so they are not part of the release
+    (a legacy flat installation carries its storage, renders and their links there)."""
     digest = hashlib.sha256()
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
+        if _mutable(relative):
+            continue
         if path.is_symlink():
             raise ValueError(f"release payload contains a symlink: {relative}")
         if path.is_file():
@@ -69,7 +78,9 @@ def prepare(base: Path, payload: Path, version: str) -> Path:
     digest = tree_digest(payload)
     temporary = releases / f".{version}.{os.getpid()}.staging"
     try:
-        shutil.copytree(payload, temporary)
+        shutil.copytree(payload, temporary, symlinks=True, ignore=lambda directory, names: [
+            name for name in names
+            if _mutable((Path(directory) / name).relative_to(payload).as_posix())])
         for name in MUTABLE:
             destination = temporary / name
             source = base / name
@@ -105,7 +116,12 @@ def activate(base: Path, version: str) -> None:
 
 
 def rollback(base: Path) -> None:
-    state = json.loads((base / ".activation.json").read_text(encoding="utf-8"))
+    activation = base / ".activation.json"
+    if not activation.exists() and not (base / "current").is_symlink():
+        # The failure came before any release was activated (a legacy flat installation
+        # whose rescue did not complete): the layout is unchanged, nothing to switch back.
+        return
+    state = json.loads(activation.read_text(encoding="utf-8"))
     previous = state.get("previous")
     if not isinstance(previous, str) or not (base / previous).is_dir():
         raise RuntimeError("no immutable previous release is available")
