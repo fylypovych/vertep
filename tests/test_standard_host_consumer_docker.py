@@ -721,48 +721,6 @@ def test_rollback_restores_previous_version_and_ready_state(
                                              fleet.container())
 
 
-def test_canary_promotion_flow_with_standard_consumer(
-        fleet, signed_update_server, tmp_path, monkeypatch):
-    """#390 F1: canary rollout waits for explicit promotion before proceeding to remaining nodes."""
-    from core.rolling_update import promote_rollout, reconcile_rollout, rollout_status, start_rollout
-
-    root = fleet.root
-    state_dir = tmp_path / "update-state"
-    state_dir.mkdir()
-    monkeypatch.setenv("VERTEP_ROOT", str(root))
-    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
-    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
-    agent = _agent()
-    first = fleet.wait_for_worker(version="0.0.0.1")
-
-    # Start a canary rollout through the rolling update coordinator.
-    rollout = start_rollout("0.0.0.2", ["consumer-worker"], canary=True)
-    assert rollout["state"] == "RUNNING"
-    assert rollout["canary"] is True
-    assert rollout["nodes"][0]["canary"] is True
-
-    # Publish the release and run the standard consumer.
-    signed_update_server.publish("0.0.0.2", _archive(_payload(
-        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    request_id = "6a" * 16
-    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
-                                 skip_drain=True) is True, _explain(state_dir, fleet)
-
-    # The worker updates to the new version and passes self-test.
-    updated = fleet.wait_for_worker(version="0.0.0.2", not_instance=first["runtime_instance_id"],
-                                    timeout=180)
-
-    # Reconcile the rollout state: canary should be in AWAITING_PROMOTION.
-    workers = {"consumer-worker": fleet.worker_record()}
-    reconciled = reconcile_rollout(workers)
-    assert reconciled["state"] == "AWAITING_PROMOTION"
-
-    # Promote the canary.
-    promoted = promote_rollout()
-    assert promoted["state"] == "RUNNING"
-    assert promoted["canary_promoted"] is True
-
-
 def test_recovery_does_not_overlap_with_previous_apply(
         installation, signed_update_server, tmp_path, monkeypatch):
     """#390 F2: a recovery operation after a failed apply does not overlap with the dead apply;

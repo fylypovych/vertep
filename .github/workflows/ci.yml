@@ -238,7 +238,7 @@ jobs:
           # #396: the runner was shut down mid-run twice; sample memory/disk so the log
           # keeps the cause even when the job dies before the summary.
           ( while true; do echo "[resources] $(date -u +%T) $(free -m | awk '/Mem:/{print "mem_used="$3"MB avail="$7"MB"}') $(df -h / | awk 'NR==2{print "disk_used="$5" free="$4}')"; sleep 15; done ) &
-          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py
+          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py --deselect tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data --deselect tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds --deselect tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect
       - name: Disk usage after the fleet tests
         if: always()
         run: df -h / /var/lib/docker && docker system df
@@ -258,6 +258,49 @@ jobs:
             ${{ runner.temp }}/criterion-390.json
             ${{ runner.temp }}/fleet-persistence-runtime/**/backup-process-*.log
           if-no-files-found: error
+
+  fleet-cancel-path-acceptance:
+    # #396: cancelling an active standard apply shut the hosted runner down mid-run.
+    # These tests run apart from the fleet job, with every kill/tgkill syscall audited
+    # and streamed live, so the log names the sender and target even if the runner dies.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VERTEP_STREAM_FAILURES: "1"
+      VERTEP_REQUIRE_STANDARD_HOST_CONSUMER: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Audit signals sent on the host
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq auditd
+          sudo auditctl -a always,exit -F arch=b64 -S kill -S tkill -S tgkill -k vertep_signal
+          sudo auditctl -l
+      - name: Cancel an active standard apply
+        run: |
+          ( sudo tail -n0 -F /var/log/audit/audit.log | grep --line-buffered -E 'key="vertep_signal"|type=OBJ_PID' | sed -u 's/^/[signal] /' ) &
+          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600 \
+            --junitxml="$RUNNER_TEMP/fleet-cancel-path.xml" \
+            --basetemp="$RUNNER_TEMP/fleet-cancel-path" \
+            tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data \
+            tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds \
+            tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect
+      - name: Audited signals
+        if: always()
+        run: sudo ausearch -k vertep_signal -i 2>/dev/null | tail -200 || true
+      - name: Upload cancel-path evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fleet-cancel-path-${{ github.sha }}
+          path: ${{ runner.temp }}/fleet-cancel-path.xml
+          if-no-files-found: warn
 
   media-acceptance:
     runs-on: ubuntu-24.04

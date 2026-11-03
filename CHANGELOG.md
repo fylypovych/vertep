@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.15
+- `tests/test_standard_host_consumer_docker.py`: прибрано `test_canary_promotion_flow_with_standard_consumer` — він викликав покрокову машину станів `reconcile_rollout` один раз у процесі тесту над state-файлом, не пов'язаним із CORE, тож `AWAITING_PROMOTION` був недосяжний; логіку canary доводить `tests/test_rolling_update.py`, процесний canary лишається відкритим (#396 F1).
+- `.github/workflows/ci.yml`: тести зі скасуванням активного apply (`interruption`, `retry_does_not_return_deleted_seeds`, `cancel_during_an_active...`) винесено з `fleet-persistence-runtime-acceptance` в окремий job `fleet-cancel-path-acceptance` з аудитом ядра на `kill`/`tkill`/`tgkill`, що транслюється в лог у реальному часі — на цьому шляху обривався runner.
+- `scripts/report_criterion_390.py`: прибрано рядок видаленого тесту.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.14
 - `tests/test_standard_host_consumer_docker.py`: canary-тест фіксує попередній екземпляр вузла до оновлення, а не після нього; повторний реліз у recovery-тесті збирається у власному каталозі; прибрано `test_db_loss_during_active_apply_blocks_mutation_and_correlates_result` — `chmod` каталогу стану не моделює втрату БД, блокував сам lease і залишав нечитабельний каталог, що зривав завантаження evidence.
 - `scripts/report_criterion_390.py`: прибрано рядок видаленого тесту.

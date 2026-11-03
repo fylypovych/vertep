@@ -28,7 +28,6 @@ CRITERIA = {
         f"{HOST}::test_standard_consumer_drains_and_admits_workers_during_update",
         f"{HOST}::test_update_timeout_and_retry_with_standard_consumer",
         f"{HOST}::test_offline_target_rejected_without_mutation",
-        f"{HOST}::test_canary_promotion_flow_with_standard_consumer",
         f"{HOST}::test_rollback_restores_previous_version_and_ready_state",
     ],
     "F2": [
@@ -59,8 +58,6 @@ CRITERIA = {
 NOT_PROOF = {
     f"{HOST}::test_update_timeout_and_retry_with_standard_consumer":
         "one successful update; no timeout or retry is exercised",
-    f"{HOST}::test_canary_promotion_flow_with_standard_consumer":
-        "waits for the previous version after update; promotion not proven",
     f"{HOST}::test_recovery_does_not_overlap_with_previous_apply":
         "starts from a signature refusal before apply; no active apply to overlap",
     f"{HOST}::test_application_consumer_reads_back_versions_and_approvals":
