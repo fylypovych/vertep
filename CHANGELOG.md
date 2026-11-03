@@ -1,3 +1,6 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.16
+- `AGENTS.md`: три команди публікації замість двох — `пуш` (версійні файли, `compileall`, `git diff --check`, commit, push у `main`; повні тести виконує CI після push), `тест` (колишній `пуш`: додатково повний локальний `pytest` перед commit) і `реліз` (без змін, спирається на `тест`); оновлено §0.1, §0.4, §2.1, §2.6, §2.6.1, §2.9, §2.10, §2.18, §2.19 і розділ 4.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.15
 - `tests/test_standard_host_consumer_docker.py`: прибрано `test_canary_promotion_flow_with_standard_consumer` — він викликав покрокову машину станів `reconcile_rollout` один раз у процесі тесту над state-файлом, не пов'язаним із CORE, тож `AWAITING_PROMOTION` був недосяжний; логіку canary доводить `tests/test_rolling_update.py`, процесний canary лишається відкритим (#396 F1).
 - `.github/workflows/ci.yml`: тести зі скасуванням активного apply (`interruption`, `retry_does_not_return_deleted_seeds`, `cancel_during_an_active...`) винесено з `fleet-persistence-runtime-acceptance` в окремий job `fleet-cancel-path-acceptance` з аудитом ядра на `kill`/`tkill`/`tgkill`, що транслюється в лог у реальному часі — на цьому шляху обривався runner.
