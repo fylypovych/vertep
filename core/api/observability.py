@@ -109,24 +109,25 @@ def security_check():
     integrations = _integration_summary()
     effective_config = _effective_config_summary()
 
-    remediation = [f"Set a strong, unique random value for {name}" for name in weak]
+    remediation = [f"Задайте для {name} надійне унікальне випадкове значення" for name in weak]
     if seals.get("sealed") is False:
-        remediation.append("Re-seal the encrypted secret-store data key with SECRET_STORE_PASSPHRASE")
+        remediation.append("Повторно запечатайте ключ даних сховища секретів за допомогою SECRET_STORE_PASSPHRASE")
     if seals.get("status") == "unusable":
         remediation.append(
-            "The sealed secret-store data key cannot be opened with the configured "
-            f"passphrase ({seals.get('detail')}); restore the matching SECRET_STORE_PASSPHRASE")
+            "Запечатаний ключ даних сховища секретів не відкривається налаштованою "
+            f"парольною фразою ({seals.get('detail')}); відновіть відповідну SECRET_STORE_PASSPHRASE")
     for label, info in certificates.items():
         if info.get("status") in ("expiring", "expired"):
-            remediation.append(f"{label} is {info['status']} (expires {info.get('expires_at')}); renew it")
+            state = "термін дії спливає" if info["status"] == "expiring" else "термін дії минув"
+            remediation.append(f"{_CERT_NAMES.get(label, label)}: {state} ({info.get('expires_at')}); оновіть його")
         elif info.get("status") == "missing":
-            remediation.append(f"{label} is missing; provision it")
+            remediation.append(f"{_CERT_NAMES.get(label, label)}: відсутній; встановіть його")
         elif info.get("status") == "unreadable":
-            remediation.append(f"{label} is present but unreadable; restore or replace it")
+            remediation.append(f"{_CERT_NAMES.get(label, label)}: є, але не читається; відновіть або замініть")
         elif label != "server_key" and info.get("san_count") == 0:
             remediation.append(
-                f"{label} carries no subjectAltName; reissue it with SAN entries so "
-                "hostname verification succeeds")
+                f"{_CERT_NAMES.get(label, label)}: немає subjectAltName; перевипустіть його із записами SAN, "
+                "щоб перевірка імені хоста проходила")
 
     # Fail-closed: a missing or unreadable certificate is never reported as ok.
     # Previously a missing cert was folded into the "ok" bucket alongside a
@@ -136,7 +137,7 @@ def security_check():
     return {
         "ok": ok,
         "weak_or_missing": list(weak),
-        "recommendation": (" ; ".join(remediation) or "Environment credentials and certificates are within policy"),
+        "recommendation": (" ; ".join(remediation) or "Облікові дані середовища та сертифікати відповідають політиці"),
         "checks": {
             "secrets_store": seals,
             "certificates": certificates,
@@ -145,6 +146,9 @@ def security_check():
         },
     }
 
+
+_CERT_NAMES = {"server_certificate": "Сертифікат сервера", "server_key": "Ключ сервера",
+               "node_ca": "CA вузлів"}
 
 _WEAK_VALUE_MARKERS = ("replace", "changeme", "change-me", "example", "<your", "todo", "test")
 
@@ -252,8 +256,8 @@ def _effective_config_summary() -> dict:
         "postgres_password_set": bool(os.getenv("POSTGRES_PASSWORD")),
         "secret_store_passphrase_set": bool(os.getenv("SECRET_STORE_PASSPHRASE") or os.getenv("SECRET_STORE_PASSPHRASE_FILE")),
         "session_secret_set": bool(os.getenv("SESSION_SECRET")),
-        "llm_provider": os.getenv("VERTEP_LLM_PROVIDER", "not configured"),
-        "tts_provider": os.getenv("TTS_PROVIDER", "not configured"),
+        "llm_provider": os.getenv("VERTEP_LLM_PROVIDER", ""),
+        "tts_provider": os.getenv("TTS_PROVIDER", ""),
         "publisher_mock": os.getenv("PUBLISHER_MOCK", "false").lower() == "true",
     }
 
@@ -366,7 +370,7 @@ def _reconcile_alerts() -> None:
     if update.get("state") in {"FAILED", "ROLLED_BACK"}:
         alert_svc.record({
             "severity": "error", "type": "UPDATE_FAILED",
-            "message": update.get("message") or "Update failed",
+            "message": update.get("message") or "Оновлення не вдалося",
             "operation_id": update.get("request_id"),
             "updated_at": update.get("updated_at"),
             "details": (update.get("log") or [])[-20:],
@@ -378,7 +382,7 @@ def _reconcile_alerts() -> None:
     if deployment.get("state") == "FAILED":
         alert_svc.record({
             "severity": "error", "type": "ROLE_DEPLOYMENT_FAILED",
-            "message": deployment.get("error") or "Role activation failed",
+            "message": deployment.get("error") or "Не вдалося активувати роль",
             "updated_at": deployment.get("updated_at"),
         })
     else:

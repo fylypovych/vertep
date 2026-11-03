@@ -11,6 +11,16 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { EmptyStateComponent } from '../shared/empty-state.component';
 
+const TYPE_LABELS: Record<string, string> = {
+  ROLE_DEPLOYMENT_FAILED: 'Не вдалося розгорнути роль', UPDATE_FAILED: 'Оновлення не вдалося',
+  JOB_FAILED: 'Job завершився помилкою', WORKER_OFFLINE: 'Вузол недоступний',
+  DEAD_LETTER_TASK: 'Задача в черзі невдалих', SYSTEM_STATE: 'Стан системи',
+};
+
+const STATE_LABELS: Record<string, string> = {
+  firing: 'активне', acknowledged: 'підтверджене', resolved: 'вирішене',
+};
+
 const SEVERITY_LABELS: Record<string, string> = {
   error: 'Помилка', warning: 'Попередження', info: 'Інформація',
 };
@@ -47,16 +57,16 @@ const SEVERITY_LABELS: Record<string, string> = {
                         [class.text-blue-700]="alert.severity === 'info'">
                     {{ severityLabel(alert.severity) }}
                   </span>
-                  <span class="text-sm font-medium text-slate-900">{{ alert.type }}</span>
+                  <span class="text-sm font-medium text-slate-900" [attr.title]="alert.type">{{ typeLabel(alert.type) }}</span>
                 </div>
                 @if (alert.message) {
                   <p class="text-sm text-slate-600 mt-1">{{ alert.message }}</p>
                 }
                 <div class="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
                   @if (alert.job_id) { <span>Job: {{ alert.job_id }}</span> }
-                  @if (alert.node_name) { <span>Node: {{ alert.node_name }}</span> }
-                  @if (alert.task_id) { <span>Task: {{ alert.task_id }}</span> }
-                  @if (alert.state) { <span>Стан: {{ alert.state }}</span> }
+                  @if (alert.node_name) { <span>Вузол: {{ alert.node_name }}</span> }
+                  @if (alert.task_id) { <span>Задача: {{ alert.task_id }}</span> }
+                  @if (alert.state) { <span>Стан: {{ stateLabel(alert.state) }}</span> }
                   @if (alert.updated_at) { <span>{{ alert.updated_at | vertepDate }}</span> }
                 </div>
               </div>
@@ -107,4 +117,8 @@ export class AlertsComponent implements OnInit, OnDestroy {
   }
 
   severityLabel(severity?: string): string { return SEVERITY_LABELS[severity || ''] || severity || '—'; }
+
+  typeLabel(type?: string): string { return TYPE_LABELS[type || ''] || type || '—'; }
+
+  stateLabel(state?: string): string { return STATE_LABELS[state || ''] || state || '—'; }
 }

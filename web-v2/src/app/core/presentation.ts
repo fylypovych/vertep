@@ -95,6 +95,33 @@ export const WORKER_STATUS_LABELS: Record<string, string> = {
 
 export function workerStatusLabel(status?: string): string { return WORKER_STATUS_LABELS[status || ''] || status || 'Невідомо'; }
 
+/** Runtime state of a node or a role (core/role_runtime.py, node runtime_status). */
+export const RUNTIME_STATUS_LABELS: Record<string, string> = {
+  READY: 'Готовий', ONLINE: 'Готовий', DEGRADED: 'Деградує', OFFLINE: 'Недоступний',
+  PENDING_SELF_TEST: 'Очікує self-test', UPDATING: 'Оновлюється', REVOKED: 'Відкликаний',
+  UNKNOWN: 'Невідомо',
+};
+
+export function runtimeStatusLabel(status?: string): string { return RUNTIME_STATUS_LABELS[status || ''] || 'Невідомо'; }
+
+/** Update executor state (scripts/update-agent.py) and rolling update state (core/rolling_update.py). */
+export const UPDATE_STATE_LABELS: Record<string, string> = {
+  IDLE: 'Очікування', CHECKING: 'Перевірка', DOWNLOADING: 'Завантаження', UPDATING: 'Оновлення',
+  RUNNING: 'Виконується', SUCCEEDED: 'Успішно', FAILED: 'Помилка', ROLLED_BACK: 'Відкочено',
+  ROLLING_BACK: 'Відкат', ROLLBACK_FAILED: 'Відкат не вдався', AWAITING_PROMOTION: 'Очікує підтвердження',
+  CANCELLED: 'Скасовано', PENDING: 'Очікує',
+};
+
+export function updateStateLabel(state?: string): string { return UPDATE_STATE_LABELS[state || ''] || state || '—'; }
+
+/** Global system state (core/system_state.py). */
+export const SYSTEM_STATE_LABELS: Record<string, string> = {
+  NORMAL: 'Штатна робота', MAINTENANCE: 'Обслуговування', UPDATING: 'Оновлення',
+  RECOVERING: 'Відновлення', READ_ONLY: 'Лише читання', EMERGENCY: 'Аварійний режим', DRAIN: 'Завершення задач',
+};
+
+export function systemStateLabel(state?: string): string { return SYSTEM_STATE_LABELS[state || ''] || state || '—'; }
+
 export const TASK_TYPE_LABELS: Record<string, string> = {
   image: 'Зображення', video: 'Відео',
 };

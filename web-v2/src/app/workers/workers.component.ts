@@ -8,7 +8,7 @@ import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { PolicyService } from '../core/services/policy.service';
 import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
-import { roleLabel, workerStatusLabel } from '../core/presentation';
+import { roleLabel, runtimeStatusLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -280,17 +280,7 @@ export class WorkersComponent implements OnInit {
 
   nodeRoleLabel(role: string): string { return roleLabel(role); }
   nodeStatusLabel(status: string): string { return workerStatusLabel(status); }
-  runtimeStatusLabel(runtimeStatus: string | undefined): string {
-    switch (runtimeStatus) {
-      case 'ONLINE': return 'Готовий';
-      case 'DEGRADED': return 'Деградує';
-      case 'OFFLINE': return 'Недоступний';
-      case 'PENDING_SELF_TEST': return 'Очікує self-test';
-      case 'UPDATING': return 'Оновлюється';
-      case 'REVOKED': return 'Відкликаний';
-      default: return 'Невідомо';
-    }
-  }
+  runtimeStatusLabel(runtimeStatus: string | undefined): string { return runtimeStatusLabel(runtimeStatus); }
   nodeLoad(worker: Worker): string {
     const value = worker.gpu_load ?? worker.cpu_load;
     return value == null ? 'Немає даних' : `${value}%`;

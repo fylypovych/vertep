@@ -17,7 +17,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <app-loading-state *ngIf="loading()" />
       <div *ngIf="secCheck() as check">
         <p class="font-medium" [class.text-emerald-700]="check.ok" [class.text-amber-700]="!check.ok"
-           data-testid="security-check-state">{{ check.ok ? 'OK' : 'Потребує уваги' }}</p>
+           data-testid="security-check-state">{{ check.ok ? 'У нормі' : 'Потребує уваги' }}</p>
         <p class="text-sm" data-testid="security-check-recommendation">{{ check.recommendation }}</p>
         <p class="text-sm text-amber-700 mt-2" *ngIf="check.weak_or_missing.length"
            data-testid="security-check-weak">
@@ -50,9 +50,9 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         <div *ngIf="detail.effective_config as effective" data-testid="security-effective-config">
           <h4 class="text-sm font-semibold">Ефективна конфігурація</h4>
           <ul class="text-sm list-disc pl-5">
-            <li>LLM: {{ effective.llm_provider || 'not configured' }}</li>
-            <li>TTS: {{ effective.tts_provider || 'not configured' }}</li>
-            <li>Публікація: {{ effective.publisher_mock ? 'тестовий режим' : 'production' }}</li>
+            <li>LLM: {{ effective.llm_provider || 'не налаштовано' }}</li>
+            <li>TTS: {{ effective.tts_provider || 'не налаштовано' }}</li>
+            <li>Публікація: {{ effective.publisher_mock ? 'тестовий режим' : 'робочий режим' }}</li>
             <li>Пароль адміністратора: {{ effective.admin_password_set ? 'встановлено' : 'відсутній' }}</li>
             <li>Токен вузла: {{ effective.node_api_token_set ? 'встановлено' : 'відсутній' }}</li>
             <li>Пароль PostgreSQL: {{ effective.postgres_password_set ? 'встановлено' : 'відсутній' }}</li>

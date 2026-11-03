@@ -76,3 +76,18 @@ def test_service_image_ships_every_imported_module(image, service):
             elif PROVIDED_BY.get(top, top).lower() not in packages:
                 missing.append(f"{top} (not installed by pip, imported by {module})")
     assert not missing, f"docker/{image}/Dockerfile: " + ", ".join(sorted(set(missing)))
+
+
+def test_core_image_ships_every_script_module_the_runtime_imports():
+    """The CORE image copies scripts/ file by file; a ``scripts.<name>`` import from the
+    runtime packages without that file in the image answered 500 in production
+    (/api/real-tests/scenarios)."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    copied = set(re.findall(r"^COPY scripts/([\w-]+)\.py ", dockerfile, re.MULTILINE))
+    imported = set()
+    for package in ("core", "worker", "services", "adapters"):
+        for path in (ROOT / package).rglob("*.py"):
+            imported.update(name.split(".")[1] for name in _imports(path)
+                            if name.startswith("scripts.") and name.count(".") == 1)
+    assert imported, "the scan found no scripts imports at all"
+    assert imported <= copied, f"not copied into the CORE image: {sorted(imported - copied)}"

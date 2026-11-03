@@ -204,7 +204,7 @@ def assert_migrate_evidence(rows: list[dict]) -> None:
     its exit state by the regular health checks.
     """
     if not any(item.get("Service") == "migrate" for item in rows):
-        raise RuntimeError("Migration evidence is missing: the 'migrate' service did not run")
+        raise RuntimeError("Немає підтвердження міграції: сервіс 'migrate' не запускався")
 
 
 def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.run,
@@ -215,11 +215,11 @@ def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.r
     while True:
         rows = compose_rows(compose, selected, runner)
         if not rows:
-            raise RuntimeError("Compose inventory is empty or malformed")
+            raise RuntimeError("Перелік сервісів Compose порожній або пошкоджений")
         found_services = {item.get("Service") for item in rows}
         missing = required_running - found_services
         if missing:
-            raise RuntimeError("Missing services in inventory: " + ", ".join(sorted(missing)))
+            raise RuntimeError("У переліку бракує сервісів: " + ", ".join(sorted(missing)))
         if "migrate" in selected and not migrate_confirmed:
             # Fail-closed: no successful migration record means the deployment
             # is not proven, regardless of how healthy the long-running services
@@ -235,11 +235,11 @@ def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.r
                   or (item.get("State") == "exited" and item.get("Service") != "migrate")
                   or (item.get("Service") == "migrate" and item.get("State") == "exited" and item.get("ExitCode", 0) != 0)]
         if failed:
-            raise RuntimeError("Selected services failed health checks: " + ", ".join(sorted(failed)))
+            raise RuntimeError("Вибрані сервіси не пройшли перевірку стану: " + ", ".join(sorted(failed)))
         if required_running <= ready:
             return
         if time.monotonic() >= deadline:
-            raise RuntimeError("Selected services did not become healthy before timeout")
+            raise RuntimeError("Вибрані сервіси не стали робочими до завершення часу очікування")
         time.sleep(5)
 
 
@@ -282,7 +282,7 @@ def _restore_runtime(compose: list[str], previous_services: set[str], new_servic
             still_running = sorted(observed & set(superseded))
             result["runtime_set_verified"] = not still_running
             if still_running:
-                raise RuntimeError("Rollback left services running: " + ", ".join(still_running))
+                raise RuntimeError("Після відкату лишилися запущені сервіси: " + ", ".join(still_running))
             result["health_verified"] = True
             result["restored"] = True
             return result
@@ -290,7 +290,7 @@ def _restore_runtime(compose: list[str], previous_services: set[str], new_servic
         result["observed_services"] = sorted(observed)
         result["missing_services"] = sorted(previous_services - observed)
         if result["missing_services"]:
-            raise RuntimeError("Restored runtime set is incomplete: "
+            raise RuntimeError("Відновлений набір сервісів неповний: "
                                + ", ".join(result["missing_services"]))
         wait_for_healthy(compose, previous_services, runner, timeout_seconds=120)
         result["health_verified"] = True
@@ -374,13 +374,13 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
     if not isinstance(version, str) or not SAFE_VERSION.fullmatch(version):
         raise ValueError("Deployment request містить некоректну версію")
     if version != current_version(root / ".env"):
-        raise RuntimeError("Deployment request створено для іншої версії Vertep")
+        raise RuntimeError("Запит на розгортання створено для іншої версії Vertep")
     additional_roles = request.get("additional_roles", [])
     if not isinstance(additional_roles, list) or any(not isinstance(item, str) for item in additional_roles):
         raise ValueError("Некоректний список додаткових ролей")
     plan = create_plan(roles, role, version, additional_roles)
     if request.get("plan_sha256") != plan["sha256"]:
-        raise RuntimeError("Deployment request не відповідає підписаному каталогу ролей")
+        raise RuntimeError("Запит на розгортання не відповідає підписаному каталогу ролей")
     core_url = request.get("core_url") or ""
     if role != "core":
         core_url = env_value(core_url, "CORE_URL").rstrip("/")
@@ -498,7 +498,7 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         observed = {item["service"] for item in inventory["containers"]}
         missing = selected - observed
         if missing:
-            raise RuntimeError("Runtime set does not match the plan; missing services: "
+            raise RuntimeError("Набір сервісів не відповідає плану; бракує: "
                                + ", ".join(sorted(missing)))
         inventory["missing_services"] = sorted(missing)
         inventory["runtime_set_verified"] = True
@@ -506,7 +506,7 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
                      if ((item["state"] != "running" and item["service"] != "migrate")
                          or item["health"] not in {"", "healthy"})]
         if unhealthy:
-            raise RuntimeError("Selected services are not healthy: " + ", ".join(unhealthy))
+            raise RuntimeError("Вибрані сервіси не в робочому стані: " + ", ".join(unhealthy))
         inventory["modules"] = _module_status(inventory["containers"], plan["modules"])
         atomic_json(root / "config/runtime-inventory.json", inventory)
         # The expected ComfyUI runtime inventory of the GPU node is written from

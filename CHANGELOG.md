@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.18
+- Web UI: статуси ролей (`READY`/`DEGRADED`/`OFFLINE`/`UNKNOWN`), стан і фаза оновлення, поетапне оновлення, тип і стан сповіщень показуються українською; спільні словники `runtimeStatusLabel`, `updateStateLabel`, `systemStateLabel` у `web-v2/src/app/core/presentation.ts`; у розділі «Безпека» — «У нормі», «не налаштовано», «робочий режим».
+- `core/api/observability.py`, `core/first_run.py`: рекомендації перевірки безпеки, опис стану сховища секретів і повідомлення сповіщень формуються українською.
+- `scripts/apply-deployment.py`: помилки розгортання ролі українською (зокрема «Немає підтвердження міграції: сервіс 'migrate' не запускався»).
+- `Dockerfile`: образ CORE містить `scripts/qualify_infrastructure.py` — без нього `/api/real-tests/scenarios` повертав 500; новий тест `test_core_image_ships_every_script_module_the_runtime_imports` перевіряє, що кожен `scripts.*`, який імпортує рантайм, є в образі.
+- Тести оновлено під українські тексти.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.17
 - `AGENTS.md`: команда `пуш` створює commit з `[skip ci]` у тілі повідомлення (назва — лише версія), тому CI та Browser E2E після неї не запускаються; `тест` публікує без `[skip ci]` і запускає їх; `реліз` для commit від `пуш` спершу запускає CI та Browser E2E для того ж SHA через `workflow_dispatch`.
 - `.github/workflows/ci.yml`: додано `workflow_dispatch`.

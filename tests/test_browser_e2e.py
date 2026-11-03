@@ -429,11 +429,11 @@ def test_settings_security_shows_effective_checks_and_remediation():
         page.route("**/api/security/check", lambda route: route.fulfill(json={
             "ok": False,
             "weak_or_missing": ["ADMIN_PASSWORD"],
-            "recommendation": "The sealed secret-store data key cannot be opened with the configured passphrase",
+            "recommendation": "Запечатаний ключ даних сховища секретів не відкривається налаштованою парольною фразою",
             "checks": {
                 "secrets_store": {
                     "status": "unusable", "sealed": True,
-                    "detail": "sealed but not openable: secret-store key failed authentication",
+                    "detail": "запечатаний, але не відкривається: secret-store key failed authentication",
                     "unsealable": False, "passphrase_configured": True, "sealing_required": True,
                 },
                 "certificates": {
@@ -453,7 +453,7 @@ def test_settings_security_shows_effective_checks_and_remediation():
         expect(section).to_be_visible()
         expect(page.locator("[data-testid='security-check-state']")).to_have_text("Потребує уваги")
         expect(page.locator("[data-testid='security-check-weak']")).to_contain_text("ADMIN_PASSWORD")
-        expect(page.locator("[data-testid='security-check-recommendation']")).to_contain_text("cannot be opened")
+        expect(page.locator("[data-testid='security-check-recommendation']")).to_contain_text("не відкривається")
         expect(page.locator("[data-testid='security-check-secret-store']")).to_contain_text("не працює")
         expect(page.locator("[data-testid='security-cert-server_certificate']")).to_contain_text("спливає")
         expect(page.locator("[data-testid='security-cert-node_ca']")).to_contain_text("відсутній")
@@ -786,11 +786,11 @@ def test_settings_security_renders_ok_state():
         page.route("**/api/security/check", lambda route: route.fulfill(json={
             "ok": True,
             "weak_or_missing": [],
-            "recommendation": "Environment credentials and certificates are within policy",
+            "recommendation": "Облікові дані середовища та сертифікати відповідають політиці",
             "checks": {
                 "secrets_store": {
                     "status": "ok", "sealed": True,
-                    "detail": "sealed (data key wrapped with passphrase-derived KEK)",
+                    "detail": "запечатаний (ключ даних захищено KEK, похідним від парольної фрази)",
                     "unsealable": True, "passphrase_configured": True, "sealing_required": True,
                 },
                 "certificates": {
@@ -806,7 +806,7 @@ def test_settings_security_renders_ok_state():
         page.goto(f"{BASE_URL}/settings?tab=security")
         section = page.locator("[data-testid='settings-security']")
         expect(section).to_be_visible()
-        expect(page.locator("[data-testid='security-check-state']")).to_have_text("OK")
+        expect(page.locator("[data-testid='security-check-state']")).to_have_text("У нормі")
         expect(page.locator("[data-testid='security-check-secret-store']")).to_contain_text("у нормі")
         expect(page.locator("[data-testid='security-cert-server_certificate']")).to_contain_text("у нормі")
         expect(section).to_contain_text("Немає активних інтеграцій")
@@ -1033,7 +1033,7 @@ def test_alerts_page_loads():
         ]))
         page.goto(f"{BASE_URL}/alerts")
         expect(page.locator("[data-testid='alerts-page']")).to_be_visible()
-        expect(page.locator("[data-testid='alerts-page']")).to_contain_text("JOB_FAILED")
+        expect(page.locator("[data-testid='alerts-page']")).to_contain_text("Job завершився помилкою")
         expect(page.locator("[data-testid='alerts-page']")).to_contain_text("Test failure")
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
@@ -1785,9 +1785,10 @@ def test_settings_roles_shows_deployment_status():
         expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
         # Measured runtime status per role contract must be rendered, not just declared.
         expect(page.locator("[data-testid='role-runtime-status-list']")).to_be_visible()
-        expect(page.locator("[data-testid='role-status-core']")).to_have_text("READY")
-        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("DEGRADED")
-        expect(page.locator("[data-testid='role-status-text']")).to_have_text("OFFLINE")
+        # The status is shown in Ukrainian, not as the API code.
+        expect(page.locator("[data-testid='role-status-core']")).to_have_text("Готовий")
+        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("Деградує")
+        expect(page.locator("[data-testid='role-status-text']")).to_have_text("Недоступний")
         page.locator("nav a[href='/settings?tab=system']").click()
         expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()
         page.go_back()

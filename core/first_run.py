@@ -196,32 +196,32 @@ def inspect_data_key() -> dict:
     try:
         raw = path.read_text(encoding="ascii").strip()
     except (OSError, UnicodeDecodeError):
-        state.update(sealed=False, detail="unreadable data key", unsealable=False)
+        state.update(sealed=False, detail="ключ даних не читається", unsealable=False)
         return state
 
     if not raw.lstrip().startswith("{"):
-        state.update(sealed=False, detail="stored as a raw (unsealed) data key",
+        state.update(sealed=False, detail="ключ даних збережено без запечатування",
                      unsealable=True)
         return state
 
     try:
         envelope = json.loads(raw)
     except ValueError:
-        state.update(sealed=False, detail="unrecognized data key envelope", unsealable=False)
+        state.update(sealed=False, detail="нерозпізнаний формат ключа даних", unsealable=False)
         return state
     if not isinstance(envelope, dict) or envelope.get("version") != 1 \
             or envelope.get("algorithm") != "scrypt+A256GCM":
-        state.update(sealed=False, detail="unrecognized data key envelope", unsealable=False)
+        state.update(sealed=False, detail="нерозпізнаний формат ключа даних", unsealable=False)
         return state
 
     state["sealed"] = True
     try:
         key = _decode_key(raw)
     except (ValueError, RuntimeError) as error:
-        state.update(unsealable=False, detail=f"sealed but not openable: {error}")
+        state.update(unsealable=False, detail=f"запечатаний, але не відкривається: {error}")
         return state
     state.update(unsealable=len(key) == 32,
-                 detail="sealed (data key wrapped with passphrase-derived KEK)")
+                 detail="запечатаний (ключ даних захищено KEK, похідним від парольної фрази)")
     return state
 
 

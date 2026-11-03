@@ -32,6 +32,7 @@ COPY brands brands
 COPY config config
 COPY db db
 COPY scripts/migrate.py scripts/migrate.py
+COPY scripts/qualify_infrastructure.py scripts/qualify_infrastructure.py
 COPY scripts/update-agent.py scripts/update-agent.py
 COPY scripts/restore.sh scripts/restore.sh
 COPY --from=web-v2 /app/web-v2/dist/vertep-admin-v2 web-v2/dist/vertep-admin-v2

@@ -62,7 +62,7 @@ def test_unsealed_store_warns_when_passphrase_configured(client, tmp_path):
     body = client()
     assert body["checks"]["secrets_store"]["sealed"] is False
     assert body["checks"]["secrets_store"]["status"] == "warning"
-    assert "Re-seal" in body["recommendation"]
+    assert "Повторно запечатайте" in body["recommendation"]
 
 
 def test_sealed_store_is_reported_sealed_and_ok(client, tmp_path):
@@ -86,7 +86,7 @@ def test_sealed_store_with_wrong_passphrase_fails_closed(client, tmp_path):
     assert checks["unsealable"] is False
     assert checks["status"] == "unusable"
     assert body["ok"] is False
-    assert "cannot be opened" in body["recommendation"]
+    assert "не відкривається" in body["recommendation"]
 
 
 def test_sealed_store_with_missing_passphrase_fails_closed(client, tmp_path):

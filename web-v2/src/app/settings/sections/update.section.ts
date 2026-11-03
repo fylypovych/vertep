@@ -6,6 +6,7 @@ import { PolicyService } from '../../core/services/policy.service';
 import { UpdateStatus, UpdateReadiness, RollingStatus } from '../../core/models';
 import { LoadingStateComponent } from '../../shared/loading-state.component';
 import { ErrorStateComponent } from '../../shared/error-state.component';
+import { systemStateLabel, updateStateLabel } from '../../core/presentation';
 
 @Component({
   selector: 'app-settings-update',
@@ -30,11 +31,11 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Стан</span>
-            <span class="font-medium text-slate-900">{{ updateStatus()!.state }}</span>
+            <span class="font-medium text-slate-900">{{ stateLabel(updateStatus()!.state) }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Фаза</span>
-            <span class="font-medium text-slate-900">{{ updateStatus()!.phase || '—' }}</span>
+            <span class="font-medium text-slate-900">{{ phaseLabel(updateStatus()!.phase) }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
             <span class="text-slate-500">Оновлення</span>
@@ -76,7 +77,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         }
         @if (rollingStatus()) {
           <div class="mb-4 text-sm text-slate-600">
-            <p>Поетапне оновлення: {{ rollingStatus()!.state || '—' }} ({{ rollingStatus()!.current_batch || 0 }}/{{ rollingStatus()!.total_batches || 0 }})</p>
+            <p>Поетапне оновлення: {{ stateLabel(rollingStatus()!.state) }} ({{ rollingStatus()!.current_batch || 0 }}/{{ rollingStatus()!.total_batches || 0 }})</p>
           </div>
         }
         <div class="flex flex-wrap gap-2">
@@ -103,6 +104,10 @@ export class UpdateSectionComponent implements OnInit {
   constructor(private system: SystemApiService, private toast: ToastService, readonly policy: PolicyService) {}
 
   ngOnInit(): void { this.loadAll(); }
+
+  stateLabel(state?: string): string { return updateStateLabel(state); }
+
+  phaseLabel(phase?: string): string { return systemStateLabel(phase); }
 
   loadAll(): void {
     this.loading.set(true);

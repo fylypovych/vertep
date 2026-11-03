@@ -231,7 +231,7 @@ def test_wait_for_healthy_fails_on_empty_inventory(tmp_path):
                 stdout = ""
             return Result()
         return None
-    with pytest.raises(RuntimeError, match="empty or malformed"):
+    with pytest.raises(RuntimeError, match="порожній або пошкоджений"):
         mod.wait_for_healthy(["docker", "compose"], {"worker"}, runner=runner)
 
 
@@ -244,7 +244,7 @@ def test_wait_for_healthy_fails_on_malformed_inventory(tmp_path):
                 stdout = "not json\n{broken\n"
             return Result()
         return None
-    with pytest.raises(RuntimeError, match="empty or malformed"):
+    with pytest.raises(RuntimeError, match="порожній або пошкоджений"):
         mod.wait_for_healthy(["docker", "compose"], {"worker"}, runner=runner)
 
 
@@ -257,7 +257,7 @@ def test_wait_for_healthy_fails_on_missing_service(tmp_path):
                 stdout = '{"Service": "worker", "State": "running", "Health": "healthy"}\n'
             return Result()
         return None
-    with pytest.raises(RuntimeError, match="Missing services"):
+    with pytest.raises(RuntimeError, match="бракує сервісів"):
         mod.wait_for_healthy(["docker", "compose"], {"worker", "comfyui"}, runner=runner)
 
 
@@ -270,7 +270,7 @@ def test_wait_for_healthy_fails_on_unhealthy_service(tmp_path):
                 stdout = '{"Service": "worker", "State": "running", "Health": "unhealthy"}\n'
             return Result()
         return None
-    with pytest.raises(RuntimeError, match="failed health checks"):
+    with pytest.raises(RuntimeError, match="не пройшли перевірку стану"):
         mod.wait_for_healthy(["docker", "compose"], {"worker"}, runner=runner)
 
 
@@ -283,7 +283,7 @@ def test_wait_for_healthy_fails_on_failed_migrate(tmp_path):
                 stdout = '{"Service": "migrate", "State": "exited", "ExitCode": 1}\n'
             return Result()
         return None
-    with pytest.raises(RuntimeError, match="failed health checks"):
+    with pytest.raises(RuntimeError, match="не пройшли перевірку стану"):
         mod.wait_for_healthy(["docker", "compose"], {"migrate"}, runner=runner)
 
 
@@ -310,7 +310,7 @@ def test_wait_for_healthy_fails_when_migrate_evidence_is_absent(tmp_path):
                           '{"Service": "postgres", "State": "running", "Health": "healthy"}\n')
             return Result()
         return None
-    with pytest.raises(RuntimeError, match="Migration evidence is missing"):
+    with pytest.raises(RuntimeError, match="Немає підтвердження міграції"):
         mod.wait_for_healthy(["docker", "compose"], {"core", "postgres", "migrate"},
                              runner=runner, timeout_seconds=0)
 
@@ -351,7 +351,7 @@ def test_apply_deployment_rolls_back_env_and_plan_on_failure(tmp_path):
             return Result()
         return None
 
-    with pytest.raises(RuntimeError, match="health"):
+    with pytest.raises(RuntimeError, match="перевірку стану|робочому стані"):
         mod.apply(root, runner=runner)
 
     # Check rollback restored .env and deployment-plan.json
@@ -455,7 +455,7 @@ def test_wait_for_healthy_rejects_missing_health_evidence(tmp_path):
         return None
     # Missing Health evidence is neither ready nor failed -> only a timeout can
     # resolve it, proving that absent evidence does not shortcut to success.
-    with pytest.raises(RuntimeError, match="timeout"):
+    with pytest.raises(RuntimeError, match="часу очікування"):
         mod.wait_for_healthy(["docker", "compose"], {"worker"}, runner=runner, timeout_seconds=0)
 
 
@@ -481,7 +481,7 @@ def test_apply_rolls_back_previous_runtime_set_after_partial_compose(tmp_path):
             return Result()
         return None
 
-    with pytest.raises(RuntimeError, match="health"):
+    with pytest.raises(RuntimeError, match="перевірку стану|робочому стані"):
         mod.apply(root, runner=runner)
 
     # Configuration restored back to the previous ("text") role.
@@ -561,7 +561,7 @@ def test_apply_fails_when_observed_runtime_set_differs_from_plan(tmp_path):
             return Result()
         return None
 
-    with pytest.raises(RuntimeError, match="Missing services"):
+    with pytest.raises(RuntimeError, match="бракує сервісів"):
         mod.apply(root, runner=runner)
     status = json.loads((root / "config/deployment-status.json").read_text(encoding="utf-8"))
     assert status["state"] == "FAILED"
