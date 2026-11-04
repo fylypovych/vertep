@@ -212,9 +212,16 @@ snapshot_installed_system(){
   progress "Backing up the installed system before changing it"
   install -d -m 0700 "$backup"
   printf '%s\n' "$target" > "$backup/target-version"
-  tar --exclude=.git --exclude=./backups --exclude=./runtime --exclude=./releases \
+  # The system is live while this runs: CORE keeps appending to config/update/*. GNU tar exits 1
+  # for a file that changed or vanished while being read (the archive is still valid), and only
+  # 2 is fatal. Without this, set -e ends bootstrap silently right after the progress line.
+  local tar_status=0
+  tar --warning=no-file-changed --warning=no-file-removed \
+    --exclude=.git --exclude=./backups --exclude=./runtime --exclude=./releases \
     --exclude=./current --exclude=./models --exclude=./storage --exclude=./data \
-    --exclude=./logs --exclude='*.pyc' -czf "$backup/application.tar.gz" -C "$INSTALL_ROOT" .
+    --exclude=./logs --exclude='*.pyc' -czf "$backup/application.tar.gz" -C "$INSTALL_ROOT" . \
+    || tar_status=$?
+  (( tar_status <= 1 )) || fail "application backup failed; the installed system was not modified"
   cp -a "$INSTALL_ROOT/.env" "$INSTALL_ROOT/config" "$backup/"
   local old_compose=(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/current/docker-compose.yml")
   mapfile -t running < <("${old_compose[@]}" ps --status running --services 2>/dev/null || true)

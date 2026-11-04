@@ -919,7 +919,9 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
         "decoder": evidence["decoder"].get("submit_route"),
         # Kept apart from the pinned assertions: these run on the documented stand-in.
         "stand_in_process_cases": {
-            test: {"expected": "PASSED", "route": "stand-in",
+            test: {"expected": "PASSED",
+                   "route": (evidence.get("process_traces") or {}).get(test, {}).get(
+                       "route", "stand-in"),
                    "actual": (evidence.get("process_lifecycle") or {}).get(test, "NOT_RUN"),
                    "trace": (evidence.get("process_traces") or {}).get(test, {})}
             for test in M3_STAND_IN_TESTS},
@@ -973,7 +975,10 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
         row(m3, PASS,
             f"{m3_measure['assertions_passed']}/{m3_measure['assertions']} pinned "
             f"recovery assertions passed, including busy DELETE 409, and "
-            f"{len(M3_STAND_IN_TESTS)} stand-in process cases passed",
+            f"{sum(case['route'] == 'pinned-proxy' for case in m3_measure['stand_in_process_cases'].values())} "
+            f"fault cases passed around the pinned runtime, "
+            f"{sum(case['route'] == 'stand-in' for case in m3_measure['stand_in_process_cases'].values())} "
+            f"only on the stand-in",
             {"measurements": m3_measure})
 
     # M4 — restart inside the acceptance→staging window.
@@ -992,7 +997,9 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
                    "actual": (evidence.get("process_lifecycle") or {}).get(test, "NOT_RUN"),
                    "trace": (evidence.get("process_traces") or {}).get(test, {})}
             for test, route in ((M4_CLEANUP_TEST, "pinned"),
-                                (M3_PROCESS_DUPLICATE_TEST, "stand-in"))},
+                                (M3_PROCESS_DUPLICATE_TEST,
+                                 (evidence.get("process_traces") or {}).get(
+                                     M3_PROCESS_DUPLICATE_TEST, {}).get("route", "stand-in")))},
     }
     m4_cases = m4_measure["lifecycle_cases"]
     m4_failed = [test for test, case in m4_cases.items() if case["actual"] == "FAILED"]

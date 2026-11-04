@@ -75,18 +75,52 @@ def _wait(predicate, timeout: float, what: str):
     raise AssertionError(f"timed out waiting for {what}: {last}")
 
 
+class PinnedProxy:
+    """The real pinned runtime behind the controlled-fault handler (#403 R3).
+
+    Submit, status, download and the submit-key routes are answered by the pinned runtime;
+    ``submits`` and ``keys`` record the upstream tasks it actually created. A repeated
+    submit key is reconciled by the runtime itself, so it adds no entry.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str, dict]] = []
+        self.submits: list[dict] = []
+        self.keys: dict[str, str] = {}
+        self._tasks: set[str] = set()
+
+    def _answer(self, method: str, url: str, kwargs: dict) -> httpx.Response:
+        path = url.split(":8000", 1)[-1]
+        self.requests.append((method, path, dict(kwargs)))
+        headers = {key: value for key, value in kwargs.get("headers", {}).items()
+                   if key not in {"host", "content-length", "accept-encoding", "connection"}}
+        response = httpx.request(method, PINNED_URL + path, headers=headers,
+                                 content=kwargs.get("content"), timeout=120)
+        if method == "POST" and path == "/api/v1/videos" and response.status_code == 200:
+            task_id = response.json()["data"]["task_id"]
+            if task_id not in self._tasks:
+                self._tasks.add(task_id)
+                self.submits.append(kwargs.get("json"))
+            key = kwargs.get("headers", {}).get("x-vertep-submit-key")
+            if key:
+                self.keys[key] = task_id
+        return response
+
+
 @pytest.fixture
 def runtime_endpoint(tmp_path, request):
     """The pinned runtime the worker renders on: real in CI, documented stand-in locally.
 
-    A test marked ``stand_in`` always gets the stand-in: it needs to hold a submitted
-    task in ``processing`` (``gate``) to kill a node mid-render, which a real upstream
-    cannot be told to do. The CORE/Worker lease logic it proves does not depend on it.
+    A test marked ``stand_in`` needs controlled faults (``gate`` holds a submitted task in
+    ``processing``, ``faults`` break single answers). With a pinned runtime configured these
+    are injected around the real submit/status/download (``pinned-proxy``); without one the
+    documented stand-in answers instead. ``route`` records which of them produced a result.
     """
     if PINNED_URL and not request.node.get_closest_marker("stand_in"):
-        yield {"url": PINNED_URL, "token": PINNED_TOKEN, "stand_in": None, "gate": None}
+        yield {"url": PINNED_URL, "token": PINNED_TOKEN, "stand_in": None, "gate": None,
+               "route": "pinned"}
         return
-    stand_in = PinnedRuntime(tmp_path)
+    stand_in = PinnedProxy() if PINNED_URL else PinnedRuntime(tmp_path)
     gate = threading.Event()
     gate.set()
     faults = {"interrupt_downloads": 0, "hold_submits": 0, "held": 0, "status_errors": [],
@@ -103,7 +137,7 @@ def runtime_endpoint(tmp_path, request):
                       "content": body}
             if self.headers.get("Content-Type", "").startswith("application/json"):
                 kwargs["json"] = json.loads(body or b"{}")
-            if self.path == "/health":  # the node's readiness probe of the wrapper
+            if self.path == "/health" and not PINNED_URL:  # the node's readiness probe
                 response = httpx.Response(200, json=_ready_report())
             elif self.path.startswith("/api/v1/tasks/") and faults["status_errors"]:
                 # A queued upstream fault for the next status poll: an HTTP status code,
@@ -155,7 +189,9 @@ def runtime_endpoint(tmp_path, request):
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
             elif self.path.startswith("/api/v1/videos/"):
-                response = _submit_key_route(self.command, self.path.rsplit("/", 1)[-1])
+                response = (stand_in._answer(self.command, "http://engine:8000" + self.path, kwargs)
+                            if PINNED_URL and gate.is_set() else
+                            _submit_key_route(self.command, self.path.rsplit("/", 1)[-1]))
             else:
                 response = stand_in._answer(self.command, "http://engine:8000" + self.path, kwargs)
             self.send_response(response.status_code)
@@ -189,8 +225,10 @@ def runtime_endpoint(tmp_path, request):
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield {"url": f"http://127.0.0.1:{server.server_port}", "token": STAND_IN_TOKEN,
-               "stand_in": stand_in, "gate": gate, "faults": faults}
+        yield {"url": f"http://127.0.0.1:{server.server_port}",
+               "token": PINNED_TOKEN if PINNED_URL else STAND_IN_TOKEN,
+               "stand_in": stand_in, "gate": gate, "faults": faults,
+               "route": "pinned-proxy" if PINNED_URL else "stand-in"}
     finally:
         server.shutdown()
         server.server_close()
@@ -317,7 +355,7 @@ def _trace(request, record_property):
     lifecycle = request.getfixturevalue("lifecycle")
     yield
     stand_in = lifecycle["runtime"]["stand_in"]
-    record_property("route", "stand-in" if stand_in is not None else "pinned")
+    record_property("route", lifecycle["runtime"]["route"])
     if stand_in is not None:
         record_property("upstream_submits", len(stand_in.submits))
         record_property("upstream_task_ids", json.dumps(sorted(set(stand_in.keys.values()))))

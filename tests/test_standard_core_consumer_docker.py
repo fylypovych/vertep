@@ -26,6 +26,9 @@ from tests.test_standard_host_consumer_docker import (
     CONSUMER_SCRIPTS, REQUIRED, ROOT, Installation, _agent, _archive, _explain, _pinned,
     _request, _run, _status, _usable)
 
+from tests.test_mpt_process_lifecycle import (  # noqa: E402,F401
+    PINNED_URL, lifecycle, runtime_endpoint)
+
 RELEASE_IMAGES = {"0.0.0.1": "ghcr.io/fylypovych/vertep-core:0.0.2.94",
                   "0.0.0.2": "ghcr.io/fylypovych/vertep-core:0.0.2.96"}
 POSTGRES_IMAGE = "postgres:16-alpine"
@@ -405,3 +408,73 @@ def test_core_reads_back_a_native_render_across_update_rollback_and_recreate(
 
     core_installation.compose("up", "-d", "--force-recreate", "core")
     assert read_back("after recreate") == original
+
+
+def _import_job(installation: CoreInstallation, job_dir: Path) -> str:
+    """Hand a finished Job (files and row) to the installed CORE, which loads it on restart."""
+    job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    installation.compose("exec", "-T", "core", "mkdir", "-p", "/data/storage/jobs")
+    _run("docker", "cp", str(job_dir), f"{installation.core_container()}:/data/storage/jobs/")
+    installation.psql(
+        "INSERT INTO jobs(job_id,topic,character_id,status,priority,source,created_at,payload) "
+        f"VALUES ('{job['job_id']}', 'MPT lifecycle', 'test_char', '{job['status']}', 5, 'web', "
+        f"'{job['created_at']}', $vt${json.dumps(job)}$vt$::jsonb);")
+    installation.compose("restart", "core")
+    installation.healthy()
+    return job["job_id"]
+
+
+@pytest.mark.skipif(not PINNED_URL and not os.getenv("VERTEP_MPT_PROCESS_LIFECYCLE"),
+                    reason="the proof belongs to the pinned runtime job")
+def test_core_reads_back_a_pinned_mpt_output_across_update_and_rollback(
+        lifecycle, core_installation, signed_update_server, tmp_path, monkeypatch):
+    """#403 R2: an approved and published MoneyPrinterTurbo render, produced by the process
+    harness on the pinned runtime, is handed to an installed CORE. Its own API then reports
+    the same versions, approval, receipt, submit-key mapping and self-verified hashes after a
+    standard update with migrations, a failed update rolled back, and a recreate."""
+    import httpx
+
+    from tests.test_mpt_process_lifecycle import (_application_reading, _publish_with_a_receipt,
+                                                  _render)
+
+    harness, job_id = lifecycle["api"], lifecycle["job_id"]
+    lifecycle["start_node"]()
+    v1 = _render(harness, job_id, 1)["video_versions"][0]
+    approved = harness.post(f"/api/jobs/{job_id}/video/approve", json={
+        "actor": "r2", "expected_video_version": 1, "expected_sha256": v1["sha256"]})
+    assert approved.status_code == 200, approved.text
+    _publish_with_a_receipt(harness, job_id)
+    produced = _application_reading(harness, job_id)
+    assert produced["engine"] == "money-printer" and produced["submit_key"]
+    assert produced["receipts"]["youtube"]
+
+    root, state_dir = core_installation.root, tmp_path / "update-state"
+    _environment(monkeypatch, root, state_dir)
+    agent = _agent()
+    api = httpx.Client(base_url=f"http://127.0.0.1:{core_installation.port}",
+                       auth=("admin", "ci-consumer-admin"), timeout=60)
+    _import_job(core_installation, lifecycle["core_jobs"] / job_id)
+
+    def read_back() -> dict:
+        core_installation.healthy()
+        return _application_reading(api, job_id)
+
+    assert read_back() == produced
+    core_installation.compose("exec", "-T", "core", "chmod", "-R", "a+rwX", "/data/storage")
+    signed_update_server.publish("0.0.0.2", _archive(_core_payload(
+        tmp_path / "release", "0.0.0.2", _release_images(),
+        {"900_ci_release_marker.sql": "CREATE TABLE ci_release_marker(version text);\n"})))
+    assert agent.process_request(root, state_dir, _request(state_dir, "f1" * 16, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, core_installation)
+    assert read_back() == produced, "changed after the update"
+
+    signed_update_server.publish("0.0.0.3", _archive(_core_payload(
+        tmp_path / "release-broken", "0.0.0.3", _release_images(),
+        {"901_ci_broken.sql": "THIS IS NOT SQL;\n"})))
+    assert agent.process_request(root, state_dir, _request(state_dir, "f2" * 16, "update", "0.0.0.3"),
+                                 skip_drain=True) is False
+    assert _status(state_dir)["state"] == "ROLLED_BACK", _explain(state_dir, core_installation)
+    assert read_back() == produced, "changed after the rollback"
+
+    core_installation.compose("up", "-d", "--force-recreate", "core")
+    assert read_back() == produced, "changed after the recreate"

@@ -67,6 +67,8 @@ CRITERIA = {
         "test_telegram_restore_caller_reports_refusals_and_retry_through_core",
         "tests/test_backup_process_acceptance.py::"
         "test_connected_healthy_restore_returns_normal_after_core_restart",
+        "tests/test_backup_process_acceptance.py::"
+        "test_telegram_restore_completes_with_a_terminal_success_on_healthy_dependencies",
         "tests/test_backup_restore_browser_e2e.py::"
         "test_browser_restore_runs_through_real_core_and_backup_service",
     ],
@@ -74,6 +76,7 @@ CRITERIA = {
         f"{HOST}::test_native_restore_is_read_back_by_the_consumer_across_update_restart_and_rollback",
         f"{HOST}::test_application_consumer_reads_back_versions_and_approvals",
         f"{CORE}::test_core_reads_back_a_native_render_across_update_rollback_and_recreate",
+        f"{CORE}::test_core_reads_back_a_pinned_mpt_output_across_update_and_rollback",
         *(f"tests/test_mpt_process_lifecycle.py::test_the_application_reads_back_versions_"
           f"approvals_receipts_hashes_and_mappings_across_recreate_and_restore[{engine}]"
           for engine in ("native", "money-printer")),

@@ -81,7 +81,7 @@ def _copy(source: Path, destination: Path) -> None:
     if not source.is_file():
         raise FileNotFoundError(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
+    shutil.copy(source, destination)  # keeps the executable bit of scripts/vertep
 
 
 def build(root: Path, output: Path, version: str, sequence: int,

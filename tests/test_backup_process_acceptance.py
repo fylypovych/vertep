@@ -647,7 +647,8 @@ def connected_core(backup_process, dependencies, name: str) -> dict:
     def launch():
         return backup_process["launch"](env, core_port, "core.app:app", "/api/session", auth)
 
-    return {"launch": launch, "url": f"http://127.0.0.1:{core_port}", "auth": auth}
+    return {"launch": launch, "url": f"http://127.0.0.1:{core_port}", "auth": auth,
+            "internal_key": internal_key}
 
 
 #: A workflow is application data CORE keeps in the backed-up storage and serves itself.
@@ -680,3 +681,39 @@ def test_core_reads_back_a_restored_workflow_after_a_backup_service_restore(
     _, restarted = core["launch"]()
     assert restarted.get(path).json() == original
     assert restarted.get("/api/system/state").json()["state"] == "NORMAL"
+
+
+def test_telegram_restore_completes_with_a_terminal_success_on_healthy_dependencies(
+        backup_process, connected_restore_dependencies, monkeypatch, tmp_path):
+    """#403 R1: confirm -> execute -> progress -> terminal success through the Telegram
+    caller, real CORE and Backup Service with healthy dependencies. The chat is told the
+    restore completed, the operation is COMPLETED, the system is NORMAL and CORE serves
+    the restored data from its own API."""
+    import core.telegram.handlers as handlers
+    from core.operations import list_operations
+
+    core = connected_core(backup_process, connected_restore_dependencies, "telegram-ok")
+    _, api = core["launch"]()
+    monkeypatch.setenv("CORE_API_URL", core["url"])
+    monkeypatch.setenv("INTERNAL_API_KEY", core["internal_key"])
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "telegram-operations"))
+    _TelegramAnswers.answers = []
+    monkeypatch.setattr(handlers, "TelegramAdapter", _TelegramAnswers)
+
+    path = "/api/workflows/image/restore-probe.json"
+    assert api.put(path, json=RESTORED_WORKFLOW).status_code == 200
+    original = api.get(path).json()
+    created = api.post("/api/system/backups")
+    assert created.status_code == 200, created.text
+    sid = created.json()["snapshot_id"]
+    assert api.delete(path).status_code == 200
+
+    handlers._sys_restore_execute({"id": "cb-success"}, "42", "sys_restore_execute", sid)
+    answer = _TelegramAnswers.answers[-1]
+    assert not answer.startswith("❌"), answer
+    assert api.get(f"/api/system/backups/{sid}/restore/progress").json()["status"] == "done"
+    assert api.get("/api/system/state").json()["state"] == "NORMAL"
+    operation = next(item for item in list_operations(200)
+                     if item.get("type") == "restore" and item.get("target") == sid)
+    assert operation["status"] == "COMPLETED", operation
+    assert api.get(path).json() == original

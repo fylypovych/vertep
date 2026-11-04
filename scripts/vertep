@@ -28,6 +28,15 @@ cleanup_stale_compose_replacements(){
     docker rm -f "$container_id" >/dev/null
   done < <(docker ps -a --format '{{.ID}} {{.Names}}')
 }
+# The system is live during a backup. tar exits 1 for a file that changed while being read
+# (the archive is still valid); gzip -t catches a real failure that also exits 1, such as a
+# compose exec into a stopped service.
+archive_live(){
+  local archive=$1 status=0
+  shift
+  "$@" > "$archive" || status=$?
+  (( status <= 1 )) && gzip -t "$archive" || { echo "Backup failed: $archive" >&2; return 1; }
+}
 sync_host_runtime(){
   local release_root=$1
   install -d -m 0750 "$ROOT/scripts" "$ROOT/core"
@@ -192,9 +201,8 @@ case "${1:-status}" in
     backup="$ROOT/backups/update-$stamp"
     mkdir -p "$backup"
     printf '%s\n' "$target_version" > "$backup/target-version"
-    tar --exclude=.git --exclude=backups --exclude=runtime --exclude=releases \
-      --exclude=current --exclude='*.pyc' \
-      -czf "$backup/application.tar.gz" -C "$ROOT" .
+    archive_live "$backup/application.tar.gz" tar --exclude=.git --exclude=backups --exclude=runtime \
+      --exclude=releases --exclude=current --exclude='*.pyc' -czf - -C "$ROOT" .
     for item in .env config /etc/vertep/node.conf; do
       [[ -e "$ROOT/$item" ]] && cp -a "$ROOT/$item" "$backup/" || true
       [[ "$item" == /* && -e "$item" ]] && cp -a "$item" "$backup/" || true
@@ -207,8 +215,8 @@ case "${1:-status}" in
       [[ "${GPU_VENDOR:-none}" == nvidia && -f "$ROOT/docker-compose.nvidia.yml" ]] \
         && backup_compose+=(-f "$ROOT/docker-compose.nvidia.yml")
       "${backup_compose[@]}" exec -T core python3 -c "from core.persistent_data import ensure_persistent_user_data; ensure_persistent_user_data()" 2>/dev/null || true
-      "${backup_compose[@]}" exec -T core tar -czf - /data/storage > "$backup/storage.tar.gz"
-      "${backup_compose[@]}" exec -T core tar -czf - /data/config > "$backup/core-config.tar.gz"
+      archive_live "$backup/storage.tar.gz" "${backup_compose[@]}" exec -T core tar -czf - /data/storage
+      archive_live "$backup/core-config.tar.gz" "${backup_compose[@]}" exec -T core tar -czf - /data/config
       "${backup_compose[@]}" exec -T postgres pg_dump -U vertep vertep > "$backup/postgres.sql"
       "${backup_compose[@]}" exec -T postgres psql -U vertep -d vertep \
         -Atc 'SELECT version, applied_at FROM schema_migrations ORDER BY applied_at' > "$backup/migrations.log" 2>/dev/null || true

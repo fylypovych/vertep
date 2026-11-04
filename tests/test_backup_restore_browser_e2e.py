@@ -62,6 +62,21 @@ def test_browser_restore_runs_through_real_core_and_backup_service(
         assert context.request.post(f"{url}/api/session", headers=core["auth"]).ok
         page.goto(f"{url}/settings?tab=backup")
         expect(page.get_by_test_id("settings-backup")).to_be_visible()
+
+        # A damaged archive: both real processes refuse it, the user sees the error and
+        # nothing is restored. The intact archive then restores on a retry from the UI.
+        archive = backup_process["root"] / "backups" / f"{sid}.vtbackup"
+        pristine = archive.read_bytes()
+        archive.write_bytes(pristine + b"synthetic tampering")
+        page.get_by_test_id("backup-restore-button").first.click()
+        with page.expect_response(lambda response: "/restore/confirm" in response.url) as refused:
+            page.get_by_role("button", name="Підтвердити").click()
+        assert refused.value.status >= 400, refused.value.text()
+        expect(page.get_by_test_id("backup-restore-error")).to_contain_text("409")
+        expect(page.get_by_role("status")).not_to_contain_text("Відновлення завершено")
+        assert api.get(path).status_code == 404, "a refused restore changed the data"
+        archive.write_bytes(pristine)
+
         with page.expect_response(lambda response: response.url.endswith(f"/backups/{sid}/restore")
                                   and response.request.method == "POST") as challenge:
             page.get_by_test_id("backup-restore-button").first.click()

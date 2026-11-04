@@ -255,7 +255,7 @@ jobs:
           # #396: the runner was shut down mid-run twice; sample memory/disk so the log
           # keeps the cause even when the job dies before the summary.
           ( while true; do echo "[resources] $(date -u +%T) $(free -m | awk '/Mem:/{print "mem_used="$3"MB avail="$7"MB"}') $(df -h / | awk 'NR==2{print "disk_used="$5" free="$4}')"; sleep 15; done ) &
-          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_backup_process_acceptance.py::test_core_reads_back_a_restored_workflow_after_a_backup_service_restore             tests/test_backup_restore_browser_e2e.py             tests/test_update_standard_browser_e2e.py             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py --deselect tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data --deselect tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds --deselect tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect --deselect tests/test_standard_host_consumer_docker.py::test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart
+          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_backup_process_acceptance.py::test_core_reads_back_a_restored_workflow_after_a_backup_service_restore             tests/test_backup_process_acceptance.py::test_telegram_restore_completes_with_a_terminal_success_on_healthy_dependencies             tests/test_backup_restore_browser_e2e.py             tests/test_update_standard_browser_e2e.py             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py --deselect tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data --deselect tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds --deselect tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect --deselect tests/test_standard_host_consumer_docker.py::test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart
       - name: Disk usage after the fleet tests
         if: always()
         run: df -h / /var/lib/docker && docker system df
@@ -584,6 +584,13 @@ jobs:
           python -m pytest -q -rs -o junit_family=legacy
           --junitxml=moneyprinter-runtime-evidence/process-lifecycle-pinned.xml
           tests/test_mpt_process_lifecycle.py
+      - name: Pinned MPT output read back across a standard CORE update and rollback (#403 R2)
+        env:
+          VERTEP_REQUIRE_STANDARD_HOST_CONSUMER: "1"
+        run: >-
+          python -m pytest -q -rs -o junit_family=legacy
+          --junitxml=moneyprinter-runtime-evidence/pinned-output-update-rollback.xml
+          tests/test_standard_core_consumer_docker.py::test_core_reads_back_a_pinned_mpt_output_across_update_and_rollback
       - name: Stop the pinned runtime
         if: always()
         run: |
