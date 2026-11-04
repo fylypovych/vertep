@@ -35,6 +35,8 @@ services:
   dispatcher:
     image: ${VERTEP_DISPATCHER_IMAGE:-${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}}
     command: ["uvicorn", "services.dispatcher_service:app", "--host", "0.0.0.0", "--port", "8094"]
+    environment:
+      REQUIRE_WORKER_SELF_TEST: "true"
     healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8094/health"], interval: 15s, timeout: 5s, retries: 20}
     restart: unless-stopped
     read_only: true

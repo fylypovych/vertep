@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.27
+- Dispatcher: сервіс вибору worker приймає й застосовує `task_type`, `min_vram_mb`, `voice_requirements`; у штатній конфігурації з `DISPATCHER_URL` спеціалізовані вузли знову отримують свої задачі, а непридатні не обираються.
+- `deploy/docker-compose.yml`: контейнер `dispatcher` отримав `REQUIRE_WORKER_SELF_TEST=true`, тому вузол без чинного self-test не обирається.
+- Тести: `tests/test_dispatcher_service_contract.py` порівнює вибір із сервісом і без нього та перевіряє налаштування compose.
+- `.gitignore`: локальний файл аудиту `audit-0311-closed-issues.md`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.26
 - Оновлення: перехід зі старого layout, перерваний між `prepare` і `activate`, більше не блокує повтор і не веде систему в EMERGENCY — `scripts/vertep` прибирає недоактивоване дерево перед повторною підготовкою.
 - Звіт критерію 390: блок `source_403` зв'язує R1–R3 #403 із джерелом, тестами, expected/actual, маршрутом, трасою і JUnit; `pinned_runtime` містить digest образу, upstream, config і SHA; R3 має PASS лише на маршруті `pinned-proxy`.
