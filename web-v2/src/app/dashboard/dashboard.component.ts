@@ -1,4 +1,4 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { SystemApiService } from '../core/api/system.api';
@@ -229,7 +229,7 @@ export class DashboardComponent implements OnInit {
   resourcesAvailable = false;
   workers: Worker[] = [];
 
-  constructor(private systemApi: SystemApiService, private workersApi: WorkersApiService, private jobsApi: JobsApiService) {}
+  constructor(private systemApi: SystemApiService, private workersApi: WorkersApiService, private jobsApi: JobsApiService, private cdr: ChangeDetectorRef) {}
 
   ngOnInit(): void {
     this.loadData();
@@ -265,9 +265,11 @@ export class DashboardComponent implements OnInit {
             { label: 'Диск', value: status.resources.disk ?? null, color: 'bg-amber-500' },
           ];
         }
+        this.cdr.markForCheck();
       },
       error: (err) => {
         this.error = err.message || 'Не вдалося завантажити дані системи';
+        this.cdr.markForCheck();
       },
     });
 
@@ -290,10 +292,13 @@ export class DashboardComponent implements OnInit {
           capabilities: Array.from(data.capabilities),
         }));
         this.loading.set(false);
+        // These fields are not signals: `loading` may already be false, so nothing else schedules a render.
+        this.cdr.markForCheck();
       },
       error: (err) => {
         this.error = err.message || 'Не вдалося завантажити воркери';
         this.loading.set(false);
+        this.cdr.markForCheck();
       },
     });
 
@@ -311,6 +316,7 @@ export class DashboardComponent implements OnInit {
           cancelled: stats.cancelled,
           waiting: stats.waiting,
         };
+        this.cdr.markForCheck();
       },
       error: () => {},
     });

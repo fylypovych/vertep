@@ -199,13 +199,24 @@ def result(api, task, *, success=True):
 
 def consistent(contour):
     api = contour["api"]
-    queue = api.get("/api/tasks/queue").json()
-    dashboard = api.get("/api/status").json()["queue"]
-    metrics = api.get("/api/metrics").json()
-    assert dashboard["backend"] == "redis"
-    for key, field, metric in (("ready", "depth", "queue_ready"), ("inflight", "inflight", "queue_inflight"),
-                               ("dead_letter", "dead_letter", "queue_dead_letter")):
-        assert queue["total"][key] == dashboard[field] == metrics[metric]
+    # Three separate reads: background dispatch may enqueue between them, so they must
+    # agree on one state within the bound, not on the first attempt.
+    deadline = time.monotonic() + 15
+    while True:
+        queue = api.get("/api/tasks/queue").json()
+        dashboard = api.get("/api/status").json()["queue"]
+        metrics = api.get("/api/metrics").json()
+        assert dashboard["backend"] == "redis"
+        try:
+            for key, field, metric in (("ready", "depth", "queue_ready"),
+                                       ("inflight", "inflight", "queue_inflight"),
+                                       ("dead_letter", "dead_letter", "queue_dead_letter")):
+                assert queue["total"][key] == dashboard[field] == metrics[metric]
+            break
+        except AssertionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
     jobs = api.get("/api/jobs").json()
     by_id = {job["job_id"]: job for job in jobs}
     for task in queue["ready"] + queue["inflight"]:

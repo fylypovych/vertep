@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -235,11 +236,15 @@ def runtime_endpoint(tmp_path, request):
 
 
 def _seed_job(job_root: Path) -> str:
-    """A Job whose approved scene and narration are ready, awaiting a video render."""
+    """A Job whose approved scene and narration are ready, awaiting a video render.
+
+    Its id is unique: the submit key derives from it, and the pinned runtime is shared by
+    the tests and keeps every key, so a fixed id would reconcile to another test's task.
+    """
     from core.orchestration import initialize_plan
 
     store = JobStore(root=str(job_root))
-    job = Job(job_id="job-mpt-lifecycle", topic="MPT lifecycle", character_id="test_char",
+    job = Job(job_id=f"job-mpt-{uuid.uuid4().hex[:12]}", topic="MPT lifecycle", character_id="test_char",
               priority=5, status=JobStatus.VIDEO_REVISION_REQUESTED, created_at=utc_now(),
               source="web", aspect_ratio="16:9", task_type="video",
               script={"title": "Approved", "scenes": [
