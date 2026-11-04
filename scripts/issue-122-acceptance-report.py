@@ -120,6 +120,16 @@ M4_CLEANUP_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_cleanup_keeps_approved_inputs_history_and_the_submit_key_mapping"
 )
+M3_PROCESS_CANCEL_TESTS = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_a_queued_attempt_cancelled_before_any_node_claims_it_is_released",
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_a_running_attempt_cancel_is_held_until_the_runtime_proves_the_release",
+)
+M3_PROCESS_INTERRUPTED_DOWNLOAD_TEST = (
+    "tests/test_mpt_process_lifecycle.py"
+    "::test_an_interrupted_download_is_retried_without_a_new_upstream_generation"
+)
 M3_PROCESS_DUPLICATE_TEST = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_a_duplicate_result_of_an_imported_attempt_is_fenced_without_a_second_version"
@@ -131,7 +141,8 @@ M3_STAND_IN_TESTS = (M3_PROCESS_LEASE_TEST, M3_PROCESS_CORE_RESTART_TEST,
                      M3_PROCESS_DUPLICATE_TEST, M3_PROCESS_TRANSIENT_FAULT_TEST,
                      M3_PROCESS_BOUNDED_FAULT_TEST, M3_PROCESS_UNREACHABLE_CANCEL_TEST,
                      M3_PROCESS_NODE_RESTART_BEFORE_STAGING_TEST,
-                     M3_PROCESS_RENDER_TIMEOUT_TEST)
+                     M3_PROCESS_RENDER_TIMEOUT_TEST, *M3_PROCESS_CANCEL_TESTS,
+                     M3_PROCESS_INTERRUPTED_DOWNLOAD_TEST)
 
 #: #392 moved the corrupt-download fault from the M1 media matrix to M3 recovery, so the
 #: two criteria partition the matrix instead of both claiming (or both dropping) it.

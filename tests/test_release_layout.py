@@ -132,3 +132,15 @@ def test_rollback_before_any_activation_leaves_a_flat_installation_unchanged(tmp
     (base / "VERSION").write_text("1.0.0", encoding="utf-8")
     layout.rollback(base)
     assert not (base / "current").exists() and (base / "VERSION").read_text() == "1.0.0"
+
+
+def test_a_rescue_interrupted_before_activation_can_be_prepared_again(tmp_path):
+    """A flat installation interrupted between prepare and activate must not block the retry."""
+    layout = _module()
+    base = tmp_path / "appliance"
+    base.mkdir()
+    layout.prepare(base, _payload(tmp_path / "first", "1.0.0"), "1.0.0")
+    assert layout.discard(base, "1.0.0") is True
+    layout.prepare(base, _payload(tmp_path / "second", "1.0.0"), "1.0.0")
+    layout.activate(base, "1.0.0")
+    assert os.readlink(base / "current") == "releases/1.0.0"

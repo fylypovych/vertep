@@ -241,6 +241,8 @@ case "${1:-status}" in
       legacy_staging=$(mktemp -d "$ROOT/.legacy-release.XXXXXX")
       tar -xzf "$backup/application.tar.gz" -C "$legacy_staging"
       legacy_version=$(tr -d '[:space:]' < "$legacy_staging/VERSION")
+      # An attempt interrupted between prepare and activate leaves this tree behind.
+      python3 "$ROOT/scripts/release-layout.py" discard "$ROOT" "$legacy_version" >/dev/null
       python3 "$ROOT/scripts/release-layout.py" prepare "$ROOT" "$legacy_staging::$legacy_version" >/dev/null
       python3 "$ROOT/scripts/release-layout.py" activate "$ROOT" "$legacy_version"
       rm -rf "$legacy_staging"

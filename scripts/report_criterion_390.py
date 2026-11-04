@@ -100,6 +100,77 @@ NOT_PROOF = {
 }
 
 
+_LIFECYCLE = "tests/test_mpt_process_lifecycle.py"
+_BACKUP = "tests/test_backup_process_acceptance.py"
+# #403 R4: each remainder criterion, its source and the tests answering it. R3 is the fault
+# matrix around the real runtime, so it is PASS only on that route, never on the stand-in.
+SOURCE_403 = {
+    "R1": {"source": "#401 P3", "route": None, "tests": [
+        "tests/test_backup_restore_browser_e2e.py::"
+        "test_browser_restore_runs_through_real_core_and_backup_service",
+        f"{_BACKUP}::test_telegram_restore_completes_with_a_terminal_success_on_healthy_dependencies",
+    ]},
+    "R2": {"source": "#401 P4", "route": None, "tests": [
+        f"{CORE}::test_core_reads_back_a_pinned_mpt_output_across_update_and_rollback",
+    ]},
+    "R3": {"source": "#402 M3", "route": "pinned-proxy", "tests": [f"{_LIFECYCLE}::{name}" for name in (
+        "test_a_node_killed_mid_render_loses_its_lease_and_another_node_finishes_the_attempt",
+        "test_a_core_restart_mid_render_drops_the_attempt_and_fences_the_late_result",
+        "test_the_same_node_restarted_after_the_task_id_reconciles_its_attempt_without_a_resubmit",
+        "test_the_same_node_restarted_before_the_task_id_submits_once_after_the_restart",
+        "test_the_same_node_restarted_before_the_voice_is_staged_stages_and_submits_once",
+        "test_a_duplicate_result_of_an_imported_attempt_is_fenced_without_a_second_version",
+        "test_transient_429_and_5xx_status_polls_are_bounded_retries_on_the_process_route",
+        "test_persistent_5xx_and_a_malformed_status_fail_the_attempt_and_the_retry_reconciles",
+        "test_a_render_that_outlives_the_bridge_timeout_fails_the_attempt_and_the_retry_reconciles",
+        "test_a_cancel_while_the_runtime_is_unreachable_is_held_unconfirmed",
+        "test_a_queued_attempt_cancelled_before_any_node_claims_it_is_released",
+        "test_a_running_attempt_cancel_is_held_until_the_runtime_proves_the_release",
+        "test_an_interrupted_download_is_retried_without_a_new_upstream_generation",
+    )]},
+}
+
+
+def _pinned_runtime(paths: list[Path]) -> dict:
+    """Digest, upstream and config of the runtime that produced these JUnit files."""
+    for path in paths:
+        snapshot = path.parent / "runtime-snapshot.json"
+        if snapshot.is_file():
+            value = json.loads(snapshot.read_text(encoding="utf-8"))
+            return {key: value.get(key) for key in (
+                "image_digest", "pinned_upstream", "config_revision", "vertep_sha")}
+    return {}
+
+
+def source_matrix(paths: list[Path], results: dict, sources: dict) -> dict:
+    """#403 R4: criterion -> test -> expected/actual, route and trace -> JUnit artifact."""
+    traces: dict[str, dict] = {}
+    for path in paths:
+        for case in ET.parse(path).getroot().iter("testcase"):
+            test_id = f"{case.get('classname', '').replace('.', '/')}.py::{case.get('name', '')}"
+            properties = {item.get("name"): item.get("value") for item in case.iter("property")}
+            if properties and sources.get(test_id) == str(path):
+                traces[test_id] = properties
+    matrix = {}
+    for criterion, spec in SOURCE_403.items():
+        rows = []
+        for test_id in spec["tests"]:
+            actual = results.get(test_id, "NOT_RUN")
+            trace = traces.get(test_id, {})
+            rows.append({"test_id": test_id, "expected": "PASS",
+                         "actual": "NOT_RUN" if actual == "SKIPPED" else actual,
+                         "route": trace.get("route"), "trace": trace,
+                         "junit": sources.get(test_id)})
+        actuals = {row["actual"] for row in rows}
+        on_route = not spec["route"] or all(row["route"] == spec["route"] for row in rows)
+        overall = ("FAIL" if "FAIL" in actuals else
+                   "PASS" if actuals == {"PASS"} and on_route else
+                   "PARTIAL" if "PASS" in actuals else "NOT_RUN")
+        matrix[criterion] = {"source": spec["source"], "required_route": spec["route"],
+                             "overall": overall, "tests": rows}
+    return matrix
+
+
 def junit_results(paths: list[Path], sources: dict[str, str] | None = None) -> dict[str, str]:
     """Exact test ID → PASS/FAIL/SKIPPED from legacy JUnit (classname tests.module).
 
@@ -160,6 +231,8 @@ def report(paths: list[Path], run_sha: str | None = None) -> dict:
                              for path in paths if path.is_file()},
             "environment": {"system": platform.platform(), "machine": platform.machine()},
             "junit": [str(path) for path in paths], "criteria": criteria,
+            "pinned_runtime": _pinned_runtime(paths),
+            "source_403": source_matrix([] if foreign else paths, results, sources),
             "summary": {status: sum(1 for value in criteria.values() if value["overall"] == status)
                         for status in ("PASS", "PARTIAL", "FAIL", "NOT_RUN")}}
 
