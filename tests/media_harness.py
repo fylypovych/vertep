@@ -24,6 +24,7 @@ import platform
 import shutil
 import struct
 import subprocess
+import threading
 import time
 import wave
 import uuid
@@ -897,10 +898,16 @@ def record_row(name: str, expected, actual, **payload) -> None:
 
 
 def drain_executor() -> None:
-    """Wait until the CORE background executor is idle."""
+    """Wait until the CORE background executor is idle.
+
+    A no-op alone would run on any free thread while a render is still running on another
+    one. Only when every worker thread reaches the barrier has all earlier work finished.
+    """
     from core.telegram.handlers import executor
-    for _ in range(2):
-        executor.submit(lambda: None).result(timeout=30)
+    workers = executor._max_workers
+    barrier = threading.Barrier(workers)
+    for future in [executor.submit(barrier.wait, 30) for _ in range(workers)]:
+        future.result(timeout=35)
 
 
 # ---------------------------------------------------------------------------
