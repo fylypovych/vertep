@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.34
+- CI: MoneyPrinter розділено на завдання `moneyprinter-pinned-image`, `-media`, `-lifecycle` і підсумковий `moneyprinter-pinned-runtime`; усі докази одного SHA використовують один образ.
+- CI: тести rollout винесено з `fleet-persistence-runtime-acceptance` у паралельне завдання `fleet-rollout-acceptance`, його артефакт входить у звіт критеріїв.
+- Тести: у lifecycle опитування worker скорочено до 2 с, тайм-аут рендеру в тесті перевищення становить 120 с замість 600 с, тайм-аут rollout workers-first становить 120 с замість 180 с.
+- Worker і VideoEngine: додано налаштування `WORKER_POLL_INTERVAL_SECONDS` і `VERTEP_VIDEO_ENGINE_TIMEOUT_SECONDS`; типові значення 15 с і 600 с не змінено.
+- Тести Lab: `test_web_compose_is_self_contained_and_isolated` враховує сервіс `lab-executor`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.33
 - Lab: встановлення однією командою `bootstrap-lab.sh` на окремій Ubuntu 24.04 VM; панель доступна лише локально, спільний GPU вимкнено.
 - Спільний GPU: у CORE додано `/lab-lease/v1` для видачі, відкликання й звільнення дозволу; за замовчуванням вимкнено, завдання Vertep мають пріоритет.

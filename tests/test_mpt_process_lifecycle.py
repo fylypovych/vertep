@@ -295,8 +295,12 @@ def lifecycle(tmp_path, runtime_endpoint, request):
     lease = request.node.get_closest_marker("lease_seconds")
     if lease:
         core_env["TASK_LEASE_SECONDS"] = str(lease.args[0])
+    render_timeout = request.node.get_closest_marker("render_timeout_seconds")
     node_env = {**base, "CORE_ADDRESS": f"http://127.0.0.1:{port}", "NODE_NAME": "mpt-node",
                 "NODE_ROLE": "gpu", "SUPPORTED_TASKS": "assembly", "DEMO_MODE": "true",
+                "WORKER_POLL_INTERVAL_SECONDS": "2",
+                **({"VERTEP_VIDEO_ENGINE_TIMEOUT_SECONDS": str(render_timeout.args[0])}
+                   if render_timeout else {}),
                 "JOB_ROOT": str(node_root / "jobs"),
                 "NODE_CONFIG_PATH": str(node_root / "config" / "node-credentials.json"),
                 "CONFIG_ROOT": str(node_root / "config")}
@@ -970,10 +974,11 @@ def test_the_same_node_restarted_before_the_voice_is_staged_stages_and_submits_o
 
 
 @pytest.mark.stand_in
+@pytest.mark.render_timeout_seconds(120)
 def test_a_render_that_outlives_the_bridge_timeout_fails_the_attempt_and_the_retry_reconciles(
         lifecycle):
     """#402 M3: the upstream keeps the task processing past the bridge's bounded render
-    timeout (600 s). The node gives up instead of waiting forever, CORE retries the
+    timeout (shortened to 120 s here; production default 600 s). The node gives up instead of waiting forever, CORE retries the
     assembly, and the retry reconciles the same submit key: one upstream task, and the
     version is imported only once the runtime finishes."""
     api, job_id = lifecycle["api"], lifecycle["job_id"]
@@ -986,7 +991,7 @@ def test_a_render_that_outlives_the_bridge_timeout_fails_the_attempt_and_the_ret
     started = time.monotonic()
     _wait(lambda: any("ASSEMBLY RETRY" in event for event in _events(api, job_id)), 900,
           "the attempt failed by the bounded render timeout")
-    assert time.monotonic() - started >= 550, "the attempt ended before the render timeout"
+    assert time.monotonic() - started >= 100, "the attempt ended before the render timeout"
     assert not _job(api, job_id).get("video_versions")
 
     gate.set()

@@ -1220,7 +1220,7 @@ def main() -> None:
                     client.post(f"{core}/api/workers/heartbeat", json=payload)
                 except httpx.HTTPError:
                     pass
-            time.sleep(15)
+            time.sleep(float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "15")))
 
 if __name__ == "__main__":
     main()

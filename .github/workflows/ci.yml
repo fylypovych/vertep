@@ -255,7 +255,7 @@ jobs:
           # #396: the runner was shut down mid-run twice; sample memory/disk so the log
           # keeps the cause even when the job dies before the summary.
           ( while true; do echo "[resources] $(date -u +%T) $(free -m | awk '/Mem:/{print "mem_used="$3"MB avail="$7"MB"}') $(df -h / | awk 'NR==2{print "disk_used="$5" free="$4}')"; sleep 15; done ) &
-          python -m pytest -v -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_backup_process_acceptance.py::test_core_reads_back_a_restored_workflow_after_a_backup_service_restore             tests/test_backup_process_acceptance.py::test_telegram_restore_completes_with_a_terminal_success_on_healthy_dependencies             tests/test_backup_restore_browser_e2e.py             tests/test_update_standard_browser_e2e.py             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py --deselect tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data --deselect tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds --deselect tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect --deselect tests/test_standard_host_consumer_docker.py::test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart
+          python -m pytest -v --durations=25 -o junit_family=legacy -o faulthandler_timeout=600             --junitxml="$RUNNER_TEMP/fleet-persistence-runtime.xml"             --basetemp="$RUNNER_TEMP/fleet-persistence-runtime"             tests/test_core_rollout_coordinator.py::test_postgres_epoch_takeover_stops_active_host_apply             tests/test_backup_process_acceptance.py::test_connected_healthy_restore_returns_normal_after_core_restart             tests/test_backup_process_acceptance.py::test_core_reads_back_a_restored_workflow_after_a_backup_service_restore             tests/test_backup_process_acceptance.py::test_telegram_restore_completes_with_a_terminal_success_on_healthy_dependencies             tests/test_backup_restore_browser_e2e.py             tests/test_update_standard_browser_e2e.py             tests/test_standard_host_consumer_docker.py             tests/test_standard_core_consumer_docker.py --deselect tests/test_standard_host_consumer_docker.py::test_workers_first_rollout_times_out_on_core_rolls_the_worker_back_and_a_retry_succeeds --deselect tests/test_standard_host_consumer_docker.py::test_standard_consumer_moves_a_running_vertep_worker_and_core_observes_it --deselect tests/test_standard_host_consumer_docker.py::test_a_rollout_to_an_offline_node_fails_instead_of_hanging --deselect tests/test_standard_host_consumer_docker.py::test_core_drives_a_canary_rollout_and_holds_it_for_promotion --deselect tests/test_standard_host_consumer_docker.py::test_rollback_restores_previous_version_and_ready_state --deselect tests/test_standard_host_consumer_docker.py::test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker --deselect tests/test_standard_host_consumer_docker.py::test_standard_consumer_drains_and_admits_workers_during_update --deselect tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data --deselect tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds --deselect tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect --deselect tests/test_standard_host_consumer_docker.py::test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart
       - name: Disk usage after the fleet tests
         if: always()
         run: df -h / /var/lib/docker && docker system df
@@ -274,6 +274,56 @@ jobs:
             ${{ runner.temp }}/fleet-persistence-runtime.xml
             ${{ runner.temp }}/criterion-390.json
             ${{ runner.temp }}/fleet-persistence-runtime/**/backup-process-*.log
+          if-no-files-found: error
+
+  fleet-rollout-acceptance:
+    # Rollout half of the fleet matrix, apart so both halves finish sooner. The same
+    # tests and the same fail-closed settings as fleet-persistence-runtime-acceptance.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VERTEP_STREAM_FAILURES: "1"
+      VERTEP_REQUIRE_DISTRIBUTED_UPDATE_FENCE: "1"
+      VERTEP_UPDATE_LEASE_DATABASE_URL: postgresql://vertep:ci-only@localhost:5432/vertep
+      VERTEP_REQUIRE_STANDARD_HOST_CONSUMER: "1"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vertep
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: vertep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vertep"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Free disk space for the Vertep images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / /var/lib/docker
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run the rollout half of the fleet matrix
+        run: >-
+          python -m pytest -v --durations=25 -o junit_family=legacy -o faulthandler_timeout=600
+          --junitxml="$RUNNER_TEMP/fleet-rollout.xml"
+          --basetemp="$RUNNER_TEMP/fleet-rollout"
+          tests/test_standard_host_consumer_docker.py::test_workers_first_rollout_times_out_on_core_rolls_the_worker_back_and_a_retry_succeeds tests/test_standard_host_consumer_docker.py::test_standard_consumer_moves_a_running_vertep_worker_and_core_observes_it tests/test_standard_host_consumer_docker.py::test_a_rollout_to_an_offline_node_fails_instead_of_hanging tests/test_standard_host_consumer_docker.py::test_core_drives_a_canary_rollout_and_holds_it_for_promotion tests/test_standard_host_consumer_docker.py::test_rollback_restores_previous_version_and_ready_state tests/test_standard_host_consumer_docker.py::test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker tests/test_standard_host_consumer_docker.py::test_standard_consumer_drains_and_admits_workers_during_update
+      - name: Upload fleet rollout evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fleet-rollout-${{ github.sha }}
+          path: ${{ runner.temp }}/fleet-rollout.xml
           if-no-files-found: error
 
   fleet-cancel-path-acceptance:
@@ -324,7 +374,7 @@ jobs:
     # #401 P5: one criterion report over every JUnit of this SHA. The fleet, cancel-path and
     # local-contracts jobs each run part of the matrix; read alone, the fleet report showed
     # the accepted cancel-path and restore-caller tests as NOT_RUN.
-    needs: [fleet-persistence-runtime-acceptance, fleet-cancel-path-acceptance, local-contracts,
+    needs: [fleet-persistence-runtime-acceptance, fleet-rollout-acceptance, fleet-cancel-path-acceptance, local-contracts,
             moneyprinter-pinned-runtime]
     if: always()
     runs-on: ubuntu-24.04
@@ -336,7 +386,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@v7
         with:
-          pattern: "{fleet-persistence-runtime,fleet-cancel-path,local-contracts,moneyprinter-pinned-runtime}-${{ github.sha }}"
+          pattern: "{fleet-persistence-runtime,fleet-rollout,fleet-cancel-path,local-contracts,moneyprinter-pinned-runtime}-${{ github.sha }}"
           path: ${{ runner.temp }}/junit
       - name: Criterion report over all JUnit of this SHA
         run: |
@@ -544,11 +594,12 @@ jobs:
             ${{ runner.temp }}/persistence-trust/**/backup-process-*.log
           if-no-files-found: error
 
-  moneyprinter-pinned-runtime:
+  moneyprinter-pinned-image:
     # #376: this is the only proof that builds and executes the agreed pinned
-    # upstream; fixture/stand-in tests cannot make this job green.
+    # upstream; fixture/stand-in tests cannot make this job green. The other pinned
+    # jobs load this exact image, so all evidence of a SHA keeps one image digest.
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -566,22 +617,95 @@ jobs:
         run: >-
           python scripts/moneyprinter-runtime-check.py --timeout 900 --keep
           --evidence moneyprinter-runtime-evidence
+      - name: Save the pinned image for the media and lifecycle jobs
+        run: docker save vertep/moneyprinter-runtime-check | gzip -1 > "$RUNNER_TEMP/mpt-image.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: moneyprinter-pinned-image-${{ github.sha }}
+          path: ${{ runner.temp }}/mpt-image.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload pinned evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: moneyprinter-evidence-image-${{ github.sha }}
+          path: moneyprinter-runtime-evidence
+          # A failure before the runtime check may leave no evidence directory;
+          # preserve that original failing step instead of masking it here.
+          if-no-files-found: warn
+
+  moneyprinter-pinned-media:
+    needs: moneyprinter-pinned-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install runtime-check dependencies
+        run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v7
+        with:
+          name: moneyprinter-pinned-image-${{ github.sha }}
+          path: ${{ runner.temp }}/mpt-image
+      - name: Load the pinned image built for this SHA
+        run: gunzip -c "$RUNNER_TEMP/mpt-image/mpt-image.tar.gz" | docker load
       - name: Recover pinned submits across a runtime restart
         run: >-
           python scripts/moneyprinter-recovery-check.py --timeout 900
           --evidence moneyprinter-runtime-evidence/recovery.json
-      - name: Start the pinned runtime for the media matrix
+      - name: Start the pinned runtime
         run: python scripts/moneyprinter-recovery-check.py --timeout 900 --serve "$GITHUB_ENV"
       - name: Run the agreed media matrix against the pinned runtime
         # #389 M1: the same test IDs as the stand-in run, now through the real
         # pinned submit/status/download route; stand-in fault injections are skipped.
         run: >-
-          python -m pytest -q -rs -o junit_family=legacy
+          python -m pytest -q -rs --durations=25 -o junit_family=legacy
           --junitxml=moneyprinter-runtime-evidence/media-matrix-pinned.xml
           tests/test_mpt_media_matrix.py
+      - name: Stop the pinned runtime
+        if: always()
+        run: |
+          if [ -n "${VERTEP_MPT_PINNED_CONTAINER:-}" ]; then
+            python scripts/moneyprinter-recovery-check.py --stop "$VERTEP_MPT_PINNED_CONTAINER"
+          fi
+      - name: Upload pinned evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: moneyprinter-evidence-media-${{ github.sha }}
+          path: moneyprinter-runtime-evidence
+          # A failure before the runtime check may leave no evidence directory;
+          # preserve that original failing step instead of masking it here.
+          if-no-files-found: warn
+
+  moneyprinter-pinned-lifecycle:
+    needs: moneyprinter-pinned-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install runtime-check dependencies
+        run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v7
+        with:
+          name: moneyprinter-pinned-image-${{ github.sha }}
+          path: ${{ runner.temp }}/mpt-image
+      - name: Load the pinned image built for this SHA
+        run: gunzip -c "$RUNNER_TEMP/mpt-image/mpt-image.tar.gz" | docker load
+      - name: Start the pinned runtime
+        run: python scripts/moneyprinter-recovery-check.py --timeout 900 --serve "$GITHUB_ENV"
       - name: CORE/Worker process lifecycle on the pinned runtime (#397 M2)
         run: >-
-          python -m pytest -q -rs -o junit_family=legacy
+          python -m pytest -q -rs --durations=25 -o junit_family=legacy
           --junitxml=moneyprinter-runtime-evidence/process-lifecycle-pinned.xml
           tests/test_mpt_process_lifecycle.py
       - name: Pinned MPT output read back across a standard CORE update and rollback (#403 R2)
@@ -597,13 +721,52 @@ jobs:
           if [ -n "${VERTEP_MPT_PINNED_CONTAINER:-}" ]; then
             python scripts/moneyprinter-recovery-check.py --stop "$VERTEP_MPT_PINNED_CONTAINER"
           fi
+      - name: Upload pinned evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: moneyprinter-evidence-lifecycle-${{ github.sha }}
+          path: moneyprinter-runtime-evidence
+          # A failure before the runtime check may leave no evidence directory;
+          # preserve that original failing step instead of masking it here.
+          if-no-files-found: warn
+
+  moneyprinter-pinned-runtime:
+    # One report and one evidence artifact over the three pinned jobs of this SHA.
+    needs: [moneyprinter-pinned-image, moneyprinter-pinned-media, moneyprinter-pinned-lifecycle]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install runtime-check dependencies
+        run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: "moneyprinter-evidence-*-${{ github.sha }}"
+          path: ${{ runner.temp }}/mpt-evidence
+          merge-multiple: true
+      - name: Collect the evidence of the pinned jobs
+        run: |
+          mkdir -p moneyprinter-runtime-evidence
+          cp -r "$RUNNER_TEMP/mpt-evidence/." moneyprinter-runtime-evidence/
+      - name: Require every pinned job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "pinned jobs: $RESULTS"
+          for result in $RESULTS; do [ "$result" = success ]; done
       - name: Render MPT criterion evidence report
         run: >-
           python scripts/issue-122-acceptance-report.py
           --only contract,media,integration,recovery,lifecycle_state,security,configuration,delivery
           --pinned-evidence moneyprinter-runtime-evidence
           --out moneyprinter-runtime-evidence/criterion-report
-      - name: Upload pinned runtime evidence
+      - name: Upload pinned evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:

@@ -380,7 +380,7 @@ class RemoteVideoEngine(VideoEngine):
                 self.secret_source = "secret-store" if self._token else "unset"
             self._transport = transport or HttpTransport()
             self._poll_interval = poll_interval
-            self._timeout = timeout
+            self._timeout = float(os.getenv("VERTEP_VIDEO_ENGINE_TIMEOUT_SECONDS", timeout))
             self._assembly_impl = assembly
             self.current_job_id: str | None = None
 

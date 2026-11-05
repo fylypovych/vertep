@@ -1304,7 +1304,7 @@ def test_workers_first_rollout_times_out_on_core_rolls_the_worker_back_and_a_ret
     with _HostUpdateAgent(_agent(), root, state_dir) as host:
         started = httpx.post(f"{core_url}/api/system/update/rolling", auth=admin, timeout=30, json={
             "target_version": "0.0.0.2", "node_ids": ["core", "consumer-worker"],
-            "order": "workers-first", "update_timeout_seconds": 180})
+            "order": "workers-first", "update_timeout_seconds": 120})
         assert started.status_code == 200, started.text
         assert [node["node_id"] for node in started.json()["nodes"]] == ["consumer-worker", "core"]
 

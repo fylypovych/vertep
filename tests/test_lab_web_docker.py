@@ -85,7 +85,11 @@ def test_web_compose_is_self_contained_and_isolated(docker):
         "compose", "-f", str(compose), "config", "--format", "json",
     ).stdout)
     services = config["services"]
-    assert set(services) == {"lab-web", "lab-control"}
+    assert set(services) == {"lab-web", "lab-control", "lab-executor"}
+    executor = services["lab-executor"]
+    assert not executor.get("ports")
+    assert executor["read_only"] is True
+    assert executor["command"][:2] == ["uvicorn", "lab.role_service:create_app"]
     web = services["lab-web"]
     assert Path(web["build"]["context"]).resolve() == ROOT
     assert web["build"]["dockerfile"] == "deploy/lab/Dockerfile.web"
