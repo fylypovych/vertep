@@ -86,8 +86,5 @@ def is_admin_chat(chat_id: str) -> bool:
 
 
 def is_allowed_chat(chat_id: str) -> bool:
-    """Перевіряє, чи дозволений чат."""
-    allowed = get_allowed_chat_ids()
-    if not allowed:
-        return False
-    return chat_id in allowed
+    """Перевіряє, чи дозволений чат; порожній список нікому не відкриває доступ."""
+    return chat_id in get_allowed_chat_ids() or is_admin_chat(chat_id)

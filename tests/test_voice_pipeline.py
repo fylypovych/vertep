@@ -212,14 +212,14 @@ def test_dispatcher_selects_voice_worker_by_catalog():
     assert available_worker([wildcard], job, task_type="voice",
                             voice_requirements={"voice": "de"})["node_name"] == "any-voice"
     # Issue i.0.0.1.5: a worker that *declares* an empty catalog has no voices
-    # at all, so it is refused instead of being silently trusted.  Only a
-    # worker that never advertised a catalog at all stays backward compatible.
+    # at all, so it is refused instead of being silently trusted.  Missing
+    # evidence is not readiness either (#165.1).
     bare = _voice_worker("bare-voice", {})
     assert available_worker([bare], job, task_type="voice",
                             voice_requirements={"voice": "uk"}) is None
     undeclared = _voice_worker("undeclared-voice", None)
     assert available_worker([undeclared], job, task_type="voice",
-                            voice_requirements={"voice": "uk"})["node_name"] == "undeclared-voice"
+                            voice_requirements={"voice": "uk"}) is None
     # A catalog that declares the required language is honoured.
     lang = _voice_worker("lang-voice", {"voices": ["uk"], "languages": ["uk"]})
     assert available_worker([lang], job, task_type="voice",

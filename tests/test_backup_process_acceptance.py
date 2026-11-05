@@ -391,7 +391,11 @@ def test_core_caller_surfaces_restore_refusals_without_mutation(backup_process):
     progress = api.get(f"/api/system/backups/{sid}/restore/progress").json()
     assert progress["status"] == "error" and "health check" in progress["message"]
     assert api.get("/api/system/state").json()["state"] == "EMERGENCY"
-    assert sorted(path.name for path in (root / "backups").glob("*.vtbackup")) == snapshots_before
+    # The restore that really ran first saved exactly one copy of the changed data.
+    added = sorted({path.name for path in (root / "backups").glob("*.vtbackup")} - set(snapshots_before))
+    assert len(added) == 1
+    pre_restore = json.loads((root / "backups" / added[0]).with_suffix(".json").read_text(encoding="utf-8"))
+    assert pre_restore["job_id"] == f"pre-restore:{sid}"
 
 def _core_caller(backup_process, label: str, backup_overrides: dict | None = None):
     """A real Backup Service process and a real CORE process wired as in production."""

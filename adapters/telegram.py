@@ -276,7 +276,14 @@ class TelegramPollingService:
                     with self._lock:
                         if not self._running:
                             break
-                    self.on_update(update)
+                    try:
+                        self.on_update(update)
+                    except (httpx.HTTPError, OSError, RuntimeError):
+                        raise  # transient: keep the offset so the update is retried
+                    except Exception as error:
+                        # A defect in one update must not block every later one.
+                        self.last_error = str(error)
+                        logger.exception("Telegram update skipped: %s", error)
                     update_id = update.get("update_id")
                     if update_id is not None:
                         new_offset = update_id + 1

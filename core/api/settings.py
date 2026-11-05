@@ -60,6 +60,21 @@ def effective_video_engine(probe: bool = False):
     return {**result, "worker_activation": activation}
 
 
+@router.get("/api/settings/workflow-mode")
+def get_workflow_mode():
+    from ..workflow.mode import workflow_mode_state
+    return workflow_mode_state()
+
+
+@router.post("/api/settings/workflow-mode")
+def post_workflow_mode(payload: dict):
+    from ..workflow.mode import set_workflow_mode
+    try:
+        return set_workflow_mode(str(payload.get("mode") or ""))
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+
+
 @router.post("/api/settings/providers/{slot}")
 def switch_provider_backend(slot: str, payload: dict):
     """Switch one provider slot with persist → apply → verify → rollback.

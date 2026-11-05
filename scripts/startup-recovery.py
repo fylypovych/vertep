@@ -67,6 +67,9 @@ def restore_system_state(root: Path, state_dir: Path) -> None:
     except (OSError, ValueError):
         return
     current_state = state.get("state", "NORMAL")
+    if str(state.get("operation_id") or "").startswith("restore:"):
+        print(f"{now()} STARTUP-RECOVERY: restore in progress, keeping {current_state}", file=sys.stderr)
+        return
     if current_state in {"MAINTENANCE", "UPDATING", "RECOVERING"}:
         print(f"{now()} STARTUP-RECOVERY: restoring system state from {current_state} to NORMAL", file=sys.stderr)
         state["state"] = "NORMAL"

@@ -662,6 +662,7 @@ WEB_DOMAIN=$WEB_DOMAIN
 WEB_UPDATE_ENABLED=true
 VERTEP_UPDATE_SERVER=https://api.github.com/repos/fylypovych/vertep/releases
 REQUIRE_ROLLING_COMPATIBILITY=true
+REQUIRE_UPDATE_KEY_LIFECYCLE=true
 UPDATE_REQUIRE_DISTRIBUTED_FENCE=true
 UPDATE_RELEASE_RETENTION=3
 GPU_ENABLED=$([[ $gpu_vendor == nvidia || $gpu_vendor == amd ]] && echo true || echo false)

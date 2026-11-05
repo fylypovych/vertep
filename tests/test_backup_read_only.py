@@ -14,7 +14,7 @@ def test_production_backup_storage_contract():
     assert service["environment"]["BACKUP_ROOT"] == "/data/backups"
     assert "./backups:/data/backups" in service["volumes"]
     assert service["read_only"] is True
-    assert "/tmp:rw,noexec,nosuid,size=128m" in service["tmpfs"]
+    assert "/tmp:rw,noexec,nosuid,size=512m" in service["tmpfs"]
     assert service["environment"]["BACKUP_ENCRYPTION_KEY_FILE"] == "/run/secrets/backup_encryption_key"
     assert "backup_encryption_key" in service["secrets"]
     for override in ("amd", "nvidia"):

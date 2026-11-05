@@ -1,0 +1,41 @@
+# Повний процес для динамічного workflow: від теми до публікації.
+# Результати кроків передає worker/workflow_inputs.py. Реальний сервер ще не перевірявся
+# (audit-0311.md, 0А.5). Канал: параметр channel або PUBLISHER_DEFAULT_CHANNEL.
+name: Стандартний
+version: 1.0.0
+description: Сценарій, голос і зображення, відео, монтаж, публікація
+tasks:
+  - id: script
+    type: text_generation
+    timeout_minutes: 30
+    retry: {max_attempts: 3, delay_seconds: 5}
+    approval_required: true
+  - id: voice
+    type: speech_synthesis
+    dependencies: [script]
+    timeout_minutes: 30
+    retry: {max_attempts: 3, delay_seconds: 5}
+  - id: images
+    type: image_generation
+    dependencies: [script]
+    vram_mb: 6000
+    timeout_minutes: 60
+    retry: {max_attempts: 2, delay_seconds: 30}
+  - id: video
+    type: video_generation
+    dependencies: [images]
+    when: {param: generate_video, equals: true}
+    vram_mb: 20000
+    timeout_minutes: 120
+    retry: {max_attempts: 2, delay_seconds: 30}
+  - id: assembly
+    type: video_assembly
+    dependencies: [script, voice, images, video]
+    timeout_minutes: 60
+    retry: {max_attempts: 2, delay_seconds: 30}
+    approval_required: true
+  - id: publish
+    type: publishing
+    dependencies: [script, assembly]
+    timeout_minutes: 30
+    retry: {max_attempts: 3, delay_seconds: 60}

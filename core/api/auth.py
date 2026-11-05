@@ -94,6 +94,8 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 operation = "configuration"
             elif path.startswith("/api/system/roles"):
                 operation = "configuration"
+            elif path == "/api/system/update/drain":
+                operation = None  # called by the agent while the system is already in MAINTENANCE
             elif path.startswith("/api/system/update"):
                 operation = "update"
             elif path.startswith("/api/system/recovery"):
@@ -142,7 +144,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return self._secure(response)
         internal_key = os.getenv("INTERNAL_API_KEY", "")
         internal_update_routes = {"/api/status", "/api/system/update/check", "/api/system/update/run",
-                                  "/api/system/update/readiness", "/api/system/recovery/normal",
+                                  "/api/system/update/readiness", "/api/system/update/drain", "/api/system/recovery/normal",
                                   "/api/system/restart", "/api/system/test",
                                   "/api/system/backups", "/api/system/state"}
         internal_actions = request.url.path.startswith("/api/nodes/") and request.url.path.endswith("/actions")

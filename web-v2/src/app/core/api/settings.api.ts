@@ -126,6 +126,12 @@ export interface OperationState {
   result: any;
 }
 
+export interface WorkflowModeState {
+  mode: 'static' | 'dynamic';
+  default: 'static';
+  dynamic_available: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class SettingsApiService {
   private baseUrl = '/api';
@@ -223,6 +229,18 @@ export class SettingsApiService {
       { backend, ...(actor ? { actor } : {}) },
       { headers: this.getHeaders() },
     ).pipe(catchError(this.handleError));
+  }
+
+  workflowMode(): Observable<WorkflowModeState> {
+    return this.http
+      .get<WorkflowModeState>(`${this.baseUrl}/settings/workflow-mode`, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
+  setWorkflowMode(mode: 'static' | 'dynamic'): Observable<WorkflowModeState> {
+    return this.http
+      .post<WorkflowModeState>(`${this.baseUrl}/settings/workflow-mode`, { mode }, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
   }
 
   videoEngine(probe = false): Observable<EffectiveEngineConfig> {

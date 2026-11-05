@@ -192,9 +192,10 @@ class JobStore:
         return self.update(job, status, event)
 
     def _save(self, job: Job) -> None:
-        if os.getenv("WORKFLOW_DEFINITIONS_ROOT"):
-            from core.workflow.runtime import workflow_runtime
-            workflow_runtime().observe_legacy_job(job)
+        from core.workflow.runtime import workflow_runtime
+        runtime = workflow_runtime()
+        if runtime:
+            runtime.observe_legacy_job(job)
         self.repository.save_job(job)
 
     def save_worker(self, worker: dict) -> None:

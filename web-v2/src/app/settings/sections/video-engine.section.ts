@@ -35,11 +35,19 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       </div>
       <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
         <label class="text-sm" for="video-engine-choice">Движок</label>
-        <select id="video-engine-choice" class="border rounded px-2 py-1" data-testid="video-engine-select"
-                [ngModel]="choice()" (ngModelChange)="choice.set($any($event))"
-                [disabled]="!canEdit() || applying()">
-          <option *ngFor="let option of cfg.options" [value]="option.id">{{ option.label }}</option>
-        </select>
+        <div class="flex items-center gap-2">
+          <select id="video-engine-choice" class="border rounded px-2 py-1 grow" data-testid="video-engine-select"
+                  [ngModel]="choice()" (ngModelChange)="choice.set($any($event)); infoOpen.set(false)"
+                  [disabled]="!canEdit() || applying()">
+            <option *ngFor="let option of cfg.options" [value]="option.id">{{ option.label }}</option>
+          </select>
+          <button type="button" class="w-6 h-6 shrink-0 rounded-full border border-amber-500 text-amber-700 text-sm font-bold"
+                  data-testid="video-engine-info-toggle" aria-label="Пояснення до обраного движка"
+                  [attr.aria-expanded]="infoOpen()" [title]="choiceExplanation()"
+                  (click)="infoOpen.set(!infoOpen())">!</button>
+        </div>
+        <p *ngIf="infoOpen()" class="md:col-start-2 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded p-2"
+           data-testid="video-engine-info">{{ choiceExplanation() }}</p>
       </div>
       <div *ngIf="endpointField() as field" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
         <label class="text-sm" for="video-engine-endpoint">Адреса runtime ({{ field.env }})</label>
@@ -75,6 +83,15 @@ export class VideoEngineSectionComponent implements OnInit {
   rollbackNotice = signal<string | null>(null);
   choice = signal('native');
   endpoint = signal('');
+  infoOpen = signal(false);
+
+  private readonly explanations: Record<string, string> = {
+    native: 'Vertep Native: відео збирає сам Vertep. Зовнішня програма не потрібна, а затвердження, версії та відновлення працюють повністю. Підходить для щоденної роботи та як запасний варіант.',
+    'money-printer': 'MoneyPrinterTurbo: фінальне відео збирає окрема зовнішня програма. Потрібні її адреса та токен, і вона має бути запущена. Якщо вона недоступна, завдання завершиться помилкою, а не перейде на Vertep Native без вашого відома.',
+  };
+
+  readonly choiceExplanation = computed(() => this.explanations[this.choice()]
+    ?? 'Зовнішній движок: відео збирає окрема програма. Перед застосуванням переконайтеся, що вона запущена й налаштована.');
 
   constructor(
     private settingsApi: SettingsApiService,

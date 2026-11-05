@@ -722,7 +722,7 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
     client = TestClient(app)
     headers = {"X-Vertep-Token": "worker-token"}
     heartbeat(client, "image-worker", supported_tasks=["image"], capabilities=["image_generation"])
-    heartbeat(client, "voice-worker", supported_tasks=["voice"], capabilities=["speech_synthesis"], role="voice")
+    heartbeat(client, "voice-worker", supported_tasks=["voice"], capabilities=["speech_synthesis"], voice_catalog={"voices": ["*"]}, role="voice")
     job_id = client.post("/api/jobs", json={"topic": "TTS pipeline test",
                                             "character_id": "did_samogon"}).json()["job_id"]
     approve_script(client, job_id)

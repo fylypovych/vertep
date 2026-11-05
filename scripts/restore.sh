@@ -25,6 +25,8 @@ case "$backup" in
       snap_id=$(basename "$backup" .vtbackup)
       echo "Restoring snapshot $snap_id via backup-service..."
       curl -sf -X POST "http://localhost:8092/snapshots/${snap_id}/restore" | python3 -m json.tool
+      echo "Restore requested: confirm it in the Web UI or Telegram; it is not complete yet."
+      exit 0
     else
       echo "Backup service not reachable — attempting direct tar restore" >&2
       # Fallback: treat as encrypted; require BACKUP_ENCRYPTION_KEY env
@@ -42,6 +44,7 @@ echo "Running post-restore health check..."
 if curl -sf http://localhost:8080/api/health >/dev/null 2>&1; then
   echo "Health check: OK"
 else
-  echo "Health check: WARNING — CORE not reachable after restore" >&2
+  echo "Restore failed: CORE not reachable after restore" >&2
+  exit 1
 fi
 echo "Restore completed: $backup"

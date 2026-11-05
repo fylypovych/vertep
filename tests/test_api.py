@@ -262,6 +262,8 @@ def test_telegram_webhook_is_disabled_by_default(monkeypatch, tmp_path):
 
 
 def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "42")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "s")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "999")
     monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
@@ -290,20 +292,20 @@ def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
     mock_response.json.return_value = {"ok": True}
     with patch("adapters.telegram.httpx.post", return_value=mock_response):
         update = {"message": {"message_id": 77, "text": "Telegram topic", "chat": {"id": 42}}}
-        first = client.post("/api/telegram/webhook", json=update).json()
+        first = client.post("/api/telegram/webhook", json=update, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         assert first.get("status") == "brand_selection"
         assert "brands" in first
         callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
                                         "message": {"chat": {"id": 42}, "message_id": 78}}}
-        second = client.post("/api/telegram/webhook", json=callback).json()
+        second = client.post("/api/telegram/webhook", json=callback, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         assert second.get("status") == "character_selection"
         assert second.get("brand_id") == "brand01"
         character_callback = {"callback_query": {"id": "cb-2", "data": "select_character:did_samogon",
                                                   "message": {"chat": {"id": 42}, "message_id": 79}}}
-        third = client.post("/api/telegram/webhook", json=character_callback).json()
+        third = client.post("/api/telegram/webhook", json=character_callback, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         job_id = third.get("job_id") or third.get("job", {}).get("job_id")
         assert job_id
-        fourth = client.post("/api/telegram/webhook", json=update).json()
+        fourth = client.post("/api/telegram/webhook", json=update, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         assert fourth.get("status") == "brand_selection"
     heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "gpu-test", "gpu_name": "stub"},
                             headers={"X-Vertep-Token": "worker-token"})
@@ -312,6 +314,8 @@ def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
 
 
 def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "42")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "s")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
@@ -340,16 +344,16 @@ def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_pa
     mock_response.raise_for_status.return_value = None
     mock_response.json.return_value = {"ok": True}
     with patch("adapters.telegram.httpx.post", return_value=mock_response):
-        response = client.post("/api/telegram/webhook", json=update).json()
+        response = client.post("/api/telegram/webhook", json=update, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         assert response.get("status") == "brand_selection"
         callback = {"callback_query": {"id": "cb-1", "data": "select_brand:brand01",
                                         "message": {"chat": {"id": 42}, "message_id": 78002}}}
-        brand_response = client.post("/api/telegram/webhook", json=callback).json()
+        brand_response = client.post("/api/telegram/webhook", json=callback, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         assert brand_response.get("status") == "character_selection"
         assert brand_response.get("brand_id") == "brand01"
         character_callback = {"callback_query": {"id": "cb-2", "data": "select_character:did_samogon",
                                                   "message": {"chat": {"id": 42}, "message_id": 78003}}}
-        job = client.post("/api/telegram/webhook", json=character_callback).json()
+        job = client.post("/api/telegram/webhook", json=character_callback, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         inputs = [item for item in job.get("artifacts", []) if item.get("kind") == "input"]
         assert inputs and inputs[0]["filename"] == "telegram.json"
         assert inputs[0]["sha256"]
@@ -383,9 +387,12 @@ def test_telegram_setup_saves_chat_ids_without_public_url(monkeypatch, tmp_path)
 
 
 def test_telegram_start_command_does_not_create_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "42")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "s")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "42")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "s")
     brand_root = tmp_path / "brands"
     brand_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("BRANDS_ROOT", str(brand_root))
@@ -399,7 +406,7 @@ def test_telegram_start_command_does_not_create_job(monkeypatch, tmp_path):
     mock_response.raise_for_status.return_value = None
     mock_response.json.return_value = {"ok": True}
     with patch("adapters.telegram.httpx.post", return_value=mock_response) as mock_post:
-        response = client.post("/api/telegram/webhook", json=update).json()
+        response = client.post("/api/telegram/webhook", json=update, headers={"x-telegram-bot-api-secret-token": "s"}).json()
     assert response.get("ok") is True
 
 
@@ -2058,6 +2065,7 @@ def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypa
     # Call the webhook endpoint directly
     client = TestClient(app, raise_server_exceptions=False)
     chat_id = "424242"
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", chat_id)
     headers = {'x-telegram-bot-api-secret-token': 'test-secret'}
 
     # Step 1: Send topic message - creates pending brand state

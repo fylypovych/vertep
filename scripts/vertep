@@ -109,6 +109,9 @@ case "${1:-status}" in
     elif [[ -n "${ADMIN_PASSWORD:-}" ]]; then
       auth=(-u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD}")
     fi
+    update_field() {
+      python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1]) or "")' "$1"
+    }
     response_file=$(mktemp)
     http_code=$(curl -sS "${core_tls[@]}" "${auth[@]}" -o "$response_file" \
       -w '%{http_code}' -X POST "$core_url/api/system/update/run") || {
@@ -117,17 +120,71 @@ case "${1:-status}" in
       echo "Не вдалося зв’язатися з CORE для запуску оновлення." >&2
       exit 1
     }
-    cat "$response_file"
+    response=$(cat "$response_file")
     rm -f "$response_file"
     if [[ "$http_code" == 423 ]]; then
-      printf '\nОновлення заблоковано станом системи. Виконайте: sudo vertep recover\n' >&2
+      printf 'Оновлення заблоковано станом системи. Виконайте: sudo vertep recover\n' >&2
       exit 1
     fi
-    [[ "$http_code" =~ ^2 ]] || {
-      printf '\nCORE відхилив оновлення (HTTP %s).\n' "$http_code" >&2
+    if [[ "$http_code" == 409 ]]; then
+      printf 'Оновлення вже виконується, показую його перебіг.\n'
+      response=$(curl -fsS "${core_tls[@]}" "${auth[@]}" "$core_url/api/system/update")
+    elif [[ ! "$http_code" =~ ^2 ]]; then
+      printf '%s\nCORE відхилив оновлення (HTTP %s).\n' "$response" "$http_code" >&2
       exit 1
-    }
-    printf '\nЗапит на оновлення прийнято. Стежте за станом командою: vertep status\n'
+    fi
+    request_id=$(printf '%s' "$response" | update_field request_id)
+    printf 'Запускаю оновлення...\n'
+    poll=${VERTEP_UPDATE_POLL_SECONDS:-3}
+    started=$SECONDS
+    last_line=""
+    core_lost=false
+    while true; do
+      if ! body=$(curl -fsS "${core_tls[@]}" --connect-timeout 3 --max-time 10 "${auth[@]}" "$core_url/api/system/update" 2>/dev/null); then
+        # CORE restarts during an update, so a lost connection is not a failure.
+        [[ "$core_lost" == true ]] || printf 'CORE перезапускається, чекаю...\n'
+        core_lost=true
+      else
+        core_lost=false
+        fields=$(printf '%s' "$body" | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress", "phase", "message", "current_version", "available_version", "update_available")))')
+        IFS=$'\x1f' read -r seen state progress phase message current available has_update <<<"$fields"
+        if [[ "$seen" == "$request_id" ]]; then
+          line="[$progress%] $phase: $message"
+          [[ "$line" == "$last_line" ]] || printf '%s\n' "$line"
+          last_line=$line
+          case "$state" in
+            SUCCEEDED)
+              if [[ "$has_update" == True ]]; then
+                printf 'Оновлення завершено: версія %s.\n' "$available"
+              else
+                printf 'Оновлень немає: уже встановлено останню опубліковану версію %s.\n' "$current"
+              fi
+              exit 0
+              ;;
+            ROLLED_BACK)
+              printf 'Оновлення не вдалося, систему повернуто до попередньої версії: %s\n' "$message" >&2
+              exit 1
+              ;;
+            FAILED)
+              printf 'Оновлення не вдалося: %s\n' "$message" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$state" == PENDING ]] && (( SECONDS - started > ${VERTEP_UPDATE_PICKUP_SECONDS:-120} )); then
+            printf 'Агент оновлень не взяв запит. Перевірте: systemctl status vertep-update.path vertep-update.service\n' >&2
+            exit 1
+          fi
+        fi
+      fi
+      if (( SECONDS - started > ${VERTEP_UPDATE_WAIT_SECONDS:-3600} )); then
+        printf 'Оновлення ще не завершилось. Стежте за станом: vertep status\n' >&2
+        exit 1
+      fi
+      sleep "$poll"
+    done
     ;;
   start)
     printf 'Запускаємо сервіси Vertep...\n'

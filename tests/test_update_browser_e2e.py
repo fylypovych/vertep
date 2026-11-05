@@ -219,6 +219,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
         with page.expect_response(
                 lambda response: "/api/system/update/run" in response.url) as queued:
             page.get_by_test_id("update-install").click()
+            page.get_by_role("button", name="Підтвердити", exact=True).click()
         assert queued.value.ok, queued.value.text()
         assert queued.value.json()["state"] == "PENDING"
         request_file = next((state_dir / "requests").glob("*.json"))
@@ -244,6 +245,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
         with page.expect_response(
                 lambda response: "/api/system/update/run" in response.url) as failed:
             page.get_by_test_id("update-install").click()
+            page.get_by_role("button", name="Підтвердити", exact=True).click()
         assert failed.value.ok, failed.value.text()
         assert _run_host_agent(base, root, state_dir, monkeypatch, signed_update_server) is False
         assert (root / "current" / "VERSION").read_text(encoding="utf-8").strip() == CURRENT_VERSION
@@ -259,6 +261,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
         with page.expect_response(
                 lambda response: "/api/system/update/run" in response.url) as retried:
             page.get_by_test_id("update-install").click()
+            page.get_by_role("button", name="Підтвердити", exact=True).click()
         assert retried.value.ok, retried.value.text()
         retry_request = retried.value.json()["request_id"]
         assert _run_host_agent(base, root, state_dir, monkeypatch, signed_update_server,

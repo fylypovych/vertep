@@ -5,10 +5,16 @@ import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
 import { SystemStatus, HealthCheck, UpdateStatus, SystemState, SystemRolesResponse, SecretStatus, TelegramStatus, RollingUpdateRequest, MetricsResponse, OperationAck, SystemStateDTO, HealthHistoryResponse, SecurityCheckResponse } from '../models';
 
+export interface PostSetupState { pending: boolean; telegram: boolean; backup_key: boolean; }
+
 @Injectable({ providedIn: 'root' })
 export class SystemApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}
+  postSetup = (): Observable<PostSetupState> => this.http.get<PostSetupState>(`${this.base.url}/system/post-setup`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  backupKey = (): Observable<Blob> => this.http.post(`${this.base.url}/system/post-setup/backup-key`, null, { headers: this.h(), responseType: 'blob' }).pipe(catchError(this.base.handleError));
+  acknowledgeBackupKey = (): Observable<PostSetupState> => this.http.post<PostSetupState>(`${this.base.url}/system/post-setup/backup-key/saved`, null, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  saveTelegramAccess = (allowed: string, admins: string): Observable<unknown> => this.http.post(`${this.base.url}/telegram/setup`, { allowed_chat_ids: allowed, admin_chat_ids: admins }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   status = (): Observable<SystemStatus> => this.http.get<SystemStatus>(`${this.base.url}/status`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   health = (): Observable<HealthCheck> => this.http.get<HealthCheck>(`${this.base.url}/health`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   healthHistory = (limit = 100): Observable<HealthHistoryResponse> => this.http.get<HealthHistoryResponse>(`${this.base.url}/health/history?limit=${limit}`, { headers: this.h() }).pipe(catchError(this.base.handleError));

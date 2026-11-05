@@ -44,7 +44,7 @@ class PollingWorkerTransport:
                 return None
             active["delivered"] = True
             request, lease = active["request"], active["lease"]
-            task_type = {"text_generation": "script", "image_generation": "image", "video_generation": "video", "voice_synthesis": "voice", "video_assembly": "assembly", "publishing": "publish"}.get(request.task_type, request.task_type)
+            task_type = {"text_generation": "script", "image_generation": "image", "video_generation": "video", "voice_synthesis": "voice", "speech_synthesis": "voice", "video_assembly": "assembly", "publishing": "publish"}.get(request.task_type, request.task_type)
             return {**request.payload.get("params", {}), **request.payload, "task_id": request.task_id,
                     "job_id": request.payload["workflow_job_id"], "task": task_type,
                     "lease_id": lease["lease_id"], "protocol_version": "1.0.0", "architecture_workflow": True}
@@ -219,7 +219,8 @@ _runtime_lock = RLock()
 
 def workflow_runtime():
     global _runtime
-    root = os.getenv("WORKFLOW_DEFINITIONS_ROOT")
+    from .mode import dynamic_definitions_root
+    root = dynamic_definitions_root()
     if not root:
         return None
     with _runtime_lock:

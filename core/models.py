@@ -456,6 +456,7 @@ class Job(BaseModel):
 
 class WorkerHeartbeat(BaseModel):
     protocol_version: str = "1.0.0"
+    scheduler_tags: list[str] = Field(default_factory=list)
     module_inventory: list[dict[str, Any]] = Field(default_factory=list)
     cpu_cores: int = Field(default=0, ge=0)
     node_name: str

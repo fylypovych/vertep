@@ -946,10 +946,13 @@ def worker_status(metrics: dict, require_gpu: bool, busy: bool = False) -> str:
 
 def execute_task(adapter: ComputeProvider, task: dict, node_name: str) -> dict:
     try:
-        artifacts = execute_role_task(configured_role(), task)
         if task.get("architecture_workflow"):
+            from worker.workflow_inputs import prepare_workflow_task, require_published
+            artifacts = execute_role_task(configured_role(), prepare_workflow_task(task))
+            require_published(task, artifacts)
             return {"job_id": task["job_id"], "task_id": task["task_id"], "node_name": node_name,
                     "success": True, "artifacts": artifacts}
+        artifacts = execute_role_task(configured_role(), task)
         images = [{"filename": item["filename"], "image_base64": item["data_base64"]}
                   for item in artifacts if item["kind"] == "image"]
         return {"job_id": task["job_id"], "task_id": task["task_id"], "node_name": node_name, "success": True,
@@ -1031,6 +1034,7 @@ def main() -> None:
                "status": worker_status(metrics, require_gpu),
                "supported_tasks": supported_tasks, "supported_workflows": supported_workflows,
                "role": configured_role(), "capabilities": capabilities,
+               "scheduler_tags": [tag.strip() for tag in os.getenv("SCHEDULER_TAGS", "").split(",") if tag.strip()],
                "voice_catalog": voice_catalog() if "speech_synthesis" in capabilities else {},
                "version": os.getenv("VERTEP_VERSION")}
     adapter = providers.compute()

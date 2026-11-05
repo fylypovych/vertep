@@ -220,6 +220,15 @@ services:
     environment:
       BACKUP_ROOT: /data/backups
       BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
+      BACKUP_CORE_URL: http://core:8080
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      # Key-level export restores into the live AOF-enabled Redis without a restart.
+      BACKUP_REDIS_DUMP_CMD: ""
+      BACKUP_REDIS_LOGICAL: "true"
+      # Dumps can outgrow the tmpfs, so they stay on the backup disk.
+      BACKUP_PG_DUMP_PATH: /data/backups/.vertep-postgres.dump
+      BACKUP_REDIS_DUMP_PATH: /data/backups/.vertep-redis.jsonl
     secrets: [backup_encryption_key]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8092/health"]
@@ -228,7 +237,7 @@ services:
       retries: 10
     restart: unless-stopped
     read_only: true
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=512m"]
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
   moneyprinter:

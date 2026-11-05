@@ -5,6 +5,7 @@ import { SidebarComponent } from './sidebar.component';
 import { HeaderComponent } from './header.component';
 import { ToastContainerComponent } from '../shared/toast-container.component';
 import { ConfirmDialogComponent } from '../shared/confirm-dialog.component';
+import { PostSetupDialogComponent } from '../shared/post-setup-dialog.component';
 import { SidebarService } from '../core/services/sidebar.service';
 import { LoadingService } from '../core/services/loading.service';
 import { LoadingStateComponent } from '../shared/loading-state.component';
@@ -19,6 +20,7 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
     HeaderComponent,
     ToastContainerComponent,
     ConfirmDialogComponent,
+    PostSetupDialogComponent,
     LoadingStateComponent
   ],
   template: `
@@ -40,6 +42,7 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
 
       <app-toast-container />
       <app-confirm-dialog />
+      <app-post-setup-dialog />
 
       <!-- Global loader -->
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"

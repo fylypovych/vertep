@@ -285,11 +285,11 @@ def run_fenced(command: list[str], root: Path, state_dir: Path, lease,
     return collected["output"]
 
 
-def core_json(path: str) -> dict:
+def core_json(path: str, method: str = "GET") -> dict:
     core_url = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL")
                 or "https://127.0.0.1:8443")
     url = core_url.rstrip("/") + path
-    request = Request(url)
+    request = Request(url, method=method)
     internal_key = os.getenv("INTERNAL_API_KEY")
     password = os.getenv("ADMIN_PASSWORD")
     if internal_key:
@@ -340,6 +340,10 @@ def wait_for_drain(state_dir: Path, state: dict, lease) -> None:
     transition(state_dir, state, "MAINTENANCE", "Maintenance mode; waiting for active jobs", 22)
     while time.monotonic() < deadline:
         assert_mutation_allowed(state_dir, lease)
+        try:
+            core_json("/api/system/update/drain", method="POST")
+        except (OSError, ValueError, RuntimeError):
+            pass  # readiness stays false, so the next poll retries
         readiness = core_json("/api/system/update/readiness")
         if readiness.get("ready"):
             state["readiness"] = readiness

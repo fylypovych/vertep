@@ -175,6 +175,19 @@ async def first_run_complete(request: Request):
                                                if Path(os.getenv("CORE_CERTIFICATE_PATH", "/data/config/pki/ca.crt")).is_file()
                                                else None)
             completed["registration_token"] = registration_token
+            from ..post_setup import acknowledge_backup_key, read_backup_key
+            from ..telegram_store import save_telegram_settings
+            bot_token = str(payload.get("telegram_bot_token") or "").strip()
+            if bot_token:
+                set_integration_secret("telegram_bot_token", bot_token)
+            admins = str(payload.get("telegram_admin_chat_ids") or "").strip()
+            allowed = str(payload.get("telegram_allowed_chat_ids") or "").strip()
+            if admins or allowed:
+                save_telegram_settings(allowed_chat_ids=allowed, admin_chat_ids=admins)
+            # The wizard shows the key once and will not continue until it is saved.
+            completed["backup_key"] = read_backup_key()
+            if completed["backup_key"]:
+                acknowledge_backup_key()
         return completed
     except FileExistsError as error:
         raise HTTPException(409, str(error)) from error

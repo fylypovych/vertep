@@ -76,6 +76,16 @@ def check_update_agent() -> dict:
         return {"update_agent": False}
 
 
+def update_in_progress() -> bool:
+    root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
+    state_dir = Path(os.getenv("UPDATE_STATE_DIR", str(root / "config" / "update")))
+    try:
+        status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return status.get("state") in {"PENDING", "RUNNING"}
+
+
 def restart_containers(role: str) -> str:
     root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
     compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml")]
@@ -196,7 +206,11 @@ def main() -> None:
     if role != "core":
         checks.update(check_core_api(core_url))
     checks.update(check_update_agent())
-    failed = [name for name, ok in checks.items() if ok is False]
+    # A failed update is reported, not healed: restarting cannot fix it and would undo a rollback.
+    failed = [name for name, ok in checks.items() if ok is False and name != "update_agent"]
+    if update_in_progress():
+        print(f"{now()} WATCHDOG: update in progress, no restart", file=sys.stderr)
+        failed = []
     if failed:
         print(f"{now()} WATCHDOG: restarting {', '.join(failed)}", file=sys.stderr)
         restart_output = restart_containers(role)

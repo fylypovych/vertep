@@ -4,6 +4,7 @@ from adapters.telegram import TelegramAdapter
 from core.models import TelegramSetup
 from core.telegram_store import get_admin_chat_ids
 from core.telegram_store import get_allowed_chat_ids
+from core.telegram_store import is_allowed_chat
 from core.telegram_store import load_telegram_settings
 from core.telegram_store import save_telegram_settings
 from fastapi import HTTPException
@@ -21,7 +22,7 @@ def telegram_webhook(update: dict, request: Request):
     if os.getenv("TELEGRAM_WEBHOOK_ENABLED", "").lower() not in {"1", "true", "yes"}:
         raise HTTPException(404, "Telegram webhook is disabled; use polling as the primary integration")
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    if webhook_secret and not secrets.compare_digest(request.headers.get("x-telegram-bot-api-secret-token", ""), webhook_secret):
+    if not webhook_secret or not secrets.compare_digest(request.headers.get("x-telegram-bot-api-secret-token", ""), webhook_secret):
         raise HTTPException(401, "Invalid Telegram webhook secret")
     callback = update.get("callback_query")
     if callback:
@@ -31,9 +32,7 @@ def telegram_webhook(update: dict, request: Request):
     if not text:
         raise HTTPException(400, "Telegram update has no text")
     chat_id = str(message.get("chat", {}).get("id", "unknown"))
-    allowed = get_allowed_chat_ids()
-    admin_ids = set(get_admin_chat_ids())
-    if allowed and chat_id not in allowed and chat_id not in admin_ids:
+    if not is_allowed_chat(chat_id):
         raise HTTPException(403, "Telegram chat is not allowed")
     source_id = str(message.get("message_id", ""))
     return _handle_telegram_message(chat_id, source_id, text, message)

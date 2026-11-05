@@ -165,9 +165,9 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     store.workers[payload.node_name] = data
     store.save_worker(data)
     reconcile_provider_activation(payload.node_name, data)
-    if os.getenv("WORKFLOW_DEFINITIONS_ROOT"):
-        from core.workflow.runtime import workflow_runtime
-        workflow = workflow_runtime()
+    from core.workflow.runtime import workflow_runtime
+    workflow = workflow_runtime()
+    if workflow:
         try:
             workflow.register(data)
         except (ValueError, KeyError, TypeError):
@@ -183,7 +183,7 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     if node_record and node_record.get("phase") in {"SELF_TESTING", "ROLLING_BACK"}:
         active_request = node_record.get("self_test_request")
     return {"accepted": True, "workers": len(store.workers),
-            "workflow_execution_enabled": bool(os.getenv("WORKFLOW_DEFINITIONS_ROOT")),
+            "workflow_execution_enabled": bool(workflow_runtime()),
             "desired_state": data.get("desired_state"),
             "self_test_requested_at": data.get("self_test_requested_at"),
             "self_test_request": active_request,

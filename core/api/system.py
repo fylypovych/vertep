@@ -199,8 +199,6 @@ def update_readiness():
         if worker is None:
             unacknowledged.append(node_id)
             continue
-        worker.update({"desired_state": "DRAINING", "drain_operation_id": operation_id})
-        store.save_worker(worker)
         drained = (worker.get("status") == "DRAINING" and not worker.get("current_task"))
         (acknowledged if drained else unacknowledged).append(node_id)
     ready = (not active and not busy and task_queue.inflight_depth() == 0
@@ -210,6 +208,40 @@ def update_readiness():
             "queue_paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth(),
             "drain_operation_id": operation_id, "acknowledged_workers": acknowledged,
             "unacknowledged_workers": unacknowledged}
+
+
+@router.get("/api/system/post-setup")
+def post_setup_status():
+    from ..post_setup import post_setup_state
+    return post_setup_state()
+
+
+@router.post("/api/system/post-setup/backup-key")
+def post_setup_backup_key():
+    from fastapi.responses import PlainTextResponse
+    from ..post_setup import read_backup_key
+    key = read_backup_key()
+    if key is None:
+        raise HTTPException(404, "Backup key is not available on this node")
+    return PlainTextResponse(key, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/api/system/post-setup/backup-key/saved")
+def post_setup_backup_key_saved():
+    from ..post_setup import acknowledge_backup_key
+    return acknowledge_backup_key()
+
+
+@router.post("/api/system/update/drain")
+def update_drain():
+    """Ask every known worker to drain; progress is read from the readiness route."""
+    workers = {worker["node_name"]: worker for worker in store.load_workers()}
+    workers.update(store.workers)
+    operation_id = get_system_state().get("operation_id")
+    for worker in workers.values():
+        worker.update({"desired_state": "DRAINING", "drain_operation_id": operation_id})
+        store.save_worker(worker)
+    return {"draining": sorted(workers), "drain_operation_id": operation_id}
 
 
 @router.post("/api/system/update/check")

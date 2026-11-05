@@ -50,6 +50,9 @@ def update(root_env: Path, manifest_path: Path, version: str) -> None:
         raise ValueError("release manifest has no image inventory")
     lines, existing = read_env(root_env)
     updates = {"VERTEP_VERSION": version,
+               # Installs made before these defaults existed get them with this update.
+               "DEMO_MODE": "false",
+               "REQUIRE_UPDATE_KEY_LIFECYCLE": "true",
                "VERTEP_UPDATE_SERVER":
                    "https://api.github.com/repos/fylypovych/vertep/releases"}
     mapping = dict(IMAGE_KEYS)

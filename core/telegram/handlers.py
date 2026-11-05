@@ -62,6 +62,7 @@ from core.telegram_callbacks import set_callback_target
 from core.telegram_store import get_admin_chat_ids
 from core.telegram_store import get_allowed_chat_ids
 from core.telegram_store import is_admin_chat
+from core.telegram_store import is_allowed_chat
 from core.update_manager import request_update
 from core.update_manager import update_status
 from core.version import application_version
@@ -1170,6 +1171,8 @@ def _handle_telegram_callback(callback: dict) -> dict:
     action, _, payload = data.partition(":")
     callback_id = str(callback.get("id", ""))
     chat_id = str(callback.get("message", {}).get("chat", {}).get("id", "unknown"))
+    if not (is_admin_chat(chat_id) or is_allowed_chat(chat_id)):
+        return TelegramAdapter().answer_callback(callback_id, "Доступ заборонено.")
 
     system_actions = {
         "sys_status", "sys_update", "sys_update_check", "sys_update_confirm",
@@ -1338,6 +1341,8 @@ def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: d
                             for scene in job.scenes) or "Scenes are not planned yet"
         return TelegramAdapter().send_message(chat_id, f"{job.job_id}: {job.status.value}\n{scenes}")
     if any(text.startswith(command + " ") for command in ("/retry", "/cancel", "/approve", "/publish")):
+        if not is_admin_chat(chat_id):
+            return TelegramAdapter().send_message(chat_id, "Доступ заборонено.")
         command, job_id = text.split(maxsplit=1)
         job = store.jobs.get(job_id.strip())
         if not job:
@@ -1451,9 +1456,7 @@ def _process_telegram_update(update: dict) -> None:
         logger.debug("Telegram update skipped: no text")
         return
     chat_id = str(message.get("chat", {}).get("id", "unknown"))
-    allowed = get_allowed_chat_ids()
-    admin_ids = set(get_admin_chat_ids())
-    if allowed and chat_id not in allowed and chat_id not in admin_ids:
+    if not is_allowed_chat(chat_id):
         logger.warning("Telegram message rejected: chat_id not allowed", extra={"chat_id": chat_id})
         try:
             TelegramAdapter().send_message(chat_id, "Доступ заборонено.")

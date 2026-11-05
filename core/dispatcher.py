@@ -65,9 +65,8 @@ def _voice_ready(worker: dict, requirements: dict | None) -> bool:
     supports the exact voice/model/language the Job requires.  A declared-but-
     empty catalog is not treated as "accepts anything": an empty ``voices``
     list means the node has no voices at all, so it is refused instead of
-    silently trusted.  Only a worker that never advertised a catalog at all
-    (backward compatible, pre-catalog workers) is assumed capable, because
-    there is nothing to contradict.
+    silently trusted.  Missing evidence is not readiness, so a worker that never
+    advertised a catalog is refused as well.
 
     A requirement is satisfied when the catalog advertises the value, advertises
     the wildcard ``"*"``, or omits the key entirely (the worker did not claim to
@@ -77,13 +76,7 @@ def _voice_ready(worker: dict, requirements: dict | None) -> bool:
     if not requirements:
         return True
     catalog = worker.get("voice_catalog")
-    if catalog is None:
-        # No catalog advertised at all: nothing to contradict, keep the node.
-        return True
     if not catalog:
-        # A declared-but-empty catalog means the node has no voices at all:
-        # refuse instead of silently trusting it.  Only the absence of the
-        # field (None) stays backward compatible.
         return False
     plural = {"voice": "voices", "model": "models", "language": "languages",
               "provider": "providers", "engine": "engines"}

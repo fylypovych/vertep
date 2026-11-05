@@ -217,6 +217,10 @@
   ],
   [
     "GET",
+    "/api/settings/workflow-mode"
+  ],
+  [
+    "GET",
     "/api/setup"
   ],
   [
@@ -250,6 +254,10 @@
   [
     "GET",
     "/api/system/models/nodes"
+  ],
+  [
+    "GET",
+    "/api/system/post-setup"
   ],
   [
     "GET",
@@ -569,6 +577,10 @@
   ],
   [
     "POST",
+    "/api/settings/workflow-mode"
+  ],
+  [
+    "POST",
     "/api/setup/complete"
   ],
   [
@@ -597,6 +609,14 @@
   ],
   [
     "POST",
+    "/api/system/post-setup/backup-key"
+  ],
+  [
+    "POST",
+    "/api/system/post-setup/backup-key/saved"
+  ],
+  [
+    "POST",
     "/api/system/recovery/normal"
   ],
   [
@@ -618,6 +638,10 @@
   [
     "POST",
     "/api/system/update/check"
+  ],
+  [
+    "POST",
+    "/api/system/update/drain"
   ],
   [
     "POST",

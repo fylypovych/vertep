@@ -85,6 +85,10 @@ def claim_task(payload: TaskClaim, request: Request):
         if not task:
             break
         job = store.jobs.get(task["job_id"])
+        if job is None:
+            # The Job was deleted: its task can never run and must not block the queue.
+            task_queue.ack(task["task_id"])
+            continue
         if task.get("kind") == "image_storyboard":
             sb_version = task.get("storyboard_version")
             if job.status not in {JobStatus.STORYBOARD_PENDING_APPROVAL,

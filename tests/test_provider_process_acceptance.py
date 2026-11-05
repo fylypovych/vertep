@@ -219,8 +219,28 @@ def test_actual_settings_mpt_task_restart_rollback_and_native(config_contour):
             assert secret_saved.value.status == 200
             expect(row).to_contain_text("Збережено")
             assert CORE_SECRET not in page.content()
+            (c["config"] / "backup.key").write_text("disposable-key", encoding="utf-8")
+            page.goto(c["url"] + "/settings?tab=workflow-mode")
+            expect(page.get_by_test_id("post-setup-dialog")).to_be_visible()
+            expect(page.get_by_test_id("post-setup-key-saved")).to_be_disabled()
+            with page.expect_download() as key_file:
+                page.get_by_test_id("post-setup-key-download").click()
+            assert Path(key_file.value.path()).read_text(encoding="utf-8") == "disposable-key"
+            page.get_by_test_id("post-setup-key-saved").check()
+            page.get_by_test_id("post-setup-key-confirm").click()
+            expect(page.get_by_test_id("post-setup-dialog")).to_be_hidden()
+            page.reload()
+            expect(page.get_by_test_id("settings-workflow-mode")).to_be_visible()
+            expect(page.get_by_test_id("post-setup-dialog")).to_be_hidden()
+            expect(page.get_by_test_id("workflow-mode-select")).to_have_value("static")
+            page.get_by_test_id("workflow-mode-info-toggle").click()
+            expect(page.get_by_test_id("workflow-mode-info")).to_contain_text("Статичний workflow")
+            expect(page.get_by_test_id("workflow-mode-unavailable")).to_be_visible()
             page.goto(c["url"] + "/settings?tab=video-engine")
             expect(page.get_by_test_id("video-engine-effective")).to_have_text("Vertep Native")
+            page.get_by_test_id("video-engine-info-toggle").click()
+            expect(page.get_by_test_id("video-engine-info")).to_contain_text("Vertep Native")
+            page.get_by_test_id("video-engine-info-toggle").click()
             def apply(endpoint):
                 page.get_by_test_id("video-engine-select").select_option("money-printer")
                 page.get_by_test_id("video-engine-endpoint").fill(endpoint)

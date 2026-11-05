@@ -2324,6 +2324,7 @@ def test_update_critical_mutations_install_and_canary():
 
         with page.expect_response("**/api/system/update/run"):
             page.locator("[data-testid='update-install']").click()
+            page.get_by_role("button", name="Підтвердити", exact=True).click()
         # Without a rollout there is nothing to cancel, promote or roll back.
         for control in ("update-cancel-rolling", "update-promote-canary", "update-rollback-canary"):
             expect(page.locator(f"[data-testid='{control}']")).to_have_count(0)
@@ -2469,6 +2470,8 @@ def _mock_chrome_data(page):
     # This UI-only smoke has a mocked session, hence no backend cookie. Letting
     # Logs hit the real protected API races the title assertion with a 401
     # redirect to /login and then /. Actual Logs HTTP proof lives separately.
+    page.route("**/api/system/post-setup", lambda route: route.fulfill(
+        json={"pending": False, "telegram": False, "backup_key": False}))
     page.route("**/api/logs*", lambda route: route.fulfill(json=[])
                if route.request.method == "GET" else route.fallback())
 

@@ -287,7 +287,7 @@ class TestContentCallbackAcceptance:
         try:
             text = acceptance.callback_answer("cb-foreign", FOREIGN_CHAT,
                                                f"vid_ok:{fixtures['job_id']}:1")
-            assert "не є власником" in text
+            assert "Доступ заборонено" in text
             assert acceptance.job(fixtures["job_id"])["status"] == "VIDEO_PENDING_APPROVAL"
         finally:
             acceptance.stop_core()

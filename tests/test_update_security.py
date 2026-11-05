@@ -544,7 +544,12 @@ def test_wait_for_drain_polls_readiness(tmp_path, monkeypatch):
     monkeypatch.setenv("UPDATE_DRAIN_POLL_SECONDS", "0.01")
     call_count = [0]
 
-    def fake_core_json(path):
+    drains = []
+
+    def fake_core_json(path, method="GET"):
+        if method == "POST":
+            drains.append(path)
+            return {}
         call_count[0] += 1
         if call_count[0] >= 3:
             return {"ready": True, "workers_drained": 2}
@@ -557,6 +562,7 @@ def test_wait_for_drain_polls_readiness(tmp_path, monkeypatch):
             return None
     agent.wait_for_drain(tmp_path, state, Lease())
     assert call_count[0] >= 3
+    assert drains and set(drains) == {"/api/system/update/drain"}
     assert state["readiness"]["ready"] is True
 
 

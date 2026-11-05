@@ -240,6 +240,87 @@ def _sources() -> list[tuple[str, Path]]:
             ("storage", Path(os.getenv("BACKUP_STORAGE_ROOT", "/data/storage")))]
 
 
+# The key cannot protect a copy of itself and must survive a restore untouched.
+_SNAPSHOT_EXCLUDED = {"backup.key"}
+
+
+def _part_size() -> int:
+    return int(os.getenv("BACKUP_PART_SIZE_BYTES", str(512 * 1024 * 1024)))
+
+
+def _snapshot_files(first: Path) -> list[Path]:
+    """A snapshot is its ``.vtbackup`` file plus any ``.partNNNN`` continuations."""
+    return [first, *sorted(first.parent.glob(first.name + ".part*"))]
+
+
+def _unlink_snapshot(first: Path) -> None:
+    for path in _snapshot_files(first):
+        path.unlink(missing_ok=True)
+
+
+def _split_parts(path: Path) -> None:
+    """Keep the first part_size bytes in ``path``; move the rest to continuations."""
+    size = _part_size()
+    if path.stat().st_size <= size:
+        return
+    number = 1
+    with path.open("r+b") as source:
+        source.seek(size)
+        while True:
+            remaining = size
+            target = None
+            while remaining:
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                if target is None:
+                    target = path.with_name(f"{path.name}.part{number:04d}").open("wb")
+                target.write(chunk)
+                remaining -= len(chunk)
+            if target is None:
+                break
+            target.flush()
+            os.fsync(target.fileno())
+            target.close()
+            number += 1
+        source.truncate(size)
+        source.flush()
+        os.fsync(source.fileno())
+
+
+def _sha256_files(paths: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _redis_export(destination: Path) -> None:
+    import redis
+    client = redis.from_url(os.environ["REDIS_URL"])
+    with destination.open("w", encoding="ascii") as output:
+        for key in client.scan_iter(count=1000):
+            value = client.dump(key)
+            if value is None:  # expired during the scan
+                continue
+            output.write(json.dumps({"key": base64.b64encode(key).decode(),
+                                     "ttl_ms": max(client.pttl(key), 0),
+                                     "value": base64.b64encode(value).decode()}) + "\n")
+
+
+def _redis_import(source: Path) -> None:
+    import redis
+    client = redis.from_url(os.environ["REDIS_URL"])
+    client.flushdb()
+    with source.open(encoding="ascii") as lines:
+        for line in lines:
+            item = json.loads(line)
+            client.restore(base64.b64decode(item["key"]), item["ttl_ms"],
+                           base64.b64decode(item["value"]), replace=True)
+
+
 def _key() -> bytes:
     try:
         encoded = os.getenv("BACKUP_ENCRYPTION_KEY", "")
@@ -338,14 +419,14 @@ def _apply_retention(root: Path) -> None:
         cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
         for dt, path, receipt_path in list(snapshots):
             if dt.timestamp() < cutoff:
-                path.unlink(missing_ok=True)
+                _unlink_snapshot(path)
                 receipt_path.unlink(missing_ok=True)
                 snapshots.remove((dt, path, receipt_path))
     max_snap = _max_snapshots()
     if max_snap is not None and len(snapshots) > max_snap:
         to_remove = len(snapshots) - max_snap
         for dt, path, receipt_path in snapshots[:to_remove]:
-            path.unlink(missing_ok=True)
+            _unlink_snapshot(path)
             receipt_path.unlink(missing_ok=True)
 
 
@@ -418,6 +499,8 @@ def _archive(destination: Path) -> None:
             # that contain no files, so we add them as explicit TarInfo entries.
             seen_dirs: set[str] = set()
             for path in sorted(root.rglob("*")):
+                if path.name in _SNAPSHOT_EXCLUDED:
+                    continue
                 arcname_base = (Path(label) / path.relative_to(root)).as_posix()
                 if path.is_dir() and not path.is_symlink():
                     if arcname_base not in seen_dirs:
@@ -468,6 +551,13 @@ def _archive(destination: Path) -> None:
             if not rdb_path.exists():
                 raise RuntimeError("redis-cli BGSAVE succeeded but RDB file was not created")
             archive.add(str(rdb_path), arcname="db/redis.rdb", recursive=False)
+        if os.getenv("BACKUP_REDIS_LOGICAL", "").lower() == "true":
+            export = Path(_redis_dump_path())
+            try:
+                _redis_export(export)
+                archive.add(str(export), arcname="db/redis.keys.jsonl", recursive=False)
+            finally:
+                export.unlink(missing_ok=True)
 
 
 def _encrypt(source: Path, destination: Path, key: bytes) -> str:
@@ -505,6 +595,10 @@ def health() -> dict:
 
 @app.post("/snapshots")
 def snapshot(request: SnapshotRequest) -> dict:
+    return _create_snapshot(request.job_id)
+
+
+def _create_snapshot(job_id: str, apply_retention: bool = True) -> dict:
     key = _key()
     root = _backup_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -516,24 +610,32 @@ def snapshot(request: SnapshotRequest) -> dict:
         encrypted = Path(temporary) / "snapshot.vtbackup"
         _archive(archive)
         digest = _encrypt(archive, encrypted, key)
+        archive.unlink()
+        total_size = encrypted.stat().st_size
+        _split_parts(encrypted)
+        for part in _snapshot_files(encrypted)[1:]:
+            part.replace(root / part.name.replace(encrypted.name, destination.name, 1))
         encrypted.replace(destination)
         inventory = [{"label": label, "path": str(path)} for label, path in _sources()]
         # Issue #36/#16: run remote copy inside the snapshot flow and record its REAL
         # outcome in the receipt. A configured remote copy that fails raises and the
         # snapshot is not reported as successful.
-        remote_copied = _remote_copy(destination)
-        receipt = {"snapshot_id": snapshot_id, "job_id": request.job_id,
+        files = _snapshot_files(destination)
+        remote_copied = any([_remote_copy(path) for path in files])
+        receipt = {"snapshot_id": snapshot_id, "job_id": job_id,
                    "created_at": datetime.now(timezone.utc).isoformat(),
                    "format": "VERTEP-BACKUP-v1", "encryption": "AES-256-GCM",
-                   "sha256": digest, "size": destination.stat().st_size,
-                   "size_bytes": destination.stat().st_size,
+                   "sha256": digest, "size": total_size,
+                   "size_bytes": total_size,
                    "file": destination.name,
+                   "parts": [path.name for path in files],
                    "inventory": inventory,
                    "retention_days": _retention_days(),
                    "max_snapshots": _max_snapshots(),
                    "remote_copy": remote_copied}
         receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
-    _apply_retention(root)
+    if apply_retention:
+        _apply_retention(root)
     return receipt
 
 
@@ -656,7 +758,8 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
     except (OSError, ValueError) as error:
         raise HTTPException(409, "Receipt snapshot відсутній або пошкоджений") from error
         
-    encrypted_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    source_files = _snapshot_files(source)
+    encrypted_digest = _sha256_files(source_files)
     if not secrets.compare_digest(encrypted_digest, str(receipt.get("sha256", ""))):
         raise HTTPException(409, "Checksum snapshot не збігається")
 
@@ -676,7 +779,7 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
             declared = int(declared_size)
         except (TypeError, ValueError) as error:
             raise HTTPException(409, "Receipt містить некоректний розмір snapshot") from error
-        if declared != source.stat().st_size:
+        if declared != sum(path.stat().st_size for path in source_files):
             raise HTTPException(409, "Розмір snapshot не збігається з receipt")
 
     # Issue #136: the safe-state gate is re-checked at confirm time, so a state
@@ -695,6 +798,12 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
         _release_restore_guard(guard)
         raise HTTPException(401, "Токен підтвердження вже використано або застарів")
 
+    # A copy of the current data, kept out of retention so it cannot remove the source.
+    try:
+        pre_restore = _create_snapshot(f"pre-restore:{snapshot_id}", apply_retention=False)
+    except Exception as error:
+        _release_restore_guard(guard)
+        raise HTTPException(409, f"Не вдалося створити копію перед відновленням: {error}") from error
     started_at = time.time()
     _write_operation(snapshot_id, {"status": "running", "progress": 5,
                                    "message": "Перевірка цілісності...",
@@ -719,7 +828,10 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
             decrypted = Path(temporary) / "snapshot.tar.gz"
             extracted = Path(temporary) / "extracted"
             
-            encrypted.write_bytes(source.read_bytes())
+            with encrypted.open("wb") as joined:
+                for part in source_files:
+                    with part.open("rb") as handle:
+                        shutil.copyfileobj(handle, joined, 1024 * 1024)
             _decrypt(encrypted, decrypted, key)
             
             _set_restore_progress(snapshot_id, 40, "Розпакування...")
@@ -737,6 +849,7 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
                 # the live restore fence with that historical NORMAL state.
                 protected = {path for path in destination.rglob("system-state.json")
                              if _read_json_file(path, {}).get("operation_id") == f"restore:{snapshot_id}"}
+                protected |= {destination / name for name in _SNAPSHOT_EXCLUDED}
                 snapshot_files = set(protected)
                 for item in sorted(source_root.rglob("*")):
                     relative = item.relative_to(source_root)
@@ -763,7 +876,7 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
             if db_root.is_dir():
                 pg_dump = db_root / "postgres.dump"
                 if pg_dump.exists():
-                    pg_restore = os.getenv("BACKUP_PG_RESTORE_CMD", f"pg_restore -h ${{POSTGRES_HOST:-postgres}} -p ${{POSTGRES_PORT:-5432}} -U ${{POSTGRES_USER:-vertep}} -d ${{POSTGRES_DB:-vertep}} -c {pg_dump}")
+                    pg_restore = os.getenv("BACKUP_PG_RESTORE_CMD", f"pg_restore -h ${{POSTGRES_HOST:-postgres}} -p ${{POSTGRES_PORT:-5432}} -U ${{POSTGRES_USER:-vertep}} -d ${{POSTGRES_DB:-vertep}} -c --if-exists {pg_dump}")
                     result = subprocess.run(pg_restore, shell=True, timeout=300, capture_output=True)
                     if result.returncode != 0:
                         raise RuntimeError(f"pg_restore failed: {result.stderr.decode()}")
@@ -772,6 +885,9 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
                     redis_data = Path(os.getenv("REDIS_DATA_DIR", str(_redis_dump_path()))).parent
                     redis_data.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(redis_rdb, redis_data / "dump.rdb")
+                redis_keys = db_root / "redis.keys.jsonl"
+                if redis_keys.exists():
+                    _redis_import(redis_keys)
             
             _set_restore_progress(snapshot_id, 85, "Перевірка після відновлення...")
             _post_restore_health_check(destinations)
@@ -779,7 +895,8 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
         # Issue #136: NORMAL is restored only after health verification passed.
         _set_system_state("NORMAL", f"System restored from {snapshot_id}")
         _set_restore_progress(snapshot_id, 100, "Відновлення завершено", status="done")
-        return {"snapshot_id": snapshot_id, "restored": [], "sha256": encrypted_digest, "status": "done"}
+        return {"snapshot_id": snapshot_id, "restored": [], "sha256": encrypted_digest, "status": "done",
+                "pre_restore_snapshot": pre_restore["snapshot_id"]}
         
     except HTTPException:
         _finalize_restore_failure(snapshot_id, "Помилка відновлення", "Restore failed")
@@ -908,7 +1025,7 @@ def _safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
 
 
 def _decrypt(source: Path, destination: Path, key: bytes) -> str:
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    digest = _sha256_files([source])
     with source.open("rb") as input_file:
         magic = input_file.read(len(MAGIC))
         if magic != MAGIC:

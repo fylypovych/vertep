@@ -113,6 +113,7 @@ def test_update_browser_drives_the_standard_executor_with_rollback_and_retry(
         def install() -> str:
             with page.expect_response(lambda response: "/api/system/update/run" in response.url) as run:
                 page.get_by_test_id("update-install").click()
+                page.get_by_role("button", name="Підтвердити", exact=True).click()
             assert run.value.ok, run.value.text()
             return run.value.json()["request_id"]
 

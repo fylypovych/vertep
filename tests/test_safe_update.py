@@ -57,7 +57,7 @@ def test_central_state_policy_blocks_mutation_during_update(monkeypatch, tmp_pat
 
 
 def test_fleet_readiness_requires_every_registered_worker_to_ack_drain(monkeypatch, tmp_path):
-    from core.api.system import update_readiness
+    from core.api.system import update_drain, update_readiness
     import core.api.system as system_module
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(system_module, "registered_nodes", lambda: [
@@ -82,6 +82,10 @@ def test_fleet_readiness_requires_every_registered_worker_to_ack_drain(monkeypat
     readiness = update_readiness()
     assert readiness["ready"]
     assert readiness["acknowledged_workers"] == ["gpu-1", "gpu-2"]
+    # Reading never changes a worker; only the explicit drain does.
+    assert not any("desired_state" in worker for worker in _owner_core_telegram_handlers.store.workers.values())
+    update_drain()
+    assert all(worker["desired_state"] == "DRAINING" for worker in _owner_core_telegram_handlers.store.workers.values())
 
 
 @requires_openssl

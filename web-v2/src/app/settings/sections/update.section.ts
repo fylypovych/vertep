@@ -1,6 +1,7 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SystemApiService } from '../../core/api/system.api';
+import { ConfirmService } from '../../core/services/confirm.service';
 import { ToastService } from '../../core/services/toast.service';
 import { PolicyService } from '../../core/services/policy.service';
 import { UpdateStatus, UpdateReadiness, RollingStatus } from '../../core/models';
@@ -81,7 +82,7 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
           </div>
         }
         <div class="flex flex-wrap gap-2">
-          <button (click)="installUpdate()" [disabled]="installing()" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
+          <button (click)="installUpdate()" [disabled]="installing() || !policy.can('start_update').allowed" [title]="policy.disabledReason('start_update') || 'Встановити оновлення'" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
             {{ installing() ? 'Оновлення...' : 'Оновити' }}
           </button>
           @if (['RUNNING', 'AWAITING_PROMOTION', 'ROLLING_BACK'].includes(rollingStatus()?.state || '')) {
@@ -105,7 +106,7 @@ export class UpdateSectionComponent implements OnInit {
   error = signal<string | null>(null);
   installing = signal(false);
 
-  constructor(private system: SystemApiService, private toast: ToastService, readonly policy: PolicyService) {}
+  constructor(private system: SystemApiService, private toast: ToastService, readonly policy: PolicyService, private confirm: ConfirmService) {}
 
   ngOnInit(): void { this.loadAll(); }
 
@@ -126,10 +127,17 @@ export class UpdateSectionComponent implements OnInit {
   loadRolling(): void { this.system.rollingStatus().subscribe({ next: (s) => this.rollingStatus.set(s), error: () => {} }); }
 
   installUpdate(): void {
-    this.installing.set(true);
-    this.system.installUpdate().subscribe({
-      next: () => { this.installing.set(false); this.loadAll(); },
-      error: (err) => { this.error.set(err.message); this.installing.set(false); },
+    if (!this.policy.can('start_update').allowed) return;
+    this.confirm.confirm({
+      title: 'Запустити оновлення',
+      message: 'Система перейде в режим обслуговування: нові завдання чекатимуть, сервіси буде перезапущено. Продовжити?',
+    }).subscribe((ok) => {
+      if (!ok) return;
+      this.installing.set(true);
+      this.system.installUpdate().subscribe({
+        next: () => { this.installing.set(false); this.loadAll(); },
+        error: (err) => { this.error.set(err.message); this.installing.set(false); },
+      });
     });
   }
 
