@@ -44,7 +44,7 @@ def built_gpu_image(tmp_path):
         probe = '''import json,subprocess
 report=json.load(open('/opt/comfyui/runtime-inventory.json'))
 commits={name:subprocess.check_output(['git','-C',path,'rev-parse','HEAD'],text=True).strip()
- for name,path in [('comfyui','/opt/comfyui'),('ComfyUI-VideoHelperSuite','/opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite')]}
+ for name,path in [('comfyui','/opt/comfyui'),('ComfyUI-VideoHelperSuite','/opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite'),('ComfyUI_IPAdapter_plus','/opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus')]}
 print(json.dumps({'report':report,'checkouts':commits}))'''
         observed = json.loads(docker("run", "--rm", "--entrypoint", "python3", image, "-c", probe))
         for name, component in observed["report"]["components"].items():
