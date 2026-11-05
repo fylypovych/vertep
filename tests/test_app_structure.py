@@ -44,6 +44,11 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/workflow-execution/templates"],
         ["GET", "/api/workflow-execution/{job_id}"],
         ["POST", "/api/workflow-execution/{job_id}/action"],
+        ["GET", "/lab-lease/v1/status"],
+        ["POST", "/lab-lease/v1/lease/request"],
+        ["POST", "/lab-lease/v1/lease/heartbeat"],
+        ["POST", "/lab-lease/v1/lease/release"],
+        ["POST", "/lab-lease/v1/inference/api/{operation}"],
     ]
     assert after == sorted(before + execution)
 

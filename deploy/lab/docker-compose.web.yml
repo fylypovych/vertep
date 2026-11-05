@@ -11,9 +11,22 @@ services:
     environment:
       LAB_STATE_DIR: /var/lib/vertep-lab
       LAB_WORKSPACE: /var/lib/vertep-lab/workspace
-      LAB_IDLE_SHARING_ENABLED: "false"
+      LAB_POLICY_GATE_ACTIVE: "true"
+      LAB_IDLE_SHARING_ENABLED: ${LAB_IDLE_SHARING_ENABLED:-false}
+      LAB_RESOURCE_URL: ${LAB_RESOURCE_URL:-}
+      LAB_RESOURCE_TOKEN: ${LAB_RESOURCE_TOKEN:-}
+      LAB_OWNER_TOKEN: ${LAB_OWNER_TOKEN:-}
+      LAB_OWNER_IDENTITY: ${LAB_OWNER_IDENTITY:-owner}
+      LAB_GITHUB_TOKEN: ${LAB_GITHUB_TOKEN:-}
+      LAB_GITHUB_REPOSITORY: ${LAB_GITHUB_REPOSITORY:-}
+      LAB_ROLE_EXECUTOR_URL: ${LAB_ROLE_EXECUTOR_URL:-}
+      LAB_ROLE_EXECUTOR_ENABLED: ${LAB_ROLE_EXECUTOR_ENABLED:-false}
+      LAB_ROLE_EXECUTOR_TOKEN: ${LAB_ROLE_EXECUTOR_TOKEN:-}
+      LAB_ROLE_EXECUTOR_TIMEOUT_SECONDS: "600"
+      LAB_RESOURCE_CA_FILE: ${LAB_RESOURCE_CA_FILE:-}
     volumes:
       - lab-web-state:/var/lib/vertep-lab
+      - ${LAB_CA_DIR:-./ca}:/run/lab-ca:ro
     read_only: true
     tmpfs:
       - /tmp
@@ -25,6 +38,31 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    restart: unless-stopped
+    networks: [lab-web]
+
+  lab-executor:
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile
+    image: ghcr.io/fylypovych/vertep-lab-control:${VERSION:-dev}
+    command: ["uvicorn", "lab.role_service:create_app", "--factory", "--host", "0.0.0.0", "--port", "8100"]
+    environment:
+      LAB_RESOURCE_URL: ${LAB_RESOURCE_URL:-}
+      LAB_RESOURCE_TOKEN: ${LAB_RESOURCE_TOKEN:-}
+      LAB_RESOURCE_CA_FILE: ${LAB_RESOURCE_CA_FILE:-}
+      LAB_ROLE_EXECUTOR_TOKEN: ${LAB_ROLE_EXECUTOR_TOKEN:-}
+    volumes:
+      - lab-web-state:/var/lib/vertep-lab:ro
+      - ${LAB_CA_DIR:-./ca}:/run/lab-ca:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      lab-control:
+        condition: service_healthy
     restart: unless-stopped
     networks: [lab-web]
 

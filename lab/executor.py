@@ -142,4 +142,5 @@ def executor_from_environment(url: str = "", *, enabled: bool | None = None,
     endpoint = str(url or "").strip() or os.getenv("LAB_ROLE_EXECUTOR_URL", "").strip()
     if not endpoint:
         return None
+    timeout = float(os.getenv("LAB_ROLE_EXECUTOR_TIMEOUT_SECONDS", timeout))
     return EndpointRoleExecutor(endpoint, token=token, timeout=timeout, enabled=enabled)

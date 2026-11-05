@@ -24,6 +24,7 @@ from ..orchestration import (all_scenes_ready, cancel_scene, fail_scene,
 from ..security import _valid_worker_request
 from ..state import executor, store, task_queue
 from ..system_state import dispatch_allowed, get_system_state
+from .lab_lease import hold_gpu_for_laboratory
 from .job_helpers import (
     _enqueue_job_task,
     _finalize_and_notify,
@@ -59,6 +60,8 @@ def claim_task(payload: TaskClaim, request: Request):
     registered_worker = store.workers.get(payload.node_name)
     if not registered_worker:
         return {"task": None, "worker_state": "HEARTBEAT_REQUIRED"}
+    if hold_gpu_for_laboratory(registered_worker):
+        return {"task": None, "worker_state": "WAITING_FOR_LAB_RELEASE"}
     worker_data = dict(registered_worker)
     claim_metrics = payload.model_dump(exclude={"node_name", "capabilities"})
     worker_data.update(claim_metrics)

@@ -135,7 +135,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         password = os.getenv("ADMIN_PASSWORD", "")
         machine = ("/api/workers/heartbeat", "/api/tasks/claim", "/api/tasks/renew",
                    "/api/tasks/cancellations", "/api/tasks/result", "/api/logs/ingest",
-                   "/api/node/status")
+                   "/api/node/status", "/lab-lease/v1/")
         worker_input = request.method == "GET" and re.fullmatch(r"/api/tasks/[^/]+/(inputs|character-references)/.+", request.url.path)
         if worker_input or request.url.path.startswith(machine) or re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", request.url.path):
             # Machine routes validate and bind the token to node_name themselves.

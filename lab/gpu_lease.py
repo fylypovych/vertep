@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -267,7 +268,12 @@ class VertepResourceClient(ResourceProvider):
         # Fail-closed: idle sharing stays off until the owner enables it and the
         # real-GPU guarantees are proven (Issue #107, criterion 4).
         self.enabled = bool(enabled)
-        self._opener = opener or urllib.request.build_opener()
+        if opener is None:
+            # Vertep ships its own CA; a custom opener never skips verification.
+            ca_file = os.getenv("LAB_RESOURCE_CA_FILE", "").strip()
+            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(
+                context=ssl.create_default_context(cafile=ca_file or None)))
+        self._opener = opener
 
     # -- transport -------------------------------------------------------
     def _call(self, path: str, payload: dict | None = None) -> dict:

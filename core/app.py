@@ -13,6 +13,7 @@ from .api.models import router as models_router
 from .api.setup import router as setup_router
 from .api.jobs import router as jobs_router
 from .api.tasks import router as tasks_router
+from .api.lab_lease import router as lab_lease_router
 from .api.workers import router as workers_router
 from .api.nodes import router as nodes_router
 from .api.observability import router as observability_router
@@ -37,6 +38,7 @@ app.include_router(models_router)
 app.include_router(setup_router)
 app.include_router(jobs_router)
 app.include_router(tasks_router)
+app.include_router(lab_lease_router)
 app.include_router(workers_router)
 app.include_router(nodes_router)
 app.include_router(observability_router)

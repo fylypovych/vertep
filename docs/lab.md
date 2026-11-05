@@ -172,3 +172,19 @@ Web-панелі, тому обхід через CLI неможливий.
 5. Angular Web + CLI: перша версія реалізована (Етап 3.5), подальший scope
    макетів — лише за рішенням власника
 6. Перевірити production-priority при 24/7 роботі
+
+## Встановлення однією командою
+
+На окремій чистій Ubuntu Server 24.04 VM:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap-lab.sh | sudo bash
+```
+
+Скрипт ставить Docker, отримує код останнього релізу, створює `/opt/vertep-lab/lab.env` із токеном власника й запускає панель на `127.0.0.1:8444`. Спільний GPU лишається вимкненим.
+
+**Спільний GPU.** На CORE задати `LAB_IDLE_SHARING_ENABLED=true`, `LAB_LEASE_TOKEN`, `LAB_GPU_ENDPOINT` (Ollama, доступна з CORE, наприклад `http://ollama:11434`) і за потреби `LAB_GPU_FREE_URL` (`http://comfyui:8188/free`). Порти GPU-сервісів назовні не відкриваються: Lab викликає модель через `/lab-lease/v1/inference` лише з чинним дозволом, а відкликання перериває виклик.
+
+У `lab.env` задати `LAB_IDLE_SHARING_ENABLED=true`, `LAB_RESOURCE_URL=https://<core>/lab-lease/v1`, `LAB_RESOURCE_TOKEN` (те саме значення, що `LAB_LEASE_TOKEN`), а для власного сертифіката Vertep покласти його в `/opt/vertep-lab/ca/vertep-ca.pem` і задати `LAB_RESOURCE_CA_FILE=/run/lab-ca/vertep-ca.pem`. Потрібну модель заздалегідь встановити в Ollama. Вмикати лише після перевірки на реальному GPU (#329).
+
+Вбудований `lab-executor` виконує лише завдання звіту (аудит, перевірка, звіт): він не змінює код і не запускає тести. Інші завдання отримують `BLOCKED`.
