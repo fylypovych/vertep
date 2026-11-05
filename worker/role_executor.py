@@ -491,8 +491,32 @@ def execute_backup(task: dict) -> list[dict]:
                       json.dumps(receipt, sort_keys=True).encode("utf-8"))]
 
 
+def _fetch_character_references(task: dict) -> list[tuple[str, bytes]]:
+    """Pull the character's references from CORE and verify them before use."""
+    fetched = []
+    node_name = str(os.getenv("NODE_NAME") or os.getenv("WORKER_NAME") or "")
+    for entry in task.get("character_references") or []:
+        url = f"{_core_base_url()}/api/tasks/{task['task_id']}/character-references/{entry['filename']}"
+        response = httpx.get(url, headers=_worker_auth_headers(node_name), timeout=60)
+        if response.status_code != 200:
+            raise RuntimeError(f"CORE refused character reference {entry['filename']}: HTTP {response.status_code}")
+        if hashlib.sha256(response.content).hexdigest() != entry["sha256"]:
+            raise RuntimeError(f"Character reference {entry['filename']} does not match its digest")
+        fetched.append((entry["filename"], response.content))
+    return fetched
+
+
 def execute_image(task: dict) -> list[dict]:
     adapter = providers.compute()
+    references = _fetch_character_references(task)
+    if references:
+        real_generate = adapter.generate_output
+
+        class _WithReferences:
+            @staticmethod
+            def generate_output(workflow, prompt, kind="image"):
+                return real_generate(workflow, prompt, kind, references=references)
+        adapter = _WithReferences
     workflow = task.get("workflow") or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json")
     topic = task.get("topic") or task.get("prompt") or ""
     scenes = (task.get("script") or {}).get("scenes")

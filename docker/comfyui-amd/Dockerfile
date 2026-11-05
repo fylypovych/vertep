@@ -1,5 +1,6 @@
 FROM rocm/pytorch:rocm6.4.4_ubuntu24.04_py3.12_pytorch_release_2.7.1
 ARG COMFYUI_VERSION=v0.38.0
+ARG IPADAPTER_COMMIT=a0f451a5113cf9becb0847b92884cb10cbdec0ef
 ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
 # set -eux so a failed clone/install fails the build instead of being masked.
 RUN set -eux; \
@@ -7,7 +8,11 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl git; \
     rm -rf /var/lib/apt/lists/*; \
     git clone --depth 1 --branch "$COMFYUI_VERSION" https://github.com/Comfy-Org/ComfyUI.git /opt/comfyui; \
-    python3 -m pip install -r /opt/comfyui/requirements.txt
+    python3 -m pip install -r /opt/comfyui/requirements.txt; \
+    git init /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus; \
+    git -C /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus remote add origin https://github.com/cubiq/ComfyUI_IPAdapter_plus.git; \
+    git -C /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus fetch --depth 1 origin "$IPADAPTER_COMMIT"; \
+    git -C /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus checkout --detach FETCH_HEAD
 # Record the resolved commit so readiness checks can detect runtime drift.
 RUN set -eux; \
     python3 - "$COMFYUI_VERSION" <<'PY'

@@ -27,6 +27,35 @@ class PromptCancelledError(RuntimeError):
     """Raised when a prompt was cancelled and its (late) result must be discarded."""
 
 
+def apply_references(workflow: dict, names: list[str]) -> dict:
+    """Point the workflow's reference input at the uploaded images.
+
+    The input is a LoadImage node holding ``{{REFERENCE_IMAGE}}``. Further images are added
+    through ImageBatch. A workflow without that input fails: silently ignoring the
+    references would render a different character.
+    """
+    node_id = next((key for key, node in workflow.items()
+                    if node.get("inputs", {}).get("image") == "{{REFERENCE_IMAGE}}"), None)
+    if node_id is None:
+        raise RuntimeError("Workflow has no {{REFERENCE_IMAGE}} input for the character references")
+    workflow[node_id]["inputs"]["image"] = names[0]
+    output = node_id
+    for index, name in enumerate(names[1:], 1):
+        load, batch = f"ref_load_{index}", f"ref_batch_{index}"
+        workflow[load] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        workflow[batch] = {"class_type": "ImageBatch",
+                           "inputs": {"image1": [output, 0], "image2": [load, 0]}}
+        output = batch
+    if output != node_id:
+        for key, node in workflow.items():
+            if key.startswith(("ref_load_", "ref_batch_")):
+                continue
+            for field, value in node.get("inputs", {}).items():
+                if value == [node_id, 0]:
+                    node["inputs"][field] = [output, 0]
+    return workflow
+
+
 class ComfyUIAdapter:
     def __init__(self) -> None:
         self.current_prompt_id: str | None = None
@@ -70,7 +99,14 @@ class ComfyUIAdapter:
             raise RuntimeError("ComfyUI workflow did not return an image")
         return data, filename
 
-    def generate_output(self, workflow_path: str, topic: str, task_type: str = "image") -> tuple[bytes, str, str]:
+    def _upload_reference(self, name: str, data: bytes) -> str:
+        response = httpx.post(f"{os.getenv('COMFYUI_URL', 'http://localhost:8188')}/upload/image",
+                              files={"image": (name, data)}, data={"overwrite": "true"}, timeout=60)
+        response.raise_for_status()
+        return response.json()["name"]
+
+    def generate_output(self, workflow_path: str, topic: str, task_type: str = "image",
+                        references: list[tuple[str, bytes]] | None = None) -> tuple[bytes, str, str]:
         if os.getenv("DEMO_MODE", "true").lower() == "true":
             if task_type != "image":
                 raise RuntimeError("Demo mode has no synthetic video workflow")
@@ -103,7 +139,12 @@ class ComfyUIAdapter:
             "SEED": os.getenv("COMFYUI_SEED", "42"),
             "WIDTH": os.getenv("COMFYUI_WIDTH", "768"),
             "HEIGHT": os.getenv("COMFYUI_HEIGHT", "432"),
+            "IPADAPTER_MODEL": os.getenv("COMFYUI_IPADAPTER_MODEL", "ip-adapter-plus_sdxl_vit-h.safetensors"),
+            "CLIP_VISION_MODEL": os.getenv("COMFYUI_CLIP_VISION_MODEL", "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"),
         })
+        if references:
+            workflow = apply_references(
+                workflow, [self._upload_reference(name, data) for name, data in references])
         submitted = self.submit(workflow)
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:

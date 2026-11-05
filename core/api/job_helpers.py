@@ -808,7 +808,26 @@ def _task_for(job, scene=None) -> dict:
         "topic": job.topic,
         "script": script,
         "task_id": task_id,
-        "scene_id": scene_id}
+        "scene_id": scene_id,
+        **reference_task_fields(job.character_id, workflow, job.task_type)}
+
+
+def reference_task_fields(character_id: str, workflow: str, task_type: str) -> dict:
+    """Attach the character's references to its image tasks by default.
+
+    A character with references must not be rendered by the plain default workflow, which
+    has no image input; a workflow chosen explicitly is kept and checked on the worker.
+    """
+    if task_type != "image":
+        return {}
+    from ..character_references import list_references
+    references = list_references(character_id)
+    if not references:
+        return {}
+    if workflow == "workflows/image/demo.json":
+        workflow = os.getenv("COMFYUI_REFERENCE_WORKFLOW", "workflows/image/ip-adapter.json")
+    return {"workflow": workflow, "character_references": [
+        {"filename": item["filename"], "sha256": item["sha256"]} for item in references]}
 
 
 def _validate_workflow_reference(reference: str | None, task_type: str) -> str:

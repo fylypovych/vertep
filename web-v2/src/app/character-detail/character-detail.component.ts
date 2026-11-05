@@ -2,7 +2,7 @@ import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/cor
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule, ActivatedRoute, Router } from '@angular/router';
-import { ResourcesApiService } from '../core/api/resources.api';
+import { CharacterReference, ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { PolicyService } from '../core/services/policy.service';
@@ -98,6 +98,23 @@ import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGen
               </div>
             </div>
           </div>
+          <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="character-references">
+            <h3 class="text-sm font-medium text-slate-500 mb-1">Референси персонажа</h3>
+            @if (isEdit) {
+              <p class="text-sm text-slate-500 mb-3">Зразки зовнішності. Вони автоматично використовуються в кожній генерації зображень цього персонажа. До 5 файлів PNG, JPEG або WebP, кожен до 10 МБ.</p>
+              <div class="flex flex-wrap gap-3 mb-3">
+                @for (item of references(); track item.filename) {
+                  <div class="relative w-24 h-24" data-testid="character-reference">
+                    <img [src]="resources.characterReferenceUrl(formId, item.filename)" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
+                    <button type="button" (click)="deleteReference(item.filename)" aria-label="Видалити референс" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
+                  </div>
+                }
+              </div>
+              <input type="file" accept="image/png,image/jpeg,image/webp" multiple data-testid="character-reference-input" (change)="uploadReferences($event)">
+            } @else {
+              <p class="text-sm text-slate-500">Збережіть персонажа, після цього можна буде додати референси.</p>
+            }
+          </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
             <h3 class="text-sm font-medium text-slate-500 mb-3">Візуальний стиль</h3>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -189,6 +206,7 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   workflow = '';
   systemPrompt = '';
   voice: CharacterVoice = { provider: 'none', voice: '' };
+  references = signal<CharacterReference[]>([]);
   visual: CharacterVisual = { style: '', aspect_ratio: '16:9', output_preset: 'youtube' };
   generation: CharacterGeneration = { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 };
   publishing: CharacterPublishing = { enabled: false, channels: '' };
@@ -211,7 +229,7 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    private resources: ResourcesApiService,
+    readonly resources: ResourcesApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
     public policy: PolicyService,
@@ -227,7 +245,30 @@ export class CharacterDetailComponent implements OnInit, CanComponentDeactivate 
     if (id) { this.isEdit = true; this.loadCharacter(id); } else { this.loading.set(false); }
   }
 
+  loadReferences(id: string): void {
+    this.resources.characterReferences(id).subscribe({ next: (items) => this.references.set(items), error: () => {} });
+  }
+
+  uploadReferences(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    for (const file of Array.from(input.files ?? [])) {
+      this.resources.uploadCharacterReference(this.formId, file).subscribe({
+        next: () => this.loadReferences(this.formId),
+        error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося завантажити зображення', 'error'),
+      });
+    }
+    input.value = '';
+  }
+
+  deleteReference(name: string): void {
+    this.resources.deleteCharacterReference(this.formId, name).subscribe({
+      next: () => this.loadReferences(this.formId),
+      error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося видалити зображення', 'error'),
+    });
+  }
+
   loadCharacter(id: string): void {
+    this.loadReferences(id);
     this.loading.set(true);
     this.error.set(null);
     this.resources.character(id).subscribe({

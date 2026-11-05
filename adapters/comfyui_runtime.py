@@ -45,6 +45,7 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 PINNED_COMPONENTS: dict[str, str] = {
     "COMFYUI_COMMIT": "comfyui",
     "VHS_COMMIT": "ComfyUI-VideoHelperSuite",
+    "IPADAPTER_COMMIT": "ComfyUI_IPAdapter_plus",
 }
 
 

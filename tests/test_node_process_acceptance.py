@@ -167,6 +167,8 @@ def test_setup_browser_deployment_manifest_enrollment_and_reload(config_contour,
             page.locator("#next").click(); page.locator("#next").click(); page.locator("#next").click()
             page.locator("#backend").select_option("skip")
             page.locator("#next").click()
+            expect(page.locator("#telegramAdmins")).to_be_visible()
+            page.locator("#next").click()
             expect(page.locator("#health")).to_contain_text("OFFLINE", timeout=15000)
             expect(page.locator("#next")).to_be_disabled()
             node_dependencies["fault"].unlink()

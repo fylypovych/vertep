@@ -6,6 +6,7 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 # its pin fails instead of silently shipping a drifted runtime.
 ARG COMFYUI_COMMIT=6b747c0428c343e1417219641db93a4fb7cb69ae
 ARG VHS_COMMIT=4d907bee61e92c2e65af3bd6383a4e4d356126d1
+ARG IPADAPTER_COMMIT=a0f451a5113cf9becb0847b92884cb10cbdec0ef
 ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
 # Every step below must succeed: a masked install failure used to produce an image
 # that reported itself ready while missing ComfyUI or its custom nodes.
@@ -20,7 +21,11 @@ RUN set -eux; \
     git init /opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite; \
     git -C /opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite remote add origin https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git; \
     git -C /opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite fetch --depth 1 origin "$VHS_COMMIT"; \
-    git -C /opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite checkout --detach FETCH_HEAD
+    git -C /opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite checkout --detach FETCH_HEAD; \
+    git init /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus; \
+    git -C /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus remote add origin https://github.com/cubiq/ComfyUI_IPAdapter_plus.git; \
+    git -C /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus fetch --depth 1 origin "$IPADAPTER_COMMIT"; \
+    git -C /opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus checkout --detach FETCH_HEAD
 RUN set -eux; \
     python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu124 torch torchvision torchaudio; \
     python3 -m pip install -r /opt/comfyui/requirements.txt; \
@@ -28,16 +33,19 @@ RUN set -eux; \
 # Record what the image was actually built from *and* prove it equals the pin, so
 # the node can verify its own runtime instead of trusting the build arguments.
 RUN set -eux; \
-    python3 - "$COMFYUI_COMMIT" "$VHS_COMMIT" <<'PY'
+    python3 - "$COMFYUI_COMMIT" "$VHS_COMMIT" "$IPADAPTER_COMMIT" <<'PY'
 import json, subprocess, sys
 
 def commit(path):
     return subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], check=True,
                           capture_output=True, text=True).stdout.strip()
 
-comfyui_pin, vhs_pin = sys.argv[1], sys.argv[2]
+comfyui_pin, vhs_pin, ipadapter_pin = sys.argv[1], sys.argv[2], sys.argv[3]
 comfyui_commit = commit("/opt/comfyui")
 vhs_commit = commit("/opt/comfyui/custom_nodes/ComfyUI-VideoHelperSuite")
+ipadapter_commit = commit("/opt/comfyui/custom_nodes/ComfyUI_IPAdapter_plus")
+if ipadapter_commit != ipadapter_pin:
+    raise SystemExit(f"runtime build pin mismatch: ipadapter {ipadapter_commit} != {ipadapter_pin}")
 if comfyui_commit != comfyui_pin or vhs_commit != vhs_pin:
     raise SystemExit(
         f"runtime build pin mismatch: comfyui {comfyui_commit} != {comfyui_pin}, "
@@ -47,6 +55,7 @@ report = {
     "components": {
         "comfyui": {"version": comfyui_pin, "commit": comfyui_commit},
         "ComfyUI-VideoHelperSuite": {"version": vhs_pin, "commit": vhs_commit},
+        "ComfyUI_IPAdapter_plus": {"version": ipadapter_pin, "commit": ipadapter_commit},
     },
 }
 with open("/opt/comfyui/runtime-inventory.json", "w", encoding="utf-8") as handle:

@@ -5,7 +5,8 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from ..configuration import (BrandConfig, CharacterConfig, SAFE_ID, load_character,
                             read_json, save_character)
@@ -47,6 +48,49 @@ def get_character(character_id: str):
         return load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
     except Exception as error:
         raise HTTPException(404, f"Character not found or invalid: {error}") from error
+
+
+def _reference_owner(character_id: str) -> str:
+    if not SAFE_ID.fullmatch(character_id):
+        raise HTTPException(400, "Invalid character ID")
+    if not (Path(os.getenv("CHARACTERS_ROOT", "characters")) / character_id).is_dir():
+        raise HTTPException(404, "Character not found")
+    return character_id
+
+
+@router.get("/api/characters/{character_id}/references")
+def character_references(character_id: str):
+    from ..character_references import list_references
+    return list_references(_reference_owner(character_id))
+
+
+@router.post("/api/characters/{character_id}/references")
+async def upload_character_reference(character_id: str, request: Request):
+    from ..character_references import save_reference
+    owner = _reference_owner(character_id)
+    try:
+        return save_reference(owner, await request.body())
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@router.get("/api/characters/{character_id}/references/{filename}")
+def character_reference_file(character_id: str, filename: str):
+    from ..character_references import reference_path
+    path = reference_path(_reference_owner(character_id), filename)
+    if path is None:
+        raise HTTPException(404, "Reference not found")
+    return FileResponse(path)
+
+
+@router.delete("/api/characters/{character_id}/references/{filename}")
+def delete_character_reference(character_id: str, filename: str):
+    from ..character_references import reference_path
+    path = reference_path(_reference_owner(character_id), filename)
+    if path is None:
+        raise HTTPException(404, "Reference not found")
+    path.unlink()
+    return {"deleted": filename}
 
 
 @router.put("/api/characters/{character_id}")

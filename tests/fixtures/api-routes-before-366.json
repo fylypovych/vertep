@@ -13,6 +13,10 @@
   ],
   [
     "DELETE",
+    "/api/characters/{character_id}/references/{filename}"
+  ],
+  [
+    "DELETE",
     "/api/jobs/{job_id}"
   ],
   [
@@ -70,6 +74,14 @@
   [
     "GET",
     "/api/characters/{character_id}"
+  ],
+  [
+    "GET",
+    "/api/characters/{character_id}/references"
+  ],
+  [
+    "GET",
+    "/api/characters/{character_id}/references/{filename}"
   ],
   [
     "GET",
@@ -293,6 +305,10 @@
   ],
   [
     "GET",
+    "/api/tasks/{task_id}/character-references/{filename}"
+  ],
+  [
+    "GET",
     "/api/tasks/{task_id}/inputs/{reference:path}"
   ],
   [
@@ -410,6 +426,10 @@
   [
     "POST",
     "/api/characters"
+  ],
+  [
+    "POST",
+    "/api/characters/{character_id}/references"
   ],
   [
     "POST",

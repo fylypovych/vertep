@@ -5,11 +5,17 @@ import { catchError, map } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
 import { Character, Brand, Channel, Workflow, BrandCreateDTO, BrandUpdateDTO, ChannelCreateDTO, ChannelUpdateDTO, WorkflowSaveResponse, WorkflowDeleteResponse } from '../models';
 
+export interface CharacterReference { filename: string; sha256: string; size: number; }
+
 @Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}
   characters = (): Observable<Character[]> => this.http.get<Character[]>(`${this.base.url}/characters`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  characterReferences = (id: string): Observable<CharacterReference[]> => this.http.get<CharacterReference[]>(`${this.base.url}/characters/${encodeURIComponent(id)}/references`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  uploadCharacterReference = (id: string, file: File): Observable<CharacterReference> => this.http.post<CharacterReference>(`${this.base.url}/characters/${encodeURIComponent(id)}/references`, file).pipe(catchError(this.base.handleError));
+  deleteCharacterReference = (id: string, name: string): Observable<unknown> => this.http.delete(`${this.base.url}/characters/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  characterReferenceUrl = (id: string, name: string): string => `${this.base.url}/characters/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}`;
   character = (id: string): Observable<Character> => this.http.get<Character>(`${this.base.url}/characters/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   createCharacter = (p: Character): Observable<Character> => this.http.post<Character>(`${this.base.url}/characters`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   updateCharacter = (id: string, p: Character): Observable<Character> => this.http.put<Character>(`${this.base.url}/characters/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));

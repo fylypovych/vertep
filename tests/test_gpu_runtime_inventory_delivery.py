@@ -46,7 +46,7 @@ def _load_script(name: str):
 def _dockerfile_pins() -> dict[str, str]:
     text = DOCKERFILE.read_text(encoding="utf-8")
     pins = {}
-    for argument in ("COMFYUI_COMMIT", "VHS_COMMIT"):
+    for argument in ("COMFYUI_COMMIT", "VHS_COMMIT", "IPADAPTER_COMMIT"):
         match = re.search(rf"^ARG {argument}=([0-9a-f]{{40}})$", text, re.MULTILINE)
         assert match, f"{argument} must be pinned by an immutable commit"
         pins[argument] = match.group(1)
@@ -197,6 +197,7 @@ def test_the_generated_inventory_makes_the_gpu_node_ready(monkeypatch, tmp_path)
     components = {
         "comfyui": {"version": pins["COMFYUI_COMMIT"], "commit": pins["COMFYUI_COMMIT"]},
         "ComfyUI-VideoHelperSuite": {"version": pins["VHS_COMMIT"], "commit": pins["VHS_COMMIT"]},
+        "ComfyUI_IPAdapter_plus": {"version": pins["IPADAPTER_COMMIT"], "commit": pins["IPADAPTER_COMMIT"]},
     }
     inventory = expected_inventory_from_dockerfile(
         DOCKERFILE.read_text(encoding="utf-8"),
@@ -218,6 +219,7 @@ def test_a_drifted_observed_report_keeps_the_gpu_node_out_of_dispatch(monkeypatc
     components = {
         "comfyui": {"version": pins["COMFYUI_COMMIT"], "commit": pins["COMFYUI_COMMIT"]},
         "ComfyUI-VideoHelperSuite": {"version": pins["VHS_COMMIT"], "commit": pins["VHS_COMMIT"]},
+        "ComfyUI_IPAdapter_plus": {"version": pins["IPADAPTER_COMMIT"], "commit": pins["IPADAPTER_COMMIT"]},
     }
     inventory = expected_inventory_from_dockerfile(
         DOCKERFILE.read_text(encoding="utf-8"),
@@ -242,6 +244,7 @@ def test_a_tampered_workflow_keeps_the_gpu_node_out_of_dispatch(monkeypatch, tmp
     components = {
         "comfyui": {"version": pins["COMFYUI_COMMIT"], "commit": pins["COMFYUI_COMMIT"]},
         "ComfyUI-VideoHelperSuite": {"version": pins["VHS_COMMIT"], "commit": pins["VHS_COMMIT"]},
+        "ComfyUI_IPAdapter_plus": {"version": pins["IPADAPTER_COMMIT"], "commit": pins["IPADAPTER_COMMIT"]},
     }
     workflows = _workflow_root(tmp_path)
     _models_root(tmp_path)

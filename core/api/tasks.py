@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 
+from fastapi.responses import FileResponse
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..artifacts import register_artifact
@@ -395,6 +396,23 @@ def _approved_input_references(snapshot: dict) -> set[str]:
         if reference:
             references.add(reference)
     return references
+
+
+@router.get("/api/tasks/{task_id}/character-references/{filename}")
+def task_character_reference(task_id: str, filename: str, request: Request):
+    """Serve a character reference to the node currently running that character's task."""
+    from ..character_references import reference_path
+    node_name = request.headers.get("x-vertep-node", "")
+    if not node_name or not _valid_worker_request(node_name, request):
+        raise HTTPException(401, "Token is not valid for this worker")
+    worker = store.workers.get(node_name) or {}
+    job = store.jobs.get(worker.get("current_job") or "")
+    if worker.get("current_task") != task_id or job is None:
+        raise HTTPException(409, "Task is no longer owned by this worker")
+    path = reference_path(job.character_id, filename)
+    if path is None:
+        raise HTTPException(404, "Reference not found")
+    return FileResponse(path)
 
 
 @router.get("/api/tasks/{task_id}/inputs/{reference:path}")
