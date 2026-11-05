@@ -36,6 +36,8 @@ def _job() -> Job:
 ])
 def test_service_selection_matches_in_process_selection(monkeypatch, worker, task_type, min_vram_mb, expected):
     monkeypatch.delenv("REQUIRE_WORKER_SELF_TEST", raising=False)
+    # Parametrized at collection: refresh the heartbeat or a long run makes the worker stale.
+    worker = {**worker, "last_seen": datetime.now(timezone.utc).isoformat()}
     client = TestClient(app)
     monkeypatch.setattr(job_helpers.httpx, "post",
                         lambda url, json, timeout: client.post("/select", json=json))

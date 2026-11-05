@@ -653,6 +653,7 @@ NODE_NAME=$(hostname -s | tr '[:upper:]_' '[:lower:]-')
 CORE_URL=${VERTEP_CORE_URL:-}
 REGISTRATION_TOKEN=${VERTEP_NODE_TOKEN:-}
 CORE_CA_PATH=
+DEMO_MODE=false
 SETUP_TOKEN_HASH=$setup_token_hash
 SETUP_TOKEN_EXPIRES_AT=$setup_token_expires_at
 COOKIE_SECURE=true

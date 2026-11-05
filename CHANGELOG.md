@@ -1,3 +1,7 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.28
+- Встановлення: `bootstrap.sh` записує `DEMO_MODE=false`, тому нова установка виконує реальну генерацію замість заглушок. Наявні установки отримають це після повторного запуску bootstrap або ручної зміни `.env`.
+- Тести: `tests/test_dispatcher_service_contract.py` оновлює `last_seen` під час виконання; раніше у повному наборі вузол вважався застарілим і CI падав. `tests/test_bootstrap_wizard.py` перевіряє вимкнення демо-режиму.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.27
 - Dispatcher: сервіс вибору worker приймає й застосовує `task_type`, `min_vram_mb`, `voice_requirements`; у штатній конфігурації з `DISPATCHER_URL` спеціалізовані вузли знову отримують свої задачі, а непридатні не обираються.
 - `deploy/docker-compose.yml`: контейнер `dispatcher` отримав `REQUIRE_WORKER_SELF_TEST=true`, тому вузол без чинного self-test не обирається.

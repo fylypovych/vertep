@@ -20,6 +20,10 @@ ROOT = Path(__file__).parents[1]
 # ── Bootstrap script structure ───────────────────────────────────────
 
 class TestBootstrapPreflight:
+    def test_bootstrap_turns_demo_mode_off(self):
+        bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "\nDEMO_MODE=false\n" in bs
+
     def test_bootstrap_requires_root(self):
         bs = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
         assert "EUID" in bs or "id -u" in bs
