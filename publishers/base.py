@@ -39,6 +39,12 @@ def check_response(response) -> None:
     )
 
 
+def publisher_mock_enabled() -> bool:
+    """Mock publication exists only in demo mode: production must never fake a post."""
+    return (os.getenv("PUBLISHER_MOCK", "false").lower() == "true"
+            and os.getenv("DEMO_MODE", "true").lower() == "true")
+
+
 def _mock_receipt(channel: str, video_path: str, metadata: dict) -> dict:
     publication_id = f"mock-{uuid.uuid4().hex[:12]}"
     return {
@@ -66,7 +72,7 @@ class Publisher:
         self.transport = transport or HttpTransport()
 
     def configured(self) -> bool:
-        mock = os.getenv("PUBLISHER_MOCK", "false").lower() == "true"
+        mock = publisher_mock_enabled()
         from publishers.oauth import _get_secret
         provider = self._token_provider()
         return mock or bool(_get_secret(self.credential_env)) or bool(provider and provider.refresh_token())
@@ -81,7 +87,7 @@ class Publisher:
 
     def ready(self, metadata: dict | None = None) -> bool:
         """Return True when credentials are present and (if OAuth) a token is available."""
-        if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
+        if publisher_mock_enabled():
             return True
         if not self.configured():
             return False
@@ -153,7 +159,7 @@ class Publisher:
                 "error": f"{self.credential_env} is missing",
             }
         missing_identifier = self._missing_identifier(metadata)
-        if missing_identifier and os.getenv("PUBLISHER_MOCK", "false").lower() != "true":
+        if missing_identifier and not publisher_mock_enabled():
             return {"channel": self.channel, "status": "FAILED", "retryable": False,
                     "error": f"{missing_identifier} is required for publishing"}
         # Issue #167.2: unsuitable credentials (missing OAuth scopes) block upload
@@ -170,7 +176,7 @@ class Publisher:
                 "status": "NOT_CONFIGURED",
                 "error": "Credentials not ready",
             }
-        if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
+        if publisher_mock_enabled():
             return _mock_receipt(self.channel, video_path, metadata)
         try:
             return self._publish_live(video_path, metadata)

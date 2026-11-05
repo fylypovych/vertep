@@ -1,3 +1,14 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.35
+- Worker: після 404/409 результату чи renew задача скасовується, heartbeat і claim тривають.
+- Scheduler: `_job_is_due` не блокує event loop; збій scheduler не зупиняє job; одна постановка job у пул; `SCRIPTING` відновлюється після рестарту.
+- Job: завдання `video` без workflow завершується зрозумілою помилкою; застаріле посилання не відтворює видалений job.
+- Оновлення: watchdog і startup recovery беруть compose активного релізу; `NORMAL` після rollback лише після перевірки здоров'я; перервані `RESTARTING` і `VERIFYING` відкочуються; startup recovery враховує стан у PostgreSQL.
+- Web: 5xx сесії не веде на login; policy оновлюється таймером; дії job враховують policy; помилка дає одне повідомлення; прогрес оновлення опитується; дії canary мають підтвердження.
+- Персонажі: блок референсів у вікні створення й редагування на сторінці `/characters`.
+- Publisher: mock працює лише в demo-режимі; CORE поза demo відхиляє mock-receipt; TikTok і Threads не подають синтетичний URL.
+- Telegram: статус показує фактичні вузли й jobs; dispatcher перевіряється через `/health`; `send_message` без токена позначається як недоставлене.
+- Звіт #122 узгоджено з рішенням #321; із блоку `core` у compose прибрано застарілі `BACKUP_*_CMD`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.34
 - CI: MoneyPrinter розділено на завдання `moneyprinter-pinned-image`, `-media`, `-lifecycle` і підсумковий `moneyprinter-pinned-runtime`; усі докази одного SHA використовують один образ.
 - CI: тести rollout винесено з `fleet-persistence-runtime-acceptance` у паралельне завдання `fleet-rollout-acceptance`, його артефакт входить у звіт критеріїв.

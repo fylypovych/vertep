@@ -90,7 +90,9 @@ class TikTokPublisher(Publisher):
             "status": "PUBLISHED",
             "id": publish_id,
             "remote_id": publish_id,
-            "url": f"https://www.tiktok.com/@user/video/{publish_id}",
+            # The API returns no public address here; the post id is in remote_id.
+            "url": "",
+            "permalink_available": False,
             "upload": {
                 "mode": "content-posting-api",
                 "bytes": size,

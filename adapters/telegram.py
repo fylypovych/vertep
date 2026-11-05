@@ -59,6 +59,12 @@ def _fsync_directory(path) -> bool:
     return True
 
 
+def _not_delivered() -> dict:
+    """Nothing reached Telegram: callers and logs must not read this as a delivery."""
+    logger.warning("Telegram message was not delivered: TELEGRAM_BOT_TOKEN is not configured")
+    return {"status": "STUB", "delivered": False, "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+
+
 class TelegramAdapter:
     def __init__(self) -> None:
         self.token = _integration_secret("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
@@ -70,7 +76,7 @@ class TelegramAdapter:
 
     def send_message(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict:
         if not self.configured():
-            return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+            return _not_delivered()
         text = _redact(text)
         last_error = None
         for attempt in range(int(os.getenv("TELEGRAM_RETRIES", "3"))):
@@ -136,7 +142,7 @@ class TelegramAdapter:
 
     def answer_callback(self, callback_query_id: str, text: str) -> dict:
         if not self.configured():
-            return {"status": "STUB"}
+            return _not_delivered()
         response = httpx.post(f"{self.base_url}/answerCallbackQuery",
                               json={"callback_query_id": callback_query_id, "text": text}, timeout=20)
         response.raise_for_status()
@@ -144,7 +150,7 @@ class TelegramAdapter:
 
     def send_video(self, chat_id: str, video_path: str, caption: str = "") -> dict:
         if not self.configured():
-            return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+            return _not_delivered()
         with open(video_path, "rb") as video_file:
             response = httpx.post(f"{self.base_url}/sendVideo",
                                   data={"chat_id": chat_id, "caption": _redact(caption[:1024])},
@@ -155,7 +161,7 @@ class TelegramAdapter:
     def send_photo(self, chat_id: str, photo_path: str, caption: str = "",
                    reply_markup: dict | None = None) -> dict:
         if not self.configured():
-            return {"status": "STUB", "reason": "TELEGRAM_BOT_TOKEN is not configured"}
+            return _not_delivered()
         data = {"chat_id": chat_id, "caption": _redact(caption[:1024])}
         if reply_markup:
             data["reply_markup"] = reply_markup

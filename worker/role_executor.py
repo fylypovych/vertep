@@ -388,7 +388,8 @@ def execute_publisher(task: dict) -> list[dict]:
                           json.dumps(receipt, sort_keys=True).encode("utf-8"))]
     if cached_receipt and cached_receipt.get("status") == "PUBLISHED":
         return receipt_artifact(cached_receipt)
-    if os.getenv("PUBLISHER_MOCK", "false").lower() == "true":
+    from publishers.base import publisher_mock_enabled
+    if publisher_mock_enabled():
         receipt = {
             "channel": channel, "status": "PUBLISHED",
             "id": f"mock-{uuid.uuid4().hex[:12]}",
@@ -540,29 +541,13 @@ def execute_video(task: dict) -> list[dict]:
     adapter = providers.compute()
     workflow = task.get("workflow") or os.getenv("COMFYUI_DEFAULT_VIDEO_WORKFLOW", "")
     topic = task.get("topic") or task.get("prompt") or ""
-    if workflow:
-        try:
-            data, filename, kind = migration_external(("compute", workflow, topic, "video"), lambda: adapter.generate_output(workflow, topic, "video"))
-            if kind != "video":
-                raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
-            return [_media_artifact(filename, "video", data, workflow=workflow, task_type="video")]
-        except RuntimeError as error:
-            if "no synthetic video workflow" not in str(error):
-                raise
-    scenes = (task.get("script") or {}).get("scenes") or [{"prompt": topic}]
-    artifacts = []
-    for index, scene in enumerate(scenes, 1):
-        scene_workflow = (task.get("workflow")
-                          or os.getenv("COMFYUI_DEFAULT_WORKFLOW", "workflows/image/demo.json"))
-        prompt = scene.get("prompt") or topic
-        scene_data, scene_filename, kind = migration_external(("compute", scene_workflow, prompt, "image"),
-            lambda: adapter.generate_output(scene_workflow, prompt, "image"))
-        if kind != "image":
-            raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
-        artifacts.append(_media_artifact(f"scene-{index:03d}{Path(scene_filename).suffix or '.png'}",
-                                        "image", scene_data, workflow=scene_workflow,
-                                        task_type="video"))
-    return artifacts
+    if not workflow:
+        # CORE accepts only real video here, so still frames could never pass.
+        raise RuntimeError("Відео-workflow не налаштовано: задайте workflow або COMFYUI_DEFAULT_VIDEO_WORKFLOW")
+    data, filename, kind = migration_external(("compute", workflow, topic, "video"), lambda: adapter.generate_output(workflow, topic, "video"))
+    if kind != "video":
+        raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
+    return [_media_artifact(filename, "video", data, workflow=workflow, task_type="video")]
 
 
 def execute_assembly(task: dict) -> list[dict]:

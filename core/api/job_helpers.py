@@ -5,6 +5,7 @@ Business helpers (no route registration) used by ``core.api.jobs``,
 and the watchdog.  Extracted from ``core.app.py`` so the job domain can live in
 dedicated router modules instead of one large file.
 """
+import logging
 import base64
 import binascii
 import hashlib
@@ -66,6 +67,9 @@ def _serialize_job_result(function):
     return locked
 
 
+logger = logging.getLogger(__name__)
+
+
 def _job_is_due(job) -> bool:
     scheduler_url = os.getenv("SCHEDULER_URL", "").rstrip("/")
     if scheduler_url:
@@ -80,8 +84,9 @@ def _job_is_due(job) -> bool:
                 timeout=3)
             response.raise_for_status()
             return bool(response.json().get("jobs"))
-        except (httpx.HTTPError, ValueError):
-            return False
+        except (httpx.HTTPError, ValueError, AttributeError):
+            # An unavailable scheduler must not stop due jobs: the rule is local too.
+            logger.warning("Scheduler unavailable; using the local due check")
     if not job.scheduled_for:
         return True
     try:
@@ -1426,6 +1431,12 @@ def _publish_local(job_store, job, channel: str) -> dict:
     return result
 
 
+def _is_mock_receipt(receipt: dict) -> bool:
+    upload = receipt.get("upload")
+    mode = str(upload.get("mode") or "") if isinstance(upload, dict) else ""
+    return mode.startswith("mock") or "example.invalid" in str(receipt.get("url") or "")
+
+
 def _validate_publication_receipt(
         receipt: dict, expected_channel: str) -> tuple[bool, str | None]:
     """Validate a publication receipt schema and channel match.
@@ -1450,8 +1461,12 @@ def _validate_publication_receipt(
     if status == "PUBLISHED":
         if not receipt.get("remote_id"):
             return False, "PUBLISHED receipt must have remote_id"
-        if not receipt.get("url"):
+        # A platform may confirm a post without returning its public address; the
+        # adapter then says so explicitly instead of inventing a link.
+        if not receipt.get("url") and receipt.get("permalink_available") is not False:
             return False, "PUBLISHED receipt must have url"
+        if os.getenv("DEMO_MODE", "true").lower() != "true" and _is_mock_receipt(receipt):
+            return False, "Mock publication receipt is not accepted outside demo mode"
     elif status in {"FAILED", "NOT_CONFIGURED"}:
         if not receipt.get("error"):
             return False, f"{status} receipt must have error"

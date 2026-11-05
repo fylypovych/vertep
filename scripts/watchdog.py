@@ -21,6 +21,21 @@ def run(cmd: list[str], **kwargs) -> str:
         return f"ERROR: {error}"
 
 
+def compose_command(root: Path) -> list[str]:
+    """Same selection as scripts/vertep: the active release owns the compose files."""
+    release = root / "current" if (root / "current").is_symlink() else root
+    compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(release / "docker-compose.yml")]
+    try:
+        environment = (root / ".env").read_text(encoding="utf-8")
+    except OSError:
+        environment = ""
+    if "GPU_VENDOR=amd" in environment and (release / "docker-compose.amd.yml").is_file():
+        compose.extend(["-f", str(release / "docker-compose.amd.yml")])
+    if "GPU_VENDOR=nvidia" in environment and (release / "docker-compose.nvidia.yml").is_file():
+        compose.extend(["-f", str(release / "docker-compose.nvidia.yml")])
+    return compose
+
+
 def check_role() -> str:
     try:
         return Path(os.getenv("NODE_ROLE_FILE", "/etc/vertep/node.conf")).read_text(encoding="utf-8").split("ROLE=", 1)[1].splitlines()[0].strip()
@@ -30,15 +45,7 @@ def check_role() -> str:
 
 def check_containers(role: str) -> dict:
     root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
-    compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml")]
-    try:
-        environment = (root / ".env").read_text(encoding="utf-8")
-    except OSError:
-        environment = ""
-    if "GPU_VENDOR=amd" in environment and (root / "docker-compose.amd.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.amd.yml")])
-    if "GPU_VENDOR=nvidia" in environment and (root / "docker-compose.nvidia.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
+    compose = compose_command(root)
     required = {"core": ["core", "postgres", "redis"],
                 "gpu": ["worker"],
                 "text": ["worker", "ollama"],
@@ -88,15 +95,7 @@ def update_in_progress() -> bool:
 
 def restart_containers(role: str) -> str:
     root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
-    compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml")]
-    try:
-        environment = (root / ".env").read_text(encoding="utf-8")
-    except OSError:
-        environment = ""
-    if "GPU_VENDOR=amd" in environment and (root / "docker-compose.amd.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.amd.yml")])
-    if "GPU_VENDOR=nvidia" in environment and (root / "docker-compose.nvidia.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
+    compose = compose_command(root)
     services = {"core": ["core", "postgres", "redis"],
                 "gpu": ["worker"],
                 "text": ["worker", "ollama"],

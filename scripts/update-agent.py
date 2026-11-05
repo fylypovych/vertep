@@ -432,10 +432,33 @@ def _has_interrupt_evidence(state_dir: Path) -> bool:
     return False
 
 
+def verify_restored_release() -> None:
+    """A rollback ends in NORMAL only after CORE answers its health check again."""
+    deadline = time.monotonic() + float(os.getenv("UPDATE_ROLLBACK_HEALTH_TIMEOUT_SECONDS", "300"))
+    while True:
+        try:
+            core_json("/api/health")
+            return
+        except (OSError, ValueError) as error:  # URLError and HTTPError are OSError
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Restored release is not healthy: {error}") from error
+        time.sleep(float(os.getenv("UPDATE_ROLLBACK_HEALTH_POLL_SECONDS", "5")))
+
+
 def _attempt_rollback(root: Path, state_dir: Path, state: dict) -> None:
     """Shared rollback logic for interrupted update recovery."""
     output = run(host_command(root, "rollback"), root)
     state["log"].extend(output.splitlines()[-100:])
+    try:
+        verify_restored_release()
+    except RuntimeError as error:
+        from core.system_state import SystemState
+        state.update({"state": "FAILED", "phase": "EMERGENCY", "message": str(error),
+                      "updated_at": now()})
+        _record_system_state(state, SystemState.EMERGENCY, "Rolled back release is not healthy",
+                             state.get("request_id"), state_dir)
+        atomic_json(state_dir / "status.json", state)
+        return
     state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "message": "Rollback completed",
                   "updated_at": now()})
     atomic_json(state_dir / "status.json", state)
@@ -491,6 +514,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                 output = run_fenced(host_command(root, "rollback"), root, state_dir, lease,
                                     {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
                 state["log"].extend(output.splitlines()[-100:])
+                verify_restored_release()
                 state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
                               "message": "Previous release restored", "updated_at": now()})
                 set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
@@ -582,6 +606,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                         host_command(root, "rollback"), root, state_dir, lease,
                         {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")}
                     ).splitlines()[-100:])
+                    verify_restored_release()
                     state.update({"state": "ROLLED_BACK", "phase": "NORMAL", "progress": 100,
                                   "message": "Попередню версію відновлено автоматично"})
                     set_system_state(SystemState.NORMAL, "Automatic rollback completed", request_id, state_dir)
@@ -590,6 +615,11 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                     state["log"].append(f"{now()} rollback failed: {rollback_error}")
                     _record_system_state(state, SystemState.EMERGENCY, "Update and rollback failed",
                                          request_id, state_dir)
+            elif state.get("phase") == "RECOVERING":
+                # A requested rollback failed or did not prove health: never report NORMAL.
+                state.update({"state": "FAILED", "phase": "EMERGENCY"})
+                _record_system_state(state, SystemState.EMERGENCY, "Rollback failed",
+                                     request_id, state_dir)
             else:
                 state.update({"state": "FAILED", "phase": "NORMAL"})
                 _record_system_state(state, SystemState.NORMAL, "Update stopped before installation",

@@ -10,6 +10,7 @@ import { ConfirmService } from '../core/services/confirm.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { Subscription } from 'rxjs';
 import { Job, JobUpdate, Character, Brand, Workflow, StageRecord, SceneRecord, AttemptRecord, PublicationResult, Channel } from '../core/models';
+import { PolicyService } from '../core/services/policy.service';
 import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTypeLabel, channelLabel } from '../core/presentation';
 
 @Component({
@@ -47,35 +48,35 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
             </div>
             <div class="flex gap-2 flex-wrap justify-end">
               @if (canPause()) {
-                <button (click)="pauseJob()" [disabled]="actionLoading() === 'pause'" class="px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium disabled:opacity-50">Пауза</button>
+                <button [title]="policy.disabledReason('pause_job') || ''" (click)="pauseJob()" [disabled]="(actionLoading() === 'pause') || !policy.can('pause_job').allowed" class="disabled:opacity-50 px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium disabled:opacity-50">Пауза</button>
               }
               @if (canResume()) {
-                <button (click)="resumeJob()" [disabled]="actionLoading() === 'resume'" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Відновити</button>
+                <button [title]="policy.disabledReason('resume_job') || ''" (click)="resumeJob()" [disabled]="(actionLoading() === 'resume') || !policy.can('resume_job').allowed" class="disabled:opacity-50 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Відновити</button>
               }
               @if (canRetry()) {
-                <button (click)="retryJob()" [disabled]="actionLoading() === 'retry'" class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">Повторити</button>
+                <button [title]="policy.disabledReason('retry_job') || ''" (click)="retryJob()" [disabled]="(actionLoading() === 'retry') || !policy.can('retry_job').allowed" class="disabled:opacity-50 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">Повторити</button>
               }
               @if (canRegenerate()) {
-                <button (click)="confirmRegenerate()" [disabled]="actionLoading() === 'regenerate'" class="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-medium disabled:opacity-50">Регенерувати</button>
+                <button [title]="policy.disabledReason('regenerate_job') || ''" (click)="confirmRegenerate()" [disabled]="(actionLoading() === 'regenerate') || !policy.can('regenerate_job').allowed" class="disabled:opacity-50 px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-medium disabled:opacity-50">Регенерувати</button>
               }
               @if (canCancel()) {
-                <button (click)="confirmCancel()" [disabled]="actionLoading() === 'cancel'" class="px-3 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 text-sm font-medium disabled:opacity-50">Скасувати</button>
+                <button [title]="policy.disabledReason('cancel_job') || ''" (click)="confirmCancel()" [disabled]="(actionLoading() === 'cancel') || !policy.can('cancel_job').allowed" class="disabled:opacity-50 px-3 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 text-sm font-medium disabled:opacity-50">Скасувати</button>
               }
               @if (canApprove()) {
-                <button (click)="approveJob()" [disabled]="actionLoading() === 'approve'" data-testid="approve-final-button" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити</button>
+                <button [title]="policy.disabledReason('approve_job') || ''" (click)="approveJob()" [disabled]="(actionLoading() === 'approve') || !policy.can('approve_job').allowed" data-testid="approve-final-button" class="disabled:opacity-50 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити</button>
               }
               @if (canApproveVideo()) {
-                <button (click)="approveVideo()" [disabled]="actionLoading() === 'video_approve'" data-testid="approve-video-button" class="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити відео</button>
+                <button [title]="policy.disabledReason('approve_job') || ''" (click)="approveVideo()" [disabled]="(actionLoading() === 'video_approve') || !policy.can('approve_job').allowed" data-testid="approve-video-button" class="disabled:opacity-50 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Схвалити відео</button>
               }
               @if (canReviewVideo()) {
-                <button (click)="requestVideoRevision()" [disabled]="!!actionLoading()" data-testid="revision-video-button" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до відео</button>
+                <button [title]="policy.disabledReason('approve_job') || ''" (click)="requestVideoRevision()" [disabled]="(!!actionLoading()) || !policy.can('approve_job').allowed" data-testid="revision-video-button" class="disabled:opacity-50 px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до відео</button>
               }
               @if (canRegenerateVideo()) {
-                <button (click)="regenerateVideo()" [disabled]="actionLoading() === 'video_regenerate'" data-testid="regenerate-video-button" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Регенерувати відео</button>
+                <button [title]="policy.disabledReason('regenerate_job') || ''" (click)="regenerateVideo()" [disabled]="(actionLoading() === 'video_regenerate') || !policy.can('regenerate_job').allowed" data-testid="regenerate-video-button" class="disabled:opacity-50 px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Регенерувати відео</button>
               }
               @if (canReviewApproval()) {
-                <button (click)="requestRevision()" [disabled]="!!actionLoading()" data-testid="revision-job-button" class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">Запросити правки</button>
-                <button (click)="rejectApproval()" [disabled]="!!actionLoading()" data-testid="reject-job-button" class="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50">Відхилити</button>
+                <button [title]="policy.disabledReason('approve_job') || ''" (click)="requestRevision()" [disabled]="(!!actionLoading()) || !policy.can('approve_job').allowed" data-testid="revision-job-button" class="disabled:opacity-50 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">Запросити правки</button>
+                <button [title]="policy.disabledReason('approve_job') || ''" (click)="rejectApproval()" [disabled]="(!!actionLoading()) || !policy.can('approve_job').allowed" data-testid="reject-job-button" class="disabled:opacity-50 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50">Відхилити</button>
               }
            @if (canReviewVideo() || canApproveVideo()) {
              <div class="mt-6 bg-indigo-50 border border-indigo-200 rounded-lg p-4" data-testid="video-approval-section">
@@ -89,18 +90,18 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                </div>
                <div class="flex gap-2 flex-wrap">
                  @if (canApproveVideo()) {
-                   <button (click)="approveVideo()" [disabled]="actionLoading() === 'video_approve'" data-testid="approve-video-button" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Схвалити відео</button>
+                   <button [title]="policy.disabledReason('approve_job') || ''" (click)="approveVideo()" [disabled]="(actionLoading() === 'video_approve') || !policy.can('approve_job').allowed" data-testid="approve-video-button" class="disabled:opacity-50 px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Схвалити відео</button>
                  }
                  @if (canReviewVideo() && !canApproveVideo()) {
-                   <button (click)="regenerateVideo()" [disabled]="actionLoading() === 'video_regenerate'" data-testid="regenerate-video-button" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Регенерувати відео</button>
+                   <button [title]="policy.disabledReason('regenerate_job') || ''" (click)="regenerateVideo()" [disabled]="(actionLoading() === 'video_regenerate') || !policy.can('regenerate_job').allowed" data-testid="regenerate-video-button" class="disabled:opacity-50 px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Регенерувати відео</button>
                  }
-                 <button (click)="requestVideoRevision()" [disabled]="!!actionLoading()" data-testid="revision-video-button" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до відео</button>
+                 <button [title]="policy.disabledReason('approve_job') || ''" (click)="requestVideoRevision()" [disabled]="(!!actionLoading()) || !policy.can('approve_job').allowed" data-testid="revision-video-button" class="disabled:opacity-50 px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до відео</button>
                </div>
              </div>
            }
 
            @if (canPublish()) {
-                <button (click)="publishJob()" [disabled]="actionLoading() === 'publish'" class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">Опублікувати</button>
+                <button [title]="policy.disabledReason('publish_job') || ''" (click)="publishJob()" [disabled]="(actionLoading() === 'publish') || !policy.can('publish_job').allowed" class="disabled:opacity-50 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">Опублікувати</button>
               }
               @if (!editing()) {
                 <button (click)="startEditing()" data-testid="edit-job-button"
@@ -108,8 +109,8 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                   Редагувати
                 </button>
               }
-              @if (canDelete()) { <button (click)="confirmDelete()" data-testid="delete-job-button"
-                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium">
+              @if (canDelete()) { <button [title]="policy.disabledReason('delete_job') || ''" [disabled]="!policy.can('delete_job').allowed" (click)="confirmDelete()" data-testid="delete-job-button"
+                class="disabled:opacity-50 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium">
                 Видалити
               </button> }
               <button (click)="goBack()" data-testid="back-to-list-button"
@@ -327,11 +328,11 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
               }
               <div class="mt-3 flex gap-2 flex-wrap">
                 @if (canApprove() && canReviewScript()) {
-                  <button (click)="approveJob()" data-testid="approve-script-button" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Затвердити сценарій</button>
-                  <button (click)="requestRevision()" data-testid="revision-script-button" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Запитати правки</button>
+                  <button [title]="policy.disabledReason('approve_job') || ''" [disabled]="!policy.can('approve_job').allowed" (click)="approveJob()" data-testid="approve-script-button" class="disabled:opacity-50 px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Затвердити сценарій</button>
+                  <button [title]="policy.disabledReason('approve_job') || ''" [disabled]="!policy.can('approve_job').allowed" (click)="requestRevision()" data-testid="revision-script-button" class="disabled:opacity-50 px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Запитати правки</button>
                 }
                 @if (job()!.status === 'SCRIPT_FAILED') {
-                  <button (click)="regenerateScriptAction()" data-testid="regenerate-script-button" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати</button>
+                  <button [title]="policy.disabledReason('regenerate_job') || ''" [disabled]="!policy.can('regenerate_job').allowed" (click)="regenerateScriptAction()" data-testid="regenerate-script-button" class="disabled:opacity-50 px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати</button>
                 }
               </div>
             </div>
@@ -378,7 +379,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                     }
                     <div class="mt-2 flex gap-2">
                       @if (canRegenerateImage()) {
-                        <button (click)="regenerateImageScene(scene.index)" class="text-xs px-2 py-1 border rounded">Перегенерувати сцену</button>
+                        <button [title]="policy.disabledReason('regenerate_job') || ''" [disabled]="!policy.can('regenerate_job').allowed" (click)="regenerateImageScene(scene.index)" class="disabled:opacity-50 text-xs px-2 py-1 border rounded">Перегенерувати сцену</button>
                       }
                     </div>
                   </div>
@@ -386,13 +387,13 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
               </div>
               <div class="mt-3 flex gap-2 flex-wrap">
                 @if (storyboard.image_status === 'ready') {
-                  <button (click)="approveImageStoryboard()" class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Затвердити превʼю розкадровки</button>
+                  <button [title]="policy.disabledReason('approve_job') || ''" [disabled]="!policy.can('approve_job').allowed" (click)="approveImageStoryboard()" class="disabled:opacity-50 px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">Затвердити превʼю розкадровки</button>
                 }
                 @if (canRegenerateImage()) {
-                  <button (click)="regenerateImageStoryboardAll()" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати всі превʼю</button>
+                  <button [title]="policy.disabledReason('regenerate_job') || ''" [disabled]="!policy.can('regenerate_job').allowed" (click)="regenerateImageStoryboardAll()" class="disabled:opacity-50 px-3 py-1.5 bg-blue-600 text-white rounded text-sm">Перегенерувати всі превʼю</button>
                 }
                 @if (canRevisionImage()) {
-                  <button (click)="revisionImageStoryboard()" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до превʼю</button>
+                  <button [title]="policy.disabledReason('approve_job') || ''" [disabled]="!policy.can('approve_job').allowed" (click)="revisionImageStoryboard()" class="disabled:opacity-50 px-3 py-1.5 bg-amber-600 text-white rounded text-sm">Правки до превʼю</button>
                 }
               </div>
             </div>
@@ -491,7 +492,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                    <input type="checkbox" id="approve-before-publish" [(ngModel)]="approveBeforePublish">
                    <label for="approve-before-publish" class="text-sm text-slate-700">Схвалювати перед публікацією</label>
                  </div>
-                 <button (click)="publishJob()" [disabled]="actionLoading() === 'publish'" data-testid="publish-confirm-button" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">
+                 <button [title]="policy.disabledReason('publish_job') || ''" (click)="publishJob()" [disabled]="(actionLoading() === 'publish') || !policy.can('publish_job').allowed" data-testid="publish-confirm-button" class="disabled:opacity-50 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">
                    {{ actionLoading() === 'publish' ? 'Публікація...' : 'Опублікувати' }}
                  </button>
                </div>
@@ -524,7 +525,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                          {{ result.status }}
                        </span>
                        @if (result.status === 'FAILED') {
-                         <button (click)="retryFailedChannel(result.channel)" [disabled]="actionLoading() === 'retry-' + result.channel" class="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50">
+                         <button [title]="policy.disabledReason('publish_job') || ''" (click)="retryFailedChannel(result.channel)" [disabled]="(actionLoading() === 'retry-' + result.channel) || !policy.can('publish_job').allowed" class="disabled:opacity-50 text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50">
                            {{ actionLoading() === 'retry-' + result.channel ? 'Повтор...' : 'Повторити' }}
                          </button>
                        }
@@ -678,6 +679,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     private workersApi: WorkersApiService,
     private toast: ToastService,
     private confirm: ConfirmService,
+    readonly policy: PolicyService,
   ) {}
 
   ngOnInit(): void {

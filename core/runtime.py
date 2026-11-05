@@ -19,6 +19,15 @@ import asyncio
 import os
 import time
 last_maintenance = 0.0
+_preparing: set[str] = set()
+
+
+def _submit_prepare(job) -> None:
+    """Keep one queued or running preparation per Job (the pool has two threads)."""
+    _preparing.add(job.job_id)
+    executor.submit(_prepare_and_dispatch, job).add_done_callback(
+        lambda _: _preparing.discard(job.job_id))
+
 
 def handle_expired_storyboard_lease(store, task: dict) -> bool:
     """Issue #64 T4: requeue an expired storyboard lease within budget.
@@ -174,10 +183,14 @@ async def _watchdog() -> None:
         for job in list(store.jobs.values()):
             if job.status == JobStatus.WAITING_FOR_SYSTEM:
                 store.update(job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
-            if job.status == JobStatus.NEW and _job_is_due(job):
+            if (job.status == JobStatus.NEW and job.job_id not in _preparing
+                    and await asyncio.to_thread(_job_is_due, job)):
+                # The scheduler call yields the loop, so the Job may have changed.
+                if job.status != JobStatus.NEW or job.job_id not in store.jobs:
+                    continue
                 store.update(job, JobStatus.SCRIPTING, "SCHEDULED JOB STARTED")
                 job.status = JobStatus.NEW
-                executor.submit(_prepare_and_dispatch, job)
+                _submit_prepare(job)
         for task in task_queue.requeue_expired():
             voice_job = store.jobs.get(task.get("job_id"))
             if task.get("task") == "publish" and voice_job and task["task_id"] in voice_job.publish_task_ids:

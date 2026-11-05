@@ -232,17 +232,12 @@ def _system_status_text() -> str:
     core_ok, core_msg = check_core_api(core_url) if core_url else (None, "not configured")
 
     dispatcher_ok = "running"
-    try:
-        from core.dispatcher import available_worker
-        workers = list(store.workers.values())
-        if workers:
-            _ = available_worker(workers, type("Job", (), {
-                "job_id": "_health", "topic": "_health", "character_id": "",
-                "priority": 1, "status": JobStatus.NEW,
-                "created_at": __import__("core.state", fromlist=["utc_now"]).utc_now(),
-            })())
-    except Exception:
-        dispatcher_ok = "error"
+    dispatcher_url = os.getenv("DISPATCHER_URL", "").rstrip("/")
+    if dispatcher_url:
+        try:
+            httpx.get(f"{dispatcher_url}/health", timeout=3).raise_for_status()
+        except httpx.HTTPError:
+            dispatcher_ok = "error"
 
     lines = [
         f"Система: {state_name}",
@@ -268,20 +263,16 @@ def _system_status_text() -> str:
 
 
 def _format_workers_summary() -> str:
-    nodes = _sync_internal_api("GET", "CORE_API_URL", "/api/nodes") \
-        or _sync_internal_api("GET", "BACKUP_URL", "/api/nodes")
-    if not nodes or not isinstance(nodes, list):
-        return "Вузли: 0/0 online"
+    nodes = _call_core_api("GET", "/api/nodes")
+    if not isinstance(nodes, list):
+        return "Вузли: дані недоступні"
     online = sum(1 for n in nodes if (n.get("runtime_status") or n.get("status")) == "ONLINE")
     return f"Вузли: {online}/{len(nodes)} online"
 
 
 def _format_jobs_summary() -> str:
-    data = _sync_internal_api("GET", "CORE_API_URL", "/api/jobs",
-                              {"per_page": 100, "page": 1}) or {}
-    jobs = data if isinstance(data, list) else data.get("jobs", [])
-    if not isinstance(jobs, list):
-        return "Jobs: 0 active / 0 queued / 0 failed"
+    # Telegram runs inside CORE: the store is the source, no self-call is needed.
+    jobs = [{"status": job.status.value} for job in store.jobs.values()]
     active = {"PROCESSING", "SCRIPTING", "ASSET_GENERATION", "VIDEO_GENERATION",
               "ASSEMBLY", "PUBLISHING"}
     queued = {"NEW", "WAITING_FOR_SYSTEM"}

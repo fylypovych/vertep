@@ -64,7 +64,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
     );
     this.loadSystemState();
     this.loadUserProfile();
-    const id = setInterval(() => this.loadSystemState(), 30_000);
+    const id = setInterval(() => { this.loadSystemState(); this.policy.refresh(); }, 30_000);
     this.subs.add(new Subscription(() => clearInterval(id)));
   }
 

@@ -5,6 +5,11 @@ import { catchError, map, tap } from 'rxjs/operators';
 import { AuthApiService } from './api/auth.api';
 import { PolicyService } from './services/policy.service';
 
+export function isConnectionFailure(error: { status?: number } | null | undefined): boolean {
+  const status = error?.status;
+  return status === 0 || (typeof status === 'number' && status >= 500);
+}
+
 @Injectable()
 export class AuthGuard implements CanActivate, CanActivateChild {
   constructor(private auth: AuthApiService, private router: Router, private policy: PolicyService) {}
@@ -19,7 +24,9 @@ export class AuthGuard implements CanActivate, CanActivateChild {
         this.policy.refresh();
       }),
       map(() => true),
-      catchError(() => of(this.router.createUrlTree(['/login'])))
+      // Лише підтверджена відсутність сесії веде на login. Під час рестарту CORE
+      // користувач лишається в системі, а policy блокує дії (fail-closed).
+      catchError((error) => of(isConnectionFailure(error) ? true : this.router.createUrlTree(['/login'])))
     );
   }
 

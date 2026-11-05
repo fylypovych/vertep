@@ -101,7 +101,7 @@ class JobStore:
                     # Issued Voice work is reconciled against the real queue at
                     # startup; replaying assets here can silently skip narration.
                     pass
-                elif original_status in {JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_READY,
+                elif original_status in {JobStatus.SCRIPTING, JobStatus.SCRIPT_GENERATING, JobStatus.SCRIPT_READY,
                                           JobStatus.ASSET_GENERATION, JobStatus.ASSETS_READY,
                                           JobStatus.TTS_GENERATING, JobStatus.TTS_READY,
                                           JobStatus.VIDEO_GENERATION, JobStatus.VIDEO_READY,
@@ -159,6 +159,8 @@ class JobStore:
               node: str | None = None, task_id: str | None = None,
               artifact_id: str | None = None, error: str | None = None) -> Job:
         with self.lock:
+            if job.job_id not in self.jobs:
+                return job  # a stale reference must not recreate a deleted Job
             created_at = utc_now()
             job.events.append(f"{created_at} {message}")
             job.event_log.append(JobEvent(timestamp=created_at, message=message, type=type,
@@ -174,6 +176,8 @@ class JobStore:
                task_id: str | None = None, artifact_id: str | None = None,
                error: str | None = None, state: str | None = None) -> Job:
         with self.lock:
+            if job.job_id not in self.jobs:
+                return job  # a stale reference must not recreate a deleted Job
             job.status = status
             created_at = utc_now()
             job.events.append(f"{created_at} {event}")
@@ -192,6 +196,8 @@ class JobStore:
         return self.update(job, status, event)
 
     def _save(self, job: Job) -> None:
+        if job.job_id not in self.jobs:
+            return
         from core.workflow.runtime import workflow_runtime
         runtime = workflow_runtime()
         if runtime:

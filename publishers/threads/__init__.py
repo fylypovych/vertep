@@ -56,7 +56,9 @@ class ThreadsPublisher(Publisher):
             "status": "PUBLISHED",
             "id": result.get("id") or media_id,
             "remote_id": result.get("id") or media_id,
-            "url": f"https://www.threads.net/@user/post/{result.get('id') or media_id}",
+            # The publish answer has no public address; the post id is in remote_id.
+            "url": "",
+            "permalink_available": False,
             "media_id": media_id,
             "upload": {"mode": "threads-api"},
         }

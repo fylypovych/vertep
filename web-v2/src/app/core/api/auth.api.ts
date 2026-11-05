@@ -57,7 +57,7 @@ export class AuthApiService {
     if (err instanceof HttpErrorResponse) {
       const detail = (err.error as { detail?: unknown } | null)?.detail;
       const message = typeof detail === 'string' && detail.trim() ? detail : undefined;
-      return throwError(() => new Error(message ?? err.message));
+      return throwError(() => Object.assign(new Error(message ?? err.message), { status: err.status }));
     }
     return throwError(() => err);
   }

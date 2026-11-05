@@ -122,4 +122,4 @@ Rows: 117 · kept: 117 · retire with evidence: 0 · blocked: 0
 | #120 | ``i.0.0.1.20`` | open | Часткове | kept | — |
 | #121 | ``i.0.0.1.21`` | open | Часткове | kept | — |
 
-Owner decision: required: an explicit exact old-list or the decision «порожній / не робимо old». The absence of candidates is not an approval (§4.1 P12).
+Owner decision: decided by the owner in fylypovych/vertep#321: «порожній список — retirement не виконується».

@@ -349,6 +349,7 @@ def test_interrupted_update_recovery_after_restart_rolls_back(tmp_path, monkeypa
     """A process restart with an in-flight apply rolls back the interrupted
     mutation under the live lease and reports ROLLED_BACK, not RUNNING forever."""
     agent = _load_agent()
+    monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     (state_dir / "status.json").write_text(json.dumps({
@@ -835,6 +836,7 @@ def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkey
     """A host command timeout is a correlated failure: rollback runs and the
     operation reports ROLLED_BACK instead of hanging or claiming success."""
     agent = _load_agent()
+    monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
     import core.update_protocol as _upd
     import core.version as _ver
     monkeypatch.setattr(_upd, "fetch_manifest", lambda channel: {
@@ -898,6 +900,7 @@ def test_update_rejects_missing_root_metadata(tmp_path, monkeypatch):
 def test_rollback_invokes_vertep_script(tmp_path, monkeypatch):
     """_attempt_rollback invokes vertep rollback script and sets ROLLED_BACK."""
     agent = _load_agent()
+    monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
     commands_run = []
     monkeypatch.setattr(agent, "run", lambda cmd, root, **kw: (
         commands_run.append(cmd), "rollback output")[1])

@@ -5,8 +5,12 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Host unit: CORE sources live next to scripts/, not on the default import path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def now() -> str:
@@ -30,17 +34,18 @@ def get_update_state_dir() -> Path:
     return default_update_state_dir()
 
 
-def recover_interrupted_update(root: Path, state_dir: Path) -> None:
+def recover_interrupted_update(root: Path, state_dir: Path) -> bool:
+    """Return True when a release was rolled back and must still prove its health."""
     status_file = state_dir / "status.json"
     if not status_file.exists():
-        return
+        return False
     try:
         status = json.loads(status_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return
+        return False
     phase = status.get("phase")
-    if status.get("state") != "RUNNING" or phase not in {"UPDATING", "RECOVERING"}:
-        return
+    if status.get("state") != "RUNNING" or phase not in {"UPDATING", "RESTARTING", "VERIFYING", "RECOVERING"}:
+        return False
     print(f"{now()} STARTUP-RECOVERY: interrupted update detected, rolling back", file=sys.stderr)
     rollback_script = root / "scripts" / "vertep"
     output = run(["/bin/bash", str(rollback_script), "rollback"], cwd=root)
@@ -56,6 +61,7 @@ def recover_interrupted_update(root: Path, state_dir: Path) -> None:
                        "message": "Interrupted update rolled back"})
     status["updated_at"] = now()
     status_file.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return not output.startswith("ERROR")
 
 
 def restore_system_state(root: Path, state_dir: Path) -> None:
@@ -78,16 +84,23 @@ def restore_system_state(root: Path, state_dir: Path) -> None:
         system_state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def restart_containers(root: Path) -> str:
-    compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml")]
+def compose_command(root: Path) -> list[str]:
+    """Same selection as scripts/vertep: the active release owns the compose files."""
+    release = root / "current" if (root / "current").is_symlink() else root
+    compose = ["docker", "compose", "--env-file", str(root / ".env"), "-f", str(release / "docker-compose.yml")]
     try:
         environment = (root / ".env").read_text(encoding="utf-8")
     except OSError:
         environment = ""
-    if "GPU_VENDOR=amd" in environment and (root / "docker-compose.amd.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.amd.yml")])
-    if "GPU_VENDOR=nvidia" in environment and (root / "docker-compose.nvidia.yml").is_file():
-        compose.extend(["-f", str(root / "docker-compose.nvidia.yml")])
+    if "GPU_VENDOR=amd" in environment and (release / "docker-compose.amd.yml").is_file():
+        compose.extend(["-f", str(release / "docker-compose.amd.yml")])
+    if "GPU_VENDOR=nvidia" in environment and (release / "docker-compose.nvidia.yml").is_file():
+        compose.extend(["-f", str(release / "docker-compose.nvidia.yml")])
+    return compose
+
+
+def restart_containers(root: Path) -> str:
+    compose = compose_command(root)
     try:
         subprocess.run([*compose, "up", "-d", "--remove-orphans"], check=True, capture_output=True, text=True, timeout=300)
         return "containers restarted"
@@ -95,14 +108,64 @@ def restart_containers(root: Path) -> str:
         return f"ERROR: {error}"
 
 
+def core_is_healthy(attempts: int = 60, delay: float = 5) -> bool:
+    url = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL")
+           or "https://127.0.0.1:8443").rstrip("/") + "/api/health"
+    for attempt in range(attempts):
+        if not run(["curl", "-kfsS", "--connect-timeout", "5", url]).startswith("ERROR"):
+            return True
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    return False
+
+
+def mark_emergency(state_dir: Path, reason: str) -> None:
+    (state_dir / "system-state.json").write_text(json.dumps({
+        "state": "EMERGENCY", "updated_at": now(), "reason": reason, "operation_id": None
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def reconcile_database_state(state_dir: Path, attempts: int = 60, delay: float = 5) -> None:
+    """Apply the same rules to PostgreSQL, the record CORE really reads in production.
+
+    It needs the database container, so it runs after the stack starts. An unreachable
+    database changes nothing: the fence or transitional state stays in force.
+    """
+    if os.getenv("SYSTEM_STATE_BACKEND", "file").lower() != "postgres":
+        return
+    from core.system_state import _database_state, set_system_state
+    for attempt in range(attempts):
+        try:
+            state = _database_state()
+            break
+        except Exception as error:  # noqa: BLE001 - psycopg is not always importable on the host
+            if attempt + 1 == attempts:
+                print(f"{now()} STARTUP-RECOVERY: database state unavailable: {error}", file=sys.stderr)
+                return
+            time.sleep(delay)
+    try:
+        local = json.loads((state_dir / "system-state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        local = {}
+    if local.get("state") == "EMERGENCY":
+        set_system_state("EMERGENCY", str(local.get("reason") or "Startup recovery failed"),
+                         local.get("operation_id"), state_dir)
+    elif (state and not str(state.get("operation_id") or "").startswith("restore:")
+            and state["state"] in {"MAINTENANCE", "UPDATING", "RECOVERING"}):
+        set_system_state("NORMAL", "Startup recovery", None, state_dir)
+
+
 def main() -> None:
     root = get_root()
     state_dir = get_update_state_dir()
     print(f"{now()} STARTUP-RECOVERY: checking system state", file=sys.stderr)
-    recover_interrupted_update(root, state_dir)
+    rolled_back = recover_interrupted_update(root, state_dir)
     restore_system_state(root, state_dir)
     output = restart_containers(root)
     print(f"{now()} STARTUP-RECOVERY: {output}", file=sys.stderr)
+    if rolled_back and not core_is_healthy():
+        mark_emergency(state_dir, "Rolled back release did not become healthy")
+    reconcile_database_state(state_dir)
 
 
 if __name__ == "__main__":

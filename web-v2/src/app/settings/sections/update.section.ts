@@ -1,6 +1,7 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SystemApiService } from '../../core/api/system.api';
+import { Observable } from 'rxjs';
 import { ConfirmService } from '../../core/services/confirm.service';
 import { ToastService } from '../../core/services/toast.service';
 import { PolicyService } from '../../core/services/policy.service';
@@ -98,7 +99,8 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
     </div>
   `,
 })
-export class UpdateSectionComponent implements OnInit {
+export class UpdateSectionComponent implements OnInit, OnDestroy {
+  private progressTimer?: ReturnType<typeof setInterval>;
   updateStatus = signal<UpdateStatus | null>(null);
   readiness = signal<UpdateReadiness | null>(null);
   rollingStatus = signal<RollingStatus | null>(null);
@@ -108,7 +110,20 @@ export class UpdateSectionComponent implements OnInit {
 
   constructor(private system: SystemApiService, private toast: ToastService, readonly policy: PolicyService, private confirm: ConfirmService) {}
 
-  ngOnInit(): void { this.loadAll(); }
+  ngOnInit(): void {
+    this.loadAll();
+    this.progressTimer = setInterval(() => this.pollProgress(), 5_000);
+  }
+
+  ngOnDestroy(): void { clearInterval(this.progressTimer); }
+
+  /** Лише активна операція; збій під час рестарту CORE не стирає останній відомий стан. */
+  private pollProgress(): void {
+    const updating = ['PENDING', 'RUNNING'].includes(this.updateStatus()?.state || '');
+    const rolling = ['RUNNING', 'AWAITING_PROMOTION', 'ROLLING_BACK'].includes(this.rollingStatus()?.state || '');
+    if (updating) this.system.updateStatus().subscribe({ next: (s) => this.updateStatus.set(s), error: () => {} });
+    if (rolling) this.loadRolling();
+  }
 
   stateLabel(state?: string): string { return updateStateLabel(state); }
 
@@ -141,9 +156,22 @@ export class UpdateSectionComponent implements OnInit {
     });
   }
 
-  cancelRolling(): void { this.system.cancelRolling().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
-  promoteCanary(): void { this.system.promoteCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
-  rollbackCanary(): void { this.system.rollbackCanary().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) }); }
+  private confirmRolling(title: string, message: string, action: () => Observable<unknown>): void {
+    this.confirm.confirm({ title, message }).subscribe((ok) => {
+      if (!ok) return;
+      action().subscribe({ next: () => this.loadRolling(), error: (err) => this.error.set(err.message) });
+    });
+  }
+
+  cancelRolling(): void {
+    this.confirmRolling('Скасувати поетапне оновлення', 'Оновлення наступних вузлів буде зупинено. Продовжити?', () => this.system.cancelRolling());
+  }
+  promoteCanary(): void {
+    this.confirmRolling('Підтвердити canary', 'Нову версію буде поширено на решту вузлів. Продовжити?', () => this.system.promoteCanary());
+  }
+  rollbackCanary(): void {
+    this.confirmRolling('Відкотити canary', 'Canary-вузол повернеться до попередньої версії. Продовжити?', () => this.system.rollbackCanary());
+  }
   recoverToNormal(): void {
     if (!this.policy.can('start_recovery').allowed) return;
     this.system.recoverToNormal().subscribe({ next: () => { this.policy.refresh(); this.loadAll(); }, error: (err) => this.error.set(err.message) });

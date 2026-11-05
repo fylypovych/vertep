@@ -1,6 +1,6 @@
 {
   "issue": "fylypovych/vertep#122",
-  "owner_decision": "required: an explicit exact old-list or the decision \u00ab\u043f\u043e\u0440\u043e\u0436\u043d\u0456\u0439 / \u043d\u0435 \u0440\u043e\u0431\u0438\u043c\u043e old\u00bb. The absence of candidates is not an approval (\u00a74.1 P12).",
+  "owner_decision": "decided by the owner in fylypovych/vertep#321: \u00ab\u043f\u043e\u0440\u043e\u0436\u043d\u0456\u0439 \u0441\u043f\u0438\u0441\u043e\u043a \u2014 retirement \u043d\u0435 \u0432\u0438\u043a\u043e\u043d\u0443\u0454\u0442\u044c\u0441\u044f\u00bb.",
   "rows": [
     {
       "decision": "LLM/media primitives \u043f\u0435\u0440\u0435\u043a\u0440\u0438\u0432\u0430\u044e\u0442\u044c\u0441\u044f; Worker dispatch, revision/approval \u0456 recovery Vertep \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438.",

@@ -1,3 +1,4 @@
+import { isConnectionFailure } from './auth.guard';
 import { Injectable } from '@angular/core';
 import { CanActivate, Router, UrlTree } from '@angular/router';
 import { Observable, of } from 'rxjs';
@@ -15,7 +16,7 @@ export class AdminGuard implements CanActivate {
       // сесія не потрапляє в адмінські маршрути, а веде на login.
       tap((profile) => { this.policy.userRole.set(profile.role); }),
       map((profile) => profile.role === 'admin'),
-      catchError(() => of(this.router.createUrlTree(['/login'])))
+      catchError((error) => of(this.router.createUrlTree([isConnectionFailure(error) ? '/' : '/login'])))
     );
   }
 }

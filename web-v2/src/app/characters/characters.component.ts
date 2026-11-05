@@ -2,7 +2,8 @@ import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
-import { ResourcesApiService } from '../core/api/resources.api';
+import { catchError, concatMap, from, of, toArray } from 'rxjs';
+import { CharacterReference, ResourcesApiService } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { PolicyService } from '../core/services/policy.service';
@@ -102,6 +103,30 @@ import { ErrorStateComponent } from '../shared/error-state.component';
           <div class="border border-slate-200 rounded-lg p-3">
             <h4 class="text-xs font-medium text-slate-500 mb-2">Системний промпт</h4>
             <textarea [(ngModel)]="form.system_prompt" placeholder="Опишіть стиль мовлення, характер, знання та обмеження персонажа." rows="6" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm resize-y"></textarea>
+          </div>
+
+          <!-- Reference images -->
+          <div class="border border-slate-200 rounded-lg p-3" data-testid="character-references">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">Референси персонажа</h4>
+            <p class="text-sm text-slate-500 mb-3">Зразки зовнішності. Вони автоматично використовуються в кожній генерації зображень цього персонажа. До 5 файлів PNG, JPEG або WebP, кожен до 10 МБ.</p>
+            <div class="flex flex-wrap gap-3 mb-3">
+              @for (item of references(); track item.filename) {
+                <div class="relative w-24 h-24" data-testid="character-reference">
+                  <img [src]="resources.characterReferenceUrl(editingId!, item.filename)" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
+                  <button type="button" (click)="deleteReference(item.filename)" [disabled]="!canSaveCharacter" aria-label="Видалити референс" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
+                </div>
+              }
+              @for (item of pendingReferences(); track item.url) {
+                <div class="relative w-24 h-24" data-testid="character-reference-pending">
+                  <img [src]="item.url" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
+                  <button type="button" (click)="removePendingReference(item)" aria-label="Прибрати референс" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
+                </div>
+              }
+            </div>
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple data-testid="character-reference-input" [disabled]="!canSaveCharacter || saving()" (change)="addReferences($event)">
+            @if (!editingId) {
+              <p class="text-xs text-slate-500 mt-2">Зображення завантажаться після натискання «Зберегти».</p>
+            }
           </div>
 
           <!-- Voice config -->
@@ -222,11 +247,13 @@ export class CharactersComponent implements OnInit {
   private originalGenerationJson = '';
   private originalPublishingJson = '';
   saving = signal(false);
+  references = signal<CharacterReference[]>([]);
+  pendingReferences = signal<{ file: File; url: string }[]>([]);
   search = '';
   page = 1;
   pageSize = 10;
 
-  constructor(private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, public policy: PolicyService) {}
+  constructor(readonly resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, public policy: PolicyService) {}
 
   get canCreateCharacter(): boolean { return this.policy.can('create_character').allowed; }
   get createCharacterReason(): string | null { return this.policy.disabledReason('create_character'); }
@@ -292,6 +319,7 @@ export class CharactersComponent implements OnInit {
   openCreateModal(): void {
     this.editingId = null;
     this.form = { ...this.emptyForm(), id: this.generateId() };
+    this.references.set([]);
     this.showModal.set(true);
   }
 
@@ -309,6 +337,8 @@ export class CharactersComponent implements OnInit {
       generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3, ...(character.generation || {}) },
       publishing: { enabled: false, channels: '', ...(character.publishing || {}) },
     };
+    this.references.set([]);
+    if (this.editingId) this.loadReferences(this.editingId);
     this.showModal.set(true);
   }
 
@@ -317,6 +347,68 @@ export class CharactersComponent implements OnInit {
     this.editingId = null;
     this.form = this.emptyForm();
     this.saving.set(false);
+    this.references.set([]);
+    this.pendingReferences().forEach((item) => URL.revokeObjectURL(item.url));
+    this.pendingReferences.set([]);
+  }
+
+  private loadReferences(id: string): void {
+    this.resources.characterReferences(id).subscribe({
+      next: (items) => { if (this.editingId === id) this.references.set(items); },
+      error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося завантажити референси', 'error'),
+    });
+  }
+
+  addReferences(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
+    const id = this.editingId;
+    if (!id) {
+      // A new character does not exist on the server yet: hold the files until it is saved.
+      this.pendingReferences.update((items) => [
+        ...items, ...files.map((file) => ({ file, url: URL.createObjectURL(file) })),
+      ]);
+      return;
+    }
+    for (const file of files) {
+      this.resources.uploadCharacterReference(id, file).subscribe({
+        next: () => this.loadReferences(id),
+        error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося завантажити зображення', 'error'),
+      });
+    }
+  }
+
+  removePendingReference(item: { file: File; url: string }): void {
+    URL.revokeObjectURL(item.url);
+    this.pendingReferences.update((items) => items.filter((other) => other !== item));
+  }
+
+  deleteReference(name: string): void {
+    const id = this.editingId;
+    if (!id) return;
+    this.resources.deleteCharacterReference(id, name).subscribe({
+      next: () => this.loadReferences(id),
+      error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося видалити зображення', 'error'),
+    });
+  }
+
+  /** Uploads held files one by one; a rejected file never undoes the saved character. */
+  private finishSave(id: string | undefined): void {
+    const files = this.pendingReferences().map((item) => item.file);
+    const done = (failed: number) => {
+      this.closeModal();
+      this.loadCharacters();
+      if (failed) this.toast.show(`Персонаж збережено, але не завантажено зображень: ${failed}`, 'error');
+      else this.toast.show('Персонаж збережено', 'success');
+    };
+    if (!id || !files.length) { done(files.length); return; }
+    from(files).pipe(
+      concatMap((file) => this.resources.uploadCharacterReference(id, file).pipe(
+        catchError(() => of(null)),
+      )),
+      toArray(),
+    ).subscribe((results) => done(results.filter((item) => item === null).length));
   }
 
   saveCharacter(): void {
@@ -344,11 +436,7 @@ export class CharactersComponent implements OnInit {
       : this.resources.createCharacter(payload);
 
     request.subscribe({
-      next: () => {
-        this.closeModal();
-        this.loadCharacters();
-        this.toast.show('Персонаж збережено', 'success');
-      },
+      next: (saved) => this.finishSave(saved?.id ?? this.form.id),
       error: (err) => {
         this.error.set(err.message);
         this.saving.set(false);

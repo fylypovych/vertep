@@ -804,6 +804,39 @@ def renew_if_needed(core: str, node_name: str, credential: str, verify: str | bo
     temporary.replace(config_path)
     return str(credentials["jwt"])
 
+# CORE no longer wants this attempt: the Job was deleted (404) or the task was
+# reassigned (409). Repeating the request can never succeed.
+RESULT_DISOWNED = {404, 409}
+
+
+def renew_active_task(client: httpx.Client, core: str, node_name: str, task: dict) -> list[dict]:
+    """Renew the lease and return the cancellations; never blocks the heartbeat."""
+    task_id = task["task_id"]
+    try:
+        if task.get("architecture_workflow"):
+            renewed = client.post(f"{core}/api/tasks/renew/workflow", json={
+                "node_name": node_name, "task_id": task_id, "lease_id": task["lease_id"],
+                "protocol_version": "1.0.0"})
+            renewed.raise_for_status()
+            return [{"task_id": task_id}] if renewed.json().get("cancelled") else []
+        client.post(f"{core}/api/tasks/renew", json={"node_name": node_name,
+                                                     "task_id": task_id}).raise_for_status()
+        cancellations = client.get(f"{core}/api/tasks/cancellations/{node_name}")
+        cancellations.raise_for_status()
+        return cancellations.json()
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code in RESULT_DISOWNED:
+            # The lease is gone: stop the work once and stop renewing. The slot
+            # frees when the running attempt returns; its result is then discarded.
+            task["lease_lost"] = True
+            logger.warning("Task lease lost", extra={"node_name": node_name})
+            return [{"task_id": task_id}]
+        logger.warning("Task renew failed", extra={"node_name": node_name})
+    except httpx.HTTPError:
+        logger.warning("Task renew failed", extra={"node_name": node_name})
+    return []
+
+
 def submit_result(client: httpx.Client, core: str, result: dict) -> None:
     if result.get("architecture_workflow"):
         response = client.post(f"{core}/api/tasks/result/workflow", json={
@@ -811,18 +844,18 @@ def submit_result(client: httpx.Client, core: str, result: dict) -> None:
             "lease_id": result["lease_id"], "protocol_version": "1.0.0",
             "result": result.get("artifacts"), "error": result.get("error") if not result.get("success") else None,
         }, timeout=90)
-        if response.status_code != 409:
+        if response.status_code not in RESULT_DISOWNED:
             response.raise_for_status()
         return
     response = client.post(f"{core}/api/tasks/result", json=result, timeout=90)
-    if response.status_code == 409:
+    if response.status_code in RESULT_DISOWNED:
         return
     if response.status_code in {400, 413, 422} and result.get("success"):
         rejection = {"job_id": result["job_id"], "task_id": result["task_id"],
                      "node_name": result["node_name"], "success": False,
                      "error": f"CORE rejected generated artifacts: {response.text[:500]}"}
         failed = client.post(f"{core}/api/tasks/result", json=rejection, timeout=90)
-        if failed.status_code != 409:
+        if failed.status_code not in RESULT_DISOWNED:
             failed.raise_for_status()
         return
     response.raise_for_status()
@@ -1134,16 +1167,8 @@ def main() -> None:
                             payload.update({"current_job": task["job_id"], "current_task": task["task_id"], "status": "BUSY"})
                             active_task = task
                             future = pool.submit(execute_task, adapter, task, payload["node_name"])
-                if future is not None and active_task:
-                    if active_task.get("architecture_workflow"):
-                        renewed = client.post(f"{core}/api/tasks/renew/workflow", json={"node_name": payload["node_name"],
-                            "task_id": active_task["task_id"], "lease_id": active_task["lease_id"], "protocol_version": "1.0.0"})
-                        renewed.raise_for_status()
-                        cancellations = [{"task_id": active_task["task_id"]}] if renewed.json().get("cancelled") else []
-                    else:
-                        client.post(f"{core}/api/tasks/renew", json={"node_name": payload["node_name"],
-                                                                  "task_id": active_task["task_id"]}).raise_for_status()
-                        cancellations = client.get(f"{core}/api/tasks/cancellations/{payload['node_name']}").json()
+                if future is not None and active_task and not active_task.get("lease_lost"):
+                    cancellations = renew_active_task(client, core, payload["node_name"], active_task)
                     if any(item["task_id"] == active_task["task_id"] for item in cancellations):
                         from worker.gpu_routing import cancel as cancel_gpu_inference
                         cancel_gpu_inference(active_task["task_id"])
