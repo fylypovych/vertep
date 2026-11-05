@@ -11,7 +11,7 @@ import { runtimeStatusLabel } from '../../core/presentation';
   selector: 'app-settings-roles',
   standalone: true,
   imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-roles"><h3 class="text-lg font-semibold mb-4">Ролі вузла</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="rolesResponse"><p class="mb-3 text-sm text-slate-600">Активні ролі: {{ selectedRoles.length ? selectedRoles.join(', ') : 'не налаштовано' }}</p><p class="mb-3 text-sm text-slate-600">Поточна роль: <strong>{{ rolesResponse.node_role }}</strong> — <span [attr.data-testid]="'role-status-' + rolesResponse.node_role">{{ statusText(roleStatus(rolesResponse.node_role)) }}</span></p><div class="mb-4 space-y-1" data-testid="role-runtime-status-list"><div class="text-sm font-medium text-slate-700">Стан ролей</div><div *ngFor="let role of allRoles" class="text-sm text-slate-600 flex items-center gap-2"><span>{{ role.label }}</span><span [attr.data-testid]="'role-status-' + role.id" [class]="statusClass(role.runtime_status)">{{ statusText(role.runtime_status) }}</span><span *ngIf="role.runtime_evidence?.nodes?.length" class="text-xs text-slate-400">вузлів: {{ role.runtime_evidence!.nodes!.length }}</span></div></div><label *ngFor="let role of allRoles" class="mr-3 inline-flex items-center gap-1"><input type="checkbox" [checked]="selectedRoles.includes(role.id)" (change)="toggleRole(role.id, $event)">{{ role.label }}</label><button (click)="saveRoles()" [disabled]="saving()" class="mt-4 block px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg disabled:opacity-50" data-testid="roles-save-button">{{ saving() ? 'Збереження...' : 'Зберегти ролі' }}</button></div></div>`,
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-roles"><h3 class="text-lg font-semibold mb-4">Ролі вузла</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="rolesResponse"><p class="mb-3 text-sm text-slate-600">Активні ролі: {{ selectedRoles.length ? selectedRoles.join(', ') : 'не налаштовано' }}</p><p class="mb-3 text-sm text-slate-600">Поточна роль: <strong>{{ rolesResponse.node_role }}</strong> — <span [attr.data-testid]="'role-status-' + rolesResponse.node_role">{{ roleStatusText(rolesResponse.node_role) }}</span></p><div class="mb-4 space-y-1" data-testid="role-runtime-status-list"><div class="text-sm font-medium text-slate-700">Стан ролей</div><div *ngFor="let role of allRoles" class="text-sm text-slate-600 flex items-center gap-2"><span>{{ role.label }}</span><span [attr.data-testid]="'role-status-' + role.id" [class]="statusClass(role.runtime_status)">{{ statusText(role.runtime_status) }}</span><span *ngIf="role.runtime_evidence?.nodes?.length" class="text-xs text-slate-400">вузлів: {{ role.runtime_evidence!.nodes!.length }}</span></div></div><label *ngFor="let role of allRoles" class="mr-3 inline-flex items-center gap-1"><input type="checkbox" [checked]="selectedRoles.includes(role.id)" (change)="toggleRole(role.id, $event)">{{ role.label }}</label><button (click)="saveRoles()" [disabled]="saving()" class="mt-4 block px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg disabled:opacity-50" data-testid="roles-save-button">{{ saving() ? 'Збереження...' : 'Зберегти ролі' }}</button></div></div>`,
 })
 export class RolesSectionComponent implements OnInit {
   allRoles: SystemRole[] = [];
@@ -43,6 +43,12 @@ export class RolesSectionComponent implements OnInit {
   }
 
   statusText(status?: string): string { return runtimeStatusLabel(status); }
+
+  /** A role that is neither selected here nor enrolled elsewhere has nothing to measure. */
+  roleStatusText(roleId: string): string {
+    const status = this.roleStatus(roleId);
+    return status === 'UNKNOWN' && !this.selectedRoles.includes(roleId) ? 'Не вибрано' : this.statusText(status);
+  }
 
   statusClass(status?: string): string {
     switch (status) {

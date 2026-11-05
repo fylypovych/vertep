@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -344,7 +345,14 @@ def wait_for_drain(state_dir: Path, state: dict, lease) -> None:
             core_json("/api/system/update/drain", method="POST")
         except (OSError, ValueError, RuntimeError):
             pass  # readiness stays false, so the next poll retries
-        readiness = core_json("/api/system/update/readiness")
+        try:
+            readiness = core_json("/api/system/update/readiness")
+        except HTTPError as error:
+            if error.code < 500:
+                raise
+            readiness = {}  # the proxy answers 5xx while CORE restarts
+        except (URLError, TimeoutError):
+            readiness = {}
         if readiness.get("ready"):
             state["readiness"] = readiness
             transition(state_dir, state, "MAINTENANCE", "Workers drained and queue paused", 30)

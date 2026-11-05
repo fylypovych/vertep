@@ -1,6 +1,7 @@
 """Internal certificate lifecycle service used by the Zero-Shell UI."""
 
 import os
+import re
 import tempfile
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
@@ -31,7 +32,8 @@ def _details() -> dict:
             "issuer": certificate.issuer.rfc4514_string(),
             "not_before": certificate.not_valid_before_utc.isoformat(),
             "not_after": certificate.not_valid_after_utc.isoformat(),
-            "sha256": certificate.fingerprint(hashes.SHA256()).hex()}
+            "sha256": certificate.fingerprint(hashes.SHA256()).hex(),
+            "pem": certificate_path.read_text(encoding="ascii")}
 
 
 @app.get("/health")
@@ -44,8 +46,17 @@ def certificate() -> dict:
     return _details()
 
 
+def _san(name: str):
+    try:
+        return x509.IPAddress(ip_address(name))
+    except ValueError:
+        if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", name):
+            raise HTTPException(422, "Invalid certificate host")
+        return x509.DNSName(name)
+
+
 @app.post("/certificate/renew")
-def renew() -> dict:
+def renew(host: str | None = None) -> dict:
     certificate_path, key_path = _paths()
     certificate_path.parent.mkdir(parents=True, exist_ok=True)
     common_name = os.getenv("WEB_DOMAIN", "vertep.local").strip() or "vertep.local"
@@ -55,11 +66,10 @@ def renew() -> dict:
     builder = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
                .public_key(key.public_key()).serial_number(x509.random_serial_number())
                .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=365)))
-    try:
-        san = x509.IPAddress(ip_address(common_name))
-    except ValueError:
-        san = x509.DNSName(common_name)
-    certificate = builder.add_extension(x509.SubjectAlternativeName([san]), critical=False).sign(key, hashes.SHA256())
+    names = [_san(common_name)]
+    if host and host != common_name:
+        names.append(_san(host))
+    certificate = builder.add_extension(x509.SubjectAlternativeName(names), critical=False).sign(key, hashes.SHA256())
     encoded_key = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                     serialization.NoEncryption())
     encoded_certificate = certificate.public_bytes(serialization.Encoding.PEM)

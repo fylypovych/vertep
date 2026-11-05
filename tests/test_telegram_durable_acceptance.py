@@ -517,7 +517,7 @@ class TestUpdateOperationAcceptance:
                     if "Поточна версія" in prompt:
                         break
                 time.sleep(0.1)
-            assert f"Поточна версія: {CURRENT_VERSION}" in prompt
+            assert f"Поточна версія: {Path("VERSION").read_text(encoding="utf-8").strip()}" in prompt
             assert f"Доступна: {TARGET_VERSION}" in prompt
             for line in _release_notes(TARGET_VERSION)[:3]:
                 assert line in prompt

@@ -446,6 +446,9 @@ def regenerate_video_endpoint(job_id: str, body: ScriptAction | None = None):
 def delete_job(job_id: str):
     if not store.delete(job_id):
         raise HTTPException(404, "Job not found")
+    for task in task_queue.ready_tasks() + task_queue.inflight_tasks():
+        if task.get("job_id") == job_id:
+            task_queue.discard(task["task_id"])
     return {"deleted": job_id}
 
 

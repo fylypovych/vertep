@@ -201,8 +201,9 @@ def test_redis_export_import_on_a_real_server(monkeypatch, tmp_path):
     if not url:
         pytest.skip("VERTEP_TEST_REDIS_URL is not set")
     import redis
-    client = redis.from_url(url, db=14)
-    monkeypatch.setenv("REDIS_URL", client.connection_pool.connection_kwargs and f"{url.rsplit('/', 1)[0]}/14")
+    url = f"{url.rsplit('/', 1)[0]}/14"  # a database number in the URL overrides db=
+    client = redis.from_url(url)
+    monkeypatch.setenv("REDIS_URL", url)
     client.flushdb()
     client.set("plain", "v")
     client.set("expiring", "v", ex=100)

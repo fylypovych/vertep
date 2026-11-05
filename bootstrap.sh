@@ -733,7 +733,7 @@ if [[ -f "$INSTALL_ROOT/tls/vertep.key" || -f "$INSTALL_ROOT/tls/vertep.crt" ]];
     || fail "existing TLS certificate/key pair is incomplete"
 else
   openssl req -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=${WEB_DOMAIN}" \
-    -addext "subjectAltName=DNS:${WEB_DOMAIN}" \
+    -addext "subjectAltName=$([[ $WEB_DOMAIN =~ ^[0-9.]+$ ]] && echo IP || echo DNS):${WEB_DOMAIN}" \
     -keyout "$INSTALL_ROOT/tls/vertep.key" -out "$INSTALL_ROOT/tls/vertep.crt" >/dev/null 2>&1
 fi
 chmod 0600 "$INSTALL_ROOT/tls/vertep.key"

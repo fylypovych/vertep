@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
+import { BACKGROUND_REQUEST } from '../interceptors/auth.interceptor';
 import { Observable } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { BaseApiService } from './base-api.service';
@@ -11,7 +12,7 @@ export interface PostSetupState { pending: boolean; telegram: boolean; backup_ke
 export class SystemApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}
-  postSetup = (): Observable<PostSetupState> => this.http.get<PostSetupState>(`${this.base.url}/system/post-setup`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  postSetup = (): Observable<PostSetupState> => this.http.get<PostSetupState>(`${this.base.url}/system/post-setup`, { headers: this.h(), context: new HttpContext().set(BACKGROUND_REQUEST, true) }).pipe(catchError(this.base.handleError));
   backupKey = (): Observable<Blob> => this.http.post(`${this.base.url}/system/post-setup/backup-key`, null, { headers: this.h(), responseType: 'blob' }).pipe(catchError(this.base.handleError));
   acknowledgeBackupKey = (): Observable<PostSetupState> => this.http.post<PostSetupState>(`${this.base.url}/system/post-setup/backup-key/saved`, null, { headers: this.h() }).pipe(catchError(this.base.handleError));
   saveTelegramAccess = (allowed: string, admins: string): Observable<unknown> => this.http.post(`${this.base.url}/telegram/setup`, { allowed_chat_ids: allowed, admin_chat_ids: admins }, { headers: this.h() }).pipe(catchError(this.base.handleError));

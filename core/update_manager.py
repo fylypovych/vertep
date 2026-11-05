@@ -28,6 +28,10 @@ def _read_json(path: Path, default: dict) -> dict:
         return default
 
 
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in str(value).split(".") if part.isdigit())
+
+
 def update_status() -> dict:
     root = state_root()
     status = _read_json(root / "status.json", {
@@ -37,8 +41,10 @@ def update_status() -> dict:
     })
     status["enabled"] = os.getenv("WEB_UPDATE_ENABLED", "false").lower() == "true"
     status["pending"] = len(list((root / "requests").glob("*.json"))) if (root / "requests").is_dir() else 0
-    if not status.get("current_version"):
-        status["current_version"] = application_version()
+    # status.json describes the last attempt; a later install may have moved on.
+    status["current_version"] = application_version()
+    if status.get("available_version"):
+        status["update_available"] = _version_tuple(status["available_version"]) > _version_tuple(status["current_version"])
     return status
 
 

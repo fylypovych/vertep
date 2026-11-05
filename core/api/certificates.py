@@ -6,7 +6,9 @@ codes.  The actual logic calls the Certificate Manager via :func:`_internal_api`
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from urllib.parse import quote
+
+from fastapi import APIRouter, Request
 
 from ..api._internal import _internal_api
 
@@ -19,5 +21,7 @@ async def system_certificates():
 
 
 @router.post("/api/system/certificates/renew")
-async def renew_system_certificate():
-    return await _internal_api("POST", "CERTIFICATE_MANAGER_URL", "/certificate/renew")
+async def renew_system_certificate(request: Request):
+    # The address the administrator actually uses must be in the certificate.
+    host = quote(request.url.hostname or "", safe="")
+    return await _internal_api("POST", "CERTIFICATE_MANAGER_URL", f"/certificate/renew?host={host}")

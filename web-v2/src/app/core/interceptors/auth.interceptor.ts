@@ -1,9 +1,12 @@
 import { Injectable } from '@angular/core';
-import { HttpEvent, HttpHandler, HttpInterceptor, HttpRequest, HttpResponse } from '@angular/common/http';
+import { HttpContextToken, HttpEvent, HttpHandler, HttpInterceptor, HttpRequest, HttpResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { resolveSessionIdentity } from '../session-identity';
+
+/** A background check the user did not ask for: its failure must not log out or raise a toast. */
+export const BACKGROUND_REQUEST = new HttpContextToken<boolean>(() => false);
 
 @Injectable()
 export class AuthInterceptor implements HttpInterceptor {
@@ -33,7 +36,7 @@ export class AuthInterceptor implements HttpInterceptor {
           }
         },
         error: (err) => {
-          if (err.status === 401) {
+          if (err.status === 401 && !req.context.get(BACKGROUND_REQUEST)) {
             this.router.navigate(['/login']);
           }
         },

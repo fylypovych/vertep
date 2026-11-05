@@ -36,6 +36,10 @@ def role_runtime_status(role: str) -> dict:
         evidence["source"] = "local"
         evidence["local"] = _local_evidence()
         return {"runtime_status": _local_status(evidence["local"]), "evidence": evidence}
+    if role in _additional_roles():
+        evidence["source"] = "local"
+        evidence["local"] = _additional_role_evidence(role)
+        return {"runtime_status": _local_status(evidence["local"]), "evidence": evidence}
 
     status, nodes = _remote_status(role)
     evidence["source"] = "nodes"
@@ -90,6 +94,25 @@ def _local_role() -> str:
     return str(os.getenv("NODE_ROLE", "core"))
 
 
+def _additional_roles() -> set[str]:
+    return {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",") if item.strip()}
+
+
+def _additional_role_evidence(role: str) -> dict | None:
+    """An additional role runs on this node, so its own containers are the evidence."""
+    inventory = _deployment_inventory()
+    if inventory is None:
+        return None
+    required = set((node_roles().get(role) or {}).get("services") or [])
+    containers = {item.get("service"): item for item in inventory.get("containers") or []}
+    return {"services_total": len(required),
+            "services_missing": sorted(required - set(containers)),
+            "services_unhealthy": sorted(name for name in required & set(containers)
+                                         if containers[name].get("state") != "running"
+                                         and name != "migrate"),
+            "checks_ok": True}
+
+
 def _local_status(local: dict | None) -> str:
     if not local:
         return "UNKNOWN"
@@ -128,6 +151,9 @@ def _local_evidence() -> dict | None:
     inventory = _deployment_inventory()
     if inventory is not None:
         containers = inventory.get("containers") or []
+        # Containers left from a role no longer selected say nothing about this deployment.
+        planned = set(inventory.get("services") or [])
+        containers = [item for item in containers if not planned or item.get("service") in planned]
         evidence["services_total"] = len(containers)
         evidence["services_missing"] = sorted(
             set(inventory.get("services") or []) - {item.get("service") for item in containers})

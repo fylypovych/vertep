@@ -66,8 +66,12 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <h3 class="text-lg font-semibold mb-4">Сертифікати</h3>
       <app-loading-state *ngIf="certLoading()" />
       <app-error-state *ngIf="certError()" [message]="certError()!" />
-      <pre *ngIf="certificates()" class="text-xs bg-slate-50 p-3">{{ certificates() | json }}</pre>
-      <button (click)="renewCert()" class="mt-2 px-3 py-2 bg-emerald-600 text-white rounded">Оновити сертифікат</button>
+      <pre *ngIf="certificates()" class="text-xs bg-slate-50 p-3 overflow-x-auto">{{ certificateInfo() | json }}</pre>
+      <p class="text-sm text-slate-600 my-2">Сертифікат самопідписаний: дані шифруються, але браузер показуватиме попередження, доки ви не додасте завантажений файл до довірених сертифікатів на своєму комп'ютері. Після створення нового сертифіката файл треба додати знову.</p>
+      <div class="flex flex-wrap gap-2">
+        <button (click)="renewCert()" data-testid="certificate-renew" class="px-3 py-2 bg-emerald-600 text-white rounded">Створити або оновити сертифікат</button>
+        <button (click)="downloadCert()" [disabled]="!certificatePem()" data-testid="certificate-download" class="px-3 py-2 border rounded disabled:opacity-50">Завантажити сертифікат</button>
+      </div>
     </div>
   </div>`,
 })
@@ -75,6 +79,23 @@ export class SecuritySectionComponent implements OnInit {
   secCheck = signal<SecurityCheck | null>(null);
   loading = signal(false);
   certificates = signal<CertificatesResponse | null>(null);
+
+  certificatePem(): string { return (this.certificates() as unknown as { pem?: string } | null)?.pem ?? ''; }
+
+  certificateInfo(): unknown {
+    const { pem: _pem, ...info } = (this.certificates() ?? {}) as unknown as Record<string, unknown>;
+    return info;
+  }
+
+  downloadCert(): void {
+    const url = URL.createObjectURL(new Blob([this.certificatePem()], { type: 'application/x-pem-file' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'vertep.crt';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   certLoading = signal(false);
   certError = signal<string | null>(null);
 

@@ -9,6 +9,7 @@ import {
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { ToastService } from '../services/toast.service';
+import { BACKGROUND_REQUEST } from './auth.interceptor';
 
 @Injectable()
 export class ErrorInterceptor implements HttpInterceptor {
@@ -20,6 +21,7 @@ export class ErrorInterceptor implements HttpInterceptor {
   ): Observable<HttpEvent<unknown>> {
     return next.handle(req).pipe(
       catchError((error: HttpErrorResponse) => {
+        if (req.context.get(BACKGROUND_REQUEST)) return throwError(() => error);
         let errorMessage = 'An unknown error occurred.';
         if (error.error instanceof ErrorEvent) {
           // Client-side error

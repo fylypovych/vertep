@@ -62,6 +62,8 @@ async def lifespan(_app):
     for task in task_queue.ready_tasks() + task_queue.inflight_tasks():
         job = store.jobs.get(task.get("job_id"))
         if not job:
+            # The Job was deleted earlier: its task can never run.
+            task_queue.discard(task["task_id"])
             continue
         obsolete_script = task.get("task") == "script" and job.script_task_id != task["task_id"]
         obsolete_voice = task.get("task") == "voice" and task["task_id"] not in job.tts_active_task_ids
