@@ -23,7 +23,7 @@ def _definitions(monkeypatch, tmp_path):
 
 
 def test_default_is_static_and_dynamic_is_refused_without_definitions(config):
-    assert mode.workflow_mode_state() == {"mode": "static", "default": "static", "dynamic_available": False}
+    assert mode.workflow_mode_state() == {"mode": "static", "default": "static", "dynamic_available": False, "active_dynamic_jobs": 0}
     assert workflow_runtime() is None
     with pytest.raises(ValueError):
         mode.set_workflow_mode("dynamic")

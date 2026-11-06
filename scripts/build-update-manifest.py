@@ -64,6 +64,7 @@ def descriptor(package: Path, version: str, repository: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--key-id", default="release-1")
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--repository", required=True)
@@ -71,7 +72,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     signed = sign_release_contract(
-        descriptor(args.package, args.version, args.repository), args.private_key)
+        {**descriptor(args.package, args.version, args.repository), "key_id": args.key_id}, args.private_key)
     args.output.write_text(json.dumps(signed, ensure_ascii=False, indent=2) + "\n",
                            encoding="utf-8")
 

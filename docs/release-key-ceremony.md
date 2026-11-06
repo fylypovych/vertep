@@ -60,16 +60,22 @@ installer/root-keys/
 
 Команда генерації підтримує відтворюваний drill без доступу до production ceremony:
 
+Приватні ключі зберігаються **поза репозиторієм**: генератор відмовляється працювати з каталогом усередині git-проєкту. У проєкт потрапляють лише метадані й відкриті ключі.
+
 ```bash
 python scripts/generate-root-metadata.py \
-  --keys-dir installer/root-keys \
+  --keys-dir /шлях/поза/проєктом \
   --output installer/root-keys/root-metadata.json \
+  --public-dir installer/root-keys \
+  --release-key release-1=installer/update-public.pem \
   --key-ids root-1 root-2 \
   --threshold 2 \
   --version 1 \
   --expiry-days 365 \
   --channels stable beta
 ```
+
+`--release-key` додає відкриту частину робочого ключа, яким підписуються релізи; його `key_id` записується в маніфест оновлення.
 
 Для ротації створюється новий metadata-документ із більшим `version`; старий ключ
 позначається `revoked: true`, а новий ключ додається до `release_keys`.

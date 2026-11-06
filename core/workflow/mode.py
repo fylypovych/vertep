@@ -33,9 +33,25 @@ def _has_definitions() -> bool:
     return bool(root) and any(path.suffix in {".yaml", ".json"} for path in Path(root).glob("*"))
 
 
+def active_dynamic_jobs() -> int:
+    """Workflow jobs that would stall in static mode; legacy-path jobs keep running there."""
+    if not dynamic_definitions_root():
+        return 0
+    from .runtime import workflow_runtime
+    runtime = workflow_runtime()
+    engine = getattr(runtime, "engine", None)
+    if engine is None:
+        return 0
+    with engine._lock:
+        return sum(1 for job in engine._jobs.values()
+                   if job.get("execution_mode") != "legacy"
+                   and job.get("status") not in {"COMPLETED", "CANCELLED", "FAILED"})
+
+
 def workflow_mode_state() -> dict:
     return {"mode": DYNAMIC if dynamic_definitions_root() else STATIC,
-            "default": STATIC, "dynamic_available": _has_definitions()}
+            "default": STATIC, "dynamic_available": _has_definitions(),
+            "active_dynamic_jobs": active_dynamic_jobs()}
 
 
 def set_workflow_mode(mode: str) -> dict:
@@ -43,6 +59,9 @@ def set_workflow_mode(mode: str) -> dict:
         raise ValueError("Unknown workflow mode")
     if mode == DYNAMIC and not _has_definitions():
         raise ValueError("Dynamic workflow has no configured definitions")
+    active = active_dynamic_jobs() if mode == STATIC else 0
+    if active:
+        raise ValueError(f"Спершу завершіть або скасуйте завдання динамічного режиму: {active}")
     root = config_root()
     root.mkdir(parents=True, exist_ok=True)
     temporary = root / f".{_FILE}.{os.getpid()}.tmp"

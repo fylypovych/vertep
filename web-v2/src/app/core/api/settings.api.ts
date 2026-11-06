@@ -130,6 +130,7 @@ export interface WorkflowModeState {
   mode: 'static' | 'dynamic';
   default: 'static';
   dynamic_available: boolean;
+  active_dynamic_jobs: number;
 }
 
 export interface PublishingSettings { public_url: string; telegram_channel_id: string; }

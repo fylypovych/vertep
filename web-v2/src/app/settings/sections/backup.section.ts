@@ -44,6 +44,7 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
       } @else if (list.data().length === 0) {
         <p class="text-sm text-slate-500">Резервних копій немає</p>
       } @else {
+        <p class="text-sm text-amber-700 mb-2" data-testid="backup-key-reminder">Копія зашифрована, ключа в ній немає. Збережіть ключ шифрування окремо від файла: без нього копію не відновити.</p>
         <div class="space-y-2">
           @for (backup of list.data(); track backup.snapshot_id) {
             <div class="flex items-center justify-between py-2 border-b border-slate-100">
@@ -51,6 +52,8 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
                 <span class="text-sm font-medium text-slate-900">{{ backup.snapshot_id }}</span>
                 <span class="text-xs text-slate-500 ml-2">{{ backup.created_at | vertepDate }}</span>
               </div>
+              <a [href]="'/api/system/backups/' + backup.snapshot_id + '/download'" download data-testid="backup-download-link"
+                 [title]="'SHA-256: ' + (backup['sha256'] || '')" class="px-3 py-1 text-sm border border-slate-200 rounded-lg mr-2">Завантажити</a>
               <button (click)="confirmRestore(backup.snapshot_id)" [disabled]="restore.pending()" data-testid="backup-restore-button" class="text-xs text-blue-600 disabled:opacity-50">
                 {{ restore.pending() ? 'Відновлення...' : 'Відновити' }}
               </button>

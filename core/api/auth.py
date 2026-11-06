@@ -215,7 +215,8 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return Response("Administrator role required", 403)
         if request.method != "GET" and request.url.path.startswith(("/api/system/update", "/api/system/roles", "/api/system/recovery", "/api/system/restart", "/api/system/test", "/api/system/models")) and role != "admin":
             return Response("Administrator role required", 403)
-        if request.method != "GET" and request.url.path.startswith("/api/system/backups") and role != "admin":
+        if (request.url.path.startswith("/api/system/backups") and role != "admin"
+                and (request.method != "GET" or request.url.path.endswith("/download"))):
             return Response("Administrator role required", 403)
         if request.method != "GET" and request.url.path.startswith("/api/settings") and role != "admin":
             return Response("Administrator role required", 403)

@@ -57,7 +57,7 @@ def claim_task(payload: TaskClaim, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
     # A node from before this field speaks the contract that introduced it (version 1).
-    node_api = (store.workers.get(payload.node_name) or {}).get("worker_api", 1)
+    node_api = (store.workers.get(payload.node_name) or {}).get("worker_api") or 1
     if node_api != WORKER_API:
         logger.warning("Incompatible worker refused", extra={"node_name": payload.node_name})
         return {"task": None, "reason": f"Несумісний контракт Worker: {node_api}, потрібен {WORKER_API}"}

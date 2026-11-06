@@ -224,7 +224,8 @@ def test_standard_consumer_updates_core_with_migrations_and_backfills(
     assert "900_ci_release_marker.sql" in core_installation.psql("SELECT version FROM schema_migrations")
     assert core_installation.psql("SELECT value FROM ci_data") == "before-update"
     backups = sorted((root / "backups").glob("update-*"))
-    assert backups and (backups[-1] / "postgres.sql").stat().st_size > 0
+    assert backups and (backups[-1] / "backup.tar.enc").stat().st_size > 0
+    assert not (backups[-1] / "postgres.sql").exists(), "the pre-update copy must be sealed"
 
 
 def test_a_failing_migration_rolls_core_back_with_the_database_restored(

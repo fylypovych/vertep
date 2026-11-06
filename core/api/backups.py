@@ -6,10 +6,13 @@ codes.  The actual logic calls the Backup Service via :func:`_internal_api`.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from ..api._internal import _internal_api
 from ..system_state import get_system_state, set_system_state, SystemState
@@ -21,6 +24,33 @@ router = APIRouter()
 @router.get("/api/system/backups")
 async def system_backups():
     return await _internal_api("GET", "BACKUP_URL", "/snapshots")
+
+
+@router.get("/api/system/backups/{snapshot_id}/download")
+def download_system_backup(snapshot_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(400, "Invalid snapshot id")
+    base = os.getenv("BACKUP_URL", "").rstrip("/")
+    if not base:
+        raise HTTPException(503, "Backup service is not configured")
+    client = httpx.Client(timeout=httpx.Timeout(30, read=600))
+    upstream = client.send(client.build_request("GET", f"{base}/snapshots/{snapshot_id}/download"), stream=True)
+    if upstream.status_code != 200:
+        status = upstream.status_code
+        upstream.close()
+        client.close()
+        raise HTTPException(status, "Backup is not available")
+
+    def body():
+        try:
+            yield from upstream.iter_bytes(1024 * 1024)
+        finally:
+            upstream.close()
+            client.close()
+
+    headers = {name: upstream.headers[name] for name in ("content-disposition", "content-length")
+               if name in upstream.headers}
+    return StreamingResponse(body(), media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/api/system/backups")

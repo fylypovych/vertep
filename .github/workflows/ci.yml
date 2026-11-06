@@ -107,7 +107,7 @@ jobs:
           openssl version
           # The Docker-backed standard consumer tests are required in fleet-persistence-runtime-acceptance;
           # running them here too doubled the job time past its limit.
-          python -m pytest -q -n auto --dist loadgroup -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
+          python -m pytest -q -n 2 --dist loadgroup -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
       - name: Збереження exact-SHA process та trust acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -431,7 +431,7 @@ jobs:
           BASE_TEMP="$RUNNER_TEMP/media-runtime-tests"
           mkdir -p "$RUN_DIR"
           mkdir -p "$BASE_TEMP"
-          python -m pytest -q -o junit_family=legacy --junitxml="$RUN_DIR/junit.xml" --basetemp="$BASE_TEMP" tests/test_full_media_harness.py tests/test_text_redis_process.py tests/test_delivery_process_acceptance.py tests/test_voice_http_acceptance.py tests/test_publisher_http_boundary.py tests/test_publisher_oauth_state.py tests/test_media_acceptance_report.py
+          python -m pytest -v -o faulthandler_timeout=300 --durations=15 -o junit_family=legacy --junitxml="$RUN_DIR/junit.xml" --basetemp="$BASE_TEMP" tests/test_full_media_harness.py tests/test_text_redis_process.py tests/test_delivery_process_acceptance.py tests/test_voice_http_acceptance.py tests/test_publisher_http_boundary.py tests/test_publisher_oauth_state.py tests/test_media_acceptance_report.py
       - name: Render the media acceptance report
         run: |
           python scripts/media-acceptance-report.py \

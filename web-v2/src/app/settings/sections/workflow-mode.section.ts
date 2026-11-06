@@ -33,9 +33,12 @@ import { PolicyService } from '../../core/services/policy.service';
       <p *ngIf="!current.dynamic_available" class="md:col-span-2 text-sm text-amber-700" data-testid="workflow-mode-unavailable">
         Динамічний workflow недоступний: на сервері немає налаштованих шаблонів процесу.
       </p>
+      <p *ngIf="blockedByActiveJobs()" class="md:col-span-2 text-sm text-amber-700" data-testid="workflow-mode-blocked">
+        Повернення до статичного режиму заборонене: незавершених завдань динамічного режиму {{ current.active_dynamic_jobs }}. Спершу завершіть або скасуйте їх.
+      </p>
       <div class="md:col-span-2">
         <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm" data-testid="workflow-mode-apply"
-                [disabled]="!canEdit() || saving() || choice() === current.mode" (click)="apply()">Застосувати</button>
+                [disabled]="!canEdit() || saving() || choice() === current.mode || blockedByActiveJobs()" (click)="apply()">Застосувати</button>
       </div>
     </div>
   </div>`,
@@ -47,6 +50,7 @@ export class WorkflowModeSectionComponent implements OnInit {
   saving = signal(false);
   error = signal<string | null>(null);
 
+  readonly blockedByActiveJobs = computed(() => this.choice() === 'static' && !!this.state()?.active_dynamic_jobs);
   readonly canEdit = computed(() => this.policy.can('update_settings').allowed);
   readonly explanation = computed(() => this.choice() === 'dynamic'
     ? 'Динамічний workflow: кроки беруться з файлу-шаблону, тому можна задавати залежності, паралельні кроки, повтори й паузу без зміни програми. Режим ще не перевірений на реальному сервері. Завдання, запущені в цьому режимі, не продовжаться після повернення до статичного, доки режим знову не ввімкнуть.'

@@ -148,6 +148,17 @@ def test_incompatible_worker_gets_no_task(monkeypatch):
     assert answer["task"] is None and "контракт" in answer["reason"]
 
 
+@pytest.mark.parametrize("record", [{}, {"worker_api": None}, {"worker_api": WORKER_API}])
+def test_older_or_current_worker_is_not_refused(monkeypatch, record):
+    from core.models import TaskClaim
+    from core.state import task_queue
+    monkeypatch.setattr(tasks.store, "workers", {"n": record})
+    monkeypatch.setattr(tasks, "_valid_worker_request", lambda node, req: True)
+    monkeypatch.setattr(task_queue, "claim", lambda *a, **k: None)
+    answer = tasks.claim_task(TaskClaim(node_name="n", vram_mb=0), SimpleNamespace(headers={}))
+    assert "reason" not in (answer or {})
+
+
 def _bash():
     bash = shutil.which("bash")
     if not bash or not shutil.which("openssl") or os.name == "nt":

@@ -20,6 +20,7 @@ import urllib.error
 from contextlib import asynccontextmanager
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from fastapi.responses import StreamingResponse
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -661,6 +662,27 @@ def list_snapshots() -> dict:
                 continue
     snapshots.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return {"snapshots": snapshots}
+
+
+@app.get("/snapshots/{snapshot_id}/download")
+def download_snapshot(snapshot_id: str):
+    """Stream the encrypted snapshot; the key is never part of it."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", snapshot_id):
+        raise HTTPException(400, "Invalid snapshot id")
+    first = _backup_root() / f"{snapshot_id}.vtbackup"
+    if not first.is_file():
+        raise HTTPException(404, "Snapshot not found")
+    files = _snapshot_files(first)
+
+    def chunks():
+        for path in files:
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    yield chunk
+
+    return StreamingResponse(chunks(), media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{first.name}"',
+        "Content-Length": str(sum(path.stat().st_size for path in files))})
 
 
 @app.get("/system/status")

@@ -59,10 +59,18 @@ def _public_sha256(private_key_path: Path) -> str:
     return hashlib.sha256(result.stdout).hexdigest()
 
 
+def _refuse_keys_inside_a_repository(directory: Path) -> None:
+    """A later `git add` would publish the private keys kept here."""
+    for parent in [directory.resolve(), *directory.resolve().parents]:
+        if (parent / ".git").exists():
+            raise ValueError(f"Keep private keys outside the repository: {directory}")
+
+
 def build_metadata(key_ids: list[str], keys_dir: Path, threshold: int,
                    expiry_days: int, channels: list[str], version: int = 1,
                    revoked: set[str] | None = None,
-                   existing_metadata: dict | None = None) -> dict:
+                   existing_metadata: dict | None = None,
+                   release_public_keys: dict[str, Path] | None = None) -> dict:
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
         raise ValueError("Root metadata version must be a positive integer")
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
@@ -104,6 +112,16 @@ def build_metadata(key_ids: list[str], keys_dir: Path, threshold: int,
             "channels": entry_channels,
             "revoked": key_id in revoked_ids or previous.get("revoked") is True,
         }
+
+    # The online key that signs releases: only its public part leaves the release host.
+    for key_id, public_path in (release_public_keys or {}).items():
+        if not KEY_ID_RE.fullmatch(key_id):
+            raise ValueError(f"Invalid release key id: {key_id}")
+        content = public_path.read_bytes()
+        if b"PRIVATE KEY" in content:
+            raise ValueError(f"Release key must be public: {public_path}")
+        release_keys[key_id] = {"sha256": hashlib.sha256(content).hexdigest(),
+                                "channels": channels, "revoked": key_id in revoked_ids}
 
     for key_id, value in existing_keys.items():
         if key_id in release_keys or not isinstance(value, dict):
@@ -147,8 +165,12 @@ def main() -> int:
     parser.add_argument("--version", type=int, default=1)
     parser.add_argument("--revoked", nargs="*", default=[])
     parser.add_argument("--existing-metadata", type=Path)
+    parser.add_argument("--release-key", action="append", default=[], metavar="ID=PUBLIC_PEM",
+                        help="authorize the public part of a release signing key")
+    parser.add_argument("--public-dir", type=Path, help="write the public root keys here")
     args = parser.parse_args()
 
+    _refuse_keys_inside_a_repository(args.keys_dir)
     args.keys_dir.mkdir(parents=True, exist_ok=True)
     for key_id in args.key_ids:
         generate_key(key_id, args.keys_dir)
@@ -160,7 +182,14 @@ def main() -> int:
         args.key_ids, args.keys_dir, args.threshold, args.expiry_days,
         args.channels, version=args.version, revoked=set(args.revoked),
         existing_metadata=existing_metadata,
+        release_public_keys={item.split("=", 1)[0]: Path(item.split("=", 1)[1]) for item in args.release_key},
     )
+    if args.public_dir:
+        args.public_dir.mkdir(parents=True, exist_ok=True)
+        for key_id in args.key_ids:
+            public = subprocess.run(["openssl", "pkey", "-in", str(args.keys_dir / f"{key_id}.pem"), "-pubout"],
+                                    capture_output=True, check=True).stdout
+            (args.public_dir / f"{key_id}.pem").write_bytes(public)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {args.output}")
