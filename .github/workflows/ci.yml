@@ -429,7 +429,7 @@ jobs:
 
   media-acceptance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -443,14 +443,18 @@ jobs:
           cp .env.example .env
           printf '\nNODE_NAME=ci-worker\nCORE_ADDRESS=http://127.0.0.1:8080\nPOSTGRES_PASSWORD=ci-only\n' >> .env
           printf 'ci-only-secret-store-passphrase' > config/secret-store.passphrase
+      - name: Install media tools
+        # A slow package mirror stalled here silently until the job limit: fail fast, name the step.
+        timeout-minutes: 12
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y redis-server espeak-ng ffmpeg
       - name: Run the media acceptance harness and record evidence
         env:
           VERTEP_MEDIA_EVIDENCE: media-evidence/${{ github.run_id }}-${{ github.run_attempt }}/evidence.json
           VERTEP_REQUIRE_TEXT_REDIS_PROCESS: "1"
           VERTEP_REQUIRE_ESPEAK: "1"
         run: |
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq redis-server espeak-ng ffmpeg
           redis-server --version
           espeak-ng --version
           RUN_DIR="media-evidence/${{ github.run_id }}-${{ github.run_attempt }}"
