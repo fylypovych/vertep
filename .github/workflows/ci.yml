@@ -102,12 +102,19 @@ jobs:
           printf 'ci-only-secret-store-passphrase' > config/secret-store.passphrase
       - name: Compile Python sources
         run: python -m compileall -q core adapters worker telegram publishers scripts lab tests
+      - name: Audit signals sent on the host
+        # The runner was shut down mid-run with no failed test: keep who signalled what.
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq auditd
+          sudo auditctl -a always,exit -F arch=b64 -S kill -S tkill -S tgkill -k vertep_signal
       - name: Run test suite
         run: |
           openssl version
+          ( sudo tail -n0 -F /var/log/audit/audit.log | grep --line-buffered 'key="vertep_signal"' | sed -u 's/^/[signal] /' ) &
+          ( while true; do echo "[resources] $(date -u +%T) $(free -m | awk '/Mem:/{print "mem_used="$3"MB avail="$7"MB"}') $(df -h / | awk 'NR==2{print "disk_avail="$4}')"; sleep 15; done ) &
           # The Docker-backed standard consumer tests are required in fleet-persistence-runtime-acceptance;
           # running them here too doubled the job time past its limit.
-          python -m pytest -q -n 2 --dist loadgroup -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
+          python -m pytest -v -n 2 --dist loadgroup -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
       - name: Збереження exact-SHA process та trust acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7

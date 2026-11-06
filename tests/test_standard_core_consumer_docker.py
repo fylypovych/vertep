@@ -274,7 +274,7 @@ def test_a_rollback_safe_release_keeps_the_database_on_rollback(
     signed_update_server.publish("0.0.0.2", _archive(_core_payload(
         tmp_path / "release", "0.0.0.2", _release_images(),
         {"900_ci_release_marker.sql": "CREATE TABLE ci_release_marker(version text);\n",
-         "901_ci_broken.sql": "THIS IS NOT SQL;\n"})), database={"rollback_safe": True})
+         "901_ci_broken.sql": "THIS IS NOT SQL;\n"})), database={"strategy": "expand", "schema": 900, "rollback_safe": True})
     request_id = "1" * 32
     assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
                                  skip_drain=True) is False

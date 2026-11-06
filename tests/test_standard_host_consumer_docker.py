@@ -932,6 +932,12 @@ def test_application_consumer_reads_back_versions_and_approvals(
     assert rolled_back_consumer == approved_host
 
 
+def _backup_started(root: Path) -> bool:
+    """The unsealed work copy lives for moments: a finished sealed copy also means the apply began."""
+    backups = root / "backups"
+    return any(backups.glob(".work-*/application.tar.gz")) or any(backups.glob("update-*/backup.tar.enc"))
+
+
 def test_interruption_during_apply_does_not_overwrite_newer_data(
         installation, signed_update_server, tmp_path, monkeypatch):
     """#390 P1: an interruption during apply does not overwrite newer data that
@@ -955,7 +961,7 @@ def test_interruption_during_apply_does_not_overwrite_newer_data(
     def interrupt_when_backup_started() -> None:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if any((root / "backups").glob(".work-*/application.tar.gz")):
+            if _backup_started(root):
                 (state_dir / "cancel-fence.json").write_text(
                     json.dumps({"operation_id": "72" * 16}), encoding="utf-8")
                 # Simulate newer data written after interruption point.
@@ -1012,7 +1018,7 @@ def test_retry_does_not_return_deleted_seeds(
     def delete_seed_when_backup_started() -> None:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if any((root / "backups").glob(".work-*/application.tar.gz")):
+            if _backup_started(root):
                 seed_file.unlink()
                 (state_dir / "cancel-fence.json").write_text(
                     json.dumps({"operation_id": "74" * 16}), encoding="utf-8")
@@ -1128,7 +1134,7 @@ def test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effec
     def cancel_when_backup_started() -> None:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if any((root / "backups").glob(".work-*/application.tar.gz")):
+            if _backup_started(root):
                 (state_dir / "cancel-fence.json").write_text(
                     json.dumps({"operation_id": request_id}), encoding="utf-8")
                 return
@@ -1395,7 +1401,7 @@ def test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_a
     def lose_database_when_backup_started() -> None:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if any((root / "backups").glob(".work-*/application.tar.gz")):
+            if _backup_started(root):
                 subprocess.run(["docker", "stop", "-t", "0", lease_database["name"]],
                                capture_output=True)
                 return
@@ -1466,7 +1472,7 @@ def test_a_recovery_started_during_an_active_apply_does_not_overlap_it(
     def recover_while_backing_up() -> None:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if any((root / "backups").glob(".work-*/application.tar.gz")):
+            if _backup_started(root):
                 observed["before"] = _status(state_dir)
                 result = subprocess.run(
                     [sys.executable, "-c", _RECOVERY_PROCESS, str(ROOT / "scripts" / "update-agent.py"),

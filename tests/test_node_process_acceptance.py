@@ -225,7 +225,7 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
     for key, value in node_dependencies["env"].items():
         monkeypatch.setenv(key, value)
     # A Publisher Node is ready only with a usable channel (i.0.0.4.14).
-    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "controlled-token")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "controlled-token")
     from worker.service import role_self_test
     from core.dispatcher import available_worker
     from core.models import Job, JobStatus
@@ -259,7 +259,7 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
     with ThreadingHTTPServer(("127.0.0.1", 0), Runtime) as runtime:
         thread = threading.Thread(target=runtime.serve_forever, daemon=True); thread.start()
         base = f"http://127.0.0.1:{runtime.server_port}"
-        for key, value in {"OLLAMA_URL": base, "TTS_HEALTH_URL": base + "/health",
+        for key, value in {"TELEGRAM_API_BASE": base, "OLLAMA_URL": base, "TTS_HEALTH_URL": base + "/health",
                 "PUBLISHER_HEALTH_URL": base + "/health", "PROMETHEUS_URL": base + "/metrics",
                 "BACKUP_ROOT": str(c["root"] / "backup-probe"), "DEMO_MODE": "true", "VERTEP_DEMO": "true"}.items():
             monkeypatch.setenv(key, value)
