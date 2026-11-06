@@ -52,6 +52,7 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/public/videos/{job_id}/{version}/{expires}/{signature}.mp4"],
         ["GET", "/api/settings/publishing"],
         ["PUT", "/api/settings/publishing"],
+        ["GET", "/api/tasks/publisher-readiness"],
         ["GET", "/api/tasks/{task_id}/secrets"],
         ["PUT", "/api/tasks/{task_id}/secrets"],
     ]

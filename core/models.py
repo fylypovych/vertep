@@ -455,6 +455,7 @@ class Job(BaseModel):
     voice_task_snapshot: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class WorkerHeartbeat(BaseModel):
+    worker_api: int | None = None
     protocol_version: str = "1.0.0"
     scheduler_tags: list[str] = Field(default_factory=list)
     module_inventory: list[dict[str, Any]] = Field(default_factory=list)

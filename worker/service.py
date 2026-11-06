@@ -26,6 +26,8 @@ from worker.role_executor import execute_role_task
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+from core.version import WORKER_API
+
 logger = configure_logging("worker")
 pending_logs: list[dict] = []
 
@@ -105,15 +107,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
             if not os.getenv("PUBLISHER_HEALTH_URL"):
                 raise RuntimeError("Publisher runtime is not configured")
             httpx.get(os.environ["PUBLISHER_HEALTH_URL"], timeout=15).raise_for_status()
-            publish_url = os.environ["PUBLISHER_HEALTH_URL"].replace("/health", "/publish") if os.environ["PUBLISHER_HEALTH_URL"].endswith("/health") else os.environ["PUBLISHER_HEALTH_URL"].rstrip("/") + "/publish"
-            response = httpx.post(publish_url, json={"job_id": "self-test", "payload": {"topic": "self-test"}}, timeout=30)
-            if response.status_code == 503:
-                raise RuntimeError("Publisher adapter not configured")
-            response.raise_for_status()
-            receipt = response.json()
-            if not receipt.get("publication_id"):
-                raise RuntimeError("Publisher returned no receipt")
-            evidence = {"publication_id": receipt["publication_id"]}
+            evidence = publisher_readiness()
         elif role == "monitoring":
             response = httpx.get(os.getenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy"), timeout=15)
             response.raise_for_status()
@@ -860,6 +854,26 @@ def submit_result(client: httpx.Client, core: str, result: dict) -> None:
         return
     response.raise_for_status()
 
+def publisher_readiness() -> dict:
+    """Which channels can really publish: nothing is uploaded and no secret is returned."""
+    from publishers import LIVE_PUBLISHERS
+    from publishers.base import publisher_mock_enabled
+    from worker.role_executor import _core_base_url, _worker_auth_headers
+    if publisher_mock_enabled():
+        return {"mode": "mock", "ready_channels": sorted(LIVE_PUBLISHERS)}
+    ready = {name for name, publisher in LIVE_PUBLISHERS.items() if os.getenv(publisher.credential_env)}
+    base = _core_base_url()
+    node_name = os.getenv("NODE_NAME") or os.getenv("WORKER_NAME") or ""
+    if base and node_name:
+        response = httpx.get(f"{base}/api/tasks/publisher-readiness",
+                             headers=_worker_auth_headers(node_name), timeout=15)
+        response.raise_for_status()
+        ready |= {name for name, state in response.json()["channels"].items() if state["ready"]}
+    if not ready:
+        raise RuntimeError("Жоден канал публікації не налаштовано")
+    return {"mode": "live", "ready_channels": sorted(ready)}
+
+
 def gpu_info() -> dict:
     info = {"gpu_name": os.getenv("GPU_NAME", "unknown"),
             "gpu_count": int(os.getenv("GPU_COUNT", "1")),
@@ -1069,7 +1083,7 @@ def main() -> None:
                "role": configured_role(), "capabilities": capabilities,
                "scheduler_tags": [tag.strip() for tag in os.getenv("SCHEDULER_TAGS", "").split(",") if tag.strip()],
                "voice_catalog": voice_catalog() if "speech_synthesis" in capabilities else {},
-               "version": os.getenv("VERTEP_VERSION")}
+               "version": os.getenv("VERTEP_VERSION"), "worker_api": WORKER_API}
     adapter = providers.compute()
     self_test = role_self_test(configured_role(), metrics, adapter)
     payload["self_test"] = self_test

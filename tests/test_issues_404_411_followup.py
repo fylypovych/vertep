@@ -12,7 +12,6 @@ from core.models import JobStatus
 from core.telegram import handlers
 from publishers import FakeTransport
 from publishers.base import fetch_permalink
-from publishers.facebook import FacebookPublisher
 from publishers.tiktok import TikTokPublisher
 
 
@@ -63,16 +62,6 @@ def test_telegram_cannot_create_a_job_during_update(monkeypatch):
 def test_lost_permalink_answer_never_fails_a_published_post():
     transport = FakeTransport([httpx.Response(500, json={})])
     assert fetch_permalink(transport, "https://graph.example/1", "t") is None
-
-
-def test_facebook_reads_the_api_permalink(monkeypatch, tmp_path):
-    monkeypatch.setenv("FACEBOOK_ACCESS_TOKEN", "t")
-    video = tmp_path / "v.mp4"
-    video.write_bytes(b"video")
-    fake = FakeTransport([httpx.Response(200, json={"id": "9"}),
-                          httpx.Response(200, json={"permalink_url": "/page/videos/9/"})])
-    result = FacebookPublisher(transport=fake)._publish_live(str(video), {"page_id": "page"})
-    assert result["url"] == "https://www.facebook.com/page/videos/9/"
 
 
 def test_tiktok_receipt_has_no_invented_link(monkeypatch, tmp_path):

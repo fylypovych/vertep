@@ -45,18 +45,10 @@ def test_tts_service_returns_valid_wav(monkeypatch, tmp_path):
     assert any("--stdout" in call and "uk" in call for call in calls)
 
 
-def test_publisher_service_is_idempotent_and_never_fakes_live_success(monkeypatch, tmp_path):
-    monkeypatch.setenv("PUBLISHER_RECEIPT_ROOT", str(tmp_path))
+def test_publisher_service_cannot_fake_a_publication():
     client = TestClient(publisher_service.app)
-    payload = {"job_id": "job-1", "payload": {"channel": "youtube"}}
-    monkeypatch.delenv("PUBLISHER_MOCK", raising=False)
-    assert client.post("/publish", json=payload).status_code == 503
-    monkeypatch.setenv("PUBLISHER_MOCK", "true")
-    first = client.post("/publish", json=payload)
-    second = client.post("/publish", json=payload)
-    assert first.status_code == 200
-    assert first.json() == second.json()
-    assert (tmp_path / f"{first.json()['publication_id']}.json").is_file()
+    assert client.get("/health").json()["status"] == "HEALTHY"
+    assert client.post("/publish", json={"job_id": "job-1", "payload": {}}).status_code == 404
 
 
 def test_backup_service_creates_encrypted_snapshot_and_receipt(monkeypatch, tmp_path):

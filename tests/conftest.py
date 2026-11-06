@@ -616,7 +616,8 @@ def signed_update_server(tmp_path, monkeypatch):
 # i.0.0.4.13: these modules collide under pytest-xdist (shared working directory, timing
 # of real processes), so `--dist loadgroup` keeps them together on one worker.
 _XDIST_TOGETHER = {"test_backup_process_acceptance", "test_runner_browser_e2e", "test_worker_roles",
-                   "test_telegram_durable_acceptance"}
+                   "test_telegram_durable_acceptance", "test_monitoring_browser_e2e",
+                   "test_provider_process_acceptance"}
 
 
 def pytest_collection_modifyitems(items):

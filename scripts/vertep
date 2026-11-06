@@ -80,6 +80,44 @@ except (OSError, ValueError):
     pass
 PY
 }
+# i.0.0.4.16: the pre-update copy holds .env, config and a database dump. openssl enc has
+# no authentication tag; SHA256SUMS sealed inside is checked again before any rollback.
+update_backup_key(){
+  local key="$ROOT/.update-backup.key"
+  [[ -s "$key" ]] || { ( umask 077; openssl rand -hex 32 > "$key" ); }
+  chmod 0600 "$key"
+  printf '%s' "$key"
+}
+seal_update_backup(){
+  local directory=$1 sealed
+  sealed=$(mktemp "$directory.XXXXXX")
+  tar -czf - -C "$directory" . \
+    | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$(update_backup_key)" -out "$sealed"
+  find "$directory" -mindepth 1 -delete
+  mv "$sealed" "$directory/backup.tar.enc"
+  chmod 0600 "$directory/backup.tar.enc"
+}
+open_update_backup(){
+  local directory=$1 opened=$2
+  openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$ROOT/.update-backup.key" -in "$directory/backup.tar.enc" \
+    | tar -xzf - -C "$opened"
+}
+prune_update_backups(){
+  local keep=$1 current=$2 old
+  while IFS= read -r old; do
+    [[ -n "$old" && "$old" != "$current" ]] && rm -rf "$old"
+  done < <(ls -1dt "$ROOT"/backups/update-* 2>/dev/null | tail -n "+$((keep + 1))")
+}
+data_services_ready(){
+  local services
+  services=$("${compose[@]}" ps --services 2>/dev/null) || return 1
+  if grep -qx postgres <<<"$services"; then
+    "${compose[@]}" exec -T postgres pg_isready -U vertep -d vertep >/dev/null 2>&1 || return 1
+  fi
+  if grep -qx redis <<<"$services"; then
+    [[ "$("${compose[@]}" exec -T -e "REDISCLI_AUTH=${REDIS_PASSWORD:-}" redis redis-cli ping 2>/dev/null | tr -d '[:space:]')" == PONG ]] || return 1
+  fi
+}
 build_runtime_compose(){
   release_root="$ROOT"
   [[ -L "$ROOT/current" ]] && release_root="$ROOT/current"
@@ -259,7 +297,7 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
     mkdir -p "$backup"
     printf '%s\n' "$target_version" > "$backup/target-version"
     archive_live "$backup/application.tar.gz" tar --exclude=.git --exclude=backups --exclude=runtime \
-      --exclude=releases --exclude=current --exclude='*.pyc' -czf - -C "$ROOT" .
+      --exclude=releases --exclude=current --exclude=.update-backup.key --exclude='*.pyc' -czf - -C "$ROOT" .
     for item in .env config /etc/vertep/node.conf; do
       [[ -e "$ROOT/$item" ]] && cp -a "$ROOT/$item" "$backup/" || true
       [[ "$item" == /* && -e "$item" ]] && cp -a "$item" "$backup/" || true
@@ -277,7 +315,7 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
       "${backup_compose[@]}" exec -T postgres pg_dump -U vertep vertep > "$backup/postgres.sql"
       "${backup_compose[@]}" exec -T postgres psql -U vertep -d vertep \
         -Atc 'SELECT version, applied_at FROM schema_migrations ORDER BY applied_at' > "$backup/migrations.log" 2>/dev/null || true
-      "${backup_compose[@]}" exec -T redis redis-cli -a "${REDIS_PASSWORD:-}" SAVE >/dev/null
+      "${backup_compose[@]}" exec -T -e "REDISCLI_AUTH=${REDIS_PASSWORD:-}" redis redis-cli SAVE >/dev/null
       "${backup_compose[@]}" cp redis:/data/dump.rdb "$backup/redis.rdb"
       printf '{"role":"%s","created_at":"%s","target_version":"%s"}\n' \
         "$role" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$target_version" > "$backup/inventory.json"
@@ -306,6 +344,8 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
       python3 "$ROOT/scripts/release-layout.py" activate "$ROOT" "$legacy_version"
       rm -rf "$legacy_staging"
     fi
+    seal_update_backup "$backup"
+    prune_update_backups "${UPDATE_BACKUP_RETENTION:-3}" "$backup"
     # A failed earlier attempt of this version leaves its prepared tree behind; drop it
     # (refused if it is still active or the rollback target) so the retry can proceed.
     python3 "$ROOT/scripts/release-layout.py" discard "$ROOT" "$target_version" >/dev/null
@@ -390,7 +430,8 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
     for attempt in {1..120}; do
       if [[ "$role" == "worker" ]]; then
         "${compose[@]}" ps --status running --services | grep -qx worker && exit 0
-      elif curl -fsS "${core_tls[@]}" -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health"; then
+      elif curl -fsS "${core_tls[@]}" -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health" \
+          && data_services_ready; then
         exit 0
       fi
       sleep 5
@@ -429,6 +470,12 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
   rollback)
     [[ -f "$ROOT/.vertep-last-good" ]] || { echo "No rollback revision recorded" >&2; exit 1; }
     backup=$(cat "$ROOT/.vertep-last-good")
+    if [[ -f "$backup/backup.tar.enc" ]]; then
+      opened_backup=$(mktemp -d "$ROOT/.update-backup-open.XXXXXX")
+      trap 'rm -rf "$opened_backup"' EXIT
+      open_update_backup "$backup" "$opened_backup"
+      backup=$opened_backup
+    fi
     [[ -f "$backup/application.tar.gz" ]] || { echo "Last-good application backup is missing" >&2; exit 1; }
     [[ -f "$backup/SHA256SUMS" ]] || { echo "Last-good backup has no checksum manifest" >&2; exit 1; }
     (cd "$backup" && sha256sum -c SHA256SUMS)

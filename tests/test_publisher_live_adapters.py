@@ -195,7 +195,7 @@ def test_threads_two_step(monkeypatch, tmp_path):
     assert result["status"] == "PUBLISHED"
     assert result["id"] == "thread-12"
     create_url = fake.requests[0][1]
-    assert "graph.threads.net" in create_url and create_url.endswith("/th-3/threads")
+    assert "graph.threads.com" in create_url and create_url.endswith("/th-3/threads")
     create_data = fake.requests[0][2]["data"]
     assert create_data["media_type"] == "VIDEO"
     assert create_data["text"] == "пост"

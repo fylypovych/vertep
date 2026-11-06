@@ -13,7 +13,7 @@ from publishers.oauth import ThreadsTokenProvider
 
 from publishers.base import Publisher, check_response, fetch_permalink, wait_for_container
 
-_BASE = "https://graph.threads.net/v1.0"
+_BASE = "https://graph.threads.com/v1.0"
 
 
 class ThreadsPublisher(Publisher):

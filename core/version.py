@@ -28,3 +28,7 @@ def application_version() -> str:
         if value:
             return value
     return "0.0.0.0"
+
+
+# Contract between CORE and Worker; raise it only for an incompatible change.
+WORKER_API = 1

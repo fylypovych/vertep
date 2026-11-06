@@ -30,11 +30,11 @@
 
 | Канал | Передача відео | Публічний URL відео | Очікування готовності | Посилання на пост |
 |---|---|---|---|---|
-| YouTube | Resumable upload файла | Не потрібен | Ні | Формується з `id` відео; за документацією не звірено |
-| Facebook | Multipart-завантаження файла | Не потрібен | Ні | Поле `permalink_url`; для відео не звірено, запасний варіант: `facebook.com/<page>/videos/<id>` |
-| Instagram | Resumable: `upload_type=resumable`, файл на `rupload.facebook.com` | Не потрібен | `status_code` до `FINISHED`, далі `media_publish` | Поле `permalink`; для медіа Instagram не звірено |
-| Threads | Платформа сама завантажує за `video_url` | **Потрібен** | Поле `status`; за документацією не звірено | Поле `permalink`, може бути відсутнє через авторські права |
-| Telegram | `sendVideo` із файлом | Не потрібен | Ні | `t.me/<username>/<message_id>` лише для публічного каналу; ліміт 50 МБ і формат не звірено |
+| YouTube | Resumable upload файла | Не потрібен | Ні | Формується з `id` відео, який повертає `videos.insert` |
+| Facebook | Multipart-завантаження файла | Не потрібен | Ні | Формується: `facebook.com/<page>/videos/<id>`; у довіднику Video-вузла поля `permalink_url` немає |
+| Instagram | Resumable: `upload_type=resumable`, файл на `rupload.facebook.com` | Не потрібен | `status_code` до `FINISHED`, далі `media_publish` | Поле `permalink` |
+| Threads | Платформа сама завантажує за `video_url` | **Потрібен** | Поле `status` до `FINISHED`; адреса API `graph.threads.com` | Поле `permalink`, може бути відсутнє через авторські права |
+| Telegram | `sendVideo` із файлом | Не потрібен | Ні | `t.me/<username>/<message_id>` лише для публічного каналу; ліміт 50 МБ і формат посилання не звірено з документацією |
 
 Якщо API не дав посилання, receipt містить `permalink_available: false`, а пост лишається опублікованим: збій читання посилання не запускає повторну публікацію.
 

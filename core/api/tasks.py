@@ -22,7 +22,8 @@ from ..models import (JobStatus, StageName, StageStatus, TaskClaim, TaskRenew,
 from ..orchestration import (all_scenes_ready, cancel_scene, fail_scene,
                              finish_scene, start_scene, transition_stage)
 from ..security import _valid_worker_request
-from ..state import executor, store, task_queue
+from ..state import executor, logger, store, task_queue
+from ..version import WORKER_API
 from ..system_state import dispatch_allowed, get_system_state
 from .lab_lease import hold_gpu_for_laboratory
 from .job_helpers import (
@@ -55,6 +56,11 @@ router.include_router(workflow_execution_router)
 def claim_task(payload: TaskClaim, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
+    # A node from before this field speaks the contract that introduced it (version 1).
+    node_api = (store.workers.get(payload.node_name) or {}).get("worker_api", 1)
+    if node_api != WORKER_API:
+        logger.warning("Incompatible worker refused", extra={"node_name": payload.node_name})
+        return {"task": None, "reason": f"Несумісний контракт Worker: {node_api}, потрібен {WORKER_API}"}
     if not dispatch_allowed():
         return {"task": None, "system_state": get_system_state()["state"]}
     registered_worker = store.workers.get(payload.node_name)
@@ -399,6 +405,22 @@ def _approved_input_references(snapshot: dict) -> set[str]:
         if reference:
             references.add(reference)
     return references
+
+
+@router.get("/api/tasks/publisher-readiness")
+def publisher_readiness(request: Request):
+    """Channel readiness for a Publisher Node; never carries secret values."""
+    from adapters.publisher import PUBLISHERS
+    node_name = request.headers.get("x-vertep-node", "")
+    if not node_name or not _valid_worker_request(node_name, request):
+        raise HTTPException(401, "Token is not valid for this worker")
+    channels = {}
+    for name, publisher in PUBLISHERS.items():
+        missing = list(publisher.missing_scopes()) if hasattr(publisher, "missing_scopes") else []
+        configured = bool(publisher.configured())
+        channels[name] = {"ready": configured and not missing, "configured": configured,
+                          "missing_scopes": missing}
+    return {"channels": channels}
 
 
 def _publish_secret_scope(task_id: str, request: Request) -> tuple[set[str], str]:

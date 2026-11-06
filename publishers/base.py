@@ -53,7 +53,7 @@ def wait_for_container(transport, url: str, token: str, field: str, *, ready: st
             raise RuntimeError(f"Media container failed: {status}")
         if time.monotonic() >= deadline:
             raise RuntimeError(f"Media container is not ready: {status}")
-        time.sleep(float(os.getenv("PUBLISHER_CONTAINER_POLL_SECONDS", "10")))
+        time.sleep(float(os.getenv("PUBLISHER_CONTAINER_POLL_SECONDS", "60")))
 
 
 def fetch_permalink(transport, url: str, token: str, field: str = "permalink") -> str | None:
