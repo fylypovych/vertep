@@ -114,7 +114,8 @@ jobs:
           ( while true; do echo "[resources] $(date -u +%T) $(free -m | awk '/Mem:/{print "mem_used="$3"MB avail="$7"MB"}') $(df -h / | awk 'NR==2{print "disk_avail="$4}')"; sleep 15; done ) &
           # The Docker-backed standard consumer tests are required in fleet-persistence-runtime-acceptance;
           # running them here too doubled the job time past its limit.
-          python -m pytest -v -n 2 --dist loadgroup -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
+          # Three runners were shut down right at these cancel/kill tests: they run in fleet-cancel-path.
+          python -m pytest -v -n 2 --dist loadgroup --ignore=tests/test_core_rollout_coordinator.py -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
       - name: Збереження exact-SHA process та trust acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -382,6 +383,7 @@ jobs:
             tests/test_standard_host_consumer_docker.py::test_interruption_during_apply_does_not_overwrite_newer_data \
             tests/test_standard_host_consumer_docker.py::test_retry_does_not_return_deleted_seeds \
             tests/test_standard_host_consumer_docker.py::test_cancel_during_an_active_standard_apply_kills_it_without_a_delayed_effect \
+            tests/test_core_rollout_coordinator.py \
             tests/test_standard_host_consumer_docker.py::test_losing_the_lease_database_kills_the_active_apply_and_a_retry_succeeds_after_restart
       - name: Audited signals
         if: always()
