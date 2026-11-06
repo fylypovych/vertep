@@ -732,7 +732,7 @@ def sandbox_receipt(channel: str, task: dict, *, status: str = "PUBLISHED",
                "job_id": task["job_id"], "task_id": task["task_id"]}
     if status == "PUBLISHED":
         receipt.update({"id": f"mock-{channel}", "remote_id": f"mock-{channel}",
-                        "url": f"https://example.invalid/{channel}/mock"})
+                        "url": f"https://controlled.test/{channel}/sandbox"})
     else:
         receipt["error"] = error or f"{channel} unavailable"
     intent = task.get("publish_intent") or {}

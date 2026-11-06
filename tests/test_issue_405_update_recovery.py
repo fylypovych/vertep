@@ -124,3 +124,23 @@ def test_core_block_has_no_stale_backup_commands():
     compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
     assert "BACKUP_PG_RESTORE_CMD" not in compose
     assert "BGSAVE" not in compose
+
+
+def test_worker_rollback_does_not_depend_on_core_health(monkeypatch, tmp_path):
+    def core_json(path):
+        raise OSError("CORE is down")
+
+    (tmp_path / ".env").write_text("ROLE=worker\n", encoding="utf-8")
+    monkeypatch.delenv("ROLE", raising=False)
+    monkeypatch.delenv("NODE_ROLE", raising=False)
+    monkeypatch.setenv("VERTEP_ROOT", str(tmp_path))
+    monkeypatch.setattr(agent, "core_json", core_json)
+    agent.verify_restored_release()
+
+
+def test_core_address_comes_from_the_installation_env(monkeypatch, tmp_path):
+    for name in ("VERTEP_CORE_URL", "CORE_URL", "CORE_ADDRESS"):
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".env").write_text("VERTEP_CORE_URL=http://127.0.0.1:18080\n", encoding="utf-8")
+    monkeypatch.setenv("VERTEP_ROOT", str(tmp_path))
+    assert agent._core_url() == "http://127.0.0.1:18080"

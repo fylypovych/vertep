@@ -109,8 +109,9 @@ def restart_containers(root: Path) -> str:
 
 
 def core_is_healthy(attempts: int = 60, delay: float = 5) -> bool:
-    url = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL")
-           or "https://127.0.0.1:8443").rstrip("/") + "/api/health"
+    core = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL") or os.getenv("CORE_ADDRESS")
+            or "https://127.0.0.1:8443")
+    url = (core if core.startswith(("http://", "https://")) else f"http://{core}").rstrip("/") + "/api/health"
     for attempt in range(attempts):
         if not run(["curl", "-kfsS", "--connect-timeout", "5", url]).startswith("ERROR"):
             return True
@@ -163,7 +164,9 @@ def main() -> None:
     restore_system_state(root, state_dir)
     output = restart_containers(root)
     print(f"{now()} STARTUP-RECOVERY: {output}", file=sys.stderr)
-    if rolled_back and not core_is_healthy():
+    role = os.getenv("ROLE") or os.getenv("NODE_ROLE") or ""
+    on_core = not role or role == "unknown" or role.startswith("core")
+    if rolled_back and on_core and not core_is_healthy():
         mark_emergency(state_dir, "Rolled back release did not become healthy")
     reconcile_database_state(state_dir)
 

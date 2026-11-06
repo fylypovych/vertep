@@ -73,7 +73,8 @@ class BaseTokenProvider:
 
     def _durable(self) -> tuple[dict, str]:
         from publishers.task_secrets import current_task_secrets
-        remote = current_task_secrets()
+        # A credential set in the node environment stays local, as before.
+        remote = None if os.getenv(self.credential_env) else current_task_secrets()
         if remote is not None:
             return remote.oauth(self.credential_env), remote.get(self.credential_env) or ""
         from core.first_run import ensure_secret_store
@@ -83,7 +84,7 @@ class BaseTokenProvider:
 
     def _persist(self, token: str, *, revoked=False, refresh=None) -> None:
         from publishers.task_secrets import current_task_secrets
-        remote = current_task_secrets()
+        remote = None if os.getenv(self.credential_env) else current_task_secrets()
         if remote is not None:
             secrets = {self.credential_env.lower(): "" if revoked else token}
             if refresh:

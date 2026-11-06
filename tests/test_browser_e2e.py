@@ -213,6 +213,7 @@ def test_character_create_and_edit_use_localized_form():
             route.fulfill(json=character)
         page.route("**/api/characters/did_samogon", handle_character)
         page.route("**/api/characters", lambda route: route.fulfill(json=[character]))
+        page.route("**/api/characters/did_samogon/references", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/characters")
         expect(page.locator("[data-testid='characters-page']")).to_be_visible()
 
@@ -2334,8 +2335,10 @@ def test_update_critical_mutations_install_and_canary():
         expect(page.locator("[data-testid='update-cancel-rolling']")).to_be_visible()
         with page.expect_response("**/api/system/update/rolling/promote"):
             page.locator("[data-testid='update-promote-canary']").click()
+            page.get_by_role("dialog", name="Підтвердити canary").get_by_role("button", name="Підтвердити").click()
         with page.expect_response("**/api/system/update/rolling/rollback"):
             page.locator("[data-testid='update-rollback-canary']").click()
+            page.get_by_role("dialog", name="Відкотити canary").get_by_role("button", name="Підтвердити").click()
 
         # Issue #362: recovery is admitted only in EMERGENCY, and the UI mirrors
         # the server STATE_OPERATION_POLICY. In NORMAL the control must be
@@ -2789,7 +2792,7 @@ def test_real_backend_system_state_blocks_mutations():
                 expect(page.get_by_test_id("jobs-page")).to_be_visible(timeout=20000)
                 blocked = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": ""}, headers=headers)
                 assert blocked.status == 423, f"READ_ONLY job create returned {blocked.status}"
-                assert "blocked by system state" in blocked.text()
+                assert "blocked by system state" in blocked.text() or "тимчасово вимкнено" in blocked.text()
                 # UI читає системний стан під час ініціалізації застосунку,
                 # тому перезавантаження робить перевірку детермінованою.
                 page.reload()

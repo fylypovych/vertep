@@ -286,10 +286,27 @@ def run_fenced(command: list[str], root: Path, state_dir: Path, lease,
     return collected["output"]
 
 
+def _installation_value(*names: str) -> str:
+    """Process environment first, then the installation .env that scripts/vertep sources."""
+    for name in names:
+        if os.getenv(name):
+            return os.environ[name]
+    try:
+        lines = (Path(os.getenv("VERTEP_ROOT", "")) / ".env").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    values = dict(line.split("=", 1) for line in lines if "=" in line and not line.startswith("#"))
+    return next((values[name].strip() for name in names if values.get(name, "").strip()), "")
+
+
+def _core_url() -> str:
+    """Same address as scripts/vertep."""
+    value = _installation_value("VERTEP_CORE_URL", "CORE_URL", "CORE_ADDRESS") or "https://127.0.0.1:8443"
+    return value if value.startswith(("http://", "https://")) else f"http://{value}"
+
+
 def core_json(path: str, method: str = "GET") -> dict:
-    core_url = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL")
-                or "https://127.0.0.1:8443")
-    url = core_url.rstrip("/") + path
+    url = _core_url().rstrip("/") + path
     request = Request(url, method=method)
     internal_key = os.getenv("INTERNAL_API_KEY")
     password = os.getenv("ADMIN_PASSWORD")
@@ -440,12 +457,18 @@ def rollback_safe_flag(manifest: dict) -> str:
 
 def drain_is_coordinated_elsewhere() -> bool:
     """CORE drains a worker before asking it to update; only a CORE node waits here."""
-    role = os.getenv("ROLE") or os.getenv("NODE_ROLE") or ""
+    role = _installation_value("ROLE", "NODE_ROLE")
     return bool(role) and role != "unknown" and not role.startswith("core")
 
 
 def verify_restored_release() -> None:
-    """A rollback ends in NORMAL only after CORE answers its health check again."""
+    """A rollback ends in NORMAL only after CORE answers its health check again.
+
+    A worker node proves itself through the rollout self-test: a CORE outage says
+    nothing about its restored release and must not put it into EMERGENCY.
+    """
+    if drain_is_coordinated_elsewhere():
+        return
     deadline = time.monotonic() + float(os.getenv("UPDATE_ROLLBACK_HEALTH_TIMEOUT_SECONDS", "300"))
     while True:
         try:

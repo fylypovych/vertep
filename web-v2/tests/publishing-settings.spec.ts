@@ -22,7 +22,8 @@ function mockApi(page: any, role: string, saved: unknown[]) {
 test('адмін зберігає параметри публікації й бачить відмову сервера', async ({ page }) => {
   const saved: unknown[] = [];
   await mockApi(page, 'admin', saved);
-  await page.goto('/settings?tab=publishing');
+  await page.goto('/settings');
+  await page.locator("a[href='/settings?tab=publishing']").click();
   await expect(page.getByTestId('publishing-telegram-channel')).toHaveValue('@old_channel', { timeout: 20000 });
   await page.getByTestId('publishing-public-url').fill('http://internal');
   await page.getByTestId('publishing-save').click();

@@ -187,6 +187,7 @@ def test_worker_rollback_reaches_host_consumer(monkeypatch, tmp_path):
     monkeypatch.setenv("UPDATE_REQUEST_DIR", str(requests))
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state))
     monkeypatch.setenv("VERTEP_TEST_EFFECT", str(runtime_effect))
+    monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
 
     request_local_update("previous", action="rollback", request_id="e" * 32)
     assert agent.process_request(root, state, requests / f"{'e' * 32}.json") is True
