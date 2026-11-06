@@ -224,6 +224,8 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
     c = config_contour; api = c["api"]
     for key, value in node_dependencies["env"].items():
         monkeypatch.setenv(key, value)
+    # A Publisher Node is ready only with a usable channel (i.0.0.4.14).
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "controlled-token")
     from worker.service import role_self_test
     from core.dispatcher import available_worker
     from core.models import Job, JobStatus

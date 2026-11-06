@@ -105,7 +105,7 @@ open_update_backup(){
 prune_update_backups(){
   local keep=$1 current=$2 old
   while IFS= read -r old; do
-    [[ -n "$old" && "$old" != "$current" ]] && rm -rf "$old"
+    if [[ -n "$old" && "$old" != "$current" ]]; then rm -rf "$old"; fi
   done < <(ls -1dt "$ROOT"/backups/update-* 2>/dev/null | tail -n "+$((keep + 1))")
 }
 data_services_ready(){

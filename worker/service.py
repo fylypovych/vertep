@@ -865,10 +865,15 @@ def publisher_readiness() -> dict:
     base = _core_base_url()
     node_name = os.getenv("NODE_NAME") or os.getenv("WORKER_NAME") or ""
     if base and node_name:
-        response = httpx.get(f"{base}/api/tasks/publisher-readiness",
-                             headers=_worker_auth_headers(node_name), timeout=15)
-        response.raise_for_status()
-        ready |= {name for name, state in response.json()["channels"].items() if state["ready"]}
+        try:
+            response = httpx.get(f"{base}/api/tasks/publisher-readiness",
+                                 headers=_worker_auth_headers(node_name), timeout=15)
+            response.raise_for_status()
+            ready |= {name for name, state in response.json()["channels"].items() if state["ready"]}
+        except httpx.HTTPError:
+            # A credential on this node is enough; without one the outage must stay visible.
+            if not ready:
+                raise
     if not ready:
         raise RuntimeError("Жоден канал публікації не налаштовано")
     return {"mode": "live", "ready_channels": sorted(ready)}
