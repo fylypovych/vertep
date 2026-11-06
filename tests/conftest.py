@@ -103,6 +103,18 @@ def _finish_executor_work(pool) -> None:
 
 
 @pytest.fixture(autouse=True)
+def restore_resource_roots():
+    """CORE startup and some helpers set these for good; a later test would read an empty root."""
+    names = ("CHARACTERS_ROOT", "BRANDS_ROOT", "WORKFLOWS_ROOT")
+    saved = {name: os.environ.get(name) for name in names}
+    yield
+    for name, value in saved.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+@pytest.fixture(autouse=True)
 def reset_in_process_api_state(monkeypatch):
     """Do not leak process-local API state between otherwise isolated tests."""
     from core.state import executor, request_windows, setup_request_windows, store, task_queue

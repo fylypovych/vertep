@@ -1,3 +1,6 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.47
+- Тести: `CHARACTERS_ROOT`, `BRANDS_ROOT` і `WORKFLOWS_ROOT` відновлюються після кожного тесту, щоб зміна в одному тесті не впливала на наступні.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.46
 - CI: `test_core_rollout_coordinator.py` перенесено з `local-contracts` у `fleet-cancel-path-acceptance`, бо зупинки машини збігалися в часі з цими тестами. Причину не доведено.
 
