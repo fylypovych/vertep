@@ -14,6 +14,14 @@ class TelegramPublisher(Publisher):
     channel = "telegram"
     credential_env = "TELEGRAM_BOT_TOKEN"
 
+    def _readiness_token(self):
+        from publishers.oauth import _get_secret
+        return _get_secret(self.credential_env)
+
+    def _probe_request(self, token: str):
+        from adapters.telegram import api_root
+        return (f"{api_root()}/bot{token}/getMe", {})
+
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         from adapters.telegram import api_root
         from publishers.oauth import _get_secret

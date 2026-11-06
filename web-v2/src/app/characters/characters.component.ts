@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -14,18 +15,18 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 @Component({
   selector: 'app-characters',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="characters-page">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-slate-900">Персонажі</h3>
-        <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="createCharacterReason || 'Новий персонаж'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
-          Новий персонаж
+        <h3 class="text-lg font-semibold text-slate-900">{{ 'Персонажі' | t }}</h3>
+        <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="(createCharacterReason || 'Новий персонаж') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
+          {{ 'Новий персонаж' | t }}
         </button>
       </div>
 
       <div class="mb-4">
-        <input [(ngModel)]="search" (input)="onSearch()" data-testid="characters-search" placeholder="Пошук за ім'ям або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <input [(ngModel)]="search" (input)="onSearch()" data-testid="characters-search" placeholder="{{ 'Пошук за ім\\'ям або ID...' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
       @if (loading()) {
@@ -42,19 +43,19 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               </div>
               <p class="text-sm text-slate-600 mb-3">{{ character.id }}</p>
               <div class="flex gap-2">
-                <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">Редагувати</button>
-                <button (click)="deleteCharacter(character.id!)" [disabled]="!canDeleteCharacter" [title]="deleteCharacterReason || 'Видалити'" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-character-button">Видалити</button>
+                <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">{{ 'Редагувати' | t }}</button>
+                <button (click)="deleteCharacter(character.id!)" [disabled]="!canDeleteCharacter" [title]="(deleteCharacterReason || 'Видалити') | t" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-character-button">{{ 'Видалити' | t }}</button>
               </div>
             </div>
           } @empty {
-            <div class="col-span-full text-center text-slate-500 py-6" data-testid="characters-empty">Персонажів не знайдено</div>
+            <div class="col-span-full text-center text-slate-500 py-6" data-testid="characters-empty">{{ 'Персонажів не знайдено' | t }}</div>
           }
         </div>
         @if (pages > 1) {
           <div class="flex items-center justify-between mt-4">
-            <button (click)="prevPage()" [disabled]="page === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Назад</button>
-            <span class="text-sm text-slate-600">Сторінка {{ page }} з {{ pages }}</span>
-            <button (click)="nextPage()" [disabled]="page === pages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Вперед</button>
+            <button (click)="prevPage()" [disabled]="page === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Назад' | t }}</button>
+            <span class="text-sm text-slate-600">{{ 'Сторінка' | t }} {{ page }} {{ 'з' | t }} {{ pages }}</span>
+            <button (click)="nextPage()" [disabled]="page === pages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Вперед' | t }}</button>
           </div>
         }
       }
@@ -63,33 +64,33 @@ import { ErrorStateComponent } from '../shared/error-state.component';
     <!-- Character Form Modal -->
     <div *ngIf="showModal()" data-testid="character-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ editingId ? 'Редагувати персонажа' : 'Новий персонаж' }}</h3>
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ (editingId ? 'Редагувати персонажа' : 'Новий персонаж') | t }}</h3>
         <div class="space-y-4 max-h-[70vh] overflow-y-auto">
           <!-- Base metadata -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Основна інформація</h4>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Основна інформація' | t }}</h4>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Назва</label>
-                <input [(ngModel)]="form.name" data-testid="character-name-input" placeholder="Наприклад, Дід Самогонщик" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Назва' | t }}</label>
+                <input [(ngModel)]="form.name" data-testid="character-name-input" placeholder="{{ 'Наприклад, Дід Самогонщик' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Системний ID</label>
-                <input [(ngModel)]="form.id" data-testid="character-id-input" [disabled]="!!editingId" placeholder="автоматично згенерований ID" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm disabled:bg-slate-100">
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Системний ID' | t }}</label>
+                <input [(ngModel)]="form.id" data-testid="character-id-input" [disabled]="!!editingId" placeholder="{{ 'автоматично згенерований ID' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm disabled:bg-slate-100">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Мова' | t }}</label>
                 <select [(ngModel)]="form.language" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <option value="uk">Українська</option>
-                  <option value="en">Англійська</option>
-                  <option value="pl">Польська</option>
-                  <option value="de">Німецька</option>
+                  <option value="uk">{{ 'Українська' | t }}</option>
+                  <option value="en">{{ 'Англійська' | t }}</option>
+                  <option value="pl">{{ 'Польська' | t }}</option>
+                  <option value="de">{{ 'Німецька' | t }}</option>
                 </select>
               </div>
               <div class="flex items-end">
                 <div class="flex items-center gap-2">
                   <input type="checkbox" [(ngModel)]="form.enabled" id="enabled">
-                  <label for="enabled" class="text-sm text-slate-700">Персонаж активний</label>
+                  <label for="enabled" class="text-sm text-slate-700">{{ 'Персонаж активний' | t }}</label>
                 </div>
               </div>
               <div class="md:col-span-2">
@@ -101,82 +102,82 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 
           <!-- System prompt -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Системний промпт</h4>
-            <textarea [(ngModel)]="form.system_prompt" placeholder="Опишіть стиль мовлення, характер, знання та обмеження персонажа." rows="6" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm resize-y"></textarea>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Системний промпт' | t }}</h4>
+            <textarea [(ngModel)]="form.system_prompt" placeholder="{{ 'Опишіть стиль мовлення, характер, знання та обмеження персонажа.' | t }}" rows="6" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm resize-y"></textarea>
           </div>
 
           <!-- Reference images -->
           <div class="border border-slate-200 rounded-lg p-3" data-testid="character-references">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Референси персонажа</h4>
-            <p class="text-sm text-slate-500 mb-3">Зразки зовнішності. Вони автоматично використовуються в кожній генерації зображень цього персонажа. До 5 файлів PNG, JPEG або WebP, кожен до 10 МБ.</p>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Референси персонажа' | t }}</h4>
+            <p class="text-sm text-slate-500 mb-3">{{ 'Зразки зовнішності. Вони автоматично використовуються в кожній генерації зображень цього персонажа. До 5 файлів PNG, JPEG або WebP, кожен до 10 МБ.' | t }}</p>
             <div class="flex flex-wrap gap-3 mb-3">
               @for (item of references(); track item.filename) {
                 <div class="relative w-24 h-24" data-testid="character-reference">
                   <img [src]="resources.characterReferenceUrl(editingId!, item.filename)" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
-                  <button type="button" (click)="deleteReference(item.filename)" [disabled]="!canSaveCharacter" aria-label="Видалити референс" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
+                  <button type="button" (click)="deleteReference(item.filename)" [disabled]="!canSaveCharacter" aria-label="{{ 'Видалити референс' | t }}" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
                 </div>
               }
               @for (item of pendingReferences(); track item.url) {
                 <div class="relative w-24 h-24" data-testid="character-reference-pending">
                   <img [src]="item.url" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
-                  <button type="button" (click)="removePendingReference(item)" aria-label="Прибрати референс" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
+                  <button type="button" (click)="removePendingReference(item)" aria-label="{{ 'Прибрати референс' | t }}" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
                 </div>
               }
             </div>
             <input type="file" accept="image/png,image/jpeg,image/webp" multiple data-testid="character-reference-input" [disabled]="!canSaveCharacter || saving()" (change)="addReferences($event)">
             @if (!editingId) {
-              <p class="text-xs text-slate-500 mt-2">Зображення завантажаться після натискання «Зберегти».</p>
+              <p class="text-xs text-slate-500 mt-2">{{ 'Зображення завантажаться після натискання «Зберегти».' | t }}</p>
             }
           </div>
 
           <!-- Voice config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Налаштування голосу</h4>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Налаштування голосу' | t }}</h4>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Провайдер</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Провайдер' | t }}</label>
                 <select [(ngModel)]="form.voice.provider" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <option value="none">Немає (тимчасово)</option>
-                  <option value="mock">Mock (тест)</option>
+                  <option value="none">{{ 'Немає (тимчасово)' | t }}</option>
+                  <option value="mock">{{ 'Mock (тест)' | t }}</option>
                   <option value="piper">Piper (MIT)</option>
                   <option value="kokoro">Kokoro (Apache-2.0)</option>
                 </select>
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Мова' | t }}</label>
                 <select [(ngModel)]="form.voice.language" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <option value="uk">Українська</option>
+                  <option value="uk">{{ 'Українська' | t }}</option>
                   <option value="en">English</option>
                   <option value="pl">Polski</option>
                   <option value="de">Deutsch</option>
                 </select>
               </div>
               <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 mb-1">Голос (voice ID)</label>
-                <input [(ngModel)]="form.voice.voice" placeholder="наприклад, uk_Kyiv (або залиште порожнім для дефолту)" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Голос (voice ID)' | t }}</label>
+                <input [(ngModel)]="form.voice.voice" placeholder="{{ 'наприклад, uk_Kyiv (або залиште порожнім для дефолту)' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
             </div>
           </div>
 
           <!-- Visual config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Візуальний стиль</h4>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Візуальний стиль' | t }}</h4>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Стиль</label>
-                <input [(ngModel)]="form.visual.style" placeholder="наприклад, warm documentary illustration" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Стиль' | t }}</label>
+                <input [(ngModel)]="form.visual.style" placeholder="{{ 'наприклад, warm documentary illustration' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Співвідношення сторін</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Співвідношення сторін' | t }}</label>
                 <select [(ngModel)]="form.visual.aspect_ratio" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <option value="16:9">16:9 (YouTube, горизонтальне)</option>
-                  <option value="9:16">9:16 (Shorts/Reels/TikTok, вертикальне)</option>
-                  <option value="1:1">1:1 (квадратне)</option>
+                  <option value="16:9">{{ '16:9 (YouTube, горизонтальне)' | t }}</option>
+                  <option value="9:16">{{ '9:16 (Shorts/Reels/TikTok, вертикальне)' | t }}</option>
+                  <option value="1:1">{{ '1:1 (квадратне)' | t }}</option>
                   <option value="4:3">4:3</option>
                 </select>
               </div>
               <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 mb-1">Пресет виводу</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Пресет виводу' | t }}</label>
                 <select [(ngModel)]="form.visual.output_preset" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
                   <option value="youtube">YouTube (1080p/720p)</option>
                   <option value="shorts">YouTube Shorts</option>
@@ -189,18 +190,18 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 
           <!-- Generation config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Налаштування генерації</h4>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Налаштування генерації' | t }}</h4>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 mb-1">Workflow (шлях до JSON)</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Workflow (шлях до JSON)' | t }}</label>
                 <input [(ngModel)]="form.generation.workflow" placeholder="workflows/image/demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-mono">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Мін. VRAM (МБ)</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Мін. VRAM (МБ)' | t }}</label>
                 <input type="number" [(ngModel)]="form.generation.min_vram_mb" min="0" step="512" placeholder="4096" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Макс. спроб</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Макс. спроб' | t }}</label>
                 <input type="number" [(ngModel)]="form.generation.max_retries" min="0" max="10" placeholder="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
             </div>
@@ -208,21 +209,21 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 
           <!-- Publishing config -->
           <div class="border border-slate-200 rounded-lg p-3">
-            <h4 class="text-xs font-medium text-slate-500 mb-2">Публікація</h4>
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Публікація' | t }}</h4>
             <div class="flex items-center gap-2 mb-3">
               <input type="checkbox" [(ngModel)]="form.publishing.enabled" id="pub-enabled">
-              <label for="pub-enabled" class="text-sm text-slate-700">Увімкнути автопублікацію</label>
+              <label for="pub-enabled" class="text-sm text-slate-700">{{ 'Увімкнути автопублікацію' | t }}</label>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Канали (через кому)</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Канали (через кому)' | t }}</label>
               <input [(ngModel)]="form.publishing.channels" placeholder="youtube,tiktok,facebook,instagram,threads,telegram" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-              <p class="text-xs text-slate-500 mt-1">Доступні: youtube, tiktok, facebook, instagram, threads, telegram</p>
+              <p class="text-xs text-slate-500 mt-1">{{ 'Доступні: youtube, tiktok, facebook, instagram, threads, telegram' | t }}</p>
             </div>
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-6">
-          <button (click)="closeModal()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-          <button (click)="saveCharacter()" [disabled]="saving() || !canSaveCharacter" [title]="saveCharacterReason || 'Зберегти'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
+          <button (click)="closeModal()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
+          <button (click)="saveCharacter()" [disabled]="saving() || !canSaveCharacter" [title]="(saveCharacterReason || 'Зберегти') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
         </div>
       </div>
     </div>

@@ -127,6 +127,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             data["self_test_requested_at"] = previous["self_test_requested_at"]
     if previous and not worker_transition_allowed(previous.get("status", "OFFLINE"), data["status"]):
         raise HTTPException(409, f"Illegal worker state transition: {previous.get('status')} -> {data['status']}")
+    if previous and previous.get("scheduler_last_claim_at"):
+        data["scheduler_last_claim_at"] = previous["scheduler_last_claim_at"]
     for field in _MODEL_LIFECYCLE_FIELDS:
         if previous and previous.get(field) is not None:
             data[field] = previous[field]

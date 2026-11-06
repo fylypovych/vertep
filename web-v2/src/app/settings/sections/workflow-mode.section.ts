@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -9,36 +10,36 @@ import { PolicyService } from '../../core/services/policy.service';
 @Component({
   selector: 'app-settings-workflow-mode',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [TPipe, CommonModule, FormsModule],
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-workflow-mode">
-    <h3 class="text-lg font-semibold mb-1">Режим workflow</h3>
-    <p class="text-sm text-slate-500 mb-4">Визначає, як нові завдання проходять шлях від теми до готового відео.</p>
+    <h3 class="text-lg font-semibold mb-1">{{ 'Режим workflow' | t }}</h3>
+    <p class="text-sm text-slate-500 mb-4">{{ 'Визначає, як нові завдання проходять шлях від теми до готового відео.' | t }}</p>
     <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="workflow-mode-error">{{ error() }}</div>
     <div *ngIf="state() as current" class="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <label class="text-sm" for="workflow-mode-choice">Режим</label>
+      <label class="text-sm" for="workflow-mode-choice">{{ 'Режим' | t }}</label>
       <div class="flex items-center gap-2">
         <select id="workflow-mode-choice" class="border rounded px-2 py-1 grow" data-testid="workflow-mode-select"
                 [ngModel]="choice()" (ngModelChange)="choice.set($any($event)); infoOpen.set(false)"
                 [disabled]="!canEdit() || saving()">
-          <option value="static">Статичний workflow</option>
-          <option value="dynamic" [disabled]="!current.dynamic_available">Динамічний workflow</option>
+          <option value="static">{{ 'Статичний workflow' | t }}</option>
+          <option value="dynamic" [disabled]="!current.dynamic_available">{{ 'Динамічний workflow' | t }}</option>
         </select>
         <button type="button" class="w-6 h-6 shrink-0 rounded-full border border-amber-500 text-amber-700 text-sm font-bold"
-                data-testid="workflow-mode-info-toggle" aria-label="Пояснення до обраного режиму"
+                data-testid="workflow-mode-info-toggle" aria-label="{{ 'Пояснення до обраного режиму' | t }}"
                 [attr.aria-expanded]="infoOpen()" [title]="explanation()"
                 (click)="infoOpen.set(!infoOpen())">!</button>
       </div>
       <p *ngIf="infoOpen()" class="md:col-start-2 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded p-2"
          data-testid="workflow-mode-info">{{ explanation() }}</p>
       <p *ngIf="!current.dynamic_available" class="md:col-span-2 text-sm text-amber-700" data-testid="workflow-mode-unavailable">
-        Динамічний workflow недоступний: на сервері немає налаштованих шаблонів процесу.
+        {{ 'Динамічний workflow недоступний: на сервері немає налаштованих шаблонів процесу.' | t }}
       </p>
       <p *ngIf="blockedByActiveJobs()" class="md:col-span-2 text-sm text-amber-700" data-testid="workflow-mode-blocked">
-        Повернення до статичного режиму заборонене: незавершених завдань динамічного режиму {{ current.active_dynamic_jobs }}. Спершу завершіть або скасуйте їх.
+        {{ 'Повернення до статичного режиму заборонене: незавершених завдань динамічного режиму' | t }} {{ current.active_dynamic_jobs }}{{ '. Спершу завершіть або скасуйте їх.' | t }}
       </p>
       <div class="md:col-span-2">
         <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm" data-testid="workflow-mode-apply"
-                [disabled]="!canEdit() || saving() || choice() === current.mode || blockedByActiveJobs()" (click)="apply()">Застосувати</button>
+                [disabled]="!canEdit() || saving() || choice() === current.mode || blockedByActiveJobs()" (click)="apply()">{{ 'Застосувати' | t }}</button>
       </div>
     </div>
   </div>`,

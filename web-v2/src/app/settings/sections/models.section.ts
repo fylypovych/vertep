@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, signal, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -13,22 +14,22 @@ import { interval, Subscription } from 'rxjs';
 @Component({
   selector: 'app-settings-models',
   standalone: true,
-  imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-models">
-  <h3 class="text-lg font-semibold mb-4">Моделі (Ollama)</h3>
+  <h3 class="text-lg font-semibold mb-4">{{ 'Моделі (Ollama)' | t }}</h3>
   <app-loading-state *ngIf="loading()" />
   <app-error-state *ngIf="error()" [message]="error()!" />
   <div *ngIf="!loading() && !error()">
     <div class="flex gap-2 mb-4">
       <select [(ngModel)]="targetNode" class="border rounded px-3 py-2" data-testid="pull-node-select">
-        <option value="">Локальний (CORE)</option>
+        <option value="">{{ 'Локальний (CORE)' | t }}</option>
         <option *ngFor="let node of nodes()" [value]="node.node_name">
-          {{ node.node_name }}<ng-container *ngIf="!node.ready"> (неготовий)</ng-container>
+          {{ node.node_name }}<ng-container *ngIf="!node.ready"> {{ '(неготовий)' | t }}</ng-container>
         </option>
       </select>
-      <input [(ngModel)]="modelName" class="flex-1 border rounded px-3 py-2" placeholder="Назва моделі" [disabled]="pulling()" data-testid="pull-model-input">
-      <button (click)="pullModel()" [disabled]="!modelName || pulling() || !canPullModel" [title]="pullModelReason || 'Завантажити модель'" class="px-4 py-2 bg-emerald-600 text-white rounded" data-testid="pull-model-button">
-        {{ pulling() ? 'Завантаження...' : 'Завантажити' }}
+      <input [(ngModel)]="modelName" class="flex-1 border rounded px-3 py-2" placeholder="{{ 'Назва моделі' | t }}" [disabled]="pulling()" data-testid="pull-model-input">
+      <button (click)="pullModel()" [disabled]="!modelName || pulling() || !canPullModel" [title]="(pullModelReason || 'Завантажити модель') | t" class="px-4 py-2 bg-emerald-600 text-white rounded" data-testid="pull-model-button">
+        {{ (pulling() ? 'Завантаження...' : 'Завантажити') | t }}
       </button>
     </div>
 
@@ -41,27 +42,27 @@ import { interval, Subscription } from 'rxjs';
         <div class="bg-emerald-600 h-2 rounded-full transition-all"
              [style.width.%]="activePull()?.progress || 0"></div>
       </div>
-      <div *ngIf="activePull()?.message" class="text-slate-600 text-sm mt-1">{{ activePull()?.message }}</div>
+      <div *ngIf="activePull()?.message" class="text-slate-600 text-sm mt-1">{{ (activePull()?.message) | t }}</div>
       <div *ngIf="activePull()?.error" class="text-red-600 text-sm mt-1">{{ activePull()?.error }}</div>
       <div class="flex gap-2 mt-2">
         <button *ngIf="activePull()?.status === 'QUEUED' || activePull()?.status === 'RUNNING'"
-                (click)="cancelPull()" [disabled]="!canCancelPull" [title]="cancelPullReason || 'Скасувати'" class="text-sm text-red-600 hover:underline disabled:opacity-50" data-testid="pull-cancel-button">Скасувати</button>
+                (click)="cancelPull()" [disabled]="!canCancelPull" [title]="(cancelPullReason || 'Скасувати') | t" class="text-sm text-red-600 hover:underline disabled:opacity-50" data-testid="pull-cancel-button">{{ 'Скасувати' | t }}</button>
       </div>
     </div>
 
     <div *ngIf="nodes().length" class="mb-4" data-testid="model-nodes-table">
-      <h4 class="text-sm font-semibold mb-2">Розподіл по вузлах</h4>
+      <h4 class="text-sm font-semibold mb-2">{{ 'Розподіл по вузлах' | t }}</h4>
       <table class="w-full text-sm">
         <thead><tr class="text-left text-slate-500">
-          <th class="py-1">Вузол</th><th>Стан</th><th>Каталог</th><th>Моделей</th><th>Команда</th>
+          <th class="py-1">{{ 'Вузол' | t }}</th><th>{{ 'Стан' | t }}</th><th>{{ 'Каталог' | t }}</th><th>{{ 'Моделей' | t }}</th><th>{{ 'Команда' | t }}</th>
         </tr></thead>
         <tbody>
           <tr *ngFor="let node of nodes()" class="border-t" [attr.data-testid]="'model-node-' + node.node_name">
             <td class="py-1">{{ node.node_name }}</td>
-            <td>{{ node.ready ? 'Готовий' : 'Неготовий' }}</td>
-            <td>{{ node.stale ? 'застарілий' : 'активний' }}</td>
+            <td>{{ (node.ready ? 'Готовий' : 'Неготовий') | t }}</td>
+            <td>{{ (node.stale ? 'застарілий' : 'активний') | t }}</td>
             <td>{{ node.model_count ?? 0 }}</td>
-            <td>{{ node.pending_command ? 'в черзі' : '-' }}</td>
+            <td>{{ (node.pending_command ? 'в черзі' : '-') | t }}</td>
           </tr>
         </tbody>
       </table>
@@ -69,14 +70,14 @@ import { interval, Subscription } from 'rxjs';
 
     <div *ngFor="let model of models()" class="flex justify-between py-2 border-b" [attr.data-testid]="'model-row-' + model.name">
       <span>{{ model.name }}</span>
-      <button (click)="deleteModel(model.name)" [disabled]="!canDeleteModel" [title]="deleteModelReason || 'Видалити модель'" class="text-red-600 disabled:opacity-40" [attr.data-testid]="'model-delete-' + model.name">Видалити</button>
+      <button (click)="deleteModel(model.name)" [disabled]="!canDeleteModel" [title]="(deleteModelReason || 'Видалити модель') | t" class="text-red-600 disabled:opacity-40" [attr.data-testid]="'model-delete-' + model.name">{{ 'Видалити' | t }}</button>
     </div>
 
     <div class="mt-6 pt-4 border-t" data-testid="voice-preview">
-      <h4 class="text-sm font-semibold mb-2">Перевірка голосу (TTS)</h4>
+      <h4 class="text-sm font-semibold mb-2">{{ 'Перевірка голосу (TTS)' | t }}</h4>
       <div class="flex gap-2 mb-2">
         <input [(ngModel)]="previewText" class="flex-1 border rounded px-3 py-2"
-               placeholder="Текст для перевірки" maxlength="500" data-testid="voice-preview-text">
+               placeholder="{{ 'Текст для перевірки' | t }}" maxlength="500" data-testid="voice-preview-text">
         <select [(ngModel)]="previewVoice" class="border rounded px-3 py-2" data-testid="voice-preview-voice">
           <option value="default">default</option>
           <option *ngFor="let voice of voices()" [value]="voice">{{ voice }}</option>
@@ -85,7 +86,7 @@ import { interval, Subscription } from 'rxjs';
                data-testid="voice-preview-speed">
         <button (click)="runPreview()" [disabled]="previewRunning() || !previewText.trim()"
                 class="px-4 py-2 bg-sky-600 text-white rounded" data-testid="voice-preview-button">
-          {{ previewRunning() ? 'Синтез...' : 'Прослухати' }}
+          {{ (previewRunning() ? 'Синтез...' : 'Прослухати') | t }}
         </button>
       </div>
       <div *ngIf="previewError()" class="text-red-600 text-sm" data-testid="voice-preview-error">{{ previewError() }}</div>

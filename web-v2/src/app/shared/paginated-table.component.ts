@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, Input, Output, EventEmitter, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -5,18 +6,18 @@ import { FormsModule } from '@angular/forms';
 @Component({
   selector: 'app-paginated-table',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [TPipe, CommonModule, FormsModule],
   template: `
     <div data-testid="paginated-table">
       <div class="mb-4">
-        <input [(ngModel)]="searchTerm" placeholder="Пошук..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <input [(ngModel)]="searchTerm" placeholder="{{ 'Пошук...' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm text-left">
           <thead class="text-xs text-slate-500 uppercase bg-slate-50">
             <tr>
               @for (col of columns; track col.key) {
-                <th class="px-4 py-3">{{ col.label }}</th>
+                <th class="px-4 py-3">{{ (col.label) | t }}</th>
               }
             </tr>
           </thead>
@@ -30,16 +31,16 @@ import { FormsModule } from '@angular/forms';
                 }
               </tr>
             } @empty {
-              <tr><td [attr.colspan]="columns.length" class="px-4 py-6 text-center text-slate-500">Немає даних</td></tr>
+              <tr><td [attr.colspan]="columns.length" class="px-4 py-6 text-center text-slate-500">{{ 'Немає даних' | t }}</td></tr>
             }
           </tbody>
         </table>
       </div>
       @if (pages() > 1) {
         <div class="flex items-center justify-between mt-4">
-          <button (click)="prev()" [disabled]="page() === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Назад</button>
-          <span class="text-sm text-slate-600">Сторінка {{ page() }} з {{ pages() }}</span>
-          <button (click)="next()" [disabled]="page() === pages()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Вперед</button>
+          <button (click)="prev()" [disabled]="page() === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Назад' | t }}</button>
+          <span class="text-sm text-slate-600">{{ 'Сторінка' | t }} {{ page() }} {{ 'з' | t }} {{ pages() }}</span>
+          <button (click)="next()" [disabled]="page() === pages()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Вперед' | t }}</button>
         </div>
       }
     </div>

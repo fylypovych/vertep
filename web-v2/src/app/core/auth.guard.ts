@@ -24,9 +24,11 @@ export class AuthGuard implements CanActivate, CanActivateChild {
         this.policy.refresh();
       }),
       map(() => true),
-      // Лише підтверджена відсутність сесії веде на login. Під час рестарту CORE
-      // користувач лишається в системі, а policy блокує дії (fail-closed).
-      catchError((error) => of(isConnectionFailure(error) ? true : this.router.createUrlTree(['/login'])))
+      // Лише підтверджена відсутність сесії веде на login: 401 або відповідь без
+      // коректної identity (помилка без HTTP-статусу). За інших помилок користувач
+      // лишається в системі, а policy блокує дії (fail-closed).
+      catchError((error) => of(error?.status === 401 || error?.status === undefined
+        ? this.router.createUrlTree(['/login']) : true))
     );
   }
 

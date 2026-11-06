@@ -1,91 +1,129 @@
 <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-  <div class="bg-white rounded-2xl shadow-lg w-full max-w-2xl">
-    <div class="px-6 py-4 border-b border-slate-200"><h1 class="text-xl font-semibold text-slate-900">Vertep — Перший запуск</h1></div>
-    <div class="px-6 py-4">
-      @if (error()) { <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4"><p class="text-red-700 text-sm">{{ error() }}</p></div> }
-      @if (loading()) { <div class="flex items-center justify-center py-12"><div class="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div></div>
-      } @else if (step() === 0) {
-        <h2 class="text-sm font-medium text-slate-500 mb-3">Крок 1: Роль вузла</h2>
-        <div class="space-y-4">
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Роль</label>
-            <select [(ngModel)]="form.role" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-role">
-              @for (entry of roleEntries; track entry.id) { <option [value]="entry.id">{{ entry.label }}</option> }
-            </select>
-            @if (selectedRoleDef) { <p class="text-xs text-slate-500 mt-1">Модулі: {{ selectedRoleDef.modules.join(', ') }}</p> }
-          </div>
-          @if (form.role !== 'core') {
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">Core URL</label><input [(ngModel)]="form.core_url" placeholder="https://core-host:8443" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-core-url"></div>
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">Core Certificate (PEM)</label><textarea [(ngModel)]="form.core_certificate" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-core-cert"></textarea></div>
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">Registration Token</label><input [(ngModel)]="form.registration_token" placeholder="VT-XXXX-XXXX-XXXX" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-reg-token"></div>
-          }
-        </div>
-      } @else if (step() === 1) {
-        <h2 class="text-sm font-medium text-slate-500 mb-3">Крок 2: Назва та адміністратор</h2>
-        <div class="space-y-4">
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Назва інсталяції</label><input [(ngModel)]="form.installation_name" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-install-name"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Логін</label><input [(ngModel)]="form.username" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-username"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Пароль</label><input type="password" [(ngModel)]="form.password" placeholder="мінімум 12 символів" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-password"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Підтвердження</label><input type="password" [(ngModel)]="form.password_confirmation" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-password-confirm"></div>
-        </div>
-      } @else if (step() === 2) {
-        <h2 class="text-sm font-medium text-slate-500 mb-3">Крок 3: Обладнання</h2>
-        <pre class="text-xs text-slate-700 bg-slate-50 p-3 rounded overflow-auto max-h-64">{{ hardwareJson }}</pre>
-      } @else if (step() === 3) {
-        <h2 class="text-sm font-medium text-slate-500 mb-3">Крок 4: AI Backend</h2>
-        <div class="space-y-4">
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Backend</label>
-            <select [(ngModel)]="form.backend_selected" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-backend">
-              @for (b of status()?.backends || []; track b) { <option [value]="b">{{ b }}</option> }
-            </select>
-          </div>
-          @if (form.backend_selected !== 'skip') {
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">Модель</label><input [(ngModel)]="form.backend_model" placeholder="наприклад, llama3:8b" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-model"></div>
-          }
-          @if (form.backend_selected === 'openai' || form.backend_selected === 'external') {
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">Backend URL</label><input [(ngModel)]="form.backend_url" placeholder="https://api.openai.com/v1" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-backend-url"></div>
-          }
-          @if (form.backend_selected !== 'ollama' && form.backend_selected !== 'skip') {
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">API Key</label><input type="password" [(ngModel)]="form.backend_api_key" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-testid="setup-api-key"></div>
-          }
-        </div>
-      } @else if (step() === 4) {
-        <h2 class="text-sm font-medium text-slate-500 mb-3">Крок 5: Перевірка системи</h2>
-        @if (healthLoading()) { <div class="flex items-center justify-center py-6"><div class="w-6 h-6 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div></div>
-        } @else if (healthError()) { <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4"><p class="text-red-700 text-sm">{{ healthError() }}</p><button (click)="loadHealth()" class="mt-2 text-xs text-emerald-600 hover:underline">Повторити</button></div>
-        } @else if (health()) {
-          <div class="space-y-1">
-            @for (e of healthEntries; track e.key) {
-              <div class="flex justify-between text-sm py-1 border-b border-slate-100"><span>{{ e.key }}</span>
-                <span class="font-medium" [class.text-emerald-600]="e.value==='OK'||e.value==='OPTIONAL'||e.value==='CONFIGURED'" [class.text-red-600]="e.value==='OFFLINE'||e.value==='UNAVAILABLE'">{{ e.value }}</span>
-              </div>
-            }
-          </div>
-        }
-      } @else if (step() === 5) {
-        <h2 class="text-sm font-medium text-slate-500 mb-3">Готово</h2>
-        @if (completeResult()) {
-          <div class="space-y-3">
-            <div><span class="text-xs text-slate-500">Installation ID</span><p class="font-mono text-sm break-all">{{ completeResult()!.installation_id }}</p></div>
-            @if (completeResult()!.core_url) { <div><span class="text-xs text-slate-500">Core URL</span><p class="font-mono text-sm">{{ completeResult()!.core_url }}</p></div> }
-            @if (completeResult()!.registration_token) { <div><span class="text-xs text-slate-500">Registration Token</span><p class="font-mono text-sm">{{ completeResult()!.registration_token }}</p></div> }
-            @if (completeResult()!.core_certificate) { <div><span class="text-xs text-slate-500">Core Certificate</span><pre class="text-xs text-slate-700 bg-slate-50 p-3 rounded overflow-auto max-h-32 mt-1">{{ completeResult()!.core_certificate }}</pre></div> }
-            <button (click)="openDashboard()" class="w-full px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium mt-4" data-testid="setup-open-dashboard">Відкрити Dashboard</button>
-          </div>
-        }
+  <main class="bg-white rounded-2xl shadow-lg w-full max-w-2xl p-6">
+    <h1 class="text-xl font-semibold text-slate-900">{{ 'Vertep — Перший запуск' | t }}</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ 'Налаштуємо готову систему за кілька кроків.' | t }}</p>
+    <div class="flex gap-1.5 my-4">
+      @for (index of steps; track index) {
+        <i class="h-1 flex-1 rounded" [class.bg-emerald-500]="index <= step()" [class.bg-slate-200]="index > step()"></i>
       }
     </div>
-    @if (step() < 5) {
-      <div class="px-6 py-4 border-t border-slate-200 flex justify-between">
-        @if (step() > 0) { <button (click)="prevStep()" class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800" data-testid="setup-back">Назад</button> } @else { <div></div> }
-        @if (step() === 4 && health()?.ready) {
-          <button (click)="complete()" [disabled]="completing()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50" data-testid="setup-complete">{{ completing() ? 'Завершення...' : 'Завершити' }}</button>
-        } @else {
-          <button (click)="nextStep()" [disabled]="step()===4 && !health()?.ready" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50" data-testid="setup-next">Далі</button>
+
+    @if (error()) {
+      <div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700" data-testid="setup-error">{{ error() }}</div>
+    }
+
+    @if (askCode()) {
+      <div class="space-y-3" data-testid="setup-code">
+        <label class="wizard-label">{{ 'Одноразовий код налаштування, показаний після встановлення' | t }}
+          <input id="setupCode" class="wizard-input" [(ngModel)]="code" autocomplete="off">
+        </label>
+        <button class="wizard-primary" [disabled]="!code.trim()" (click)="useCode()">{{ 'Продовжити' | t }}</button>
+      </div>
+    } @else {
+      <section [class.hidden]="step() !== 0">
+        <h2 class="wizard-title">{{ 'Роль вузла' | t }}</h2>
+        <p class="text-sm text-slate-600">{{ 'Оберіть, що цей сервер виконуватиме. Можливості будуть визначені автоматично після встановлення.' | t }}</p>
+        <label class="wizard-label">Node Role
+          <select id="nodeRole" class="wizard-input" [ngModel]="role()" (ngModelChange)="role.set($event)" [disabled]="roleLocked()">
+            @for (entry of roles(); track entry.id) { <option [value]="entry.id">{{ (entry.label) | t }}</option> }
+          </select>
+        </label>
+        @if (selectedRole(); as current) {
+          <div id="roleDetails" class="wizard-box">{{ (current.label) | t }}
+
+Modules: {{ current.modules.join(', ') }}
+Capabilities: {{ current.capabilities.join(', ') }}</div>
         }
+        <div id="coreConnection" [style.display]="role() === 'core' ? 'none' : 'block'">
+          <label class="wizard-label">Core URL<input id="coreUrl" type="url" class="wizard-input" [(ngModel)]="form.core_url" placeholder="https://core.example.com:8443"></label>
+          <label class="wizard-label">Core Certificate<textarea id="coreCertificate" rows="6" class="wizard-input" [(ngModel)]="form.core_certificate" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label>
+          <label class="wizard-label">Registration Token<input id="registrationToken" class="wizard-input" [(ngModel)]="form.registration_token" autocomplete="off"></label>
+        </div>
+      </section>
+
+      <section [class.hidden]="step() !== 1">
+        <h2 class="wizard-title">{{ 'Назва інсталяції' | t }}</h2>
+        <label class="wizard-label">{{ 'Назва системи' | t }}<input id="name" class="wizard-input" [(ngModel)]="form.name" maxlength="120"></label>
+        <label class="wizard-label">{{ 'Домен (необов\'язково)' | t }}<input id="domain" class="wizard-input" [(ngModel)]="form.domain" placeholder="{{ 'vertep.local або example.com' | t }}"></label>
+        <p class="text-sm text-slate-500">{{ 'Залиште порожнім, щоб використовувати IP-адресу. Домен дозволить налаштувати HTTPS-сертифікат.' | t }}</p>
+      </section>
+
+      <section [class.hidden]="step() !== 2">
+        <h2 class="wizard-title">{{ 'Адміністратор' | t }}</h2>
+        <label class="wizard-label">Login<input id="username" class="wizard-input" [(ngModel)]="form.username" autocomplete="username"></label>
+        <label class="wizard-label">Password<input id="password" type="password" minlength="12" class="wizard-input" [(ngModel)]="form.password" autocomplete="new-password"></label>
+        <label class="wizard-label">{{ 'Підтвердження' | t }}<input id="confirmation" type="password" class="wizard-input" [(ngModel)]="form.confirmation" autocomplete="new-password"></label>
+      </section>
+
+      <section [class.hidden]="step() !== 3">
+        <h2 class="wizard-title">{{ 'Секрети' | t }}</h2>
+        <p class="text-sm text-emerald-700">{{ 'Криптографічні ключі та внутрішні паролі створено автоматично. Значення приховані й зберігаються у внутрішньому сховищі Vertep.' | t }}</p>
+      </section>
+
+      <section [class.hidden]="step() !== 4">
+        <h2 class="wizard-title">{{ 'Обладнання' | t }}</h2>
+        <div id="hardware" class="wizard-box">{{ hardware() | t }}</div>
+      </section>
+
+      <section [class.hidden]="step() !== 5">
+        <h2 class="wizard-title">AI Backend</h2>
+        <label class="wizard-label">{{ 'Провайдер' | t }}
+          <select id="backend" class="wizard-input" [(ngModel)]="form.backend">
+            <option value="ollama">Ollama</option>
+            <option value="openai">External OpenAI</option>
+            <option value="external">External API</option>
+            <option value="skip">{{ 'Пропустити' | t }}</option>
+          </select>
+        </label>
+        <label class="wizard-label">{{ 'URL API (необов\'язково)' | t }}<input id="backendUrl" type="url" class="wizard-input" [(ngModel)]="form.backend_url"></label>
+        <label class="wizard-label">{{ 'Модель' | t }}<input id="backendModel" class="wizard-input" [(ngModel)]="form.backend_model" maxlength="128"></label>
+        <label class="wizard-label">{{ 'API key (для зовнішнього backend)' | t }}<input id="backendApiKey" type="password" class="wizard-input" [(ngModel)]="form.backend_api_key" autocomplete="off"></label>
+        <p class="text-sm text-slate-500">{{ 'Перед завершенням Vertep перевірить endpoint, credentials і наявність моделі.' | t }}</p>
+      </section>
+
+      <section [class.hidden]="step() !== 6">
+        <h2 class="wizard-title">{{ 'Telegram-бот' | t }}</h2>
+        <p class="text-sm text-slate-500">{{ 'Необов\'язково. Бот відповідає лише вказаним чатам; налаштувати можна й пізніше.' | t }}</p>
+        <label class="wizard-label">{{ 'Токен бота' | t }}<input id="telegramToken" type="password" class="wizard-input" [(ngModel)]="form.telegram_token" autocomplete="off"></label>
+        <label class="wizard-label">{{ 'Чати адміністраторів (через кому)' | t }}<input id="telegramAdmins" class="wizard-input" [(ngModel)]="form.telegram_admins"></label>
+        <label class="wizard-label">{{ 'Інші дозволені чати (через кому)' | t }}<input id="telegramAllowed" class="wizard-input" [(ngModel)]="form.telegram_allowed"></label>
+      </section>
+
+      <section [class.hidden]="step() !== healthStep">
+        <h2 class="wizard-title">Health Check</h2>
+        <div id="health" class="wizard-box">{{ healthText() | t }}</div>
+      </section>
+
+      <section [class.hidden]="step() !== manifestStep">
+        <h2 class="wizard-title">Installation Manifest</h2>
+        <p class="text-sm text-slate-600">{{ 'Налаштування завершено. Перегляньте створений маніфест інсталяції та за потреби завантажте його як JSON.' | t }}</p>
+        <div id="manifest" class="wizard-box">{{ manifestText() | t }}</div>
+        <button id="downloadManifest" type="button" class="wizard-primary mt-3" [disabled]="!result()" (click)="downloadManifest()">{{ 'Завантажити manifest.json' | t }}</button>
+        @if (result()?.['manifest_sha256']; as hash) { <p id="manifestHash" class="text-xs text-slate-500 mt-2">SHA-256: {{ hash }}</p> }
+      </section>
+
+      <section [class.hidden]="step() !== backupKeyStep">
+        <h2 class="wizard-title">{{ 'Ключ резервних копій' | t }}</h2>
+        <p class="text-sm text-slate-600">{{ 'Ключ не входить у резервні копії. Якщо сервер буде втрачено, без цього файлу їх не відновити. Збережіть його поза сервером і нікому не передавайте.' | t }}</p>
+        <button id="backupKeyDownload" type="button" class="wizard-primary mt-3" (click)="downloadKey()">{{ 'Завантажити ключ' | t }}</button>
+        <label class="flex items-center gap-2 text-sm text-slate-700 mt-3">
+          <input id="backupKeySaved" type="checkbox" [disabled]="!keyDownloaded()" [ngModel]="keySaved()" (ngModelChange)="keySaved.set($event)">
+          {{ 'Я зберіг ключ у безпечному місці поза сервером' | t }}
+        </label>
+      </section>
+
+      <section [class.hidden]="step() !== lastStep">
+        <h2 class="wizard-title">{{ 'Готово' | t }}</h2>
+        <p class="text-sm text-slate-600">{{ 'Vertep налаштовано. Для Core нижче показано Installation ID, Core URL, Core Certificate та перший одноразовий Registration Token.' | t }}</p>
+        <pre id="result" class="wizard-box">{{ resultText() }}</pre>
+        <h3 class="text-sm font-medium text-slate-700 mt-3">Core Certificate</h3>
+        <pre id="certificate" class="wizard-box max-h-48 overflow-auto text-xs">{{ (result()?.core_certificate || 'Немає сертифіката (non-Core вузол)') | t }}</pre>
+      </section>
+
+      <div class="flex justify-between mt-6">
+        <button id="back" type="button" class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800" [style.visibility]="step() ? 'visible' : 'hidden'" (click)="back()">{{ 'Назад' | t }}</button>
+        <button id="next" type="button" class="wizard-primary" [disabled]="nextDisabled()" (click)="next()">{{ (nextLabel()) | t }}</button>
       </div>
     }
-    <div class="px-6 pb-4 flex justify-center gap-1.5">
-      @for (s of [0,1,2,3,4]; track s) { <div class="w-2 h-2 rounded-full" [class.bg-emerald-500]="s <= step()" [class.bg-slate-300]="s > step()"></div> }
-    </div>
-  </div>
+  </main>
 </div>

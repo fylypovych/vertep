@@ -1,10 +1,11 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 @Component({
   selector: 'app-status-badge',
   standalone: true,
-  imports: [CommonModule],
+  imports: [TPipe, CommonModule],
   template: `
     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
           [class.bg-emerald-50]="isActive"
@@ -14,7 +15,7 @@ import { CommonModule } from '@angular/common';
       <span class="w-1.5 h-1.5 rounded-full"
             [class.bg-emerald-500]="isActive"
             [class.bg-slate-400]="!isActive"></span>
-      {{ label || status }}
+      {{ (label || status) | t }}
     </span>
   `,
 })

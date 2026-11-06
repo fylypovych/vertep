@@ -2175,7 +2175,7 @@ def test_setup_wizard_back_button_hidden_on_first_step():
 
 def test_setup_wizard_password_minimum_length():
     """Password field has minlength=12 attribute."""
-    html = Path("web/setup.html").read_text(encoding="utf-8")
+    html = Path("web-v2/src/app/setup/setup.component.html").read_text(encoding="utf-8")
     assert 'minlength="12"' in html
 
 

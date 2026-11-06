@@ -21,6 +21,10 @@ class InstagramPublisher(Publisher):
     credential_env = "INSTAGRAM_ACCESS_TOKEN"
     required_scopes = ["instagram_content_publish", "instagram_basic", "pages_show_list"]
 
+    def _probe_request(self, token: str):
+        return (f"{_GRAPH}/{os.getenv('INSTAGRAM_USER_ID')}",
+                {"params": {"fields": "id", "access_token": token}})
+
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         token = InstagramTokenProvider().access_token()
         user_id = (

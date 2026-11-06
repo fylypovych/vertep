@@ -21,6 +21,10 @@ class ThreadsPublisher(Publisher):
     credential_env = "THREADS_ACCESS_TOKEN"
     required_scopes = ["threads_content_publish", "threads_read"]
 
+    def _probe_request(self, token: str):
+        return (f"{_BASE}/{os.getenv('THREADS_USER_ID')}",
+                {"params": {"fields": "id", "access_token": token}})
+
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         token = ThreadsTokenProvider().access_token()
         user_id = os.getenv("THREADS_USER_ID") or metadata.get("threads_user_id")

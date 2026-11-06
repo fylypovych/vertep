@@ -102,6 +102,10 @@ class YoutubePublisher(Publisher):
     def _token_provider(self) -> YouTubeTokenProvider:
         return YouTubeTokenProvider(self.transport)
 
+    def _probe_request(self, token: str):
+        return ("https://www.googleapis.com/youtube/v3/channels",
+                {"params": {"part": "id", "mine": "true"}, "headers": {"Authorization": f"Bearer {token}"}})
+
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         tp = self._token_provider()
         token = tp.access_token()

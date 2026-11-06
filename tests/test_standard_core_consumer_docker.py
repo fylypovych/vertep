@@ -265,6 +265,26 @@ def test_a_failing_migration_rolls_core_back_with_the_database_restored(
         "storage not preserved after rollback"
 
 
+def test_a_rollback_safe_release_keeps_the_database_on_rollback(
+        core_installation, signed_update_server, tmp_path, monkeypatch):
+    """i.0.0.4.27: the same failure as above, but the signed manifest promises rollback safety."""
+    root, state_dir = core_installation.root, tmp_path / "update-state"
+    _environment(monkeypatch, root, state_dir)
+    agent = _agent()
+    signed_update_server.publish("0.0.0.2", _archive(_core_payload(
+        tmp_path / "release", "0.0.0.2", _release_images(),
+        {"900_ci_release_marker.sql": "CREATE TABLE ci_release_marker(version text);\n",
+         "901_ci_broken.sql": "THIS IS NOT SQL;\n"})), database={"rollback_safe": True})
+    request_id = "1" * 32
+    assert agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "0.0.0.2"),
+                                 skip_drain=True) is False
+    status = _status(state_dir)
+    assert status["state"] == "ROLLED_BACK", _explain(state_dir, core_installation)
+    assert core_installation.healthy() == 200
+    assert core_installation.psql("SELECT to_regclass('public.ci_release_marker')") == "ci_release_marker",         "a rollback-safe release must not restore the database"
+    assert core_installation.psql("SELECT value FROM ci_data") == "before-update"
+
+
 def test_core_reads_back_its_jobs_and_approvals_across_update_rollback_and_recreate(
         core_installation, signed_update_server, tmp_path, monkeypatch):
     """#401 P1/P4: the application itself is the reader. A Job is created and approved

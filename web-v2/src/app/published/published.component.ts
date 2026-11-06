@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -14,19 +15,19 @@ import { statusLabel } from '../core/presentation';
 @Component({
   selector: 'app-published',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe, EmptyStateComponent, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, RouterModule, VertepDatePipe, EmptyStateComponent, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="space-y-6" data-testid="published-page">
       <div class="flex items-center justify-between">
-        <h3 class="text-lg font-semibold text-slate-900">Опубліковані матеріали</h3>
-        <button (click)="loadPublished()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Оновити</button>
+        <h3 class="text-lg font-semibold text-slate-900">{{ 'Опубліковані матеріали' | t }}</h3>
+        <button (click)="loadPublished()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Оновити' | t }}</button>
       </div>
 
       <div class="flex gap-4 mb-4">
         <select [(ngModel)]="filterChannel" (change)="applyFilter()" class="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-          <option value="">Усі канали</option>
+          <option value="">{{ 'Усі канали' | t }}</option>
           @for (ch of distinctChannels(); track ch) {
-            <option [value]="ch">{{ channelLabel(ch) }}</option>
+            <option [value]="ch">{{ (channelLabel(ch)) | t }}</option>
           }
         </select>
       </div>
@@ -47,7 +48,7 @@ import { statusLabel } from '../core/presentation';
                   <p class="text-xs text-slate-500">ID: {{ job.job_id }} · {{ job.created_at | vertepDate }}</p>
                 </div>
                 <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700">
-                  {{ jobStatusLabel(job.status) }}
+                  {{ (jobStatusLabel(job.status)) | t }}
                 </span>
               </div>
 
@@ -55,7 +56,7 @@ import { statusLabel } from '../core/presentation';
                 @for (result of publicationResults(job); track result.channel) {
                   <div class="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
                     <div>
-                      <span class="text-sm font-medium text-slate-900">{{ channelLabel(result.channel) }}</span>
+                      <span class="text-sm font-medium text-slate-900">{{ (channelLabel(result.channel)) | t }}</span>
                       @if (result.url) {
                         <a [href]="result.url" target="_blank" class="text-xs text-emerald-600 hover:text-emerald-700 ml-2">{{ result.url }}</a>
                       }
@@ -75,7 +76,7 @@ import { statusLabel } from '../core/presentation';
                       </span>
                       @if (result.status === 'FAILED') {
                         <button (click)="retryChannel(job, result.channel)" [disabled]="retrying() === job.job_id + '-' + result.channel" class="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50">
-                          {{ retrying() === job.job_id + '-' + result.channel ? '...' : 'Повторити' }}
+                          {{ (retrying() === job.job_id + '-' + result.channel ? '...' : 'Повторити') | t }}
                         </button>
                       }
                     </div>
@@ -84,7 +85,7 @@ import { statusLabel } from '../core/presentation';
               </div>
 
               <div class="mt-3">
-                <a [routerLink]="['/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити завдання</a>
+                <a [routerLink]="['/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити завдання' | t }}</a>
               </div>
             </div>
           }

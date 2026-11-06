@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { KeyValuePipe, DatePipe } from '@angular/common';
@@ -10,67 +11,67 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
 @Component({
   selector: 'app-settings-security',
   standalone: true,
-  imports: [CommonModule, KeyValuePipe, DatePipe, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, KeyValuePipe, DatePipe, LoadingStateComponent, ErrorStateComponent],
   template: `<div class="space-y-6" data-testid="settings-security">
     <div class="bg-white rounded-xl border p-5">
-      <h3 class="text-lg font-semibold mb-4">Безпека</h3>
+      <h3 class="text-lg font-semibold mb-4">{{ 'Безпека' | t }}</h3>
       <app-loading-state *ngIf="loading()" />
       <div *ngIf="secCheck() as check">
         <p class="font-medium" [class.text-emerald-700]="check.ok" [class.text-amber-700]="!check.ok"
-           data-testid="security-check-state">{{ check.ok ? 'У нормі' : 'Потребує уваги' }}</p>
+           data-testid="security-check-state">{{ (check.ok ? 'У нормі' : 'Потребує уваги') | t }}</p>
         <p class="text-sm" data-testid="security-check-recommendation">{{ check.recommendation }}</p>
         <p class="text-sm text-amber-700 mt-2" *ngIf="check.weak_or_missing.length"
            data-testid="security-check-weak">
-          Слабкі або відсутні значення: {{ check.weak_or_missing.join(', ') }}
+          {{ 'Слабкі або відсутні значення:' | t }} {{ check.weak_or_missing.join(', ') }}
         </p>
       </div>
       <div *ngIf="secCheck()?.checks as detail" class="mt-4 space-y-3">
         <div data-testid="security-check-secret-store">
-          <h4 class="text-sm font-semibold">Сховище секретів</h4>
-          <p class="text-sm">{{ label(detail.secrets_store.status) }} — {{ detail.secrets_store.detail }}</p>
+          <h4 class="text-sm font-semibold">{{ 'Сховище секретів' | t }}</h4>
+          <p class="text-sm">{{ (label(detail.secrets_store.status)) | t }} — {{ detail.secrets_store.detail }}</p>
         </div>
         <div>
-          <h4 class="text-sm font-semibold">Сертифікати та ключі</h4>
+          <h4 class="text-sm font-semibold">{{ 'Сертифікати та ключі' | t }}</h4>
           <ul class="text-sm list-disc pl-5">
             <li *ngFor="let item of detail.certificates | keyvalue" [attr.data-testid]="'security-cert-' + item.key">
-              {{ certName(item.key) }}: {{ label(item.value.status) }}<span *ngIf="item.value.expires_at">
-                (до {{ item.value.expires_at | date: 'yyyy-MM-dd' }})</span>
+              {{ certName(item.key) }}: {{ (label(item.value.status)) | t }}<span *ngIf="item.value.expires_at">
+                {{ '(до' | t }} {{ item.value.expires_at | date: 'yyyy-MM-dd' }})</span>
               <span class="block font-mono text-xs text-slate-500" *ngIf="item.value.sha256">
                 SHA-256: {{ item.value.sha256 }}</span>
             </li>
           </ul>
         </div>
         <div>
-          <h4 class="text-sm font-semibold">Інтеграції</h4>
-          <p class="text-sm" *ngIf="!detail.integrations.length">Немає активних інтеграцій</p>
+          <h4 class="text-sm font-semibold">{{ 'Інтеграції' | t }}</h4>
+          <p class="text-sm" *ngIf="!detail.integrations.length">{{ 'Немає активних інтеграцій' | t }}</p>
           <ul class="text-sm list-disc pl-5">
-            <li *ngFor="let item of detail.integrations">{{ item.name }}: {{ label(item.status) }}</li>
+            <li *ngFor="let item of detail.integrations">{{ item.name }}: {{ (label(item.status)) | t }}</li>
           </ul>
         </div>
         <div *ngIf="detail.effective_config as effective" data-testid="security-effective-config">
-          <h4 class="text-sm font-semibold">Ефективна конфігурація</h4>
+          <h4 class="text-sm font-semibold">{{ 'Ефективна конфігурація' | t }}</h4>
           <ul class="text-sm list-disc pl-5">
-            <li>LLM: {{ effective.llm_provider || 'не налаштовано' }}</li>
-            <li>TTS: {{ effective.tts_provider || 'не налаштовано' }}</li>
-            <li>Публікація: {{ effective.publisher_mock ? 'тестовий режим' : 'робочий режим' }}</li>
-            <li>Пароль адміністратора: {{ effective.admin_password_set ? 'встановлено' : 'відсутній' }}</li>
-            <li>Токен вузла: {{ effective.node_api_token_set ? 'встановлено' : 'відсутній' }}</li>
-            <li>Пароль PostgreSQL: {{ effective.postgres_password_set ? 'встановлено' : 'відсутній' }}</li>
-            <li>Ключ сховища секретів: {{ effective.secret_store_passphrase_set ? 'встановлено' : 'відсутній' }}</li>
-            <li>Секрет сесії: {{ effective.session_secret_set ? 'встановлено' : 'відсутній' }}</li>
+            <li>LLM: {{ (effective.llm_provider || 'не налаштовано') | t }}</li>
+            <li>TTS: {{ (effective.tts_provider || 'не налаштовано') | t }}</li>
+            <li>{{ 'Публікація:' | t }} {{ (effective.publisher_mock ? 'тестовий режим' : 'робочий режим') | t }}</li>
+            <li>{{ 'Пароль адміністратора:' | t }} {{ (effective.admin_password_set ? 'встановлено' : 'відсутній') | t }}</li>
+            <li>{{ 'Токен вузла:' | t }} {{ (effective.node_api_token_set ? 'встановлено' : 'відсутній') | t }}</li>
+            <li>{{ 'Пароль PostgreSQL:' | t }} {{ (effective.postgres_password_set ? 'встановлено' : 'відсутній') | t }}</li>
+            <li>{{ 'Ключ сховища секретів:' | t }} {{ (effective.secret_store_passphrase_set ? 'встановлено' : 'відсутній') | t }}</li>
+            <li>{{ 'Секрет сесії:' | t }} {{ (effective.session_secret_set ? 'встановлено' : 'відсутній') | t }}</li>
           </ul>
         </div>
       </div>
     </div>
     <div class="bg-white rounded-xl border p-5">
-      <h3 class="text-lg font-semibold mb-4">Сертифікати</h3>
+      <h3 class="text-lg font-semibold mb-4">{{ 'Сертифікати' | t }}</h3>
       <app-loading-state *ngIf="certLoading()" />
       <app-error-state *ngIf="certError()" [message]="certError()!" />
       <pre *ngIf="certificates()" class="text-xs bg-slate-50 p-3 overflow-x-auto">{{ certificateInfo() | json }}</pre>
-      <p class="text-sm text-slate-600 my-2">Сертифікат самопідписаний: дані шифруються, але браузер показуватиме попередження, доки ви не додасте завантажений файл до довірених сертифікатів на своєму комп'ютері. Після створення нового сертифіката файл треба додати знову.</p>
+      <p class="text-sm text-slate-600 my-2">{{ 'Сертифікат самопідписаний: дані шифруються, але браузер показуватиме попередження, доки ви не додасте завантажений файл до довірених сертифікатів на своєму комп\\'ютері. Після створення нового сертифіката файл треба додати знову.' | t }}</p>
       <div class="flex flex-wrap gap-2">
-        <button (click)="renewCert()" data-testid="certificate-renew" class="px-3 py-2 bg-emerald-600 text-white rounded">Створити або оновити сертифікат</button>
-        <button (click)="downloadCert()" [disabled]="!certificatePem()" data-testid="certificate-download" class="px-3 py-2 border rounded disabled:opacity-50">Завантажити сертифікат</button>
+        <button (click)="renewCert()" data-testid="certificate-renew" class="px-3 py-2 bg-emerald-600 text-white rounded">{{ 'Створити або оновити сертифікат' | t }}</button>
+        <button (click)="downloadCert()" [disabled]="!certificatePem()" data-testid="certificate-download" class="px-3 py-2 border rounded disabled:opacity-50">{{ 'Завантажити сертифікат' | t }}</button>
       </div>
     </div>
   </div>`,

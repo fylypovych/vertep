@@ -26,6 +26,10 @@ class TelegramChannelPublisher(Publisher):
     def reconnect(self) -> bool:
         return self.configured()
 
+    def readiness(self) -> dict:
+        from publishers.telegram import TelegramPublisher
+        return TelegramPublisher(self.transport).readiness()
+
     def publish(self, video_path: str, metadata: dict) -> dict:
         from adapters.telegram import TelegramAdapter
 

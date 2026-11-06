@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
@@ -28,12 +29,12 @@ const SEVERITY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-alerts',
   standalone: true,
-  imports: [CommonModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
+  imports: [TPipe, CommonModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
   template: `
     <div class="space-y-4" data-testid="alerts-page">
       <div class="flex items-center justify-between">
-        <h3 class="text-lg font-semibold text-slate-900">Алерти</h3>
-        <button (click)="loadAlerts()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Оновити</button>
+        <h3 class="text-lg font-semibold text-slate-900">{{ 'Алерти' | t }}</h3>
+        <button (click)="loadAlerts()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Оновити' | t }}</button>
       </div>
 
       @if (list.loading()) {
@@ -55,30 +56,30 @@ const SEVERITY_LABELS: Record<string, string> = {
                         [class.text-amber-700]="alert.severity === 'warning'"
                         [class.bg-blue-50]="alert.severity === 'info'"
                         [class.text-blue-700]="alert.severity === 'info'">
-                    {{ severityLabel(alert.severity) }}
+                    {{ (severityLabel(alert.severity)) | t }}
                   </span>
-                  <span class="text-sm font-medium text-slate-900" [attr.title]="alert.type">{{ typeLabel(alert.type) }}</span>
+                  <span class="text-sm font-medium text-slate-900" [attr.title]="alert.type">{{ (typeLabel(alert.type)) | t }}</span>
                 </div>
                 @if (alert.message) {
-                  <p class="text-sm text-slate-600 mt-1">{{ alert.message }}</p>
+                  <p class="text-sm text-slate-600 mt-1">{{ (alert.message) | t }}</p>
                 }
                 <div class="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
                   @if (alert.job_id) { <span>Job: {{ alert.job_id }}</span> }
-                  @if (alert.node_name) { <span>Вузол: {{ alert.node_name }}</span> }
-                  @if (alert.task_id) { <span>Задача: {{ alert.task_id }}</span> }
-                  @if (alert.state) { <span>Стан: {{ stateLabel(alert.state) }}</span> }
+                  @if (alert.node_name) { <span>{{ 'Вузол:' | t }} {{ alert.node_name }}</span> }
+                  @if (alert.task_id) { <span>{{ 'Задача:' | t }} {{ alert.task_id }}</span> }
+                  @if (alert.state) { <span>{{ 'Стан:' | t }} {{ (stateLabel(alert.state)) | t }}</span> }
                   @if (alert.updated_at) { <span>{{ alert.updated_at | vertepDate }}</span> }
                 </div>
               </div>
               <div class="flex items-center gap-2 shrink-0 ml-2">
                 @if (alert.job_id) {
-                  <a [routerLink]="['/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
+                  <a [routerLink]="['/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                 }
                 @if (alert.state === 'firing') {
                   <button type="button" (click)="acknowledge(alert)" [disabled]="acknowledging() === alert.id"
                           [attr.data-testid]="'alert-ack-' + alert.id"
                           class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                    Підтвердити
+                    {{ 'Підтвердити' | t }}
                   </button>
                 }
               </div>

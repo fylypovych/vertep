@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SettingsApiService } from '../../core/api/settings.api';
@@ -8,8 +9,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
 @Component({
   selector: 'app-settings-telegram',
   standalone: true,
-  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-telegram"><h3 class="text-lg font-semibold mb-4">Telegram</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="tgStatus()" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm"><p>Статус: {{ tgStatus()!.configured ? 'Налаштовано' : 'Не налаштовано' }}</p><p>Ім’я бота: {{ tgStatus()!.bot_username || '-' }}</p><p>Режим: {{ tgStatus()!.polling_enabled ? 'Опитування' : 'Вебхук' }}</p><p>Дозволені chat ID: {{ tgStatus()!.allowed_chat_ids || '-' }}</p><p>Адміністративні chat ID: {{ tgStatus()!.admin_chat_ids || '-' }}</p></div></div>`,
+  imports: [TPipe, CommonModule, LoadingStateComponent, ErrorStateComponent],
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-telegram"><h3 class="text-lg font-semibold mb-4">Telegram</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" /><div *ngIf="tgStatus()" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm"><p>{{ 'Статус:' | t }} {{ (tgStatus()!.configured ? 'Налаштовано' : 'Не налаштовано') | t }}</p><p>{{ 'Ім’я бота:' | t }} {{ tgStatus()!.bot_username || '-' }}</p><p>{{ 'Режим:' | t }} {{ (tgStatus()!.polling_enabled ? 'Опитування' : 'Вебхук') | t }}</p><p>{{ 'Дозволені chat ID:' | t }} {{ tgStatus()!.allowed_chat_ids || '-' }}</p><p>{{ 'Адміністративні chat ID:' | t }} {{ tgStatus()!.admin_chat_ids || '-' }}</p></div></div>`,
 })
 export class TelegramSectionComponent implements OnInit {
   tgStatus = signal<TelegramStatus | null>(null);

@@ -118,7 +118,7 @@ class ControlledProvider:
         return {"cancelled": True, "cleanup": True}
 
 
-def test_gpu_configured_priority_fallback_and_local_only():
+def test_gpu_failure_is_not_replaced_by_another_provider_and_local_only():
     registry = GPUProviderRegistry()
     cloud = ControlledProvider("cloud", local=False)
     fallback = ControlledProvider("fallback")
@@ -127,8 +127,9 @@ def test_gpu_configured_priority_fallback_and_local_only():
     for name, provider, priority in [("fallback", fallback, 10), ("outside", outside, 0), ("cloud", cloud, 1), ("primary", primary, 2)]:
         registry.register_provider(name, provider, priority)
     router = GPURouter(registry, allowed=["cloud", "primary", "fallback"], local_only=True)
-    assert router.execute("text", {"task_id": "x"})["result_ref"] == "controlled-output"
-    assert len(primary.calls) == len(fallback.calls) == 1
+    with pytest.raises(RuntimeError, match="primary: failed"):
+        router.execute("text", {"task_id": "x"})
+    assert len(primary.calls) == 1 and not fallback.calls
     assert not cloud.calls and not outside.calls
 
 

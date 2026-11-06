@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
@@ -6,9 +7,9 @@ import { ToastService } from '../core/services/toast.service';
 @Component({
   selector: 'app-toast-container',
   standalone: true,
-  imports: [CommonModule],
+  imports: [TPipe, CommonModule],
   template: `
-    <div class="fixed top-4 right-4 z-50 space-y-2" role="status" aria-live="polite" aria-label="Сповіщення">
+    <div class="fixed top-4 right-4 z-50 space-y-2" role="status" aria-live="polite" aria-label="{{ 'Сповіщення' | t }}">
       @for (toast of toasts(); track toast.id) {
         <div class="px-4 py-3 rounded-lg border shadow-lg text-sm font-medium"
              [class.bg-emerald-50]="toast.type === 'success'"
@@ -20,7 +21,7 @@ import { ToastService } from '../core/services/toast.service';
              [class.bg-blue-50]="toast.type === 'info'"
              [class.border-blue-200]="toast.type === 'info'"
              [class.text-blue-800]="toast.type === 'info'">
-          {{ toast.message }}
+          {{ (toast.message) | t }}
         </div>
       }
     </div>

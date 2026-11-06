@@ -24,7 +24,6 @@ COPY core core
 COPY worker worker
 COPY services services
 COPY adapters adapters
-COPY web web
 COPY workflows workflows
 COPY characters characters
 COPY publishers publishers

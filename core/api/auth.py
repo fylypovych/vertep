@@ -39,17 +39,16 @@ router = APIRouter()
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        # The wizard is a web-v2 page, so it also needs the files of the built application.
         setup_route = (request.url.path == "/setup" or
-                       request.url.path.startswith(("/api/setup", "/setup.html", "/v1/setup.html", "/api/health")))
+                       request.url.path.startswith(("/api/setup", "/api/health")) or
+                       (request.method == "GET" and not request.url.path.startswith("/api/")
+                        and "." in request.url.path.rsplit("/", 1)[-1]))
         if not is_configured() and not setup_route:
             if request.url.path == "/":
-                return Response(status_code=307, headers={"Location": "/v1/setup.html"})
+                return Response(status_code=307, headers={"Location": "/setup"})
             return Response("Complete the First Run Wizard", 503,
                             {"Retry-After": "30", "X-Vertep-Setup": "required"})
-        if request.method == "GET" and is_configured() and request.url.path in ("/", "/index.html"):
-            # Design choice: v2 (default) vs v1 (classic). Choice is persisted in the cookie.
-            if request.cookies.get("vertep_ui") == "v1":
-                return Response(status_code=307, headers={"Location": "/v1/"})
         if not is_configured() and setup_route:
             expected_setup = os.getenv("SETUP_TOKEN_HASH", "")
             if expected_setup and request.url.path.startswith("/api/setup"):

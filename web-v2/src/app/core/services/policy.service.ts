@@ -22,8 +22,8 @@ const BLOCKED_RESTORE: SystemMode[] = ['UPDATING', 'READ_ONLY', 'EMERGENCY', 'UN
 const BLOCKED_RECOVERY: SystemMode[] = ['NORMAL', 'MAINTENANCE', 'UPDATING', 'RECOVERING', 'READ_ONLY', 'UNAVAILABLE'];
 
 const MUTATION_BLOCKED_IN: Record<string, SystemMode[]> = {
-  // POST /api/jobs -> "create_job" (also admitted in MAINTENANCE, where the job is
-  // durably created with WAITING_FOR_SYSTEM and still reaches the pre-update backup).
+  // POST /api/jobs -> "create_job" (admitted in MAINTENANCE with WAITING_FOR_SYSTEM,
+  // except while an update owns that MAINTENANCE: see updateInProgress).
   create_job: BLOCKED_CREATE_JOB,
   // /api/jobs non-create routes -> "mutate_job".
   update_job: BLOCKED_AFTER_NORMAL,
@@ -101,6 +101,8 @@ export class PolicyService {
   // Distinguishes "still loading" from "loaded as UNAVAILABLE" so the UI can
   // tell a transient wait apart from a real failure.
   readonly stateLoaded = signal(false);
+  // Mirrors update_owns_maintenance() in core/system_state.py.
+  readonly updateInProgress = signal(false);
 
   readonly isNormal = computed(() => this.systemState() === 'NORMAL');
   readonly isReadOnly = computed(() => this.systemState() === 'READ_ONLY');
@@ -127,6 +129,8 @@ export class PolicyService {
           this.systemState.set(raw as SystemMode);
           this.systemReason.set(s.system?.reason || null);
         }
+        const operation = s.system?.operation_id || '';
+        this.updateInProgress.set(raw === 'MAINTENANCE' && !!operation && !operation.startsWith('restore:'));
         this.stateLoaded.set(true);
       },
       error: () => {
@@ -146,6 +150,9 @@ export class PolicyService {
     // access by omission.
     if (!this.stateLoaded()) {
       return { allowed: false, reason: 'Стан системи ще не визначено' };
+    }
+    if (action === 'create_job' && this.updateInProgress()) {
+      return { allowed: false, reason: 'Створення завдань вимкнено на час оновлення' };
     }
     const blocked = MUTATION_BLOCKED_IN[action];
     if (blocked && blocked.includes(this.systemState())) {

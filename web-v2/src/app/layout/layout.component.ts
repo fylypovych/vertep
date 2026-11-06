@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
@@ -13,7 +14,7 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
 @Component({
   selector: 'app-layout',
   standalone: true,
-  imports: [
+  imports: [TPipe,
     CommonModule,
     RouterOutlet,
     SidebarComponent,
@@ -35,7 +36,7 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
       <!-- Main area -->
       <div class="flex flex-1 flex-col min-w-0 overflow-hidden">
         <app-header />
-        <main class="flex-1 overflow-y-auto p-4 lg:p-6" role="main" aria-label="Основний вміст">
+        <main class="flex-1 overflow-y-auto p-4 lg:p-6" role="main" aria-label="{{ 'Основний вміст' | t }}">
           <router-outlet></router-outlet>
         </main>
       </div>

@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from .version import application_version
 from .lifecycle import lifespan
 from .api.auth import AdminAuthMiddleware
+from .error_codes import install_error_codes
 from .web_ui import router as web_router, mount_web_ui
 from .telegram import handlers
 from . import telegram_pump
@@ -55,4 +56,5 @@ app.include_router(telegram_router)
 app.include_router(status_router)
 telegram_pump.register_restart(handlers._restart_telegram_polling)
 telegram_pump.register_service(lambda: handlers.telegram_polling_service)
+install_error_codes(app)
 mount_web_ui(app)

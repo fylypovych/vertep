@@ -139,6 +139,52 @@ class Publisher:
         except Exception:
             return False
 
+    def _probe_request(self, token: str) -> tuple[str, dict] | None:
+        """A read-only API call proving the credential; ``None`` when the channel has none."""
+        return None
+
+    def _readiness_token(self) -> str | None:
+        provider = self._token_provider()
+        return provider.access_token() if provider is not None else None
+
+    def readiness(self) -> dict:
+        """Whether this channel can really publish, and why not. Nothing is uploaded."""
+        configured = bool(self.configured())
+
+        def state(ready: bool, reason: str | None = None, missing: list[str] | None = None) -> dict:
+            return {"ready": ready, "configured": configured, "missing_scopes": missing or [], "reason": reason}
+
+        if publisher_mock_enabled():
+            return state(True)
+        if not configured:
+            return state(False, "Немає облікових даних")
+        identifier = self._missing_identifier({})
+        if identifier:
+            return state(False, f"Не задано {identifier}")
+        try:
+            token = self._readiness_token()
+        except Exception:  # noqa: BLE001 - the provider's text may quote the secret
+            return state(False, "Токен недійсний або прострочений: не вдалося оновити")
+        if not token:
+            return state(False, "Токен недоступний")
+        provider = self._token_provider()
+        if self.token_scopes() or (provider is not None and provider.scopes_known()):
+            missing = self.missing_scopes()
+            if missing:
+                return state(False, "Недостатньо дозволів: " + ", ".join(missing), missing)
+        probe = self._probe_request(token)
+        if probe is None:
+            return state(True)
+        try:
+            response = self.transport.get(probe[0], **probe[1], timeout=15)
+        except Exception:  # noqa: BLE001 - a transport error can quote the URL with the token
+            return state(False, "Платформа недоступна: облікові дані не перевірено")
+        if response.status_code in {401, 403}:
+            return state(False, "Платформа відхилила облікові дані або дозволи")
+        if response.status_code >= 400:
+            return state(False, f"Платформа відповіла помилкою {response.status_code}")
+        return state(True)
+
     def token_scopes(self) -> list[str]:
         """Return scopes granted by the current token, or [] if unavailable."""
         provider = self._token_provider() if hasattr(self, "_token_provider") else None

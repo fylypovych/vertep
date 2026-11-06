@@ -447,7 +447,7 @@ class TestSetupBackendFieldAlignment:
         source = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.ts").read_text(
             encoding="utf-8")
         complete_call = re.search(
-            r"const p: Record<string, unknown> = \{[^}]*\}", source, re.DOTALL)
+            r"body: JSON\.stringify\(\{.*?\}\)", source, re.DOTALL)
         assert complete_call is not None
         payload = complete_call.group(0)
         assert "ai_backend:" in payload
@@ -535,28 +535,28 @@ class TestSetupBackendFieldAlignment:
         source = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.ts").read_text(
             encoding="utf-8")
         complete_call = re.search(
-            r"const p: Record<string, unknown> = \{[^}]*\}", source, re.DOTALL)
+            r"body: JSON\.stringify\(\{.*?\}\)", source, re.DOTALL)
         assert complete_call is not None
         payload = complete_call.group(0)
-        assert "ai_backend: this.form.backend_selected" in payload
+        assert "ai_backend: form.backend" in payload
         assert '|| "ollama"' not in payload
 
 
 class TestSetupWizardHTML:
     def test_has_all_sections(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
-        for s in ("Крок 1: Роль вузла", "Крок 2: Назва та адміністратор",
-                  "Крок 4: AI Backend", "Крок 5: Перевірка системи", "Готово"):
+        for s in ("Роль вузла", "Назва інсталяції", "Адміністратор", "Секрети", "Обладнання", "AI Backend",
+                  "Telegram-бот", "Health Check", "Installation Manifest", "Ключ резервних копій", "Готово"):
             assert s in html
 
     def test_has_admin_fields(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
-        assert 'data-testid="setup-username"' in html and 'data-testid="setup-password"' in html
+        assert 'id="username"' in html and 'id="password"' in html and 'id="confirmation"' in html
 
     def test_has_core_connection_fields(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
-        for f in ("setup-core-url", "setup-core-cert", "setup-reg-token"):
-            assert f"data-testid=\"{f}\"" in html
+        for f in ("coreUrl", "coreCertificate", "registrationToken"):
+            assert f'id="{f}"' in html
 
     def test_has_manifest_download(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
@@ -564,7 +564,7 @@ class TestSetupWizardHTML:
 
     def test_completion_section(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
-        assert 'data-testid="setup-complete"' in html and "Core URL" in html
+        assert "Core Certificate" in html and "Registration Token" in html
 
 
 class TestBootstrapDockerCompose:

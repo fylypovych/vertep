@@ -1,3 +1,5 @@
+import { LanguageSwitchComponent } from '../shared/language-switch.component';
+import { TPipe } from '../core/i18n/t.pipe';
 import { ChangeDetectorRef, Component, OnInit, OnDestroy, HostListener, signal } from '@angular/core';
 import { Router, NavigationEnd, RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
@@ -29,7 +31,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
 @Component({
   selector: 'app-header',
   standalone: true,
-  imports: [CommonModule, RouterModule],
+  imports: [LanguageSwitchComponent, TPipe, CommonModule, RouterModule],
   templateUrl: './header.component.html',
 })
 export class HeaderComponent implements OnInit, OnDestroy {
@@ -80,11 +82,6 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
   toggleSidebar(): void { this.sidebarService.toggle(); }
   toggleTheme(): void   { this.themeService.toggle(); }
-
-  switchToV1(): void {
-    document.cookie = 'vertep_ui=v1; path=/; max-age=31536000; SameSite=Lax';
-    window.location.href = '/v1/';
-  }
 
   toggleProfileMenu(): void {
     this.showProfileMenu = !this.showProfileMenu;

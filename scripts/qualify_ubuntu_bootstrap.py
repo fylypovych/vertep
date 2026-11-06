@@ -74,6 +74,11 @@ def compose(*arguments: str, check: bool = True) -> subprocess.CompletedProcess:
 def bootstrap(log: Path, overrides: dict[str, str] | None = None, *, expect_failure: bool = False) -> dict:
     environment = {**os.environ, "VERTEP_ROLE": "core", "VERTEP_WEB_DOMAIN": "vertep.ci",
                    "DEBIAN_FRONTEND": "noninteractive", **(overrides or {})}
+    # bootstrap refuses to interrupt the watchdog, which a rollback or restart may have just woken.
+    run("systemctl", "stop", "vertep-watchdog.timer", check=False)
+    wait(lambda: run("systemctl", "show", "-p", "ActiveState", "--value", "vertep-watchdog.service",
+                     check=False).stdout.strip() not in {"active", "activating", "deactivating"},
+         300, "the watchdog run to finish")
     started = time.monotonic()
     # Written line by line with the time: a stalled run must still leave evidence of where it stalled.
     process = subprocess.Popen(["bash", str(ROOT / "bootstrap.sh")], cwd=ROOT, env=environment,

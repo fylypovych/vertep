@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SettingsApiService } from '../../core/api/settings.api';
@@ -8,19 +9,19 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
 @Component({
   selector: 'app-settings-integrations',
   standalone: true,
-  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-integrations">
-    <h3 class="text-lg font-semibold mb-4">Стан підключень</h3>
-    <p class="text-sm text-slate-600 mb-4">Ключі й паролі змінюються в розділі «Секрети»; збережений ключ сам по собі не підтверджує готовність сервісу.</p>
-    <p class="text-sm text-slate-600 mb-4">Telegram нижче — публікація повідомлень, а не стан бота керування.</p>
-    <button type="button" (click)="ngOnInit()" [disabled]="loading()" data-testid="publisher-test" class="px-3 py-2 border rounded mb-3">Перевірити підключення</button>
+    <h3 class="text-lg font-semibold mb-4">{{ 'Стан підключень' | t }}</h3>
+    <p class="text-sm text-slate-600 mb-4">{{ 'Ключі й паролі змінюються в розділі «Секрети»; збережений ключ сам по собі не підтверджує готовність сервісу.' | t }}</p>
+    <p class="text-sm text-slate-600 mb-4">{{ 'Telegram нижче — публікація повідомлень, а не стан бота керування.' | t }}</p>
+    <button type="button" (click)="ngOnInit()" [disabled]="loading()" data-testid="publisher-test" class="px-3 py-2 border rounded mb-3">{{ 'Перевірити підключення' | t }}</button>
     <app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" />
     <div *ngIf="!loading() && !error()" class="space-y-2">
       <div class="flex justify-between"><span>Ollama</span><span>{{ integrations()?.ollama?.status || 'OFFLINE' }}</span></div>
       <div class="flex justify-between"><span>ComfyUI</span><span>{{ integrations()?.comfyui?.status || 'OFFLINE' }}</span></div>
       <div *ngFor="let ch of publisherChannels()" [attr.data-testid]="'publisher-status-' + ch.key">
-        <div class="flex justify-between items-center gap-3"><span>{{ ch.label }}</span><span>{{ publisherStatus(ch.val) }}</span>
-          <button *ngIf="ch.key !== 'telegram'" type="button" [disabled]="busy() !== null" (click)="reconnect(ch.key)" [attr.data-testid]="'publisher-reconnect-' + ch.key" class="px-3 py-2 border rounded">Перепідключити</button>
+        <div class="flex justify-between items-center gap-3"><span>{{ (ch.label) | t }}</span><span>{{ publisherStatus(ch.val) }}</span>
+          <button *ngIf="ch.key !== 'telegram'" type="button" [disabled]="busy() !== null" (click)="reconnect(ch.key)" [attr.data-testid]="'publisher-reconnect-' + ch.key" class="px-3 py-2 border rounded">{{ 'Перепідключити' | t }}</button>
         </div>
         <p *ngIf="messages()[ch.key]" role="status" class="text-sm">{{ messages()[ch.key] }}</p>
       </div>

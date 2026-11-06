@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -9,21 +10,21 @@ import { PolicyService } from '../../core/services/policy.service';
 @Component({
   selector: 'app-settings-publishing',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [TPipe, CommonModule, FormsModule],
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-publishing">
-    <h3 class="text-lg font-semibold mb-1">Публікація</h3>
-    <p class="text-sm text-slate-500 mb-4">Токени платформ задаються в розділі «Секрети».</p>
+    <h3 class="text-lg font-semibold mb-1">{{ 'Публікація' | t }}</h3>
+    <p class="text-sm text-slate-500 mb-4">{{ 'Токени платформ задаються в розділі «Секрети».' | t }}</p>
     <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="publishing-error">{{ error() }}</div>
-    <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-public-url">Публічна адреса Vertep</label>
+    <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-public-url">{{ 'Публічна адреса Vertep' | t }}</label>
     <input id="publishing-public-url" data-testid="publishing-public-url" [ngModel]="publicUrl()" (ngModelChange)="publicUrl.set($event)" [disabled]="!canEdit()"
            placeholder="https://vertep.example.com" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
-    <p class="text-xs text-slate-500 mt-1 mb-4">Потрібна для Threads: платформа сама завантажує відео за посиланням, тому адреса має відкриватися з інтернету. Внутрішня адреса не підійде.</p>
-    <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-telegram-channel">Канал Telegram</label>
+    <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Потрібна для Threads: платформа сама завантажує відео за посиланням, тому адреса має відкриватися з інтернету. Внутрішня адреса не підійде.' | t }}</p>
+    <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-telegram-channel">{{ 'Канал Telegram' | t }}</label>
     <input id="publishing-telegram-channel" data-testid="publishing-telegram-channel" [ngModel]="telegramChannel()" (ngModelChange)="telegramChannel.set($event)" [disabled]="!canEdit()"
-           placeholder="@назва_каналу" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
-    <p class="text-xs text-slate-500 mt-1 mb-4">Бот має бути адміністратором цього каналу.</p>
+           placeholder="{{ '@назва_каналу' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
+    <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Бот має бути адміністратором цього каналу.' | t }}</p>
     <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" data-testid="publishing-save"
-            [disabled]="!canEdit() || saving()" (click)="save()">Зберегти</button>
+            [disabled]="!canEdit() || saving()" (click)="save()">{{ 'Зберегти' | t }}</button>
   </div>`,
 })
 export class PublishingSectionComponent implements OnInit {

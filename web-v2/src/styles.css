@@ -25,3 +25,10 @@ html, body {
 aside {
   transition: width 0.2s ease;
 }
+
+/* First Run Wizard */
+.wizard-title { @apply text-base font-semibold text-slate-800 mb-2; }
+.wizard-label { @apply block text-sm text-slate-700 my-3; }
+.wizard-input { @apply w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm; }
+.wizard-box { @apply mt-2 p-3 bg-slate-50 rounded-lg text-sm whitespace-pre-wrap; }
+.wizard-primary { @apply px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-50; }

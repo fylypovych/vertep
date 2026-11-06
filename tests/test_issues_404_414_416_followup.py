@@ -120,7 +120,7 @@ def test_node_without_channels_is_not_ready(monkeypatch):
 
 def test_node_reports_the_channels_core_can_serve(monkeypatch):
     _node(monkeypatch, {"channels": {"youtube": {"ready": True}, "tiktok": {"ready": False}}})
-    assert service.publisher_readiness() == {"mode": "live", "ready_channels": ["youtube"]}
+    assert service.publisher_readiness() == {"mode": "live", "ready_channels": ["youtube"], "not_ready": {}}
 
 
 def test_readiness_route_refuses_a_foreign_node_and_has_no_values(monkeypatch):
@@ -132,7 +132,7 @@ def test_readiness_route_refuses_a_foreign_node_and_has_no_values(monkeypatch):
     monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "value-must-not-leak")
     answer = tasks.publisher_readiness(request)
     assert "value-must-not-leak" not in str(answer)
-    assert set(answer["channels"]["youtube"]) == {"ready", "configured", "missing_scopes"}
+    assert set(answer["channels"]["youtube"]) == {"ready", "configured", "missing_scopes", "reason"}
 
 
 def test_stub_publication_is_gone():

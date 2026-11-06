@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
@@ -13,20 +14,20 @@ import { RemoteState } from '../core/state/remote-state';
 @Component({
   selector: 'app-logs',
   standalone: true,
-  imports: [FormsModule, RouterModule, EmptyStateComponent, ErrorStateComponent, LoadingStateComponent, VertepDatePipe],
+  imports: [TPipe, FormsModule, RouterModule, EmptyStateComponent, ErrorStateComponent, LoadingStateComponent, VertepDatePipe],
   template: `
     <div class="space-y-5" data-testid="logs-page">
       <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h3 class="text-lg font-semibold text-slate-900">Логи</h3>
-          <p class="mt-1 text-sm text-slate-500">Події CORE і підключених вузлів</p>
+          <h3 class="text-lg font-semibold text-slate-900">{{ 'Логи' | t }}</h3>
+          <p class="mt-1 text-sm text-slate-500">{{ 'Події CORE і підключених вузлів' | t }}</p>
         </div>
 
         <form class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5" (ngSubmit)="loadLogs()">
           <label class="text-xs text-slate-600">
-            Рівень
+            {{ 'Рівень' | t }}
             <select [(ngModel)]="level" name="level" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-              <option value="">Усі</option>
+              <option value="">{{ 'Усі' | t }}</option>
               <option value="DEBUG">DEBUG</option>
               <option value="INFO">INFO</option>
               <option value="WARNING">WARNING</option>
@@ -39,11 +40,11 @@ import { RemoteState } from '../core/state/remote-state';
             <input [(ngModel)]="jobId" name="jobId" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           </label>
           <label class="text-xs text-slate-600">
-            Вузол
+            {{ 'Вузол' | t }}
             <input [(ngModel)]="nodeName" name="nodeName" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           </label>
           <label class="text-xs text-slate-600">
-            Кількість
+            {{ 'Кількість' | t }}
             <select [(ngModel)]="limit" name="limit" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
               <option [ngValue]="100">100</option>
               <option [ngValue]="200">200</option>
@@ -52,7 +53,7 @@ import { RemoteState } from '../core/state/remote-state';
             </select>
           </label>
           <button type="submit" [disabled]="logsState.loading()" class="self-end rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
-            Оновити
+            {{ 'Оновити' | t }}
           </button>
         </form>
       </div>
@@ -68,11 +69,11 @@ import { RemoteState } from '../core/state/remote-state';
           <table class="min-w-full divide-y divide-slate-200 text-left text-sm">
             <thead class="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Час</th>
-                <th class="px-4 py-3 font-medium">Рівень</th>
-                <th class="px-4 py-3 font-medium">Джерело</th>
-                <th class="px-4 py-3 font-medium">Повідомлення</th>
-                <th class="px-4 py-3 font-medium">Зв'язок</th>
+                <th class="px-4 py-3 font-medium">{{ 'Час' | t }}</th>
+                <th class="px-4 py-3 font-medium">{{ 'Рівень' | t }}</th>
+                <th class="px-4 py-3 font-medium">{{ 'Джерело' | t }}</th>
+                <th class="px-4 py-3 font-medium">{{ 'Повідомлення' | t }}</th>
+                <th class="px-4 py-3 font-medium">{{ 'Зв\\'язок' | t }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
@@ -90,10 +91,10 @@ import { RemoteState } from '../core/state/remote-state';
                     } @else {
                       <div>{{ entry.logger || 'CORE' }}</div>
                     }
-                    @if (entry.actor) { <div class="text-slate-500">Користувач: {{ entry.actor }}</div> }
+                    @if (entry.actor) { <div class="text-slate-500">{{ 'Користувач:' | t }} {{ entry.actor }}</div> }
                   </td>
                   <td class="min-w-80 px-4 py-3 text-slate-800">
-                    <div class="whitespace-pre-wrap break-words">{{ entry.message }}</div>
+                    <div class="whitespace-pre-wrap break-words">{{ (entry.message) | t }}</div>
                     @if (entry.exception) {
                       <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-red-50 p-2 text-xs text-red-800">{{ entry.exception }}</pre>
                     }
@@ -114,7 +115,7 @@ import { RemoteState } from '../core/state/remote-state';
             <button type="button" (click)="loadOlder()" [disabled]="loadingOlder()"
                     data-testid="logs-load-older"
                     class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-              {{ loadingOlder() ? 'Завантаження…' : 'Показати старіші' }}
+              {{ (loadingOlder() ? 'Завантаження…' : 'Показати старіші') | t }}
             </button>
           </div>
         }

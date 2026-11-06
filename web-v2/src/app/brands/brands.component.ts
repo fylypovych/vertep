@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -15,15 +16,15 @@ import { RemoteState } from '../core/state/remote-state';
 @Component({
   selector: 'app-brands',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, BrandChannelsComponent, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, RouterModule, BrandChannelsComponent, LoadingStateComponent, ErrorStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="space-y-5" data-testid="brands-page">
       <div class="flex items-center justify-between">
-        <h2 class="text-xl font-semibold text-slate-900">Бренди</h2>
-        <button (click)="openEditor()" data-testid="create-brand-button" [disabled]="!canCreateBrand" [title]="createBrandReason || 'Новий бренд'"
+        <h2 class="text-xl font-semibold text-slate-900">{{ 'Бренди' | t }}</h2>
+        <button (click)="openEditor()" data-testid="create-brand-button" [disabled]="!canCreateBrand" [title]="(createBrandReason || 'Новий бренд') | t"
                 class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
-          Новий бренд
+          {{ 'Новий бренд' | t }}
         </button>
       </div>
 
@@ -32,7 +33,7 @@ import { RemoteState } from '../core/state/remote-state';
       } @else if (error()) {
         <app-error-state [message]="error()!" (retry)="loadBrands()" />
       } @else if (brands().length === 0) {
-        <div class="text-center text-slate-500 py-10" data-testid="brands-empty">Брендів не знайдено</div>
+        <div class="text-center text-slate-500 py-10" data-testid="brands-empty">{{ 'Брендів не знайдено' | t }}</div>
       } @else {
         <div class="space-y-4">
           @for (brand of brands(); track brand.id) {
@@ -43,11 +44,11 @@ import { RemoteState } from '../core/state/remote-state';
                   <p class="text-xs text-slate-500 font-mono">{{ brand.id }}</p>
                 </div>
                 <div class="flex gap-2">
-                  <button (click)="editBrand(brand)" [disabled]="!canUpdateBrand" [title]="updateBrandReason || 'Редагувати'" class="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-40">Редагувати</button>
-                  <button (click)="deleteBrand(brand)" [disabled]="!canDeleteBrand" [title]="deleteBrandReason || 'Видалити'" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-brand-button">Видалити</button>
+                  <button (click)="editBrand(brand)" [disabled]="!canUpdateBrand" [title]="(updateBrandReason || 'Редагувати') | t" class="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-40">{{ 'Редагувати' | t }}</button>
+                  <button (click)="deleteBrand(brand)" [disabled]="!canDeleteBrand" [title]="(deleteBrandReason || 'Видалити') | t" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-brand-button">{{ 'Видалити' | t }}</button>
                 </div>
               </div>
-              <div class="text-sm text-slate-600 mb-3">{{ brand.enabled ? 'Активний' : 'Неактивний' }}</div>
+              <div class="text-sm text-slate-600 mb-3">{{ (brand.enabled ? 'Активний' : 'Неактивний') | t }}</div>
               <app-brand-channels [brandId]="brand.id" [channels]="channelStates[brand.id]?.data() || []"
                 [loading]="channelStates[brand.id]?.loading() || false" [error]="channelStates[brand.id]?.error() || null"
                 (retry)="loadChannels(brand.id)" (channelAdded)="onChannelAdded($event)" (channelChanged)="loadChannels(brand.id)" />
@@ -59,32 +60,32 @@ import { RemoteState } from '../core/state/remote-state';
       <!-- Brand Editor Modal -->
       <div *ngIf="showEditor()" data-testid="brand-editor-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div class="bg-white rounded-xl p-6 w-full max-w-xl mx-4 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ editingBrand() ? 'Редагувати бренд' : 'Новий бренд' }}</h3>
+          <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ (editingBrand() ? 'Редагувати бренд' : 'Новий бренд') | t }}</h3>
           <div class="space-y-4">
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">ID</label>
-              <input [(ngModel)]="editorForm.id" [disabled]="!!editingBrand()" placeholder="наприклад, my_brand" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm disabled:bg-slate-100">
+              <input [(ngModel)]="editorForm.id" [disabled]="!!editingBrand()" placeholder="{{ 'наприклад, my_brand' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm disabled:bg-slate-100">
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Назва</label>
-              <input [(ngModel)]="editorForm.name" placeholder="Назва бренду" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Назва' | t }}</label>
+              <input [(ngModel)]="editorForm.name" placeholder="{{ 'Назва бренду' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
             </div>
             <div class="flex items-center gap-2">
               <input type="checkbox" [(ngModel)]="editorForm.enabled" id="brand-enabled">
-              <label for="brand-enabled" class="text-sm text-slate-700">Бренд активний</label>
+              <label for="brand-enabled" class="text-sm text-slate-700">{{ 'Бренд активний' | t }}</label>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Метадані (JSON)</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Метадані (JSON)' | t }}</label>
               <textarea [(ngModel)]="metadataJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono" spellcheck="false"></textarea>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Налаштування публікації (JSON)</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Налаштування публікації (JSON)' | t }}</label>
               <textarea [(ngModel)]="publishingJson" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono" spellcheck="false"></textarea>
             </div>
           </div>
           <div class="flex justify-end gap-2 mt-6">
-            <button (click)="closeEditor()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="saveBrand()" [disabled]="saving() || !canSaveBrand" [title]="saveBrandReason || 'Зберегти'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
+            <button (click)="closeEditor()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
+            <button (click)="saveBrand()" [disabled]="saving() || !canSaveBrand" [title]="(saveBrandReason || 'Зберегти') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
           </div>
         </div>
       </div>

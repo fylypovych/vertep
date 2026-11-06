@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { ChangeDetectorRef, Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -17,18 +18,18 @@ import { RemoteState } from '../core/state/remote-state';
 @Component({
   selector: 'app-workers',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, RouterModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="workers-page">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-slate-900">Вузли Vertep</h3>
+        <h3 class="text-lg font-semibold text-slate-900">{{ 'Вузли Vertep' | t }}</h3>
         <button (click)="openWizard()" [disabled]="!policy.can('update_worker').allowed" data-testid="create-worker-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
-          Додати вузол
+          {{ 'Додати вузол' | t }}
         </button>
       </div>
 
       <div class="mb-4">
-        <input [(ngModel)]="search" data-testid="workers-search" placeholder="Пошук за назвою або ID..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+        <input [(ngModel)]="search" data-testid="workers-search" placeholder="{{ 'Пошук за назвою або ID...' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
       </div>
 
       @if (workersState.loading()) {
@@ -40,13 +41,13 @@ import { RemoteState } from '../core/state/remote-state';
           <table class="w-full text-sm text-left" data-testid="workers-table">
             <thead class="text-xs text-slate-500 uppercase bg-slate-50">
               <tr>
-                <th class="px-4 py-3">Назва</th>
-                <th class="px-4 py-3">Роль</th>
-                <th class="px-4 py-3">Можливості</th>
-                <th class="px-4 py-3">Статус</th>
+                <th class="px-4 py-3">{{ 'Назва' | t }}</th>
+                <th class="px-4 py-3">{{ 'Роль' | t }}</th>
+                <th class="px-4 py-3">{{ 'Можливості' | t }}</th>
+                <th class="px-4 py-3">{{ 'Статус' | t }}</th>
                 <th class="px-4 py-3">Runtime</th>
-                <th class="px-4 py-3">Навантаження</th>
-                <th class="px-4 py-3">Дії</th>
+                <th class="px-4 py-3">{{ 'Навантаження' | t }}</th>
+                <th class="px-4 py-3">{{ 'Дії' | t }}</th>
               </tr>
             </thead>
             <tbody>
@@ -56,7 +57,7 @@ import { RemoteState } from '../core/state/remote-state';
                      <a [routerLink]="['/workers', worker.node_id]" class="font-medium text-slate-900 hover:text-emerald-600">{{ worker.node_name }}</a>
                      <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
                    </td>
-                  <td class="px-4 py-3">{{ nodeRoleLabel(worker.role) }}</td>
+                  <td class="px-4 py-3">{{ (nodeRoleLabel(worker.role)) | t }}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">{{ worker.capabilities ? worker.capabilities.join(', ') : '-' }}</td>
                   <td class="px-4 py-3">
                     <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
@@ -67,7 +68,7 @@ import { RemoteState } from '../core/state/remote-state';
                       [class.bg-slate-100]="!['Готовий', 'Очікує self-test'].includes(runtimeStatusLabel(worker.runtime_status))"
                       [class.text-slate-600]="!['Готовий', 'Очікує self-test'].includes(runtimeStatusLabel(worker.runtime_status))"
                       [attr.data-testid]="'worker-runtime-status-' + worker.node_id">
-                      {{ runtimeStatusLabel(worker.runtime_status) }}
+                      {{ (runtimeStatusLabel(worker.runtime_status)) | t }}
                     </span>
                     @if (worker.last_self_test_at) {
                       <div class="text-xs text-slate-400 mt-0.5">self-test: {{ worker.last_self_test_at }}</div>
@@ -82,7 +83,7 @@ import { RemoteState } from '../core/state/remote-state';
                       <span class="w-1.5 h-1.5 rounded-full"
                         [class.bg-emerald-500]="['READY', 'ONLINE', 'FREE'].includes(worker.status)"
                         [class.bg-slate-400]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"></span>
-                      {{ nodeStatusLabel(worker.status) }}
+                      {{ (nodeStatusLabel(worker.status)) | t }}
                     </span>
                     @if (worker.compatibility_issue) {
                       <div class="text-xs text-red-600 mt-0.5" [attr.data-testid]="'worker-compatibility-' + worker.node_id">{{ worker.compatibility_issue }}</div>
@@ -90,21 +91,21 @@ import { RemoteState } from '../core/state/remote-state';
                   </td>
                   <td class="px-4 py-3">{{ nodeLoad(worker) }}{{ worker.temperature != null ? ' · ' + worker.temperature + '°C' : '' }}</td>
                   <td class="px-4 py-3">
-                    <button (click)="openSettings(worker)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Налаштування</button>
-                    <button (click)="deleteWorker(worker)" class="text-red-600 hover:text-red-700 text-sm font-medium">Видалити</button>
+                    <button (click)="openSettings(worker)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">{{ 'Налаштування' | t }}</button>
+                    <button (click)="deleteWorker(worker)" class="text-red-600 hover:text-red-700 text-sm font-medium">{{ 'Видалити' | t }}</button>
                   </td>
                 </tr>
               } @empty {
-                <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500" data-testid="workers-empty">Воркерів не знайдено</td></tr>
+                <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500" data-testid="workers-empty">{{ 'Воркерів не знайдено' | t }}</td></tr>
               }
             </tbody>
           </table>
         </div>
         @if (pages > 1) {
           <div class="flex items-center justify-between mt-4">
-            <button (click)="prevPage()" [disabled]="page === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Назад</button>
-            <span class="text-sm text-slate-600">Сторінка {{ page }} з {{ pages }}</span>
-            <button (click)="nextPage()" [disabled]="page === pages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Вперед</button>
+            <button (click)="prevPage()" [disabled]="page === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Назад' | t }}</button>
+            <span class="text-sm text-slate-600">{{ 'Сторінка' | t }} {{ page }} {{ 'з' | t }} {{ pages }}</span>
+            <button (click)="nextPage()" [disabled]="page === pages" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Вперед' | t }}</button>
           </div>
         }
       }
@@ -113,23 +114,23 @@ import { RemoteState } from '../core/state/remote-state';
     <!-- Worker Onboarding Wizard -->
     <div *ngIf="showWizard" data-testid="worker-wizard-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
-        <h3 class="text-lg font-semibold text-slate-900 mb-4">Додати вузол</h3>
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Додати вузол' | t }}</h3>
 
         @if (!tokenResult()) {
           <div class="space-y-4">
             <div>
               <select [(ngModel)]="wizard.role" data-testid="worker-role-select" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                <option value="gpu">GPU-вузол</option>
-                <option value="text">Текстовий вузол</option>
-                <option value="voice">Голосовий вузол</option>
-                <option value="publisher">Вузол публікації</option>
-                <option value="backup">Вузол резервного копіювання</option>
-                <option value="monitoring">Вузол моніторингу</option>
+                <option value="gpu">{{ 'GPU-вузол' | t }}</option>
+                <option value="text">{{ 'Текстовий вузол' | t }}</option>
+                <option value="voice">{{ 'Голосовий вузол' | t }}</option>
+                <option value="publisher">{{ 'Вузол публікації' | t }}</option>
+                <option value="backup">{{ 'Вузол резервного копіювання' | t }}</option>
+                <option value="monitoring">{{ 'Вузол моніторингу' | t }}</option>
               </select>
             </div>
             <div class="flex justify-end gap-2 mt-6">
-              <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-              <button (click)="generateToken()" [disabled]="creating" data-testid="generate-token-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ creating ? 'Генерація...' : 'Згенерувати токен' }}</button>
+              <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
+              <button (click)="generateToken()" [disabled]="creating" data-testid="generate-token-button" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ (creating ? 'Генерація...' : 'Згенерувати токен') | t }}</button>
             </div>
           </div>
         } @else if (pollingNode()) {
@@ -137,39 +138,39 @@ import { RemoteState } from '../core/state/remote-state';
             <p class="text-sm text-slate-700">{{ onboardingStatus() }}</p>
             <div class="flex items-center gap-3">
               <div class="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-              <span class="text-sm text-slate-600">Перевірка /api/nodes</span>
+              <span class="text-sm text-slate-600">{{ 'Перевірка /api/nodes' | t }}</span>
             </div>
             <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1" data-testid="token-display">
-              <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
-              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at | vertepDate }}</p>
-              <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
+              <p><span class="font-medium">{{ 'Токен:' | t }}</span> {{ tokenResult()!.token }}</p>
+              <p><span class="font-medium">{{ 'Діє до:' | t }}</span> {{ tokenResult()!.expires_at | vertepDate }}</p>
+              <p><span class="font-medium">{{ 'Роль:' | t }}</span> {{ tokenResult()!.role }}</p>
             </div>
           </div>
         } @else if (registeredNode()) {
           <div class="space-y-3">
-            <h4 class="text-sm font-medium text-emerald-900">Вузол зареєстровано</h4>
+            <h4 class="text-sm font-medium text-emerald-900">{{ 'Вузол зареєстровано' | t }}</h4>
             <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1" data-testid="token-display">
               <p><span class="font-medium">ID:</span> {{ registeredNode()!.node_id }}</p>
-              <p><span class="font-medium">Назва:</span> {{ registeredNode()!.node_name }}</p>
-              <p><span class="font-medium">Роль:</span> {{ registeredNode()!.role }}</p>
-              <p><span class="font-medium">Статус:</span> {{ registeredNode()!.status }}</p>
+              <p><span class="font-medium">{{ 'Назва:' | t }}</span> {{ registeredNode()!.node_name }}</p>
+              <p><span class="font-medium">{{ 'Роль:' | t }}</span> {{ registeredNode()!.role }}</p>
+              <p><span class="font-medium">{{ 'Статус:' | t }}</span> {{ registeredNode()!.status }}</p>
             </div>
             <div class="flex justify-end gap-2 mt-6">
-              <button (click)="closeWizard()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Закрити</button>
+              <button (click)="closeWizard()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Закрити' | t }}</button>
             </div>
           </div>
         } @else {
           <div class="space-y-3">
-            <p class="text-sm text-slate-700">Використовуйте ці дані для реєстрації вузла:</p>
+            <p class="text-sm text-slate-700">{{ 'Використовуйте ці дані для реєстрації вузла:' | t }}</p>
             <div class="bg-slate-50 rounded-lg p-3 text-xs space-y-1" data-testid="token-display">
-              <p><span class="font-medium">Токен:</span> {{ tokenResult()!.token }}</p>
-              <p><span class="font-medium">Діє до:</span> {{ tokenResult()!.expires_at | vertepDate }}</p>
-              <p><span class="font-medium">Роль:</span> {{ tokenResult()!.role }}</p>
+              <p><span class="font-medium">{{ 'Токен:' | t }}</span> {{ tokenResult()!.token }}</p>
+              <p><span class="font-medium">{{ 'Діє до:' | t }}</span> {{ tokenResult()!.expires_at | vertepDate }}</p>
+              <p><span class="font-medium">{{ 'Роль:' | t }}</span> {{ tokenResult()!.role }}</p>
               <p><span class="font-medium">Core URL:</span> {{ locationOrigin }}/api/nodes/register</p>
             </div>
             <div class="flex justify-end gap-2 mt-6">
-              <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Закрити</button>
-              <button (click)="startPolling()" [disabled]="polling" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">{{ polling ? 'Очікування...' : 'Перевірити статус' }}</button>
+              <button (click)="showWizard = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Закрити' | t }}</button>
+              <button (click)="startPolling()" [disabled]="polling" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">{{ (polling ? 'Очікування...' : 'Перевірити статус') | t }}</button>
             </div>
           </div>
         }
@@ -179,22 +180,22 @@ import { RemoteState } from '../core/state/remote-state';
     <!-- Worker Settings Modal -->
     <div *ngIf="showSettings" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
-        <h3 class="text-lg font-semibold text-slate-900 mb-4">Налаштування: {{ selectedWorker?.node_name }}</h3>
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Налаштування:' | t }} {{ selectedWorker?.node_name }}</h3>
         <div class="space-y-4">
           <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Дія</label>
+            <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Дія' | t }}</label>
             <select [(ngModel)]="workerAction" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-              <option value="">Обрати дію...</option>
-              <option value="drain">Завершити поточні завдання</option>
-              <option value="disable">Вимкнути</option>
-              <option value="enable">Увімкнути</option>
-              <option value="restart">Перезапустити</option>
+              <option value="">{{ 'Обрати дію...' | t }}</option>
+              <option value="drain">{{ 'Завершити поточні завдання' | t }}</option>
+              <option value="disable">{{ 'Вимкнути' | t }}</option>
+              <option value="enable">{{ 'Увімкнути' | t }}</option>
+              <option value="restart">{{ 'Перезапустити' | t }}</option>
             </select>
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-6">
-          <button (click)="showSettings = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Закрити</button>
-          <button (click)="applyAction()" [disabled]="actioning" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ actioning ? 'Застосування...' : 'Застосувати' }}</button>
+          <button (click)="showSettings = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Закрити' | t }}</button>
+          <button (click)="applyAction()" [disabled]="actioning" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ (actioning ? 'Застосування...' : 'Застосувати') | t }}</button>
         </div>
       </div>
     </div>

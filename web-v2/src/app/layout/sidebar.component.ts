@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, computed, inject } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
@@ -23,7 +24,7 @@ interface SidebarGroup {
 @Component({
   selector: 'app-sidebar',
   standalone: true,
-  imports: [RouterModule, CommonModule],
+  imports: [TPipe, RouterModule, CommonModule],
   template: `
     <aside
       class="flex flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 h-full z-30 flex-shrink-0 transition-all duration-200"
@@ -34,7 +35,7 @@ interface SidebarGroup {
       [class.-translate-x-full]="isMobile && collapsed"
       [class.translate-x-0]="!collapsed"
       role="navigation"
-      aria-label="Навігація">
+      aria-label="{{ 'Навігація' | t }}">
 
       <!-- Logo -->
       <div class="flex items-center h-16 px-4 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
@@ -57,7 +58,7 @@ interface SidebarGroup {
                [class.w-0]="collapsed"
                [class.overflow-hidden]="collapsed"
                [class.invisible]="collapsed">
-            {{ group.label }}
+            {{ (group.label) | t }}
           </div>
           @for (item of group.items; track item.id) {
             <a [routerLink]="item.path"
@@ -73,7 +74,7 @@ interface SidebarGroup {
                     [class.opacity-0]="collapsed"
                     [class.w-0]="collapsed"
                     [class.overflow-hidden]="collapsed">
-                {{ item.label }}
+                {{ (item.label) | t }}
               </span>
             </a>
           }

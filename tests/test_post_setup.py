@@ -65,7 +65,7 @@ def test_update_sets_the_production_defaults(tmp_path):
 
 
 def test_wizard_asks_for_telegram_and_makes_the_key_a_required_step():
-    html = Path("web/setup.html").read_text(encoding="utf-8")
+    html = Path("web-v2/src/app/setup/setup.component.html").read_text(encoding="utf-8")
     for element in ('id="telegramToken"', 'id="telegramAdmins"', 'id="backupKeyDownload"', 'id="backupKeySaved"'):
         assert element in html
-    assert "telegram_admin_chat_ids" in html
+    assert "telegram_admin_chat_ids" in Path("web-v2/src/app/setup/setup.component.ts").read_text(encoding="utf-8")

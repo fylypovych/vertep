@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ResourcesApiService } from '../../core/api/resources.api';
@@ -9,10 +10,10 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
 @Component({
   selector: 'app-settings-branding',
   standalone: true,
-  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-branding">
-      <h3 class="text-lg font-semibold text-slate-900 mb-4">Брендинг</h3>
+      <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Брендинг' | t }}</h3>
       @if (logoError()) {
         <app-error-state [message]="logoError()!" [showRetry]="false" />
       }
@@ -29,12 +30,12 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
             <app-loading-state />
           } @else {
             <label class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer">
-              {{ uploading() ? 'Завантаження...' : 'Завантажити' }}
+              {{ (uploading() ? 'Завантаження...' : 'Завантажити') | t }}
               <input [disabled]="uploading()" type="file" accept="image/*" (change)="uploadFile($event)" class="hidden" data-testid="logo-upload">
             </label>
           }
           @if (logoUrl()) {
-            <button (click)="deleteLogo()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">Видалити</button>
+            <button (click)="deleteLogo()" class="px-3 py-1.5 text-sm text-red-600 hover:text-red-700 border border-red-200 rounded-lg" data-testid="logo-delete">{{ 'Видалити' | t }}</button>
           }
         </div>
       </div>

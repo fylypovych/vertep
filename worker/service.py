@@ -861,7 +861,11 @@ def publisher_readiness() -> dict:
     from worker.role_executor import _core_base_url, _worker_auth_headers
     if publisher_mock_enabled():
         return {"mode": "mock", "ready_channels": sorted(LIVE_PUBLISHERS)}
-    ready = {name for name, publisher in LIVE_PUBLISHERS.items() if os.getenv(publisher.credential_env)}
+    # Only a credential held by this node is probed here; CORE judges the ones it stores.
+    states = {name: publisher.readiness() for name, publisher in LIVE_PUBLISHERS.items()
+              if os.getenv(publisher.credential_env)}
+    ready = {name for name, state in states.items() if state["ready"]}
+    reasons = {name: state["reason"] for name, state in states.items() if not state["ready"]}
     base = _core_base_url()
     node_name = os.getenv("NODE_NAME") or os.getenv("WORKER_NAME") or ""
     if base and node_name:
@@ -869,14 +873,19 @@ def publisher_readiness() -> dict:
             response = httpx.get(f"{base}/api/tasks/publisher-readiness",
                                  headers=_worker_auth_headers(node_name), timeout=15)
             response.raise_for_status()
-            ready |= {name for name, state in response.json()["channels"].items() if state["ready"]}
+            channels = response.json()["channels"]
+            ready |= {name for name, state in channels.items() if state["ready"]}
+            reasons.update({name: state["reason"] for name, state in channels.items()
+                            if not state["ready"] and state.get("reason")})
         except httpx.HTTPError:
             # A credential on this node is enough; without one the outage must stay visible.
             if not ready:
                 raise
     if not ready:
-        raise RuntimeError("Жоден канал публікації не налаштовано")
-    return {"mode": "live", "ready_channels": sorted(ready)}
+        detail = "; ".join(f"{name}: {reason}" for name, reason in sorted(reasons.items()))
+        raise RuntimeError("Жоден канал публікації не налаштовано" + (f" ({detail})" if detail else ""))
+    return {"mode": "live", "ready_channels": sorted(ready), "not_ready": {
+        name: reason for name, reason in sorted(reasons.items()) if name not in ready}}
 
 
 def gpu_info() -> dict:

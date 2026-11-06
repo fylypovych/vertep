@@ -65,51 +65,17 @@ def test_worker_update_agent_accepts_skip_drain():
     assert "--skip-drain" in result.stdout
 
 
-def test_add_worker_wizard_html_exists():
-    html = Path("web/index.html").read_text(encoding="utf-8")
-    assert "addworkerdialog" in html
-    assert "wizard-step-1" in html
-    assert "wizard-step-2" in html
-    assert "wizard-step-3" in html
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required for inline UI syntax validation")
-def test_dashboard_inline_javascript_is_valid():
-    html = Path("web/index.html").read_text(encoding="utf-8")
-    scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
-    assert scripts
-    for script in scripts:
-        subprocess.run(["node", "--check", "-"], input=script, text=True, encoding="utf-8",
-                       capture_output=True, check=True)
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required for UI syntax validation")
-def test_dashboard_external_javascript_is_valid():
-    subprocess.run(["node", "--check", "web/admin-uk.js"], capture_output=True,
-                   text=True, encoding="utf-8", check=True)
-
-
-def test_character_editor_is_a_localized_form():
-    script = Path("web/admin-uk.js").read_text(encoding="utf-8")
-    assert 'id="characterform"' in script
-    assert "Опис характеру та поведінки" in script
-    assert "Візуальний стиль" in script
-    assert "window.editCharacter = async" in script
-    assert "dialog.showModal()" in script
-
-
 def test_setup_wizard_has_manifest_step():
-    html = Path("web/setup.html").read_text(encoding="utf-8")
+    html = Path("web-v2/src/app/setup/setup.component.html").read_text(encoding="utf-8")
     assert "Installation Manifest" in html
     assert "downloadManifest" in html
     assert "manifest.json" in html
     for element_id in ("coreConnection", "coreUrl", "coreCertificate", "registrationToken"):
         assert f'id="{element_id}"' in html
-    assert "location.replace(target)" in html
-    assert "if(setupCode){alert" in html
-    assert "step===sections.length-4" in html
-    assert "downloadBtn.disabled=false" in html
-    assert "Маніфест буде створено після перевірки налаштувань" in html
+    source = Path("web-v2/src/app/setup/setup.component.ts").read_text(encoding="utf-8")
+    assert "window.location.replace(target)" in source
+    assert "this.askCode.set(true)" in source
+    assert "backup_key: _omitted" in source, "the downloaded manifest must not carry the backup key"
 
 
 def test_bootstrap_redirects_to_setup():
@@ -122,14 +88,16 @@ def test_setup_alias_preserves_token(monkeypatch):
     from core import app as core_app
     from fastapi.testclient import TestClient
 
+    from core.api import auth as core_auth
+    monkeypatch.setattr(core_auth, "is_configured", lambda: False)
     monkeypatch.setattr(_owner_core_first_run, "is_configured", lambda: False)
     client = TestClient(core_app.app)
     response = client.get("/setup?token=one-time-code", follow_redirects=False)
-    assert response.status_code == 307
-    assert response.headers["location"] == "/v1/setup.html?token=one-time-code"
-    page = client.get(response.headers["location"])
-    assert page.status_code == 200
-    assert '<div class="brand">VERTEP</div>' in page.text
+    assert response.status_code != 503, "the wizard page must open before configuration"
+    assert client.get("/", follow_redirects=False).headers["location"] == "/setup"
+    assert client.get("/v1/setup.html", follow_redirects=False).status_code != 200 or not Path("web").exists()
+    if Path("web-v2/dist/vertep-admin-v2").is_dir():
+        assert response.status_code == 200 and "<app-root" in response.text
 
 
 def test_server_side_worker_filtering():
@@ -150,7 +118,7 @@ def test_bootstrap_supports_push_based_enrollment():
 
 
 def test_domain_support_in_setup():
-    html = Path("web/setup.html").read_text(encoding="utf-8")
+    html = Path("web-v2/src/app/setup/setup.component.html").read_text(encoding="utf-8")
     assert "domain" in html.lower()
     assert "WEB_DOMAIN" in Path("core/first_run.py").read_text(encoding="utf-8")
 

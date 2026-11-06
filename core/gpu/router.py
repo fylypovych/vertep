@@ -1,12 +1,11 @@
-"""GPU Router - fallback routing and provider selection.
+"""GPU Router - provider selection.
 
 Implements the GPU Provider contract from Architecture 2.0.
-Handles provider fallback routing, readiness checks, and resource management.
+A failed provider is reported, never replaced automatically: the owner restarts it (#431).
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from typing import Any, Optional
 from threading import RLock
 
@@ -15,12 +14,10 @@ from .provider_registry import GPUProviderRegistry
 
 
 class GPURouter:
-    """Router for GPU provider fallback and task routing."""
+    """Sends a task to the highest-priority capable provider."""
 
     def __init__(self, registry: GPUProviderRegistry | None = None, allowed: list[str] | None = None, local_only: bool = False) -> None:
         self.registry = registry or GPUProviderRegistry()
-        self._fallback_attempts: dict[str, int] = {}  # task_id -> fallback count
-        self._fallback_cooldown = timedelta(seconds=30)
         self.allowed = set(allowed if allowed is not None else self.registry.list_providers())
         self.local_only = local_only
         self._active = {}
@@ -48,10 +45,10 @@ class GPURouter:
                     ready = provider.query_capability({"type": capability, **task})
                     if not ready.get("available"):
                         reasons.append(f"{name}: not ready")
-                        continue
+                        break
                     if sum(owner == name for owner in self._active.values()) >= provider.max_concurrent_tasks:
                         reasons.append(f"{name}: capacity exhausted")
-                        continue
+                        break
                     usage = provider.get_resource_usage()
                     required = task.get("vram_mb", provider.min_vram_mb)
                     if not isinstance(required, int) or isinstance(required, bool) or required < 0:
@@ -59,10 +56,10 @@ class GPURouter:
                     reserved = sum(amount for task_key, amount in self._reservations.items() if self._active.get(task_key) == name)
                     if usage.get("vram_total_mb", 0) - usage.get("vram_used_mb", 0) - reserved < required:
                         reasons.append(f"{name}: insufficient VRAM")
-                        continue
+                        break
                 except Exception as exc:
                     reasons.append(f"{name}: readiness {type(exc).__name__}")
-                    continue
+                    break
                 self._active[task_id] = name
                 self._reservations[task_id] = required
                 self._operations[operation_id] = task_id
@@ -86,7 +83,7 @@ class GPURouter:
                 if result.get("status") == "failed" and result.get("cleanup") is True:
                     self._release(task_id)
                     reasons.append(f"{name}: failed with cleanup confirmed")
-                    continue
+                    break
                 return result
         self.failures[task_id] = reasons
         raise RuntimeError("Allowed GPU providers exhausted: " + "; ".join(reasons))
@@ -109,50 +106,6 @@ class GPURouter:
                 return True
             return False
 
-    def route_inference(
-        self, capability: str, task: dict[str, Any], current_provider: str | None = None
-    ) -> Optional[GPUProvider]:
-        """Route an inference task to the best available provider.
-
-        Tries providers in priority order, with fallback on failure.
-        """
-        # Try providers in priority order
-        for provider_name in self.registry._get_priority_order():
-            if provider_name not in self.allowed:
-                continue
-            prov = self.registry._providers.get(provider_name)
-            if prov is None:
-                continue
-
-            # Check capability
-            if capability not in prov.capabilities:
-                continue
-
-            # Check if provider is ready (basic check)
-            if not self._is_provider_ready(prov):
-                continue
-
-            return prov
-
-        # No provider available
-        return None
-
-    def route_with_fallback(
-        self, capability: str, task: dict[str, Any], current_provider: str | None = None
-    ) -> Optional[GPUProvider]:
-        """Route with explicit fallback logic.
-
-        Tries current provider first, then falls back through priority list.
-        """
-        # Try current provider first if specified
-        if current_provider:
-            prov = self.registry._providers.get(current_provider)
-            if current_provider in self.allowed and prov and capability in prov.capabilities and self._is_provider_ready(prov):
-                return prov
-
-        # Fall through to priority-based routing
-        return self.route_inference(capability, task, current_provider)
-
     def _is_provider_ready(self, provider: GPUProvider) -> bool:
         """Check if a provider is ready to accept tasks.
 
@@ -165,22 +118,6 @@ class GPURouter:
             return any(provider.query_capability({"type": capability}).get("available", False) for capability in provider.capabilities)
         except Exception:
             return False
-
-    def handle_provider_failure(
-        self, provider_name: str, task_id: str, reason: str
-    ) -> None:
-        """Handle provider failure and trigger fallback.
-
-        Logs the failure and records the attempt for cooldown tracking.
-        """
-        # Record the failure
-        self._fallback_attempts[task_id] = self._fallback_attempts.get(task_id, 0) + 1
-
-        # In a full implementation, would:
-        # 1. Log the failure with reason
-        # 2. Trigger fallback to next provider
-        # 3. Apply cooldown before retrying same provider
-        pass
 
     def get_best_provider(
         self, capability: str, exclude: set[str] | None = None

@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SystemApiService } from '../../core/api/system.api';
@@ -13,10 +14,10 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
 @Component({
   selector: 'app-settings-update',
   standalone: true,
-  imports: [CommonModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-update">
-      <h3 class="text-lg font-semibold text-slate-900 mb-4">Оновлення</h3>
+      <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Оновлення' | t }}</h3>
       @if (loading()) {
         <app-loading-state />
       } @else if (error()) {
@@ -24,31 +25,31 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
       } @else if (updateStatus()) {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-sm mb-4">
           <div class="flex justify-between py-2 border-b border-slate-100">
-            <span class="text-slate-500">Поточна версія</span>
+            <span class="text-slate-500">{{ 'Поточна версія' | t }}</span>
             <span class="font-medium text-slate-900">{{ updateStatus()!.current_version || '—' }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
-            <span class="text-slate-500">Доступна версія</span>
+            <span class="text-slate-500">{{ 'Доступна версія' | t }}</span>
             <span class="font-medium text-slate-900">{{ updateStatus()!.available_version || '—' }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
-            <span class="text-slate-500">Стан</span>
-            <span class="font-medium text-slate-900">{{ stateLabel(updateStatus()!.state) }}</span>
+            <span class="text-slate-500">{{ 'Стан' | t }}</span>
+            <span class="font-medium text-slate-900">{{ (stateLabel(updateStatus()!.state)) | t }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
-            <span class="text-slate-500">Фаза</span>
-            <span class="font-medium text-slate-900">{{ phaseLabel(updateStatus()!.phase) }}</span>
+            <span class="text-slate-500">{{ 'Фаза' | t }}</span>
+            <span class="font-medium text-slate-900">{{ (phaseLabel(updateStatus()!.phase)) | t }}</span>
           </div>
           <div class="flex justify-between py-2 border-b border-slate-100">
-            <span class="text-slate-500">Оновлення</span>
+            <span class="text-slate-500">{{ 'Оновлення' | t }}</span>
             <span class="font-medium" [class.text-emerald-600]="updateStatus()!.update_available" [class.text-slate-400]="!updateStatus()!.update_available">
-              {{ updateStatus()!.update_available ? 'Доступне' : 'Немає' }}
+              {{ (updateStatus()!.update_available ? 'Доступне' : 'Немає') | t }}
             </span>
           </div>
         </div>
         <div class="mb-4" data-testid="update-progress" role="status" aria-live="polite">
           <div class="flex justify-between text-xs text-slate-600 mb-1">
-            <span>{{ updateStatus()!.message || 'Очікування операції' }}</span>
+            <span>{{ (updateStatus()!.message || 'Очікування операції') | t }}</span>
             <span>{{ updateStatus()!.progress || 0 }}%</span>
           </div>
           <div class="h-2 rounded-full bg-slate-200 overflow-hidden" role="progressbar"
@@ -57,43 +58,43 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
           </div>
           @if (updateStatus()!.state === 'FAILED' || updateStatus()!.state === 'ROLLED_BACK') {
             <p class="mt-2 text-sm text-amber-700" data-testid="update-recovery-state">
-              {{ updateStatus()!.state === 'ROLLED_BACK' ? 'Попередню версію відновлено.' : 'Оновлення зупинено. Перевірте повідомлення та запустіть відновлення.' }}
+              {{ (updateStatus()!.state === 'ROLLED_BACK' ? 'Попередню версію відновлено.' : 'Оновлення зупинено. Перевірте повідомлення та запустіть відновлення.') | t }}
             </p>
           }
         </div>
         @if (readiness()) {
           <div class="mb-4 p-3 rounded-lg" [class.bg-emerald-50]="readiness()!.ready" [class.bg-amber-50]="!readiness()!.ready">
             <p class="text-sm font-medium" [class.text-emerald-700]="readiness()!.ready" [class.text-amber-700]="!readiness()!.ready">
-              {{ readiness()!.ready ? 'Підготовку до встановлення завершено' : 'Підготовку до встановлення не завершено' }}
+              {{ (readiness()!.ready ? 'Підготовку до встановлення завершено' : 'Підготовку до встановлення не завершено') | t }}
             </p>
             @if (!readiness()!.ready) {
               @if (!readiness()!.queue_paused) {
-                <p class="text-xs text-slate-600 mt-1">Видачу задач ще не призупинено. Підготовка виконується під час запуску оновлення.</p>
+                <p class="text-xs text-slate-600 mt-1">{{ 'Видачу задач ще не призупинено. Підготовка виконується під час запуску оновлення.' | t }}</p>
               }
-              <p class="text-xs text-slate-600 mt-1">Активних job: {{ readiness()!.active_jobs.length }}, задач у виконанні: {{ readiness()!.inflight }}, зайнятих вузлів: {{ readiness()!.busy_workers.length }}</p>
+              <p class="text-xs text-slate-600 mt-1">{{ 'Активних job:' | t }} {{ readiness()!.active_jobs.length }}{{ ', задач у виконанні:' | t }} {{ readiness()!.inflight }}{{ ', зайнятих вузлів:' | t }} {{ readiness()!.busy_workers.length }}</p>
               @if (readiness()!.unacknowledged_workers.length) {
-                <p class="text-xs text-slate-600 mt-1">Не підтвердили завершення роботи: {{ readiness()!.unacknowledged_workers.join(', ') }}</p>
+                <p class="text-xs text-slate-600 mt-1">{{ 'Не підтвердили завершення роботи:' | t }} {{ readiness()!.unacknowledged_workers.join(', ') }}</p>
               }
             }
           </div>
         }
         @if (rollingStatus()) {
           <div class="mb-4 text-sm text-slate-600">
-            <p>Поетапне оновлення: {{ stateLabel(rollingStatus()!.state) }} ({{ rollingStatus()!.current_batch || 0 }}/{{ rollingStatus()!.total_batches || 0 }})</p>
+            <p>{{ 'Поетапне оновлення:' | t }} {{ (stateLabel(rollingStatus()!.state)) | t }} ({{ rollingStatus()!.current_batch || 0 }}/{{ rollingStatus()!.total_batches || 0 }})</p>
           </div>
         }
         <div class="flex flex-wrap gap-2">
-          <button (click)="installUpdate()" [disabled]="installing() || !policy.can('start_update').allowed" [title]="policy.disabledReason('start_update') || 'Встановити оновлення'" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
-            {{ installing() ? 'Оновлення...' : 'Оновити' }}
+          <button (click)="installUpdate()" [disabled]="installing() || !policy.can('start_update').allowed" [title]="(policy.disabledReason('start_update') || 'Встановити оновлення') | t" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
+            {{ (installing() ? 'Оновлення...' : 'Оновити') | t }}
           </button>
           @if (['RUNNING', 'AWAITING_PROMOTION', 'ROLLING_BACK'].includes(rollingStatus()?.state || '')) {
-            <button (click)="cancelRolling()" data-testid="update-cancel-rolling" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Скасувати поетапне оновлення</button>
+            <button (click)="cancelRolling()" data-testid="update-cancel-rolling" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">{{ 'Скасувати поетапне оновлення' | t }}</button>
           }
           @if (rollingStatus()?.state === 'AWAITING_PROMOTION') {
-            <button (click)="promoteCanary()" data-testid="update-promote-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Підтвердити canary</button>
-            <button (click)="rollbackCanary()" data-testid="update-rollback-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">Відкотити canary</button>
+            <button (click)="promoteCanary()" data-testid="update-promote-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">{{ 'Підтвердити canary' | t }}</button>
+            <button (click)="rollbackCanary()" data-testid="update-rollback-canary" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">{{ 'Відкотити canary' | t }}</button>
           }
-          <button (click)="recoverToNormal()" [disabled]="!policy.can('start_recovery').allowed" [title]="policy.disabledReason('start_recovery') || 'Відновити нормальний стан'" data-testid="update-recover-normal" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Відновити нормальний стан</button>
+          <button (click)="recoverToNormal()" [disabled]="!policy.can('start_recovery').allowed" [title]="(policy.disabledReason('start_recovery') || 'Відновити нормальний стан') | t" data-testid="update-recover-normal" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">{{ 'Відновити нормальний стан' | t }}</button>
         </div>
       }
     </div>

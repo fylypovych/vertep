@@ -218,15 +218,6 @@ def test_node_registration_push_token_has_forward_migration():
     assert "BOOLEAN NOT NULL DEFAULT FALSE" in migration
 
 
-def test_web_ui_is_utf8_and_has_orchestration_sections():
-    html = open("web/index.html", encoding="utf-8").read()
-    assert "Dashboard" in html
-    assert "Черга помилкових завдань" in html
-    assert "Етапи та сцени" in html
-    assert "РќР" not in html
-    assert "вЂ" not in html
-
-
 def test_web_v2_settings_sources_are_utf8_localized_and_use_shared_confirmation():
     settings_root = Path("web-v2/src/app/settings")
     source = "\n".join(
@@ -238,19 +229,6 @@ def test_web_v2_settings_sources_are_utf8_localized_and_use_shared_confirmation(
     assert "Promote canary" not in source
     assert "Rollback canary" not in source
     assert "if (!confirm(" not in source
-
-
-def test_web_ui_has_remaining_job_and_registry_controls():
-    html = open("web/index.html", encoding="utf-8").read()
-    assert "Retry publish" in html
-    assert "removeJob" in html
-    assert 'data-panel="brands"' in html
-    assert 'data-panel="workflows"' in html
-    assert re.search(r"mime_type\?\.startsWith\(['\"]video/['\"]\)", html)
-    assert "Безпечне оновлення Vertep" in html
-    assert "requestSystemUpdate" in html
-    assert "deleteBrand" in html
-    assert "deleteWorkflow" in html
 
 
 def test_appliance_backup_service_can_read_protected_sources():

@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription, timer } from 'rxjs';
@@ -14,11 +15,11 @@ import { RemoteMutation } from '../core/state/remote-state';
 @Component({
   selector: 'app-health',
   standalone: true,
-  imports: [CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
+  imports: [TPipe, CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
   template: `
     <div class="space-y-6" data-testid="health-page">
       <div class="flex items-center justify-between">
-        <h3 class="text-lg font-semibold text-slate-900">Стан системи</h3>
+        <h3 class="text-lg font-semibold text-slate-900">{{ 'Стан системи' | t }}</h3>
         <a [href]="grafanaUrl()" target="_blank" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Grafana</a>
       </div>
 
@@ -29,21 +30,21 @@ import { RemoteMutation } from '../core/state/remote-state';
       } @else {
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500 mb-1">Загальний стан</p>
+            <p class="text-xs text-slate-500 mb-1">{{ 'Загальний стан' | t }}</p>
             <p class="text-sm font-medium" [class.text-emerald-600]="healthOk()" [class.text-red-600]="!healthOk()">{{ healthStatus() }}</p>
           </div>
           <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500 mb-1">Сервіс</p>
+            <p class="text-xs text-slate-500 mb-1">{{ 'Сервіс' | t }}</p>
             <p class="text-sm font-medium text-slate-900">{{ service() }}</p>
           </div>
           <div class="bg-slate-50 rounded-lg p-4">
-            <p class="text-xs text-slate-500 mb-1">Активних завдань</p>
+            <p class="text-xs text-slate-500 mb-1">{{ 'Активних завдань' | t }}</p>
             <p class="text-sm font-medium text-slate-900">{{ jobsCount() }}</p>
           </div>
         </div>
 
         <div class="mb-6">
-          <h4 class="text-sm font-medium text-slate-900 mb-2">Перевірки</h4>
+          <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Перевірки' | t }}</h4>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             @for (check of checks(); track check.key) {
               <div class="flex items-center justify-between bg-slate-50 rounded-lg p-3">
@@ -64,29 +65,29 @@ import { RemoteMutation } from '../core/state/remote-state';
         </div>
 
         <div class="mb-6">
-          <h4 class="text-sm font-medium text-slate-900 mb-2">Метрики</h4>
+          <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Метрики' | t }}</h4>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div class="bg-slate-50 rounded-lg p-4">
-              <p class="text-xs text-slate-500">Всього завдань</p>
+              <p class="text-xs text-slate-500">{{ 'Всього завдань' | t }}</p>
               <p class="text-xl font-bold text-slate-900">{{ metrics()['jobs_total'] || 0 }}</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4">
-              <p class="text-xs text-slate-500">Готові до виконання</p>
+              <p class="text-xs text-slate-500">{{ 'Готові до виконання' | t }}</p>
               <p class="text-xl font-bold text-slate-900">{{ metrics()['queue_ready'] || 0 }}</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4">
-              <p class="text-xs text-slate-500">В обробці</p>
+              <p class="text-xs text-slate-500">{{ 'В обробці' | t }}</p>
               <p class="text-xl font-bold text-slate-900">{{ metrics()['queue_inflight'] || 0 }}</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4">
-              <p class="text-xs text-slate-500">Воркери онлайн</p>
+              <p class="text-xs text-slate-500">{{ 'Воркери онлайн' | t }}</p>
               <p class="text-xl font-bold text-slate-900">{{ metrics()['workers_online'] || 0 }}</p>
             </div>
           </div>
 
           @if (jobsByStatus().length > 0) {
             <div class="mt-4">
-              <h5 class="text-xs font-medium text-slate-500 mb-2">Завдання за станом</h5>
+              <h5 class="text-xs font-medium text-slate-500 mb-2">{{ 'Завдання за станом' | t }}</h5>
               <div class="flex flex-wrap gap-2">
                 @for (item of jobsByStatus(); track item.status) {
                   <span class="px-2 py-1 rounded-full text-xs"
@@ -105,13 +106,13 @@ import { RemoteMutation } from '../core/state/remote-state';
         </div>
 
         <div>
-          <h4 class="text-sm font-medium text-slate-900 mb-2">Історія стану</h4>
+          <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Історія стану' | t }}</h4>
           @if (historyState.loading()) {
             <div class="animate-pulse bg-slate-100 rounded-lg h-20"></div>
           } @else if (historyState.failed()) {
             <app-error-state [message]="historyState.error()!" (retry)="loadHistory()" />
           } @else if (historyState.data().length === 0) {
-            <p class="text-sm text-slate-500">Немає історії</p>
+            <p class="text-sm text-slate-500">{{ 'Немає історії' | t }}</p>
           } @else {
             <div class="space-y-2">
               @for (entry of historyState.data() | slice:0:10; track entry.timestamp) {

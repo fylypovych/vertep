@@ -1,4 +1,6 @@
-import { Injectable } from '@angular/core';
+import { inject, Injectable } from '@angular/core';
+import { I18nService } from '../i18n/i18n.service';
+import { API_ERRORS } from '../i18n/api-errors';
 import {
   HttpEvent,
   HttpHandler,
@@ -9,10 +11,19 @@ import {
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
-function ukrainianMessage(error: HttpErrorResponse): string {
-  const detail = error.error?.detail;
-  if (typeof detail === 'string' && detail) return detail;
-  if (typeof detail?.message === 'string' && detail.message) return detail.message;
+const CYRILLIC = /[А-ЯЄІЇҐа-яєіїґ]/;
+
+export function errorMessage(error: HttpErrorResponse, i18n: I18nService): string {
+  const known = API_ERRORS[error.error?.code];
+  if (known) return known[i18n.language()];
+  const raw = error.error?.detail;
+  const detail = typeof raw === 'string' ? raw : raw?.message;
+  // A message built at run time has no code; it still names the cause, so it is shown unless it is Ukrainian in the English panel.
+  if (typeof detail === 'string' && detail && !(i18n.language() === 'en' && CYRILLIC.test(detail))) return detail;
+  return i18n.t(statusMessage(error));
+}
+
+function statusMessage(error: HttpErrorResponse): string {
   if (error.status === 0) return 'Немає зв\'язку із сервером';
   if (error.status === 401) return 'Потрібно увійти в систему';
   if (error.status === 403) return 'Недостатньо прав';
@@ -28,6 +39,8 @@ function ukrainianMessage(error: HttpErrorResponse): string {
  */
 @Injectable()
 export class ErrorInterceptor implements HttpInterceptor {
+  private i18n = inject(I18nService);
+
   intercept(
     req: HttpRequest<unknown>,
     next: HttpHandler
@@ -35,7 +48,10 @@ export class ErrorInterceptor implements HttpInterceptor {
     return next.handle(req).pipe(
       catchError((error: HttpErrorResponse) => {
         if (error instanceof HttpErrorResponse) {
-          Object.defineProperty(error, 'message', { value: ukrainianMessage(error), configurable: true });
+          const message = errorMessage(error, this.i18n);
+          Object.defineProperty(error, 'message', { value: message, configurable: true });
+          // Some components read the server text directly: they get the chosen language too.
+          if (typeof error.error?.detail === 'string') error.error.detail = message;
         }
         return throwError(() => error);
       })

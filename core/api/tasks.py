@@ -10,6 +10,7 @@ import binascii
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from fastapi.responses import FileResponse
@@ -24,6 +25,8 @@ from ..orchestration import (all_scenes_ready, cancel_scene, fail_scene,
 from ..security import _valid_worker_request
 from ..state import executor, logger, store, task_queue
 from ..version import worker_incompatibility
+from ..turns import may_claim_now, record_claim
+from ..alert_store import get_alert_store
 from ..system_state import dispatch_allowed, get_system_state
 from .lab_lease import hold_gpu_for_laboratory
 from .job_helpers import (
@@ -52,10 +55,38 @@ router = APIRouter()
 router.include_router(workflow_execution_router)
 
 
+def _report_gpu_outcome(job, result: TaskResult) -> None:
+    """A failed GPU task asks the operator for a restart; nothing switches providers (#431)."""
+    task = task_queue.find(result.task_id) or {}
+    if not (result.task_id in job.image_storyboard_task_ids
+            or task.get("task_type") in {"image", "video"} or task.get("kind") in {"image", "video"}):
+        return
+    identity = {"type": "GPU_PROVIDER_FAILED", "source": "gpu", "node_name": result.node_name}
+    if result.success:
+        get_alert_store().resolve(identity, "the node completed a GPU task")
+    elif not getattr(result, "cancelled", False):
+        error = str(result.error or "невідома помилка")[:300]
+        named = re.match(r"(?:Allowed GPU providers exhausted: )?([\w.-]+): ", error)
+        provider = named.group(1) if named else "ComfyUI"
+        get_alert_store().record({**identity, "severity": "error", "details": {"provider": provider},
+                                  "message": f"Збій GPU-провайдера {provider} на вузлі {result.node_name}: {error}. "
+                                             "Автоматичного перемикання немає, потрібен перезапуск."})
+
+
 @router.post("/api/tasks/claim")
 def claim_task(payload: TaskClaim, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
+    if not may_claim_now(payload.node_name, store.workers):
+        return {"task": None, "worker_state": "WAITING_FOR_TURN"}
+    answer = _claim_task(payload)
+    if answer and answer.get("task"):
+        record_claim(payload.node_name, store.workers)
+        store.save_worker(store.workers[payload.node_name])
+    return answer
+
+
+def _claim_task(payload: TaskClaim):
     incompatibility = worker_incompatibility(store.workers.get(payload.node_name))
     if incompatibility:
         logger.warning("Incompatible worker refused", extra={"node_name": payload.node_name})
@@ -413,12 +444,7 @@ def publisher_readiness(request: Request):
     node_name = request.headers.get("x-vertep-node", "")
     if not node_name or not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
-    channels = {}
-    for name, publisher in PUBLISHERS.items():
-        missing = list(publisher.missing_scopes()) if hasattr(publisher, "missing_scopes") else []
-        configured = bool(publisher.configured())
-        channels[name] = {"ready": configured and not missing, "configured": configured,
-                          "missing_scopes": missing}
+    channels = {name: publisher.readiness() for name, publisher in PUBLISHERS.items()}
     return {"channels": channels}
 
 
@@ -720,6 +746,7 @@ def task_result(result: TaskResult, request: Request):
     job = store.jobs.get(result.job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    _report_gpu_outcome(job, result)
     if result.task_id in job.image_storyboard_task_ids:
         from ..image_storyboard import handle_image_result
         worker = store.workers.get(result.node_name)

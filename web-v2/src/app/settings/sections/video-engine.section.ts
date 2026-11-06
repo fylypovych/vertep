@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -16,33 +17,33 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
 @Component({
   selector: 'app-settings-video-engine',
   standalone: true,
-  imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-video-engine">
-    <h3 class="text-lg font-semibold mb-1">Движок відео</h3>
-    <p class="text-sm text-slate-500 mb-4">Движок, яким збирається фінальне відео. Зміна застосовується одразу з перевіркою готовності; невдале застосування повертає попередній движок.</p>
+    <h3 class="text-lg font-semibold mb-1">{{ 'Движок відео' | t }}</h3>
+    <p class="text-sm text-slate-500 mb-4">{{ 'Движок, яким збирається фінальне відео. Зміна застосовується одразу з перевіркою готовності; невдале застосування повертає попередній движок.' | t }}</p>
     <app-loading-state *ngIf="loading()" />
     <app-error-state *ngIf="error()" [message]="error()!" />
     <div *ngIf="config() as cfg" data-testid="video-engine-panel">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-        <p>Обрано: <span data-testid="video-engine-selected">{{ selectedLabel() }}</span></p>
-        <p>Діє: <span data-testid="video-engine-effective">{{ effectiveLabel() }}</span></p>
-        <p>Готовність: <span data-testid="video-engine-ready">{{ cfg.ready ? 'Готовий' : 'Не готовий' }}</span></p>
-        <p *ngIf="cfg.reason" class="text-amber-700 md:col-span-3" data-testid="video-engine-reason">Причина: {{ reasonLabel(cfg.reason) }}</p>
-        <p *ngIf="!cfg.agree" class="text-red-600 md:col-span-3" data-testid="video-engine-mismatch">Обраний движок не відповідає застосованому — виконання відхилено без підміни.</p>
-        <p>Ревізія конфігурації: <code class="text-xs" data-testid="video-engine-revision">{{ cfg.config_revision }}</code></p>
-        <p>Стан системи: <span data-testid="video-engine-system-state">{{ cfg.system_state }}</span></p>
+        <p>{{ 'Обрано:' | t }} <span data-testid="video-engine-selected">{{ (selectedLabel()) | t }}</span></p>
+        <p>{{ 'Діє:' | t }} <span data-testid="video-engine-effective">{{ (effectiveLabel()) | t }}</span></p>
+        <p>{{ 'Готовність:' | t }} <span data-testid="video-engine-ready">{{ (cfg.ready ? 'Готовий' : 'Не готовий') | t }}</span></p>
+        <p *ngIf="cfg.reason" class="text-amber-700 md:col-span-3" data-testid="video-engine-reason">{{ 'Причина:' | t }} {{ (reasonLabel(cfg.reason)) | t }}</p>
+        <p *ngIf="!cfg.agree" class="text-red-600 md:col-span-3" data-testid="video-engine-mismatch">{{ 'Обраний движок не відповідає застосованому — виконання відхилено без підміни.' | t }}</p>
+        <p>{{ 'Ревізія конфігурації:' | t }} <code class="text-xs" data-testid="video-engine-revision">{{ cfg.config_revision }}</code></p>
+        <p>{{ 'Стан системи:' | t }} <span data-testid="video-engine-system-state">{{ cfg.system_state }}</span></p>
         <p>Upstream: <code class="text-xs" data-testid="video-engine-upstream">{{ cfg.upstream_reference || '—' }}</code></p>
       </div>
       <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-        <label class="text-sm" for="video-engine-choice">Движок</label>
+        <label class="text-sm" for="video-engine-choice">{{ 'Движок' | t }}</label>
         <div class="flex items-center gap-2">
           <select id="video-engine-choice" class="border rounded px-2 py-1 grow" data-testid="video-engine-select"
                   [ngModel]="choice()" (ngModelChange)="choice.set($any($event)); infoOpen.set(false)"
                   [disabled]="!canEdit() || applying()">
-            <option *ngFor="let option of cfg.options" [value]="option.id">{{ option.label }}</option>
+            <option *ngFor="let option of cfg.options" [value]="option.id">{{ (option.label) | t }}</option>
           </select>
           <button type="button" class="w-6 h-6 shrink-0 rounded-full border border-amber-500 text-amber-700 text-sm font-bold"
-                  data-testid="video-engine-info-toggle" aria-label="Пояснення до обраного движка"
+                  data-testid="video-engine-info-toggle" aria-label="{{ 'Пояснення до обраного движка' | t }}"
                   [attr.aria-expanded]="infoOpen()" [title]="choiceExplanation()"
                   (click)="infoOpen.set(!infoOpen())">!</button>
         </div>
@@ -50,23 +51,23 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
            data-testid="video-engine-info">{{ choiceExplanation() }}</p>
       </div>
       <div *ngIf="endpointField() as field" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-        <label class="text-sm" for="video-engine-endpoint">Адреса runtime ({{ field.env }})</label>
+        <label class="text-sm" for="video-engine-endpoint">{{ 'Адреса runtime (' | t }}{{ field.env }})</label>
         <input id="video-engine-endpoint" class="border rounded px-2 py-1" data-testid="video-engine-endpoint"
                [ngModel]="endpoint()" (ngModelChange)="endpoint.set($any($event))"
                [disabled]="!canEdit() || applying()" placeholder="http://host:port" />
       </div>
       <p *ngIf="tokenField() as field" class="mt-2 text-sm" data-testid="video-engine-token-state">
-        Токен ({{ field.env }}): {{ field.configured ? 'налаштовано' : 'не налаштовано' }}
+        {{ 'Токен (' | t }}{{ field.env }}): {{ (field.configured ? 'налаштовано' : 'не налаштовано') | t }}
       </p>
       <div class="mt-4 flex flex-wrap gap-2">
         <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm"
                 data-testid="video-engine-apply"
                 [disabled]="!canApply()"
-                (click)="apply()">Застосувати</button>
+                (click)="apply()">{{ 'Застосувати' | t }}</button>
         <button class="px-3 py-1 bg-slate-700 text-white rounded text-sm"
                 data-testid="video-engine-return-native"
                 [disabled]="!canEdit() || applying() || (cfg.effective === 'native' && cfg.selected === 'native')"
-                (click)="returnNative()">Повернути Vertep Native</button>
+                (click)="returnNative()">{{ 'Повернути Vertep Native' | t }}</button>
       </div>
       <p *ngIf="lockedReason() as reason" class="mt-2 text-amber-700 text-sm" data-testid="video-engine-locked">{{ reason }}</p>
       <div *ngIf="applyError()" class="text-red-600 text-sm mt-2" data-testid="video-engine-error">{{ applyError() }}</div>

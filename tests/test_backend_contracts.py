@@ -634,8 +634,8 @@ class TestSessionIdentityContract:
             "web-v2/dist/vertep-admin-v2", "web-v2/dist/vertep-admin-v2/browser"))
         if built_ui:
             assert shell.status_code == 200
-        for path in ("/", "/v1/"):
-            assert client.get(path).status_code == 200, f"{path} is not publicly reachable"
+            assert client.get("/").status_code == 200, "/ is not publicly reachable"
+        assert client.get("/v1/").status_code != 401 and "web-v1" not in {route.name for route in app.routes}
         for path in ("/api/session", "/api/jobs", "/api/characters"):
             response = client.get(path)
             assert response.status_code == 401, f"{path} is publicly readable"

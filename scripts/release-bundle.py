@@ -47,7 +47,8 @@ BUNDLE_FILES = [
     "installer/vertep-startup-recovery.service",
     "installer/update-public.pem",
     "installer/root-keys/root-metadata.json",
-    "web/index.html",
+    "installer/root-keys/root-1.pem",
+    "installer/root-keys/root-2.pem",
     "VERSION",
     "CHANGELOG.md",
 ]
@@ -67,6 +68,8 @@ def collect_manifest(root: Path) -> dict:
         path = root / relative
         if not path.exists():
             continue
+        if relative.startswith("installer/root-keys/") and b"PRIVATE KEY" in path.read_bytes():
+            raise ValueError(f"Private key refused in the release bundle: {relative}")
         files[relative] = {
             "sha256": sha256_file(path),
             "size": path.stat().st_size,

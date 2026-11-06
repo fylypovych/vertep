@@ -222,11 +222,10 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
         candidates.append(worker)
     if not candidates:
         return None
-    # Prefer explicitly configured priority, then the lowest composite load
+    # Prefer the lowest composite load
     # score (load-aware), then the most free VRAM, then fair-share scheduling
     # (fewest prior dispatches). Node name makes equal scores deterministic.
     return min(candidates, key=lambda worker: (
-        -int(worker.get("scheduler_priority", 0)),
         float(worker.get("load_score", 0.0)),
         -int(worker.get("free_vram_mb") if worker.get("free_vram_mb") is not None
              else worker.get("vram_mb", 0)),

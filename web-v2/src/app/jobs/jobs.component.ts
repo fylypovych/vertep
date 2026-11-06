@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, signal, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -19,28 +20,28 @@ import { RemoteState } from '../core/state/remote-state';
 @Component({
   selector: 'app-jobs',
   standalone: true,
-  imports: [CommonModule, FormsModule, VertepDatePipe, RouterModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, VertepDatePipe, RouterModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="jobs-page">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-slate-900">Завдання</h3>
+        <h3 class="text-lg font-semibold text-slate-900">{{ 'Завдання' | t }}</h3>
         @if (view() === 'list') {
-          <button (click)="openCreateModal()" data-testid="create-job-button" [disabled]="!canCreateJob" [title]="createJobReason || 'Створити нове завдання'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
-            Нове завдання
+          <button (click)="openCreateModal()" data-testid="create-job-button" [disabled]="!canCreateJob" [title]="(createJobReason || 'Створити нове завдання') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+            {{ 'Нове завдання' | t }}
           </button>
         }
       </div>
 
       <div class="mb-4 flex gap-2 border-b border-slate-200">
-        <button (click)="setView('list')" [class.border-b-2]="view() === 'list'" [class.border-emerald-600]="view() === 'list'" [class.text-emerald-700]="view() === 'list'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">Список</button>
-        <button (click)="setView('queue')" [class.border-b-2]="view() === 'queue'" [class.border-emerald-600]="view() === 'queue'" [class.text-emerald-700]="view() === 'queue'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">Виконання</button>
+        <button (click)="setView('list')" [class.border-b-2]="view() === 'list'" [class.border-emerald-600]="view() === 'list'" [class.text-emerald-700]="view() === 'list'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Список' | t }}</button>
+        <button (click)="setView('queue')" [class.border-b-2]="view() === 'queue'" [class.border-emerald-600]="view() === 'queue'" [class.text-emerald-700]="view() === 'queue'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Виконання' | t }}</button>
       </div>
 
       @if (view() === 'list') {
         <div class="mb-4 grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
-          <input [(ngModel)]="search" (ngModelChange)="onSearchChange()" data-testid="jobs-search" placeholder="Пошук за ID або темою..." class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+          <input [(ngModel)]="search" (ngModelChange)="onSearchChange()" data-testid="jobs-search" placeholder="{{ 'Пошук за ID або темою...' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
           <select [(ngModel)]="statusGroup" (ngModelChange)="onGroupChange()" data-testid="jobs-status-filter" class="px-3 py-2 border border-slate-200 rounded-lg text-sm">
-            <option value="">Усі стани</option><option value="active">Активні</option><option value="queued">У черзі</option><option value="waiting">Очікують</option><option value="completed">Завершені</option><option value="failed">З помилкою</option>
+            <option value="">{{ 'Усі стани' | t }}</option><option value="active">{{ 'Активні' | t }}</option><option value="queued">{{ 'У черзі' | t }}</option><option value="waiting">{{ 'Очікують' | t }}</option><option value="completed">{{ 'Завершені' | t }}</option><option value="failed">{{ 'З помилкою' | t }}</option>
           </select>
         </div>
 
@@ -54,9 +55,9 @@ import { RemoteState } from '../core/state/remote-state';
               <thead class="text-xs text-slate-500 uppercase bg-slate-50">
                 <tr>
                   <th class="px-4 py-3">ID</th>
-                  <th class="px-4 py-3">Статус</th>
-                  <th class="px-4 py-3">Створено</th>
-                  <th class="px-4 py-3">Дії</th>
+                  <th class="px-4 py-3">{{ 'Статус' | t }}</th>
+                  <th class="px-4 py-3">{{ 'Створено' | t }}</th>
+                  <th class="px-4 py-3">{{ 'Дії' | t }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -69,26 +70,26 @@ import { RemoteState } from '../core/state/remote-state';
                         [class.text-emerald-700]="isActive(job.status)"
                         [class.bg-slate-100]="!isActive(job.status)"
                         [class.text-slate-600]="!isActive(job.status)">
-                        {{ jobStatusLabel(job.status) }}
+                        {{ (jobStatusLabel(job.status)) | t }}
                       </span>
                     </td>
                     <td class="px-4 py-3">{{ job.created_at | vertepDate }}</td>
                     <td class="px-4 py-3">
-                      <button (click)="openJob(job.job_id)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">Відкрити</button>
-                      <button (click)="deleteJob(job.job_id)" [disabled]="!canDeleteJob" [title]="deleteJobReason || 'Видалити' || ''" class="text-red-600 hover:text-red-700 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">Видалити</button>
+                      <button (click)="openJob(job.job_id)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">{{ 'Відкрити' | t }}</button>
+                      <button (click)="deleteJob(job.job_id)" [disabled]="!canDeleteJob" [title]="(deleteJobReason || 'Видалити' || '') | t" class="text-red-600 hover:text-red-700 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">{{ 'Видалити' | t }}</button>
                     </td>
                   </tr>
                 } @empty {
-                  <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500" data-testid="jobs-empty">Завдань не знайдено</td></tr>
+                  <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500" data-testid="jobs-empty">{{ 'Завдань не знайдено' | t }}</td></tr>
                 }
               </tbody>
             </table>
           </div>
           @if (pages() > 1) {
             <div class="flex items-center justify-between mt-4">
-              <button (click)="prevPage()" [disabled]="page === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Назад</button>
-              <span class="text-sm text-slate-600">Сторінка {{ page }} з {{ pages() }}</span>
-              <button (click)="nextPage()" [disabled]="page === pages()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">Вперед</button>
+              <button (click)="prevPage()" [disabled]="page === 1" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Назад' | t }}</button>
+              <span class="text-sm text-slate-600">{{ 'Сторінка' | t }} {{ page }} {{ 'з' | t }} {{ pages() }}</span>
+              <button (click)="nextPage()" [disabled]="page === pages()" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg disabled:opacity-50">{{ 'Вперед' | t }}</button>
             </div>
           }
         }
@@ -96,10 +97,10 @@ import { RemoteState } from '../core/state/remote-state';
         <div class="space-y-6" data-testid="queue-page">
           <div class="flex items-center justify-between">
             <div>
-              <h4 class="text-sm font-medium text-slate-900">Виконання завдань</h4>
-              <p class="text-xs text-slate-500">Операційний стан scheduled, ready, inflight і dead-letter етапів життєвого циклу.</p>
+              <h4 class="text-sm font-medium text-slate-900">{{ 'Виконання завдань' | t }}</h4>
+              <p class="text-xs text-slate-500">{{ 'Операційний стан scheduled, ready, inflight і dead-letter етапів життєвого циклу.' | t }}</p>
             </div>
-            <button (click)="loadQueue()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Оновити</button>
+            <button (click)="loadQueue()" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Оновити' | t }}</button>
           </div>
 
           @if (queueState.loading()) {
@@ -113,34 +114,34 @@ import { RemoteState } from '../core/state/remote-state';
           } @else {
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               <div class="bg-slate-50 rounded-lg p-4">
-                <p class="text-xs text-slate-500">Відкладені</p>
+                <p class="text-xs text-slate-500">{{ 'Відкладені' | t }}</p>
                 <p class="text-2xl font-bold text-slate-900">{{ scheduledJobs().length }}</p>
               </div>
               <div class="bg-slate-50 rounded-lg p-4">
-                <p class="text-xs text-slate-500">Готові</p>
+                <p class="text-xs text-slate-500">{{ 'Готові' | t }}</p>
                 <p class="text-2xl font-bold text-slate-900">{{ readyCount() }}</p>
               </div>
               <div class="bg-slate-50 rounded-lg p-4">
-                <p class="text-xs text-slate-500">В обробці</p>
+                <p class="text-xs text-slate-500">{{ 'В обробці' | t }}</p>
                 <p class="text-2xl font-bold text-slate-900">{{ inflightCount() }}</p>
               </div>
               <div class="bg-slate-50 rounded-lg p-4">
-                <p class="text-xs text-slate-500">Потребують втручання</p>
+                <p class="text-xs text-slate-500">{{ 'Потребують втручання' | t }}</p>
                 <p class="text-2xl font-bold text-red-600">{{ deadLetterCount() }}</p>
               </div>
             </div>
 
             @if (scheduledJobs().length > 0) {
               <div class="mb-6">
-                <h4 class="text-sm font-medium text-slate-900 mb-2">Відкладені завдання</h4>
+                <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Відкладені завдання' | t }}</h4>
                 <div class="space-y-2">
                   @for (job of scheduledJobs(); track job.job_id) {
                     <div class="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
                       <div>
                         <span class="text-sm font-medium text-slate-900">{{ job.topic }}</span>
-                        <p class="text-xs text-slate-500">ID: {{ job.job_id }} · Заплановано: {{ job.scheduled_for | vertepDate }}</p>
+                        <p class="text-xs text-slate-500">ID: {{ job.job_id }} {{ '· Заплановано:' | t }} {{ job.scheduled_for | vertepDate }}</p>
                       </div>
-                      <a [routerLink]="['/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
+                      <a [routerLink]="['/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                     </div>
                   }
                 </div>
@@ -149,15 +150,15 @@ import { RemoteState } from '../core/state/remote-state';
 
             @if (readyTasks().length > 0) {
               <div class="mb-6">
-                <h4 class="text-sm font-medium text-slate-900 mb-2">Готові до виконання</h4>
+                <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Готові до виконання' | t }}</h4>
                 <div class="space-y-2">
                   @for (task of readyTasks(); track task.task_id) {
                     <div class="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
                       <div>
                         <span class="text-sm font-medium text-slate-900">{{ task.task }}</span>
-                        <p class="text-xs text-slate-500">Задача: {{ task.task_id }} · Сцена: {{ task.scene_id }}</p>
+                        <p class="text-xs text-slate-500">{{ 'Задача:' | t }} {{ task.task_id }} {{ '· Сцена:' | t }} {{ task.scene_id }}</p>
                       </div>
-                      <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
+                      <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                     </div>
                   }
                 </div>
@@ -166,15 +167,15 @@ import { RemoteState } from '../core/state/remote-state';
 
             @if (inflightTasks().length > 0) {
               <div class="mb-6">
-                <h4 class="text-sm font-medium text-slate-900 mb-2">В процесі виконання</h4>
+                <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'В процесі виконання' | t }}</h4>
                 <div class="space-y-2">
                   @for (task of inflightTasks(); track task.task_id) {
                     <div class="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
                       <div>
                         <span class="text-sm font-medium text-slate-900">{{ task.task }}</span>
-                        <p class="text-xs text-slate-500">Задача: {{ task.task_id }} · Сцена: {{ task.scene_id }}</p>
+                        <p class="text-xs text-slate-500">{{ 'Задача:' | t }} {{ task.task_id }} {{ '· Сцена:' | t }} {{ task.scene_id }}</p>
                       </div>
-                      <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
+                      <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                     </div>
                   }
                 </div>
@@ -183,19 +184,19 @@ import { RemoteState } from '../core/state/remote-state';
 
             @if (deadLetterTasks().length > 0) {
               <div class="mb-6">
-                <h4 class="text-sm font-medium text-slate-900 mb-2">Dead-letter задачі</h4>
+                <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Dead-letter задачі' | t }}</h4>
                 <div class="space-y-2">
                   @for (task of deadLetterTasks(); track task.task_id) {
                     <div class="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center justify-between">
                       <div>
                         <p class="text-sm font-medium text-slate-900">{{ task.job_id }}</p>
-                        <p class="text-xs text-slate-500">Task: {{ task.task_id }} · Сцена: {{ task.scene_id }}</p>
+                        <p class="text-xs text-slate-500">Task: {{ task.task_id }} {{ '· Сцена:' | t }} {{ task.scene_id }}</p>
                         <p class="text-xs text-red-600">{{ task.error }}</p>
                       </div>
                       <div class="flex gap-2">
-                        <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Відкрити</a>
+                        <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                         <button (click)="retryTask(task.task_id)" [disabled]="retrying() === task.task_id" class="text-xs px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50">
-                          {{ retrying() === task.task_id ? 'Повтор...' : 'Повторити' }}
+                          {{ (retrying() === task.task_id ? 'Повтор...' : 'Повторити') | t }}
                         </button>
                       </div>
                     </div>
@@ -203,7 +204,7 @@ import { RemoteState } from '../core/state/remote-state';
                 </div>
               </div>
             } @else if (readyTasks().length === 0 && inflightTasks().length === 0 && !scheduledJobs().length) {
-              <p class="text-sm text-slate-500">Черга порожня</p>
+              <p class="text-sm text-slate-500">{{ 'Черга порожня' | t }}</p>
             }
           }
         </div>
@@ -213,27 +214,27 @@ import { RemoteState } from '../core/state/remote-state';
     <!-- Create Job Modal -->
     <div *ngIf="showCreateModal" data-testid="create-job-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl p-6 w-full max-w-lg mx-4">
-        <h3 class="text-lg font-semibold text-slate-900 mb-4">Нове завдання</h3>
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Нове завдання' | t }}</h3>
         <div class="space-y-4">
           <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Тема</label>
-            <input [(ngModel)]="newJob.topic" data-testid="job-topic-input" placeholder="Наприклад, Історія про діда Самогонщика" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Тема' | t }}</label>
+            <input [(ngModel)]="newJob.topic" data-testid="job-topic-input" placeholder="{{ 'Наприклад, Історія про діда Самогонщика' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Персонаж</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Персонаж' | t }}</label>
               <select [(ngModel)]="newJob.character_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                <option value="">За замовчуванням</option>
+                <option value="">{{ 'За замовчуванням' | t }}</option>
                 @for (character of characters(); track character.id) {
                   <option [value]="character.id">{{ character.name }} ({{ character.id }})</option>
                 }
               </select>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Бренд</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Бренд' | t }}</label>
               <select [(ngModel)]="newJob.brand_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                <option value="">За замовчуванням</option>
+                <option value="">{{ 'За замовчуванням' | t }}</option>
                 @for (brand of brands(); track brand.id) {
                   <option [value]="brand.id">{{ brand.name }} ({{ brand.id }})</option>
                 }
@@ -243,14 +244,14 @@ import { RemoteState } from '../core/state/remote-state';
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Пріоритет (1-10)</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Пріоритет (1-10)' | t }}</label>
               <input type="number" [(ngModel)]="newJob.priority" min="1" max="10" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Тип завдання</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Тип завдання' | t }}</label>
               <select [(ngModel)]="newJob.task_type" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                <option value="image">Зображення</option>
-                <option value="video">Відео</option>
+                <option value="image">{{ 'Зображення' | t }}</option>
+                <option value="video">{{ 'Відео' | t }}</option>
               </select>
             </div>
           </div>
@@ -259,14 +260,14 @@ import { RemoteState } from '../core/state/remote-state';
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">Workflow</label>
               <select [(ngModel)]="newJob.workflow" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                <option value="">Без workflow</option>
+                <option value="">{{ 'Без workflow' | t }}</option>
                 @for (workflow of workflows(); track workflow.kind + '/' + workflow.name) {
                   <option [value]="'workflows/' + workflow.kind + '/' + workflow.name">{{ workflow.kind }}/{{ workflow.name }}</option>
                 }
               </select>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Співвідношення сторін</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Співвідношення сторін' | t }}</label>
               <select [(ngModel)]="newJob.aspect_ratio" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
                 <option value="16:9">16:9</option>
                 <option value="9:16">9:16</option>
@@ -276,7 +277,7 @@ import { RemoteState } from '../core/state/remote-state';
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Вихідний preset</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Вихідний preset' | t }}</label>
               <select [(ngModel)]="newJob.output_preset" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
                 <option value="youtube">YouTube</option>
                 <option value="tiktok">TikTok</option>
@@ -286,18 +287,18 @@ import { RemoteState } from '../core/state/remote-state';
             </div>
             <div class="flex items-center gap-2">
               <input type="checkbox" [(ngModel)]="newJobScheduled" id="scheduled">
-              <label for="scheduled" class="text-sm text-slate-700">Запланувати</label>
+              <label for="scheduled" class="text-sm text-slate-700">{{ 'Запланувати' | t }}</label>
             </div>
           </div>
 
           <div *ngIf="newJobScheduled">
-            <label class="block text-sm font-medium text-slate-700 mb-1">Дата та час</label>
+            <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Дата та час' | t }}</label>
             <input type="datetime-local" [(ngModel)]="newJobDate" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-6">
-          <button (click)="showCreateModal = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-          <button (click)="createJob()" [disabled]="creating" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ creating ? 'Створення...' : 'Створити' }}</button>
+          <button (click)="showCreateModal = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
+          <button (click)="createJob()" [disabled]="creating" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ (creating ? 'Створення...' : 'Створити') | t }}</button>
         </div>
       </div>
     </div>

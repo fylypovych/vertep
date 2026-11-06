@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -12,13 +13,13 @@ import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGen
 @Component({
   selector: 'app-character-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [TPipe, CommonModule, FormsModule, RouterModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="space-y-5" data-testid="character-detail-page">
       <div class="flex items-center gap-4">
-        <a routerLink="/characters" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">&larr; Назад до персонажів</a>
-        <h2 class="text-xl font-semibold text-slate-900">{{ name || 'Новий персонаж' }}</h2>
+        <a routerLink="/characters" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">{{ '&larr; Назад до персонажів' | t }}</a>
+        <h2 class="text-xl font-semibold text-slate-900">{{ (name || 'Новий персонаж') | t }}</h2>
       </div>
 
       @if (loading()) {
@@ -34,7 +35,7 @@ import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGen
       } @else {
         <div class="space-y-5">
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 class="text-sm font-medium text-slate-500 mb-3">Основна інформація</h3>
+            <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Основна інформація' | t }}</h3>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
                 <label class="block text-slate-500 mb-1">ID <span class="text-red-400">*</span></label>
@@ -43,15 +44,15 @@ import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGen
                   placeholder="unicorns-narrator">
               </div>
               <div>
-                <label class="block text-slate-500 mb-1">Назва <span class="text-red-400">*</span></label>
+                <label class="block text-slate-500 mb-1">{{ 'Назва' | t }} <span class="text-red-400">*</span></label>
                 <input [(ngModel)]="name" data-testid="character-name"
                   class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
               </div>
               <div>
-                <label class="block text-slate-500 mb-1">Мова</label>
+                <label class="block text-slate-500 mb-1">{{ 'Мова' | t }}</label>
                 <select [(ngModel)]="language" data-testid="character-language"
                   class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                  <option value="uk">Українська</option><option value="en">English</option>
+                  <option value="uk">{{ 'Українська' | t }}</option><option value="en">English</option>
                 </select>
               </div>
               <div>
@@ -62,77 +63,77 @@ import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGen
               <div class="flex items-center gap-2 mt-4">
                 <input type="checkbox" [(ngModel)]="enabled" id="char-enabled" data-testid="character-enabled"
                   class="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
-                <label for="char-enabled" class="text-sm text-slate-700">Активний</label>
+                <label for="char-enabled" class="text-sm text-slate-700">{{ 'Активний' | t }}</label>
               </div>
             </div>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 class="text-sm font-medium text-slate-500 mb-3">Системний промпт</h3>
+            <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Системний промпт' | t }}</h3>
             <textarea [(ngModel)]="systemPrompt" rows="6" data-testid="character-system-prompt"
               class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 class="text-sm font-medium text-slate-500 mb-3">Налаштування голосу</h3>
+            <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Налаштування голосу' | t }}</h3>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Провайдер</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Провайдер' | t }}</label>
                 <select [(ngModel)]="voice.provider" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <option value="none">Немає (тимчасово)</option>
-                  <option value="mock">Mock (тест)</option>
+                  <option value="none">{{ 'Немає (тимчасово)' | t }}</option>
+                  <option value="mock">{{ 'Mock (тест)' | t }}</option>
                   <option value="piper">Piper (MIT)</option>
                   <option value="kokoro">Kokoro (Apache-2.0)</option>
                 </select>
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Мова</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Мова' | t }}</label>
                 <select [(ngModel)]="voice.language" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <option value="uk">Українська</option>
+                  <option value="uk">{{ 'Українська' | t }}</option>
                   <option value="en">English</option>
                   <option value="pl">Polski</option>
                   <option value="de">Deutsch</option>
                 </select>
               </div>
               <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 mb-1">Голос (voice ID)</label>
-                <input [(ngModel)]="voice.voice" placeholder="наприклад, uk_Kyiv (або залиште порожнім для дефолту)" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Голос (voice ID)' | t }}</label>
+                <input [(ngModel)]="voice.voice" placeholder="{{ 'наприклад, uk_Kyiv (або залиште порожнім для дефолту)' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
             </div>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="character-references">
-            <h3 class="text-sm font-medium text-slate-500 mb-1">Референси персонажа</h3>
+            <h3 class="text-sm font-medium text-slate-500 mb-1">{{ 'Референси персонажа' | t }}</h3>
             @if (isEdit) {
-              <p class="text-sm text-slate-500 mb-3">Зразки зовнішності. Вони автоматично використовуються в кожній генерації зображень цього персонажа. До 5 файлів PNG, JPEG або WebP, кожен до 10 МБ.</p>
+              <p class="text-sm text-slate-500 mb-3">{{ 'Зразки зовнішності. Вони автоматично використовуються в кожній генерації зображень цього персонажа. До 5 файлів PNG, JPEG або WebP, кожен до 10 МБ.' | t }}</p>
               <div class="flex flex-wrap gap-3 mb-3">
                 @for (item of references(); track item.filename) {
                   <div class="relative w-24 h-24" data-testid="character-reference">
                     <img [src]="resources.characterReferenceUrl(formId, item.filename)" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
-                    <button type="button" (click)="deleteReference(item.filename)" aria-label="Видалити референс" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
+                    <button type="button" (click)="deleteReference(item.filename)" aria-label="{{ 'Видалити референс' | t }}" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
                   </div>
                 }
               </div>
               <input type="file" accept="image/png,image/jpeg,image/webp" multiple data-testid="character-reference-input" (change)="uploadReferences($event)">
             } @else {
-              <p class="text-sm text-slate-500">Збережіть персонажа, після цього можна буде додати референси.</p>
+              <p class="text-sm text-slate-500">{{ 'Збережіть персонажа, після цього можна буде додати референси.' | t }}</p>
             }
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 class="text-sm font-medium text-slate-500 mb-3">Візуальний стиль</h3>
+            <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Візуальний стиль' | t }}</h3>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Стиль</label>
-                <input [(ngModel)]="visual.style" placeholder="наприклад, warm documentary illustration" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Стиль' | t }}</label>
+                <input [(ngModel)]="visual.style" placeholder="{{ 'наприклад, warm documentary illustration' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Співвідношення сторін</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Співвідношення сторін' | t }}</label>
                 <select [(ngModel)]="visual.aspect_ratio" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <option value="16:9">16:9 (YouTube, горизонтальне)</option>
-                  <option value="9:16">9:16 (Shorts/Reels/TikTok, вертикальне)</option>
-                  <option value="1:1">1:1 (квадратне)</option>
+                  <option value="16:9">{{ '16:9 (YouTube, горизонтальне)' | t }}</option>
+                  <option value="9:16">{{ '9:16 (Shorts/Reels/TikTok, вертикальне)' | t }}</option>
+                  <option value="1:1">{{ '1:1 (квадратне)' | t }}</option>
                   <option value="4:3">4:3</option>
                 </select>
               </div>
               <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 mb-1">Пресет виводу</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Пресет виводу' | t }}</label>
                 <select [(ngModel)]="visual.output_preset" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
                   <option value="youtube">YouTube (1080p/720p)</option>
                   <option value="shorts">YouTube Shorts</option>
@@ -143,45 +144,45 @@ import { Character, CharacterForm, CharacterVoice, CharacterVisual, CharacterGen
             </div>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 class="text-sm font-medium text-slate-500 mb-3">Налаштування генерації</h3>
+            <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Налаштування генерації' | t }}</h3>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 mb-1">Workflow (шлях до JSON)</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Workflow (шлях до JSON)' | t }}</label>
                 <input [(ngModel)]="generation.workflow" placeholder="workflows/image/demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-mono">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Мін. VRAM (МБ)</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Мін. VRAM (МБ)' | t }}</label>
                 <input type="number" [(ngModel)]="generation.min_vram_mb" min="0" step="512" placeholder="4096" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Макс. спроб</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Макс. спроб' | t }}</label>
                 <input type="number" [(ngModel)]="generation.max_retries" min="0" max="10" placeholder="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
               </div>
             </div>
           </div>
           <div class="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 class="text-sm font-medium text-slate-500 mb-3">Публікація</h3>
+            <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Публікація' | t }}</h3>
             <div class="flex items-center gap-2 mb-3">
               <input type="checkbox" [(ngModel)]="publishing.enabled" id="pub-enabled">
-              <label for="pub-enabled" class="text-sm text-slate-700">Увімкнути автопублікацію</label>
+              <label for="pub-enabled" class="text-sm text-slate-700">{{ 'Увімкнути автопублікацію' | t }}</label>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Канали (через кому)</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Канали (через кому)' | t }}</label>
               <input [(ngModel)]="publishing.channels" placeholder="youtube,tiktok,facebook,instagram,threads" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-              <p class="text-xs text-slate-500 mt-1">Доступні: youtube, tiktok, facebook, instagram, threads</p>
+              <p class="text-xs text-slate-500 mt-1">{{ 'Доступні: youtube, tiktok, facebook, instagram, threads' | t }}</p>
             </div>
           </div>
           <div class="flex items-center justify-between pt-2">
             <div class="flex gap-2">
-              <button (click)="save()" [disabled]="saving() || !formId || !name || !canSave" [title]="saveReason || 'Зберегти'" data-testid="character-save-btn"
+              <button (click)="save()" [disabled]="saving() || !formId || !name || !canSave" [title]="(saveReason || 'Зберегти') | t" data-testid="character-save-btn"
                 class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 text-sm font-medium">
-                {{ saving() ? 'Збереження...' : (isEdit ? 'Зберегти' : 'Створити') }}
+                {{ (saving() ? 'Збереження...' : (isEdit ? 'Зберегти' : 'Створити')) | t }}
               </button>
-              <a routerLink="/characters" class="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg">Скасувати</a>
+              <a routerLink="/characters" class="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg">{{ 'Скасувати' | t }}</a>
             </div>
             @if (isEdit) {
-              <button (click)="deleteCharacter()" [disabled]="!canDelete" [title]="deleteReason || 'Видалити'" data-testid="character-delete-btn"
-                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50">Видалити</button>
+              <button (click)="deleteCharacter()" [disabled]="!canDelete" [title]="(deleteReason || 'Видалити') | t" data-testid="character-delete-btn"
+                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50">{{ 'Видалити' | t }}</button>
             }
           </div>
         </div>

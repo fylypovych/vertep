@@ -8,14 +8,13 @@ import os
 from fastapi import APIRouter
 router = APIRouter()
 
-@router.get("/setup", include_in_schema=False)
-def setup_page(request: Request):
-    query = f"?{request.url.query}" if request.url.query else ""
-    return Response(status_code=307, headers={"Location": f"/v1/setup.html{query}"})
-
-
 class SPAStaticFiles(StaticFiles):
     """StaticFiles with SPA fallback for client-side routing (Angular v2)."""
+
+    async def check_config(self) -> None:
+        # A checkout without the built application answers 404 instead of failing every request.
+        if os.path.isdir(self.directory):
+            await super().check_config()
 
     async def get_response(self, path: str, scope):
         try:
@@ -38,5 +37,4 @@ def mount_web_ui(app):
     static_dir = "web-v2/dist/vertep-admin-v2/browser"
     if not os.path.isdir(static_dir):
         static_dir = "web-v2/dist/vertep-admin-v2"
-    app.mount("/v1", StaticFiles(directory="web", html=True), name="web-v1")
-    app.mount("/", SPAStaticFiles(directory=static_dir, html=True) if os.path.isdir(static_dir) else StaticFiles(directory="web", html=True), name="web-v2")
+    app.mount("/", SPAStaticFiles(directory=static_dir, html=True, check_dir=False), name="web-v2")

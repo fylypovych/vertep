@@ -392,7 +392,7 @@ export interface SystemStatus {
   redis: string;
   storage: string;
   version?: string;
-  system?: { state: string; reason?: string };
+  system?: { state: string; reason?: string; operation_id?: string };
   telegram?: { status: string; bot_username?: string };
   queue?: { depth: number; inflight: number; dead_letter: number };
   scheduler?: { pending: number; next_run?: string };

@@ -132,9 +132,6 @@ def test_zero_shell_routes_and_ui_are_present():
             "/api/system/models", "/api/system/models/pull",
             "/api/system/certificates", "/api/system/certificates/renew",
             "/api/system/installation-manifest"} <= paths
-    ui = (Path(__file__).parents[1] / "web/index.html").read_text(encoding="utf-8")
-    assert "Zero-Shell lifecycle" in ui
-    assert "restoreBackup" in ui and "deleteModel" in ui and "renewCertificate" in ui
 
 
 def test_gpu_bootstrap_contains_production_runtimes():

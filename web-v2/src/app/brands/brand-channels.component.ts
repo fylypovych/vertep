@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -12,20 +13,20 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 @Component({
   selector: 'app-brand-channels',
   standalone: true,
-  imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="mt-3 pt-3 border-t border-slate-100" [attr.data-testid]="'brand-channels-' + brandId">
       <div class="flex items-center justify-between mb-2">
-        <h4 class="text-xs font-medium text-slate-500">Канали бренду</h4>
-        <button (click)="showCreate = true" [disabled]="!canCreateChannel" [title]="createChannelReason || 'Додати канал'" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium disabled:opacity-40">Додати канал</button>
+        <h4 class="text-xs font-medium text-slate-500">{{ 'Канали бренду' | t }}</h4>
+        <button (click)="showCreate = true" [disabled]="!canCreateChannel" [title]="(createChannelReason || 'Додати канал') | t" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium disabled:opacity-40">{{ 'Додати канал' | t }}</button>
       </div>
       @if (loading) {
         <app-loading-state />
       } @else if (error) {
         <app-error-state [message]="error" (retry)="retry.emit()" />
       } @else if (channels.length === 0) {
-        <p class="text-xs text-slate-400">Каналів не налаштовано</p>
+        <p class="text-xs text-slate-400">{{ 'Каналів не налаштовано' | t }}</p>
       } @else {
         <div class="space-y-1">
           @for (ch of channels; track ch.channel_id) {
@@ -33,10 +34,10 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               <span>{{ ch.channel_type }}: {{ ch.target }}</span>
               <div class="flex items-center gap-2">
                 <span class="text-xs" [class.text-emerald-600]="ch.enabled" [class.text-slate-400]="!ch.enabled">
-                  {{ ch.enabled ? 'Активний' : 'Неактивний' }}
+                  {{ (ch.enabled ? 'Активний' : 'Неактивний') | t }}
                 </span>
-                <button (click)="toggleChannel(ch)" [disabled]="!canUpdateChannel" [title]="updateChannelReason || (ch.enabled ? 'Вимкнути' : 'Увімкнути')" class="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-40" data-testid="channel-toggle">{{ ch.enabled ? 'Вимкнути' : 'Увімкнути' }}</button>
-                <button (click)="deleteChannel(ch)" [disabled]="!canDeleteChannel" [title]="deleteChannelReason || 'Видалити'" class="text-xs text-red-600 hover:text-red-700 disabled:opacity-40" data-testid="channel-delete">Видалити</button>
+                <button (click)="toggleChannel(ch)" [disabled]="!canUpdateChannel" [title]="(updateChannelReason || (ch.enabled ? 'Вимкнути' : 'Увімкнути')) | t" class="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-40" data-testid="channel-toggle">{{ (ch.enabled ? 'Вимкнути' : 'Увімкнути') | t }}</button>
+                <button (click)="deleteChannel(ch)" [disabled]="!canDeleteChannel" [title]="(deleteChannelReason || 'Видалити') | t" class="text-xs text-red-600 hover:text-red-700 disabled:opacity-40" data-testid="channel-delete">{{ 'Видалити' | t }}</button>
               </div>
             </div>
           }
@@ -45,10 +46,10 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 
       <div *ngIf="showCreate" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
-          <h4 class="text-lg font-semibold text-slate-900 mb-4">Новий канал</h4>
+          <h4 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Новий канал' | t }}</h4>
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Тип каналу</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Тип каналу' | t }}</label>
               <select [(ngModel)]="newChannel.channel_type" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
                 @for (type of channelTypes; track type) {
                   <option [value]="type">{{ type }}</option>
@@ -56,13 +57,13 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               </select>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Ціль</label>
-              <input [(ngModel)]="newChannel.target" placeholder="наприклад, @mychannel або channel_id" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Ціль' | t }}</label>
+              <input [(ngModel)]="newChannel.target" placeholder="{{ 'наприклад, @mychannel або channel_id' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
             </div>
           </div>
           <div class="flex justify-end gap-2 mt-6">
-            <button (click)="showCreate = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="createChannel()" [disabled]="!canCreateChannel" [title]="createChannelReason || 'Створити'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">Створити</button>
+            <button (click)="showCreate = false" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
+            <button (click)="createChannel()" [disabled]="!canCreateChannel" [title]="(createChannelReason || 'Створити') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ 'Створити' | t }}</button>
           </div>
         </div>
       </div>

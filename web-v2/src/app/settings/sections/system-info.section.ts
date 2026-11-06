@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -11,15 +12,15 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
 @Component({
   selector: 'app-settings-system-info',
   standalone: true,
-  imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info"><h3 class="text-lg font-semibold mb-4">Система</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" (retry)="ngOnInit()" /><div *ngIf="status()" class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="system-info"><p>Стан: {{ systemStateLabel }}</p><p>Версія: {{ status()?.version || '-' }}</p><p>Ядро: {{ status()?.core || '-' }}</p><p>База даних: {{ status()?.postgres || '-' }}</p><p>Redis: {{ status()?.redis || '-' }}</p><p>Поточна: <span data-testid="status-update-current-version">{{ status()?.update?.['current_version'] || '-' }}</span></p><p>Доступна: <span data-testid="status-update-available-version">{{ status()?.update?.['available_version'] || '-' }}</span></p></div>
+  imports: [TPipe, CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info"><h3 class="text-lg font-semibold mb-4">{{ 'Система' | t }}</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" (retry)="ngOnInit()" /><div *ngIf="status()" class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="system-info"><p>{{ 'Стан:' | t }} {{ (systemStateLabel) | t }}</p><p>{{ 'Версія:' | t }} {{ status()?.version || '-' }}</p><p>{{ 'Ядро:' | t }} {{ status()?.core || '-' }}</p><p>{{ 'База даних:' | t }} {{ status()?.postgres || '-' }}</p><p>Redis: {{ status()?.redis || '-' }}</p><p>{{ 'Поточна:' | t }} <span data-testid="status-update-current-version">{{ status()?.update?.['current_version'] || '-' }}</span></p><p>{{ 'Доступна:' | t }} <span data-testid="status-update-available-version">{{ status()?.update?.['available_version'] || '-' }}</span></p></div>
   <table *ngIf="backendsList().length" class="w-full mt-4" data-testid="backends-table">
-    <thead><tr class="text-left text-slate-500 text-sm"><th class="py-1">Слот</th><th>Налаштовано</th><th>Бекенд</th><th>Зміна</th></tr></thead>
+    <thead><tr class="text-left text-slate-500 text-sm"><th class="py-1">{{ 'Слот' | t }}</th><th>{{ 'Налаштовано' | t }}</th><th>{{ 'Бекенд' | t }}</th><th>{{ 'Зміна' | t }}</th></tr></thead>
     <tbody>
       <tr *ngFor="let entry of backendsList(); trackBy: trackSlot" class="border-t" [attr.data-testid]="'backend-row-' + entry[0]">
         <td class="py-1">{{ entry[0] }}</td>
-        <td>{{ entry[1]?.['configured'] ? 'Так' : 'Ні' }}</td>
-        <td [attr.data-testid]="'backend-current-' + entry[0]">{{ entry[1]?.['backend'] || '-' }}<small *ngIf="entry[1]?.['activation_status']" class="block text-amber-700">Очікує Worker: {{ entry[1]?.['selected_backend'] }}</small></td>
+        <td>{{ (entry[1]?.['configured'] ? 'Так' : 'Ні') | t }}</td>
+        <td [attr.data-testid]="'backend-current-' + entry[0]">{{ entry[1]?.['backend'] || '-' }}<small *ngIf="entry[1]?.['activation_status']" class="block text-amber-700">{{ 'Очікує Worker:' | t }} {{ entry[1]?.['selected_backend'] }}</small></td>
         <td>
           <ng-container *ngIf="switchable(entry[0], entry[1])">
             <select class="border rounded px-2 py-1 mr-2" [attr.data-testid]="'backend-select-' + entry[0]"
@@ -30,7 +31,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
             <button class="px-2 py-1 bg-emerald-600 text-white rounded text-sm"
                     [disabled]="switching() || (choice(entry[0], entry[1]) === entry[1]?.['backend'] && choice(entry[0], entry[1]) === (entry[1]?.['selected_backend'] || entry[1]?.['backend']))"
                     (click)="switchBackend(entry[0], choice(entry[0], entry[1]))"
-                    [attr.data-testid]="'backend-switch-' + entry[0]">Застосувати</button>
+                    [attr.data-testid]="'backend-switch-' + entry[0]">{{ 'Застосувати' | t }}</button>
           </ng-container>
           <span *ngIf="!switchable(entry[0], entry[1])" class="text-slate-400 text-sm">—</span>
         </td>

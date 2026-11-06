@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, signal, computed } from '@angular/core';
 
 import { RealTestsApiService, RealTestReport, RealTestScenario, RealTestRunSummary } from '../core/api/real-tests.api';
@@ -7,7 +8,7 @@ type Tab = 'scenarios' | 'history';
 @Component({
   selector: 'app-real-tests',
   standalone: true,
-  imports: [],
+  imports: [TPipe, ],
   templateUrl: './real-tests.component.html',
   styleUrl: './real-tests.component.css',
 })

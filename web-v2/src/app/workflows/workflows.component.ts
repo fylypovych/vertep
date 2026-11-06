@@ -1,3 +1,4 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -41,15 +42,15 @@ function coerceInputValue(value: unknown, type?: string): unknown {
 @Component({
   selector: 'app-workflows',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, RouterModule, LoadingStateComponent, ErrorStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="space-y-5" data-testid="workflows-page">
       <div class="flex items-center justify-between">
-        <h2 class="text-xl font-semibold text-slate-900">Реєстр сценаріїв</h2>
-        <button (click)="openEditor()" data-testid="create-workflow-button" [disabled]="!canCreateWorkflow" [title]="createWorkflowReason || 'Новий сценарій'"
+        <h2 class="text-xl font-semibold text-slate-900">{{ 'Реєстр сценаріїв' | t }}</h2>
+        <button (click)="openEditor()" data-testid="create-workflow-button" [disabled]="!canCreateWorkflow" [title]="(createWorkflowReason || 'Новий сценарій') | t"
                 class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
-          Новий сценарій
+          {{ 'Новий сценарій' | t }}
         </button>
       </div>
 
@@ -58,17 +59,17 @@ function coerceInputValue(value: unknown, type?: string): unknown {
       } @else if (error()) {
         <app-error-state [message]="error()!" (retry)="loadWorkflows()" />
       } @else if (workflows().length === 0) {
-        <div class="text-center text-slate-500 py-10" data-testid="workflows-empty">Сценаріїв не знайдено</div>
+        <div class="text-center text-slate-500 py-10" data-testid="workflows-empty">{{ 'Сценаріїв не знайдено' | t }}</div>
       } @else {
         <div class="overflow-x-auto">
           <table class="w-full text-sm text-left" data-testid="workflows-table">
             <thead class="text-xs text-slate-500 uppercase bg-slate-50">
               <tr>
-                <th class="px-4 py-3">Тип</th>
-                <th class="px-4 py-3">Назва</th>
-                <th class="px-4 py-3">Стан валідації</th>
-                <th class="px-4 py-3">Використовується</th>
-                <th class="px-4 py-3">Дії</th>
+                <th class="px-4 py-3">{{ 'Тип' | t }}</th>
+                <th class="px-4 py-3">{{ 'Назва' | t }}</th>
+                <th class="px-4 py-3">{{ 'Стан валідації' | t }}</th>
+                <th class="px-4 py-3">{{ 'Використовується' | t }}</th>
+                <th class="px-4 py-3">{{ 'Дії' | t }}</th>
               </tr>
             </thead>
             <tbody>
@@ -78,9 +79,9 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                   <td class="px-4 py-3 font-medium">{{ wf.name }}</td>
                   <td class="px-4 py-3">
                     @if (wf.valid === false) {
-                      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800" data-testid="workflow-validation-status">Невалідний</span>
+                      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800" data-testid="workflow-validation-status">{{ 'Невалідний' | t }}</span>
                     } @else {
-                      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800" data-testid="workflow-validation-status">Валідний</span>
+                      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800" data-testid="workflow-validation-status">{{ 'Валідний' | t }}</span>
                     }
                   </td>
                   <td class="px-4 py-3">
@@ -91,9 +92,9 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                     }
                   </td>
                   <td class="px-4 py-3 space-x-2">
-                    <button (click)="editWorkflow(wf)" [disabled]="!canUpdateWorkflow" [title]="updateWorkflowReason || 'Редагувати'" class="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-40">Редагувати</button>
-                    <button (click)="viewVersions(wf)" class="text-sm text-amber-600 hover:text-amber-700 font-medium">Історія</button>
-                    <button (click)="deleteWorkflow(wf)" [disabled]="!canDeleteWorkflow" [title]="deleteWorkflowReason || 'Видалити'" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-workflow-button">Видалити</button>
+                    <button (click)="editWorkflow(wf)" [disabled]="!canUpdateWorkflow" [title]="(updateWorkflowReason || 'Редагувати') | t" class="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-40">{{ 'Редагувати' | t }}</button>
+                    <button (click)="viewVersions(wf)" class="text-sm text-amber-600 hover:text-amber-700 font-medium">{{ 'Історія' | t }}</button>
+                    <button (click)="deleteWorkflow(wf)" [disabled]="!canDeleteWorkflow" [title]="(deleteWorkflowReason || 'Видалити') | t" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-workflow-button">{{ 'Видалити' | t }}</button>
                   </td>
                 </tr>
               }
@@ -106,17 +107,17 @@ function coerceInputValue(value: unknown, type?: string): unknown {
       <div *ngIf="showEditor()" data-testid="workflow-editor-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div class="bg-white rounded-xl p-6 w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col">
           <div class="flex items-center justify-between mb-4 border-b pb-3">
-            <h3 class="text-lg font-semibold text-slate-900">{{ editingWf ? 'Редагувати' : 'Новий' }} сценарій</h3>
+            <h3 class="text-lg font-semibold text-slate-900">{{ (editingWf ? 'Редагувати' : 'Новий') | t }} {{ 'сценарій' | t }}</h3>
             <div class="flex items-center gap-2">
               <button (click)="activeTab.set('json')" [class.bg-emerald-600]="activeTab() === 'json'" [class.text-white]="activeTab() === 'json'" [class.bg-slate-100]="activeTab() !== 'json'" class="px-3 py-1.5 rounded-lg text-xs font-medium">JSON</button>
-              <button (click)="openFormTab()" [class.bg-emerald-600]="activeTab() === 'form'" [class.text-white]="activeTab() === 'form'" [class.bg-slate-100]="activeTab() !== 'form'" class="px-3 py-1.5 rounded-lg text-xs font-medium">Форма</button>
-              <button (click)="activeTab.set('report')" [class.bg-emerald-600]="activeTab() === 'report'" [class.text-white]="activeTab() === 'report'" [class.bg-slate-100]="activeTab() !== 'report'" class="px-3 py-1.5 rounded-lg text-xs font-medium">Звіт валідації</button>
+              <button (click)="openFormTab()" [class.bg-emerald-600]="activeTab() === 'form'" [class.text-white]="activeTab() === 'form'" [class.bg-slate-100]="activeTab() !== 'form'" class="px-3 py-1.5 rounded-lg text-xs font-medium">{{ 'Форма' | t }}</button>
+              <button (click)="activeTab.set('report')" [class.bg-emerald-600]="activeTab() === 'report'" [class.text-white]="activeTab() === 'report'" [class.bg-slate-100]="activeTab() !== 'report'" class="px-3 py-1.5 rounded-lg text-xs font-medium">{{ 'Звіт валідації' | t }}</button>
             </div>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Тип</label>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Тип' | t }}</label>
               <select [(ngModel)]="editorForm.kind" [disabled]="!!editingWf" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
                 <option value="image">Image</option>
                 <option value="video">Video</option>
@@ -124,31 +125,31 @@ function coerceInputValue(value: unknown, type?: string): unknown {
               </select>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Назва</label>
-              <input [(ngModel)]="editorForm.name" data-testid="workflow-name-input" placeholder="наприклад, demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Назва' | t }}</label>
+              <input [(ngModel)]="editorForm.name" data-testid="workflow-name-input" placeholder="{{ 'наприклад, demo.json' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
             </div>
           </div>
 
           <div class="flex-1 overflow-y-auto min-h-[300px]">
             @if (activeTab() === 'json') {
               <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Конфігурація (JSON)</label>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Конфігурація (JSON)' | t }}</label>
                 <textarea [(ngModel)]="editorForm.content" (ngModelChange)="onJsonChange()" rows="18" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-mono resize-none" spellcheck="false"></textarea>
               </div>
             } @else if (activeTab() === 'form') {
               <div class="space-y-4" data-testid="workflow-form-view">
                 @if (formSchema() && (formSchema()!.schema.editable_inputs || []).length > 0) {
-                  <h4 class="text-sm font-semibold text-slate-800">Редаговані входи нод</h4>
+                  <h4 class="text-sm font-semibold text-slate-800">{{ 'Редаговані входи нод' | t }}</h4>
                   <div class="space-y-3">
                     @for (item of formSchema()!.schema.editable_inputs; track item.node_id + '_' + item.input_name) {
                       <div class="p-3 border border-slate-200 rounded-lg bg-slate-50 text-xs">
-                        <div class="font-semibold text-slate-700">Нода {{ item.node_id }} ({{ item.class_type }}) — {{ item.input_name }}</div>
+                        <div class="font-semibold text-slate-700">{{ 'Нода' | t }} {{ item.node_id }} ({{ item.class_type }}) — {{ item.input_name }}</div>
                         <input [(ngModel)]="item.current_value" (change)="updateJsonFromForm(item)" class="mt-1 w-full px-2 py-1 border border-slate-300 rounded text-xs">
                       </div>
                     }
                   </div>
                 } @else {
-                  <div class="text-slate-500 text-sm py-6 text-center">Немає доступних генеративних полів у формі для цього сценарію.</div>
+                  <div class="text-slate-500 text-sm py-6 text-center">{{ 'Немає доступних генеративних полів у формі для цього сценарію.' | t }}</div>
                 }
               </div>
             } @else if (activeTab() === 'report') {
@@ -156,12 +157,12 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                 @if (validationReport()) {
                   <div class="p-3 rounded-lg border" [class.bg-emerald-50]="validationReport()!.valid" [class.border-emerald-200]="validationReport()!.valid" [class.bg-red-50]="!validationReport()!.valid" [class.border-red-200]="!validationReport()!.valid">
                     <div class="font-semibold text-sm" [class.text-emerald-800]="validationReport()!.valid" [class.text-red-800]="!validationReport()!.valid">
-                      {{ validationReport()!.valid ? 'Сценарій валідний' : 'Сценарій містить помилки' }}
+                      {{ (validationReport()!.valid ? 'Сценарій валідний' : 'Сценарій містить помилки') | t }}
                     </div>
                   </div>
                   @if (validationReport()!.errors.length) {
                     <div>
-                      <div class="font-semibold text-red-700 mb-1">Помилки:</div>
+                      <div class="font-semibold text-red-700 mb-1">{{ 'Помилки:' | t }}</div>
                       <ul class="list-disc pl-4 text-red-600 space-y-1">
                         @for (err of validationReport()!.errors; track err) {
                           <li>{{ err }}</li>
@@ -171,7 +172,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                   }
                   @if (validationReport()!.warnings.length) {
                     <div>
-                      <div class="font-semibold text-amber-700 mb-1">Попередження:</div>
+                      <div class="font-semibold text-amber-700 mb-1">{{ 'Попередження:' | t }}</div>
                       <ul class="list-disc pl-4 text-amber-600 space-y-1">
                         @for (warn of validationReport()!.warnings; track warn) {
                           <li>{{ warn }}</li>
@@ -180,22 +181,22 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                     </div>
                   }
                   <div class="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
-                    <div><span class="font-medium">Кількість нод:</span> {{ validationReport()!.schema.node_count }}</div>
-                    <div><span class="font-medium">Типи нод:</span> {{ validationReport()!.schema.node_types.join(', ') || '—' }}</div>
-                    <div><span class="font-medium">Плейсхолдери:</span> {{ validationReport()!.schema.has_placeholders.join(', ') || '—' }}</div>
+                    <div><span class="font-medium">{{ 'Кількість нод:' | t }}</span> {{ validationReport()!.schema.node_count }}</div>
+                    <div><span class="font-medium">{{ 'Типи нод:' | t }}</span> {{ validationReport()!.schema.node_types.join(', ') || '—' }}</div>
+                    <div><span class="font-medium">{{ 'Плейсхолдери:' | t }}</span> {{ validationReport()!.schema.has_placeholders.join(', ') || '—' }}</div>
                   </div>
                 } @else if (!editorForm.content.trim()) {
-                  <div class="text-slate-500 py-6 text-center">Немає вмісту для валідації. Введіть JSON сценарію.</div>
+                  <div class="text-slate-500 py-6 text-center">{{ 'Немає вмісту для валідації. Введіть JSON сценарію.' | t }}</div>
                 } @else {
-                  <div class="text-slate-500 py-6 text-center">Завантаження звіту валідації...</div>
+                  <div class="text-slate-500 py-6 text-center">{{ 'Завантаження звіту валідації...' | t }}</div>
                 }
               </div>
             }
           </div>
 
           <div class="flex justify-end gap-2 mt-4 pt-3 border-t">
-            <button (click)="closeEditor()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="saveWorkflow()" [disabled]="saving() || !canSaveWorkflow" [title]="saveWorkflowReason || 'Зберегти'" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ saving() ? 'Збереження...' : 'Зберегти' }}</button>
+            <button (click)="closeEditor()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
+            <button (click)="saveWorkflow()" [disabled]="saving() || !canSaveWorkflow" [title]="(saveWorkflowReason || 'Зберегти') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
           </div>
         </div>
       </div>
@@ -203,29 +204,29 @@ function coerceInputValue(value: unknown, type?: string): unknown {
       <!-- Versions Modal -->
       <div *ngIf="showVersions()" data-testid="workflow-versions-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div class="bg-white rounded-xl p-6 w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
-          <h3 class="text-lg font-semibold text-slate-900 mb-4">Історія версій: {{ activeVersionWf?.kind }}/{{ activeVersionWf?.name }}</h3>
+          <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Історія версій:' | t }} {{ activeVersionWf?.kind }}/{{ activeVersionWf?.name }}</h3>
           <div class="flex-1 overflow-y-auto">
             @if (versionsList().length === 0) {
-              <div class="text-slate-500 text-center py-6 text-sm">Немає збережених попередніх версій</div>
+              <div class="text-slate-500 text-center py-6 text-sm">{{ 'Немає збережених попередніх версій' | t }}</div>
             } @else {
               <div class="space-y-2">
                 @for (ver of versionsList(); track ver.version) {
                   <div class="p-3 border border-slate-200 rounded-lg flex items-center justify-between text-xs">
                     <div>
-                      <span class="font-semibold text-slate-800">Версія {{ ver.version }}</span>
+                      <span class="font-semibold text-slate-800">{{ 'Версія' | t }} {{ ver.version }}</span>
                       <span class="text-slate-500 ml-2">({{ ver.size_bytes }} B)</span>
                       @if (ver.archived_at) {
                         <div class="text-slate-400 text-[11px]">{{ ver.archived_at }}</div>
                       }
                     </div>
-                    <button (click)="restoreVersion(ver.version)" [disabled]="!canUpdateWorkflow" [title]="updateWorkflowReason || 'Відновити'" class="px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium text-xs disabled:opacity-40">Відновити</button>
+                    <button (click)="restoreVersion(ver.version)" [disabled]="!canUpdateWorkflow" [title]="(updateWorkflowReason || 'Відновити') | t" class="px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium text-xs disabled:opacity-40">{{ 'Відновити' | t }}</button>
                   </div>
                 }
               </div>
             }
           </div>
           <div class="flex justify-end gap-2 mt-4 pt-3 border-t">
-            <button (click)="showVersions.set(false)" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Закрити</button>
+            <button (click)="showVersions.set(false)" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Закрити' | t }}</button>
           </div>
         </div>
       </div>
@@ -233,26 +234,26 @@ function coerceInputValue(value: unknown, type?: string): unknown {
       <!-- Dependency Conflict Modal -->
       <div *ngIf="showConflictModal()" data-testid="workflow-conflict-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div class="bg-white rounded-xl p-6 w-full max-w-lg mx-4 flex flex-col">
-          <h3 class="text-lg font-semibold text-red-700 mb-2">Конфлікт видалення (409)</h3>
+          <h3 class="text-lg font-semibold text-red-700 mb-2">{{ 'Конфлікт видалення (409)' | t }}</h3>
           <p class="text-sm text-slate-600 mb-4">{{ conflictMessage() }}</p>
           @if (conflictUsage()) {
             <div class="space-y-3 mb-4 text-xs">
               @if (conflictUsage()!.characters.length) {
                 <div>
-                  <div class="font-semibold text-slate-700">Персонажі:</div>
+                  <div class="font-semibold text-slate-700">{{ 'Персонажі:' | t }}</div>
                   <ul class="list-disc pl-4 text-slate-600">
                     @for (char of conflictUsage()!.characters; track char.character_id) {
-                      <li>{{ char.character_id }} (поле: {{ char.field }})</li>
+                      <li>{{ char.character_id }} {{ '(поле:' | t }} {{ char.field }})</li>
                     }
                   </ul>
                 </div>
               }
               @if (conflictUsage()!.jobs.length) {
                 <div>
-                  <div class="font-semibold text-slate-700">Завдання:</div>
+                  <div class="font-semibold text-slate-700">{{ 'Завдання:' | t }}</div>
                   <ul class="list-disc pl-4 text-slate-600">
                     @for (job of conflictUsage()!.jobs; track job.job_id) {
-                      <li>{{ job.job_id }} (тема: {{ job.topic }})</li>
+                      <li>{{ job.job_id }} {{ '(тема:' | t }} {{ job.topic }})</li>
                     }
                   </ul>
                 </div>
@@ -260,8 +261,8 @@ function coerceInputValue(value: unknown, type?: string): unknown {
             </div>
           }
           <div class="flex justify-end gap-2 pt-3 border-t">
-            <button (click)="showConflictModal.set(false)" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">Скасувати</button>
-            <button (click)="forceDeleteWorkflow()" [disabled]="!canDeleteWorkflow" [title]="deleteWorkflowReason || 'Видалити примусово'" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-40">Видалити примусово (force)</button>
+            <button (click)="showConflictModal.set(false)" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
+            <button (click)="forceDeleteWorkflow()" [disabled]="!canDeleteWorkflow" [title]="(deleteWorkflowReason || 'Видалити примусово') | t" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-40">{{ 'Видалити примусово (force)' | t }}</button>
           </div>
         </div>
       </div>

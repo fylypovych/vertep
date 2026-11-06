@@ -108,7 +108,16 @@ def dispatch_allowed() -> bool:
 
 def jobs_may_be_created() -> bool:
     """Whether the public API may durably accept a new job in this state."""
-    return get_system_state()["state"] in {SystemState.NORMAL.value, SystemState.MAINTENANCE.value}
+    state = get_system_state()
+    if state["state"] == SystemState.MAINTENANCE.value and update_owns_maintenance(state):
+        return False
+    return state["state"] in {SystemState.NORMAL.value, SystemState.MAINTENANCE.value}
+
+
+def update_owns_maintenance(state: dict) -> bool:
+    """An update drains in MAINTENANCE under its request id; a restore marks its own id."""
+    operation = str(state.get("operation_id") or "")
+    return bool(operation) and not operation.startswith("restore:")
 
 
 def new_job_status() -> str:

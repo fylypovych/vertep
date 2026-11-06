@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -10,11 +11,11 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
 @Component({
   selector: 'app-settings-secrets',
   standalone: true,
-  imports: [CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-secrets">
-      <h3 class="text-lg font-semibold mb-4">Ключі та паролі підключень</h3>
-      <p class="text-sm text-slate-600 mb-4">Тут зберігаються токени, API keys і паролі. «Збережено» означає наявність значення, а не перевірку його дійсності чи готовність підключення. Доступність сервісів показано в розділі «Стан підключень».</p>
+      <h3 class="text-lg font-semibold mb-4">{{ 'Ключі та паролі підключень' | t }}</h3>
+      <p class="text-sm text-slate-600 mb-4">{{ 'Тут зберігаються токени, API keys і паролі. «Збережено» означає наявність значення, а не перевірку його дійсності чи готовність підключення. Доступність сервісів показано в розділі «Стан підключень».' | t }}</p>
       <app-loading-state *ngIf="loading()" />
       <app-error-state *ngIf="error()" [message]="error()!" />
       <div *ngIf="!loading() && !error()">
@@ -22,36 +23,36 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
           <span class="font-mono text-sm break-all">{{ name }}</span>
           <div class="flex flex-wrap items-center gap-2">
             <ng-container *ngIf="editingSecret() === name; else secretActions">
-              <label class="sr-only" [for]="'secret-' + name">Нове значення для {{ name }}</label>
+              <label class="sr-only" [for]="'secret-' + name">{{ 'Нове значення для' | t }} {{ name }}</label>
               <input [(ngModel)]="editValue" [id]="'secret-' + name" type="password"
                      class="px-2 py-1 text-sm border border-slate-200 rounded w-48">
               <button (click)="saveSecret(name)" [disabled]="secretSaving()"
-                      class="text-sm text-emerald-700 font-medium disabled:opacity-50">Зберегти</button>
-              <button (click)="editingSecret.set(null)" class="text-sm text-slate-600">Скасувати</button>
+                      class="text-sm text-emerald-700 font-medium disabled:opacity-50">{{ 'Зберегти' | t }}</button>
+              <button (click)="editingSecret.set(null)" class="text-sm text-slate-600">{{ 'Скасувати' | t }}</button>
             </ng-container>
             <ng-template #secretActions>
               <span class="text-sm" [class.text-emerald-700]="secrets()?.[name]"
                     [class.text-slate-500]="!secrets()?.[name]">
-                {{ secrets()?.[name] ? 'Збережено' : 'Не збережено' }}
+                {{ (secrets()?.[name] ? 'Збережено' : 'Не збережено') | t }}
               </span>
-              <button (click)="startEdit(name)" class="text-sm text-blue-700">Редагувати</button>
+              <button (click)="startEdit(name)" class="text-sm text-blue-700">{{ 'Редагувати' | t }}</button>
               <button *ngIf="secrets()?.[name]" (click)="confirmDeleteSecret(name)"
-                      class="text-sm text-red-700">Видалити</button>
+                      class="text-sm text-red-700">{{ 'Видалити' | t }}</button>
             </ng-template>
           </div>
         </div>
         <div class="mt-4 pt-4 border-t border-slate-200">
-          <h4 class="text-sm font-medium text-slate-700 mb-2">Новий секрет</h4>
+          <h4 class="text-sm font-medium text-slate-700 mb-2">{{ 'Новий секрет' | t }}</h4>
           <div class="flex flex-wrap gap-2">
-            <label class="sr-only" for="new-secret-name">Назва секрету</label>
-            <input id="new-secret-name" [(ngModel)]="newSecretName" placeholder="Назва"
+            <label class="sr-only" for="new-secret-name">{{ 'Назва секрету' | t }}</label>
+            <input id="new-secret-name" [(ngModel)]="newSecretName" placeholder="{{ 'Назва' | t }}"
                    class="px-3 py-2 border border-slate-200 rounded-lg text-sm w-48">
-            <label class="sr-only" for="new-secret-value">Значення секрету</label>
-            <input id="new-secret-value" [(ngModel)]="newSecretValue" type="password" placeholder="Значення"
+            <label class="sr-only" for="new-secret-value">{{ 'Значення секрету' | t }}</label>
+            <input id="new-secret-value" [(ngModel)]="newSecretValue" type="password" placeholder="{{ 'Значення' | t }}"
                    class="px-3 py-2 border border-slate-200 rounded-lg text-sm flex-1 min-w-48">
             <button (click)="createSecret()" [disabled]="!newSecretName || !newSecretValue || secretSaving()"
                     class="px-3 py-2 bg-emerald-600 text-white rounded-lg text-sm disabled:opacity-50">
-              Створити
+              {{ 'Створити' | t }}
             </button>
           </div>
         </div>

@@ -20,6 +20,10 @@ class FacebookPublisher(Publisher):
     credential_env = "FACEBOOK_ACCESS_TOKEN"
     required_scopes = ["pages_manage_posts", "pages_manage_engagement"]
 
+    def _probe_request(self, token: str):
+        return (f"{_GRAPH}/{os.getenv('FACEBOOK_PAGE_ID')}",
+                {"params": {"fields": "id", "access_token": token}})
+
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         token = FacebookTokenProvider().access_token()
         page_id = (

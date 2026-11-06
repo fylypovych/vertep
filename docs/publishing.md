@@ -26,7 +26,7 @@
 
 ## Передача відео й посилання на пост
 
-Звірено з документацією API 2026-11-06. Live-перевірка належить #47.
+Звірено з офіційною документацією API 2026-11-06: [YouTube `videos.insert`](https://developers.google.com/youtube/v3/docs/videos/insert), [Facebook Video API](https://developers.facebook.com/docs/video-api/guides/publishing), [Instagram Content Publishing](https://developers.facebook.com/docs/instagram-platform/content-publishing/), [Threads Posts](https://developers.facebook.com/docs/threads/posts), [Telegram `sendVideo`](https://core.telegram.org/bots/api#sendvideo) і [посилання на повідомлення Telegram](https://core.telegram.org/api/links#message-links). Live-перевірка належить #47.
 
 | Канал | Передача відео | Публічний URL відео | Очікування готовності | Посилання на пост |
 |---|---|---|---|---|
@@ -34,7 +34,7 @@
 | Facebook | Multipart-завантаження файла | Не потрібен | Ні | Формується: `facebook.com/<page>/videos/<id>`; у довіднику Video-вузла поля `permalink_url` немає |
 | Instagram | Resumable: `upload_type=resumable`, файл на `rupload.facebook.com` | Не потрібен | `status_code` до `FINISHED`, далі `media_publish` | Поле `permalink` |
 | Threads | Платформа сама завантажує за `video_url` | **Потрібен** | Поле `status` до `FINISHED`; адреса API `graph.threads.com` | Поле `permalink`, може бути відсутнє через авторські права |
-| Telegram | `sendVideo` із файлом | Не потрібен | Ні | `t.me/<username>/<message_id>` лише для публічного каналу; ліміт 50 МБ і формат посилання не звірено з документацією |
+| Telegram | `sendVideo` із файлом | Не потрібен | Ні | `t.me/<username>/<message_id>` лише для публічного каналу; Bot API надсилає файли до 50 МБ |
 
 Якщо API не дав посилання, receipt містить `permalink_available: false`, а пост лишається опублікованим: збій читання посилання не запускає повторну публікацію.
 

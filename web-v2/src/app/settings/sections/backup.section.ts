@@ -1,3 +1,4 @@
+import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { map, Observable, of, throwError, timer } from 'rxjs';
@@ -18,12 +19,12 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
 @Component({
   selector: 'app-settings-backup',
   standalone: true,
-  imports: [CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-backup">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-slate-900">Резервні копії</h3>
-        <button (click)="createBackup()" [disabled]="creating.pending()" data-testid="backup-create-button" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">{{ creating.pending() ? 'Створення...' : 'Створити' }}</button>
+        <h3 class="text-lg font-semibold text-slate-900">{{ 'Резервні копії' | t }}</h3>
+        <button (click)="createBackup()" [disabled]="creating.pending()" data-testid="backup-create-button" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">{{ (creating.pending() ? 'Створення...' : 'Створити') | t }}</button>
       </div>
       @if (creating.error()) {
         <app-error-state [message]="creating.error()!" [showRetry]="false" />
@@ -34,7 +35,7 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
         </div>
       } @else if (restore.progress() !== null) {
         <div class="mb-4 p-3 bg-blue-50 rounded-lg">
-          <p class="text-sm text-blue-700">{{ restore.message() }}</p>
+          <p class="text-sm text-blue-700">{{ (restore.message()) | t }}</p>
         </div>
       }
       @if (list.loading()) {
@@ -42,9 +43,9 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
       } @else if (list.failed()) {
         <app-error-state [message]="list.error()!" [showRetry]="true" (retry)="loadBackups()" />
       } @else if (list.data().length === 0) {
-        <p class="text-sm text-slate-500">Резервних копій немає</p>
+        <p class="text-sm text-slate-500">{{ 'Резервних копій немає' | t }}</p>
       } @else {
-        <p class="text-sm text-amber-700 mb-2" data-testid="backup-key-reminder">Копія зашифрована, ключа в ній немає. Збережіть ключ шифрування окремо від файла: без нього копію не відновити.</p>
+        <p class="text-sm text-amber-700 mb-2" data-testid="backup-key-reminder">{{ 'Копія зашифрована, ключа в ній немає. Збережіть ключ шифрування окремо від файла: без нього копію не відновити.' | t }}</p>
         <div class="space-y-2">
           @for (backup of list.data(); track backup.snapshot_id) {
             <div class="flex items-center justify-between py-2 border-b border-slate-100">
@@ -53,9 +54,9 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
                 <span class="text-xs text-slate-500 ml-2">{{ backup.created_at | vertepDate }}</span>
               </div>
               <a [href]="'/api/system/backups/' + backup.snapshot_id + '/download'" download data-testid="backup-download-link"
-                 [title]="'SHA-256: ' + (backup['sha256'] || '')" class="px-3 py-1 text-sm border border-slate-200 rounded-lg mr-2">Завантажити</a>
+                 [title]="'SHA-256: ' + (backup['sha256'] || '')" class="px-3 py-1 text-sm border border-slate-200 rounded-lg mr-2">{{ 'Завантажити' | t }}</a>
               <button (click)="confirmRestore(backup.snapshot_id)" [disabled]="restore.pending()" data-testid="backup-restore-button" class="text-xs text-blue-600 disabled:opacity-50">
-                {{ restore.pending() ? 'Відновлення...' : 'Відновити' }}
+                {{ (restore.pending() ? 'Відновлення...' : 'Відновити') | t }}
               </button>
             </div>
           }
