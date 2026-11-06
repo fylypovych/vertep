@@ -32,3 +32,11 @@ def application_version() -> str:
 
 # Contract between CORE and Worker; raise it only for an incompatible change.
 WORKER_API = 1
+
+
+def worker_incompatibility(worker: dict | None) -> str | None:
+    """Why CORE refuses tasks to this worker. A node from before the field speaks version 1."""
+    node_api = (worker or {}).get("worker_api") or 1
+    if node_api == WORKER_API:
+        return None
+    return f"Несумісний контракт Worker: {node_api}, потрібен {WORKER_API}"

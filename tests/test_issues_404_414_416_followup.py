@@ -148,6 +148,13 @@ def test_incompatible_worker_gets_no_task(monkeypatch):
     assert answer["task"] is None and "контракт" in answer["reason"]
 
 
+def test_panel_is_told_why_a_worker_gets_no_tasks():
+    from core.api.nodes import _node_context
+    assert "контракт" in _node_context({"runtime": {"worker_api": WORKER_API + 1}})["compatibility_issue"]
+    assert _node_context({"runtime": {"worker_api": WORKER_API}})["compatibility_issue"] is None
+    assert _node_context({})["compatibility_issue"] is None
+
+
 @pytest.mark.parametrize("record", [{}, {"worker_api": None}, {"worker_api": WORKER_API}])
 def test_older_or_current_worker_is_not_refused(monkeypatch, record):
     from core.models import TaskClaim

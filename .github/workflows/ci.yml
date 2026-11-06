@@ -287,6 +287,15 @@ jobs:
   fleet-rollout-acceptance:
     # Rollout half of the fleet matrix, apart so both halves finish sooner. The same
     # tests and the same fail-closed settings as fleet-persistence-runtime-acceptance.
+    # Two parts of near-equal length: the workers-first test alone takes about 5 minutes.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: workers-first
+            tests: tests/test_standard_host_consumer_docker.py::test_workers_first_rollout_times_out_on_core_rolls_the_worker_back_and_a_retry_succeeds
+          - part: consumer
+            tests: tests/test_standard_host_consumer_docker.py::test_standard_consumer_moves_a_running_vertep_worker_and_core_observes_it tests/test_standard_host_consumer_docker.py::test_a_rollout_to_an_offline_node_fails_instead_of_hanging tests/test_standard_host_consumer_docker.py::test_core_drives_a_canary_rollout_and_holds_it_for_promotion tests/test_standard_host_consumer_docker.py::test_rollback_restores_previous_version_and_ready_state tests/test_standard_host_consumer_docker.py::test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker tests/test_standard_host_consumer_docker.py::test_standard_consumer_drains_and_admits_workers_during_update
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -325,12 +334,12 @@ jobs:
           python -m pytest -v --durations=25 -o junit_family=legacy -o faulthandler_timeout=600
           --junitxml="$RUNNER_TEMP/fleet-rollout.xml"
           --basetemp="$RUNNER_TEMP/fleet-rollout"
-          tests/test_standard_host_consumer_docker.py::test_workers_first_rollout_times_out_on_core_rolls_the_worker_back_and_a_retry_succeeds tests/test_standard_host_consumer_docker.py::test_standard_consumer_moves_a_running_vertep_worker_and_core_observes_it tests/test_standard_host_consumer_docker.py::test_a_rollout_to_an_offline_node_fails_instead_of_hanging tests/test_standard_host_consumer_docker.py::test_core_drives_a_canary_rollout_and_holds_it_for_promotion tests/test_standard_host_consumer_docker.py::test_rollback_restores_previous_version_and_ready_state tests/test_standard_host_consumer_docker.py::test_standard_consumer_updates_restarts_and_rolls_back_a_running_worker tests/test_standard_host_consumer_docker.py::test_standard_consumer_drains_and_admits_workers_during_update
+          ${{ matrix.tests }}
       - name: Upload fleet rollout evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: fleet-rollout-${{ github.sha }}
+          name: fleet-rollout-${{ matrix.part }}-${{ github.sha }}
           path: ${{ runner.temp }}/fleet-rollout.xml
           if-no-files-found: error
 
@@ -394,7 +403,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@v7
         with:
-          pattern: "{fleet-persistence-runtime,fleet-rollout,fleet-cancel-path,local-contracts,moneyprinter-pinned-runtime}-${{ github.sha }}"
+          pattern: "{fleet-persistence-runtime,fleet-rollout-workers-first,fleet-rollout-consumer,fleet-cancel-path,local-contracts,moneyprinter-pinned-runtime}-${{ github.sha }}"
           path: ${{ runner.temp }}/junit
       - name: Criterion report over all JUnit of this SHA
         run: |

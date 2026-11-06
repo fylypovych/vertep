@@ -9,6 +9,7 @@ from ..node_registry import (create_registration_token, enroll_node, registered_
                              rotate_node_credentials)
 from ..security import _valid_worker_request
 from ..state import store
+from ..version import worker_incompatibility
 from .workers import workers
 
 router = APIRouter()
@@ -39,6 +40,7 @@ def _node_context(node: dict) -> dict:
         "runtime_status": node.get("runtime_status") or "PENDING_SELF_TEST",
         "self_test_capabilities": node.get("self_test_capabilities") or [],
         "last_self_test_at": node.get("last_self_test_at"),
+        "compatibility_issue": worker_incompatibility(node.get("runtime")),
         "modules": definition.get("modules", []),
         "services": definition.get("services", []),
         "capability_backends": {

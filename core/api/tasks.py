@@ -23,7 +23,7 @@ from ..orchestration import (all_scenes_ready, cancel_scene, fail_scene,
                              finish_scene, start_scene, transition_stage)
 from ..security import _valid_worker_request
 from ..state import executor, logger, store, task_queue
-from ..version import WORKER_API
+from ..version import worker_incompatibility
 from ..system_state import dispatch_allowed, get_system_state
 from .lab_lease import hold_gpu_for_laboratory
 from .job_helpers import (
@@ -56,11 +56,10 @@ router.include_router(workflow_execution_router)
 def claim_task(payload: TaskClaim, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
-    # A node from before this field speaks the contract that introduced it (version 1).
-    node_api = (store.workers.get(payload.node_name) or {}).get("worker_api") or 1
-    if node_api != WORKER_API:
+    incompatibility = worker_incompatibility(store.workers.get(payload.node_name))
+    if incompatibility:
         logger.warning("Incompatible worker refused", extra={"node_name": payload.node_name})
-        return {"task": None, "reason": f"Несумісний контракт Worker: {node_api}, потрібен {WORKER_API}"}
+        return {"task": None, "reason": incompatibility}
     if not dispatch_allowed():
         return {"task": None, "system_state": get_system_state()["state"]}
     registered_worker = store.workers.get(payload.node_name)

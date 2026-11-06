@@ -622,6 +622,7 @@ _XDIST_TOGETHER = {"test_backup_process_acceptance", "test_runner_browser_e2e", 
                    "test_queue_redis_contract"}
 
 
+@pytest.hookimpl(tryfirst=True)  # xdist turns the mark into a group in its own hook of this name
 def pytest_collection_modifyitems(items):
     for item in items:
         if item.module.__name__.rsplit(".", 1)[-1] in _XDIST_TOGETHER:

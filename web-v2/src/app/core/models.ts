@@ -21,6 +21,7 @@ export interface Worker {
   current_task?: string;
   supported_tasks?: string[];
   supported_workflows?: string[];
+  compatibility_issue?: string | null;
   runtime_status?: string;
   tested_capabilities?: string[];
   self_test_capabilities?: string[];

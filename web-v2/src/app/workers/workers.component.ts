@@ -84,6 +84,9 @@ import { RemoteState } from '../core/state/remote-state';
                         [class.bg-slate-400]="!['READY', 'ONLINE', 'FREE'].includes(worker.status)"></span>
                       {{ nodeStatusLabel(worker.status) }}
                     </span>
+                    @if (worker.compatibility_issue) {
+                      <div class="text-xs text-red-600 mt-0.5" [attr.data-testid]="'worker-compatibility-' + worker.node_id">{{ worker.compatibility_issue }}</div>
+                    }
                   </td>
                   <td class="px-4 py-3">{{ nodeLoad(worker) }}{{ worker.temperature != null ? ' · ' + worker.temperature + '°C' : '' }}</td>
                   <td class="px-4 py-3">

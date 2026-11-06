@@ -144,8 +144,10 @@ def test_runner_web_actual_api_progress_history_restart_and_retry(tmp_path):
 
             scenario = page.locator("[data-testid='real-tests-scenario-S01']")
             expect(scenario).to_be_visible()
-            with page.expect_response(lambda response: response.url.endswith("/prerequisites")) as prerequisites:
-                scenario.get_by_role("button", name="Запустити").click()
+            with page.expect_response(lambda response: response.url.endswith("/prerequisites"),
+                                      timeout=120000) as prerequisites:
+                # The global loader covers the page until its first requests end, slowly under a parallel run.
+                scenario.get_by_role("button", name="Запустити").click(timeout=120000)
             assert prerequisites.value.status == 200
             assert "bootstrap_first_run" in prerequisites.value.json()["mandatory_checks"]
             dialog = page.locator("[data-testid='real-tests-confirm']")
