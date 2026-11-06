@@ -12,12 +12,20 @@ from core.state import task_queue
 from core.system_state import dispatch_allowed
 from pathlib import Path
 import asyncio
+import logging
 import os
 from core.runtime import _watchdog
 from core.telegram.handlers import (_start_telegram_polling, _stop_telegram_polling, _recover_stale_update_operations, _reconcile_restart_operations)
 
 @asynccontextmanager
 async def lifespan(_app):
+    # i.0.0.4.12: a failure keeps the file and stays visible; the store is not replaced.
+    try:
+        from .first_run import migrate_secret_file_to_database
+        if migrate_secret_file_to_database():
+            logging.getLogger(__name__).info("Secret store moved to PostgreSQL; the file was removed")
+    except Exception:
+        logging.getLogger(__name__).exception("Secret store migration failed; the file was kept")
     # Issue 32: migrate ephemeral characters/brands/workflows to persistent storage on startup.
     try:
         from .persistent_data import ensure_persistent_user_data, persistent_characters_root, persistent_brands_root, workflows_persistent_root

@@ -225,14 +225,41 @@ def inspect_data_key() -> dict:
     return state
 
 
-def _read_encrypted_secrets() -> dict:
+def _secret_database_url() -> str | None:
+    """CORE-side processes keep the store in PostgreSQL; a node has no database access."""
+    if os.getenv("STORAGE_BACKEND", "file").lower() != "postgres":
+        return None
+    return os.getenv("DATABASE_URL") or None
+
+
+def _database_envelope(dsn: str) -> dict | None:
+    import psycopg
+    with psycopg.connect(dsn) as connection:
+        row = connection.execute("SELECT envelope FROM secret_store WHERE singleton=TRUE").fetchone()
+    if not row:
+        return None
+    return row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
+
+def _write_database_envelope(dsn: str, envelope: dict) -> None:
+    import psycopg
+    with psycopg.connect(dsn) as connection:
+        connection.execute("""INSERT INTO secret_store(singleton,envelope,updated_at)
+            VALUES(TRUE,%s::jsonb,now()) ON CONFLICT(singleton) DO UPDATE SET
+            envelope=excluded.envelope,updated_at=excluded.updated_at""", (json.dumps(envelope),))
+
+
+def _file_envelope() -> dict | None:
     path = config_root() / "secrets.enc.json"
     if not path.exists():
-        return {}
+        return None
     try:
-        envelope = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ValueError("encrypted secret store is unreadable") from exc
+
+
+def _open_envelope(envelope: dict) -> dict:
     if not isinstance(envelope, dict):
         raise ValueError("encrypted secret store envelope must be an object")
     if envelope.get("version") != 1 or envelope.get("algorithm") != "AES-256-GCM":
@@ -249,16 +276,56 @@ def _read_encrypted_secrets() -> dict:
     return value
 
 
+def migrate_secret_file_to_database() -> bool:
+    """Move the file store into PostgreSQL; the file goes only after a verified read.
+
+    Any failure raises and leaves the file in place. Returns True when a file was removed.
+    """
+    dsn = _secret_database_url()
+    if not dsn:
+        return False
+    with _secret_lock:
+        stored = _database_envelope(dsn)
+        if stored is not None:
+            # Early formats may reappear when bootstrap runs again on a live install.
+            for name in ("secrets.json", "bootstrap-secrets.json"):
+                (config_root() / name).unlink(missing_ok=True)
+        envelope = _file_envelope()
+        if envelope is None:
+            return False
+        expected = _open_envelope(envelope)
+        if stored is None:
+            _write_database_envelope(dsn, envelope)
+            if _open_envelope(_database_envelope(dsn)) != expected:
+                raise ValueError("secret store migration could not be verified")
+        else:
+            # The database is the source of truth; it must open before the copy goes.
+            _open_envelope(stored)
+        (config_root() / "secrets.enc.json").unlink()
+        return True
+
+
+def _read_encrypted_secrets() -> dict:
+    dsn = _secret_database_url()
+    envelope = _database_envelope(dsn) if dsn else _file_envelope()
+    return {} if envelope is None else _open_envelope(envelope)
+
+
 def _write_encrypted_secrets(value: dict) -> None:
     nonce = os.urandom(12)
     plaintext = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
     ciphertext = AESGCM(_secret_key()).encrypt(nonce, plaintext, _SECRET_AAD)
-    _write("secrets.enc.json", {
+    envelope = {
         "version": 1,
         "algorithm": "AES-256-GCM",
         "nonce": base64.b64encode(nonce).decode("ascii"),
         "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
-    })
+    }
+    dsn = _secret_database_url()
+    if dsn:
+        _write_database_envelope(dsn, envelope)
+    else:
+        _write("secrets.enc.json", envelope)
 
 
 def password_hash(value: str) -> str:
@@ -270,19 +337,18 @@ def password_hash(value: str) -> str:
 
 def ensure_secret_store() -> dict:
     with _secret_lock:
-        path = config_root() / "secrets.enc.json"
-        if path.exists():
+        migrate_secret_file_to_database()
+        dsn = _secret_database_url()
+        present = (_database_envelope(dsn) if dsn else _file_envelope()) is not None
+        if present:
             stored = _read_encrypted_secrets()
             if stored:
                 return stored
-        else:
-            # A missing encrypted store is the bootstrap baseline: create a fresh
-            # one and migrate any legacy plaintext values into it.
-            stored = {}
-        # A real store that is present but unreadable or fails authentication
-        # must fail closed; silently replacing it would discard secrets.
-        if path.exists() and not stored:
+            # A real store that is present but unreadable or fails authentication
+            # must fail closed; silently replacing it would discard secrets.
             raise ValueError("encrypted secret store is unreadable or invalid")
+        # A missing encrypted store is the bootstrap baseline: create a fresh
+        # one and migrate any legacy plaintext values into it.
         # Transparently migrate both early appliance formats, then erase their files.
         stored = {**_read("secrets.json"), **_read("bootstrap-secrets.json")}
         generated = {name: secrets.token_urlsafe(size) for name, size in {

@@ -175,7 +175,7 @@ test.describe('Policy fail-closed — Issue #168.3/#114', () => {
 
 // Issue #168.3/#168.4: the UI guard matrix must match the server
 // STATE_OPERATION_POLICY (core/system_state.py). create_job stays admitted in
-// MAINTENANCE/UPDATING/RECOVERING (job is durably queued as WAITING_FOR_SYSTEM)
+// MAINTENANCE (job is durably queued as WAITING_FOR_SYSTEM)
 // and resources stay mutable in MAINTENANCE but are blocked in READ_ONLY.
 test.describe('System-state mutation matrix — Issue #168.3/#168.4', () => {
   async function gotoAndWait(page: any, path: string) {
@@ -183,7 +183,7 @@ test.describe('System-state mutation matrix — Issue #168.3/#168.4', () => {
     await page.waitForLoadState('networkidle').catch(() => {});
   }
 
-  for (const state of ['NORMAL', 'MAINTENANCE', 'UPDATING', 'RECOVERING']) {
+  for (const state of ['NORMAL', 'MAINTENANCE']) {
     test(`create-job дозволено у стані ${state}`, async ({ page }) => {
       await mockApi(page, { role: 'admin', state });
       await gotoAndWait(page, '/jobs');
@@ -194,7 +194,7 @@ test.describe('System-state mutation matrix — Issue #168.3/#168.4', () => {
     });
   }
 
-  for (const state of ['READ_ONLY', 'EMERGENCY']) {
+  for (const state of ['UPDATING', 'RECOVERING', 'READ_ONLY', 'EMERGENCY']) {
     test(`create-job заблоковано у стані ${state}`, async ({ page }) => {
       await mockApi(page, { role: 'admin', state });
       await gotoAndWait(page, '/jobs');

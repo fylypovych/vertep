@@ -132,6 +132,8 @@ export interface WorkflowModeState {
   dynamic_available: boolean;
 }
 
+export interface PublishingSettings { public_url: string; telegram_channel_id: string; }
+
 @Injectable({ providedIn: 'root' })
 export class SettingsApiService {
   private baseUrl = '/api';
@@ -229,6 +231,18 @@ export class SettingsApiService {
       { backend, ...(actor ? { actor } : {}) },
       { headers: this.getHeaders() },
     ).pipe(catchError(this.handleError));
+  }
+
+  publishingSettings(): Observable<PublishingSettings> {
+    return this.http
+      .get<PublishingSettings>(`${this.baseUrl}/settings/publishing`, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
+  savePublishingSettings(value: PublishingSettings): Observable<PublishingSettings> {
+    return this.http
+      .put<PublishingSettings>(`${this.baseUrl}/settings/publishing`, value, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
   }
 
   workflowMode(): Observable<WorkflowModeState> {

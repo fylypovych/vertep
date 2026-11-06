@@ -8,6 +8,7 @@ real API upload through an injectable ``HttpTransport``.
 from __future__ import annotations
 
 import os
+import time
 import re
 import uuid
 import httpx
@@ -37,6 +38,36 @@ def check_response(response) -> None:
     raise RuntimeError(
         f"HTTP {response.status_code} ({response.reason_phrase}): {detail}"
     )
+
+
+def wait_for_container(transport, url: str, token: str, field: str, *, ready: str = "FINISHED") -> None:
+    """Meta publishes a media container only after it finishes processing the video."""
+    deadline = time.monotonic() + float(os.getenv("PUBLISHER_CONTAINER_TIMEOUT_SECONDS", "300"))
+    while True:
+        response = transport.get(url, params={"fields": field, "access_token": token})
+        check_response(response)
+        status = str(response.json().get(field) or "")
+        if status == ready:
+            return
+        if status in {"ERROR", "EXPIRED"}:
+            raise RuntimeError(f"Media container failed: {status}")
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Media container is not ready: {status}")
+        time.sleep(float(os.getenv("PUBLISHER_CONTAINER_POLL_SECONDS", "10")))
+
+
+def fetch_permalink(transport, url: str, token: str, field: str = "permalink") -> str | None:
+    """Read the post link after a successful publish.
+
+    The post already exists here: a failure must cost only the link, because
+    reporting FAILED would make the retry publish a duplicate.
+    """
+    try:
+        response = transport.get(url, params={"fields": field, "access_token": token})
+        check_response(response)
+        return response.json().get(field) or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def publisher_mock_enabled() -> bool:

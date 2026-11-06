@@ -76,7 +76,7 @@ def test_route_classification_matches_state_policy(state, label, operation, meth
             assert response.status_code == 423, (
                 f"{label} ({operation}) must be blocked in {state.value} "
                 f"but returned {response.status_code}")
-            assert "blocked by system state" in response.text
+            assert "blocked by system state" in response.text or "тимчасово вимкнено" in response.json().get("detail", "")
             assert operation in response.text
     finally:
         set_system_state(previous, "matrix restore")
@@ -285,7 +285,7 @@ def test_a_blocked_state_leaves_the_resource_unchanged(label, actual_backend, mo
         before = probe["snapshot"]()
         response = _request(actual_backend, probe["method"], probe["path"], probe["body"])
         assert response.status_code == 423, response.text
-        assert "blocked by system state" in response.text
+        assert "blocked by system state" in response.text or "тимчасово вимкнено" in response.json().get("detail", "")
         assert probe["snapshot"]() == before
     finally:
         set_system_state(previous, "matrix restore")
@@ -341,8 +341,7 @@ def test_the_model_pull_probe_keeps_its_method_and_path(actual_backend, monkeypa
         set_system_state(previous, "matrix restore")
 
 
-@pytest.mark.parametrize("state", [SystemState.MAINTENANCE, SystemState.UPDATING,
-                                   SystemState.RECOVERING])
+@pytest.mark.parametrize("state", [SystemState.MAINTENANCE])
 def test_create_job_is_accepted_and_waits_for_the_system(state, actual_backend,
                                                           monkeypatch, tmp_path):
     """Issue #168.3: the agreed states accept the job with WAITING_FOR_SYSTEM."""
@@ -386,7 +385,7 @@ def test_create_job_is_blocked_and_creates_no_job(state, actual_backend, monkeyp
             "/api/jobs", json={"topic": "matrix", "character_id": "matrix_char"},
             headers=actual_backend["admin"])
         assert response.status_code == 423, response.text
-        assert "blocked by system state" in response.text
+        assert "blocked by system state" in response.text or "тимчасово вимкнено" in response.json().get("detail", "")
         assert len(store.jobs) == before
     finally:
         set_system_state(previous, "matrix restore")

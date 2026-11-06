@@ -12,6 +12,7 @@ from publishers.tiktok import TikTokPublisher
 from publishers.facebook import FacebookPublisher
 from publishers.instagram import InstagramPublisher
 from publishers.threads import ThreadsPublisher
+from publishers.telegram import TelegramPublisher
 
 LIVE_PUBLISHERS = {
     publisher.channel: publisher
@@ -21,6 +22,7 @@ LIVE_PUBLISHERS = {
         FacebookPublisher(),
         InstagramPublisher(),
         ThreadsPublisher(),
+        TelegramPublisher(),
     )
 }
 

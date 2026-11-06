@@ -13,6 +13,7 @@ import httpx
 from worker.migration_trace import post as migration_post, stream as migration_stream, external as migration_external
 from adapters import media_integrity
 from adapters.providers import providers
+from publishers.task_secrets import task_secrets
 
 logger = logging.getLogger("worker.executor")
 
@@ -332,6 +333,17 @@ def execute_voice(task: dict) -> list[dict]:
     return [artifact]
 
 
+def _task_secret_source(task: dict):
+    """A node without the database receives credentials from CORE for this task only."""
+    from publishers.task_secrets import TaskSecrets
+    base = _core_base_url()
+    node_name = str(os.getenv("NODE_NAME") or os.getenv("WORKER_NAME") or "")
+    task_id = task.get("task_id")
+    if os.getenv("DATABASE_URL") or not base or not node_name or not task_id:
+        return None
+    return TaskSecrets(f"{base}/api/tasks/{task_id}/secrets", _worker_auth_headers(node_name))
+
+
 def execute_publisher(task: dict) -> list[dict]:
     """Publish a video to a platform via the Publisher Worker.
 
@@ -454,7 +466,8 @@ def execute_publisher(task: dict) -> list[dict]:
         return receipt_artifact(receipt)
     try:
         save_ledger("UPLOADING")
-        result = publisher.publish(video_path, metadata)
+        with task_secrets(_task_secret_source(task)):
+            result = publisher.publish(video_path, metadata)
     except Exception as error:
         # Transient failures (network, rate limit) should raise so worker retries
         # Permanent failures should be caught by publisher and returned in result

@@ -24,8 +24,12 @@ services:
       CONFIG_ROOT: /data/config
       SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
       REQUIRE_SECRET_KEY_SEALING: "true"
+      STORAGE_BACKEND: postgres
+      DATABASE_URL: "host=postgres port=5432 dbname=vertep user=vertep password=${POSTGRES_PASSWORD}"
     secrets: [secret_store_passphrase]
     volumes: ["./config:/data/config:ro"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
     healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8093/health"], interval: 15s, timeout: 5s, retries: 20}
     restart: unless-stopped
     read_only: true

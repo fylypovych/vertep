@@ -51,6 +51,12 @@ def agent():
     return _load(ROOT / "scripts" / "update-agent.py", "update_agent")
 
 
+@pytest.fixture(autouse=True)
+def _restored_release_is_healthy(agent, monkeypatch):
+    # The disposable deployment has no CORE to answer the post-rollback health check.
+    monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
+
+
 def _prepare(root: Path, state_dir: Path, monkeypatch) -> None:
     monkeypatch.setenv("VERTEP_ROOT", str(root))
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))

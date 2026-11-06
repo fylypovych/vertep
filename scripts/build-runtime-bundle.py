@@ -58,15 +58,14 @@ FILES = {
 SCRIPTS = (
     "apply-deployment.py", "migrate.py", "release-layout.py", "safe-extract.py",
     "startup-recovery.py", "status.py", "update-agent.py", "vertep", "watchdog.py",
-    "worker_update.py", "update-runtime-env.py",
+    "update-runtime-env.py",
 )
 
 UNITS = (
     "vertep-update.service", "vertep-update.path", "vertep-update-check.service",
     "vertep-update.timer", "vertep-deployment.service", "vertep-deployment.path",
     "vertep-watchdog.service", "vertep-watchdog.timer",
-    "vertep-startup-recovery.service", "vertep-worker-update.service",
-    "vertep-worker-update.path",
+    "vertep-startup-recovery.service",
 )
 
 MONITORING = (

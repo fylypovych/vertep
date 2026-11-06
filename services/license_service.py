@@ -20,11 +20,14 @@ def _license() -> tuple[str, str]:
             raise HTTPException(503, "License key file is unavailable") from error
     config_root = os.getenv("CONFIG_ROOT", "")
     encrypted_store = Path(config_root) / "secrets.enc.json" if config_root else None
-    if not value and encrypted_store and encrypted_store.is_file():
+    if not value and (os.getenv("DATABASE_URL") or (encrypted_store and encrypted_store.is_file())):
         try:
-            from core.first_run import ensure_secret_store
-            value = str(ensure_secret_store().get("license_key") or "").strip()
-        except (OSError, RuntimeError, ValueError) as error:
+            # Read only: this container mounts config read-only, so CORE owns the migration.
+            from core.first_run import _file_envelope, _open_envelope, _read_encrypted_secrets
+            envelope = _file_envelope()
+            stored = _read_encrypted_secrets() or (_open_envelope(envelope) if envelope else {})
+            value = str(stored.get("license_key") or "").strip()
+        except Exception as error:  # noqa: BLE001 - database errors must also answer 503
             raise HTTPException(503, "Encrypted license store is unavailable") from error
     if not value:
         return "COMMUNITY", ""

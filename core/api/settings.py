@@ -60,6 +60,22 @@ def effective_video_engine(probe: bool = False):
     return {**result, "worker_activation": activation}
 
 
+@router.get("/api/settings/publishing")
+def get_publishing_settings():
+    from ..publishing_settings import publishing_settings
+    return publishing_settings()
+
+
+@router.put("/api/settings/publishing")
+def put_publishing_settings(payload: dict):
+    from ..publishing_settings import save_publishing_settings
+    try:
+        return save_publishing_settings(str(payload.get("public_url") or ""),
+                                        str(payload.get("telegram_channel_id") or ""))
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @router.get("/api/settings/workflow-mode")
 def get_workflow_mode():
     from ..workflow.mode import workflow_mode_state

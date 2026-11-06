@@ -18,19 +18,15 @@ watchdog = _load("watchdog_405", "scripts/watchdog.py")
 agent = _load("update_agent_405", "scripts/update-agent.py")
 
 
-def _release(tmp_path):
-    release = tmp_path / "releases" / "1"
-    release.mkdir(parents=True)
-    try:
-        (tmp_path / "current").symlink_to(release, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks are unavailable")
+def _release(tmp_path, monkeypatch):
+    # The symlink itself needs privileges on Windows; the selection rule does not.
+    monkeypatch.setattr(Path, "is_symlink", lambda path: path.name == "current")
     return tmp_path / "current"
 
 
 @pytest.mark.parametrize("module", [recovery, watchdog])
-def test_compose_comes_from_the_active_release(tmp_path, module):
-    current = _release(tmp_path)
+def test_compose_comes_from_the_active_release(tmp_path, monkeypatch, module):
+    current = _release(tmp_path, monkeypatch)
     assert str(current / "docker-compose.yml") in module.compose_command(tmp_path)
 
 

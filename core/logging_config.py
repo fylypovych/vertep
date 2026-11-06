@@ -72,6 +72,7 @@ def secret_redact(text: str) -> str:
     text = _BEARER_TOKEN.sub(lambda m: m.group(1) + "[REDACTED]", text)
     text = _URL_USERINFO.sub(lambda m: m.group(1) + m.group(2) + ":[REDACTED]@", text)
     text = _QUERY_CREDENTIAL.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = re.sub(r"(/bot)\d+:[A-Za-z0-9_-]+", r"[REDACTED]", text)
     text = re.sub(r"(?i)(Authorization\s*:\s*Basic\s+)([A-Za-z0-9._\-+/=]+)",
                   r"\1[REDACTED]", text)
     text = re.sub(r"(?i)(basic[_-]?auth\s*[:=]\s*)((?:Basic\s+)?[A-Za-z0-9._\-+/=]+)",

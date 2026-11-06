@@ -45,8 +45,6 @@ BUNDLE_FILES = [
     "installer/vertep-watchdog.service",
     "installer/vertep-watchdog.timer",
     "installer/vertep-startup-recovery.service",
-    "installer/vertep-worker-update.service",
-    "installer/vertep-worker-update.path",
     "installer/update-public.pem",
     "installer/root-keys/root-metadata.json",
     "web/index.html",

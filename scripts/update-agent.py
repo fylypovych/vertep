@@ -432,6 +432,18 @@ def _has_interrupt_evidence(state_dir: Path) -> bool:
     return False
 
 
+def rollback_safe_flag(manifest: dict) -> str:
+    """Only an explicit promise keeps live data on rollback; anything else restores the copy."""
+    database = manifest.get("database")
+    return "true" if isinstance(database, dict) and database.get("rollback_safe") is True else "false"
+
+
+def drain_is_coordinated_elsewhere() -> bool:
+    """CORE drains a worker before asking it to update; only a CORE node waits here."""
+    role = os.getenv("ROLE") or os.getenv("NODE_ROLE") or ""
+    return bool(role) and role != "unknown" and not role.startswith("core")
+
+
 def verify_restored_release() -> None:
     """A rollback ends in NORMAL only after CORE answers its health check again."""
     deadline = time.monotonic() + float(os.getenv("UPDATE_ROLLBACK_HEALTH_TIMEOUT_SECONDS", "300"))
@@ -584,7 +596,8 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                 output = run_fenced(host_command(root, "apply-update",
                                                 str(package), manifest["version"]),
                                     root, state_dir, lease,
-                                    {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json")})
+                                    {"VERTEP_UPDATE_STATUS_FILE": str(state_dir / "status.json"),
+                                     "VERTEP_ROLLBACK_SAFE": rollback_safe_flag(manifest)})
                 merge_runtime_progress(state_dir, state)
                 state["log"].extend(output.splitlines()[-200:])
                 retention = os.getenv("UPDATE_RELEASE_RETENTION", "3")
@@ -698,7 +711,7 @@ def main() -> None:
     failed = False
     for request_path in sorted(requests.glob("*.json")):
         try:
-            if not process_request(root, state_dir, request_path, skip_drain=args.skip_drain):
+            if not process_request(root, state_dir, request_path, skip_drain=args.skip_drain or drain_is_coordinated_elsewhere()):
                 failed = True
         except Exception as error:
             failed = True

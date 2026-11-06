@@ -16,16 +16,17 @@ export interface PolicyDecision {
 // ("Operation <op> is blocked by system state"), so the button and the API
 // agree. Keep both tables in lock-step.
 const BLOCKED_AFTER_NORMAL: SystemMode[] = ['UPDATING', 'RECOVERING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
-const BLOCKED_CREATE_JOB: SystemMode[] = ['READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
+const BLOCKED_CREATE_JOB: SystemMode[] = ['UPDATING', 'RECOVERING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
 const BLOCKED_BACKUP: SystemMode[] = ['MAINTENANCE', 'UPDATING', 'RECOVERING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
 const BLOCKED_RESTORE: SystemMode[] = ['UPDATING', 'READ_ONLY', 'EMERGENCY', 'UNAVAILABLE'];
 const BLOCKED_RECOVERY: SystemMode[] = ['NORMAL', 'MAINTENANCE', 'UPDATING', 'RECOVERING', 'READ_ONLY', 'UNAVAILABLE'];
 
 const MUTATION_BLOCKED_IN: Record<string, SystemMode[]> = {
-  // POST /api/jobs -> "create_job" (also admitted in MAINTENANCE/UPDATING/
-  // RECOVERING, where the job is durably created with WAITING_FOR_SYSTEM).
+  // POST /api/jobs -> "create_job" (also admitted in MAINTENANCE, where the job is
+  // durably created with WAITING_FOR_SYSTEM and still reaches the pre-update backup).
   create_job: BLOCKED_CREATE_JOB,
   // /api/jobs non-create routes -> "mutate_job".
+  update_job: BLOCKED_AFTER_NORMAL,
   pause_job: BLOCKED_AFTER_NORMAL,
   resume_job: BLOCKED_AFTER_NORMAL,
   retry_job: BLOCKED_AFTER_NORMAL,
@@ -69,7 +70,7 @@ const MUTATION_BLOCKED_IN: Record<string, SystemMode[]> = {
 };
 
 const VIEWER_BLOCKED = new Set([
-  'create_job', 'delete_job', 'approve_job', 'publish_job',
+  'create_job', 'update_job', 'delete_job', 'approve_job', 'publish_job',
   'pause_job', 'resume_job', 'retry_job', 'regenerate_job', 'cancel_job',
   'update_worker', 'drain_worker',
   'create_character', 'update_character', 'delete_character',

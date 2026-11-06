@@ -401,6 +401,46 @@ def _approved_input_references(snapshot: dict) -> set[str]:
     return references
 
 
+def _publish_secret_scope(task_id: str, request: Request) -> tuple[set[str], str]:
+    """Names this node may use: only the channel of the publish task it runs now."""
+    from ..first_run import INTEGRATION_SECRET_NAMES
+    node_name = request.headers.get("x-vertep-node", "")
+    if not node_name or not _valid_worker_request(node_name, request):
+        raise HTTPException(401, "Token is not valid for this worker")
+    worker = store.workers.get(node_name) or {}
+    job = store.jobs.get(worker.get("current_job") or "")
+    channel = job.publish_task_ids.get(task_id) if job else None
+    if worker.get("current_task") != task_id or not channel:
+        raise HTTPException(409, "Task is no longer owned by this worker")
+    return {name for name in INTEGRATION_SECRET_NAMES if name.startswith(f"{channel}_")}, channel
+
+
+@router.get("/api/tasks/{task_id}/secrets")
+def task_secrets(task_id: str, request: Request):
+    from ..first_run import ensure_secret_store
+    names, channel = _publish_secret_scope(task_id, request)
+    stored = ensure_secret_store()
+    oauth = stored.get("publisher_oauth", {})
+    return {"secrets": {name: stored[name] for name in names if stored.get(name)},
+            "oauth": {key: value for key, value in oauth.items() if key.lower() in names}}
+
+
+@router.put("/api/tasks/{task_id}/secrets")
+def save_task_secrets(task_id: str, payload: dict, request: Request):
+    """Keep tokens a node refreshed during publication in the one store."""
+    from ..first_run import _secret_lock, _write_encrypted_secrets, ensure_secret_store
+    names, _ = _publish_secret_scope(task_id, request)
+    secrets, oauth = payload.get("secrets") or {}, payload.get("oauth") or {}
+    if not set(secrets) <= names or not {key.lower() for key in oauth} <= names:
+        raise HTTPException(403, "Secret is outside this task's channel")
+    with _secret_lock:
+        stored = ensure_secret_store()
+        stored.update(secrets)
+        stored.setdefault("publisher_oauth", {}).update(oauth)
+        _write_encrypted_secrets(stored)
+    return {"saved": True}
+
+
 @router.get("/api/tasks/{task_id}/character-references/{filename}")
 def task_character_reference(task_id: str, filename: str, request: Request):
     """Serve a character reference to the node currently running that character's task."""

@@ -1505,7 +1505,10 @@ def _send_character_selection(chat_id: str, brand_id: str) -> dict:
         offered = offer_workflows(chat_id, _telegram_pending_character[chat_id], character_id)
         if offered is not None:
             return offered
-        job = _create_job_from_telegram(pending, brand_id, character_id)
+        try:
+            job = _create_job_from_telegram(pending, brand_id, character_id)
+        except HTTPException as error:
+            return TelegramAdapter().send_message(chat_id, str(error.detail))
         _telegram_pending_character.pop(chat_id, None)
         _queue_storyboard(job, chat_id)
         TelegramAdapter().send_message(chat_id, f"JOB {job.job_id}\nSTATUS: {job.status.value}\nПерсонажів не знайдено, використовується {character_id}. Генерую розкадровку…")
@@ -1681,6 +1684,9 @@ def _create_job_from_telegram(pending: dict, brand_id: str, character_id: str | 
     for existing in store.jobs.values():
         if existing.source == source:
             return existing
+    from core.system_state import jobs_may_be_created
+    if not jobs_may_be_created():
+        raise HTTPException(503, "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.")
     try:
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
     except Exception as error:

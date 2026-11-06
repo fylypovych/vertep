@@ -20,6 +20,7 @@ from core.system_state import get_system_state
 from core.system_state import operation_allowed
 from datetime import datetime
 from datetime import timezone
+from fastapi.responses import JSONResponse
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -121,6 +122,8 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             elif path.startswith("/api/channels"):
                 operation = "resource_management"
             if operation and not operation_allowed(operation):
+                if operation == "create_job":
+                    return JSONResponse({"detail": "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.", "operation": operation}, 423)
                 return Response(f"Operation {operation} is blocked by system state", 423)
         client = request.client.host if request.client else "unknown"
         window = request_windows[client]
@@ -162,7 +165,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 and secrets.compare_digest(request.headers.get("x-vertep-internal-key", ""), internal_key)):
             response = await call_next(request)
             return self._secure(response)
-        public = ("/api/health", "/api/telegram/webhook", "/api/nodes/register")
+        public = ("/api/health", "/api/telegram/webhook", "/api/nodes/register", "/api/public/videos/")
         setup_routes = ("/api/setup",)
         if request.url.path.startswith(public) or request.url.path.startswith(setup_routes) or request.url.path == "/api/nodes/register":
             response = await call_next(request)

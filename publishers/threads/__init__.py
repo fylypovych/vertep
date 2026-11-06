@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from publishers.oauth import ThreadsTokenProvider
 
-from publishers.base import Publisher, check_response
+from publishers.base import Publisher, check_response, fetch_permalink, wait_for_container
 
 _BASE = "https://graph.threads.net/v1.0"
 
@@ -29,7 +29,7 @@ class ThreadsPublisher(Publisher):
         video_url = metadata.get("video_url")
         if not video_url:
             raise ValueError(
-                "Threads require metadata['video_url'] (a hosted video URL)"
+                "Threads завантажує відео за посиланням: вкажіть публічну адресу в Налаштування → Публікація"
             )
         text = metadata.get("description", "") or metadata.get("topic", "")
 
@@ -44,21 +44,23 @@ class ThreadsPublisher(Publisher):
         )
         check_response(create)
         media_id = create.json().get("id")
+        wait_for_container(self.transport, f"{_BASE}/{media_id}", token, "status")
 
         publish = self.transport.post(
             f"{_BASE}/{user_id}/threads_publish",
             data={"creation_id": media_id, "access_token": token},
         )
         check_response(publish)
-        result = publish.json()
+        post_id = publish.json().get("id") or media_id
+        # Threads omits the link for media flagged for copyright.
+        permalink = fetch_permalink(self.transport, f"{_BASE}/{post_id}", token)
         return {
             "channel": self.channel,
             "status": "PUBLISHED",
-            "id": result.get("id") or media_id,
-            "remote_id": result.get("id") or media_id,
-            # The publish answer has no public address; the post id is in remote_id.
-            "url": "",
-            "permalink_available": False,
+            "id": post_id,
+            "remote_id": post_id,
+            "url": permalink or "",
+            **({} if permalink else {"permalink_available": False}),
             "media_id": media_id,
             "upload": {"mode": "threads-api"},
         }

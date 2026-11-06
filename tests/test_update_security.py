@@ -290,7 +290,7 @@ def test_signed_update_switches_runtime_images_and_host_executors():
     assert 'up -d --force-recreate --no-deps --remove-orphans' in command
     assert command.count('source "$ROOT/.env"') >= 3
     assert '--exclude=releases' in command and '--exclude=current' in command
-    assert '"worker_update.py", "update-runtime-env.py"' in runtime
+    assert '"update-runtime-env.py"' in runtime
     assert "scripts/build-update-manifest.py" in workflow
     assert '"update-manifest-$version.json"' in workflow
 

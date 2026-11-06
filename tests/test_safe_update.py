@@ -47,7 +47,7 @@ def test_central_state_policy_blocks_mutation_during_update(monkeypatch, tmp_pat
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
     set_system_state(SystemState.UPDATING, "installing")
     assert operation_allowed("read")
-    assert operation_allowed("create_job")
+    assert not operation_allowed("create_job")
     assert not operation_allowed("mutate_job")
     assert not operation_allowed("node_control")
     set_system_state(SystemState.NORMAL, "done")

@@ -104,7 +104,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                 <button [title]="policy.disabledReason('publish_job') || ''" (click)="publishJob()" [disabled]="(actionLoading() === 'publish') || !policy.can('publish_job').allowed" class="disabled:opacity-50 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:opacity-50">Опублікувати</button>
               }
               @if (!editing()) {
-                <button (click)="startEditing()" data-testid="edit-job-button"
+                <button (click)="startEditing()" [disabled]="!policy.can('update_job').allowed" [title]="policy.disabledReason('update_job') || ''" data-testid="edit-job-button"
                   class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
                   Редагувати
                 </button>

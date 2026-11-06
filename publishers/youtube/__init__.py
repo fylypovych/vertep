@@ -38,6 +38,10 @@ class _TokenProvider:
         value = os.getenv(name.upper())
         if value:
             return value
+        from publishers.task_secrets import current_task_secrets
+        remote = current_task_secrets()
+        if remote is not None:
+            return remote.get(name)
         try:
             from core.first_run import ensure_secret_store
             store = ensure_secret_store()

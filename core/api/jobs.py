@@ -26,6 +26,9 @@ from ..models import JobCreate, JobStatus, JobUpdate, StageName, StageStatus
 from ..orchestration import initialize_plan, transition_stage
 from ..pipeline import approve_script, approve_video, claim_video_regeneration, generate_script, queue_storyboard, regenerate_script, regenerate_video, release_video_regeneration, request_script_revision, request_video_revision
 from ..state import executor, store, task_queue
+import secrets
+import time
+from ..pipeline import _active_video_file
 from ..system_state import dispatch_allowed, get_system_state, jobs_may_be_created
 from .job_helpers import (_job_action, _job_is_due,
                           _prepare_and_dispatch, _validate_workflow_reference)
@@ -48,10 +51,25 @@ STATUS_GROUPS: dict[str, set[str]] = {
 }
 
 
+@router.get("/api/public/videos/{job_id}/{version}/{expires}/{signature}.mp4", include_in_schema=False)
+def public_video(job_id: str, version: int, expires: int, signature: str):
+    """Serve one active video version to a platform that fetches it by address."""
+    from .job_helpers import _public_video_signature
+    expected = _public_video_signature(job_id, version, expires)
+    job = store.jobs.get(job_id)
+    if (not expected or not secrets.compare_digest(expected, signature) or expires < time.time()
+            or job is None or job.active_video_version != version):
+        raise HTTPException(404, "Video not found")
+    path = _active_video_file(job, store.root)
+    if not path.is_file():
+        raise HTTPException(404, "Video not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
 @router.post("/api/jobs")
 def create_job(request: JobCreate):
     if not jobs_may_be_created():
-        raise HTTPException(503, f"New jobs are disabled while system is {get_system_state()['state']}")
+        raise HTTPException(503, "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.")
     if request.workflow_template:
         from core.workflow.runtime import workflow_runtime
         runtime = workflow_runtime()

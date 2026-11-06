@@ -138,7 +138,10 @@ def test_instagram_reels_two_step(monkeypatch, tmp_path):
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "ig-token")
     fake = FakeTransport([
         httpx.Response(200, json={"id": "container-1"}),
+        httpx.Response(200, json={"success": True}),
+        httpx.Response(200, json={"status_code": "FINISHED"}),
         httpx.Response(200, json={"id": "media-55"}),
+        httpx.Response(200, json={"permalink": "https://www.instagram.com/reel/abc/"}),
     ])
     publisher = InstagramPublisher(transport=fake)
 
@@ -149,18 +152,24 @@ def test_instagram_reels_two_step(monkeypatch, tmp_path):
     assert result["status"] == "PUBLISHED"
     assert result["id"] == "media-55"
     assert result["media_id"] == "container-1"
-    assert "media_publish" in fake.requests[1][1]
-    post_data = fake.requests[1][2]["data"]
+    assert "media_publish" in fake.requests[3][1]
+    post_data = fake.requests[3][2]["data"]
+    assert result["url"] == "https://www.instagram.com/reel/abc/"
     assert post_data["creation_id"] == "container-1"
 
 
-def test_instagram_requires_video_url(monkeypatch, tmp_path):
+def test_instagram_needs_no_public_video_url(monkeypatch, tmp_path):
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "ig-token")
-    result = InstagramPublisher(transport=FakeTransport([])).publish(
-        _mp4(tmp_path), {"instagram_user_id": "ig-9"}
-    )
-    assert result["status"] == "FAILED"
-    assert "video_url" in result["error"]
+    fake = FakeTransport([
+        httpx.Response(200, json={"id": "c"}),
+        httpx.Response(200, json={"success": True}),
+        httpx.Response(200, json={"status_code": "FINISHED"}),
+        httpx.Response(200, json={"id": "m"}),
+        httpx.Response(200, json={"permalink": "https://www.instagram.com/reel/abc/"}),
+    ])
+    result = InstagramPublisher(transport=fake).publish(_mp4(tmp_path), {"instagram_user_id": "ig-9"})
+    assert result["status"] == "PUBLISHED"
+    assert "rupload.facebook.com" in fake.requests[1][1]
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +181,9 @@ def test_threads_two_step(monkeypatch, tmp_path):
     monkeypatch.setenv("THREADS_ACCESS_TOKEN", "th-token")
     fake = FakeTransport([
         httpx.Response(200, json={"id": "thread-media-1"}),
+        httpx.Response(200, json={"status": "FINISHED"}),
         httpx.Response(200, json={"id": "thread-12"}),
+        httpx.Response(200, json={"permalink": "https://www.threads.com/@a/post/x"}),
     ])
     publisher = ThreadsPublisher(transport=fake)
 
@@ -188,7 +199,7 @@ def test_threads_two_step(monkeypatch, tmp_path):
     create_data = fake.requests[0][2]["data"]
     assert create_data["media_type"] == "VIDEO"
     assert create_data["text"] == "пост"
-    assert "threads_publish" in fake.requests[1][1]
+    assert "threads_publish" in fake.requests[2][1]
 
 
 # ---------------------------------------------------------------------------
@@ -478,14 +489,19 @@ def test_end_to_end_publish_receives_receipt_for_all_platforms(monkeypatch, tmp_
         "instagram": (
             InstagramPublisher(transport=FakeTransport([
                 httpx.Response(200, json={"id": "ig-container-004"}),
+                httpx.Response(200, json={"success": True}),
+                httpx.Response(200, json={"status_code": "FINISHED"}),
                 httpx.Response(200, json={"id": "ig-media-004"}),
+                httpx.Response(200, json={"permalink": "https://www.instagram.com/reel/abc/"}),
             ])),
             {"INSTAGRAM_ACCESS_TOKEN": "ig-token"},
         ),
         "threads": (
             ThreadsPublisher(transport=FakeTransport([
                 httpx.Response(200, json={"id": "th-media-005"}),
+                httpx.Response(200, json={"status": "FINISHED"}),
                 httpx.Response(200, json={"id": "th-005"}),
+                httpx.Response(200, json={"permalink": "https://www.threads.com/@a/post/x"}),
             ])),
             {"THREADS_ACCESS_TOKEN": "th-token"},
         ),
@@ -574,7 +590,9 @@ def test_end_to_end_partial_failure_one_platform_fails(monkeypatch, tmp_path):
         "threads": (
             ThreadsPublisher(transport=FakeTransport([
                 httpx.Response(200, json={"id": "th-media-pf"}),
+                httpx.Response(200, json={"status": "FINISHED"}),
                 httpx.Response(200, json={"id": "th-pf-005"}),
+                httpx.Response(200, json={"permalink": "https://www.threads.com/@a/post/x"}),
             ])),
             {"THREADS_ACCESS_TOKEN": "th-token"},
         ),

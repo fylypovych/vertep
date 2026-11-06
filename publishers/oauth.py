@@ -23,6 +23,10 @@ def _get_secret(name: str) -> Optional[str]:
     value = os.getenv(name.upper())
     if value:
         return value
+    from publishers.task_secrets import current_task_secrets
+    remote = current_task_secrets()
+    if remote is not None:
+        return remote.get(name)
     try:
         from core.first_run import ensure_secret_store
         store = ensure_secret_store()
@@ -68,12 +72,29 @@ class BaseTokenProvider:
         self._scopes_known = False
 
     def _durable(self) -> tuple[dict, str]:
+        from publishers.task_secrets import current_task_secrets
+        remote = current_task_secrets()
+        if remote is not None:
+            return remote.oauth(self.credential_env), remote.get(self.credential_env) or ""
         from core.first_run import ensure_secret_store
         stored = ensure_secret_store()
         return (stored.get("publisher_oauth", {}).get(self.credential_env, {}),
                 stored.get(self.credential_env.lower(), ""))
 
     def _persist(self, token: str, *, revoked=False, refresh=None) -> None:
+        from publishers.task_secrets import current_task_secrets
+        remote = current_task_secrets()
+        if remote is not None:
+            secrets = {self.credential_env.lower(): "" if revoked else token}
+            if refresh:
+                secrets[self.refresh_env.lower()] = refresh
+            if revoked and self.refresh_env:
+                secrets[self.refresh_env.lower()] = ""
+            remote.save(secrets, {self.credential_env: {
+                "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
+                "expires_at": self._token_expires_at, "scopes": self._cached_scopes,
+                "revoked": revoked, "scopes_known": self._scopes_known}})
+            return
         from core.first_run import ensure_secret_store, _secret_lock, _write_encrypted_secrets
         with _secret_lock:
             stored = ensure_secret_store()

@@ -132,13 +132,6 @@ def test_setup_alias_preserves_token(monkeypatch):
     assert '<div class="brand">VERTEP</div>' in page.text
 
 
-def test_worker_update_processor_exists():
-    assert Path("scripts/worker_update.py").is_file()
-    content = Path("scripts/worker_update.py").read_text(encoding="utf-8")
-    assert "process_worker_update" in content
-    assert "target_version" in content
-
-
 def test_server_side_worker_filtering():
     sys.path.insert(0, str(Path(".").resolve()))
     from core.app import app

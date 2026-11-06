@@ -556,7 +556,7 @@ moneyprinter_api_key=$(existing_secret "$INSTALL_ROOT/config/moneyprinter-api.ke
 jwt_secret=$(env_value JWT_SECRET); worker_secret=$(env_value WORKER_SECRET)
 internal_api_key=$(env_value INTERNAL_API_KEY); session_secret=$(env_value SESSION_SECRET)
 grafana_password=$(env_value GRAFANA_ADMIN_PASSWORD); node_api_token=$(env_value NODE_API_TOKEN)
-if [[ -f "$INSTALL_ROOT/config/secrets.enc.json" && -z $secret_store_passphrase ]]; then
+if [[ ( -f "$INSTALL_ROOT/config/secrets.enc.json" || -f "$INSTALL_ROOT/config/secret-store.key" ) && -z $secret_store_passphrase ]]; then
   fail "encrypted secret store exists but its passphrase file is missing"
 fi
 if command -v docker >/dev/null 2>&1 \
@@ -719,6 +719,7 @@ PY
 fi
 chmod 0600 "$INSTALL_ROOT/config/deployment-plan.json"
 if [[ ! -f "$INSTALL_ROOT/config/secrets.enc.json" \
+      && ! -f "$INSTALL_ROOT/config/secret-store.key" \
       && ! -f "$INSTALL_ROOT/config/bootstrap-secrets.json" ]]; then
 cat > "$INSTALL_ROOT/config/bootstrap-secrets.json" <<EOF
 {"postgres_password":"$postgres_password","redis_password":"$redis_password","grafana_admin_password":"$grafana_password","jwt_secret":"$jwt_secret","worker_secret":"$worker_secret","encryption_key":"$encryption_key","internal_api_key":"$internal_api_key","session_secret":"$session_secret"}

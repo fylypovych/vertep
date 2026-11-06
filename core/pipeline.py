@@ -45,6 +45,7 @@ class JobStore:
     def __init__(self, root: str = "jobs", repository: StateRepository | None = None, executor=None) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self._deleted: set[str] = set()
         self.jobs: dict[str, Job] = {}
         self.workers: dict[str, dict] = {}
         # Re-entrant: the status gate of approve/revision request must hold the
@@ -150,6 +151,7 @@ class JobStore:
             if job_id not in self.jobs:
                 return False
             del self.jobs[job_id]
+            self._deleted.add(job_id)
             self.repository.delete_job(job_id)
             shutil.rmtree(self.root / job_id, ignore_errors=True)
             return True
@@ -159,7 +161,7 @@ class JobStore:
               node: str | None = None, task_id: str | None = None,
               artifact_id: str | None = None, error: str | None = None) -> Job:
         with self.lock:
-            if job.job_id not in self.jobs:
+            if job.job_id in self._deleted:
                 return job  # a stale reference must not recreate a deleted Job
             created_at = utc_now()
             job.events.append(f"{created_at} {message}")
@@ -176,7 +178,7 @@ class JobStore:
                task_id: str | None = None, artifact_id: str | None = None,
                error: str | None = None, state: str | None = None) -> Job:
         with self.lock:
-            if job.job_id not in self.jobs:
+            if job.job_id in self._deleted:
                 return job  # a stale reference must not recreate a deleted Job
             job.status = status
             created_at = utc_now()
@@ -196,7 +198,7 @@ class JobStore:
         return self.update(job, status, event)
 
     def _save(self, job: Job) -> None:
-        if job.job_id not in self.jobs:
+        if job.job_id in self._deleted:
             return
         from core.workflow.runtime import workflow_runtime
         runtime = workflow_runtime()

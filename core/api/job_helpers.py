@@ -9,6 +9,7 @@ import logging
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -1299,6 +1300,26 @@ def _has_publisher_worker(job_store) -> bool:
         "role") == "publisher" for worker in job_store.workers.values())
 
 
+def _public_video_signature(job_id: str, version: int, expires: int) -> str:
+    secret = os.getenv("SESSION_SECRET", "")
+    message = f"{job_id}:{version}:{expires}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest() if secret else ""
+
+
+def _public_video_url(job) -> dict:
+    """Time-limited address of exactly one video version, or nothing when CORE is not public."""
+    from ..publishing_settings import publishing_settings
+    base = publishing_settings()["public_url"] or os.getenv("PUBLIC_URL", "").rstrip("/")
+    version = job.active_video_version
+    if not base or version is None:
+        return {}
+    expires = int(time.time()) + int(os.getenv("PUBLIC_VIDEO_LINK_TTL_SECONDS", "21600"))
+    signature = _public_video_signature(job.job_id, version, expires)
+    if not signature:
+        return {}
+    return {"video_url": f"{base}/api/public/videos/{job.job_id}/{version}/{expires}/{signature}.mp4"}
+
+
 def _publish_task_for(job, channel: str) -> dict:
     """Build a publish task carrying the durable delivery contract.
 
@@ -1318,6 +1339,11 @@ def _publish_task_for(job, channel: str) -> dict:
         "attempt": (job.publish_retry_count.get(channel, 0) + 1),
     }
     job.publish_intent[channel] = intent
+    # Threads downloads the video itself; other channels receive the file.
+    public_link = _public_video_url(job) if channel == "threads" else {}
+    if channel == "telegram":
+        from ..publishing_settings import publishing_settings
+        public_link = {"telegram_chat_id": publishing_settings()["telegram_channel_id"]}
     return {"job_id": job.job_id,
             "task": "publish",
             "priority": job.priority,
@@ -1333,7 +1359,8 @@ def _publish_task_for(job, channel: str) -> dict:
                          "brand_id": job.brand_id,
                          **(job.script or {}),
                          **((job.script or {}).get("platforms",
-                                                   {}).get(channel) or {})},
+                                                   {}).get(channel) or {}),
+                         **public_link},
             "task_type": "publish"}
 
 

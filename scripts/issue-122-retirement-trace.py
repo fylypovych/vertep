@@ -124,7 +124,7 @@ def classify(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_trace(body: str) -> dict[str, Any]:
+def build_trace(body: str, owner_decision: str | None = None) -> dict[str, Any]:
     rows = [classify(row) for row in parse_registry(body)]
     duplicates = sorted({row["issue"] for row in rows
                          if row["issue"] and
@@ -140,7 +140,7 @@ def build_trace(body: str) -> dict[str, Any]:
             "blocked": sum(1 for row in rows if row["verdict"] == "blocked"),
             "duplicate_issues": duplicates,
         },
-        "owner_decision": (
+        "owner_decision": owner_decision or (
             "required: an explicit exact old-list or the decision «порожній / не робимо old». "
             "The absence of candidates is not an approval (§4.1 P12)."
         ),
@@ -174,11 +174,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--body", help="read the issue body from this file instead of GitHub")
     parser.add_argument("--out", help="directory for the JSON and Markdown trace")
     parser.add_argument("--print", dest="print_trace", action="store_true")
+    parser.add_argument("--owner-decision", help="the recorded owner decision, kept in the trace")
     args = parser.parse_args(argv)
 
     body = Path(args.body).read_text(encoding="utf-8") if args.body else issue_body()
     try:
-        trace = build_trace(body)
+        trace = build_trace(body, args.owner_decision)
     except ValueError as error:
         print(f"cannot trace the registry: {error}", file=sys.stderr)
         return 2

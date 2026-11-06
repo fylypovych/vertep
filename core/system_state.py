@@ -108,8 +108,7 @@ def dispatch_allowed() -> bool:
 
 def jobs_may_be_created() -> bool:
     """Whether the public API may durably accept a new job in this state."""
-    return get_system_state()["state"] not in {SystemState.READ_ONLY.value,
-                                                SystemState.EMERGENCY.value}
+    return get_system_state()["state"] in {SystemState.NORMAL.value, SystemState.MAINTENANCE.value}
 
 
 def new_job_status() -> str:
@@ -123,8 +122,10 @@ STATE_OPERATION_POLICY = {
                          "resource_management"},
     SystemState.MAINTENANCE: {"read", "create_job", "mutate_job", "node_control", "configuration",
                               "update", "restart", "test", "real_test", "model_pull", "resource_management", "restore"},
-    SystemState.UPDATING: {"read", "create_job"},
-    SystemState.RECOVERING: {"read", "create_job", "restore"},
+    # The pre-update backup starts on entering UPDATING: a Job accepted from then on
+    # is not in it and would be lost by a database rollback (i.0.0.4.9).
+    SystemState.UPDATING: {"read"},
+    SystemState.RECOVERING: {"read", "restore"},
     SystemState.READ_ONLY: {"read"},
     SystemState.EMERGENCY: {"read", "recovery"},
 }

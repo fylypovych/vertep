@@ -215,8 +215,8 @@ import { ErrorStateComponent } from '../shared/error-state.component';
             </div>
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">Канали (через кому)</label>
-              <input [(ngModel)]="form.publishing.channels" placeholder="youtube,tiktok,facebook,instagram,threads" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-              <p class="text-xs text-slate-500 mt-1">Доступні: youtube, tiktok, facebook, instagram, threads</p>
+              <input [(ngModel)]="form.publishing.channels" placeholder="youtube,tiktok,facebook,instagram,threads,telegram" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              <p class="text-xs text-slate-500 mt-1">Доступні: youtube, tiktok, facebook, instagram, threads, telegram</p>
             </div>
           </div>
         </div>

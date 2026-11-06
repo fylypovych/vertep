@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from publishers.base import Publisher, check_response
+from publishers.base import Publisher, check_response, fetch_permalink
 from publishers.oauth import FacebookTokenProvider
 
 _GRAPH = "https://graph.facebook.com/v21.0"
@@ -42,11 +42,14 @@ class FacebookPublisher(Publisher):
         )
         check_response(response)
         video_id = response.json().get("id")
+        permalink = fetch_permalink(self.transport, f"{_GRAPH}/{video_id}", token, "permalink_url") if video_id else None
+        if permalink and permalink.startswith("/"):
+            permalink = f"https://www.facebook.com{permalink}"
         return {
             "channel": self.channel,
             "status": "PUBLISHED",
             "id": video_id,
-            "url": (
+            "url": permalink or (
                 f"https://www.facebook.com/{page_id}/videos/{video_id}"
                 if video_id
                 else None

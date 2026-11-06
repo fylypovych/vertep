@@ -182,7 +182,7 @@ def test_unknown_backend_record_is_visible_and_does_not_grant_writes(access_back
         context.close()
 
 
-@pytest.mark.parametrize("mode", ["MAINTENANCE", "UPDATING", "RECOVERING"])
+@pytest.mark.parametrize("mode", ["MAINTENANCE"])
 def test_browser_create_job_waits_without_dispatch(access_backend, mode):
     ctx = access_backend
     from tests.test_system_state_mutation_matrix import CHARACTER_BODY
