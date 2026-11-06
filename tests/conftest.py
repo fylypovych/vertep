@@ -617,7 +617,9 @@ def signed_update_server(tmp_path, monkeypatch):
 # of real processes), so `--dist loadgroup` keeps them together on one worker.
 _XDIST_TOGETHER = {"test_backup_process_acceptance", "test_runner_browser_e2e", "test_worker_roles",
                    "test_telegram_durable_acceptance", "test_monitoring_browser_e2e",
-                   "test_provider_process_acceptance"}
+                   "test_provider_process_acceptance",
+                   # Its tests flush the one shared Redis database.
+                   "test_queue_redis_contract"}
 
 
 def pytest_collection_modifyitems(items):

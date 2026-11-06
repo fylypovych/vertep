@@ -31,10 +31,12 @@ import json
 import os
 import platform
 import re
+import signal
 import socket
 import ssl
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +45,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALL_ROOT = Path(os.getenv("VERTEP_INSTALL_ROOT", "/opt/vertep"))
 SECRET_KEY = re.compile(r"(PASSWORD|SECRET|_KEY|TOKEN)")
 MARKER = f"bootstrap-lifecycle-{os.getpid()}"
+# Below the CI job limit (60 min), so the evidence is still written and uploaded.
+BOOTSTRAP_TIMEOUT_SECONDS = 2700
 
 
 def run(*command: str, check: bool = True, timeout: int = 3600, **kwargs) -> subprocess.CompletedProcess:
@@ -71,15 +75,32 @@ def bootstrap(log: Path, overrides: dict[str, str] | None = None, *, expect_fail
     environment = {**os.environ, "VERTEP_ROLE": "core", "VERTEP_WEB_DOMAIN": "vertep.ci",
                    "DEBIAN_FRONTEND": "noninteractive", **(overrides or {})}
     started = time.monotonic()
-    result = subprocess.run(["bash", str(ROOT / "bootstrap.sh")], cwd=ROOT, env=environment,
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3600)
-    output = result.stdout + result.stderr
-    log.write_text(output, encoding="utf-8")
-    if bool(result.returncode) != expect_failure:
+    # Written line by line with the time: a stalled run must still leave evidence of where it stalled.
+    process = subprocess.Popen(["bash", str(ROOT / "bootstrap.sh")], cwd=ROOT, env=environment,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, errors="replace", start_new_session=True)
+    timer = threading.Timer(BOOTSTRAP_TIMEOUT_SECONDS, os.killpg, (process.pid, signal.SIGKILL))
+    timer.start()
+    try:
+        with log.open("w", encoding="utf-8") as sink:
+            for line in process.stdout:
+                stamped = f"{time.strftime('%H:%M:%S')} {line}"
+                sink.write(stamped)
+                sink.flush()
+                if line.startswith("==>"):
+                    print(stamped, end="", flush=True)
+        returncode = process.wait()
+    finally:
+        timed_out = not timer.is_alive()
+        timer.cancel()
+    output = log.read_text(encoding="utf-8")
+    if timed_out:
+        raise RuntimeError(f"bootstrap exceeded {BOOTSTRAP_TIMEOUT_SECONDS}s: {output[-3000:]}")
+    if bool(returncode) != expect_failure:
         raise RuntimeError(f"bootstrap {'unexpectedly succeeded' if expect_failure else 'failed'} "
-                           f"({result.returncode}): {output[-3000:]}")
+                           f"({returncode}): {output[-3000:]}")
     return {"seconds": round(time.monotonic() - started), "log": str(log),
-            "returncode": result.returncode, "output_tail": output[-2000:]}
+            "returncode": returncode, "output_tail": output[-2000:]}
 
 
 def active_release() -> str:

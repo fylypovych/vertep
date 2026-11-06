@@ -371,11 +371,14 @@ def test_mid_apply_lease_takeover_stops_the_real_mutation(tmp_path, monkeypatch)
     state_dir.mkdir()
     marker = tmp_path / "side-effect.txt"
     script = (
-        "import json, sys, time\n"
+        "import json, os, sys, time\n"
         "lease = sys.argv[1]\n"
         "record = json.loads(open(lease, encoding='utf-8').read())\n"
         "record['operation_id'] = 'b' * 32\n"
-        "open(lease, 'w', encoding='utf-8').write(json.dumps(record))\n"
+        # Atomic: the fence polls this file and must never read it half-written.
+        "with open(lease + '.new', 'w', encoding='utf-8') as sink:\n"
+        "    sink.write(json.dumps(record))\n"
+        "os.replace(lease + '.new', lease)\n"
         "time.sleep(3.0)\n"
         "open(sys.argv[2], 'w', encoding='utf-8').write('applied')\n"
     )
