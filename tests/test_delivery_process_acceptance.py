@@ -267,7 +267,8 @@ def test_partial_publish_retry_preserves_successful_channel_across_restart(conto
     assert retry["channel"] == "facebook" and time.monotonic() - started >= 1.9
     assert get_job(api, job_id)["publication_results"]["youtube"] == accepted
     retried = execute(retry, "facebook-success", [{"status": 200, "json": {"id": "facebook-once"}}])
-    assert len(retried["http_requests"]) == 1
+    # One upload; the follow-up GET only reads the post link.
+    assert sum(r["method"] == "POST" for r in retried["http_requests"]) == 1
     assert submit(api, retry, "process-publisher", retried["artifacts"]).status_code == 200
     published = get_job(api, job_id)
     assert published["status"] == "PUBLISHED"

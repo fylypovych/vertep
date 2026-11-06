@@ -180,6 +180,9 @@ def _run_host_agent(base: Path, root: Path, state_dir: Path, monkeypatch, update
     update_server.publish(version, _release_package(base, version))
     monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
     monkeypatch.setenv("VERTEP_ROOT", str(root))
+    # The disposable host does not run CORE behind this root; the docker consumer tests
+    # prove the post-rollback health check against a real CORE.
+    monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
     requests = sorted((state_dir / "requests").glob("*.json"))
     assert len(requests) == 1, f"expected one queued host request, found {requests}"
     return agent.process_request(root, state_dir, requests[0], skip_drain=True)

@@ -109,8 +109,8 @@ def restart_containers(root: Path) -> str:
 
 
 def core_is_healthy(attempts: int = 60, delay: float = 5) -> bool:
-    core = (os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL") or os.getenv("CORE_ADDRESS")
-            or "https://127.0.0.1:8443")
+    # CORE_ADDRESS is the address inside the Docker network, not reachable from the host.
+    core = os.getenv("VERTEP_CORE_URL") or os.getenv("CORE_URL") or "https://127.0.0.1:8443"
     url = (core if core.startswith(("http://", "https://")) else f"http://{core}").rstrip("/") + "/api/health"
     for attempt in range(attempts):
         if not run(["curl", "-kfsS", "--connect-timeout", "5", url]).startswith("ERROR"):

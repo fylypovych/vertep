@@ -300,8 +300,11 @@ def _installation_value(*names: str) -> str:
 
 
 def _core_url() -> str:
-    """Same address as scripts/vertep."""
-    value = _installation_value("VERTEP_CORE_URL", "CORE_URL", "CORE_ADDRESS") or "https://127.0.0.1:8443"
+    """The host reaches CORE through its HTTPS proxy.
+
+    CORE_ADDRESS is deliberately ignored: it is the address inside the Docker network.
+    """
+    value = _installation_value("VERTEP_CORE_URL", "CORE_URL") or "https://127.0.0.1:8443"
     return value if value.startswith(("http://", "https://")) else f"http://{value}"
 
 
