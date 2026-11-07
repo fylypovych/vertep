@@ -38,6 +38,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -211,16 +212,29 @@ def renew_certificate() -> None:
     compose("exec", "-T", "core", "python3", "-c", code)
 
 
-ROLLBACK_PROBE_RELEASE = os.getenv("VERTEP_ROLLBACK_PROBE_RELEASE", "0.0.2.94")
-ROLLBACK_PROBE_ORIGIN = ("https://api.github.com/repos/fylypovych/vertep/releases/tags/"
-                         + ROLLBACK_PROBE_RELEASE)
+RELEASES_API = "https://api.github.com/repos/fylypovych/vertep/releases"
+
+
+def rollback_probe_release(installed: str) -> str:
+    """Another published release: old ones get removed, so a fixed version stops existing."""
+    configured = os.getenv("VERTEP_ROLLBACK_PROBE_RELEASE")
+    if configured:
+        return configured
+    request = urllib.request.Request(RELEASES_API, headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}"}
+                                     if os.getenv("GITHUB_TOKEN") else {})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        tags = [item["tag_name"] for item in json.load(response) if not item["draft"] and not item["prerelease"]]
+    others = [tag for tag in tags if tag != installed]
+    if not others:
+        raise RuntimeError("no other published release to probe the rollback with")
+    return others[0]
 
 
 def bootstrap_failure_rollback(evidence_dir: Path) -> dict:
     """#391 B3: a bootstrap that fails *after activation* is rolled back by bootstrap itself.
 
     The real ``bootstrap.sh`` is run against another published signed release
-    (``ROLLBACK_PROBE_RELEASE``), so the snapshot is taken and the release is
+    (``rollback_probe_release``), so the snapshot is taken and the release is
     really activated (``bootstrap_mutated=true``).  The run is then failed by an
     input bootstrap validates only after activation: a node role that is absent
     from the signed role catalog.  ``rollback_after_failure`` must call the
@@ -231,15 +245,16 @@ def bootstrap_failure_rollback(evidence_dir: Path) -> dict:
     layout = adopt_release_layout()
     before = {"release": active_release(), "secrets": secret_fingerprints(),
               "certificate": certificate_sha256(), "markers": markers_present()}
-    assert before["release"] != ROLLBACK_PROBE_RELEASE, "probe release is already active"
+    probe_release = rollback_probe_release(before["release"])
+    assert before["release"] != probe_release, "probe release is already active"
     failed = bootstrap(evidence_dir / "bootstrap-failure.log", {
-        "VERTEP_DOWNLOAD_ORIGIN": ROLLBACK_PROBE_ORIGIN, "VERTEP_ALLOW_DOWNGRADE": "1",
+        "VERTEP_DOWNLOAD_ORIGIN": f"{RELEASES_API}/tags/{probe_release}", "VERTEP_ALLOW_DOWNGRADE": "1",
         "VERTEP_ROLE": "ci-role-absent-from-catalog"}, expect_failure=True)
     log = Path(failed["log"]).read_text(encoding="utf-8")
     preflight = {
-        "probe_release": ROLLBACK_PROBE_RELEASE,
+        "probe_release": probe_release,
         "snapshot_taken": "Backing up the installed system" in log,
-        "activated_probe_release": (INSTALL_ROOT / "releases" / ROLLBACK_PROBE_RELEASE).is_dir(),
+        "activated_probe_release": (INSTALL_ROOT / "releases" / probe_release).is_dir(),
         "failed_after_activation": "is absent from the signed role catalog" in log,
         "rollback_started": "restoring the previous release" in log,
         "rollback_failed": "automatic rollback failed" in log,

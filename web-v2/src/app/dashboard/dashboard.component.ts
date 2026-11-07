@@ -1,5 +1,6 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { ChangeDetectorRef, Component, OnInit, signal } from '@angular/core';
+import { I18nService } from '../core/i18n/i18n.service';
+import { ChangeDetectorRef, Component, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { SystemApiService } from '../core/api/system.api';
@@ -11,13 +12,14 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { RemoteState } from '../core/state/remote-state';
 
-function gigabytes(bytes: number): string {
+function gigabytes(bytes: number, locale: string): string {
   const value = bytes / 1024 ** 3;
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} GB`;
+  const digits = value < 10 ? 1 : 0;
+  return `${value.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits })} GB`;
 }
 
-function usedOfBytes(used?: number, total?: number): string | null {
-  return used == null || !total ? null : `${gigabytes(used)} | ${gigabytes(total)}`;
+function usedOfBytes(locale: string, used?: number, total?: number): string | null {
+  return used == null || !total ? null : `${gigabytes(used, locale)} | ${gigabytes(total, locale)}`;
 }
 
 function usedOfCores(used?: number, total?: number): string | null {
@@ -275,8 +277,8 @@ export class DashboardComponent implements OnInit {
           this.resourcesAvailable = true;
           this.resources = [
             { label: 'CPU', value: status.resources.cpu ?? null, color: 'bg-emerald-500', detail: usedOfCores(status.resources.cpu_used_cores, status.resources.cpu_cores) },
-            { label: 'RAM', value: status.resources.ram ?? null, color: 'bg-blue-500', detail: usedOfBytes(status.resources.ram_used_bytes, status.resources.ram_total_bytes) },
-            { label: 'Диск', value: status.resources.disk ?? null, color: 'bg-amber-500', detail: usedOfBytes(status.resources.disk_used_bytes, status.resources.disk_total_bytes) },
+            { label: 'RAM', value: status.resources.ram ?? null, color: 'bg-blue-500', detail: usedOfBytes(this.i18n.locale, status.resources.ram_used_bytes, status.resources.ram_total_bytes) },
+            { label: 'Диск', value: status.resources.disk ?? null, color: 'bg-amber-500', detail: usedOfBytes(this.i18n.locale, status.resources.disk_used_bytes, status.resources.disk_total_bytes) },
           ];
         }
         this.cdr.markForCheck();
@@ -353,5 +355,6 @@ export class DashboardComponent implements OnInit {
 
   roleLabel(role: string): string { return roleLabel(role); }
   workerStatusLabel(status: string): string { return workerStatusLabel(status); }
-  metric(value: number | null): string | number { return value == null ? 'Немає даних' : value; }
+  private i18n = inject(I18nService);
+  metric(value: number | null): string { return value == null ? 'Немає даних' : value.toLocaleString(this.i18n.locale); }
 }

@@ -204,6 +204,28 @@ def test_pruning_never_removes_the_current_copy(tmp_path):
     assert sorted(path.name for path in (root / "backups").iterdir()) == ["update-0", "update-3", "update-4"]
 
 
+@pytest.mark.parametrize("postgres,redis,core,code", [
+    (0, "PONG", 0, 0), (1, "PONG", 0, 1), (0, "NOPE", 0, 1), (0, "PONG", 1, 1)])
+def test_update_succeeds_only_with_core_postgres_and_redis(postgres, redis, core, code):
+    """A non-zero exit of this stage is what makes the update agent roll back."""
+    bash = _bash()
+    script = Path("scripts/vertep").read_text(encoding="utf-8")
+    ready = script[script.index("data_services_ready(){"):script.index("build_runtime_compose(){")]
+    start = script.index('    for attempt in {1..120}; do\n      if [[ "$role" == "worker" ]]')
+    stage = script[start:script.index("    ;;", start)].replace("{1..120}", "{1..2}")
+    harness = f"""
+fake(){{ case "$*" in
+  *"ps --services"*) printf 'postgres\\nredis\\n';;
+  *pg_isready*) return {postgres};;
+  *redis-cli*) echo {redis};;
+esac; }}
+compose=(fake); curl(){{ return {core}; }}; sleep(){{ :; }}; role=core; core_url=x; core_tls=()
+{ready}
+{stage}
+"""
+    assert subprocess.run([bash, "-c", harness], capture_output=True).returncode == code
+
+
 def test_scripts_contract():
     script = Path("scripts/vertep").read_text(encoding="utf-8")
     assert 'redis-cli -a' not in script

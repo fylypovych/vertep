@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
-test('ресурси показують використане і загальне', async ({ page }) => {
+for (const [language, disk, ram] of [['uk', '(5,0 GB | 20 GB)', '(8,0 GB | 16 GB)'], ['en', '(5.0 GB | 20 GB)', '(8.0 GB | 16 GB)']]) test(`ресурси показують використане і загальне: ${language}`, async ({ page }) => {
+  await page.addInitScript(value => localStorage.setItem('vertep_language', value), language);
   await page.route('**/api/**', async (route: any) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/session')) return route.fulfill({ json: { authenticated: true, username: 'admin', user: 'admin', role: 'admin' } });
@@ -11,7 +12,7 @@ test('ресурси показують використане і загальн
   });
   await page.goto('/');
   const resources = page.getByTestId('resources');
-  await expect(resources).toContainText('(5.0 GB | 20 GB)', { timeout: 20000 });
-  await expect(resources).toContainText('(8.0 GB | 16 GB)');
+  await expect(resources).toContainText(disk, { timeout: 20000 });
+  await expect(resources).toContainText(ram);
   await expect(resources).toContainText('(2 | 8 CPU)');
 });

@@ -22,6 +22,31 @@ class TelegramPublisher(Publisher):
         from adapters.telegram import api_root
         return (f"{api_root()}/bot{token}/getMe", {})
 
+    def channel_readiness(self, chat_id: str) -> dict:
+        """The bot is valid and may post to this channel. Nothing is sent."""
+        from adapters.telegram import api_root
+        from publishers.base import publisher_mock_enabled
+        from publishers.oauth import _get_secret
+
+        state = self.readiness()
+        if not state["ready"] or publisher_mock_enabled():
+            return state
+        refused = lambda reason: {**state, "ready": False, "reason": reason}  # noqa: E731
+        if not chat_id:
+            return refused("Вкажіть канал у Налаштування → Публікація")
+        token = _get_secret(self.credential_env)
+        try:
+            response = self.transport.get(f"{api_root()}/bot{token}/getChatMember",
+                                          params={"chat_id": chat_id, "user_id": token.split(":")[0]}, timeout=15)
+        except Exception:  # noqa: BLE001 - a transport error can quote the URL with the token
+            return refused("Платформа недоступна: доступ до каналу не перевірено")
+        if response.status_code >= 400:
+            return refused("Бот не має доступу до каналу або канал не знайдено")
+        member = response.json().get("result") or {}
+        if member.get("status") in {None, "left", "kicked"} or member.get("can_post_messages") is False:
+            return refused("Бот не має права публікувати в каналі")
+        return state
+
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         from adapters.telegram import api_root
         from publishers.oauth import _get_secret

@@ -327,6 +327,40 @@ def test_telegram_checks_the_bot_without_sending(monkeypatch):
     _only_read(transport)
 
 
+def _telegram(responses):
+    transport = FakeTransport(responses)
+    return TelegramPublisher(transport), transport
+
+
+GET_ME = httpx.Response(200, json={"ok": True, "result": {"id": 1, "is_bot": True}})
+
+
+def test_telegram_without_a_channel_is_not_ready(monkeypatch):
+    _clean(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    publisher, transport = _telegram([GET_ME])
+    state = publisher.channel_readiness("")
+    assert state["ready"] is False and "канал" in state["reason"]
+    _only_read(transport)
+
+
+@pytest.mark.parametrize("answer,ready", [
+    (httpx.Response(200, json={"result": {"status": "administrator", "can_post_messages": True}}), True),
+    (httpx.Response(200, json={"result": {"status": "creator"}}), True),
+    (httpx.Response(200, json={"result": {"status": "administrator", "can_post_messages": False}}), False),
+    (httpx.Response(200, json={"result": {"status": "left"}}), False),
+    (httpx.Response(400, json={"description": "chat not found"}), False),
+    (httpx.Response(403, json={"description": "bot was kicked"}), False)])
+def test_telegram_channel_permission_decides_readiness(monkeypatch, answer, ready):
+    _clean(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    publisher, transport = _telegram([GET_ME, answer])
+    state = publisher.channel_readiness("@channel")
+    assert state["ready"] is ready and SECRET not in json.dumps(state)
+    assert transport.requests[1][1].endswith("/getChatMember")
+    _only_read(transport)
+
+
 def test_a_synthetic_token_on_the_node_does_not_make_it_ready(monkeypatch):
     from publishers import LIVE_PUBLISHERS
     from worker import service

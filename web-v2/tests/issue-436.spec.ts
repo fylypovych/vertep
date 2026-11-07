@@ -1,3 +1,6 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 
@@ -42,21 +45,29 @@ for (const [action, status, button] of ACTIONS) {
 }
 
 test('посилання дає файл копії з іменем і хешем із панелі', async ({ page }) => {
-  // Chromium does not pass a real file download through page.route, so the bytes are read by fetch;
-  // the 600 MB transfer through CORE and Backup Service is covered by test_issues_427_429.py.
+  // The 600 MB transfer through CORE and Backup Service is covered by test_issues_427_429.py.
   const body = Buffer.from('encrypted-backup-bytes');
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="snap-1.vtbackup"' });
+    response.end(body);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const sha256 = createHash('sha256').update(body).digest('hex');
   await mockApi(page, 'admin', 'NORMAL', { '/system/backups': { snapshots: [{ snapshot_id: 'snap-1', created_at: '2026-11-06T10:00:00Z', sha256 }] } });
-  await page.route('**/api/system/backups/snap-1/download', (route: any) => route.fulfill({ body, headers: { 'content-type': 'application/octet-stream' } }));
   await page.goto('/settings?tab=backup');
   const link = page.getByTestId('backup-download-link');
   await expect(link).toHaveAttribute('download', 'snap-1.vtbackup', { timeout: 20000 });
   await expect(link).toHaveAttribute('title', `SHA-256: ${sha256}`);
-  const received = await link.evaluate(async (element: HTMLAnchorElement) => {
-    const bytes = await (await fetch(element.href)).arrayBuffer();
-    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(item => item.toString(16).padStart(2, '0')).join('');
-  });
-  expect(received).toBe(sha256);
+  await expect(link).toHaveAttribute('href', '/api/system/backups/snap-1/download');
+  // A browser download bypasses page.route, so the panel's link is pointed at the local endpoint.
+  await link.evaluate((element: HTMLAnchorElement, url: string) => { element.href = url; }, `${origin}/snap-1`);
+  const [download] = await Promise.all([page.waitForEvent('download'), link.click()]);
+  expect(download.suggestedFilename()).toBe('snap-1.vtbackup');
+  const received = readFileSync(await download.path());
+  expect(received.equals(body)).toBe(true);
+  expect(createHash('sha256').update(received).digest('hex')).toBe(sha256);
+  server.close();
 });
 
 test('сповіщення про збій GPU називає провайдера, причину й перезапуск', async ({ page }) => {

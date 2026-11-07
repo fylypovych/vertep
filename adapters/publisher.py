@@ -28,7 +28,8 @@ class TelegramChannelPublisher(Publisher):
 
     def readiness(self) -> dict:
         from publishers.telegram import TelegramPublisher
-        return TelegramPublisher(self.transport).readiness()
+        from core.publishing_settings import publishing_settings
+        return TelegramPublisher(self.transport).channel_readiness(publishing_settings()["telegram_channel_id"])
 
     def publish(self, video_path: str, metadata: dict) -> dict:
         from adapters.telegram import TelegramAdapter

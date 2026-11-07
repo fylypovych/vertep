@@ -85,6 +85,7 @@ def _mock_session(page, role="admin"):
     Мутації та невідомі endpoints не підміняються успішною відповіддю.
     """
     _mock_status(page)
+    page.route("**/api/settings/dispatch", lambda route: route.fulfill(json={"worker_turn_timeout_seconds": 45}))
     for endpoint in ("jobs", "workers", "characters", "brands", "workflows", "channels/types"):
         page.route(f"**/api/{endpoint}", lambda route: (
             route.fulfill(json=[]) if route.request.method == "GET" else route.fallback()

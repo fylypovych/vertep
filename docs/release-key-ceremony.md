@@ -83,7 +83,7 @@ python scripts/generate-root-metadata.py \
 
 ```bash
 python scripts/generate-root-metadata.py \
-  --keys-dir installer/root-keys \
+  --keys-dir /шлях/поза/проєктом \
   --output installer/root-keys/root-metadata-v2.json \
   --key-ids root-2 root-3 \
   --threshold 2 \
