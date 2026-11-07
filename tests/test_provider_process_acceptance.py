@@ -211,7 +211,7 @@ def test_actual_settings_mpt_task_restart_rollback_and_native(config_contour):
         page.on("console", lambda message: console.append(message.text) if message.type == "error" else None)
         try:
             page.goto(c["url"] + "/settings?tab=secrets")
-            row = page.get_by_test_id("settings-secrets").locator("div.border-b").filter(has_text="money_printer_token")
+            row = page.get_by_test_id("settings-secrets").locator("div.border-t").filter(has_text="money_printer_token")
             row.get_by_role("button", name="Редагувати", exact=True).click()
             page.locator("#secret-money_printer_token").fill(CORE_SECRET)
             with page.expect_response(lambda r: r.request.method == "PUT" and r.url.endswith("/api/settings/secrets/money_printer_token")) as secret_saved:

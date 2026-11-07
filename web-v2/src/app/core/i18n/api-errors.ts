@@ -1,6 +1,7 @@
 // Text of the API error codes (core/api_error_codes.json): the panel shows it in the chosen language.
 export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "active_jobs_must_be_drained_before_restore": { uk: "Перед відновленням завершіть активні завдання", en: "Active jobs must be drained before restore" },
+  "validation_error": { uk: "Перевірте введені дані", en: "Check the entered data" },
   "alert_not_found": { uk: "Сповіщення не знайдено", en: "Alert not found" },
   "another_restore_is_awaiting_confirmation_or_executing": { uk: "Інше відновлення вже очікує підтвердження або виконується", en: "Another restore is awaiting confirmation or executing" },
   "approved_publish_input_is_corrupt": { uk: "Затверджені дані для публікації пошкоджено", en: "Approved publish input is corrupt" },

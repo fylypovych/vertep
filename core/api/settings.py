@@ -66,6 +66,21 @@ def get_publishing_settings():
     return publishing_settings()
 
 
+@router.get("/api/settings/dispatch")
+def get_dispatch_settings():
+    from ..turns import turn_timeout_seconds
+    return {"worker_turn_timeout_seconds": turn_timeout_seconds()}
+
+
+@router.put("/api/settings/dispatch")
+def put_dispatch_settings(payload: dict):
+    from ..turns import save_turn_timeout_seconds
+    try:
+        return {"worker_turn_timeout_seconds": save_turn_timeout_seconds(payload.get("worker_turn_timeout_seconds"))}
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @router.put("/api/settings/publishing")
 def put_publishing_settings(payload: dict):
     from ..publishing_settings import save_publishing_settings

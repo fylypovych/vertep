@@ -5,5 +5,5 @@ import { I18nService } from './i18n.service';
 @Pipe({ name: 't', standalone: true, pure: false })
 export class TPipe implements PipeTransform {
   private i18n = inject(I18nService);
-  transform(text: string | null | undefined): string { return text ? this.i18n.t(text) : ''; }
+  transform(text: unknown): string { return text === null || text === undefined ? '' : this.i18n.t(String(text)); }
 }

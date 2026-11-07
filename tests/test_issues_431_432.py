@@ -48,7 +48,20 @@ def test_only_worker_claims_without_delay():
     assert turns.may_claim_now("a", {"a": _worker(scheduler_last_claim_at=NOW)}, NOW)
 
 
-def test_a_hung_worker_cannot_hold_work_forever():
+def test_turn_timeout_comes_from_the_panel_setting(monkeypatch, tmp_path):
+    monkeypatch.setattr(turns, "config_root", lambda: tmp_path)
+    assert turns.turn_timeout_seconds() == 45
+    assert turns.save_turn_timeout_seconds(10) == 10
+    workers = {"a": _worker(scheduler_last_claim_at=NOW), "b": _worker()}
+    assert not turns.may_claim_now("a", workers, NOW)
+    assert turns.may_claim_now("a", workers, NOW + 10)
+    for bad in (-1, 601, "10", True, None):
+        with pytest.raises(ValueError):
+            turns.save_turn_timeout_seconds(bad)
+
+
+def test_a_hung_worker_cannot_hold_work_forever(monkeypatch, tmp_path):
+    monkeypatch.setattr(turns, "config_root", lambda: tmp_path)
     workers = {"a": _worker(scheduler_last_claim_at=NOW), "b": _worker()}
     assert not turns.may_claim_now("a", workers, NOW)
     assert not turns.may_claim_now("a", workers, NOW + 30)

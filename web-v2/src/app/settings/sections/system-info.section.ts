@@ -1,5 +1,6 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, OnInit, computed, signal } from '@angular/core';
+import { inject, Component, OnInit, computed, signal } from '@angular/core';
+import { PolicyService } from '../../core/services/policy.service';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SystemApiService } from '../../core/api/system.api';
@@ -13,15 +14,16 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
   selector: 'app-settings-system-info',
   standalone: true,
   imports: [TPipe, CommonModule, FormsModule, LoadingStateComponent, ErrorStateComponent],
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info"><h3 class="text-lg font-semibold mb-4">{{ 'Система' | t }}</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" (retry)="ngOnInit()" /><div *ngIf="status()" class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="system-info"><p>{{ 'Стан:' | t }} {{ (systemStateLabel) | t }}</p><p>{{ 'Версія:' | t }} {{ status()?.version || '-' }}</p><p>{{ 'Ядро:' | t }} {{ status()?.core || '-' }}</p><p>{{ 'База даних:' | t }} {{ status()?.postgres || '-' }}</p><p>Redis: {{ status()?.redis || '-' }}</p><p>{{ 'Поточна:' | t }} <span data-testid="status-update-current-version">{{ status()?.update?.['current_version'] || '-' }}</span></p><p>{{ 'Доступна:' | t }} <span data-testid="status-update-available-version">{{ status()?.update?.['available_version'] || '-' }}</span></p></div>
-  <table *ngIf="backendsList().length" class="w-full mt-4" data-testid="backends-table">
-    <thead><tr class="text-left text-slate-500 text-sm"><th class="py-1">{{ 'Слот' | t }}</th><th>{{ 'Налаштовано' | t }}</th><th>{{ 'Бекенд' | t }}</th><th>{{ 'Зміна' | t }}</th></tr></thead>
-    <tbody>
-      <tr *ngFor="let entry of backendsList(); trackBy: trackSlot" class="border-t" [attr.data-testid]="'backend-row-' + entry[0]">
-        <td class="py-1">{{ entry[0] }}</td>
-        <td>{{ (entry[1]?.['configured'] ? 'Так' : 'Ні') | t }}</td>
-        <td [attr.data-testid]="'backend-current-' + entry[0]">{{ entry[1]?.['backend'] || '-' }}<small *ngIf="entry[1]?.['activation_status']" class="block text-amber-700">{{ 'Очікує Worker:' | t }} {{ entry[1]?.['selected_backend'] }}</small></td>
-        <td>
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-system-info"><h3 class="text-lg font-semibold mb-4">{{ 'Система' | t }}</h3><app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" (retry)="ngOnInit()" /><div *ngIf="status()" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="system-info"><p class="border border-slate-200 rounded-xl p-4 text-sm">{{ 'Стан:' | t }} {{ (systemStateLabel) | t }}</p><p class="border border-slate-200 rounded-xl p-4 text-sm">{{ 'Версія:' | t }} {{ status()?.version || '-' }}</p><p class="border border-slate-200 rounded-xl p-4 text-sm">{{ 'Ядро:' | t }} {{ (status()?.core || '-') | t }}</p><p class="border border-slate-200 rounded-xl p-4 text-sm">{{ 'База даних:' | t }} {{ (status()?.postgres || '-') | t }}</p><p class="border border-slate-200 rounded-xl p-4 text-sm">Redis: {{ (status()?.redis || '-') | t }}</p><p class="border border-slate-200 rounded-xl p-4 text-sm">{{ 'Поточна:' | t }} <span data-testid="status-update-current-version">{{ status()?.update?.['current_version'] || '-' }}</span></p><p class="border border-slate-200 rounded-xl p-4 text-sm">{{ 'Доступна:' | t }} <span data-testid="status-update-available-version">{{ status()?.update?.['available_version'] || '-' }}</span></p></div>
+  <div *ngIf="backendsList().length" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4" data-testid="backends-table">
+    <section *ngFor="let entry of backendsList(); trackBy: trackSlot" class="border border-slate-200 rounded-xl p-4" [attr.data-testid]="'backend-row-' + entry[0]">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold text-slate-900">{{ entry[0] }}</h4>
+        <span class="text-xs" [class.text-emerald-700]="entry[1]?.['configured']" [class.text-slate-500]="!entry[1]?.['configured']">{{ 'Налаштовано' | t }}: {{ (entry[1]?.['configured'] ? 'Так' : 'Ні') | t }}</span>
+      </div>
+      <p class="text-sm text-slate-500">{{ 'Бекенд' | t }}</p>
+      <div class="text-sm font-medium mb-3" [attr.data-testid]="'backend-current-' + entry[0]">{{ entry[1]?.['backend'] || '-' }}<small *ngIf="entry[1]?.['activation_status']" class="block text-amber-700">{{ 'Очікує Worker:' | t }} {{ entry[1]?.['selected_backend'] }}</small></div>
+      <div class="flex flex-wrap items-center gap-2">
           <ng-container *ngIf="switchable(entry[0], entry[1])">
             <select class="border rounded px-2 py-1 mr-2" [attr.data-testid]="'backend-select-' + entry[0]"
                     [ngModel]="choice(entry[0], entry[1])"
@@ -34,11 +36,18 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
                     [attr.data-testid]="'backend-switch-' + entry[0]">{{ 'Застосувати' | t }}</button>
           </ng-container>
           <span *ngIf="!switchable(entry[0], entry[1])" class="text-slate-400 text-sm">—</span>
-        </td>
-      </tr>
-    </tbody>
-  </table>
-  <div *ngIf="switchError()" class="text-red-600 text-sm mt-2" data-testid="backend-switch-error">{{ switchError() }}</div>
+        </div>
+    </section>
+  </div>
+  <div class="border border-slate-200 rounded-xl p-4 mt-4 max-w-md" data-testid="turn-timeout">
+    <label class="block text-sm font-semibold mb-1" for="turn-timeout">{{ 'Очікування черги між однаковими вузлами, с' | t }}</label>
+    <p class="text-xs text-slate-500 mb-2">{{ 'Скільки вузол чекає, поки свою задачу візьме сусід. Після цього забирає її сам.' | t }}</p>
+    <div class="flex gap-2">
+      <input id="turn-timeout" type="number" min="0" max="600" step="1" class="w-28 px-2 py-1 border border-slate-200 rounded text-sm" [(ngModel)]="turnTimeout" [disabled]="!canSaveTurnTimeout()">
+      <button type="button" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" [disabled]="!canSaveTurnTimeout()" (click)="saveTurnTimeout()" data-testid="turn-timeout-save">{{ 'Зберегти' | t }}</button>
+    </div>
+  </div>
+  <div *ngIf="switchError()" class="text-red-600 text-sm mt-2" data-testid="backend-switch-error">{{ (switchError()) | t }}</div>
 </div>`,
 })
 export class SystemInfoSectionComponent implements OnInit {
@@ -48,6 +57,17 @@ export class SystemInfoSectionComponent implements OnInit {
   switching = signal(false);
   switchError = signal<string | null>(null);
   selected: Record<string, string> = {};
+  turnTimeout = 45;
+  private policy = inject(PolicyService);
+
+  canSaveTurnTimeout(): boolean { return this.policy.can('update_settings').allowed; }
+
+  saveTurnTimeout(): void {
+    this.settingsApi.saveDispatchSettings(Number(this.turnTimeout)).subscribe({
+      next: (saved) => { this.turnTimeout = saved.worker_turn_timeout_seconds; this.toast.show('Збережено', 'success'); },
+      error: (err) => this.toast.show(err.message, 'error'),
+    });
+  }
 
   private readonly switchableSlots = new Set(['llm', 'tts', 'compute', 'image', 'video', 'video_engine']);
 
@@ -115,6 +135,7 @@ export class SystemInfoSectionComponent implements OnInit {
   }
 
   ngOnInit(): void {
+    this.settingsApi.dispatchSettings().subscribe({ next: (value) => { this.turnTimeout = value.worker_turn_timeout_seconds; }, error: () => {} });
     this.error.set(null);
     this.loading.set(true);
     this.systemApi.status().subscribe({

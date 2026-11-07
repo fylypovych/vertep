@@ -42,9 +42,9 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
               <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Інформація про вузол' | t }}</h3>
               <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                 <div><dt class="text-slate-500">ID</dt><dd class="font-mono text-xs">{{ node()!.node_id }}</dd></div>
-                <div><dt class="text-slate-500">{{ 'Роль' | t }}</dt><dd>{{ roleName(node()!.role) }}</dd></div>
-                <div><dt class="text-slate-500">{{ 'Статус' | t }}</dt><dd>{{ nodeStatus(node()!.status) }}</dd></div>
-                <div><dt class="text-slate-500">{{ 'Runtime статус' | t }}</dt><dd>{{ node()!.runtime_status || '—' }}</dd></div>
+                <div><dt class="text-slate-500">{{ 'Роль' | t }}</dt><dd>{{ (roleName(node()!.role)) | t }}</dd></div>
+                <div><dt class="text-slate-500">{{ 'Статус' | t }}</dt><dd>{{ (nodeStatus(node()!.status)) | t }}</dd></div>
+                <div><dt class="text-slate-500">{{ 'Runtime статус' | t }}</dt><dd>{{ (node()!.runtime_status || '—') | t }}</dd></div>
                 <div><dt class="text-slate-500">{{ 'Runtime версія' | t }}</dt><dd>{{ node()!.runtime_version || node()!.version || '—' }}</dd></div>
                 <div><dt class="text-slate-500">GPU</dt><dd>{{ node()!.gpu_name || '—' }}</dd></div>
                 <div><dt class="text-slate-500">VRAM</dt><dd>{{ node()!.vram_mb ? (node()!.vram_mb + ' MB') : '—' }}@if (node()!.free_vram_mb) { ({{ node()!.free_vram_mb }} MB вільно) }</div>
@@ -88,7 +88,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                   @for (role of availableRoles(); track role.id) {
                     <label class="flex items-start gap-2 rounded border border-slate-200 p-3 text-sm">
                       <input type="checkbox" [checked]="selectedRoles().includes(role.id)" (change)="toggleRole(role.id, $event)">
-                      <span><strong>{{ roleName(role.id) }}</strong><small class="block text-slate-500">{{ (role.capabilities || []).join(', ') }}</small></span>
+                      <span><strong>{{ (roleName(role.id)) | t }}</strong><small class="block text-slate-500">{{ (role.capabilities || []).join(', ') }}</small></span>
                     </label>
                   }
                 </div>
@@ -101,7 +101,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
             <div class="bg-white rounded-xl border border-slate-200 p-5">
               <h3 class="text-sm font-medium text-slate-500 mb-3">{{ 'Самодіагностика (self-test)' | t }}</h3>
               @if (selfTestStatus()) {
-                <pre class="text-xs text-slate-700 bg-slate-50 p-3 rounded overflow-x-auto">{{ selfTestStatus() }}</pre>
+                <pre class="text-xs text-slate-700 bg-slate-50 p-3 rounded overflow-x-auto">{{ (selfTestStatus()) | t }}</pre>
               } @else {
                 <p class="text-sm text-slate-500">{{ 'Немає даних про самодіагностику' | t }}</p>
               }
@@ -131,7 +131,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                 <span class="text-sm font-medium">{{ (statusLabel()) | t }}</span>
               </div>
               @if (heartbeatAge()) {
-                <p class="text-xs text-slate-500">{{ 'Останній heartbeat:' | t }} {{ heartbeatAge() }} {{ 'тому' | t }}</p>
+                <p class="text-xs text-slate-500">{{ 'Останній heartbeat:' | t }} {{ (heartbeatAge()) | t }} {{ 'тому' | t }}</p>
               }
               <button (click)="runAction({action: 'self-test'})"
                       [disabled]="actioning() || isBusy()"

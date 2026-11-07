@@ -1,13 +1,14 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 @Component({
   selector: 'app-action-toolbar',
   standalone: true,
-  imports: [CommonModule],
+  imports: [TPipe, CommonModule],
   template: `
     <div class="flex items-center justify-between mb-4" data-testid="action-toolbar">
-      <h3 class="text-lg font-semibold text-slate-900">{{ title }}</h3>
+      <h3 class="text-lg font-semibold text-slate-900">{{ (title) | t }}</h3>
       <div class="flex gap-2">
         <ng-content></ng-content>
       </div>

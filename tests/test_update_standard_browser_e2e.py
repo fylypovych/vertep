@@ -35,6 +35,17 @@ except ImportError:  # pragma: no cover - dependency is required in CI
     pytest.skip("playwright is not installed", allow_module_level=True)
 
 
+
+def _finish_a_check(page, state_dir) -> None:
+    """The install button opens only after a finished check that found a release."""
+    path = state_dir / "status.json"
+    status = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    status.update({"state": "SUCCEEDED", "action": "check", "phase": "NORMAL", "pending": 0,
+                   "available_version": "99.0.0.0", "message": "Update check completed"})
+    path.write_text(json.dumps(status), encoding="utf-8")
+    page.reload()
+    expect(page.get_by_test_id("update-install")).to_be_enabled()
+
 def _require_web_build() -> None:
     if any((ROOT / path / "index.html").is_file() for path in (
             "web-v2/dist/vertep-admin-v2/browser", "web-v2/dist/vertep-admin-v2")):
@@ -111,6 +122,7 @@ def test_update_browser_drives_the_standard_executor_with_rollback_and_retry(
         expect(page.get_by_test_id("settings-update")).to_be_visible()
 
         def install() -> str:
+            _finish_a_check(page, state_dir)
             with page.expect_response(lambda response: "/api/system/update/run" in response.url) as run:
                 page.get_by_test_id("update-install").click()
                 page.get_by_role("button", name="Підтвердити", exact=True).click()

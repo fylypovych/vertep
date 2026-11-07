@@ -31,11 +31,11 @@ import { RemoteMutation } from '../core/state/remote-state';
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div class="bg-slate-50 rounded-lg p-4">
             <p class="text-xs text-slate-500 mb-1">{{ 'Загальний стан' | t }}</p>
-            <p class="text-sm font-medium" [class.text-emerald-600]="healthOk()" [class.text-red-600]="!healthOk()">{{ healthStatus() }}</p>
+            <p class="text-sm font-medium" [class.text-emerald-600]="healthOk()" [class.text-red-600]="!healthOk()">{{ (healthStatus()) | t }}</p>
           </div>
           <div class="bg-slate-50 rounded-lg p-4">
             <p class="text-xs text-slate-500 mb-1">{{ 'Сервіс' | t }}</p>
-            <p class="text-sm font-medium text-slate-900">{{ service() }}</p>
+            <p class="text-sm font-medium text-slate-900">{{ (service()) | t }}</p>
           </div>
           <div class="bg-slate-50 rounded-lg p-4">
             <p class="text-xs text-slate-500 mb-1">{{ 'Активних завдань' | t }}</p>
@@ -50,7 +50,7 @@ import { RemoteMutation } from '../core/state/remote-state';
               <div class="flex items-center justify-between bg-slate-50 rounded-lg p-3">
                 <span class="text-sm text-slate-700">{{ check.key }}</span>
                 <div class="flex items-center gap-2">
-                  <span class="text-xs text-slate-500">{{ check.value[1] }}</span>
+                  <span class="text-xs text-slate-500">{{ (check.value[1]) | t }}</span>
                   <span class="px-2 py-0.5 rounded-full text-xs font-medium"
                         [class.bg-emerald-50]="check.value[0]"
                         [class.text-emerald-700]="check.value[0]"
@@ -97,7 +97,7 @@ import { RemoteMutation } from '../core/state/remote-state';
                         [class.text-red-700]="item.count > 0 && ['FAILED', 'CANCELLED'].includes(item.status)"
                         [class.bg-slate-100]="!['READY', 'PUBLISHED', 'FAILED', 'CANCELLED'].includes(item.status) || item.count === 0"
                         [class.text-slate-600]="!['READY', 'PUBLISHED', 'FAILED', 'CANCELLED'].includes(item.status) || item.count === 0">
-                    {{ item.status }}: {{ item.count }}
+                    {{ (item.status) | t }}: {{ item.count }}
                   </span>
                 }
               </div>
@@ -124,7 +124,7 @@ import { RemoteMutation } from '../core/state/remote-state';
                           [class.text-emerald-700]="entry.status === 'HEALTHY'"
                           [class.bg-red-50]="entry.status !== 'HEALTHY'"
                           [class.text-red-700]="entry.status !== 'HEALTHY'">
-                      {{ entry.status }}
+                      {{ (entry.status) | t }}
                     </span>
                   </div>
                   <div class="mt-1 flex flex-wrap gap-1 text-xs text-slate-500">

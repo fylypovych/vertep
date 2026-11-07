@@ -1,1 +1,1 @@
-{"strategy": "expand", "rollback_safe": false}
+{"strategy": "expand", "rollback_safe": true}

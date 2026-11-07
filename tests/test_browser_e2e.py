@@ -2300,8 +2300,8 @@ def test_update_critical_mutations_install_and_canary():
         _mock_status(page)
 
         update_status = {
-            "current_version": "0.0.1.53", "available_version": "0.0.2.0",
-            "state": "IDLE", "phase": "NORMAL", "progress": 0,
+            "current_version": "0.0.1.53", "available_version": "0.0.2.0", "action": "check",
+            "state": "SUCCEEDED", "phase": "NORMAL", "progress": 0,
             "message": "Очікування", "log": [], "enabled": True, "pending": 0,
             "update_available": True,
         }

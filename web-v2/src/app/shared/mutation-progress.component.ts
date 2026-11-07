@@ -14,7 +14,7 @@ import { CommonModule } from '@angular/common';
       } @else if (success) {
         <span class="text-emerald-600">{{ (successMessage || 'Успішно') | t }}</span>
       } @else if (error) {
-        <span class="text-red-600">{{ error }}</span>
+        <span class="text-red-600">{{ (error) | t }}</span>
       }
     </div>
   `,

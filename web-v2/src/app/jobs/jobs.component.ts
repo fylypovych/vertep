@@ -55,6 +55,7 @@ import { RemoteState } from '../core/state/remote-state';
               <thead class="text-xs text-slate-500 uppercase bg-slate-50">
                 <tr>
                   <th class="px-4 py-3">ID</th>
+                  <th class="px-4 py-3">{{ 'Тема' | t }}</th>
                   <th class="px-4 py-3">{{ 'Статус' | t }}</th>
                   <th class="px-4 py-3">{{ 'Створено' | t }}</th>
                   <th class="px-4 py-3">{{ 'Дії' | t }}</th>
@@ -64,6 +65,7 @@ import { RemoteState } from '../core/state/remote-state';
                 @for (job of pagedJobs(); track job.job_id) {
                   <tr class="border-t border-slate-100">
                     <td class="px-4 py-3 font-medium text-slate-900">{{ job.job_id }}</td>
+                    <td class="px-4 py-3 text-slate-700 max-w-xs truncate" [title]="job.topic || ''" data-testid="job-topic">{{ job.topic }}</td>
                     <td class="px-4 py-3">
                       <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium"
                         [class.bg-emerald-50]="isActive(job.status)"
@@ -110,7 +112,7 @@ import { RemoteState } from '../core/state/remote-state';
               }
             </div>
           } @else if (queueState.failed()) {
-            <p class="text-sm text-red-600" data-testid="queue-error">{{ queueError() }}</p>
+            <p class="text-sm text-red-600" data-testid="queue-error">{{ (queueError()) | t }}</p>
           } @else {
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               <div class="bg-slate-50 rounded-lg p-4">

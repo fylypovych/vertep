@@ -397,7 +397,12 @@ export interface SystemStatus {
   queue?: { depth: number; inflight: number; dead_letter: number };
   scheduler?: { pending: number; next_run?: string };
   orchestration?: { active_jobs: number; active_scenes: number };
-  resources?: { cpu: number; ram: number; disk: number };
+  resources?: {
+    cpu: number; ram: number; disk: number;
+    cpu_cores?: number; cpu_used_cores?: number;
+    ram_used_bytes?: number; ram_total_bytes?: number;
+    disk_used_bytes?: number; disk_total_bytes?: number;
+  };
   providers?: Record<string, ProviderSlot>;
   ollama?: string;
   update?: Record<string, unknown>;
@@ -644,7 +649,7 @@ export interface TelegramBotInfo {
 }
 
 export interface UpdateStatus {
-  state: 'IDLE' | 'PENDING' | 'RUNNING' | 'FAILED' | 'ROLLED_BACK';
+  state: 'IDLE' | 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'ROLLED_BACK';
   phase?: string;
   action?: string;
   message: string;

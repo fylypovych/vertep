@@ -24,8 +24,8 @@ test('Алерти: порожній стан, помилка та підтве�
   // Failure surfaces as a firing alert bound to the node entity.
   body = [{ id: '7', severity: 'error', type: 'WORKER_OFFLINE', node_name: 'gpu-1', state: 'firing', message: 'node down' }];
   await page.getByRole('button', { name: 'Оновити' }).click();
-  await expect(page.getByText('WORKER_OFFLINE')).toBeVisible();
-  await expect(page.getByText('Node: gpu-1')).toBeVisible();
+  await expect(page.locator('[title="WORKER_OFFLINE"]')).toBeVisible();
+  await expect(page.getByText('gpu-1').first()).toBeVisible();
 
   const ackCalls: string[] = [];
   page.on('request', req => { if (req.url().includes('/acknowledge')) ackCalls.push(req.url()); });
@@ -34,7 +34,7 @@ test('Алерти: порожній стан, помилка та підтве�
   body = [{ id: '7', severity: 'error', type: 'WORKER_OFFLINE', node_name: 'gpu-1', state: 'acknowledged', message: 'node down' }];
   await page.getByTestId('alert-ack-7').click();
   await expect(page.getByTestId('alert-ack-7')).toHaveCount(0);
-  await expect(page.getByText('Стан: acknowledged')).toBeVisible();
+  await expect(page.getByText(/підтверджене/)).toBeVisible();
   expect(ackCalls.some(url => url.includes('/api/alerts/7/acknowledge'))).toBe(true);
 
   // Backend error surfaces the error state with a retry action.

@@ -1,7 +1,9 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, inject } from '@angular/core';
 import { I18nService, Language } from '../core/i18n/i18n.service';
 
 @Component({
+  imports: [TPipe],
   selector: 'app-language-switch',
   standalone: true,
   template: `
@@ -12,7 +14,7 @@ import { I18nService, Language } from '../core/i18n/i18n.service';
                 [class.text-white]="i18n.language() === option.id"
                 [attr.aria-pressed]="i18n.language() === option.id"
                 [attr.data-testid]="'language-' + option.id"
-                (click)="i18n.set(option.id)">{{ option.label }}</button>
+                (click)="i18n.set(option.id)">{{ (option.label) | t }}</button>
       }
     </div>
   `,

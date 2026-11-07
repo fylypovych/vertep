@@ -26,11 +26,11 @@ import { PolicyService } from '../../core/services/policy.service';
         </select>
         <button type="button" class="w-6 h-6 shrink-0 rounded-full border border-amber-500 text-amber-700 text-sm font-bold"
                 data-testid="workflow-mode-info-toggle" aria-label="{{ 'Пояснення до обраного режиму' | t }}"
-                [attr.aria-expanded]="infoOpen()" [title]="explanation()"
+                [attr.aria-expanded]="infoOpen()" [title]="(explanation()) | t"
                 (click)="infoOpen.set(!infoOpen())">!</button>
       </div>
       <p *ngIf="infoOpen()" class="md:col-start-2 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded p-2"
-         data-testid="workflow-mode-info">{{ explanation() }}</p>
+         data-testid="workflow-mode-info">{{ (explanation()) | t }}</p>
       <p *ngIf="!current.dynamic_available" class="md:col-span-2 text-sm text-amber-700" data-testid="workflow-mode-unavailable">
         {{ 'Динамічний workflow недоступний: на сервері немає налаштованих шаблонів процесу.' | t }}
       </p>

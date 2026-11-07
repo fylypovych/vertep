@@ -91,19 +91,20 @@ test.describe('Brands CRUD', () => {
 
   test('Видалення бренду викликає DELETE API', async ({ page }) => {
     let deleteCalled = false;
+    await setupRoutes(page);
     await page.route('**/api/brands/brand_1', async route => {
       if (route.request().method() === 'DELETE') {
         deleteCalled = true;
         brandsState = brandsState.filter(b => b.id !== 'brand_1');
         return route.fulfill({ json: { deleted: 'brand_1' } });
       }
-      return route.continue();
+      return route.fallback();
     });
-    await setupRoutes(page);
     await page.goto('/brands');
     page.on('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Видалити', exact: true }).first().click();
-    await page.waitForTimeout(500);
+    await page.locator('app-confirm-dialog button').last().click();
+    await expect.poll(() => deleteCalled).toBe(true);
     expect(deleteCalled).toBe(true);
     expect(brandsState.find(b => b.id === 'brand_1')).toBeFalsy();
   });

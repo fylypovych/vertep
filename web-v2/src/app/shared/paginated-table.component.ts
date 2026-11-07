@@ -26,7 +26,7 @@ import { FormsModule } from '@angular/forms';
               <tr class="border-t border-slate-100">
                 @for (col of columns; track col.key) {
                   <td class="px-4 py-3">
-                    {{ col.template ? col.template(row) : (row[col.key] ?? '—') }}
+                    {{ (col.template ? col.template(row) : (row[col.key] ?? '—')) | t }}
                   </td>
                 }
               </tr>

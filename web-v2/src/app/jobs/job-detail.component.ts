@@ -130,7 +130,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
             </div>
           } @else if (actionError()) {
             <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-              <p class="text-sm text-red-700">{{ actionError() }}</p>
+              <p class="text-sm text-red-700">{{ (actionError()) | t }}</p>
               <button (click)="actionError.set(null)" class="mt-2 text-sm text-red-600 hover:text-red-700 font-medium">{{ 'Сховати' | t }}</button>
             </div>
           }
@@ -523,7 +523,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                              [class.text-red-700]="result.status === 'FAILED' || result.status === 'NOT_CONFIGURED'"
                              [class.bg-amber-50]="result.status !== 'PUBLISHED' && result.status !== 'FAILED' && result.status !== 'NOT_CONFIGURED'"
                              [class.text-amber-700]="result.status !== 'PUBLISHED' && result.status !== 'FAILED' && result.status !== 'NOT_CONFIGURED'">
-                         {{ result.status }}
+                         {{ (result.status) | t }}
                        </span>
                        @if (result.status === 'FAILED') {
                          <button [title]="policy.disabledReason('publish_job') || ''" (click)="retryFailedChannel(result.channel)" [disabled]="(actionLoading() === 'retry-' + result.channel) || !policy.can('publish_job').allowed" class="disabled:opacity-50 text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50">
@@ -565,7 +565,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                               [class.text-red-700]="stageEntry.status === 'FAILED'"
                               [class.bg-slate-100]="!['READY', 'RUNNING', 'FAILED'].includes(stageEntry.status)"
                               [class.text-slate-600]="!['READY', 'RUNNING', 'FAILED'].includes(stageEntry.status)">
-                          {{ stageEntry.status }}
+                          {{ (stageEntry.status) | t }}
                         </span>
                       </div>
                       @if (stageEntry.started_at) {
@@ -578,7 +578,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                         <div class="mt-2 space-y-1">
                           @for (attempt of stageEntry.attempts; track attempt.attempt) {
                             <div class="text-xs text-slate-600">
-                              {{ 'Спроба #' | t }}{{ attempt.attempt }}: {{ attempt.status }} {{ (attempt.node_name ? 'на ' + attempt.node_name : '') | t }} {{ attempt.error ? '— ' + attempt.error : '' }}
+                              {{ 'Спроба #' | t }}{{ attempt.attempt }}: {{ (attempt.status) | t }} {{ (attempt.node_name ? 'на ' + attempt.node_name : '') | t }} {{ attempt.error ? '— ' + attempt.error : '' }}
                             </div>
                           }
                         </div>
@@ -615,7 +615,7 @@ import { inStatusGroup, jobActionAllowed, statusLabel, workerStatusLabel, taskTy
                        <span class="inline-block px-1 rounded text-[10px] uppercase tracking-wide bg-slate-200 text-slate-600 mr-1">{{ event.type }}</span>
                      }
                      @if (event.state) {
-                       <span class="inline-block px-1 rounded text-[10px] bg-emerald-100 text-emerald-700 mr-1">{{ event.state }}</span>
+                       <span class="inline-block px-1 rounded text-[10px] bg-emerald-100 text-emerald-700 mr-1">{{ (event.state) | t }}</span>
                      }
                      @if (event.attempt) {
                        <span class="inline-block px-1 rounded text-[10px] bg-yellow-50 text-yellow-800 mr-1">{{ 'Спроба #' | t }}{{ event.attempt }}</span>

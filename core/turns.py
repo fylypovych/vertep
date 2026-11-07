@@ -6,12 +6,38 @@ lost it starts a new round, and the first claim of that round goes to whoever as
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import datetime, timezone
 
+from .first_run import config_root
+
+_SETTINGS = "dispatch-settings.json"
+DEFAULT_TURN_TIMEOUT = 45
+
 # ponytail: one process per CORE, as the worker registry itself; shared store if CORE ever scales out.
 _yielding_since: dict[str, float] = {}
+
+
+def turn_timeout_seconds() -> int:
+    """Set in Settings -> System."""
+    try:
+        value = json.loads((config_root() / _SETTINGS).read_text(encoding="utf-8"))["worker_turn_timeout_seconds"]
+        return value if isinstance(value, int) and not isinstance(value, bool) else DEFAULT_TURN_TIMEOUT
+    except (OSError, ValueError, KeyError, TypeError):
+        return DEFAULT_TURN_TIMEOUT
+
+
+def save_turn_timeout_seconds(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 600:
+        raise ValueError("Час очікування має бути цілим числом від 0 до 600 секунд")
+    path = config_root() / _SETTINGS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{_SETTINGS}.tmp")
+    temporary.write_text(json.dumps({"worker_turn_timeout_seconds": value}), encoding="utf-8")
+    os.replace(temporary, path)
+    return value
 
 
 def _identity(worker: dict) -> tuple:
@@ -51,7 +77,7 @@ def may_claim_now(node_name: str, workers: dict, now: float | None = None) -> bo
         return True
     # The other worker may have hung while its heartbeat lives on: work must not wait for it.
     since = _yielding_since.setdefault(node_name, now)
-    if now - since >= float(os.getenv("WORKER_TURN_TIMEOUT_SECONDS", "45")):
+    if now - since >= turn_timeout_seconds():
         _yielding_since.pop(node_name, None)
         return True
     return False

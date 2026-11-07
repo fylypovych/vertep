@@ -234,6 +234,18 @@ export class SettingsApiService {
     ).pipe(catchError(this.handleError));
   }
 
+  dispatchSettings(): Observable<{ worker_turn_timeout_seconds: number }> {
+    return this.http
+      .get<{ worker_turn_timeout_seconds: number }>(`${this.baseUrl}/settings/dispatch`, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
+  saveDispatchSettings(seconds: number): Observable<{ worker_turn_timeout_seconds: number }> {
+    return this.http
+      .put<{ worker_turn_timeout_seconds: number }>(`${this.baseUrl}/settings/dispatch`, { worker_turn_timeout_seconds: seconds }, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
   publishingSettings(): Observable<PublishingSettings> {
     return this.http
       .get<PublishingSettings>(`${this.baseUrl}/settings/publishing`, { headers: this.getHeaders() })

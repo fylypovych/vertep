@@ -63,7 +63,7 @@ def test_every_api_error_message_has_a_code():
 def test_every_code_has_text_in_both_languages():
     source = (APP / "core/i18n/api-errors.ts").read_text(encoding="utf-8")
     rows = dict(re.findall(r'^  "([a-z0-9_]+)": \{ uk: "(.+?)", en: "', source, flags=re.M))
-    assert set(ERROR_CODES.values()) == set(rows)
+    assert set(ERROR_CODES.values()) | {"validation_error"} == set(rows)
     assert len(re.findall(r'en: "[^"]+"', source)) == len(rows)
 
 
@@ -75,6 +75,10 @@ def test_response_keeps_detail_and_adds_the_code():
     def known():
         raise HTTPException(404, "Job not found", headers={"X-Test": "1"})
 
+    @app.get("/typed/{number}")
+    def typed(number: int):
+        return number
+
     @app.get("/built")
     def built():
         raise HTTPException(409, "Job 5 is busy")
@@ -85,6 +89,9 @@ def test_response_keeps_detail_and_adds_the_code():
     assert answer.json() == {"detail": "Job not found", "code": "job_not_found"}
     assert client.get("/built").json() == {"detail": "Job 5 is busy", "code": "http_409"}
     assert client.get("/absent").json()["code"] == "http_404"
+    invalid = client.get("/typed/not-a-number")
+    assert invalid.status_code == 422 and invalid.json()["code"] == "validation_error"
+    assert isinstance(invalid.json()["detail"], list)
 
 
 def test_structured_detail_gets_a_status_code():

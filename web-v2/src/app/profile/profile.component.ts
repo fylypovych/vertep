@@ -54,7 +54,7 @@ import { UserProfile, ChangePasswordRequest, UpdateProfileRequest } from '../cor
               {{ 'Невірний формат email' | t }}
             </p>
           </div>
-          <p class="text-sm text-emerald-700 dark:text-emerald-400" *ngIf="accountError()" data-testid="account-error">{{ accountError() }}</p>
+          <p class="text-sm text-emerald-700 dark:text-emerald-400" *ngIf="accountError()" data-testid="account-error">{{ (accountError()) | t }}</p>
           <button type="submit" data-testid="account-save"
                   [disabled]="accountForm.invalid || accountSaving()"
                   class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
@@ -89,7 +89,7 @@ import { UserProfile, ChangePasswordRequest, UpdateProfileRequest } from '../cor
           <p class="text-xs text-slate-500 dark:text-slate-400" data-testid="password-policy-hint">
             {{ 'Пароль має містити щонайменше' | t }} {{ minPasswordLength() }} {{ 'символів і відрізнятися від поточного' | t }}
           </p>
-          <p class="text-sm text-red-600" *ngIf="passwordError()" data-testid="password-error">{{ passwordError() }}</p>
+          <p class="text-sm text-red-600" *ngIf="passwordError()" data-testid="password-error">{{ (passwordError()) | t }}</p>
           <button type="submit" data-testid="password-save"
                   [disabled]="passwordForm.invalid || loading()"
                   class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">

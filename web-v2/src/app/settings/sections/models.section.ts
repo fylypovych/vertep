@@ -52,25 +52,22 @@ import { interval, Subscription } from 'rxjs';
 
     <div *ngIf="nodes().length" class="mb-4" data-testid="model-nodes-table">
       <h4 class="text-sm font-semibold mb-2">{{ 'Розподіл по вузлах' | t }}</h4>
-      <table class="w-full text-sm">
-        <thead><tr class="text-left text-slate-500">
-          <th class="py-1">{{ 'Вузол' | t }}</th><th>{{ 'Стан' | t }}</th><th>{{ 'Каталог' | t }}</th><th>{{ 'Моделей' | t }}</th><th>{{ 'Команда' | t }}</th>
-        </tr></thead>
-        <tbody>
-          <tr *ngFor="let node of nodes()" class="border-t" [attr.data-testid]="'model-node-' + node.node_name">
-            <td class="py-1">{{ node.node_name }}</td>
-            <td>{{ (node.ready ? 'Готовий' : 'Неготовий') | t }}</td>
-            <td>{{ (node.stale ? 'застарілий' : 'активний') | t }}</td>
-            <td>{{ node.model_count ?? 0 }}</td>
-            <td>{{ (node.pending_command ? 'в черзі' : '-') | t }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div *ngFor="let node of nodes()" class="border border-slate-200 rounded-xl p-4 text-sm" [attr.data-testid]="'model-node-' + node.node_name">
+          <div class="font-semibold mb-1">{{ node.node_name }}</div>
+          <div>{{ 'Стан' | t }}: {{ (node.ready ? 'Готовий' : 'Неготовий') | t }}</div>
+          <div>{{ 'Каталог' | t }}: {{ (node.stale ? 'застарілий' : 'активний') | t }}</div>
+          <div>{{ 'Моделей' | t }}: {{ node.model_count ?? 0 }}</div>
+          <div>{{ 'Команда' | t }}: {{ (node.pending_command ? 'в черзі' : '-') | t }}</div>
+        </div>
+      </div>
     </div>
 
-    <div *ngFor="let model of models()" class="flex justify-between py-2 border-b" [attr.data-testid]="'model-row-' + model.name">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div *ngFor="let model of models()" class="flex justify-between gap-2 border border-slate-200 rounded-xl p-4" [attr.data-testid]="'model-row-' + model.name">
       <span>{{ model.name }}</span>
       <button (click)="deleteModel(model.name)" [disabled]="!canDeleteModel" [title]="(deleteModelReason || 'Видалити модель') | t" class="text-red-600 disabled:opacity-40" [attr.data-testid]="'model-delete-' + model.name">{{ 'Видалити' | t }}</button>
+    </div>
     </div>
 
     <div class="mt-6 pt-4 border-t" data-testid="voice-preview">
@@ -89,7 +86,7 @@ import { interval, Subscription } from 'rxjs';
           {{ (previewRunning() ? 'Синтез...' : 'Прослухати') | t }}
         </button>
       </div>
-      <div *ngIf="previewError()" class="text-red-600 text-sm" data-testid="voice-preview-error">{{ previewError() }}</div>
+      <div *ngIf="previewError()" class="text-red-600 text-sm" data-testid="voice-preview-error">{{ (previewError()) | t }}</div>
       <audio *ngIf="previewUrl()" [src]="previewUrl()" controls autoplay data-testid="voice-preview-audio"></audio>
     </div>
   </div>

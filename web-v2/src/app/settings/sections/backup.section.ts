@@ -53,7 +53,7 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
                 <span class="text-sm font-medium text-slate-900">{{ backup.snapshot_id }}</span>
                 <span class="text-xs text-slate-500 ml-2">{{ backup.created_at | vertepDate }}</span>
               </div>
-              <a [href]="'/api/system/backups/' + backup.snapshot_id + '/download'" download data-testid="backup-download-link"
+              <a [href]="'/api/system/backups/' + backup.snapshot_id + '/download'" [attr.download]="backup.snapshot_id + '.vtbackup'" data-testid="backup-download-link"
                  [title]="'SHA-256: ' + (backup['sha256'] || '')" class="px-3 py-1 text-sm border border-slate-200 rounded-lg mr-2">{{ 'Завантажити' | t }}</a>
               <button (click)="confirmRestore(backup.snapshot_id)" [disabled]="restore.pending()" data-testid="backup-restore-button" class="text-xs text-blue-600 disabled:opacity-50">
                 {{ (restore.pending() ? 'Відновлення...' : 'Відновити') | t }}

@@ -31,7 +31,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         <p *ngIf="cfg.reason" class="text-amber-700 md:col-span-3" data-testid="video-engine-reason">{{ 'Причина:' | t }} {{ (reasonLabel(cfg.reason)) | t }}</p>
         <p *ngIf="!cfg.agree" class="text-red-600 md:col-span-3" data-testid="video-engine-mismatch">{{ 'Обраний движок не відповідає застосованому — виконання відхилено без підміни.' | t }}</p>
         <p>{{ 'Ревізія конфігурації:' | t }} <code class="text-xs" data-testid="video-engine-revision">{{ cfg.config_revision }}</code></p>
-        <p>{{ 'Стан системи:' | t }} <span data-testid="video-engine-system-state">{{ cfg.system_state }}</span></p>
+        <p>{{ 'Стан системи:' | t }} <span data-testid="video-engine-system-state">{{ (cfg.system_state) | t }}</span></p>
         <p>Upstream: <code class="text-xs" data-testid="video-engine-upstream">{{ cfg.upstream_reference || '—' }}</code></p>
       </div>
       <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -44,11 +44,11 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
           </select>
           <button type="button" class="w-6 h-6 shrink-0 rounded-full border border-amber-500 text-amber-700 text-sm font-bold"
                   data-testid="video-engine-info-toggle" aria-label="{{ 'Пояснення до обраного движка' | t }}"
-                  [attr.aria-expanded]="infoOpen()" [title]="choiceExplanation()"
+                  [attr.aria-expanded]="infoOpen()" [title]="(choiceExplanation()) | t"
                   (click)="infoOpen.set(!infoOpen())">!</button>
         </div>
         <p *ngIf="infoOpen()" class="md:col-start-2 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded p-2"
-           data-testid="video-engine-info">{{ choiceExplanation() }}</p>
+           data-testid="video-engine-info">{{ (choiceExplanation()) | t }}</p>
       </div>
       <div *ngIf="endpointField() as field" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
         <label class="text-sm" for="video-engine-endpoint">{{ 'Адреса runtime (' | t }}{{ field.env }})</label>
@@ -69,9 +69,9 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
                 [disabled]="!canEdit() || applying() || (cfg.effective === 'native' && cfg.selected === 'native')"
                 (click)="returnNative()">{{ 'Повернути Vertep Native' | t }}</button>
       </div>
-      <p *ngIf="lockedReason() as reason" class="mt-2 text-amber-700 text-sm" data-testid="video-engine-locked">{{ reason }}</p>
-      <div *ngIf="applyError()" class="text-red-600 text-sm mt-2" data-testid="video-engine-error">{{ applyError() }}</div>
-      <div *ngIf="rollbackNotice()" class="text-amber-700 text-sm mt-2" data-testid="video-engine-rollback">{{ rollbackNotice() }}</div>
+      <p *ngIf="lockedReason() as reason" class="mt-2 text-amber-700 text-sm" data-testid="video-engine-locked">{{ (reason) | t }}</p>
+      <div *ngIf="applyError()" class="text-red-600 text-sm mt-2" data-testid="video-engine-error">{{ (applyError()) | t }}</div>
+      <div *ngIf="rollbackNotice()" class="text-amber-700 text-sm mt-2" data-testid="video-engine-rollback">{{ (rollbackNotice()) | t }}</div>
     </div>
   </div>`,
 })

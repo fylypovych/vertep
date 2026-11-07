@@ -805,6 +805,49 @@ def test_rollback_restores_previous_version_and_ready_state(
                                              fleet.container())
 
 
+def _updated_fleet_with_a_copy(fleet, signed_update_server, tmp_path, monkeypatch):
+    root, state_dir = fleet.root, tmp_path / "update-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("VERTEP_ROOT", str(root))
+    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
+    agent = _agent()
+    fleet.wait_for_worker(version="0.0.0.1")
+    signed_update_server.publish("0.0.0.2", _archive(_payload(
+        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
+    assert agent.process_request(root, state_dir, _request(state_dir, "81" * 16, "update", "0.0.0.2"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    updated = fleet.wait_for_worker(version="0.0.0.2", timeout=180)
+    copy = Path((root / ".vertep-last-good").read_text(encoding="utf-8").strip())
+    assert (copy / "backup.tar.enc").is_file(), "the copy before an update must be sealed"
+    return agent, root, state_dir, copy, updated
+
+
+def test_rollback_reads_a_copy_in_the_old_unsealed_format(fleet, signed_update_server, tmp_path, monkeypatch):
+    """i.0.0.4.27: a copy made by an older release is still usable."""
+    agent, root, state_dir, copy, updated = _updated_fleet_with_a_copy(fleet, signed_update_server, tmp_path, monkeypatch)
+    sealed = copy / "backup.tar.enc"
+    plain = subprocess.run(["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-pass", f"file:{root / '.update-backup.key'}",
+                            "-in", str(sealed)], check=True, capture_output=True).stdout
+    subprocess.run(["tar", "-xzf", "-", "-C", str(copy)], input=plain, check=True)
+    sealed.unlink()
+    assert agent.process_request(root, state_dir, _request(state_dir, "82" * 16, "rollback"),
+                                 skip_drain=True) is True, _explain(state_dir, fleet)
+    assert fleet.wait_for_worker(version="0.0.0.1", not_instance=updated["runtime_instance_id"], timeout=180)
+
+
+def test_rollback_refuses_a_damaged_copy(fleet, signed_update_server, tmp_path, monkeypatch):
+    """i.0.0.4.27: integrity is checked before anything is restored."""
+    agent, root, state_dir, copy, _updated = _updated_fleet_with_a_copy(fleet, signed_update_server, tmp_path, monkeypatch)
+    sealed = copy / "backup.tar.enc"
+    data = bytearray(sealed.read_bytes())
+    data[len(data) // 2] ^= 0xFF
+    sealed.write_bytes(bytes(data))
+    assert agent.process_request(root, state_dir, _request(state_dir, "83" * 16, "rollback"),
+                                 skip_drain=True) is False
+    assert fleet.wait_for_worker(version="0.0.0.2", timeout=60)
+
+
 def test_recovery_does_not_overlap_with_previous_apply(
         installation, signed_update_server, tmp_path, monkeypatch):
     """#390 F2: a recovery operation after a failed apply does not overlap with the dead apply;

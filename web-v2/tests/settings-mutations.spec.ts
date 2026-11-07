@@ -33,7 +33,7 @@ test.describe('Settings — Secrets', () => {
     await mockApi(page, { secrets: { telegram_bot_token: true } });
     await page.goto('/settings');
     await page.getByText('Секрети').click();
-    await page.getByText('telegram_bot_token').locator('..').locator('button:has-text("Редагувати")').click();
+    await page.getByText('telegram_bot_token').locator('xpath=ancestor::div[contains(@class,"border-t")][1]').locator('button:has-text("Редагувати")').click();
     await expect(page.getByRole('button', { name: 'Зберегти' })).toBeVisible();
   });
 });

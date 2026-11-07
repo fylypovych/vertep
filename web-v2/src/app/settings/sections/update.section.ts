@@ -71,8 +71,8 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
               @if (!readiness()!.queue_paused) {
                 <p class="text-xs text-slate-600 mt-1">{{ 'Видачу задач ще не призупинено. Підготовка виконується під час запуску оновлення.' | t }}</p>
               }
-              <p class="text-xs text-slate-600 mt-1">{{ 'Активних job:' | t }} {{ readiness()!.active_jobs.length }}{{ ', задач у виконанні:' | t }} {{ readiness()!.inflight }}{{ ', зайнятих вузлів:' | t }} {{ readiness()!.busy_workers.length }}</p>
-              @if (readiness()!.unacknowledged_workers.length) {
+              <p class="text-xs text-slate-600 mt-1">{{ 'Активних job:' | t }} {{ (readiness()!.active_jobs || []).length }}{{ ', задач у виконанні:' | t }} {{ readiness()!.inflight }}{{ ', зайнятих вузлів:' | t }} {{ (readiness()!.busy_workers || []).length }}</p>
+              @if (readiness()!.unacknowledged_workers?.length) {
                 <p class="text-xs text-slate-600 mt-1">{{ 'Не підтвердили завершення роботи:' | t }} {{ readiness()!.unacknowledged_workers.join(', ') }}</p>
               }
             }
@@ -84,8 +84,11 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
           </div>
         }
         <div class="flex flex-wrap gap-2">
-          <button (click)="installUpdate()" [disabled]="installing() || !policy.can('start_update').allowed" [title]="(policy.disabledReason('start_update') || 'Встановити оновлення') | t" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
-            {{ (installing() ? 'Оновлення...' : 'Оновити') | t }}
+          <button (click)="checkUpdate()" [disabled]="checking() || !policy.can('start_update').allowed" [title]="(policy.disabledReason('start_update') || '') | t" data-testid="update-check" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
+            {{ (checking() ? 'Перевірка...' : 'Перевірити оновлення') | t }}
+          </button>
+          <button (click)="installUpdate()" [disabled]="installing() || !canInstall() || !policy.can('start_update').allowed" [title]="(policy.disabledReason('start_update') || installHint()) | t" data-testid="update-install" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            {{ (installing() ? 'Оновлення...' : 'ОНОВИТИ') | t }}
           </button>
           @if (['RUNNING', 'AWAITING_PROMOTION', 'ROLLING_BACK'].includes(rollingStatus()?.state || '')) {
             <button (click)="cancelRolling()" data-testid="update-cancel-rolling" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">{{ 'Скасувати поетапне оновлення' | t }}</button>
@@ -108,6 +111,7 @@ export class UpdateSectionComponent implements OnInit, OnDestroy {
   loading = signal(false);
   error = signal<string | null>(null);
   installing = signal(false);
+  checkRequested = signal(false);
 
   constructor(private system: SystemApiService, private toast: ToastService, readonly policy: PolicyService, private confirm: ConfirmService) {}
 
@@ -124,6 +128,31 @@ export class UpdateSectionComponent implements OnInit, OnDestroy {
     const rolling = ['RUNNING', 'AWAITING_PROMOTION', 'ROLLING_BACK'].includes(this.rollingStatus()?.state || '');
     if (updating) this.system.updateStatus().subscribe({ next: (s) => this.updateStatus.set(s), error: () => {} });
     if (rolling) this.loadRolling();
+  }
+
+  /** The last finished operation was a check that found a newer release. */
+  canInstall(): boolean {
+    const status = this.updateStatus();
+    return status?.action === 'check' && status.state === 'SUCCEEDED' && !!status.update_available;
+  }
+
+  checking(): boolean {
+    const status = this.updateStatus();
+    return this.checkRequested() || (status?.action === 'check' && ['PENDING', 'RUNNING'].includes(status.state || ''));
+  }
+
+  installHint(): string {
+    const status = this.updateStatus();
+    if (status?.action === 'check' && status.state === 'SUCCEEDED' && !status.update_available) return 'Встановлено найновішу версію';
+    return 'Спершу перевірте оновлення';
+  }
+
+  checkUpdate(): void {
+    this.checkRequested.set(true);
+    this.system.checkUpdate().subscribe({
+      next: () => { this.checkRequested.set(false); this.loadAll(); },
+      error: (err) => { this.checkRequested.set(false); this.toast.show(err.message, 'error'); },
+    });
   }
 
   stateLabel(state?: string): string { return updateStateLabel(state); }

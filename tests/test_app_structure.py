@@ -51,6 +51,8 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["POST", "/lab-lease/v1/inference/api/{operation}"],
         ["GET", "/api/public/videos/{job_id}/{version}/{expires}/{signature}.mp4"],
         ["GET", "/api/system/backups/{snapshot_id}/download"],
+        ["GET", "/api/settings/dispatch"],
+        ["PUT", "/api/settings/dispatch"],
         ["GET", "/api/settings/publishing"],
         ["PUT", "/api/settings/publishing"],
         ["GET", "/api/tasks/publisher-readiness"],

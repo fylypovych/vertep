@@ -52,6 +52,17 @@ FAIL_TARGET_VERSION = "9.9.10"
 CURRENT_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
+
+def _finish_a_check(page, state_dir) -> None:
+    """The install button opens only after a finished check that found a release."""
+    path = state_dir / "status.json"
+    status = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    status.update({"state": "SUCCEEDED", "action": "check", "phase": "NORMAL", "pending": 0,
+                   "available_version": "99.0.0.0", "message": "Update check completed"})
+    path.write_text(json.dumps(status), encoding="utf-8")
+    page.reload()
+    expect(page.get_by_test_id("update-install")).to_be_enabled()
+
 def _unsatisfied(message: str):
     if REQUIRE:
         pytest.fail(message, pytrace=False)
@@ -219,6 +230,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
         expect(page.get_by_test_id("settings-update")).to_be_visible()
 
         # 1) The Browser mutation reaches the real CORE state machine.
+        _finish_a_check(page, state_dir)
         with page.expect_response(
                 lambda response: "/api/system/update/run" in response.url) as queued:
             page.get_by_test_id("update-install").click()
@@ -245,6 +257,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
         # 4) Negative path: the real executor fails, the real rollback runs and
         #    the Browser reports recovery instead of a fabricated success.
         (root / "fail-apply").write_text("1", encoding="utf-8")
+        _finish_a_check(page, state_dir)
         with page.expect_response(
                 lambda response: "/api/system/update/run" in response.url) as failed:
             page.get_by_test_id("update-install").click()
@@ -261,6 +274,7 @@ def test_update_center_browser_drives_real_core_and_host_executor(
         # 5) Retry after the recovered failure: a new request, a new signed release
         #    and a correlated success.
         (root / "fail-apply").unlink()
+        _finish_a_check(page, state_dir)
         with page.expect_response(
                 lambda response: "/api/system/update/run" in response.url) as retried:
             page.get_by_test_id("update-install").click()

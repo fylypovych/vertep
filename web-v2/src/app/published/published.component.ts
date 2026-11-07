@@ -72,7 +72,7 @@ import { statusLabel } from '../core/presentation';
                             [class.text-red-700]="result.status === 'FAILED' || result.status === 'NOT_CONFIGURED'"
                             [class.bg-amber-50]="result.status !== 'PUBLISHED' && result.status !== 'FAILED' && result.status !== 'NOT_CONFIGURED'"
                             [class.text-amber-700]="result.status !== 'PUBLISHED' && result.status !== 'FAILED' && result.status !== 'NOT_CONFIGURED'">
-                        {{ result.status }}
+                        {{ (result.status) | t }}
                       </span>
                       @if (result.status === 'FAILED') {
                         <button (click)="retryChannel(job, result.channel)" [disabled]="retrying() === job.job_id + '-' + result.channel" class="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50">

@@ -16,14 +16,14 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
     <p class="text-sm text-slate-600 mb-4">{{ 'Telegram нижче — публікація повідомлень, а не стан бота керування.' | t }}</p>
     <button type="button" (click)="ngOnInit()" [disabled]="loading()" data-testid="publisher-test" class="px-3 py-2 border rounded mb-3">{{ 'Перевірити підключення' | t }}</button>
     <app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" />
-    <div *ngIf="!loading() && !error()" class="space-y-2">
-      <div class="flex justify-between"><span>Ollama</span><span>{{ integrations()?.ollama?.status || 'OFFLINE' }}</span></div>
-      <div class="flex justify-between"><span>ComfyUI</span><span>{{ integrations()?.comfyui?.status || 'OFFLINE' }}</span></div>
-      <div *ngFor="let ch of publisherChannels()" [attr.data-testid]="'publisher-status-' + ch.key">
-        <div class="flex justify-between items-center gap-3"><span>{{ (ch.label) | t }}</span><span>{{ publisherStatus(ch.val) }}</span>
+    <div *ngIf="!loading() && !error()" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div class="flex justify-between border border-slate-200 rounded-xl p-4"><span class="font-semibold">Ollama</span><span>{{ (integrations()?.ollama?.status || 'OFFLINE') | t }}</span></div>
+      <div class="flex justify-between border border-slate-200 rounded-xl p-4"><span class="font-semibold">ComfyUI</span><span>{{ (integrations()?.comfyui?.status || 'OFFLINE') | t }}</span></div>
+      <div *ngFor="let ch of publisherChannels()" class="border border-slate-200 rounded-xl p-4" [attr.data-testid]="'publisher-status-' + ch.key">
+        <div class="flex flex-wrap justify-between items-center gap-3"><span class="font-semibold">{{ (ch.label) | t }}</span><span>{{ (publisherStatus(ch.val)) | t }}</span>
           <button *ngIf="ch.key !== 'telegram'" type="button" [disabled]="busy() !== null" (click)="reconnect(ch.key)" [attr.data-testid]="'publisher-reconnect-' + ch.key" class="px-3 py-2 border rounded">{{ 'Перепідключити' | t }}</button>
         </div>
-        <p *ngIf="messages()[ch.key]" role="status" class="text-sm">{{ messages()[ch.key] }}</p>
+        <p *ngIf="messages()[ch.key]" role="status" class="text-sm">{{ (messages()[ch.key]) | t }}</p>
       </div>
     </div>
   </div>`,

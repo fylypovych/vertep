@@ -19,13 +19,19 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <app-loading-state *ngIf="loading()" />
       <app-error-state *ngIf="error()" [message]="error()!" />
       <div *ngIf="!loading() && !error()">
-        <div *ngFor="let name of secretNames" class="flex flex-wrap items-center justify-between gap-2 py-2 border-b">
-          <span class="font-mono text-sm break-all">{{ name }}</span>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <section *ngFor="let group of secretGroups" class="border border-slate-200 rounded-xl p-4" [attr.data-testid]="'secret-group-' + group.id">
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="font-semibold text-slate-900">{{ group.label | t }}</h4>
+          <span class="text-xs text-slate-500">{{ savedCount(group.names) }}/{{ group.names.length }}</span>
+        </div>
+        <div *ngFor="let name of group.names" class="flex flex-wrap items-center justify-between gap-2 py-2 border-t border-slate-100">
+          <span class="min-w-0"><span class="block text-sm font-medium">{{ secretLabel(name) | t }}</span><span class="block font-mono text-xs text-slate-400 break-all">{{ name }}</span></span>
           <div class="flex flex-wrap items-center gap-2">
             <ng-container *ngIf="editingSecret() === name; else secretActions">
               <label class="sr-only" [for]="'secret-' + name">{{ 'Нове значення для' | t }} {{ name }}</label>
               <input [(ngModel)]="editValue" [id]="'secret-' + name" type="password"
-                     class="px-2 py-1 text-sm border border-slate-200 rounded w-48">
+                     class="px-2 py-1 text-sm border border-slate-200 rounded w-full">
               <button (click)="saveSecret(name)" [disabled]="secretSaving()"
                       class="text-sm text-emerald-700 font-medium disabled:opacity-50">{{ 'Зберегти' | t }}</button>
               <button (click)="editingSecret.set(null)" class="text-sm text-slate-600">{{ 'Скасувати' | t }}</button>
@@ -40,6 +46,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
                       class="text-sm text-red-700">{{ 'Видалити' | t }}</button>
             </ng-template>
           </div>
+        </div>
+        </section>
         </div>
         <div class="mt-4 pt-4 border-t border-slate-200">
           <h4 class="text-sm font-medium text-slate-700 mb-2">{{ 'Новий секрет' | t }}</h4>
@@ -69,15 +77,25 @@ export class SecretsSectionComponent implements OnInit {
   newSecretName = '';
   newSecretValue = '';
 
-  readonly secretNames = [
-    'money_printer_token',
-    'telegram_bot_token', 'youtube_client_secret', 'facebook_access_token',
-    'tiktok_client_secret', 'smtp_password', 'external_ai_api_key',
-    'youtube_access_token', 'youtube_refresh_token', 'youtube_client_id',
-    'tiktok_access_token', 'tiktok_refresh_token', 'tiktok_client_id',
-    'instagram_access_token', 'instagram_refresh_token', 'instagram_client_id', 'instagram_client_secret',
-    'threads_access_token', 'threads_refresh_token', 'threads_client_id', 'threads_client_secret',
+  readonly secretGroups = [
+    { id: 'telegram', label: 'Telegram', names: ['telegram_bot_token'] },
+    { id: 'youtube', label: 'YouTube', names: ['youtube_client_id', 'youtube_client_secret', 'youtube_access_token', 'youtube_refresh_token'] },
+    { id: 'facebook', label: 'Facebook', names: ['facebook_access_token'] },
+    { id: 'instagram', label: 'Instagram', names: ['instagram_client_id', 'instagram_client_secret', 'instagram_access_token', 'instagram_refresh_token'] },
+    { id: 'threads', label: 'Threads', names: ['threads_client_id', 'threads_client_secret', 'threads_access_token', 'threads_refresh_token'] },
+    { id: 'tiktok', label: 'TikTok', names: ['tiktok_client_id', 'tiktok_client_secret', 'tiktok_access_token', 'tiktok_refresh_token'] },
+    { id: 'moneyprinter', label: 'MoneyPrinterTurbo', names: ['money_printer_token'] },
+    { id: 'ai', label: 'Зовнішній AI', names: ['external_ai_api_key'] },
+    { id: 'email', label: 'Пошта (SMTP)', names: ['smtp_password'] },
   ];
+
+  secretLabel(name: string): string {
+    const labels: [string, string][] = [['client_id', 'Client ID'], ['client_secret', 'Client Secret'], ['access_token', 'Токен доступу'],
+      ['refresh_token', 'Токен оновлення'], ['bot_token', 'Токен бота'], ['api_key', 'API key'], ['password', 'Пароль'], ['token', 'Токен']];
+    return labels.find(([suffix]) => name.endsWith(suffix))?.[1] ?? name;
+  }
+
+  savedCount(names: string[]): number { return names.filter(name => this.secrets()?.[name]).length; }
 
   constructor(
     private settings: SettingsApiService,

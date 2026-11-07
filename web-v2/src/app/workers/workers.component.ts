@@ -89,7 +89,7 @@ import { RemoteState } from '../core/state/remote-state';
                       <div class="text-xs text-red-600 mt-0.5" [attr.data-testid]="'worker-compatibility-' + worker.node_id">{{ worker.compatibility_issue }}</div>
                     }
                   </td>
-                  <td class="px-4 py-3">{{ nodeLoad(worker) }}{{ worker.temperature != null ? ' · ' + worker.temperature + '°C' : '' }}</td>
+                  <td class="px-4 py-3">{{ nodeLoad(worker) | t }}{{ worker.temperature != null ? ' · ' + worker.temperature + '°C' : '' }}</td>
                   <td class="px-4 py-3">
                     <button (click)="openSettings(worker)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">{{ 'Налаштування' | t }}</button>
                     <button (click)="deleteWorker(worker)" class="text-red-600 hover:text-red-700 text-sm font-medium">{{ 'Видалити' | t }}</button>
@@ -135,7 +135,7 @@ import { RemoteState } from '../core/state/remote-state';
           </div>
         } @else if (pollingNode()) {
           <div class="space-y-3">
-            <p class="text-sm text-slate-700">{{ onboardingStatus() }}</p>
+            <p class="text-sm text-slate-700">{{ (onboardingStatus()) | t }}</p>
             <div class="flex items-center gap-3">
               <div class="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
               <span class="text-sm text-slate-600">{{ 'Перевірка /api/nodes' | t }}</span>
@@ -153,7 +153,7 @@ import { RemoteState } from '../core/state/remote-state';
               <p><span class="font-medium">ID:</span> {{ registeredNode()!.node_id }}</p>
               <p><span class="font-medium">{{ 'Назва:' | t }}</span> {{ registeredNode()!.node_name }}</p>
               <p><span class="font-medium">{{ 'Роль:' | t }}</span> {{ registeredNode()!.role }}</p>
-              <p><span class="font-medium">{{ 'Статус:' | t }}</span> {{ registeredNode()!.status }}</p>
+              <p><span class="font-medium">{{ 'Статус:' | t }}</span> {{ (registeredNode()!.status) | t }}</p>
             </div>
             <div class="flex justify-end gap-2 mt-6">
               <button (click)="closeWizard()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Закрити' | t }}</button>

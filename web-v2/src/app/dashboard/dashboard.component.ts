@@ -11,6 +11,19 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { RemoteState } from '../core/state/remote-state';
 
+function gigabytes(bytes: number): string {
+  const value = bytes / 1024 ** 3;
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} GB`;
+}
+
+function usedOfBytes(used?: number, total?: number): string | null {
+  return used == null || !total ? null : `${gigabytes(used)} | ${gigabytes(total)}`;
+}
+
+function usedOfCores(used?: number, total?: number): string | null {
+  return used == null || !total ? null : `${used} | ${total} CPU`;
+}
+
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -27,7 +40,7 @@ import { RemoteState } from '../core/state/remote-state';
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">{{ 'Воркери' | t }}</p>
-                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(onlineWorkers) }}</p>
+                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(onlineWorkers) | t }}</p>
                 <p class="text-xs text-slate-400 mt-1">{{ 'У мережі' | t }}</p>
               </div>
               <div class="w-12 h-12 bg-emerald-50 rounded-lg flex items-center justify-center text-emerald-600">
@@ -39,7 +52,7 @@ import { RemoteState } from '../core/state/remote-state';
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">{{ 'Активні завдання' | t }}</p>
-                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(activeJobs) }}</p>
+                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(activeJobs) | t }}</p>
                 <p class="text-xs text-slate-400 mt-1">{{ 'В процесі' | t }}</p>
               </div>
               <div class="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
@@ -51,7 +64,7 @@ import { RemoteState } from '../core/state/remote-state';
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm text-slate-500">{{ 'Завдань у черзі' | t }}</p>
-                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(queuedJobs) }}</p>
+                <p class="text-2xl font-semibold text-slate-900 mt-1">{{ metric(queuedJobs) | t }}</p>
                 <p class="text-xs text-slate-400 mt-1">{{ 'Очікують' | t }}</p>
               </div>
               <div class="w-12 h-12 bg-amber-50 rounded-lg flex items-center justify-center text-amber-600">
@@ -103,33 +116,33 @@ import { RemoteState } from '../core/state/remote-state';
             <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Статуси завдань' | t }}</h3>
             <div class="grid grid-cols-2 gap-4" data-testid="job-statuses">
               <div class="text-center">
-                <div class="text-3xl font-bold text-blue-600">{{ metric(statusCounts['inProgress']) }}</div>
+                <div class="text-3xl font-bold text-blue-600">{{ metric(statusCounts['inProgress']) | t }}</div>
                 <div class="text-sm text-slate-500">{{ 'В процесі' | t }}</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-amber-600">{{ metric(statusCounts['queued']) }}</div>
+                <div class="text-3xl font-bold text-amber-600">{{ metric(statusCounts['queued']) | t }}</div>
                 <div class="text-sm text-slate-500">{{ 'Очікують' | t }}</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-emerald-600">{{ metric(statusCounts['completed']) }}</div>
+                <div class="text-3xl font-bold text-emerald-600">{{ metric(statusCounts['completed']) | t }}</div>
                 <div class="text-sm text-slate-500">{{ 'Завершено' | t }}</div>
               </div>
               <div class="text-center">
-                <div class="text-3xl font-bold text-red-600">{{ metric(statusCounts['failed']) }}</div>
+                <div class="text-3xl font-bold text-red-600">{{ metric(statusCounts['failed']) | t }}</div>
                 <div class="text-sm text-slate-500">{{ 'Помилки' | t }}</div>
               </div>
             </div>
             <div class="grid grid-cols-3 gap-4 mt-4">
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['paused']) }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['paused']) | t }}</div>
                 <div class="text-xs text-slate-500">{{ 'Призупинено' | t }}</div>
               </div>
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['cancelled']) }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['cancelled']) | t }}</div>
                 <div class="text-xs text-slate-500">{{ 'Скасовано' | t }}</div>
               </div>
               <div class="text-center">
-                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['waiting']) }}</div>
+                <div class="text-2xl font-bold text-slate-600">{{ metric(statusCounts['waiting']) | t }}</div>
                 <div class="text-xs text-slate-500">{{ 'Очікують систему' | t }}</div>
               </div>
             </div>
@@ -144,7 +157,7 @@ import { RemoteState } from '../core/state/remote-state';
                 <div>
                   <div class="flex justify-between text-sm mb-1">
                     <span class="text-slate-600">{{ (resource.label) | t }}</span>
-                    <span class="text-slate-900 font-medium">{{ (resource.value == null ? 'Немає даних' : resource.value + '%') | t }}</span>
+                    <span class="text-slate-900 font-medium">{{ (resource.value == null ? 'Немає даних' : resource.value + '%') | t }}@if (resource.value != null && resource.detail) { <span class="text-slate-500 font-normal" [attr.data-testid]="'resource-detail-' + resource.label"> ({{ resource.detail }})</span> }</span>
                   </div>
                   <div class="w-full bg-slate-100 rounded-full h-2">
                     @if (resource.value != null) {
@@ -226,7 +239,7 @@ export class DashboardComponent implements OnInit {
   coreModules: string[] = [];
   architectureItems: { role: string; label: string; count: number; capabilities: string[] }[] = [];
   statusCounts: Record<string, number | null> = { inProgress: null, queued: null, completed: null, failed: null, paused: null, cancelled: null, waiting: null };
-  resources: { label: string; value: number | null; color: string }[] = [];
+  resources: { label: string; value: number | null; color: string; detail: string | null }[] = [];
   resourcesAvailable = false;
   workers: Worker[] = [];
 
@@ -261,9 +274,9 @@ export class DashboardComponent implements OnInit {
         if (status.resources && (status.resources.cpu !== undefined || status.resources.ram !== undefined || status.resources.disk !== undefined)) {
           this.resourcesAvailable = true;
           this.resources = [
-            { label: 'CPU', value: status.resources.cpu ?? null, color: 'bg-emerald-500' },
-            { label: 'RAM', value: status.resources.ram ?? null, color: 'bg-blue-500' },
-            { label: 'Диск', value: status.resources.disk ?? null, color: 'bg-amber-500' },
+            { label: 'CPU', value: status.resources.cpu ?? null, color: 'bg-emerald-500', detail: usedOfCores(status.resources.cpu_used_cores, status.resources.cpu_cores) },
+            { label: 'RAM', value: status.resources.ram ?? null, color: 'bg-blue-500', detail: usedOfBytes(status.resources.ram_used_bytes, status.resources.ram_total_bytes) },
+            { label: 'Диск', value: status.resources.disk ?? null, color: 'bg-amber-500', detail: usedOfBytes(status.resources.disk_used_bytes, status.resources.disk_total_bytes) },
           ];
         }
         this.cdr.markForCheck();

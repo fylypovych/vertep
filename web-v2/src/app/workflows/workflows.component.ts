@@ -165,7 +165,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                       <div class="font-semibold text-red-700 mb-1">{{ 'Помилки:' | t }}</div>
                       <ul class="list-disc pl-4 text-red-600 space-y-1">
                         @for (err of validationReport()!.errors; track err) {
-                          <li>{{ err }}</li>
+                          <li>{{ (err) | t }}</li>
                         }
                       </ul>
                     </div>
@@ -175,7 +175,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                       <div class="font-semibold text-amber-700 mb-1">{{ 'Попередження:' | t }}</div>
                       <ul class="list-disc pl-4 text-amber-600 space-y-1">
                         @for (warn of validationReport()!.warnings; track warn) {
-                          <li>{{ warn }}</li>
+                          <li>{{ (warn) | t }}</li>
                         }
                       </ul>
                     </div>
@@ -235,7 +235,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
       <div *ngIf="showConflictModal()" data-testid="workflow-conflict-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div class="bg-white rounded-xl p-6 w-full max-w-lg mx-4 flex flex-col">
           <h3 class="text-lg font-semibold text-red-700 mb-2">{{ 'Конфлікт видалення (409)' | t }}</h3>
-          <p class="text-sm text-slate-600 mb-4">{{ conflictMessage() }}</p>
+          <p class="text-sm text-slate-600 mb-4">{{ (conflictMessage()) | t }}</p>
           @if (conflictUsage()) {
             <div class="space-y-3 mb-4 text-xs">
               @if (conflictUsage()!.characters.length) {

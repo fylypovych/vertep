@@ -32,3 +32,11 @@ aside {
 .wizard-input { @apply w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm; }
 .wizard-box { @apply mt-2 p-3 bg-slate-50 rounded-lg text-sm whitespace-pre-wrap; }
 .wizard-primary { @apply px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-50; }
+
+/* The native file button looks like plain text next to the Tailwind reset. */
+input[type='file']::file-selector-button {
+  @apply mr-3 px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-100 text-slate-800 text-sm font-medium cursor-pointer;
+}
+input[type='file']::file-selector-button:hover {
+  @apply bg-slate-200;
+}

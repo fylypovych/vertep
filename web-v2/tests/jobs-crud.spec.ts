@@ -58,21 +58,21 @@ test.describe('Jobs CRUD', () => {
     await mockApi(page, jobs);
     await page.goto('/jobs');
     await expect(page.getByTestId('jobs-page')).toBeVisible();
-    await expect(page.getByText('Коти')).toBeVisible();
+    await expect(page.getByText('j1', { exact: true })).toBeVisible();
   });
 
   test('Фільтрація за статусом', async ({ page }) => {
     await mockApi(page, jobs);
     await page.goto('/jobs');
     await page.selectOption('[data-testid="jobs-status-filter"]', 'active');
-    await expect(page.getByText('Природа')).toBeVisible();
+    await expect(page.getByText('j2', { exact: true })).toBeVisible();
   });
 
   test('Пошук за темою', async ({ page }) => {
     await mockApi(page, jobs);
     await page.goto('/jobs');
     await page.getByTestId('jobs-search').fill('Коти');
-    await expect(page.getByText('Коти')).toBeVisible();
-    await expect(page.getByText('Природа')).not.toBeVisible();
+    await expect(page.getByText('j1', { exact: true })).toBeVisible();
+    await expect(page.getByText('j2', { exact: true })).not.toBeVisible();
   });
 });

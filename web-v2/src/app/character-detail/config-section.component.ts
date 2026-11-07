@@ -1,14 +1,15 @@
+import { TPipe } from '../core/i18n/t.pipe';
 import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 @Component({
   selector: 'app-config-section',
   standalone: true,
-  imports: [CommonModule],
+  imports: [TPipe, CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5">
-      <h3 class="text-sm font-medium text-slate-500 mb-3">{{ title }}</h3>
+      <h3 class="text-sm font-medium text-slate-500 mb-3">{{ (title) | t }}</h3>
       <pre class="text-xs text-slate-700 bg-slate-50 p-3 rounded overflow-x-auto">{{ json }}</pre>
     </div>
   `,

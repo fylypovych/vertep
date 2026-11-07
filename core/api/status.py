@@ -44,10 +44,21 @@ def _build_telegram_status() -> dict:
 
 def _get_system_resources() -> dict | None:
     try:
+        cpu = psutil.cpu_percent(interval=0.1)
+        cores = psutil.cpu_count() or 1
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
         return {
-            "cpu": int(psutil.cpu_percent(interval=0.1)),
-            "ram": int(psutil.virtual_memory().percent),
-            "disk": int(psutil.disk_usage('/').percent),
+            "cpu": int(cpu),
+            "ram": int(memory.percent),
+            "disk": int(disk.percent),
+            # What the percentages are of; `used` matches them, unlike total minus available.
+            "cpu_cores": cores,
+            "cpu_used_cores": round(cpu * cores / 100, 1),
+            "ram_used_bytes": memory.total - memory.available,
+            "ram_total_bytes": memory.total,
+            "disk_used_bytes": disk.used,
+            "disk_total_bytes": disk.total,
         }
     except Exception:
         return None

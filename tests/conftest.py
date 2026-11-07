@@ -630,6 +630,7 @@ def signed_update_server(tmp_path, monkeypatch):
 _XDIST_TOGETHER = {"test_backup_process_acceptance", "test_runner_browser_e2e", "test_worker_roles",
                    "test_telegram_durable_acceptance", "test_monitoring_browser_e2e",
                    "test_provider_process_acceptance",
+                   "test_web_state_browser_e2e", "test_update_operation_lifecycle",
                    # Its tests flush the one shared Redis database.
                    "test_queue_redis_contract"}
 

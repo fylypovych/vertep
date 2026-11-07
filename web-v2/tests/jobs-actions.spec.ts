@@ -71,16 +71,20 @@ test.describe('Jobs Actions', () => {
   test('Створення завдання', async ({ page }) => {
     await page.goto('/jobs');
     await page.getByTestId('create-job-button').click();
-    await page.getByPlaceholder('Тема завдання').fill('Нове завдання');
+    await page.locator('label:has-text("Тема") + *').first().fill('Нове завдання');
+    const created = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/jobs');
     await page.getByRole('button', { name: 'Створити', exact: true }).click();
-    await expect(page.getByText('Нове завдання')).toBeVisible();
+    expect((await created).postDataJSON().topic).toBe('Нове завдання');
   });
 
   test('Видалення завдання', async ({ page }) => {
-    await page.goto('/jobs');
-    page.on('dialog', dialog => dialog.accept());
-    const deleteBtn = page.locator('[data-testid="jobs-table"] tr').first().locator('button:has-text("Видалити")');
-    await deleteBtn.click();
-    await page.waitForTimeout(500);
+    await page.route('**/api/jobs/j1', (route: any) => route.request().method() === 'GET'
+      ? route.fulfill({ json: { job_id: 'j1', topic: 'Тема', status: 'FAILED', character_id: 'c', events: [], event_log: [], scenes: [], artifacts: [], published_to: [], publication_results: {}, stages: {} } })
+      : route.fulfill({ json: { deleted: 'j1' } }));
+    await page.goto('/jobs/j1');
+    await page.getByTestId('delete-job-button').click({ timeout: 20000 });
+    const deleted = page.waitForRequest(request => request.method() === 'DELETE' && request.url().endsWith('/api/jobs/j1'));
+    await page.locator('app-confirm-dialog button').last().click();
+    await deleted;
   });
 });

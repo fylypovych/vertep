@@ -9,7 +9,8 @@ import json
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.exception_handlers import http_exception_handler
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
@@ -22,6 +23,11 @@ def error_code(detail: object, status: int) -> str:
 
 
 def install_error_codes(app: FastAPI) -> None:
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, error: RequestValidationError):
+        response = await request_validation_exception_handler(request, error)
+        return JSONResponse({**json.loads(response.body), "code": "validation_error"}, status_code=response.status_code)
+
     @app.exception_handler(HTTPException)
     async def with_code(request: Request, error: HTTPException):
         response = await http_exception_handler(request, error)
