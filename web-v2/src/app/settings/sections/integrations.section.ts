@@ -6,6 +6,8 @@ import { IntegrationStatus } from '../../core/models';
 import { LoadingStateComponent } from '../../shared/loading-state.component';
 import { ErrorStateComponent } from '../../shared/error-state.component';
 
+type Tone = 'green' | 'yellow' | 'red';
+
 @Component({
   selector: 'app-settings-integrations',
   standalone: true,
@@ -17,9 +19,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
     <button type="button" (click)="ngOnInit()" [disabled]="loading()" data-testid="publisher-test" class="px-3 py-2 border rounded mb-3">{{ 'Перевірити підключення' | t }}</button>
     <app-loading-state *ngIf="loading()" /><app-error-state *ngIf="error()" [message]="error()!" />
     <div *ngIf="!loading() && !error()" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <div class="flex justify-between border border-slate-200 rounded-xl p-4"><span class="font-semibold">Ollama</span><span>{{ (integrations()?.ollama?.status || 'OFFLINE') | t }}</span></div>
-      <div class="flex justify-between border border-slate-200 rounded-xl p-4"><span class="font-semibold">ComfyUI</span><span>{{ (integrations()?.comfyui?.status || 'OFFLINE') | t }}</span></div>
-      <div *ngFor="let ch of publisherChannels()" class="border border-slate-200 rounded-xl p-4" [attr.data-testid]="'publisher-status-' + ch.key">
+      <div *ngFor="let svc of services()" class="flex justify-between border rounded-xl p-4" [ngClass]="toneClass(serviceTone(svc.val))" [attr.data-tone]="serviceTone(svc.val)" [attr.data-testid]="'service-status-' + svc.key"><span class="font-semibold">{{ svc.label }}</span><span>{{ serviceStatus(svc.val) | t }}</span></div>
+      <div *ngFor="let ch of publisherChannels()" class="border rounded-xl p-4" [ngClass]="toneClass(publisherTone(ch.val))" [attr.data-tone]="publisherTone(ch.val)" [attr.data-testid]="'publisher-status-' + ch.key">
         <div class="flex flex-wrap justify-between items-center gap-3"><span class="font-semibold">{{ (ch.label) | t }}</span><span>{{ (publisherStatus(ch.val)) | t }}</span>
           <button *ngIf="ch.key !== 'telegram'" type="button" [disabled]="busy() !== null" (click)="reconnect(ch.key)" [attr.data-testid]="'publisher-reconnect-' + ch.key" class="px-3 py-2 border rounded">{{ 'Перепідключити' | t }}</button>
         </div>
@@ -59,6 +60,32 @@ export class IntegrationsSectionComponent implements OnInit {
         this.busy.set(null);
       },
     });
+  }
+
+  services(): { key: string; label: string; val?: { status?: string; http_status?: number } }[] {
+    return [{ key: 'ollama', label: 'Ollama', val: this.integrations()?.ollama },
+            { key: 'comfyui', label: 'ComfyUI', val: this.integrations()?.comfyui }];
+  }
+
+  /** Unreachable is red; an answer with an HTTP error is a problem (yellow); a clean answer is green. */
+  serviceTone(val?: { status?: string; http_status?: number }): Tone {
+    if (val?.status !== 'ONLINE') return 'red';
+    return (val.http_status ?? 200) >= 400 ? 'yellow' : 'green';
+  }
+
+  serviceStatus(val?: { status?: string; http_status?: number }): string {
+    const tone = this.serviceTone(val);
+    return tone === 'red' ? 'OFFLINE' : tone === 'yellow' ? 'Відповідає з помилкою' : 'ONLINE';
+  }
+
+  /** Not configured is red; confirmed ready is green; anything in between is a problem (yellow). */
+  publisherTone(val: { configured: boolean; ready?: boolean; missing_scopes?: string[] }): Tone {
+    if (!val?.configured) return 'red';
+    return val.ready === true && !val.missing_scopes?.length ? 'green' : 'yellow';
+  }
+
+  toneClass(tone: Tone): string {
+    return { green: 'bg-emerald-50 border-emerald-300', yellow: 'bg-amber-50 border-amber-300', red: 'bg-red-50 border-red-300' }[tone];
   }
 
   publisherStatus(val: { configured: boolean; ready?: boolean; missing_scopes?: string[] }): string {

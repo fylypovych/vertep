@@ -349,6 +349,14 @@ def test_telegram_without_a_channel_is_not_ready(monkeypatch):
     (httpx.Response(200, json={"result": {"status": "creator"}}), True),
     (httpx.Response(200, json={"result": {"status": "administrator", "can_post_messages": False}}), False),
     (httpx.Response(200, json={"result": {"status": "left"}}), False),
+    # #440: only a proven right to post counts.
+    (httpx.Response(200, json={"result": {"status": "member"}}), False),
+    (httpx.Response(200, json={"result": {"status": "restricted"}}), False),
+    (httpx.Response(200, json={"result": {"status": "administrator"}}), False),
+    (httpx.Response(200, json={"result": {"status": "administrator", "can_post_messages": "true"}}), False),
+    (httpx.Response(200, json={"ok": True}), False),
+    (httpx.Response(200, json={"result": ["creator"]}), False),
+    (httpx.Response(200, content=b"not json"), False),
     (httpx.Response(400, json={"description": "chat not found"}), False),
     (httpx.Response(403, json={"description": "bot was kicked"}), False)])
 def test_telegram_channel_permission_decides_readiness(monkeypatch, answer, ready):
@@ -375,6 +383,71 @@ def test_a_synthetic_token_on_the_node_does_not_make_it_ready(monkeypatch):
         service.publisher_readiness()
     assert "youtube" in str(refused.value) and SECRET not in str(refused.value)
 
+
+
+class _CoreReadiness:
+    """CORE's /api/tasks/publisher-readiness answer for a Publisher Node."""
+
+    def __init__(self, target):
+        self.target = target
+
+    def __call__(self, url, **kwargs):
+        assert url.endswith("/api/tasks/publisher-readiness")
+        return httpx.Response(200, json={
+            "channels": {"telegram": {"ready": False, "reason": "CORE не має токена"}},
+            "targets": {"telegram": self.target}}, request=httpx.Request("GET", url))
+
+
+def _node_with_telegram(monkeypatch, responses, target):
+    from publishers import LIVE_PUBLISHERS
+    from worker import service
+    _clean(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    monkeypatch.setenv("NODE_NAME", "publisher-1")
+    for name, publisher in LIVE_PUBLISHERS.items():
+        if name != "telegram":
+            monkeypatch.delenv(publisher.credential_env, raising=False)
+    transport = FakeTransport(responses)
+    monkeypatch.setattr(LIVE_PUBLISHERS["telegram"], "transport", transport)
+    monkeypatch.setattr("worker.role_executor._core_base_url", lambda: "http://core")
+    monkeypatch.setattr("worker.role_executor._worker_auth_headers", lambda node: {})
+    monkeypatch.setattr(service.httpx, "get", _CoreReadiness(target))
+    return service, transport
+
+
+@pytest.mark.parametrize("target,member", [
+    ("", None),
+    ("@channel", {"status": "member"}),
+    ("@channel", {"status": "administrator", "can_post_messages": False})])
+def test_a_node_token_is_not_ready_without_the_core_channel_or_the_right(monkeypatch, target, member):
+    """#440: a node with its own valid token is judged on the channel CORE configured."""
+    responses = [GET_ME] + ([httpx.Response(200, json={"result": member})] if member else [])
+    service, transport = _node_with_telegram(monkeypatch, responses, target)
+    with pytest.raises(RuntimeError) as refused:
+        service.publisher_readiness()
+    assert "telegram" in str(refused.value) and SECRET not in str(refused.value)
+    _only_read(transport)
+
+
+def test_a_node_token_with_the_right_to_post_is_ready(monkeypatch):
+    service, transport = _node_with_telegram(monkeypatch, [GET_ME, httpx.Response(
+        200, json={"result": {"status": "administrator", "can_post_messages": True}})], "@channel")
+    assert service.publisher_readiness()["ready_channels"] == ["telegram"]
+    assert transport.requests[1][1].endswith("/getChatMember")
+    _only_read(transport)
+
+
+def test_core_reports_the_target_it_checks_without_secrets(monkeypatch):
+    from core.api import tasks
+    monkeypatch.setattr(tasks, "_valid_worker_request", lambda node, request: True)
+    monkeypatch.setattr("core.publishing_settings.publishing_settings", lambda: {"telegram_channel_id": "@channel"})
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(tasks.router)
+    answer = TestClient(app).get("/api/tasks/publisher-readiness", headers={"x-vertep-node": "p"}).json()
+    assert answer["targets"] == {"telegram": "@channel"}
+    assert SECRET not in json.dumps(answer)
 
 # ---- #426
 def test_release_bundle_refuses_a_private_key(tmp_path):

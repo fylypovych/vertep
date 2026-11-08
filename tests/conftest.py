@@ -103,6 +103,23 @@ def _finish_executor_work(pool) -> None:
 
 
 @pytest.fixture(autouse=True)
+def restore_process_environment():
+    """#439: a test must not leave the process environment changed for the next one.
+
+    Some code under test writes os.environ for good (provider switch, worker config,
+    deleted roots). Child CORE/Worker processes inherit it, so in one serial process a
+    leaked MONEY_PRINTER_URL or TTS_PROVIDER broke unrelated process tests much later.
+    """
+    saved = dict(os.environ)
+    yield
+    for name in set(os.environ) - set(saved):
+        os.environ.pop(name, None)
+    for name, value in saved.items():
+        if os.environ.get(name) != value:
+            os.environ[name] = value
+
+
+@pytest.fixture(autouse=True)
 def restore_resource_roots():
     """CORE startup and some helpers set these for good; a later test would read an empty root."""
     names = ("CHARACTERS_ROOT", "BRANDS_ROOT", "WORKFLOWS_ROOT")

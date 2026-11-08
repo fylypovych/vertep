@@ -42,8 +42,16 @@ class TelegramPublisher(Publisher):
             return refused("Платформа недоступна: доступ до каналу не перевірено")
         if response.status_code >= 400:
             return refused("Бот не має доступу до каналу або канал не знайдено")
-        member = response.json().get("result") or {}
-        if member.get("status") in {None, "left", "kicked"} or member.get("can_post_messages") is False:
+        try:
+            member = response.json().get("result")
+        except (ValueError, AttributeError):
+            member = None
+        # Only a proven right counts: the channel owner, or an administrator whose
+        # answer states can_post_messages=true. A member, a restricted bot, an
+        # administrator without that right or an unreadable answer is not ready.
+        if not isinstance(member, dict) or not (
+                member.get("status") == "creator"
+                or (member.get("status") == "administrator" and member.get("can_post_messages") is True)):
             return refused("Бот не має права публікувати в каналі")
         return state
 

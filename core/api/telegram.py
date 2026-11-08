@@ -9,9 +9,12 @@ from core.telegram_store import load_telegram_settings
 from core.telegram_store import save_telegram_settings
 from fastapi import HTTPException
 from fastapi import Request
+import hashlib
 import httpx
 import os
 import secrets
+import threading
+import time
 from fastapi import APIRouter
 router = APIRouter()
 from core.telegram import handlers
@@ -87,17 +90,45 @@ def telegram_status():
     }
 
 
-def _get_bot_username() -> str | None:
+_BOT_NAME_TTL_SECONDS = 600
+_bot_name: dict = {"key": None, "value": None, "at": 0.0, "refreshing": False}
+_bot_name_lock = threading.Lock()
+
+
+def _fetch_bot_username(adapter: TelegramAdapter, key: str) -> None:
+    value = None
     try:
-        adapter = TelegramAdapter()
-        if not adapter.configured():
-            return None
         result = adapter.get_me()
         if result.get("ok"):
-            return result.get("result", {}).get("username")
+            value = result.get("result", {}).get("username")
     except Exception:
         pass
-    return None
+    with _bot_name_lock:
+        # A failed refresh keeps the last name of the same bot; another bot starts empty.
+        if value is None and _bot_name["key"] == key:
+            value = _bot_name["value"]
+        _bot_name.update(key=key, value=value, at=time.monotonic(), refreshing=False)
+
+
+def _get_bot_username() -> str | None:
+    """The bot name for the panel; a page never waits for Telegram to answer.
+
+    /api/status is read by every page. getMe is refreshed in the background at
+    most every few minutes, so a slow or unreachable Telegram only delays the
+    name, never the page; the last known name stays until a new one arrives.
+    """
+    adapter = TelegramAdapter()
+    if not adapter.configured():
+        return None
+    key = hashlib.sha256(adapter.token.encode()).hexdigest()
+    with _bot_name_lock:
+        known = _bot_name["value"] if _bot_name["key"] == key else None
+        fresh = _bot_name["key"] == key and time.monotonic() - _bot_name["at"] < _BOT_NAME_TTL_SECONDS
+        if fresh or _bot_name["refreshing"]:
+            return known
+        _bot_name["refreshing"] = True
+    threading.Thread(target=_fetch_bot_username, args=(adapter, key), daemon=True).start()
+    return known
 
 
 @router.get("/api/telegram/bot-info")

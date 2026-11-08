@@ -2657,7 +2657,7 @@ def test_real_backend_admin_profile_password_logout_roundtrip():
         try:
             _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
             expect(page.get_by_text("Адмін", exact=True)).to_be_visible(timeout=20000)
-            expect(page.get_by_text("Адміністрування", exact=True)).to_be_visible()
+            expect(page.locator("nav").first.get_by_text("Налаштування", exact=True)).to_be_visible()
 
             # Профіль показує серверну identity, а не локальні припущення.
             page.goto(f"{BASE_URL}/profile")
@@ -2741,7 +2741,7 @@ def test_real_backend_viewer_has_no_admin_access():
         try:
             _ui_login(page, VIEWER_USER, VIEWER_PASSWORD)
             expect(page.get_by_text("Переглядач", exact=False).first).to_be_visible(timeout=20000)
-            expect(page.locator("nav").first.get_by_text("Адміністрування", exact=True)).to_have_count(0)
+            expect(page.locator("nav").first.get_by_text("Налаштування", exact=True)).to_have_count(0)
 
             body = page.request.get(f"{BASE_URL}/api/session").json()
             assert body["authenticated"] is True

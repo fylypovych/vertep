@@ -444,8 +444,11 @@ def publisher_readiness(request: Request):
     node_name = request.headers.get("x-vertep-node", "")
     if not node_name or not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
+    from ..publishing_settings import publishing_settings
     channels = {name: publisher.readiness() for name, publisher in PUBLISHERS.items()}
-    return {"channels": channels}
+    # The target is a setting, not a secret: a node holding its own Telegram token
+    # checks its right to post in this exact channel.
+    return {"channels": channels, "targets": {"telegram": publishing_settings()["telegram_channel_id"]}}
 
 
 def _publish_secret_scope(task_id: str, request: Request) -> tuple[set[str], str]:

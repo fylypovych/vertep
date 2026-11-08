@@ -8,6 +8,7 @@ the pieces they need.
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,24 @@ def atomic_write_bytes(path: Path, data: bytes, *, mode: int | None = None) -> N
         os.fsync(output.fileno())
     if mode is not None:
         os.chmod(temporary, mode)
-    temporary.replace(path)
+    _replace(temporary, path)
+
+
+def _replace(temporary: Path, path: Path) -> None:
+    """Swap the file in; on Windows retry briefly while another process holds the target.
+
+    POSIX replaces an open file atomically. Windows refuses with PermissionError while a
+    reader or an antivirus scan has the target open, so a concurrent read made a write
+    fail (#439). The retry is bounded; a lasting refusal is raised as before.
+    """
+    for attempt in range(20 if os.name == "nt" else 1):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 19:
+                raise
+            time.sleep(0.05)
 
 
 def atomic_write_text(path: Path, text: str, *, mode: int | None = None,
