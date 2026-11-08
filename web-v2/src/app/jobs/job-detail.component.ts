@@ -711,6 +711,8 @@ export class JobDetailComponent implements OnInit, OnDestroy {
       this.jobsApi.get(jobId).subscribe({
         next: (job) => {
           this.job.set(job as Job);
+          if (this.route.snapshot.queryParamMap.get('edit') === '1' && !this.editing()
+              && this.policy.can('update_job').allowed) this.startEditing();
           this.loadJobChannels(job as Job);
           if ((job as Job).output_path) {
             this.videoArtifactUrl.set(`/api/jobs/${encodeURIComponent((job as Job).job_id)}/final/video.mp4`);

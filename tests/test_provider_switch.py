@@ -744,14 +744,12 @@ def _live_core():
     password = os.getenv("ADMIN_PASSWORD", "")
     auth = "Basic " + base64.b64encode(f"admin:{password}".encode("utf-8")).decode("ascii")
     try:
+        # /api/health runs real dependency probes (over 6 s here), so polling it
+        # only burned the whole deadline; uvicorn says when the socket is served.
         deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            try:
-                if httpx.get(f"{base}/api/health", timeout=2).status_code == 200:
-                    break
-            except httpx.HTTPError:
-                pass
-            time.sleep(0.2)
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert server.started, "CORE did not start within 30 s"
         yield base, auth
     finally:
         server.should_exit = True

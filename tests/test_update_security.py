@@ -832,8 +832,14 @@ def test_update_disk_full_journals_failure_and_retry_succeeds(tmp_path, monkeypa
     status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
     assert status["state"] == "SUCCEEDED" and status["progress"] == 100
 
-def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkeypatch):
-    """A host command timeout is a correlated failure: rollback runs and the
+@pytest.mark.parametrize("failure,expected", [
+    ("Command timed out after 1 seconds", "timed out"),
+    # #415 AC1: the apply stage exits non-zero when CORE, PostgreSQL or Redis fail
+    # the health check; that exit must start the existing rollback.
+    ("Update health check failed; the update agent will rollback automatically.", "health check failed"),
+])
+def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkeypatch, failure, expected):
+    """A failed host command is a correlated failure: rollback runs and the
     operation reports ROLLED_BACK instead of hanging or claiming success."""
     agent = _load_agent()
     monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
@@ -853,7 +859,7 @@ def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkey
     def timed_out(cmd, *_args, **_kwargs):
         if "rollback" in cmd:
             return commands.append(cmd) or ""
-        raise RuntimeError("Command timed out after 1 seconds")
+        raise RuntimeError(failure)
     monkeypatch.setattr(agent, "run_fenced", timed_out)
 
     state_dir = tmp_path / "state"
@@ -866,7 +872,7 @@ def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkey
     assert any("rollback" in " ".join(cmd) for cmd in commands)
     status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
     assert status["state"] == "ROLLED_BACK"
-    assert "timed out" in status["message"].lower()
+    assert expected in status["message"].lower() or expected in " ".join(status.get("log", [])).lower()
     assert not request.exists()
 
 def test_update_rejects_missing_root_metadata(tmp_path, monkeypatch):

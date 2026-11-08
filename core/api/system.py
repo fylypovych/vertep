@@ -176,9 +176,17 @@ def update_readiness():
     persisted_jobs_by_id = {job.job_id: job for job in store.repository.load_jobs()}
     persisted_jobs_by_id.update(store.jobs)
     persisted_jobs = list(persisted_jobs_by_id.values())
-    active = [job.job_id for job in persisted_jobs if job.status not in {
+    # Only work already running blocks the update: in-flight tasks and busy
+    # workers are checked below, CORE's own preparation here. A Job whose task
+    # waits in the paused queue, or that waits for an operator, cannot move
+    # while dispatch is paused, so waiting for it would never end; it simply
+    # continues after the update (AGENTS.md §15.6.3).
+    from ..runtime import _preparing
+    unfinished = [job.job_id for job in persisted_jobs if job.status not in {
         JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM, JobStatus.READY, JobStatus.PUBLISHED, JobStatus.FAILED,
         JobStatus.PAUSED, JobStatus.CANCELLED}]
+    active = [job_id for job_id in unfinished if job_id in _preparing]
+    waiting = [job_id for job_id in unfinished if job_id not in _preparing]
     persisted_workers_by_name = {worker["node_name"]: worker for worker in store.load_workers()}
     persisted_workers_by_name.update(store.workers)
     persisted_workers = list(persisted_workers_by_name.values())
@@ -204,7 +212,7 @@ def update_readiness():
     ready = (not active and not busy and task_queue.inflight_depth() == 0
              and not unacknowledged and not dispatch_allowed())
     return {"ready": ready,
-            "active_jobs": active, "busy_workers": busy,
+            "active_jobs": active, "waiting_jobs": waiting, "busy_workers": busy,
             "queue_paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth(),
             "drain_operation_id": operation_id, "acknowledged_workers": acknowledged,
             "unacknowledged_workers": unacknowledged}

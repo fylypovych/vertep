@@ -12,7 +12,7 @@ import { Job, Character, Brand, Workflow, JobCreate, JobPage, QueueState, DeadLe
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
-import { inStatusGroup, statusLabel } from '../core/presentation';
+import { inStatusGroup, jobActionAllowed, statusLabel } from '../core/presentation';
 import { Subscription, timer, forkJoin } from 'rxjs';
 import { PolicyService } from '../core/services/policy.service';
 import { RemoteState } from '../core/state/remote-state';
@@ -78,6 +78,16 @@ import { RemoteState } from '../core/state/remote-state';
                     <td class="px-4 py-3">{{ job.created_at | vertepDate }}</td>
                     <td class="px-4 py-3">
                       <button (click)="openJob(job.job_id)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">{{ 'Відкрити' | t }}</button>
+                      <button (click)="editJob(job.job_id)" [disabled]="!policy.can('update_job').allowed" [title]="(policy.disabledReason('update_job') || 'Редагувати') | t" data-testid="list-edit-job" class="text-blue-600 hover:text-blue-700 text-sm font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">{{ 'Редагувати' | t }}</button>
+                      @if (allowed('pause', job.status)) {
+                        <button (click)="runJobAction(job.job_id, 'pause')" [disabled]="!policy.can('pause_job').allowed" [title]="(policy.disabledReason('pause_job') || 'Пауза') | t" data-testid="list-pause-job" class="text-amber-600 hover:text-amber-700 text-sm font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">{{ 'Пауза' | t }}</button>
+                      }
+                      @if (allowed('resume', job.status)) {
+                        <button (click)="runJobAction(job.job_id, 'resume')" [disabled]="!policy.can('resume_job').allowed" [title]="(policy.disabledReason('resume_job') || 'Продовжити') | t" data-testid="list-resume-job" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">{{ 'Продовжити' | t }}</button>
+                      }
+                      @if (allowed('cancel', job.status)) {
+                        <button (click)="cancelJob(job.job_id)" [disabled]="!policy.can('cancel_job').allowed" [title]="(policy.disabledReason('cancel_job') || 'Скасувати') | t" data-testid="list-cancel-job" class="text-slate-600 hover:text-slate-800 text-sm font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">{{ 'Скасувати' | t }}</button>
+                      }
                       <button (click)="deleteJob(job.job_id)" [disabled]="!canDeleteJob" [title]="(deleteJobReason || 'Видалити' || '') | t" class="text-red-600 hover:text-red-700 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">{{ 'Видалити' | t }}</button>
                     </td>
                   </tr>
@@ -353,7 +363,7 @@ export class JobsComponent implements OnInit, OnDestroy {
   private queueSubs = new Subscription();
   private pollTimer: Subscription | null = null;
 
-  constructor(private jobsApi: JobsApiService, private queue: QueueApiService, private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router, private route: ActivatedRoute, private policy: PolicyService) {}
+  constructor(private jobsApi: JobsApiService, private queue: QueueApiService, private resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, private router: Router, private route: ActivatedRoute, public policy: PolicyService) {}
 
   get canCreateJob(): boolean { return this.policy.can('create_job').allowed; }
   get createJobReason(): string | null { return this.policy.disabledReason('create_job'); }
@@ -553,6 +563,24 @@ export class JobsComponent implements OnInit, OnDestroy {
 
   openJob(id: string): void {
     this.router.navigate(['/jobs', id]);
+  }
+
+  allowed(action: string, status: string): boolean { return jobActionAllowed(action, status); }
+
+  editJob(id: string): void {
+    this.router.navigate(['/jobs', id], { queryParams: { edit: '1' } });
+  }
+
+  runJobAction(id: string, action: 'pause' | 'resume' | 'cancel'): void {
+    const call = action === 'pause' ? this.jobsApi.pause(id) : action === 'resume' ? this.jobsApi.resume(id) : this.jobsApi.cancel(id);
+    call.subscribe({
+      next: () => { this.loadJobs(); this.toast.show(action === 'pause' ? 'Завдання призупинено' : action === 'resume' ? 'Завдання продовжено' : 'Завдання скасовано', 'success'); },
+      error: (err) => this.toast.show(err.message || 'Помилка дії', 'error'),
+    });
+  }
+
+  cancelJob(id: string): void {
+    this.confirm.confirm({ title: 'Скасувати завдання', message: `Скасувати ${id}?` }).subscribe((ok) => { if (ok) this.runJobAction(id, 'cancel'); });
   }
 
   deleteJob(id: string): void {
