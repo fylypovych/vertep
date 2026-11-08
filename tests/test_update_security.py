@@ -832,15 +832,21 @@ def test_update_disk_full_journals_failure_and_retry_succeeds(tmp_path, monkeypa
     status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
     assert status["state"] == "SUCCEEDED" and status["progress"] == 100
 
-@pytest.mark.parametrize("failure,expected", [
-    ("Command timed out after 1 seconds", "timed out"),
-    # #415 AC1: the apply stage exits non-zero when CORE, PostgreSQL or Redis fail
-    # the health check; that exit must start the existing rollback.
-    ("Update health check failed; the update agent will rollback automatically.", "health check failed"),
-])
-def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkeypatch, failure, expected):
-    """A failed host command is a correlated failure: rollback runs and the
+def test_update_timeout_rolls_back_and_reports_correlated_error(tmp_path, monkeypatch):
+    """A host command timeout is a correlated failure: rollback runs and the
     operation reports ROLLED_BACK instead of hanging or claiming success."""
+    _assert_failed_apply_rolls_back(tmp_path, monkeypatch, "Command timed out after 1 seconds", "timed out")
+
+
+def test_failed_health_check_rolls_back(tmp_path, monkeypatch):
+    """#415 AC1: the apply stage exits non-zero when CORE, PostgreSQL or Redis fail
+    the health check; that exit must start the existing rollback."""
+    _assert_failed_apply_rolls_back(
+        tmp_path, monkeypatch,
+        "Update health check failed; the update agent will rollback automatically.", "health check failed")
+
+
+def _assert_failed_apply_rolls_back(tmp_path, monkeypatch, failure, expected):
     agent = _load_agent()
     monkeypatch.setattr(agent, "verify_restored_release", lambda: None)
     import core.update_protocol as _upd
