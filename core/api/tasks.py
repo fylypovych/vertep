@@ -4,6 +4,7 @@ Worker-facing task lifecycle endpoints (owning a task, renewing a lease,
 cancellations, dead-letter queue and result submission). Extracted from
 ``core/app.py``.
 """
+import threading
 from .workflow_execution import router as workflow_execution_router
 import base64
 import binascii
@@ -77,13 +78,18 @@ def _report_gpu_outcome(job, result: TaskResult) -> None:
 def claim_task(payload: TaskClaim, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
-    if not may_claim_now(payload.node_name, store.workers):
-        return {"task": None, "worker_state": "WAITING_FOR_TURN"}
-    answer = _claim_task(payload)
-    if answer and answer.get("task"):
-        record_claim(payload.node_name, store.workers)
-        store.save_worker(store.workers[payload.node_name])
-    return answer
+    # Concurrent claims of one node would both pass the "no current_task" check.
+    with _claim_locks.setdefault(payload.node_name, threading.Lock()):
+        if not may_claim_now(payload.node_name, store.workers):
+            return {"task": None, "worker_state": "WAITING_FOR_TURN"}
+        answer = _claim_task(payload)
+        if answer and answer.get("task"):
+            record_claim(payload.node_name, store.workers)
+            store.save_worker(store.workers[payload.node_name])
+        return answer
+
+
+_claim_locks: dict[str, threading.Lock] = {}
 
 
 def _claim_task(payload: TaskClaim):

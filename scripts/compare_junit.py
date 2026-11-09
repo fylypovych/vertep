@@ -1,4 +1,5 @@
 """Compare per-test outcomes of two JUnit XML reports (#439): exit 1 on any difference."""
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -6,8 +7,11 @@ import xml.etree.ElementTree as ET
 def outcomes(path):
     result = {}
     for case in ET.parse(path).iter("testcase"):
-        name = f"{case.get('classname')}::{case.get('name')}"
         tags = {child.tag for child in case}
+        if not case.get("classname") and "skipped" in tags:
+            continue  # whole-module skip: reported only without xdist
+        # xdist --dist loadgroup appends "@<group>" to grouped test names.
+        name = re.sub(r"@\w+$", "", f"{case.get('classname')}::{case.get('name')}")
         result[name] = next((t for t in ("failure", "error", "skipped") if t in tags), "passed")
     return result
 

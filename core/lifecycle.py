@@ -17,6 +17,20 @@ import os
 from core.runtime import _watchdog
 from core.telegram.handlers import (_start_telegram_polling, _stop_telegram_polling, _recover_stale_update_operations, _reconcile_restart_operations)
 
+def _redispatch_after_restart() -> None:
+    for recovered_job in list(store.jobs.values()):
+        if (recovered_job.status in {JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM}
+                and dispatch_allowed() and _job_is_due(recovered_job)):
+            if recovered_job.status == JobStatus.WAITING_FOR_SYSTEM:
+                store.update(recovered_job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
+            executor.submit(_prepare_and_dispatch, recovered_job)
+        elif (recovered_job.status == JobStatus.SCRIPT_QUEUED and not recovered_job.script_task_id
+              and dispatch_allowed()):
+            # CORE stopped between queueing the script task and saving its id: that
+            # task is discarded at startup, so the script is queued again.
+            executor.submit(_prepare_and_dispatch, recovered_job)
+
+
 @asynccontextmanager
 async def lifespan(_app):
     # i.0.0.4.12: a failure keeps the file and stays visible; the store is not replaced.
@@ -96,12 +110,7 @@ async def lifespan(_app):
                 worker["status"] = "OFFLINE"
                 store.save_worker(worker)
         store.repository.record_task(task, "RELEASED", owner, error="task interrupted by CORE restart")
-    for recovered_job in list(store.jobs.values()):
-        if (recovered_job.status in {JobStatus.NEW, JobStatus.WAITING_FOR_SYSTEM}
-                and dispatch_allowed() and _job_is_due(recovered_job)):
-            if recovered_job.status == JobStatus.WAITING_FOR_SYSTEM:
-                store.update(recovered_job, JobStatus.NEW, "SYSTEM RETURNED TO NORMAL")
-            executor.submit(_prepare_and_dispatch, recovered_job)
+    _redispatch_after_restart()
     watchdog_task = asyncio.create_task(_watchdog())
     # Issue #174.3: an update operation whose host request was lost must reach
     # a terminal state after a restart, otherwise every retry is refused.
