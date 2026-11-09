@@ -226,6 +226,11 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
         monkeypatch.setenv(key, value)
     # A Publisher Node is ready only with a usable channel (i.0.0.4.14).
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "controlled-token")
+    # ...and the channel CORE configured in Settings -> Publishing (no CORE contact in this probe).
+    from publishers import LIVE_PUBLISHERS
+    telegram = LIVE_PUBLISHERS["telegram"]
+    configured = type(telegram).channel_readiness
+    monkeypatch.setattr(telegram, "channel_readiness", lambda chat_id: configured(telegram, chat_id or "@measured_channel"))
     from worker.service import role_self_test
     from core.dispatcher import available_worker
     from core.models import Job, JobStatus
@@ -237,7 +242,10 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
             pass
         def do_GET(self):
             calls.append(("GET", self.path))
-            self.send_response(200); self.end_headers(); self.wfile.write(b"healthy")
+            body = b"healthy"
+            if "/getChatMember" in self.path:  # the bot may post to the configured channel
+                body = b'{"ok":true,"result":{"status":"administrator","can_post_messages":true}}'
+            self.send_response(200); self.end_headers(); self.wfile.write(body)
         def do_POST(self):
             calls.append(("POST", self.path))
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
