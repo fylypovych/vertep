@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-24.04
     # The suite also runs the Docker-backed standard consumer tests (~16 min before #393).
     # workflow_dispatch adds the serial run for #439.
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 150 || 45 }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 180 || 45 }}
     env:
       VERTEP_STREAM_FAILURES: "1"
       VERTEP_TEST_REDIS_URL: redis://localhost:6379/0
@@ -116,7 +116,7 @@ jobs:
           # The Docker-backed standard consumer tests are required in fleet-persistence-runtime-acceptance;
           # running them here too doubled the job time past its limit.
           # Three runners were shut down right at these cancel/kill tests: they run in fleet-cancel-path.
-          python -m pytest -v -n 2 --dist loadgroup --ignore=tests/test_core_rollout_coordinator.py -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
+          python -m pytest -v -n 2 --dist loadgroup --durations=25 --ignore=tests/test_core_rollout_coordinator.py -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts.xml" --basetemp="$RUNNER_TEMP/local-contracts"             --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py
       - name: Збереження exact-SHA process та trust acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -127,11 +127,24 @@ jobs:
             ${{ runner.temp }}/local-contracts/**/backup-process-*.log
       - name: Validate shell syntax
         run: bash -n bootstrap.sh install.sh installer/*.sh scripts/vertep scripts/restore.sh
-      - name: Послідовний прогін і порівняння з паралельним (#439)
+      - name: Повтор паралельного, послідовний прогін і порівняння (#439)
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
         run: |
-          python -m pytest -q -p no:xdist --ignore=tests/test_core_rollout_coordinator.py -o junit_family=legacy -o faulthandler_timeout=600 --junitxml="$RUNNER_TEMP/local-contracts-serial.xml" --basetemp="$RUNNER_TEMP/local-contracts-serial" --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py || true
-          python scripts/compare_junit.py "$RUNNER_TEMP/local-contracts.xml" "$RUNNER_TEMP/local-contracts-serial.xml"
+          mkdir -p "$RUNNER_TEMP/compare"
+          python --version > "$RUNNER_TEMP/compare/environment.txt"; uname -a >> "$RUNNER_TEMP/compare/environment.txt"; pip freeze >> "$RUNNER_TEMP/compare/environment.txt"
+          cp "$RUNNER_TEMP/local-contracts.xml" "$RUNNER_TEMP/compare/parallel-1.xml"
+          start=$(date +%s); python -m pytest -q -n 2 --dist loadgroup --ignore=tests/test_core_rollout_coordinator.py --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py -o junit_family=legacy -o faulthandler_timeout=600 --durations=25 --junitxml="$RUNNER_TEMP/compare/parallel-2.xml" --basetemp="$RUNNER_TEMP/parallel-2" > "$RUNNER_TEMP/compare/parallel-2.log" 2>&1 || true
+          echo "parallel-2 wall_s=$(( $(date +%s) - start ))" >> "$RUNNER_TEMP/compare/wall.txt"
+          start=$(date +%s); python -m pytest -q -p no:xdist --ignore=tests/test_core_rollout_coordinator.py --ignore=tests/test_standard_host_consumer_docker.py --ignore=tests/test_standard_core_consumer_docker.py -o junit_family=legacy -o faulthandler_timeout=600 --durations=25 --junitxml="$RUNNER_TEMP/compare/serial.xml" --basetemp="$RUNNER_TEMP/serial" > "$RUNNER_TEMP/compare/serial.log" 2>&1 || true
+          echo "serial wall_s=$(( $(date +%s) - start ))" >> "$RUNNER_TEMP/compare/wall.txt"
+          cat "$RUNNER_TEMP/compare/wall.txt"
+          python scripts/compare_junit.py "$RUNNER_TEMP/compare/parallel-1.xml" "$RUNNER_TEMP/compare/parallel-2.xml" "$RUNNER_TEMP/compare/serial.xml" | tee "$RUNNER_TEMP/compare/report.txt"
+      - name: Збереження доказів порівняння (#439)
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: serial-parallel-compare-${{ github.sha }}
+          path: ${{ runner.temp }}/compare
       - name: Validate Compose configurations
         run: |
           docker compose -f docker-compose.yml config --quiet
