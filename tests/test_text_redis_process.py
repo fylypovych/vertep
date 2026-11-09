@@ -172,7 +172,8 @@ def create(api):
     response = api.post("/api/jobs", json={"topic": "Process Text", "character_id": "processchar"})
     assert response.status_code == 200, response.text
     job_id = response.json()["job_id"]
-    wait(lambda: get_job(api, job_id)["status"] == "SCRIPT_QUEUED")
+    # SCRIPT_QUEUED is saved just before the task enters the queue: wait for its id too.
+    wait(lambda: (job := get_job(api, job_id))["status"] == "SCRIPT_QUEUED" and job.get("script_task_id"))
     return job_id
 
 
