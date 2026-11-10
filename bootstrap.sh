@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vertep appliance bootstrap for a clean Ubuntu Server 24.04 host.
+# Vertep appliance bootstrap for Ubuntu Server 24.04 / 26.04 hosts.
 # The whole script is one brace group: `curl … | bash` reads it from stdin, and bash must
 # parse it completely before anything runs, or a command that reads stdin (docker compose
 # exec during the backup) swallows the rest of the script and bootstrap stops silently.
@@ -15,8 +15,20 @@ REGISTRATION_TOKEN=${VERTEP_NODE_TOKEN:-}
 BOOTSTRAP_SERVICES=(proxy core license-manager dispatcher scheduler certificate-manager migrate postgres redis update-agent)
 MIN_RAM_MB=${VERTEP_MIN_RAM_MB:-4096}
 MIN_DISK_MB=${VERTEP_MIN_DISK_MB:-20480}
-DOCKER_APT_VERSION='29.1.3-0ubuntu3~24.04.2'
-COMPOSE_APT_VERSION='2.40.3+ds1-0ubuntu1~24.04.1'
+select_host_platform(){
+  [[ ${ID:-} == ubuntu ]] || fail "Ubuntu Server 24.04 or 26.04 LTS is required"
+  case "${VERSION_ID:-}" in
+    24.04)
+      DOCKER_APT_VERSION='29.1.3-0ubuntu3~24.04.2'
+      COMPOSE_APT_VERSION='2.40.3+ds1-0ubuntu1~24.04.1'
+      ;;
+    26.04)
+      DOCKER_APT_VERSION='29.1.3-0ubuntu4.1'
+      COMPOSE_APT_VERSION='2.40.3+ds1-0ubuntu1'
+      ;;
+    *) fail "Ubuntu Server 24.04 or 26.04 LTS is required" ;;
+  esac
+}
 
 # Rollback state for an already installed system (see snapshot_installed_system).
 snapshot_taken=false
@@ -35,6 +47,22 @@ rollback_after_failure(){
 }
 fail(){ printf 'VERTEP: %s\n' "$*" >&2; rollback_after_failure; exit 1; }
 progress(){ printf '\n==> %s\n' "$*"; }
+select_runtime_health_contract(){
+  # The published signed payload may predate this bootstrap checkout. Only
+  # install the observer when that runtime actually declares its contract.
+  host_health_units=()
+  runtime_health_path=/api/health
+  if grep -q 'HOST_HEALTH_OBSERVATION:' "$INSTALL_ROOT/docker-compose.yml"; then
+    jq -e '.files as $files | all(["vertep-host-health.service", "vertep-host-health.timer",
+                "scripts/host-health.py", "core/health_observation.py"][];
+                . as $name | ($files[$name].sha256 | type == "string"))' "$manifest_tmp" >/dev/null \
+      || fail "signed runtime declares host health but its observer contract is incomplete"
+    host_health_units=(vertep-host-health.service vertep-host-health.timer)
+    runtime_health_path=/api/health/ready
+  elif grep -q '/api/health/ready' "$INSTALL_ROOT/docker-compose.yml"; then
+    runtime_health_path=/api/health/ready
+  fi
+}
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run bootstrap as root (curl … | sudo bash)"
 # Capability gate MUST precede stopping services, package installation or writes.
 # Bootstrap owns systemd lifecycle; a container with an executable systemctl
@@ -58,7 +86,7 @@ if command -v docker >/dev/null 2>&1; then
   existing_runtime=true
 fi
 . /etc/os-release
-[[ ${ID:-} == ubuntu && ${VERSION_ID:-} == 24.04 ]] || fail "Ubuntu Server 24.04 LTS is required"
+select_host_platform
 arch=$(dpkg --print-architecture)
 [[ $arch == amd64 || $arch == arm64 ]] || fail "unsupported CPU architecture: $arch"
 ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
@@ -87,17 +115,23 @@ if command -v ss >/dev/null && ss -H -ltn 'sport = :8443' | grep -q .; then
 fi
 filesystem=$(findmnt -n -o FSTYPE /opt 2>/dev/null || findmnt -n -o FSTYPE /)
 [[ $filesystem =~ ^(ext4|xfs|btrfs|zfs)$ ]] || fail "unsupported /opt filesystem: $filesystem"
+# The bundled ROCm 6.4.1 installer targets Noble only. Refuse before mutation
+# rather than configure a foreign-distribution repository on Resolute.
+if [[ $VERSION_ID == 26.04 && $existing_runtime == false && -c /dev/kfd && -d /dev/dri ]] \
+    && { grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -Eqi 'AMD|ATI'; }; then
+  fail "Automatic AMD ROCm installation on Ubuntu 26.04 is not qualified; configure a compatible Docker/ROCm runtime first; no changes made"
+fi
 
 # Only a fully supported host may quiesce the existing installation.
+for trigger in vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer; do
+  systemctl stop "$trigger" >/dev/null 2>&1 || true
+done
 for executor in vertep-update.service vertep-deployment.service vertep-watchdog.service vertep-startup-recovery.service; do
   executor_state=$(systemctl show -p ActiveState --value "$executor" 2>/dev/null || true)
   case "$executor_state" in
     active|activating|deactivating)
       fail "$executor is currently active; wait for it to finish before running bootstrap" ;;
   esac
-done
-for trigger in vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer; do
-  systemctl stop "$trigger" >/dev/null 2>&1 || true
 done
 
 progress "Detecting hardware"
@@ -773,6 +807,7 @@ fi
 chmod 0600 "$INSTALL_ROOT/tls/node-ca.key"
 
 progress "Installing privileged update executor"
+select_runtime_health_contract
 pending_requests=("$INSTALL_ROOT"/config/update/requests/*.json)
 if [[ -e "${pending_requests[0]}" ]]; then
   cancelled_dir="$INSTALL_ROOT/config/update/cancelled"
@@ -788,7 +823,7 @@ if [[ -e "${pending_requests[0]}" ]]; then
   mv -f "$status_tmp" "$INSTALL_ROOT/config/update/status.json"
 fi
 for unit in vertep-update.service vertep-update.path vertep-update-check.service vertep-update.timer \
-             vertep-host-health.service vertep-host-health.timer \
+             "${host_health_units[@]}" \
              vertep-deployment.service vertep-deployment.path \
              vertep-watchdog.service vertep-watchdog.timer \
              vertep-startup-recovery.service; do
@@ -803,9 +838,11 @@ for unit in vertep-update.service vertep-update.path vertep-update-check.service
   rm -f "/tmp/$unit"
 done
 systemctl daemon-reload
-install -d -m 0755 "$INSTALL_ROOT/config/host-health"
-systemctl enable --now vertep-host-health.timer
-systemctl start vertep-host-health.service
+if [[ ${#host_health_units[@]} -gt 0 ]]; then
+  install -d -m 0755 "$INSTALL_ROOT/config/host-health"
+  systemctl enable --now vertep-host-health.timer
+  systemctl start vertep-host-health.service
+fi
 # Enable now, but start only after bootstrap has verified and recorded health.
 systemctl enable vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
 # Startup recovery is a boot-time guard. Running it here would race the initial
@@ -852,7 +889,7 @@ required_services_healthy(){
   done
 }
 until required_services_healthy \
-  && curl -kfsS https://127.0.0.1:8443/api/health/ready >/dev/null; do
+  && curl -kfsS "https://127.0.0.1:8443$runtime_health_path" >/dev/null; do
   (( SECONDS < deadline )) || { "${compose[@]}" ps; fail "runtime health check timed out"; }
   if (( SECONDS >= next_health_report )); then
     "${compose[@]}" ps

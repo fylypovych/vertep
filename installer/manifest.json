@@ -1,5 +1,6 @@
 {
   "platform": "ubuntu:24.04",
+  "platforms": ["ubuntu:24.04", "ubuntu:26.04"],
   "profiles": {
     "core": {"includes": ["core"]},
     "worker": {"includes": ["gpu"]},

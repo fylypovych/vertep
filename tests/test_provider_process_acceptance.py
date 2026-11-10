@@ -86,7 +86,10 @@ def config_contour(tmp_path, request, record_property):
         (config / "installation.json").write_text('{"completed_at":"2026-01-01"}', encoding="utf-8")
         from core.deployment_plan import create_plan
         roles = json.loads((ROOT / "config/node_roles.json").read_text())
-        (config / "deployment-plan.json").write_text(json.dumps(create_plan(roles, "core", (ROOT / "VERSION").read_text().strip(), ["gpu", "voice"])))
+        # The node matrix enrolls remote roles with its own measured probes;
+        # it does not run the provider-switch contour's local GPU/Voice services.
+        additional_roles = [] if getattr(request, "param", None) == "dependencies" else ["gpu", "voice"]
+        (config / "deployment-plan.json").write_text(json.dumps(create_plan(roles, "core", (ROOT / "VERSION").read_text().strip(), additional_roles)))
     (config / "users.json").write_text("{}", encoding="utf-8")
     core_url = f"http://127.0.0.1:{port()}"
     env = {**os.environ, "CONFIG_ROOT": str(config), "JOB_ROOT": str(tmp_path / "core-jobs"),

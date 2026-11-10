@@ -6,10 +6,10 @@ gpu_role=false
 if [[ "${1:-}" == "--dry-run" ]]; then
   exec "$ROOT_DIR/installer/preflight.sh"
 fi
-if [[ "$(. /etc/os-release && echo "${ID}:${VERSION_ID}")" != "ubuntu:24.04" ]]; then
-  echo "This installer supports Ubuntu Server 24.04 only" >&2
-  exit 1
-fi
+case "$(. /etc/os-release && echo "${ID}:${VERSION_ID}")" in
+  ubuntu:24.04|ubuntu:26.04) ;;
+  *) echo "This installer supports Ubuntu Server 24.04 and 26.04 only" >&2; exit 1 ;;
+esac
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root: sudo ./install.sh" >&2
   exit 1

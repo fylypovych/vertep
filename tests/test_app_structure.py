@@ -58,6 +58,7 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/tasks/publisher-readiness"],
         ["GET", "/api/tasks/{task_id}/secrets"],
         ["PUT", "/api/tasks/{task_id}/secrets"],
+        ["POST", "/api/setup/selection"],  # #445 stages the wizard's selected services.
     ]
     assert after == sorted(before + execution)
 

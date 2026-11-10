@@ -1,5 +1,9 @@
 // Text of the API error codes (core/api_error_codes.json): the panel shows it in the chosen language.
 export const API_ERRORS: Record<string, { uk: string; en: string }> = {
+  "setup_already_completed": { uk: "Початкове налаштування вже завершено", en: "First-run setup has already been completed" },
+  "invalid_ollama_model_name": { uk: "Некоректна назва моделі Ollama", en: "Invalid Ollama model name" },
+  "invalid_backend_url": { uk: "Некоректна адреса AI backend", en: "Invalid backend URL" },
+  "unsupported_health_configuration": { uk: "Непідтримувана конфігурація перевірки", en: "Unsupported health check configuration" },
   "active_jobs_must_be_drained_before_restore": { uk: "Перед відновленням завершіть активні завдання", en: "Active jobs must be drained before restore" },
   "validation_error": { uk: "Перевірте введені дані", en: "Check the entered data" },
   "alert_not_found": { uk: "Сповіщення не знайдено", en: "Alert not found" },

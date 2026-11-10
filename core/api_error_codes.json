@@ -1,4 +1,8 @@
 {
+ "First-run setup has already been completed": "setup_already_completed",
+ "Invalid Ollama model name": "invalid_ollama_model_name",
+ "Invalid backend URL": "invalid_backend_url",
+ "Непідтримувана конфігурація перевірки": "unsupported_health_configuration",
  "Active jobs must be drained before restore": "active_jobs_must_be_drained_before_restore",
  "Alert not found": "alert_not_found",
  "Another restore is awaiting confirmation or executing": "another_restore_is_awaiting_confirmation_or_executing",

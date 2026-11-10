@@ -169,7 +169,9 @@ def test_setup_browser_deployment_manifest_enrollment_and_reload(config_contour,
             page.locator("#next").click()
             expect(page.locator("#telegramAdmins")).to_be_visible()
             page.locator("#next").click()
-            expect(page.locator("#health")).to_contain_text("OFFLINE", timeout=15000)
+            expect(page.locator("#health")).to_contain_text("Docker daemon недоступний.", timeout=15000)
+            blocked = api.get("/api/setup/health?role=core", headers={"X-Vertep-Setup-Token": "setup-acceptance-code"}).json()
+            assert blocked["ready"] is False and blocked["checks"]["docker"].startswith("OFFLINE"), blocked
             expect(page.locator("#next")).to_be_disabled()
             node_dependencies["fault"].unlink()
             page.locator("#back").click(); page.locator("#next").click()
@@ -315,7 +317,10 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
             created = api.post("/api/jobs", json={"topic": "Full self-test output", "character_id": "matrix_char"})
             assert created.status_code == 200, created.text
             job_id = created.json()["job_id"]
-            wait(lambda: api.get(f"/api/jobs/{job_id}").json()["status"] == "SCRIPT_QUEUED")
+            # SCRIPT_QUEUED is persisted before its task id; claim only after
+            # the task has been bound to the job, as in the Redis process test.
+            wait(lambda: (job := api.get(f"/api/jobs/{job_id}").json())["status"] == "SCRIPT_QUEUED"
+                 and job.get("script_task_id"))
             claimed = api.post("/api/tasks/claim", json={"node_name": "measured-text", "vram_mb": 0,
                 "supported_tasks": ["text"]}, headers=credentials["text"])
             assert claimed.status_code == 200, claimed.text
@@ -387,7 +392,7 @@ def test_required_services_and_optional_backend_use_actual_probes(config_contour
     core = api.get("/api/setup/health?role=core").json()
     assert core["ready"] is True, core
     assert core["checks"]["postgres"] == "OK" and core["checks"]["redis"] == "OK"
-    assert core["checks"]["ollama"].startswith("OFFLINE")  # optional for CORE/skip
+    assert core["checks"]["ollama"] == "OPTIONAL"  # CORE/skip does not select Ollama.
     for role, check in [("text", "ollama"), ("gpu", "comfyui"), ("monitoring", "monitoring")]:
         state = api.get("/api/setup/health", params={"role": role}).json()
         assert state["ready"] is False and state["checks"][check] != "OK", state

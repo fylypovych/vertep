@@ -67,12 +67,12 @@ def test_worker_update_agent_accepts_skip_drain():
 
 def test_setup_wizard_has_manifest_step():
     html = Path("web-v2/src/app/setup/setup.component.html").read_text(encoding="utf-8")
-    assert "Installation Manifest" in html
+    assert "Підсумок налаштувань" in html
     assert "downloadManifest" in html
-    assert "manifest.json" in html
     for element_id in ("coreConnection", "coreUrl", "coreCertificate", "registrationToken"):
         assert f'id="{element_id}"' in html
     source = Path("web-v2/src/app/setup/setup.component.ts").read_text(encoding="utf-8")
+    assert "manifest.json" in source
     assert "window.location.replace(target)" in source
     assert "this.askCode.set(true)" in source
     assert "backup_key: _omitted" in source, "the downloaded manifest must not carry the backup key"
