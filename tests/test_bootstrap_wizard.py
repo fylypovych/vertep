@@ -243,7 +243,7 @@ class TestSetupAPI:
         result = first_run_health()
         assert "ready" in result and "checks" in result
         assert result["checks"]["docker"] == "OK"
-        assert result["status"] == "HEALTHY"
+        assert result["status"] == "UNHEALTHY"  # Missing required checks cannot disagree with ready=False.
         assert result["role"] == "core"
 
     def test_setup_status_when_not_configured(self, monkeypatch, tmp_path):
@@ -546,7 +546,7 @@ class TestSetupWizardHTML:
     def test_has_all_sections(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
         for s in ("Роль вузла", "Назва інсталяції", "Адміністратор", "Секрети", "Обладнання", "AI Backend",
-                  "Telegram-бот", "Health Check", "Installation Manifest", "Ключ резервних копій", "Готово"):
+                  "Telegram-бот", "Health Check", "Підсумок налаштувань", "Ключ резервних копій", "Готово"):
             assert s in html
 
     def test_has_admin_fields(self):
@@ -560,7 +560,7 @@ class TestSetupWizardHTML:
 
     def test_has_manifest_download(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
-        assert "Installation ID" in html or "installation_id" in html
+        assert 'id="downloadManifest"' in html and 'downloadManifest()' in html
 
     def test_completion_section(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
@@ -607,6 +607,8 @@ class TestBootstrapDockerCompose:
 
     def _run_effective_runtime_check(self, **versions):
         bash = shutil.which("bash")
+        if not bash and Path("C:/Program Files/Git/bin/bash.exe").is_file():
+            bash = "C:/Program Files/Git/bin/bash.exe"
         if not bash:
             pytest.skip("bash runtime fixture is exercised by the required Ubuntu CI job")
         source = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
@@ -618,6 +620,7 @@ class TestBootstrapDockerCompose:
         fixture = textwrap.dedent(
             """
             set -euo pipefail
+            existing_runtime=${MOCK_EXISTING_RUNTIME:-false}
             DOCKER_APT_VERSION='29.1.3-0ubuntu3~24.04.2'
             COMPOSE_APT_VERSION='2.40.3+ds1-0ubuntu1~24.04.1'
             fail() { printf '%s\\n' "$*" >&2; exit 1; }
@@ -645,6 +648,7 @@ class TestBootstrapDockerCompose:
                 "MOCK_DOCKER_CLIENT_VERSION": versions.get("client", "29.1.3"),
                 "MOCK_DOCKER_SERVER_VERSION": versions.get("server", "29.1.3"),
                 "MOCK_COMPOSE_VERSION": versions.get("compose", "v2.40.3"),
+                "MOCK_EXISTING_RUNTIME": versions.get("existing", "false"),
             },
             check=False,
         )
@@ -653,6 +657,14 @@ class TestBootstrapDockerCompose:
     def test_effective_runtime_versions_match_all_pins(self):
         result = self._run_effective_runtime_check()
         assert result.returncode == 0, result.stderr
+
+    def test_existing_supported_runtime_is_preserved(self):
+        result = self._run_effective_runtime_check(client="27.3.1", server="27.3.1", compose="v2.29.6", existing="true")
+        assert result.returncode == 0, result.stderr
+
+    def test_existing_runtime_still_enforces_minimum(self):
+        result = self._run_effective_runtime_check(client="23.0.0", server="23.0.0", compose="v2.29.6", existing="true")
+        assert result.returncode != 0 and "too old" in result.stderr
 
     def test_ubuntu_compose_package_suffix_matches_the_pin(self):
         # Ubuntu 24.04 docker-compose-v2 reports the full package version.

@@ -486,6 +486,9 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
     atomic_json(root / "config/deployment-status.json", status)
     try:
         runner([*compose, "pull", *sorted(selected)], check=True, timeout=3600)
+        # Worker verifies the expected inventory before it can become ready.
+        # Publishing it after wait_for_healthy creates a readiness dependency cycle.
+        gpu_runtime_inventory(root)
         runner([*compose, "up", "-d", "--remove-orphans", *sorted(selected)],
                check=True, timeout=1800)
         if managed_ollama:
@@ -509,10 +512,6 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
             raise RuntimeError("Вибрані сервіси не в робочому стані: " + ", ".join(unhealthy))
         inventory["modules"] = _module_status(inventory["containers"], plan["modules"])
         atomic_json(root / "config/runtime-inventory.json", inventory)
-        # The expected ComfyUI runtime inventory of the GPU node is written from
-        # the pins of the release and the roots this deployment serves, so the
-        # node can verify its runtime before it becomes ready.
-        gpu_runtime_inventory(root)
         installation_path = root / "config/installation.json"
         if installation_path.is_file():
             installation = json.loads(installation_path.read_text(encoding="utf-8"))

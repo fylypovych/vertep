@@ -139,7 +139,7 @@ def _local_evidence() -> dict | None:
         return None
     names = [name for name, value in checks.items() if isinstance(value, tuple)]
     from .api.setup import REQUIRED_HEALTH_CHECKS
-    required = REQUIRED_HEALTH_CHECKS.get(_local_role(), frozenset(names))
+    required = checks.get("required", REQUIRED_HEALTH_CHECKS.get(_local_role(), frozenset(names)))
     evidence = {
         "checked_at": checks.get("checked_at"),
         "checks_ok": health_status(checks) == "HEALTHY",

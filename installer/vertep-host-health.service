@@ -1,0 +1,16 @@
+[Unit]
+Description=Vertep read-only host readiness observation
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@VERTEP_ROOT@
+Environment=VERTEP_ROOT=@VERTEP_ROOT@
+EnvironmentFile=-@VERTEP_ROOT@/.env
+ExecStart=/usr/bin/python3 @VERTEP_ROOT@/scripts/host-health.py
+TimeoutStartSec=50
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@VERTEP_ROOT@/config/host-health

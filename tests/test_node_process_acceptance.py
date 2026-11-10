@@ -527,7 +527,10 @@ print('ROCm 6.3.0' if '--version' in sys.argv else 'Name: gfx1100')
     monkeypatch.setenv("GPU_VENDOR", "amd")
     monkeypatch.setenv("ROCM_VERSION", "configured-only")
     from core.health_checks import check_gpu, check_cuda
-    assert check_gpu()[0] is True and check_cuda()[0] is True
+    assert check_gpu()[0] is True
+    # Vendor inventory/version output does not prove runtime computation.
+    monkeypatch.setitem(sys.modules, "torch", None)
+    assert check_cuda()[0] is False
     for mode in ("failed", "empty"):
         monkeypatch.setenv("MEASURED_GPU_MODE", mode)
         assert check_gpu()[0] is not True and check_cuda()[0] is False

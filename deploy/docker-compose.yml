@@ -93,6 +93,10 @@ services:
       SECRET_STORE_PASSPHRASE_FILE: /run/secrets/secret_store_passphrase
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      HOST_HEALTH_OBSERVATION: /data/config/host-health/observation.json
+      COMFYUI_URL: http://comfyui:8188
+      OLLAMA_URL: http://ollama:11434
+      PROMETHEUS_URL: http://monitoring:9090/-/healthy
     secrets: [secret_store_passphrase, postgres_password, redis_password]
     volumes:
       - ./config:/data/config
@@ -100,6 +104,7 @@ services:
       - ./storage:/data/storage
       - ./backups:/data/backups
       - ./tls:/data/tls:ro
+      - ./config/host-health:/data/config/host-health:ro
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -107,7 +112,7 @@ services:
       dispatcher: {condition: service_healthy}
       scheduler: {condition: service_healthy}
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 30

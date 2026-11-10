@@ -36,18 +36,27 @@ rollback_after_failure(){
 fail(){ printf 'VERTEP: %s\n' "$*" >&2; rollback_after_failure; exit 1; }
 progress(){ printf '\n==> %s\n' "$*"; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run bootstrap as root (curl … | sudo bash)"
-# Quiesce automatic runtime writers before changing the installed release.
-# Do not stop an executor halfway through an apply/rollback.
-for trigger in vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer; do
-  systemctl stop "$trigger" >/dev/null 2>&1 || true
-done
-for executor in vertep-update.service vertep-deployment.service vertep-watchdog.service vertep-startup-recovery.service; do
-  executor_state=$(systemctl show -p ActiveState --value "$executor" 2>/dev/null || true)
-  case "$executor_state" in
-    active|activating|deactivating)
-      fail "$executor is currently active; wait for it to finish before running bootstrap" ;;
-  esac
-done
+# Capability gate MUST precede stopping services, package installation or writes.
+# Bootstrap owns systemd lifecycle; a container with an executable systemctl
+# but no running manager is not a supported bootstrap host.
+service_manager=${VERTEP_SERVICE_MANAGER:-auto}
+[[ $service_manager == auto || $service_manager == systemd ]] \
+  || fail "unsupported service manager: $service_manager; bootstrap requires active systemd"
+command -v systemctl >/dev/null \
+  && systemctl show --property=Version --value >/dev/null 2>&1 \
+  || fail "active systemd is unavailable; no changes made. Use the signed Compose runtime with an external host supervisor (docs/runtime-readiness.md)"
+existing_runtime=false
+if command -v docker >/dev/null 2>&1; then
+  docker info >/dev/null 2>&1 || fail "Docker is installed but its daemon is unavailable; no changes made"
+  docker compose version --short >/dev/null 2>&1 \
+    || fail "Docker Compose v2 is unavailable; repair the existing runtime before bootstrap"
+  docker_server_version=$(docker version --format '{{.Server.Version}}')
+  compose_version=$(docker compose version --short)
+  [[ ${docker_server_version%%.*} =~ ^[0-9]+$ && ${docker_server_version%%.*} -ge 24 ]] \
+    || fail "Docker runtime is too old; minimum required is 24.0; no changes made"
+  [[ ${compose_version#v} == 2.* ]] || fail "Docker Compose v2 is required; no changes made"
+  existing_runtime=true
+fi
 . /etc/os-release
 [[ ${ID:-} == ubuntu && ${VERSION_ID:-} == 24.04 ]] || fail "Ubuntu Server 24.04 LTS is required"
 arch=$(dpkg --print-architecture)
@@ -79,6 +88,18 @@ fi
 filesystem=$(findmnt -n -o FSTYPE /opt 2>/dev/null || findmnt -n -o FSTYPE /)
 [[ $filesystem =~ ^(ext4|xfs|btrfs|zfs)$ ]] || fail "unsupported /opt filesystem: $filesystem"
 
+# Only a fully supported host may quiesce the existing installation.
+for executor in vertep-update.service vertep-deployment.service vertep-watchdog.service vertep-startup-recovery.service; do
+  executor_state=$(systemctl show -p ActiveState --value "$executor" 2>/dev/null || true)
+  case "$executor_state" in
+    active|activating|deactivating)
+      fail "$executor is currently active; wait for it to finish before running bootstrap" ;;
+  esac
+done
+for trigger in vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer; do
+  systemctl stop "$trigger" >/dev/null 2>&1 || true
+done
+
 progress "Detecting hardware"
 gpu_vendor=none; gpu_name="GPU not found"; gpu_vram_mb=0; driver=unavailable; cuda=unavailable
 if grep -qix '0x10de' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -qi nvidia; then
@@ -92,8 +113,11 @@ elif grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/de
 progress "Installing container runtime"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils python3-psycopg docker.io=$DOCKER_APT_VERSION docker-compose-v2=$COMPOSE_APT_VERSION
-systemctl enable --now docker
+apt-get install -y -qq ca-certificates curl gnupg openssl jq pciutils python3-psycopg
+if [[ $existing_runtime == false ]]; then
+  apt-get install -y -qq docker.io=$DOCKER_APT_VERSION docker-compose-v2=$COMPOSE_APT_VERSION
+  systemctl enable --now docker
+fi
 verify_container_runtime() {
   local expected_docker_version expected_compose_version
   docker_client_version=$(docker version --format '{{.Client.Version}}' 2>/dev/null) \
@@ -109,11 +133,11 @@ verify_container_runtime() {
 
   expected_docker_version=${DOCKER_APT_VERSION%%-*}
   expected_compose_version=${COMPOSE_APT_VERSION%%+*}
-  [[ "$docker_client_version" == "$expected_docker_version" ]] \
+  [[ $existing_runtime == true || "$docker_client_version" == "$expected_docker_version" ]] \
     || fail "Docker Client version mismatch: expected $expected_docker_version, got $docker_client_version"
-  [[ "$docker_server_version" == "$expected_docker_version" ]] \
+  [[ $existing_runtime == true || "$docker_server_version" == "$expected_docker_version" ]] \
     || fail "Docker Server version mismatch: expected $expected_docker_version, got $docker_server_version"
-  [[ "$compose_version" == "$expected_compose_version" ]] \
+  [[ $existing_runtime == true || "$compose_version" == "$expected_compose_version" ]] \
     || fail "Docker Compose runtime version mismatch: expected $expected_compose_version, got $compose_version"
 
   # Preserve explicit minimum-version diagnostics for unsupported older runtimes.
@@ -131,18 +155,18 @@ verify_container_runtime
 
 # Verify effective apt versions match pinned versions
 docker_pkg_version=$(dpkg-query -W -f='${Version}' docker.io 2>/dev/null || echo "")
-if [[ "$docker_pkg_version" != "$DOCKER_APT_VERSION" ]]; then
+if [[ $existing_runtime == false && "$docker_pkg_version" != "$DOCKER_APT_VERSION" ]]; then
   fail "Docker apt version mismatch: expected $DOCKER_APT_VERSION, got $docker_pkg_version"
 fi
 compose_pkg_version=$(dpkg-query -W -f='${Version}' docker-compose-v2 2>/dev/null || echo "")
-if [[ "$compose_pkg_version" != "$COMPOSE_APT_VERSION" ]]; then
+if [[ $existing_runtime == false && "$compose_pkg_version" != "$COMPOSE_APT_VERSION" ]]; then
   fail "Docker Compose apt version mismatch: expected $COMPOSE_APT_VERSION, got $compose_pkg_version"
 fi
 if [[ $gpu_vendor == nvidia && $driver == unavailable ]]; then
   apt-get install -y -qq ubuntu-drivers-common
   ubuntu-drivers install || fail "NVIDIA driver installation failed"
 fi
-if [[ $gpu_vendor == nvidia ]]; then
+if [[ $gpu_vendor == nvidia ]] && ! { nvidia-smi >/dev/null 2>&1 && docker info --format '{{json .Runtimes}}' | grep -q nvidia; }; then
   progress "Installing NVIDIA Container Toolkit"
   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
     | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
@@ -159,7 +183,7 @@ if [[ $gpu_vendor == nvidia ]]; then
     || fail "NVIDIA driver was installed but is not active; reboot the host and rerun bootstrap"
   IFS=, read -r gpu_name gpu_vram_mb driver < <(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits | head -1)
   cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: \([^ ]*\).*/\1/p' | head -1); cuda=${cuda:-unavailable}
-elif [[ $gpu_vendor == amd ]]; then
+elif [[ $gpu_vendor == amd && $existing_runtime == false ]]; then
   [[ $arch == amd64 ]] || fail "AMD ROCm runtime currently requires amd64"
   # Skip ROCm installation if no actual AMD GPU hardware is present (e.g., CI runners)
   if [[ ! -c /dev/kfd || ! -d /dev/dri ]]; then
@@ -764,6 +788,7 @@ if [[ -e "${pending_requests[0]}" ]]; then
   mv -f "$status_tmp" "$INSTALL_ROOT/config/update/status.json"
 fi
 for unit in vertep-update.service vertep-update.path vertep-update-check.service vertep-update.timer \
+             vertep-host-health.service vertep-host-health.timer \
              vertep-deployment.service vertep-deployment.path \
              vertep-watchdog.service vertep-watchdog.timer \
              vertep-startup-recovery.service; do
@@ -778,6 +803,9 @@ for unit in vertep-update.service vertep-update.path vertep-update-check.service
   rm -f "/tmp/$unit"
 done
 systemctl daemon-reload
+install -d -m 0755 "$INSTALL_ROOT/config/host-health"
+systemctl enable --now vertep-host-health.timer
+systemctl start vertep-host-health.service
 # Enable now, but start only after bootstrap has verified and recorded health.
 systemctl enable vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
 # Startup recovery is a boot-time guard. Running it here would race the initial
@@ -824,7 +852,7 @@ required_services_healthy(){
   done
 }
 until required_services_healthy \
-  && curl -kfsS https://127.0.0.1:8443/api/health >/dev/null; do
+  && curl -kfsS https://127.0.0.1:8443/api/health/ready >/dev/null; do
   (( SECONDS < deadline )) || { "${compose[@]}" ps; fail "runtime health check timed out"; }
   if (( SECONDS >= next_health_report )); then
     "${compose[@]}" ps

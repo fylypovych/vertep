@@ -53,12 +53,13 @@ FILES = {
     "config/node_roles.json": "config/node_roles.json",
     "core/deployment_plan.py": "runtime/deployment-plan.py",
     "VERSION": "VERSION",
+    "docs/runtime-readiness.md": "docs/runtime-readiness.md",
 }
 
 SCRIPTS = (
     "apply-deployment.py", "migrate.py", "release-layout.py", "safe-extract.py",
     "startup-recovery.py", "status.py", "update-agent.py", "vertep", "watchdog.py",
-    "update-runtime-env.py",
+    "update-runtime-env.py", "host-health.py",
 )
 
 UNITS = (
@@ -66,6 +67,7 @@ UNITS = (
     "vertep-update.timer", "vertep-deployment.service", "vertep-deployment.path",
     "vertep-watchdog.service", "vertep-watchdog.timer",
     "vertep-startup-recovery.service",
+    "vertep-host-health.service", "vertep-host-health.timer",
 )
 
 MONITORING = (

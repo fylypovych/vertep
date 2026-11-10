@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Vertep host readiness observation
+
+[Timer]
+OnBootSec=1s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=vertep-host-health.service
+
+[Install]
+WantedBy=timers.target

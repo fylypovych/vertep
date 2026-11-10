@@ -62,7 +62,20 @@ Capabilities: {{ current.capabilities.join(', ') }}</div>
 
       <section [class.hidden]="step() !== 4">
         <h2 class="wizard-title">{{ 'Обладнання' | t }}</h2>
-        <div id="hardware" class="wizard-box">{{ hardware() | t }}</div>
+        <div id="hardware" class="rounded-xl bg-slate-50 p-4">
+          @if (hardware()) {
+            <dl class="divide-y divide-slate-200">
+              @for (row of hardwareRows(); track row.label) {
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-4 py-3 first:pt-0 last:pb-0">
+                  <dt class="text-sm text-slate-500">{{ row.label | t }}</dt>
+                  <dd class="m-0 text-sm font-medium text-slate-900 break-words">{{ row.value | t }}@if (row.unit) { {{ row.unit | t }} }</dd>
+                </div>
+              }
+            </dl>
+          } @else {
+            <p class="text-sm text-slate-500" role="status">{{ 'Виявлення…' | t }}</p>
+          }
+        </div>
       </section>
 
       <section [class.hidden]="step() !== 5">
@@ -91,15 +104,39 @@ Capabilities: {{ current.capabilities.join(', ') }}</div>
 
       <section [class.hidden]="step() !== healthStep">
         <h2 class="wizard-title">Health Check</h2>
-        <div id="health" class="wizard-box">{{ healthText() | t }}</div>
+        <div id="health" class="rounded-xl bg-slate-50 p-4 space-y-3" aria-live="polite">
+          @for (row of healthRows(); track row.name) {
+            <div class="text-sm">
+              <div class="flex flex-wrap justify-between gap-2">
+                <span class="font-medium">{{ row.name | t }}</span>
+                <span [class.text-red-700]="row.status === 'Помилка'" [class.text-emerald-700]="row.status === 'Готово'">{{ row.status | t }}</span>
+              </div>
+              <p class="text-xs text-slate-500">{{ (row.required ? 'Обов’язкова перевірка' : 'Необов’язкова перевірка') | t }}</p>
+              @if (row.code && row.status === 'Помилка') { <p class="text-sm text-red-700">{{ row.code | t }}</p> }
+            </div>
+          } @empty { <p class="text-sm text-slate-500">{{ healthText() | t }}</p> }
+        </div>
+        <button type="button" class="text-sm text-emerald-700 mt-3" (click)="prepareHealth()">{{ 'Повторити перевірку' | t }}</button>
       </section>
 
       <section [class.hidden]="step() !== manifestStep">
-        <h2 class="wizard-title">Installation Manifest</h2>
-        <p class="text-sm text-slate-600">{{ 'Налаштування завершено. Перегляньте створений маніфест інсталяції та за потреби завантажте його як JSON.' | t }}</p>
-        <div id="manifest" class="wizard-box">{{ manifestText() | t }}</div>
-        <button id="downloadManifest" type="button" class="wizard-primary mt-3" [disabled]="!result()" (click)="downloadManifest()">{{ 'Завантажити manifest.json' | t }}</button>
-        @if (result()?.['manifest_sha256']; as hash) { <p id="manifestHash" class="text-xs text-slate-500 mt-2">SHA-256: {{ hash }}</p> }
+        <h2 class="wizard-title">{{ 'Підсумок налаштувань' | t }}</h2>
+        <p class="text-sm text-slate-600 mb-4">{{ 'Систему налаштовано. Перевірте основні відомості та збережіть файл із повними даними інсталяції.' | t }}</p>
+        <dl id="manifest" class="rounded-xl bg-slate-50 p-4 divide-y divide-slate-200">
+          @for (row of manifestRows(); track row.label) {
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-4 py-3 first:pt-0 last:pb-0">
+              <dt class="text-sm text-slate-500">{{ row.label | t }}</dt>
+              <dd class="m-0 text-sm font-medium text-slate-900 break-words min-w-0">{{ row.value | t }}</dd>
+            </div>
+          }
+        </dl>
+        <button id="downloadManifest" type="button" class="wizard-primary mt-3" [disabled]="!result()" (click)="downloadManifest()">{{ 'Завантажити дані інсталяції' | t }}</button>
+        @if (result()?.['manifest_sha256']; as hash) {
+          <details class="mt-3 text-xs text-slate-500">
+            <summary class="cursor-pointer">{{ 'Контрольна сума файлу' | t }}</summary>
+            <p id="manifestHash" class="mt-2 break-all">SHA-256: {{ hash }}</p>
+          </details>
+        }
       </section>
 
       <section [class.hidden]="step() !== backupKeyStep">
@@ -114,10 +151,22 @@ Capabilities: {{ current.capabilities.join(', ') }}</div>
 
       <section [class.hidden]="step() !== lastStep">
         <h2 class="wizard-title">{{ 'Готово' | t }}</h2>
-        <p class="text-sm text-slate-600">{{ 'Vertep налаштовано. Для Core нижче показано Installation ID, Core URL, Core Certificate та перший одноразовий Registration Token.' | t }}</p>
-        <pre id="result" class="wizard-box">{{ resultText() }}</pre>
-        <h3 class="text-sm font-medium text-slate-700 mt-3">Core Certificate</h3>
-        <pre id="certificate" class="wizard-box max-h-48 overflow-auto text-xs">{{ (result()?.core_certificate || 'Немає сертифіката (non-Core вузол)') | t }}</pre>
+        <p class="text-sm text-slate-600 mb-4">{{ 'Vertep налаштовано та готовий до роботи.' | t }}</p>
+        <dl id="result" class="rounded-xl bg-slate-50 p-4 divide-y divide-slate-200">
+          @for (row of resultRows(); track row.label) {
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-4 py-3 first:pt-0 last:pb-0">
+              <dt class="text-sm text-slate-500">{{ row.label | t }}</dt>
+              <dd class="m-0 text-sm font-medium text-slate-900 break-all min-w-0 select-all">{{ row.value | t }}</dd>
+            </div>
+          }
+        </dl>
+        @if (result()?.core_certificate; as certificate) {
+          <details class="mt-4">
+            <summary class="cursor-pointer text-sm font-medium text-slate-700">{{ 'Сертифікат CORE' | t }}</summary>
+            <p class="text-sm text-slate-500 mt-2">{{ 'Використайте сертифікат і одноразовий токен для підключення іншого вузла.' | t }}</p>
+            <pre id="certificate" class="wizard-box max-h-48 overflow-auto text-xs select-all">{{ certificate }}</pre>
+          </details>
+        }
       </section>
 
       <div class="flex justify-between mt-6">

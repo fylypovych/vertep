@@ -66,6 +66,11 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
             }
             for selected in additional & health_urls.keys():
                 httpx.get(health_urls[selected], timeout=15).raise_for_status()
+            if "gpu" in additional:
+                gpu_test = role_self_test("gpu", metrics, adapter)
+                if gpu_test["status"] != "PASSED":
+                    raise RuntimeError(gpu_test.get("error", "GPU self-test failed"))
+                evidence["gpu"] = gpu_test["evidence"]
             if "backup" in additional:
                 Path(os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups"))).mkdir(parents=True, exist_ok=True)
         elif role == "gpu":

@@ -124,6 +124,25 @@ def test_apply_deployment_rejects_tampered_plan(tmp_path):
         module().apply(root, runner=lambda *args, **kwargs: None)
 
 
+def test_worker_inventory_exists_before_start_and_health_wait(tmp_path, monkeypatch):
+    root = fixture(tmp_path)
+    deployment = module()
+    published = []
+    started = []
+    monkeypatch.setattr(deployment, "gpu_runtime_inventory", lambda root: published.append(True))
+    def runner(command, **kwargs):
+        if "up" in command:
+            assert published == [True], "Worker must receive inventory before startup"
+            started.append(True)
+        if "ps" in command and "--all" in command:
+            if started:
+                assert published == [True], "Readiness must not wait on inventory published afterwards"
+            from types import SimpleNamespace
+            return SimpleNamespace(stdout="\n".join(json.dumps({"Service": name, "State": "running", "Health": "healthy"})
+                for name in ("worker", "comfyui", "update-agent")))
+    assert deployment.apply(root, runner=runner)["state"] == "SUCCEEDED"
+
+
 def test_text_deployment_provisions_selected_model(tmp_path):
     root = fixture(tmp_path, "text")
     commands = []

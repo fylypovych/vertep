@@ -470,7 +470,11 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
         raise ValueError("A non-Core node must be registered with Core")
     secrets_store = ensure_secret_store()
     version = os.getenv("VERTEP_VERSION", "unknown")
-    additional_roles = ["text"] if node_role == "core" and backend == "ollama" else []
+    from .health_checks import health_selection
+    selected_roles, _ = health_selection(node_role, backend)
+    additional_roles = sorted(selected_roles - {node_role})
+    if node_role == "core" and backend == "ollama" and not backend_url:
+        additional_roles.append("text")
     plan = create_plan(roles, node_role, version, additional_roles)
     _write("deployment-plan.json", plan)
     value = {"installation_id": secrets.token_hex(16), "installation_name": name.strip(),

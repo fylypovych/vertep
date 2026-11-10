@@ -23,7 +23,7 @@ router = APIRouter()
 
 @router.get("/api/health")
 def health() -> dict:
-    checks = _run_health_checks("core")
+    checks = _run_health_checks(None)
     return {"status": _health_status(checks), "service": "core",
             "runtime_instance_id": CORE_RUNTIME_INSTANCE_ID,
             "jobs": len(store.jobs), "checks": checks}
@@ -37,7 +37,7 @@ def health_ready():
     this probe returns HTTP 503 whenever the aggregated status is UNHEALTHY so
     that a successful ``curl`` on the health gate never implies a healthy node.
     """
-    checks = _run_health_checks("core")
+    checks = _run_health_checks(None)
     status = _health_status(checks)
     payload = {"status": status, "service": "core",
                "runtime_instance_id": CORE_RUNTIME_INSTANCE_ID,

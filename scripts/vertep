@@ -41,7 +41,7 @@ sync_host_runtime(){
   local release_root=$1
   install -d -m 0750 "$ROOT/scripts" "$ROOT/core"
   for executor in update-agent.py update-runtime-env.py vertep vertep-cli.py safe-extract.py \
-                  release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py; do
+                  release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py host-health.py; do
     [[ -f "$release_root/scripts/$executor" ]] || continue
     install -m 0750 "$release_root/scripts/$executor" "$ROOT/scripts/$executor"
   done
@@ -425,6 +425,16 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
     update_progress 80 RESTARTING "Restarting active Vertep services"
     [[ ${#restart_services[@]} -eq 0 ]] || "${compose[@]}" up -d --force-recreate --no-deps --remove-orphans "${restart_services[@]}"
     sync_host_runtime "$release_root"
+    if command -v systemctl >/dev/null 2>&1 && systemctl show --property=Version --value >/dev/null 2>&1 \
+        && [[ -f "$release_root/vertep-host-health.service" ]]; then
+      install -d -m 0755 "$ROOT/config/host-health"
+      for unit in vertep-host-health.service vertep-host-health.timer; do
+        sed "s|@VERTEP_ROOT@|$ROOT|g" "$release_root/$unit" > "/etc/systemd/system/$unit"
+      done
+      systemctl daemon-reload
+      systemctl enable --now vertep-host-health.timer
+      systemctl start vertep-host-health.service
+    fi
     if [[ "$role" == "core" || "$role" == "core-worker" ]] && command -v systemctl >/dev/null 2>&1; then
       for unit in vertep-update.service vertep-update.path vertep-update-check.service \
                   vertep-deployment.service vertep-deployment.path \
