@@ -1,12 +1,15 @@
 """A missing generation role must not lock the operator out of First Run."""
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from core import health_checks as hc
 from core.app import app
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -35,9 +38,11 @@ def test_missing_gpu_preserves_setup_access_but_not_role_readiness(setup_client)
     assert control.json()['scope'] == 'control'
     assert control.json()['checks']['required'] == ['core_api', 'docker', 'postgres', 'redis']
     assert api.get('/api/health/ready').status_code == 503
-    page = api.get('/setup?token=setup-control-test')
-    assert page.status_code == 200
-    assert 'html' in page.headers['content-type']
+    # The page itself is served only with a web-v2 build (local runs and Browser E2E; not local-contracts).
+    if any((ROOT / p / 'index.html').is_file() for p in ('web-v2/dist/vertep-admin-v2/browser', 'web-v2/dist/vertep-admin-v2')):
+        page = api.get('/setup?token=setup-control-test')
+        assert page.status_code == 200
+        assert 'html' in page.headers['content-type']
     assert api.get('/api/setup').status_code == 401
     headers = {'X-Vertep-Setup-Token': 'setup-control-test'}
     status = api.get('/api/setup', headers=headers)
