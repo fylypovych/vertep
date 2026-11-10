@@ -29,6 +29,22 @@ def health() -> dict:
             "jobs": len(store.jobs), "checks": checks}
 
 
+@router.get("/api/health/control")
+def health_control():
+    """Readiness of the management API, independent of selected generation roles.
+
+    This endpoint admits setup and administrative recovery, never role tasks.
+    The full role-aware readiness contract remains /api/health/ready.
+    """
+    from ..health_checks import run_control_checks
+    checks = run_control_checks()
+    status = _health_status(checks)
+    payload = {"status": status, "service": "core", "scope": "control",
+               "runtime_instance_id": CORE_RUNTIME_INSTANCE_ID, "checks": checks}
+    return Response(json.dumps(payload, ensure_ascii=False), media_type="application/json",
+                    status_code=200 if status == "HEALTHY" else 503)
+
+
 @router.get("/api/health/ready")
 def health_ready():
     """Readiness gate for container/probe health checks.

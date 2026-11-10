@@ -889,6 +889,7 @@ export interface UpdateOperation {
 }
 
 export interface SetupStatus {
+  selected_additional_roles?: string[];
   configured: boolean;
   installation: string | null;
   hardware: Record<string, unknown>;

@@ -300,6 +300,15 @@ def run_checks(role: str | None = None, *, backend: str | None = None,
     return checks
 
 
+def run_control_checks() -> dict:
+    """CORE management must remain reachable to repair unavailable role services."""
+    return {"role": "core", "scope": "control",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "required": sorted(REQUIRED_HEALTH_CHECKS["core"]),
+            "docker": check_docker(), "postgres": check_postgres(),
+            "redis": check_redis(), "core_api": (True, "local")}
+
+
 def health_status(checks: dict) -> str:
     required = checks.get("required", REQUIRED_HEALTH_CHECKS.get(checks.get("role")))
     if required is not None:

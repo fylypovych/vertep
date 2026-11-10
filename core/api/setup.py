@@ -70,7 +70,11 @@ async def _enroll_with_retry(core_url: str, body: dict, verify, attempts: int = 
 
 @router.get("/api/setup")
 def first_run_status():
-    return {**setup_status(), "roles": node_roles()}
+    from ..health_checks import effective_health_role, health_selection
+    role = effective_health_role()
+    roles, _ = health_selection(role)
+    return {**setup_status(), "roles": node_roles(),
+            "selected_additional_roles": sorted(roles - {role})}
 
 
 @router.get("/api/setup/health")
@@ -231,8 +235,16 @@ async def first_run_selection(request: Request):
     previous_selection = _read("setup-selection.json")
     extras = (set(previous.get("additional_roles", [])) if previous.get("role") == role else
               {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",") if item.strip()}) if role == "core" else set()
-    # The text role added by the wizard belongs only to the managed local backend.
-    if _read("setup-selection.json").get("managed_text"):
+    # Explicit manual selection replaces bootstrap roles, including an empty list.
+    if "additional_roles" in payload:
+        chosen = payload["additional_roles"]
+        if (not isinstance(chosen, list)
+                or any(not isinstance(item, str) or item == "core" or item not in node_roles() for item in chosen)
+                or (role != "core" and chosen)):
+            raise HTTPException(422, "Непідтримувана конфігурація перевірки")
+        extras = set(chosen)
+    # An implicit managed Text role belongs only to the selected local backend.
+    elif _read("setup-selection.json").get("managed_text"):
         extras.discard("text")
     managed = role == "core" and backend == "ollama" and not payload.get("backend_url")
     managed_text_added = managed and "text" not in extras

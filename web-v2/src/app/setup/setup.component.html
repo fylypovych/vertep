@@ -34,6 +34,19 @@
 Modules: {{ current.modules.join(', ') }}
 Capabilities: {{ current.capabilities.join(', ') }}</div>
         }
+        @if (role() === 'core') {
+          <fieldset class="mt-4 space-y-2" id="additionalRoles">
+            <legend class="wizard-label">{{ 'Додаткові ролі на цьому сервері' | t }}</legend>
+            @for (entry of additionalRoleOptions(); track entry.id) {
+              <label class="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" [id]="'setup-role-' + entry.id"
+                  [ngModel]="additionalRoles().includes(entry.id)"
+                  (ngModelChange)="toggleAdditionalRole(entry.id, $event)">
+                {{ entry.label | t }}
+              </label>
+            }
+          </fieldset>
+        }
         <div id="coreConnection" [style.display]="role() === 'core' ? 'none' : 'block'">
           <label class="wizard-label">Core URL<input id="coreUrl" type="url" class="wizard-input" [(ngModel)]="form.core_url" placeholder="https://core.example.com:8443"></label>
           <label class="wizard-label">Core Certificate<textarea id="coreCertificate" rows="6" class="wizard-input" [(ngModel)]="form.core_certificate" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label>

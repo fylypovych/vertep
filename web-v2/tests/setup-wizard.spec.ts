@@ -130,3 +130,46 @@ test('панель не веде на старий інтерфейс', async ({
   await page.goto('/login');
   await expect(page.locator('text=Класичний дизайн')).toHaveCount(0);
 });
+
+test('можна вручну вимкнути недоступну GPU роль зі збереженням даних майстра', async ({ page }) => {
+  let selected: string[] = ['gpu'];
+  await page.route('**/api/setup', route => route.fulfill({ json: {
+    ...status, selected_role: 'core', selected_additional_roles: ['gpu'],
+  } }));
+  await page.route('**/api/setup/selection', route => {
+    selected = route.request().postDataJSON()['additional_roles'];
+    return route.fulfill({ json: { accepted: true } });
+  });
+  await page.route('**/api/setup/health*', route => route.fulfill({ json: {
+    ready: !selected.includes('gpu'), required: selected.includes('gpu') ? ['gpu'] : ['core_api'],
+    checks: selected.includes('gpu') ? { gpu: 'OFFLINE' } : { core_api: 'OK' },
+    details: { gpu: { code: 'health_gpu_unavailable' } },
+  } }));
+  await page.goto('/setup?token=abc');
+  await expect(page.locator('#nodeRole')).toBeDisabled();
+  await expect(page.locator('#setup-role-gpu')).toBeChecked();
+  const next = page.locator('#next');
+  await next.click();
+  await page.fill('#name', 'Тестова VM');
+  await next.click();
+  await page.fill('#username', 'admin');
+  await page.fill('#password', 'long-enough-password');
+  await page.fill('#confirmation', 'long-enough-password');
+  await next.click();
+  await next.click();
+  await next.click();
+  await page.selectOption('#backend', 'skip');
+  await next.click();
+  await next.click();
+  await expect(next).toBeDisabled();
+  await expect(page.locator('#health')).toContainText('GPU недоступний');
+  for (let i = 0; i < 7; i++) await page.locator('#back').click();
+  await page.locator('#setup-role-gpu').uncheck();
+  await next.click();
+  await expect(page.locator('#name')).toHaveValue('Тестова VM');
+  await next.click();
+  await expect(page.locator('#password')).toHaveValue('long-enough-password');
+  for (let i = 0; i < 5; i++) await next.click();
+  await expect(next).toBeEnabled();
+  expect(selected).toEqual([]);
+});

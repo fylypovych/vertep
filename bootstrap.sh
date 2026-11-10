@@ -849,6 +849,18 @@ systemctl enable vertep-update.path vertep-update.timer vertep-deployment.path v
 # Compose deployment that bootstrap performs immediately below.
 systemctl enable vertep-startup-recovery.service
 
+select_bootstrap_health_contract(){
+  health_services=("${role_services[@]}")
+  bootstrap_health_path=$runtime_health_path
+  # An unfinished installation must expose the wizard even when optional roles
+  # cannot start. Keep the full gate for updates and legacy signed payloads.
+  if [[ $installation_complete == false ]] && grep -q '/api/health/control' "$INSTALL_ROOT/docker-compose.yml"; then
+    health_services=("${BOOTSTRAP_SERVICES[@]}")
+    bootstrap_health_path=/api/health/control
+  fi
+}
+select_bootstrap_health_contract
+
 progress "Starting Vertep $version"
 compose=(docker compose --env-file "$INSTALL_ROOT/.env" -f "$INSTALL_ROOT/docker-compose.yml")
 [[ $gpu_vendor == amd ]] && compose+=(-f "$INSTALL_ROOT/docker-compose.amd.yml")
@@ -868,7 +880,7 @@ next_health_report=$((SECONDS+30))
 progress "Waiting for runtime health checks"
 required_services_healthy(){
   local service container_id state health
-  for service in "${role_services[@]}"; do
+  for service in "${health_services[@]}"; do
     [[ $service == migrate ]] && continue
     container_id=$("${compose[@]}" ps -q "$service")
     if [[ -z $container_id ]]; then
@@ -889,7 +901,7 @@ required_services_healthy(){
   done
 }
 until required_services_healthy \
-  && curl -kfsS "https://127.0.0.1:8443$runtime_health_path" >/dev/null; do
+  && curl -kfsS "https://127.0.0.1:8443$bootstrap_health_path" >/dev/null; do
   (( SECONDS < deadline )) || { "${compose[@]}" ps; fail "runtime health check timed out"; }
   if (( SECONDS >= next_health_report )); then
     "${compose[@]}" ps

@@ -1,5 +1,6 @@
 // English text by its Ukrainian source; a missing entry shows Ukrainian (#433, #434).
 export const EN: Record<string, string> = {
+  "Додаткові ролі на цьому сервері": "Additional roles on this server",
   "Токен доступу": "Access token",
   "Токен оновлення": "Refresh token",
   "Токен": "Token",

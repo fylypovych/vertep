@@ -49,6 +49,8 @@ export class SetupComponent implements OnInit, OnDestroy {
   roleLocked = signal(false);
   role = signal('core');
   roles = signal<RoleEntry[]>([]);
+  additionalRoles = signal<string[]>([]);
+  additionalRoleOptions = computed(() => this.roles().filter(entry => entry.id !== 'core'));
   hardware = signal<Record<string, unknown> | null>(null);
   hardwareRows = computed(() => {
     const hardware = this.hardware();
@@ -155,6 +157,7 @@ export class SetupComponent implements OnInit, OnDestroy {
       if (status.configured) { window.location.href = '/'; return; }
       const entries = Object.entries(status.roles).map(([id, role]) => ({ id, ...role }));
       this.roles.set(entries);
+      this.additionalRoles.set(status.selected_additional_roles || []);
       if (status.selected_role && status.roles[status.selected_role]) {
         this.role.set(status.selected_role);
         this.roleLocked.set(true);
@@ -208,6 +211,12 @@ export class SetupComponent implements OnInit, OnDestroy {
     if (step === HEALTH_STEP && !this.result()) void this.prepareHealth();
   }
 
+  toggleAdditionalRole(id: string, enabled: boolean): void {
+    this.additionalRoles.update(roles => enabled ? [...new Set([...roles, id])] : roles.filter(role => role !== id));
+    this.selectionPrepared = false;
+    this.healthReady.set(false);
+  }
+
   async prepareHealth(): Promise<void> {
     if (this.preparingHealth) return;
     this.preparingHealth = true;
@@ -221,6 +230,7 @@ export class SetupComponent implements OnInit, OnDestroy {
         signal: AbortSignal.timeout(15000),
         method: 'POST', headers: { 'Content-Type': 'application/json', ...this.headers() },
         body: JSON.stringify({ node_role: this.role(), ai_backend: form.backend,
+          additional_roles: this.role() === 'core' ? this.additionalRoles() : [],
           backend_url: form.backend_url || null, backend_model: form.backend_model,
           core_url: form.core_url || null }),
       });
@@ -239,11 +249,13 @@ export class SetupComponent implements OnInit, OnDestroy {
     if (this.loadingHealth) return;
     this.loadingHealth = true;
     try {
-      const selection = new URLSearchParams({ role: this.role(), backend: this.form.backend });
+      const extras = this.role() === 'core' ? this.additionalRoles().join(',') : '';
+      const selection = new URLSearchParams({ role: this.role(), backend: this.form.backend, additional_roles: extras });
       const response = await fetch(`/api/setup/health?${selection}`, { headers: this.headers(), signal: AbortSignal.timeout(15000) });
       if (!response.ok) throw new Error('Перевірка недоступна');
       const health = await response.json();
-      if (this.step() !== HEALTH_STEP || selection.get('role') !== this.role() || selection.get('backend') !== this.form.backend) return;
+      if (this.step() !== HEALTH_STEP || selection.get('role') !== this.role() || selection.get('backend') !== this.form.backend
+        || extras !== (this.role() === 'core' ? this.additionalRoles().join(',') : '')) return;
       this.healthRows.set(Object.entries(health.checks as Record<string, string>).map(([name, status]) => ({
         name: HEALTH_NAMES[name] || name, status: status === 'OK' ? 'Готово' : status === 'OPTIONAL' ? 'Не застосовується' : 'Помилка',
         required: (health.required || []).includes(name),

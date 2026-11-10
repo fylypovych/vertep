@@ -326,7 +326,7 @@ def test_signed_bundle_contains_complete_observer_contract(tmp_path):
         assert hashlib.sha256((bundle / name).read_bytes()).hexdigest() == manifest['files'][name]['sha256']
     compose = yaml.safe_load((bundle / 'docker-compose.yml').read_text())
     core = compose['services']['core']
-    assert core['healthcheck']['test'][-1].endswith('/api/health/ready')
+    assert core['healthcheck']['test'][-1].endswith('/api/health/control')
     assert any('host-health:/data/config/host-health:ro' in mount for mount in core['volumes'])
     assert not any('docker.sock' in mount for mount in core['volumes'])
     assert 'host-health.py' in (bundle / 'scripts/vertep').read_text(encoding='utf-8')

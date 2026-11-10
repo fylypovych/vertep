@@ -112,7 +112,7 @@ services:
       dispatcher: {condition: service_healthy}
       scheduler: {condition: service_healthy}
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health/ready"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health/control"]
       interval: 10s
       timeout: 5s
       retries: 30
