@@ -208,8 +208,10 @@ def test_certificate_manager_renews_atomically(monkeypatch, tmp_path):
     assert (tmp_path / "vertep.key").read_text().startswith(private_key_header)
 
 
-def test_scheduler_filters_future_jobs():
-    response = TestClient(scheduler_service.app).post("/due", json={"jobs": [
+def test_scheduler_filters_future_jobs(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_KEY", "schedule-key")
+    assert TestClient(scheduler_service.app).post("/due", json={"jobs": []}).status_code == 401
+    response = TestClient(scheduler_service.app).post("/due", headers={"x-vertep-internal-key": "schedule-key"}, json={"jobs": [
         {"job_id": "future", "scheduled_for": "2999-01-01T00:00:00Z", "priority": 99},
         {"job_id": "ready", "scheduled_for": None, "priority": 1},
     ], "limit": 10})

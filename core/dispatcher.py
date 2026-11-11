@@ -168,7 +168,8 @@ def role_runtime_blocks(worker: dict | str) -> bool:
     if not role:
         return False
     try:
-        return role_blocks_dispatch(str(role))
+        node_id = None if isinstance(worker, str) else worker.get("node_id") or worker.get("node_name")
+        return role_blocks_dispatch(str(role), node_id=node_id)
     except Exception:
         return False
 

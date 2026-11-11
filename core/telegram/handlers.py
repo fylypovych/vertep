@@ -231,9 +231,13 @@ def _system_status_text() -> str:
     core_url = os.getenv("CORE_ADDRESS", "")
     core_ok, core_msg = check_core_api(core_url) if core_url else (None, "not configured")
 
-    dispatcher_ok = "running"
     dispatcher_url = os.getenv("DISPATCHER_URL", "").rstrip("/")
+    # Without a separate Dispatcher service it runs inside CORE: report whether it
+    # actually hands out tasks now instead of an unchecked "running".
+    from core.system_state import dispatch_allowed
+    dispatcher_ok = "running" if dispatch_allowed() else "paused"
     if dispatcher_url:
+        dispatcher_ok = "running"
         try:
             httpx.get(f"{dispatcher_url}/health", timeout=3).raise_for_status()
         except httpx.HTTPError:

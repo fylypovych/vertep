@@ -1,15 +1,20 @@
 # Життєвий цикл Job
 
-> Статус: чинний | Аудиторія: розробник | Канон: `AGENTS.md` §5, §10
+> Статус: чинний | Аудиторія: розробник | Канон: [AGENTS.md](../AGENTS.md) §3.1, §14–§15.
 
 ## Основний ланцюг
 
 ```text
-NEW → SCRIPTING → SCRIPT_READY → ASSET_GENERATION → ASSETS_READY →
-VIDEO_GENERATION → VIDEO_READY → ASSEMBLY → READY → PUBLISHING → PUBLISHED
+NEW → SCRIPT_QUEUED → SCRIPT_GENERATING → SCRIPT_PENDING_APPROVAL → SCRIPT_APPROVED
+→ STORYBOARD_QUEUED → STORYBOARD_GENERATING → STORYBOARD_PENDING_APPROVAL
+→ STORYBOARD_APPROVED → ASSET_GENERATION → TTS_GENERATING → TTS_READY
+→ VIDEO_GENERATION → VIDEO_PENDING_APPROVAL → VIDEO_APPROVED
+→ ASSEMBLY → READY → PUBLISHING → PUBLISHED
 ```
 
-Кожен етап генерації завершується review: `*_PENDING_APPROVAL` → approve/revision. Незатверджена версія не публікується; старий approval не поширюється на нову версію.
+Це спрощений основний шлях, а не перелік усіх дозволених переходів. Джерело фактичних станів і переходів — [JobStatus та JOB_STATE_TRANSITIONS](../core/models.py). Storyboard також має preview-стан `STORYBOARD_READY`; залежно від шляху можливі `ASSETS_READY`, `VIDEO_READY`, revision/failure-переходи та перехід TTS безпосередньо до assembly. Legacy `SCRIPTING`, `SCRIPT_READY`, `PENDING_APPROVAL` залишаються в enum, але не замінюють поточний script workflow.
+
+Етапи сценарію, storyboard та відео мають review: `*_PENDING_APPROVAL` → approve/revision. Незатверджена версія не публікується; старий approval не поширюється на нову версію.
 
 ## Бокові стани
 

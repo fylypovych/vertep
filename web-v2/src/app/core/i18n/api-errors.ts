@@ -1,5 +1,7 @@
 // Text of the API error codes (core/api_error_codes.json): the panel shows it in the chosen language.
 export const API_ERRORS: Record<string, { uk: string; en: string }> = {
+  "role_change_in_progress": { uk: "Попередня зміна ролей ще не завершена", en: "The previous role change has not finished" },
+  "role_change_blocked_by_update": { uk: "Триває оновлення системи; зміна ролей недоступна", en: "System update is in progress; role changes are unavailable" },
   "setup_already_completed": { uk: "Початкове налаштування вже завершено", en: "First-run setup has already been completed" },
   "invalid_ollama_model_name": { uk: "Некоректна назва моделі Ollama", en: "Invalid Ollama model name" },
   "invalid_backend_url": { uk: "Некоректна адреса AI backend", en: "Invalid backend URL" },

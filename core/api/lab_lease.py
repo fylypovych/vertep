@@ -1,4 +1,4 @@
-"""Production side of the laboratory GPU idle-lease contract (docs/lab-gpu-contract.md).
+"""Production side of the laboratory GPU idle-lease contract (docs/lab/lab-gpu-contract.md).
 
 Off unless the owner sets LAB_IDLE_SHARING_ENABLED=true, LAB_LEASE_TOKEN and
 LAB_GPU_ENDPOINT. Production always wins: a lease is granted only while no task is

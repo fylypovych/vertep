@@ -84,7 +84,7 @@ def system_status():
                                                   for job in store.jobs.values()),
                               "active_scenes": sum(scene.status == StageStatus.RUNNING
                                                    for job in store.jobs.values() for scene in job.scenes)},
-             "ollama": "STUB" if os.getenv("DEMO_MODE", "true").lower() == "true" else "CONFIGURED",
+             "ollama": "STUB" if os.getenv("DEMO_MODE", "false").lower() == "true" else "CONFIGURED",
              "telegram": _build_telegram_status(),
              "providers": provider_matrix(),
              "resources": _get_system_resources(),

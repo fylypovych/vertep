@@ -38,9 +38,10 @@ def test_service_selection_matches_in_process_selection(monkeypatch, worker, tas
     monkeypatch.delenv("REQUIRE_WORKER_SELF_TEST", raising=False)
     # Parametrized at collection: refresh the heartbeat or a long run makes the worker stale.
     worker = {**worker, "last_seen": datetime.now(timezone.utc).isoformat()}
+    monkeypatch.setenv("INTERNAL_API_KEY", "dispatch-key")
     client = TestClient(app)
     monkeypatch.setattr(job_helpers.httpx, "post",
-                        lambda url, json, timeout: client.post("/select", json=json))
+                        lambda url, json, headers, timeout: client.post("/select", json=json, headers=headers))
 
     monkeypatch.delenv("DISPATCHER_URL", raising=False)
     local = job_helpers._select_worker([dict(worker)], _job(), task_type, min_vram_mb)
@@ -51,9 +52,10 @@ def test_service_selection_matches_in_process_selection(monkeypatch, worker, tas
     assert (remote or {}).get("node_name") == expected
 
 
-def test_service_applies_voice_requirements():
+def test_service_applies_voice_requirements(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_KEY", "dispatch-key")
     worker = {**_worker("voice", ["speech_synthesis"]), "voice_catalog": {"voices": ["known"]}}
-    response = TestClient(app).post("/select", json={
+    response = TestClient(app).post("/select", headers={"x-vertep-internal-key": "dispatch-key"}, json={
         "job": _job().model_dump(mode="json"), "workers": [worker], "task_type": "voice", "min_vram_mb": 0,
         "voice_requirements": {"voice": "missing"}})
 
@@ -64,3 +66,13 @@ def test_service_applies_voice_requirements():
 def test_production_dispatcher_enforces_worker_self_test():
     compose = yaml.safe_load(Path("deploy/docker-compose.yml").read_text(encoding="utf-8"))
     assert compose["services"]["dispatcher"]["environment"]["REQUIRE_WORKER_SELF_TEST"] == "true"
+
+
+@pytest.mark.parametrize("configured,sent", [("", ""), ("dispatch-key", ""), ("dispatch-key", "wrong")])
+def test_service_refuses_a_call_without_the_internal_key(monkeypatch, configured, sent):
+    """I-12: only CORE holding INTERNAL_API_KEY may ask for a selection; no key configured = refused."""
+    monkeypatch.setenv("INTERNAL_API_KEY", configured)
+    response = TestClient(app).post("/select", headers={"x-vertep-internal-key": sent},
+                                    json={"job": _job().model_dump(mode="json"), "workers": []})
+    assert response.status_code == 401
+    assert TestClient(app).get("/health").status_code == 200

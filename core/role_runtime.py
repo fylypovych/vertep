@@ -76,7 +76,7 @@ def locally_deployed_roles() -> set[str]:
     return roles
 
 
-def role_blocks_dispatch(role: str) -> bool:
+def role_blocks_dispatch(role: str, node_id: str | None = None) -> bool:
     """True when a locally deployed role contract is measured as not ready.
 
     Dispatch stays capability-driven, but a role that this installation claims
@@ -87,6 +87,12 @@ def role_blocks_dispatch(role: str) -> bool:
     """
     if role not in locally_deployed_roles():
         return False
+    if node_id:
+        # A failed local deployment does not invalidate an independently
+        # enrolled remote executor with fresh heartbeat and self-test evidence.
+        _, nodes = _remote_status(role)
+        if any(node.get("node_id") == node_id and node.get("live") for node in nodes):
+            return False
     return role_runtime_status(role)["runtime_status"] != "READY"
 
 
@@ -95,6 +101,9 @@ def _local_role() -> str:
 
 
 def _additional_roles() -> set[str]:
+    deployed = locally_deployed_roles()
+    if deployed:
+        return deployed - {_local_role()}
     return {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",") if item.strip()}
 
 
@@ -105,12 +114,16 @@ def _additional_role_evidence(role: str) -> dict | None:
         return None
     required = set((node_roles().get(role) or {}).get("services") or [])
     containers = {item.get("service"): item for item in inventory.get("containers") or []}
+    from .health_checks import run_checks, health_status
+    checks = run_checks(role)
     return {"services_total": len(required),
             "services_missing": sorted(required - set(containers)),
             "services_unhealthy": sorted(name for name in required & set(containers)
-                                         if containers[name].get("state") != "running"
-                                         and name != "migrate"),
-            "checks_ok": True}
+                                         if name != "migrate" and (containers[name].get("state") != "running"
+                                             or containers[name].get("health") != "healthy")),
+            "failed_checks": [name for name in checks.get("required", [])
+                              if not isinstance(checks.get(name), (tuple, list)) or checks[name][0] is not True],
+            "checks_ok": health_status(checks) == "HEALTHY"}
 
 
 def _local_status(local: dict | None) -> str:

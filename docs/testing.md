@@ -1,16 +1,19 @@
 # Тестування
 
-> Статус: чинний | Аудиторія: розробник | Канон: `AGENTS.md` §21, §3.9, §3.12
+> Статус: чинний | Аудиторія: розробник | Канон: [AGENTS.md](../AGENTS.md) §2.9, §2.12, §11.
 
-## Обов'язкові перевірки (перед кожним версійним commit)
+## Перевірки за командою власника
 
-```bash
-python -m compileall -q core adapters worker scripts installer tests
-python -m pytest -q
-git diff --check
-```
+Нормативна послідовність — [AGENTS.md §2.9](../AGENTS.md#29-перевірки-перед-commit-і-push); документація не надає дозволу виконувати push/release.
 
-Плюс: відсутність нових падінь тестів, секретів/ключів у дифі, узгодженість `VERSION = commit = CHANGELOG = releases/<версія>.md`.
+| Команда | Локальні перевірки | Публікація |
+| --- | --- | --- |
+| `пуш` | `python -m compileall -q core adapters worker scripts installer tests`, `git diff --check`; без pytest, Playwright і вибіркових тестів | Версійний commit із `[skip ci]`, push у main; без tag/Release |
+| `тест` | Ті самі швидкі перевірки та `python -m pytest -q -n 8 --dist loadgroup` | Commit без `[skip ci]`, push; CI і Browser E2E |
+| `реліз` із локальними змінами | Повна логіка `тест`, далі release workflow | Лише після перевірок точного SHA |
+| `реліз` із чистим деревом | Без нового commit; перевірка CI/Browser gate точного SHA, release workflow виконує свої тести | Tag і Release створює лише workflow |
+
+Перевіряються відсутність нових падінь, секретів/ключів у diff та узгодженість `VERSION = commit = CHANGELOG = releases/<версія>.md`. Для локального виконання Issue запускаються доречні тести його scope; це не команда `тест` і не дозвіл на публікацію.
 
 ## Рівні
 
@@ -37,10 +40,10 @@ git diff --check
 
 - Нові падіння модульних тестів блокують реліз; допустимі e2e-невдачі — лише відсутність запущеного сервера (`ERR_CONNECTION_REFUSED 127.0.0.1:8080`).
 - Skipped ≠ passed: пропущені перевірки (OpenSSL, GPU, live) фіксуються явно і не зараховуються.
-- Release gate: required Browser E2E для точного release SHA має бути green — інакше публікація блокується (§3.12).
+- Release gate: required Browser E2E для точного release SHA має бути green — інакше публікація блокується ([AGENTS.md §2.12](../AGENTS.md)).
 
 ## CI
 
-- `ci.yml` — повний suite, компіляція, shell/compose-перевірки на кожен push/PR; redis-сервіс + `redis-server` для queue contract; окремий job `infrastructure-qualification` (`--run`) з артефактом `infrastructure-qualification.json`.
+- `ci.yml` — повний suite, компіляція, shell/compose-перевірки для подій push/PR без пропуску CI; redis-сервіс + `redis-server` для queue contract; окремий job `infrastructure-qualification` (`--run`) з артефактом `infrastructure-qualification.json`.
 - `browser-e2e.yml` — Browser suite з артефактами (logs/traces).
 - `release.yml` — build images, runtime bundle, manifest/checksums/SBOM/підпис, валідація, tag + GitHub Release. Єдиний власник публікації.

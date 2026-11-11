@@ -49,6 +49,10 @@ def _path(state_dir: Path | None = None) -> Path:
 
 
 def get_system_state() -> dict:
+    from .first_run import config_root
+    if (config_root() / "removal-in-progress.json").exists():
+        return {"state": SystemState.MAINTENANCE.value, "updated_at": None,
+                "reason": "Триває видалення Vertep; dispatch заблоковано", "operation_id": "removal"}
     database = _database_state()
     if database is not None:
         return database

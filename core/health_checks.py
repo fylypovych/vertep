@@ -247,7 +247,7 @@ def run_checks(role: str | None = None, *, backend: str | None = None,
     if role == "unassigned":
         role = "core"
     roles, required = health_selection(role, backend, additional_roles)
-    checks = {"role": role, "checked_at": datetime.now(timezone.utc).isoformat(),
+    checks = {"role": role, "selected_roles": sorted(roles), "checked_at": datetime.now(timezone.utc).isoformat(),
               "required": sorted(required)}
     checks["docker"] = check_docker()
     if role == "core":
@@ -312,7 +312,7 @@ def run_control_checks() -> dict:
 def health_status(checks: dict) -> str:
     required = checks.get("required", REQUIRED_HEALTH_CHECKS.get(checks.get("role")))
     if required is not None:
-        return "HEALTHY" if all(isinstance(checks.get(name), tuple) and checks[name][0] is True
+        return "HEALTHY" if all(isinstance(checks.get(name), (tuple, list)) and len(checks[name]) == 2 and checks[name][0] is True
             for name in required) else "UNHEALTHY"
-    failures = [name for name, value in checks.items() if isinstance(value, tuple) and value[0] is False]
+    failures = [name for name, value in checks.items() if isinstance(value, (tuple, list)) and len(value) == 2 and value[0] is False]
     return "UNHEALTHY" if failures else "HEALTHY"

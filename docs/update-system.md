@@ -1,6 +1,6 @@
 # Safe Update System
 
-> Статус: чинний | Аудиторія: оператор, розробник | Канон: `AGENTS.md` §11
+> Статус: чинний | Аудиторія: оператор, розробник | Канон: [AGENTS.md](../AGENTS.md) §15.
 
 ## Джерело
 
@@ -15,7 +15,7 @@ Download → Update (контейнери, міграції, рестарт) →
 
 - Перед оновленням — `MAINTENANCE`: диспетчер не видає нових задач, активні добігають, нові отримують `WAITING_FOR_SYSTEM`.
 - Backup перед оновленням: конфігурація, PostgreSQL, Redis, секрети, ліцензії, журнали міграцій → `/opt/vertep/backups/update-<stamp>/`.
-- Health Check: PostgreSQL, Redis, API, Web UI, Ollama, Dispatcher, GPU/Driver/CUDA, ComfyUI, VRAM + self-test кожного Worker. Успіх усіх — `READY`.
+- Health Check залежить від застосованих ролей та backend: CORE/БД/Redis, вибрані службові залежності й role-specific self-test Worker. Ollama, GPU/CUDA/ComfyUI та інші невибрані залежності не роблять CORE несправним. Потрібна вибрана залежність із відмовою блокує готовність. Контракт — [core/health_checks.py](../core/health_checks.py) і [runtime readiness](runtime-readiness.md).
 
 ## Rollback
 

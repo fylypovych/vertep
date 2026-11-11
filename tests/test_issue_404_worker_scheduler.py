@@ -101,3 +101,26 @@ def test_video_without_workflow_fails_clearly(monkeypatch):
     monkeypatch.delenv("COMFYUI_DEFAULT_VIDEO_WORKFLOW", raising=False)
     with pytest.raises(RuntimeError, match="Відео-workflow не налаштовано"):
         role_executor.execute_video({"topic": "тема"})
+
+
+def test_video_workflow_returning_a_frame_is_assembled_into_video(monkeypatch, tmp_path):
+    """AGENTS.md §14.3: a frame from ComfyUI becomes a video via FFmpeg on the node."""
+    from tests.test_assembly_worker_route import _mp4
+    from tests.test_mpt_media_matrix import _png
+    frame = _png(tmp_path / "f.png", (10, 20, 30), 16, 16).read_bytes()
+    seen = {}
+
+    class Compute:
+        def generate_output(self, workflow, prompt, kind):
+            return frame, "out.png", "image"
+
+    class Assembly:
+        def assemble(self, output, image=None, aspect_ratio="16:9", **_):
+            seen["frame"], seen["aspect"] = image.read_bytes(), aspect_ratio
+            return _mp4(output)
+
+    monkeypatch.setattr(role_executor.providers, "compute", lambda: Compute())
+    monkeypatch.setattr(role_executor.providers, "assembly", lambda: Assembly())
+    [artifact] = role_executor.execute_video({"topic": "тема", "workflow": "wf.json", "aspect_ratio": "9:16"})
+    assert seen == {"frame": frame, "aspect": "9:16"}
+    assert artifact["filename"] == "out.mp4" and artifact["contract"]["mime_type"] == "video/mp4"

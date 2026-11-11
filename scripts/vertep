@@ -2,6 +2,10 @@
 set -euo pipefail
 SCRIPT_PATH=$(readlink -f "$0")
 ROOT=$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)
+if [[ "${1:-}" == remove ]]; then
+  shift
+  exec python3 "$ROOT/scripts/remove-vertep.py" --root "$ROOT" "$@"
+fi
 if [[ -f "$ROOT/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -41,7 +45,7 @@ sync_host_runtime(){
   local release_root=$1
   install -d -m 0750 "$ROOT/scripts" "$ROOT/core"
   for executor in update-agent.py update-runtime-env.py vertep vertep-cli.py safe-extract.py \
-                  release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py host-health.py; do
+                  release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py host-health.py remove-vertep.py; do
     [[ -f "$release_root/scripts/$executor" ]] || continue
     install -m 0750 "$release_root/scripts/$executor" "$ROOT/scripts/$executor"
   done
@@ -50,6 +54,9 @@ sync_host_runtime(){
     install -m 0640 "$release_root/config/node_roles.json" "$ROOT/config/node_roles.json"
   fi
   install -m 0640 "$release_root/VERSION" "$ROOT/VERSION"
+  if [[ -f "$ROOT/scripts/remove-vertep.py" ]]; then
+    python3 "$ROOT/scripts/remove-vertep.py" --root "$ROOT" --record
+  fi
 }
 update_progress(){
   [[ -n "${VERTEP_UPDATE_STATUS_FILE:-}" && -f "${VERTEP_UPDATE_STATUS_FILE}" ]] || return 0
@@ -558,5 +565,5 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
   backup)
     python3 "$ROOT/scripts/vertep-cli.py" backup "${@:2}"
     ;;
-  *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback|backup|module}"; exit 2 ;;
+  *) echo "Usage: vertep {status|start|stop|restart|update|recover|rollback|backup|module|remove}"; exit 2 ;;
 esac

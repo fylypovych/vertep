@@ -350,11 +350,35 @@ def _refresh_inventory_after_rollback(root: Path, compose: list[str], selected: 
 
 
 def apply(root: Path, runner=subprocess.run) -> dict:
+    from core.update_lease import UpdateLease
+    # A competing deployment/update must never consume the current owner's request.
+    with UpdateLease(root / "config/update", "deployment"):
+        return _consume_request(root, runner)
+
+
+def _consume_request(root: Path, runner=subprocess.run) -> dict:
     request_path = root / "config/deployment-request.json"
     original_request = request_path.read_bytes()
     try:
         return _apply(root, runner)
-    except Exception:
+    except Exception as error:
+        # Validation and prerequisite failures happen before the inner rollback block.
+        try:
+            request = json.loads(original_request)
+            if not isinstance(request, dict):
+                request = {}
+        except ValueError:
+            request = {}
+        status_path = root / "config/deployment-status.json"
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            status = {}
+        if (status.get("state") != "FAILED" or status.get("request_id") != request.get("request_id")
+                or status.get("error") != str(error)):
+            atomic_json(status_path, {"state": "FAILED", "phase": "VALIDATING",
+                "request_id": request.get("request_id"), "additional_roles": request.get("additional_roles", []),
+                "error": str(error), "updated_at": datetime.now(timezone.utc).isoformat()})
         # PathExists otherwise immediately retries the failed request, repeatedly
         # applying and rolling back the same runtime. Preserve it for diagnosis,
         # without consuming a replacement request submitted during this attempt.
@@ -367,7 +391,8 @@ def apply(root: Path, runner=subprocess.run) -> dict:
 
 def _apply(root: Path, runner=subprocess.run) -> dict:
     request_path = root / "config/deployment-request.json"
-    request = json.loads(request_path.read_text(encoding="utf-8"))
+    original_request = request_path.read_bytes()
+    request = json.loads(original_request)
     roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
     role = request.get("role")
     version = request.get("version")
@@ -403,6 +428,17 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         except (OSError, ValueError):
             previous_services = set()
     new_services = set(plan["services"])
+    status = {"state": "APPLYING", "phase": "PREPARING", "role": role,
+              "request_id": request.get("request_id"),
+              "previous_roles": json.loads(previous_plan).get("additional_roles", []) if previous_plan else [],
+              "additional_roles": plan.get("additional_roles", []), "services": sorted(new_services),
+              "updated_at": datetime.now(timezone.utc).isoformat()}
+
+    def phase(name):
+        status.update(phase=name, updated_at=datetime.now(timezone.utc).isoformat())
+        atomic_json(root / "config/deployment-status.json", status)
+
+    phase("PREPARING")
 
     def compose_command() -> list[str]:
         command = ["docker", "compose", "--env-file", str(root / ".env"),
@@ -480,21 +516,20 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         else:
             plan_path.unlink(missing_ok=True)
         raise
-    status = {"state": "APPLYING", "role": role,
-              "additional_roles": plan.get("additional_roles", []), "services": sorted(selected),
-              "updated_at": datetime.now(timezone.utc).isoformat()}
-    atomic_json(root / "config/deployment-status.json", status)
     try:
+        phase("PULLING")
         runner([*compose, "pull", *sorted(selected)], check=True, timeout=3600)
         # Worker verifies the expected inventory before it can become ready.
         # Publishing it after wait_for_healthy creates a readiness dependency cycle.
         gpu_runtime_inventory(root)
+        phase("STARTING")
         runner([*compose, "up", "-d", "--remove-orphans", *sorted(selected)],
                check=True, timeout=1800)
         if managed_ollama:
             wait_for_healthy(compose, {"ollama"}, runner)
             runner([*compose, "exec", "-T", "ollama", "ollama", "pull", model],
                    check=True, timeout=3600)
+        phase("VERIFYING")
         wait_for_healthy(compose, selected, runner)
         inventory = runtime_inventory(root, compose, selected, role, version, runner)
         # Set-equality: the observed runtime set must match the intended plan.
@@ -526,8 +561,13 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
                 sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             atomic_json(root / "config/installation-manifest.json", public_manifest)
         if unwanted:
+            phase("STOPPING")
             runner([*compose, "stop", *unwanted], check=True, timeout=600)
             runner([*compose, "rm", "-f", *unwanted], check=True, timeout=600)
+            remaining = [item.get("Service") for item in compose_rows(compose, set(unwanted), runner)
+                         if item.get("State") == "running"]
+            if remaining:
+                raise RuntimeError("Не вдалося вимкнути служби: " + ", ".join(sorted(remaining)))
         # Migrate legacy ephemeral roots from old container filesystem after
         # successful apply, so user data from previous versions is preserved.
         try:
@@ -539,10 +579,11 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
             migrate_staged_legacy_roots(rescue_staging)
         except Exception as error:  # noqa: BLE001
             print(f"WARNING: staged legacy migration failed: {error}", file=sys.stderr)
-        status.update({"state": "SUCCEEDED", "updated_at": datetime.now(timezone.utc).isoformat(),
+        status.update({"state": "SUCCEEDED", "phase": "COMPLETED", "updated_at": datetime.now(timezone.utc).isoformat(),
                        "runtime_set_verified": True, "observed_services": sorted(observed)})
         atomic_json(root / "config/deployment-status.json", status)
-        request_path.unlink()
+        if request_path.is_file() and request_path.read_bytes() == original_request:
+            request_path.unlink()
         return status
     except Exception as error:
         rollback_result = restore()

@@ -1,6 +1,6 @@
 # Глосарій
 
-> Статус: чинний | Аудиторія: усі
+> Статус: чинний | Аудиторія: усі | Канон: [AGENTS.md](../AGENTS.md).
 
 | Термін | Значення |
 |---|---|
@@ -12,7 +12,7 @@
 | Workflow | ComfyUI-workflow (`workflows/`): модель, LoRA, sampler окремо від коду CORE. |
 | Node | Вузол розгортання з роллю: core, gpu, text, voice, publisher, backup, monitoring. |
 | Worker | Процес на вузлі, що бере tasks, звітує heartbeat і self-test. |
-| Capability | Фактична спроможність вузла (`tts`, `image_generation`, `publish_youtube`…); заявляється при реєстрації, підтверджується self-test. |
+| Capability | Фактична спроможність вузла (`speech_synthesis`, `image_generation`, `publishing`…); заявляється при реєстрації, підтверджується self-test. |
 | Role | Що встановити на вузол; capability — що вузол реально вміє. Диспетчер шукає за capability. |
 | Provider / Engine / Backend | Змінний задній движок за інтерфейсом (`providers.md`): LLM, TTS, Compute, Assembly, VideoEngine, Publisher. |
 | Artifact | Файл-результат (зображення, аудіо, відео, manifest) з checksum і provenance. |

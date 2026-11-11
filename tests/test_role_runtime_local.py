@@ -13,12 +13,16 @@ def inventory(monkeypatch, tmp_path):
     monkeypatch.setenv("RUNTIME_INVENTORY_PATH", str(path))
     monkeypatch.setenv("NODE_ROLE", "core")
     monkeypatch.setenv("NODE_ADDITIONAL_ROLES", "voice")
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    from core import health_checks
+    monkeypatch.setattr(health_checks, "run_checks", lambda role: {
+        "tts": (True, "ready"), "required": ["tts"]})
     monkeypatch.setattr(role_runtime, "node_roles", lambda: {
         "voice": {"services": ["worker", "tts"]}, "gpu": {"services": ["worker", "comfyui"]}})
 
     def write(states):
         path.write_text(json.dumps({"services": list(states), "containers": [
-            {"service": name, "state": state} for name, state in states.items()]}), encoding="utf-8")
+            {"service": name, "state": state, "health": "healthy"} for name, state in states.items()]}), encoding="utf-8")
     return write
 
 

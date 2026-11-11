@@ -21,7 +21,10 @@ class TelegramChannelPublisher(Publisher):
     channel, credential_env = "telegram", "TELEGRAM_BOT_TOKEN"
 
     def ready(self) -> bool:
-        return self.configured()
+        # The bot token alone (the same one the bot uses for commands) cannot publish:
+        # a target channel must be set in Settings -> Publishing. No network here.
+        from core.publishing_settings import publishing_settings
+        return self.configured() and bool(publishing_settings()["telegram_channel_id"])
 
     def reconnect(self) -> bool:
         return self.configured()

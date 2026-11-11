@@ -1,5 +1,7 @@
 # Text / Redis acceptance — #358, #359
 
+> Статус: матеріал приймання; результат і межі наведено в документі | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../AGENTS.md).
+
 ## Межі доказу
 
 `tests/test_queue_redis_contract.py` запускає disposable Redis та перевіряє

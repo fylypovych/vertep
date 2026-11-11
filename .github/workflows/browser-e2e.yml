@@ -107,6 +107,8 @@ jobs:
         env:
           RATE_LIMIT_PER_MINUTE: "100000"
           SETUP_RATE_LIMIT_PER_10_MINUTES: "100000"
+          # The code defaults DEMO_MODE to off; this smoke CORE runs the dev stand-ins.
+          DEMO_MODE: "true"
         run: |
           # Лог у файл, а не в pipe кроку: інакше процес гине разом із кроком
           # на першому ж записі після його завершення.

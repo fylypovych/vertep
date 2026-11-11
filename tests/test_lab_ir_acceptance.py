@@ -43,12 +43,17 @@ class _FakeTransport(IssueTransport):
         self.duplicates.append(title)
         return []
 
+    #: Remote Issues that exist before the test: #41 carries the source identifier.
+    remote = {41: {"number": 41, "title": "ir.0.0.0.1 — Перевірка lease", "state": "open"}}
+
     def get_issue(self, number):
+        if int(number) in self.remote:
+            return self.remote[int(number)]
         return (getattr(self, "previous", []) + self.created)[int(number) - 101]
 
-    def close_issue(self, issue_number, comment=""):
+    def close_issue(self, issue_number, comment="", state_reason="completed"):
         self.calls += 1
-        self.closed.append({"number": issue_number, "comment": comment})
+        self.closed.append({"number": issue_number, "comment": comment, "state_reason": state_reason})
         return {"number": issue_number, "state": "closed"}
 
 
@@ -152,7 +157,7 @@ def test_unconfirmed_remote_close_never_becomes_durable_acceptance(tmp_path):
     gate = _gate(tmp_path)
     _grant(gate, "delegate_close_ir", "ir.0.0.0.1")
     class RefusedClose(_FakeTransport):
-        def close_issue(self, issue_number, comment=""):
+        def close_issue(self, issue_number, comment="", state_reason="completed"):
             return {"number": issue_number, "state": "open"}
     governance = _gov(tmp_path, gate, RefusedClose())
     assert not governance.delegate_close_ir("ir.0.0.0.1", _full_evidence())["closed"]
@@ -248,9 +253,10 @@ def test_atomic_ir_transfer_sequence(tmp_path):
     # successors first — exactly two, with reserved and explicit numbers
     assert [c["title"] for c in transport.created] == [
         "ir.0.0.0.2 — Перевірка lease: черги", "ir.0.0.0.3 — Перевірка lease: відновлення"]
-    # only the source is closed, and only after verification
+    # only the source is closed, and only after verification, as a transfer
     assert len(transport.closed) == 1
     assert transport.closed[0]["number"] == 41
+    assert transport.closed[0]["state_reason"] == "not_planned"
 
     records = {r["identifier"]: r for r in governance.created()
                if r.get("identifier")}
@@ -452,3 +458,30 @@ def test_creation_reserves_a_number_held_by_another_kind(tmp_path):
     outcome = governance.create_ir_issue("Наступний ir")
     assert outcome["created"]
     assert outcome["identifier"] == "ir.0.0.0.8"
+
+
+def test_evidence_issue_number_must_carry_the_identifier(tmp_path):
+    """LAB-1: a number taken only from the evidence must point at the Issue with this identifier."""
+    gate = _gate(tmp_path)
+    _grant(gate, "delegate_close_ir", "ir.0.0.0.1")
+    transport = _FakeTransport()
+    transport.remote = {41: {"number": 41, "title": "ir.0.0.0.9 — Інша перевірка", "state": "open"}}
+    outcome = _gov(tmp_path, gate, transport).delegate_close_ir("ir.0.0.0.1", _full_evidence())
+    assert outcome["rule"] == "mismatched_remote_target" and not outcome["closed"]
+    assert transport.closed == []
+
+
+def test_accepted_ir_is_closed_as_completed(tmp_path):
+    gate = _gate(tmp_path)
+    _grant(gate, "delegate_close_ir", "ir.0.0.0.1")
+    transport = _FakeTransport()
+    assert _gov(tmp_path, gate, transport).delegate_close_ir("ir.0.0.0.1", _full_evidence())["closed"]
+    assert transport.closed[0]["state_reason"] == "completed"
+
+
+@pytest.mark.parametrize("issue", ["i.0.0.0.7", "var.0.0.0.7", "lab.0.0.0.7", "ir.0.0.0.7"])
+def test_evidence_must_name_the_issue_for_every_identifier_type(tmp_path, issue):
+    """LAB-2: the identifier check is not limited to the ``ir.`` prefix."""
+    from lab.evidence import verify
+    problems = verify(_full_evidence(), "lab", issue, tmp_path)
+    assert "evidence targets another issue" in problems

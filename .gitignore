@@ -67,3 +67,6 @@ audit-0311-closed-issues.md
 /char_images
 /.angular/cache
 /tests/__pycache__
+
+# Named local Browser test runs
+/web-v2/test-results-*/

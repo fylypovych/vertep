@@ -18,7 +18,7 @@ import { interval, Subscription } from 'rxjs';
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-models">
   <h3 class="text-lg font-semibold mb-4">{{ 'Моделі (Ollama)' | t }}</h3>
   <app-loading-state *ngIf="loading()" />
-  <app-error-state *ngIf="error()" [message]="error()!" />
+  <app-error-state *ngIf="error()" [message]="error()!" (retry)="loadModels()" />
   <div *ngIf="!loading() && !error()">
     <div class="flex gap-2 mb-4">
       <select [(ngModel)]="targetNode" class="border rounded px-3 py-2" data-testid="pull-node-select">

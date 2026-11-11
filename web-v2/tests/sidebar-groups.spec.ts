@@ -27,7 +27,7 @@ test('меню адміністратора: Контент, Система й �
   const menu = await groups(page);
   expect(Object.keys(menu)).toEqual(['Контент', 'Система', 'Налаштування']);
   expect(menu['Система']).toEqual(['Вузли', 'Стан системи', 'Стан підключень', 'Алерти', 'Логи', 'Оновлення', 'Бекапи', 'Ролі', 'Реальні тести']);
-  expect(menu['Налаштування']).toEqual(['Загальне', 'Публікація', 'Telegram-бот', 'Моделі', 'Движок відео', 'Режим workflow', 'Брендинг', 'Секрети', 'Безпека']);
+  expect(menu['Налаштування']).toEqual(['Загальне', 'Публікація', 'Telegram-бот', 'Моделі', 'Движок відео', 'Режим workflow', 'Брендинг', 'Ключі інтеграцій', 'Безпека']);
   const labels = Object.values(menu).flat();
   expect(new Set(labels).size).toBe(labels.length);
   expect(labels.filter(label => Object.keys(menu).includes(label))).toEqual([]);

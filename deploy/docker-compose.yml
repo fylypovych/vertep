@@ -41,6 +41,7 @@ services:
     command: ["uvicorn", "services.dispatcher_service:app", "--host", "0.0.0.0", "--port", "8094"]
     environment:
       REQUIRE_WORKER_SELF_TEST: "true"
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
     healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8094/health"], interval: 15s, timeout: 5s, retries: 20}
     restart: unless-stopped
     read_only: true
@@ -50,6 +51,8 @@ services:
   scheduler:
     image: ${VERTEP_SCHEDULER_IMAGE:-${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}}
     command: ["uvicorn", "services.scheduler_service:app", "--host", "0.0.0.0", "--port", "8095"]
+    environment:
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
     healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8095/health"], interval: 15s, timeout: 5s, retries: 20}
     restart: unless-stopped
     read_only: true
@@ -96,6 +99,9 @@ services:
       HOST_HEALTH_OBSERVATION: /data/config/host-health/observation.json
       COMFYUI_URL: http://comfyui:8188
       OLLAMA_URL: http://ollama:11434
+      # The wizard's Health Check runs in CORE: without these it probed localhost.
+      TTS_HEALTH_URL: http://tts:8090/health
+      PUBLISHER_HEALTH_URL: http://publisher-worker:8091/health
       PROMETHEUS_URL: http://monitoring:9090/-/healthy
     secrets: [secret_store_passphrase, postgres_password, redis_password]
     volumes:

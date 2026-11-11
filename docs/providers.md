@@ -1,6 +1,6 @@
 # Provider / Adapter Layer
 
-> Статус: чинний | Аудиторія: розробник | Канон: `AGENTS.md` §28
+> Статус: чинний | Аудиторія: розробник | Канон: [AGENTS.md](../AGENTS.md) §3.5.
 
 Усі зовнішні движки викликаються виключно через інтерфейси в `adapters/providers/base.py`. Задні технології взаємозамінні без зміни Orchestrator, Dispatcher, Node Registry чи Web UI.
 

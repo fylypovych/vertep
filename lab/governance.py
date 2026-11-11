@@ -87,7 +87,7 @@ class IssueTransport:
     def identifiers(self):
         return []
 
-    def close_issue(self, issue, comment: str = "") -> dict:
+    def close_issue(self, issue, comment: str = "", state_reason: str = "completed") -> dict:
         """Close an issue — reachable only through a delegated, gated decision."""
         if self.dry_run:
             return {"number": issue, "state": "closed", "dry_run": True}
@@ -153,10 +153,10 @@ class GhIssueTransport(IssueTransport):
         output = self._gh("api", "--paginate", f"repos/{self.repository}/issues?state=all&per_page=100", "--jq", '.[] | (.title + " " + (.body // ""))')
         return re.findall(r"(?:i|ir|ri|rt|lab|var)\.\d+\.\d+\.\d+\.\d+", output)
 
-    def close_issue(self, issue, comment: str = "") -> dict:
+    def close_issue(self, issue, comment: str = "", state_reason: str = "completed") -> dict:
         if self.dry_run:
             return {"number": issue, "state": "closed", "dry_run": True}
-        return GitHubApiTransport.close_issue(self, issue, comment)
+        return GitHubApiTransport.close_issue(self, issue, comment, state_reason)
 
 
 class GitHubApiTransport(IssueTransport):
@@ -265,7 +265,7 @@ class GitHubApiTransport(IssueTransport):
                 return result
             page += 1
 
-    def close_issue(self, issue, comment: str = "") -> dict:
+    def close_issue(self, issue, comment: str = "", state_reason: str = "completed") -> dict:
         if self.dry_run:
             return {"number": issue, "state": "closed", "dry_run": True}
         try:
@@ -285,7 +285,7 @@ class GitHubApiTransport(IssueTransport):
                 raise GovernanceError("Remote close comment history is unconfirmed")
             if not any(marker in str(item.get("body", "")) for item in comments):
                 self._request("POST", f"/issues/{number}/comments", {"body": comment + "\n\n" + marker})
-        data = self._request("PATCH", f"/issues/{number}", {"state": "closed"})
+        data = self._request("PATCH", f"/issues/{number}", {"state": "closed", "state_reason": state_reason})
         state = str(data.get("state", "closed")).lower() if isinstance(data, dict) else "closed"
         return {"number": number, "state": state, "dry_run": False}
 
@@ -583,6 +583,14 @@ class Governance:
         target = target or (int(issue) if str(issue).isdigit() else None)
         if not target:
             return {"allowed": False, "closed": False, "rule": "unconfirmed_remote_target"}
+        if not recorded_target and not str(issue).isdigit():
+            # The number came only from the evidence: the remote Issue must carry this identifier.
+            try:
+                title = str((self.transport.get_issue(target) or {}).get("title", ""))
+            except Exception:  # fail closed
+                return {"allowed": False, "closed": False, "rule": "unconfirmed_remote_target"}
+            if title.split(" ", 1)[0] != str(issue):
+                return {"allowed": False, "closed": False, "rule": "mismatched_remote_target"}
         comment = ("Закрито за делегованим рішенням власника: повний доказ "
                    f"({evidence.get('version')} / {evidence.get('commit')}), "
                    "тести пройдено, незалежний review "
@@ -885,8 +893,9 @@ class Governance:
             source_number = source.get("number") or source_record.get("issue", {}).get("number")
             if self.transport.dry_run or not source_number:
                 raise GovernanceError("Verified numeric source issue is required before transfer close")
+            # A transferred remainder is not a completed acceptance (AGENTS.md §4.5, §4.7).
             close = self.transport.close_issue(
-                source_number, comment=comment)
+                source_number, comment=comment, state_reason="not_planned")
             if close.get("state") != "closed" or close.get("dry_run"):
                 raise GovernanceError("Remote source close was not confirmed")
         except Exception as error:

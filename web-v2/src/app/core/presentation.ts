@@ -97,7 +97,7 @@ export function workerStatusLabel(status?: string): string { return WORKER_STATU
 
 /** Runtime state of a node or a role (core/role_runtime.py, node runtime_status). */
 export const RUNTIME_STATUS_LABELS: Record<string, string> = {
-  READY: 'Готовий', ONLINE: 'Готовий', DEGRADED: 'Деградує', OFFLINE: 'Недоступний',
+  READY: 'Готовий', ONLINE: 'Готовий', DEGRADED: 'Працює з проблемами', OFFLINE: 'Недоступний',
   PENDING_SELF_TEST: 'Очікує self-test', UPDATING: 'Оновлюється', REVOKED: 'Відкликаний',
   UNKNOWN: 'Невідомо',
 };
@@ -134,3 +134,18 @@ export const CHANNEL_LABELS: Record<string, string> = {
 };
 
 export function channelLabel(value?: string): string { return CHANNEL_LABELS[value || ''] || value || '—'; }
+
+/** Why a role is not ready: failed checks, missing or stopped services, silent nodes (label is translated). */
+export function runtimeProblems(evidence?: {
+  nodes?: { live?: boolean }[];
+  local?: { failed_checks?: string[]; services_missing?: string[]; services_unhealthy?: string[] } | null;
+}): { label: string; detail: string }[] {
+  const local = evidence?.local;
+  const problems: { label: string; detail: string }[] = [];
+  if (local?.failed_checks?.length) problems.push({ label: 'Не пройшли перевірки:', detail: local.failed_checks.join(', ') });
+  if (local?.services_missing?.length) problems.push({ label: 'Не запущено служби:', detail: local.services_missing.join(', ') });
+  if (local?.services_unhealthy?.length) problems.push({ label: 'Зупинено служби:', detail: local.services_unhealthy.join(', ') });
+  const silent = (evidence?.nodes || []).filter(node => !node.live).length;
+  if (silent) problems.push({ label: 'Вузлів без зв’язку або self-test:', detail: String(silent) });
+  return problems;
+}

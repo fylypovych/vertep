@@ -26,23 +26,23 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
           {{ 'Слабкі або відсутні значення:' | t }} {{ check.weak_or_missing.join(', ') }}
         </p>
       </div>
-      <div *ngIf="secCheck()?.checks as detail" class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div class="border border-slate-200 rounded-xl p-4" data-testid="security-check-secret-store">
+      <div *ngIf="secCheck()?.checks as detail" class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
+        <div class="border border-slate-200 rounded-xl p-4 min-w-0" data-testid="security-check-secret-store">
           <h4 class="text-sm font-semibold">{{ 'Сховище секретів' | t }}</h4>
           <p class="text-sm">{{ (label(detail.secrets_store.status)) | t }} — {{ (detail.secrets_store.detail) | t }}</p>
         </div>
-        <div class="border border-slate-200 rounded-xl p-4">
+        <div class="border border-slate-200 rounded-xl p-4 min-w-0">
           <h4 class="text-sm font-semibold">{{ 'Сертифікати та ключі' | t }}</h4>
           <ul class="text-sm list-disc pl-5">
             <li *ngFor="let item of detail.certificates | keyvalue" [attr.data-testid]="'security-cert-' + item.key">
               {{ (certName(item.key)) | t }}: {{ (label(item.value.status)) | t }}<span *ngIf="item.value.expires_at">
                 {{ '(до' | t }} {{ formatDate(item.value.expires_at) }})</span>
-              <span class="block font-mono text-xs text-slate-500" *ngIf="item.value.sha256">
+              <span class="block font-mono text-xs text-slate-500 break-all" *ngIf="item.value.sha256">
                 SHA-256: {{ item.value.sha256 }}</span>
             </li>
           </ul>
         </div>
-        <div class="border border-slate-200 rounded-xl p-4">
+        <div class="border border-slate-200 rounded-xl p-4 min-w-0">
           <h4 class="text-sm font-semibold">{{ 'Інтеграції' | t }}</h4>
           <p class="text-sm" *ngIf="!detail.integrations?.length">{{ 'Немає активних інтеграцій' | t }}</p>
           <ul class="text-sm list-disc pl-5">

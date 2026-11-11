@@ -1,4 +1,7 @@
 CORE ↔ Worker Protocol Contract
+
+> Статус: контракт; реалізація та готовність підтверджуються окремо | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
+
 ================================
 
 1. Контракт task assignment (TaskRequest, TaskResponse)

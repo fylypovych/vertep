@@ -107,8 +107,24 @@ def test_dispatcher_indicator_reports_the_service(monkeypatch):
     assert _status_line(monkeypatch) == "Dispatcher: error"
 
 
+def test_in_core_dispatcher_reports_whether_it_dispatches(monkeypatch):
+    monkeypatch.delenv("DISPATCHER_URL", raising=False)
+    monkeypatch.setattr("core.system_state.dispatch_allowed", lambda: True)
+    assert _status_line(monkeypatch) == "Dispatcher: running"
+    monkeypatch.setattr("core.system_state.dispatch_allowed", lambda: False)
+    assert _status_line(monkeypatch) == "Dispatcher: paused"
+
+
 def test_generator_keeps_a_recorded_owner_decision():
     spec = importlib.util.spec_from_file_location("trace_411", "scripts/issue-122-retirement-trace.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.build_trace.__defaults__ == (None,)
+
+
+def test_unset_demo_mode_is_off(monkeypatch):
+    """I-10: without an explicit DEMO_MODE a node never fakes generation or publication."""
+    from publishers.base import publisher_mock_enabled
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    assert not publisher_mock_enabled()

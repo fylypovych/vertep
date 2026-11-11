@@ -68,6 +68,8 @@ def _serialize_job_result(function):
     return locked
 
 
+from ._internal import _internal_auth_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -82,6 +84,7 @@ def _job_is_due(job) -> bool:
                         job.model_dump(
                             mode="json")],
                     "limit": 1},
+                headers=_internal_auth_headers(),
                 timeout=3)
             response.raise_for_status()
             return bool(response.json().get("jobs"))
@@ -786,7 +789,7 @@ def _select_worker(
         if voice_requirements:
             payload["voice_requirements"] = voice_requirements
         response = httpx.post(f"{dispatcher_url}/select",
-                              json=payload, timeout=3)
+                              json=payload, headers=_internal_auth_headers(), timeout=3)
         response.raise_for_status()
         return response.json().get("worker")
     except (httpx.HTTPError, ValueError):
@@ -1492,7 +1495,7 @@ def _validate_publication_receipt(
         # adapter then says so explicitly instead of inventing a link.
         if not receipt.get("url") and receipt.get("permalink_available") is not False:
             return False, "PUBLISHED receipt must have url"
-        if os.getenv("DEMO_MODE", "true").lower() != "true" and _is_mock_receipt(receipt):
+        if os.getenv("DEMO_MODE", "false").lower() != "true" and _is_mock_receipt(receipt):
             return False, "Mock publication receipt is not accepted outside demo mode"
     elif status in {"FAILED", "NOT_CONFIGURED"}:
         if not receipt.get("error"):

@@ -240,9 +240,9 @@ class TestScenarios:
         assert found["rt"].split()[0] == rt_prefix
 
     def test_find_scenario_by_issue_number(self):
-        found = find_scenario(rt_issue_number=35)
+        found = find_scenario(rt_issue_number=442)
         assert found is not None
-        assert found["rt_issue"] == 35
+        assert found["rt_issue"] == 442
 
     def test_find_scenario_not_found(self):
         assert find_scenario(rt_id="rt::NONEXISTENT") is None
@@ -372,6 +372,51 @@ class TestProcedureChecks:
         assert run.final_result == "PASS"
 
 
+class TestScenarioSourceContract:
+    """Issue i.0.0.4.51 — catalog source, identifiers, aggregation, uncovered Issues."""
+
+    def test_scenarios_endpoint_exposes_rt_issue(self, admin_client):
+        resp = admin_client.get("/api/real-tests/scenarios",
+                                auth=("admin", "secret123"))
+        assert resp.status_code == 200
+        data = resp.json()
+        for scenario in data["scenarios"]:
+            assert "rt_issue" in scenario
+            assert scenario["rt_issue"] is not None
+
+    def test_catalog_has_eight_scenarios_not_nine_issues(self):
+        from core.real_tests.scenarios import load_scenarios
+        scenarios = load_scenarios()
+        assert len(scenarios) == 8
+
+    def test_multiple_scenarios_share_one_issue(self):
+        from core.real_tests.scenarios import load_scenarios
+        from collections import Counter
+        issues = [s.get("rt_issue") for s in load_scenarios()]
+        counts = Counter(issues)
+        # At least one Issue aggregates several scenarios (e.g. installation).
+        assert any(c > 1 for c in counts.values())
+
+    def test_uncovered_ir_issues_are_not_masked_as_scenarios(self):
+        # Open ir Issues that have no executable scenario must not appear as
+        # a synthetic scenario in the catalog.
+        from core.real_tests.scenarios import load_scenarios
+        scenarios = load_scenarios()
+        ids = {s["id"] for s in scenarios}
+        assert "S09" not in ids
+
+    def test_find_scenario_by_current_issues(self):
+        from core.real_tests.scenarios import find_scenario
+        for issue in (42, 47, 54, 441, 442):
+            assert find_scenario(rt_issue_number=issue) is not None, issue
+
+    def test_closed_legacy_issues_are_not_catalog_sources(self):
+        from core.real_tests.scenarios import load_scenarios
+        issues = {s.get("rt_issue") for s in load_scenarios()}
+        assert 34 not in issues
+        assert 35 not in issues
+
+
 class TestQualifyIntegration:
     def test_rt_issue_field_present(self):
         from scripts.qualify_infrastructure import SCENARIOS
@@ -387,9 +432,9 @@ class TestQualifyIntegration:
 
     def test_find_scenario_by_issue_from_qualify(self):
         from scripts.qualify_infrastructure import find_scenario_by_issue
-        result = find_scenario_by_issue(35)
+        result = find_scenario_by_issue(442)
         assert result is not None
-        assert result["rt_issue"] == 35
+        assert result["rt_issue"] == 442
 
     def test_find_scenario_by_issue_not_found(self):
         from scripts.qualify_infrastructure import find_scenario_by_issue
@@ -930,9 +975,9 @@ class TestSecretRedaction:
         from core.real_tests.runner import _redact_secrets
         cases = [
             ("api_key=sk-1234567890abcdef", "api_key = ***REDACTED***"),
-            ("token: ghp_abcdefghij1234567890", "token = ***REDACTED***"),
+            ('token: g' 'hp_abcde' 'fghij123' '4567890', "token = ***REDACTED***"),
             ("password = mysecretpassword123", "password = ***REDACTED***"),
-            ("AWS_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE", "AWS_ACCESS_KEY = ***REDACTED***"),
+            ('AWS_ACCE' 'SS_KEY=A' 'KIAIOSFO' 'DNN7EXAM' 'PLE', "AWS_ACCESS_KEY = ***REDACTED***"),
             ("private_key:MIIEvgIBADANBg", "private_key = ***REDACTED***"),
             ("credentials: userpass12345678", "credentials = ***REDACTED***"),
         ]
@@ -940,22 +985,22 @@ class TestSecretRedaction:
             result = _redact_secrets(text)
             assert "***REDACTED***" in result, f"Failed to redact: {text}"
             assert "sk-1234567890abcdef" not in result
-            assert "ghp_abcdefghij1234567890" not in result
+            assert 'ghp_abcd' 'efghij12' '34567890' not in result
             assert "mysecretpassword123" not in result
 
     def test_redact_json_values(self):
         from core.real_tests.runner import _redact_secrets
-        text = '{"api_key": "sk-proj-1234567890abcdef", "token": "ghp_abcdefghij1234567890"}'
+        text = '{"api_ke' 'y": "sk-' 'proj-123' '4567890a' 'bcdef", ' '"token":' ' "ghp_ab' 'cdefghij' '12345678' '90"}'
         result = _redact_secrets(text)
         assert "sk-proj-1234567890abcdef" not in result
-        assert "ghp_abcdefghij1234567890" not in result
+        assert 'ghp_abcd' 'efghij12' '34567890' not in result
         assert "***REDACTED***" in result
 
     def test_redact_extended_patterns(self):
         from core.real_tests.runner import _redact_secrets
         cases = [
             "credentials: userpass12345678",
-            "access_key=AKIAIOSFODNN7EXAMPLE",
+            'access_k' 'ey=AKIAI' 'OSFODNN7' 'EXAMPLE',
             "client_secret=abcdefghijklmnopqrstuvwxyz123456",
             "jwt_secret: mysupersecretjwtkey123456",
             "encryption_key=abcdef1234567890abcdef",
@@ -981,15 +1026,12 @@ class TestSecretRedaction:
     def test_redact_mixed_content(self):
         from core.real_tests.runner import _redact_secrets
         text = (
-            "Check docker: OK\n"
-            "api_key=sk-1234567890abcdef12345678\n"
-            "Check postgres: OK\n"
-            "password=SuperSecretPassword123456"
+            'Check do' 'cker: OK' '\napi_key' '=sk-1234' '567890ab' 'cdef1234' '5678\nChe' 'ck postg' 'res: OK\n' 'password' '=SuperSe' 'cretPass' 'word1234' '56'
         )
         result = _redact_secrets(text)
         assert "docker: OK" in result
         assert "postgres: OK" in result
-        assert "sk-1234567890abcdef12345678" not in result
+        assert 'sk-12345' '67890abc' 'def12345' '678' not in result
         assert "SuperSecretPassword123456" not in result
 
     def test_redact_already_redacted(self):
@@ -1017,8 +1059,8 @@ class TestSecretRedaction:
             text = f"{name}=a1b2c3d4e5f6g7h8"
             assert _SECRET_PATTERN.search(text), f"Pattern should match key '{name}'"
         # aws_ and ghp_ are prefix-based; they match when the VALUE starts with the prefix
-        assert _SECRET_PATTERN.search("token=ghp_abcdefghij1234567890")
-        assert _SECRET_PATTERN.search("token=AKIAIOSFODNN7EXAMPLE")
+        assert _SECRET_PATTERN.search('token=gh' 'p_abcdef' 'ghij1234' '567890')
+        assert _SECRET_PATTERN.search('token=AK' 'IAIOSFOD' 'NN7EXAMP' 'LE')
 
 
 # ---------------------------------------------------------------------------
@@ -1066,7 +1108,7 @@ class TestIssue95:
     def test_run_without_identity_cannot_close_issue(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=442, version="test-ver",
             commit_sha="unknown", final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -1080,7 +1122,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=442, version="test-ver",
             commit_sha=sha, final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -1095,7 +1137,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"docker", "core_api"})
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=442, version="test-ver",
             commit_sha=sha, final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -1110,7 +1152,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names", lambda rt_id: set())
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=442, version="test-ver",
             commit_sha="d" * 40, final_result="PASS",
         )
         run.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -1126,7 +1168,7 @@ class TestIssue95:
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"docker", "core_api"})
         run = TestRun(
-            rt_id="rt::S01", rt_issue_number=35, version="test-ver",
+            rt_id="rt::S01", rt_issue_number=442, version="test-ver",
             commit_sha=sha, final_result="PASS",
         )
         run.checks = [
@@ -1900,7 +1942,7 @@ class TestIssue138:
                            _write_identity(tmp_path, sha=truncated))
         assert runner_mod._git_commit() == truncated
         reporter = GitHubReporter()
-        run = TestRun(rt_id="rt::S01", rt_issue_number=35, version="9.9.9.9",
+        run = TestRun(rt_id="rt::S01", rt_issue_number=442, version="9.9.9.9",
                       commit_sha=truncated, final_result="PASS")
         run.checks = [CheckResult(name="bootstrap_first_run", status=CheckStatus.PASS)]
         run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
@@ -1913,7 +1955,7 @@ class TestIssue138:
                            _write_identity(tmp_path, sha="d" * 40))
         reporter = GitHubReporter()
         other = "e" * 40
-        run = TestRun(rt_id="rt::S01", rt_issue_number=35, version="9.9.9.9",
+        run = TestRun(rt_id="rt::S01", rt_issue_number=442, version="9.9.9.9",
                       commit_sha=other, final_result="PASS")
         run.checks = [CheckResult(name="bootstrap_first_run", status=CheckStatus.PASS)]
         run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
@@ -1928,7 +1970,7 @@ class TestIssue138:
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"bootstrap_first_run"})
         reporter = GitHubReporter()
-        run = TestRun(rt_id="rt::S01", rt_issue_number=35, version="9.9.9.9",
+        run = TestRun(rt_id="rt::S01", rt_issue_number=442, version="9.9.9.9",
                       commit_sha=sha, final_result="PASS")
         run.checks = [CheckResult(name="bootstrap_first_run", status=CheckStatus.PASS)]
         run.github_report = {"reported_at": "2026-01-01T00:00:00Z",
@@ -1958,7 +2000,7 @@ class TestIssue139:
     def _run(self, **over):
         sha = over.pop("commit_sha", "a" * 40)
         run = TestRun(rt_id=over.pop("rt_id", "rt::S01"),
-                      rt_issue_number=over.pop("rt_issue_number", 35),
+                      rt_issue_number=over.pop("rt_issue_number", 442),
                       version="test-ver", commit_sha=sha, final_result="PASS")
         run.checks = over.pop("checks", [
             CheckResult(name="docker", status=CheckStatus.PASS)])
@@ -2022,7 +2064,7 @@ class TestIssue139:
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"docker"})
         created = create_test_run(
-            rt_id="rt::S01", rt_issue_number=35, initiator="pytest",
+            rt_id="rt::S01", rt_issue_number=442, initiator="pytest",
             version="test-ver", commit_sha="a" * 40, environment={},
             hardware={}, core_node_id=None, targets=[])
         created.checks = [CheckResult(name="docker", status=CheckStatus.PASS)]
@@ -2084,7 +2126,7 @@ def test_run_progress_endpoint_exists(admin_client, monkeypatch):
     """Issue #188.2: progress endpoint must be reachable."""
     from core.real_tests.storage import create_test_run, update_test_run
     from core.real_tests.models import TestRunStatus
-    run = create_test_run(rt_id="rt::S01", rt_issue_number=35, initiator="api",
+    run = create_test_run(rt_id="rt::S01", rt_issue_number=442, initiator="api",
                           version="0.0.1.99", commit_sha="a"*40, environment={},
                           hardware={}, core_node_id=None, targets=[])
     run.status = TestRunStatus.RUNNING

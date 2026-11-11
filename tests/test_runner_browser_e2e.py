@@ -143,7 +143,9 @@ def test_runner_web_actual_api_progress_history_restart_and_retry(tmp_path):
             expect(page.locator("[data-testid='real-tests-page']")).to_be_visible(timeout=20000)
 
             scenario = page.locator("[data-testid='real-tests-scenario-S01']")
-            expect(scenario).to_be_visible()
+            # The real API catalog/history can still be loading under xdist;
+            # use the same process-boundary budget as the launch action below.
+            expect(scenario).to_be_visible(timeout=120000)
             with page.expect_response(lambda response: response.url.endswith("/prerequisites"),
                                       timeout=120000) as prerequisites:
                 # The global loader covers the page until its first requests end, slowly under a parallel run.

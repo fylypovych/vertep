@@ -57,7 +57,14 @@ def main():
                     (root / f"{command['id']}.json").write_text(json.dumps(result), encoding="utf-8")
                 temporary = root / "observation.tmp"
                 temporary.write_text(json.dumps(state), encoding="utf-8")
-                temporary.replace(root / "observation.json")
+                try:
+                    temporary.replace(root / "observation.json")
+                except PermissionError:
+                    if os.name != "nt":
+                        raise
+                    # Windows readers briefly deny replacement of the open
+                    # observation file. Publish again on the next heartbeat;
+                    # completed command IDs remain recorded in this process.
             except (httpx.HTTPError, ValueError):
                 pass
             time.sleep(.1)

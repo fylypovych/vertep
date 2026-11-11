@@ -3,6 +3,7 @@
     <div>
       <h3 class="text-lg font-semibold text-slate-900">{{ 'Реальні тести' | t }}</h3>
       <p class="mt-1 text-sm text-slate-500">{{ 'Сценарії реального стенда та історія прогонів' | t }}</p>
+      <p class="mt-1 text-xs text-slate-400" data-testid="real-tests-source-note">{{ 'Каталог локальний: сценарії реального стенда, прив\'язані до GitHub Issues. Не є повним списком відкритих GitHub Issues; кілька сценаріїв можуть посилатися на один Issue.' | t }}</p>
     </div>
     <button
       type="button"
@@ -75,6 +76,10 @@
                   <p class="font-medium text-slate-900">{{ scenario.name }}</p>
                   @if (scenario.rt_id) {
                     <p class="mt-1 text-xs text-slate-500">{{ scenario.rt_id }}</p>
+                  }
+                  @if (scenario.rt_issue) {
+                    <p class="mt-1 text-xs text-slate-500" [attr.data-testid]="'real-tests-scenario-issue-' + scenario.id">
+                      {{ 'GitHub Issue:' | t }} #{{ scenario.rt_issue }}</p>
                   }
                   @if (scenario.description) {
                     <p class="mt-1 text-sm text-slate-600">{{ scenario.description }}</p>

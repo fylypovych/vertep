@@ -90,8 +90,16 @@ def health_history(limit: int = 100):
     if not history_path.exists():
         return {"history": []}
     try:
-        lines = history_path.read_text(encoding="utf-8").splitlines()[-limit:]
-        return {"history": [json.loads(line) for line in lines if line.strip()]}
+        lines = history_path.read_text(encoding="utf-8").splitlines()[-max(1, min(limit, 1000)):]
+        history = []
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict):
+                history.append(entry)
+        return {"history": history}
     except (OSError, ValueError):
         return {"history": []}
 

@@ -1,5 +1,7 @@
 # Приймання #354 та #355
 
+> Статус: матеріал приймання; результат і межі наведено в документі | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../AGENTS.md).
+
 Локальне середовище: Windows, disposable Python processes, loopback HTTP,
 synthetic signing/encryption keys і fixtures; production не змінюється.
 Повний Vertep SHA, dirty/clean статус та hashes тестів фіксує JUnit fixture

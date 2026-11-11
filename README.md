@@ -116,7 +116,7 @@ LAB — окремий компонент у [lab/](lab/) зі своїм Angula
 
 LAB не отримує автоматичного права змінювати production, виконувати push/release або використовувати GPU. Доступ до GPU регулюється lease і пріоритетом production; активація та grants перевіряються policy gate. Створення `lab` Issues і операції з `ir` підпорядковуються окремим правилам [AGENTS.md](AGENTS.md), а не самому факту запуску панелі.
 
-Окрема Web-панель має Docker Compose у `deploy/lab/docker-compose.web.yml`; її запуск сам собою не активує автономного executor. Інструкції, доступ і перевірки: [LAB](docs/lab.md), [Lab Web](deploy/lab/web/README.md), [qualification](docs/lab-qualification.md).
+Окрема Web-панель має Docker Compose у `deploy/lab/docker-compose.web.yml`; її запуск сам собою не активує автономного executor. Інструкції, доступ і перевірки: [LAB](docs/lab.md), [Lab Web](deploy/lab/web/README.md), [qualification](docs/lab/lab-qualification.md).
 
 ## Розробка й локальний запуск
 

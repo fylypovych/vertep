@@ -73,7 +73,7 @@ def fetch_permalink(transport, url: str, token: str, field: str = "permalink") -
 def publisher_mock_enabled() -> bool:
     """Mock publication exists only in demo mode: production must never fake a post."""
     return (os.getenv("PUBLISHER_MOCK", "false").lower() == "true"
-            and os.getenv("DEMO_MODE", "true").lower() == "true")
+            and os.getenv("DEMO_MODE", "false").lower() == "true")
 
 
 def _mock_receipt(channel: str, video_path: str, metadata: dict) -> dict:

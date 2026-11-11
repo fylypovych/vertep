@@ -20,7 +20,7 @@ def verify(evidence, actor, issue, state_root):
     problems = []
     if not re.fullmatch(r"[0-9a-fA-F]{40}", str(evidence.get("commit", ""))):
         problems.append("evidence requires a full commit SHA")
-    if str(issue).startswith("ir.") and evidence.get("identifier") != issue:
+    if re.fullmatch(r"(?:i|ir|ri|rt|lab|var)\.\d+\.\d+\.\d+\.\d+", str(issue)) and evidence.get("identifier") != issue:
         problems.append("evidence targets another issue")
     try:
         artifact = evidence["artifact"]

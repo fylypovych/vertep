@@ -1,4 +1,7 @@
 Module Contract
+
+> Статус: контракт; реалізація та готовність підтверджуються окремо | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
+
 ===============
 
 1. Структура module manifest (name, version, dependencies, capabilities, resource requirements)

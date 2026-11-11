@@ -40,7 +40,7 @@ VERSION_FILE = ROOT / "VERSION"
 TOOL = "qualify-infrastructure"
 ISSUE = "i.0.0.0.31"
 
-VALID_RT_ISSUES = {34, 35, 42, 47, 54, 63}
+VALID_RT_ISSUES = {42, 47, 54, 441, 442}
 
 # ---------------------------------------------------------------------------
 # Каталог сценаріїв кваліфікації інфраструктури.
@@ -57,7 +57,7 @@ SCENARIOS = [
         "name": "Clean Ubuntu-compatible bootstrap та First Run",
         "automated": ["tests/test_bootstrap_wizard.py", "tests/test_first_run.py"],
         "rt": "rt::S01 clean bootstrap + First Run Wizard",
-        "rt_issue": 35,
+        "rt_issue": 442,
         "description": "Automated/disposable qualification чистого Ubuntu-сумісного "
                        "bootstrap: roles, секрети, контейнери, health check.",
     },
@@ -75,7 +75,7 @@ SCENARIOS = [
         "name": "GPU/ComfyUI-compatible integration harness",
         "automated": ["tests/test_core_generation_gate.py", "tests/test_compute_distributed.py"],
         "rt": "rt::S03 фізична GPU + ComfyUI workflow",
-        "rt_issue": 34,
+        "rt_issue": 441,
         "description": "Інтеграційний harness сумісний з GPU/ComfyUI без вимоги "
                        "фізичної GPU: генерація через mock/fallback, execution op.",
     },
@@ -84,7 +84,7 @@ SCENARIOS = [
         "name": "Backup → data mutation → restore → health verification",
         "automated": ["tests/test_role_services.py"],
         "rt": "rt::S04 реальний backup/restore стенд",
-        "rt_issue": 35,
+        "rt_issue": 442,
         "description": "Резервна копія, мутація даних, відновлення та перевірка "
                        "здоров'я у контрольованому середовищі.",
     },
@@ -93,7 +93,7 @@ SCENARIOS = [
         "name": "Existing-install migration/persistence harness",
         "automated": ["tests/test_persistent_user_data.py", "tests/test_deployment_plan.py"],
         "rt": "rt::S05 міграція існуючої інсталяції",
-        "rt_issue": 35,
+        "rt_issue": 442,
         "description": "characters/brands/workflows/jobs → update/recreate/"
                        "rollback/restore simulation без втрати даних.",
     },
@@ -102,7 +102,7 @@ SCENARIOS = [
         "name": "Safe Update fault-injection",
         "automated": ["tests/test_safe_update.py", "tests/test_rolling_update.py", "tests/test_updates.py"],
         "rt": "rt::S06 real update interruption/restart/rollback",
-        "rt_issue": 35,
+        "rt_issue": 442,
         "description": "rolling/canary, interruption/restart, rollback/recovery "
                        "з інжекцією відмов під час оновлення.",
     },
@@ -130,10 +130,10 @@ def validate_rt_issues(scenarios: list[dict] | None = None) -> list[str]:
     """Перевіряє, що кожен rt_issue належить до чинного відкритого ir-набору.
 
     Набір відповідає фізичним/live сценаріям i.0.0.0.89:
-    #34 (медіаконвеєр), #35 (встановлення/міграція/backup/update),
     #42 (node roles/web/telegram), #47 (publisher), #54 (security/release
-    trust), #63 (Real Test Runner).  Повертає список порушень; порожній
-    список означає, що каталог валідний.
+    trust), #441 (медіаконвеєр Native/MPT), #442 (встановлення/міграція/
+    backup/update).  Повертає список порушень; порожній список означає,
+    що каталог валідний.
     """
     items = SCENARIOS if scenarios is None else scenarios
     problems: list[str] = []

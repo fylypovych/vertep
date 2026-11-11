@@ -431,6 +431,9 @@ def test_the_video_engine_endpoint_renders_both_names_and_the_required_fields(
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "money-printer")
     monkeypatch.setenv("MONEY_PRINTER_URL", "http://user:pass@runtime:8098/internal")
     monkeypatch.delenv("MONEY_PRINTER_TOKEN", raising=False)
+    # The registry caches engine instances; direct env setup must model the
+    # same reset performed by the production provider-switch flow.
+    reset_provider_registry()
 
     response = client.get("/api/settings/video-engine")
 

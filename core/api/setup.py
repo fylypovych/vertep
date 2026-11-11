@@ -186,6 +186,10 @@ async def first_run_complete(request: Request):
             allowed = str(payload.get("telegram_allowed_chat_ids") or "").strip()
             if admins or allowed:
                 save_telegram_settings(allowed_chat_ids=allowed, admin_chat_ids=admins)
+            if bot_token:
+                # Polling starts with CORE, before the wizard stored the token: start it now.
+                from ..telegram_pump import restart_polling
+                restart_polling()
             # The wizard shows the key once and will not continue until it is saved.
             completed["backup_key"] = read_backup_key()
             if completed["backup_key"]:

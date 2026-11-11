@@ -1,5 +1,7 @@
 # Architecture 2.0 — локальне приймання #367 / #368
 
+> Статус: матеріал приймання; результат і межі наведено в документі | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../AGENTS.md).
+
 Дата: 2026-10-29. Базовий commit: `a98e2de4a19a6906c9403e8495a37275baa8f445`, VERSION `0.0.2.87`. Реалізація перебуває в незакоміченому робочому дереві; цей SHA не оголошується SHA реалізованих змін у main. Відтворюваний склад локального source фіксується в `.pytest_tmp/issue-368-source.json` через SHA256 файлів і tracked diff. Commit, push, Release та зміни GitHub Issues не виконувалися.
 
 Результат: **#367 IMPLEMENTED; #368 IMPLEMENTED локально в межах етапів 1–4**. Fingerprint охоплює сукупне робоче дерево з попередніми правками; він не приписує всі його зміни цьому Issue.
@@ -8,7 +10,7 @@
 
 | Критерій | Реалізація | Перевірка / очікуваний результат |
 | --- | --- | --- |
-| #367 review та owner gate | [Версії шести контрактів, review і рішення власника](contracts-review-367.md) | Власник прямо погодив пакет та початок #368 у чаті 2026-10-29. Незмінні Git blob шести документів зафіксовано в review. Код #368/#369 та physical qualification не підміняють це рішення. |
+| #367 review та owner gate | [Версії шести контрактів, review і рішення власника](../architecture/contracts-review-367.md) | Власник прямо погодив пакет та початок #368 у чаті 2026-10-29. Незмінні Git blob шести документів зафіксовано в review. Код #368/#369 та physical qualification не підміняють це рішення. |
 | #368 AC1 | `core/workflow/{dsl,engine,state,database_state,runtime}.py`, `core/dispatcher.py`, `worker/protocol/transport.py` | `tests/test_workflow_dispatch_execution.py`: незалежні tasks працюють паралельно, залежна task споживає їхні фактичні outputs; retry має окремі спроби; timeout/cancel не приймає пізній output; pause/approval/conditional/revision зберігають стан. `tests/test_workflow_http_process.py` виконує DAG через HTTP та окремий Worker process із production `execute_task`/`execute_role_task`/`submit_result`. |
 | #368 AC2 | `core/module/{manifest,registry,discovery,packages}.py`, `worker/module_runtime.py`, `scripts/vertep-cli.py`, `scripts/vertep`, `scripts/vertep.ps1` | `tests/test_architecture_contract_integration.py`: SemVer та legacy version, dependency ranges, cache replacement, підпис/недовірений signer/tamper, CLI install/info/list/uninstall через окремі процеси. Перевірено штатний Windows CLI wrapper. HTTP/process test виконує підписаний модуль на Worker; uninstall прибирає його з discovery й блокує наступний dispatch. |
 | #368 AC3 | `core/protocol/{task,worker}.py`, `worker/protocol/handler.py`, `core/api/workflow_execution.py`, штатні heartbeat та Worker loop | HTTP/process tests перевіряють registration/assignment/claim/progress/result/renew/cancel, несумісну major version, неправильну lease і пізній result. Паралельні cancel/result запити не можуть підтвердити fenced output. Execution tests підтверджують одного owner, lease generation, worker-loss fallback та відхилення старої спроби. |

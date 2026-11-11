@@ -4,7 +4,7 @@ import httpx
 
 class LLMAdapter:
     def generate_script(self, topic: str, system_prompt: str = "") -> dict:
-        if os.getenv("DEMO_MODE", "true").lower() == "true":
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
             return {"title": topic, "description": f"Коротке відео: {topic}", "hashtags": ["#vertep"],
                     "voiceover": topic, "scenes": [{"prompt": topic, "video_prompt": topic, "duration": 1}]}
         prompt = (system_prompt + "\nCreate a short Ukrainian video script. Return only valid JSON with keys "

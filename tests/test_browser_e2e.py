@@ -1789,7 +1789,7 @@ def test_settings_roles_shows_deployment_status():
         expect(page.locator("[data-testid='role-runtime-status-list']")).to_be_visible()
         # The status is shown in Ukrainian, not as the API code.
         expect(page.locator("[data-testid='role-status-core']")).to_have_text("Готовий")
-        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("Деградує")
+        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("Працює з проблемами")
         expect(page.locator("[data-testid='role-status-text']")).to_have_text("Недоступний")
         page.locator("nav a[href='/settings?tab=system']").click()
         expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()

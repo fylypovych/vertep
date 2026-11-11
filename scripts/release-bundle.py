@@ -20,6 +20,7 @@ BUNDLE_FILES = [
     "config/node_roles.json",
     "scripts/update-agent.py",
     "scripts/vertep",
+    "scripts/remove-vertep.py",
     "scripts/safe-extract.py",
     "scripts/release-layout.py",
     "scripts/apply-deployment.py",

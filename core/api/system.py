@@ -113,7 +113,11 @@ def local_roles_status():
     plan = _read_optional_json(config_root() / "deployment-plan.json")
     deployment = _read_optional_json(config_root() / "deployment-status.json")
     request = _read_optional_json(config_root() / "deployment-request.json")
+    from ..deployment_state import operation_state
+    deployment = operation_state(request, deployment, config_root() / "deployment-request.json")
     active = plan.get("additional_roles", []) if plan.get("role") == "core" else []
+    if deployment.get("state") == "APPLYING":
+        active = deployment.get("previous_roles", [])
     queued = bool(request)
     # Measured runtime status per role contract, not a static declaration.
     from ..role_runtime import role_runtime_matrix
@@ -133,8 +137,10 @@ def local_roles_status():
             and isinstance(definition, dict)
         ],
         "role_runtime_status": {role: item["runtime_status"] for role, item in runtime.items()},
+        "node_role_evidence": (runtime.get(plan.get("role") or installation().get("node_role") or "core") or {}).get("evidence", {}),
         "deployment": deployment,
         "queued": queued,
+        "requested_roles": request.get("additional_roles") if request else None,
     }
 
 
@@ -149,23 +155,40 @@ def configure_local_roles(payload: dict):
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     current = _read_optional_json(config_root() / "deployment-plan.json")
+    path = config_root() / "deployment-request.json"
+    pending = _read_optional_json(path)
+    if pending:
+        if pending.get("plan_sha256") == plan["sha256"]:
+            return {"state": "QUEUED", "requested_roles": plan.get("additional_roles", []),
+                    "message": "Зміни передано системному виконавцю"}
+        raise HTTPException(409, "Попередня зміна ролей ще не завершена")
+    update = update_status()
+    if update.get("state") in {"PENDING", "RUNNING"} or update.get("pending"):
+        raise HTTPException(409, "Триває оновлення системи; зміна ролей недоступна")
     if current.get("sha256") == plan["sha256"]:
         return {"state": "UNCHANGED", "active_roles": plan.get("additional_roles", []),
                 "message": "Вибрані ролі вже активні"}
     setup = installation()
     backend = setup.get("ai_backend", {})
     request_value = {
-        "schema": 1, "role": "core", "additional_roles": plan.get("additional_roles", []),
+        "schema": 1, "request_id": uuid.uuid4().hex, "requested_at": utc_now(),
+        "role": "core", "additional_roles": plan.get("additional_roles", []),
         "version": application_version(), "ai_backend": backend.get("type") or "ollama",
         "core_url": None, "plan_sha256": plan["sha256"],
         "ollama_model": backend.get("model") or os.getenv("OLLAMA_MODEL", "llama3.2"),
     }
     path = config_root() / "deployment-request.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary = path.with_name(f".{path.name}.{request_value['request_id']}.tmp")
     temporary.write_text(json.dumps(request_value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o600)
-    temporary.replace(path)
+    try:
+        # Atomic no-replace publication: simultaneous API replicas cannot overwrite intent.
+        os.link(temporary, path)
+    except FileExistsError:
+        raise HTTPException(409, "Попередня зміна ролей ще не завершена")
+    finally:
+        temporary.unlink(missing_ok=True)
     return {"state": "QUEUED", "active_roles": current.get("additional_roles", []),
             "requested_roles": plan.get("additional_roles", []),
             "message": "Зміни передано системному виконавцю"}

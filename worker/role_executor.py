@@ -120,7 +120,7 @@ def execute_script(task: dict) -> list[dict]:
     from core.script_prompt import build_script_prompt
     from core.script_schema import normalize_script
 
-    if os.getenv("DEMO_MODE", "true").lower() == "true":
+    if os.getenv("DEMO_MODE", "false").lower() == "true":
         from core.script_agent import ScriptAgent
         script = ScriptAgent().generate_script(task["topic"], task.get("system_prompt", ""), task.get("character"))
         return [_artifact("script.json", "script", json.dumps(script, ensure_ascii=False).encode("utf-8"))]
@@ -558,6 +558,16 @@ def execute_video(task: dict) -> list[dict]:
         # CORE accepts only real video here, so still frames could never pass.
         raise RuntimeError("Відео-workflow не налаштовано: задайте workflow або COMFYUI_DEFAULT_VIDEO_WORKFLOW")
     data, filename, kind = migration_external(("compute", workflow, topic, "video"), lambda: adapter.generate_output(workflow, topic, "video"))
+    if kind == "image":
+        # AGENTS.md §14.3: ComfyUI returned a frame instead of a video, so the
+        # node assembles the video from it with FFmpeg (CORE accepts only video).
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / f"frame{Path(filename).suffix or '.png'}"
+            frame.write_bytes(data)
+            output = providers.assembly().assemble(Path(tmp) / "video.mp4", image=frame,
+                                                   aspect_ratio=str(task.get("aspect_ratio") or "16:9"))
+            data, filename, kind = output.read_bytes(), f"{Path(filename).stem}.mp4", "video"
     if kind != "video":
         raise RuntimeError(f"ComfyUI workflow returned unexpected kind: {kind}")
     return [_media_artifact(filename, "video", data, workflow=workflow, task_type="video")]

@@ -67,7 +67,7 @@ class ComfyUIAdapter:
         self._abandoned_prompts: set[str] = set()
 
     def submit(self, workflow: dict) -> dict:
-        if os.getenv("DEMO_MODE", "true").lower() == "true":
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
             return {"prompt_id": "demo", "status": "STUB"}
         response = httpx.post(f"{os.getenv('COMFYUI_URL', 'http://localhost:8188')}/prompt",
                               json={"prompt": workflow}, timeout=30)
@@ -75,7 +75,7 @@ class ComfyUIAdapter:
         return response.json()
 
     def wait_for_result(self, prompt_id: str, timeout: int = 300) -> dict:
-        if os.getenv("DEMO_MODE", "true").lower() == "true":
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
             return {"prompt_id": prompt_id, "status": "STUB"}
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -107,7 +107,7 @@ class ComfyUIAdapter:
 
     def generate_output(self, workflow_path: str, topic: str, task_type: str = "image",
                         references: list[tuple[str, bytes]] | None = None) -> tuple[bytes, str, str]:
-        if os.getenv("DEMO_MODE", "true").lower() == "true":
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
             if task_type != "image":
                 raise RuntimeError("Demo mode has no synthetic video workflow")
             width, height = 640, 360
@@ -179,7 +179,7 @@ class ComfyUIAdapter:
         executing it is *abandoned* instead, and its late result is rejected by
         :meth:`wait_for_result` rather than reported as a success.
         """
-        if os.getenv("DEMO_MODE", "true").lower() == "true":
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
             self.current_prompt_id = None
             return True
         prompt_id = self.current_prompt_id

@@ -1,4 +1,7 @@
 Backup/Restore Contract
+
+> Статус: контракт; реалізація та готовність підтверджуються окремо | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
+
 =======================
 
 1. Структура CORE state snapshot (jobs, tasks, artifacts, settings)

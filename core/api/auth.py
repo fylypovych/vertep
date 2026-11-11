@@ -169,7 +169,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith(public) or request.url.path.startswith(setup_routes) or request.url.path == "/api/nodes/register":
             response = await call_next(request)
             return self._secure(response)
-        demo_mode = os.getenv("DEMO_MODE", "true").lower() == "true"
+        demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true"
         demo_paths = {"/api/health", "/api/setup", "/api/setup/health"}
         if (
             demo_mode

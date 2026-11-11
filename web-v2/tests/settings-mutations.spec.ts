@@ -23,7 +23,7 @@ test.describe('Settings — Secrets', () => {
   test('Вкладка Секрети відображається', async ({ page }) => {
     await mockApi(page, { secrets: { telegram_bot_token: true, smtp_password: false } });
     await page.goto('/settings');
-    await page.getByText('Секрети').click();
+    await page.getByText('Ключі інтеграцій').click();
     await expect(page.getByTestId('settings-secrets')).toBeVisible();
     await expect(page.getByText('telegram_bot_token')).toBeVisible();
     await expect(page.getByText('Збережено', { exact: true }).first()).toBeVisible();
@@ -32,7 +32,7 @@ test.describe('Settings — Secrets', () => {
   test('Редагування секрету', async ({ page }) => {
     await mockApi(page, { secrets: { telegram_bot_token: true } });
     await page.goto('/settings');
-    await page.getByText('Секрети').click();
+    await page.getByText('Ключі інтеграцій').click();
     await page.getByText('telegram_bot_token').locator('xpath=ancestor::div[contains(@class,"border-t")][1]').locator('button:has-text("Редагувати")').click();
     await expect(page.getByRole('button', { name: 'Зберегти' })).toBeVisible();
   });

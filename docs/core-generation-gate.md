@@ -1,7 +1,7 @@
 # CORE Generation Gate — архітектурний контракт
 
 > Статус: прийнято.
-> Аудиторія: розробник | Канон: `AGENTS.md` §4.1.
+> Аудиторія: розробник | Канон: [AGENTS.md](../AGENTS.md) §3.1, §3.5, §14.
 > Issue: `i.0.0.0.29` (#31) — «Перевірити й усунути прямі generation/provider calls у CORE».
 > Дата: вересень 2026.
 
@@ -43,7 +43,7 @@ generation calls у `core/`.
 Дозволені операції, що не є генерацією контенту:
 
 - **FFmpeg assembly** — `providers.video_engine().render()` у `core/pipeline.py:finalize_job()`
-  (AGENTS.md §20: «Не витрачати GPU на те, що нормально робиться звичайним монтажем»).
+  (AGENTS.md §14: «Не витрачати GPU на те, що нормально робиться звичайним монтажем»).
 - **Config / metadata запити** — `providers.publisher().available_channels()`,
   `providers.publisher().configured()`, `provider_matrix()`.
 - **Status reporting** — `provider_matrix()` для `/api/status` та Web UI.
@@ -61,7 +61,7 @@ i.0.0.1.4 #104). Production тримає обидва `false`; production-при
 Python AST (i.0.0.1.4 #104), резолвить аліаси (`engine.render()` →
 `video_engine.render`) та перевіряє кожен виклик проти `ALLOWLIST`.
 
-Native FFmpeg assembly у CORE залишається control-plane операцією (AGENTS.md §20).
+Native FFmpeg assembly у CORE залишається control-plane операцією (AGENTS.md §14).
 Захист від іншого VideoEngine через той самий CORE шлях (i.0.0.1.4 #104):
 зовнішні рушії диспетчеризуються на Worker, а рушій з чужим `provider`
 відмовляється fail-closed guard'ом `_is_native_engine()` у
@@ -99,7 +99,7 @@ Native FFmpeg assembly у CORE залишається control-plane операц
 
 | Файл | Викликання | Класифікація | Дія |
 |---|---|---|---|
-| `core/pipeline.py:385` | `providers.video_engine().render()` | control-plane (assembly) | дозволено, AGENTS.md §20 |
+| `core/pipeline.py:385` | `providers.video_engine().render()` | control-plane (assembly) | дозволено, AGENTS.md §14 |
 | `core/pipeline.py:356` | `providers.publisher().publish()` (через `_publish_local`) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
 | `core/app.py:848` | `providers.publisher().publish()` (Telegram callback) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
 | `core/api/jobs.py:368` | `providers.publisher().available_channels()` | control-plane (metadata) | дозволено |

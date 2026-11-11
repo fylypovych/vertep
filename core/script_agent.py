@@ -9,7 +9,7 @@ from .script_schema import normalize_script, ScriptDocument
 
 class ScriptAgent:
     def generate_script(self, topic: str, system_prompt: str = "", character: dict | None = None) -> dict:
-        if os.getenv("DEMO_MODE", "true").lower() == "true":
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
             return {"title": topic, "description": f"Коротке відео: {topic}", "hashtags": ["#vertep"],
                     "voiceover": topic, "scenes": [{"prompt": topic, "video_prompt": topic, "duration": 1}]}
         metadata = self._generate_metadata(topic, system_prompt, character)

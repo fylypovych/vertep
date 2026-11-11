@@ -42,7 +42,7 @@ def verify_gpu_runtime_inventory() -> dict | None:
     demo mode keeps working.
     """
     if comfyui_runtime.inventory_path() is None:
-        if os.getenv("DEMO_MODE", "true").lower() == "true":
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
             return None
         raise comfyui_runtime.RuntimeInventoryError(
             "COMFYUI_RUNTIME_INVENTORY is required for production GPU readiness")
@@ -74,7 +74,7 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
             if "backup" in additional:
                 Path(os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups"))).mkdir(parents=True, exist_ok=True)
         elif role == "gpu":
-            if os.getenv("DEMO_MODE", "true").lower() != "true" and not metrics.get("gpu_available"):
+            if os.getenv("DEMO_MODE", "false").lower() != "true" and not metrics.get("gpu_available"):
                 raise RuntimeError("NVIDIA GPU/driver is unavailable")
             verify_gpu_runtime_inventory()
             adapter = adapter or providers.compute()
@@ -1099,7 +1099,7 @@ def main() -> None:
     supported_tasks = [item.strip() for item in os.getenv("SUPPORTED_TASKS", "image").split(",") if item.strip()]
     supported_workflows = [item.strip() for item in os.getenv("SUPPORTED_WORKFLOWS", "*").split(",") if item.strip()]
     metrics = gpu_info()
-    require_gpu = os.getenv("WORKER_REQUIRE_GPU", "true").lower() == "true" and os.getenv("DEMO_MODE", "true").lower() != "true"
+    require_gpu = os.getenv("WORKER_REQUIRE_GPU", "true").lower() == "true" and os.getenv("DEMO_MODE", "false").lower() != "true"
     capabilities = node_capabilities()
     payload = {"node_name": os.getenv("NODE_NAME", "gpu-01"),
                "runtime_instance_id": uuid.uuid4().hex, **metrics, **host_metrics(),

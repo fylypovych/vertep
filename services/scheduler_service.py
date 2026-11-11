@@ -2,7 +2,10 @@
 
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+import hmac
+import os
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 
@@ -14,12 +17,19 @@ class ScheduleRequest(BaseModel):
     limit: int = Field(default=1, ge=1, le=1000)
 
 
+def require_internal_key(x_vertep_internal_key: str = Header(default="")) -> None:
+    """Only CORE (holding INTERNAL_API_KEY) may call the policy endpoint."""
+    expected = os.getenv("INTERNAL_API_KEY", "")
+    if not expected or not hmac.compare_digest(x_vertep_internal_key, expected):
+        raise HTTPException(401, "Internal key required")
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "HEALTHY", "service": "scheduler"}
 
 
-@app.post("/due")
+@app.post("/due", dependencies=[Depends(require_internal_key)])
 def due(request: ScheduleRequest) -> dict:
     now = datetime.now(timezone.utc)
     due_jobs = []

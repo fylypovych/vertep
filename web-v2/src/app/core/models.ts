@@ -338,7 +338,10 @@ export interface SystemRole {
   modules?: string[];
   deployment_status?: string;
   runtime_status?: string;
-  runtime_evidence?: {
+  runtime_evidence?: RoleRuntimeEvidence;
+}
+
+export interface RoleRuntimeEvidence {
     source?: string;
     nodes?: { node_id?: string; runtime_status?: string; heartbeat?: string; live?: boolean }[];
     local?: {
@@ -348,8 +351,7 @@ export interface SystemRole {
       services_total?: number | null;
       services_missing?: string[];
       services_unhealthy?: string[];
-    };
-  };
+    } | null;
 }
 
 export interface RolesDeploymentState {
@@ -374,8 +376,10 @@ export interface SystemRolesResponse {
   active_roles: string[];
   available_roles: SystemRole[];
   role_runtime_status?: Record<string, string>;
+  node_role_evidence?: RoleRuntimeEvidence;
   deployment?: RolesDeploymentState;
   queued?: boolean;
+  requested_roles?: string[] | null;
 }
 
 export interface ProviderSlot {
@@ -675,7 +679,7 @@ export interface HealthCheck {
   status: string;
   service: string;
   jobs: number;
-  checks: Record<string, [boolean, string]>;
+  checks: Record<string, unknown>;
 }
 
 export interface RegistrationTokenResponse {
@@ -737,7 +741,7 @@ export interface HealthHistoryEntry {
   timestamp: string;
   role: string;
   status: string;
-  checks: Record<string, [boolean, string]>;
+  checks: Record<string, unknown>;
 }
 
 export interface ScheduledJob {
@@ -989,7 +993,7 @@ export interface HealthHistoryEntry {
   timestamp: string;
   role: string;
   status: string;
-  checks: Record<string, [boolean, string]>;
+  checks: Record<string, unknown>;
 }
 
 export interface HealthHistoryResponse {

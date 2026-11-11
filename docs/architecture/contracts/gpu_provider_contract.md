@@ -1,4 +1,7 @@
 GPU Provider Contract
+
+> Статус: контракт; реалізація та готовність підтверджуються окремо | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
+
 =====================
 
 1. Абстрактний інтерфейс провайдера (query capability, submit inference, cancel inference, get resource usage)

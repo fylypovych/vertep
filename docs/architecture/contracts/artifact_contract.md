@@ -1,4 +1,7 @@
 Artifact Contract
+
+> Статус: контракт; реалізація та готовність підтверджуються окремо | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
+
 =================
 
 1. Структура artifact metadata (type, format, checksum, references)

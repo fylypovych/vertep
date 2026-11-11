@@ -112,7 +112,8 @@ def test_apply_deployment_uses_only_catalog_services_and_erases_token(tmp_path):
     assert "REGISTRATION_TOKEN=\n" in environment
     pull = next(c for c in commands if c[:2] == ["docker", "compose"] and "pull" in c)
     assert pull[-3:] == ["comfyui", "update-agent", "worker"]
-    assert "core" in commands[-1]
+    assert any("rm" in command and "core" in command for command in commands)
+    assert "ps" in commands[-1]  # Confirm stopped services did not survive removal.
 
 
 def test_apply_deployment_rejects_tampered_plan(tmp_path):
@@ -169,6 +170,8 @@ def test_core_deployment_provisions_managed_ollama_model(tmp_path):
 
     def runner(command, **kwargs):
         commands.append(command)
+        if "stop" in command:
+            selected.difference_update(command[command.index("stop") + 1:])
         if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
             rows = [json.dumps({"Service": s, "State": "running", "Health": "healthy"})
                     for s in selected]

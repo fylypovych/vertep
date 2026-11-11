@@ -1,12 +1,12 @@
 # Вузли та capabilities
 
-> Статус: чинний | Аудиторія: розробник, оператор | Канон: `AGENTS.md` §7, §8, §14–§17
+> Статус: чинний | Аудиторія: розробник, оператор | Канон: [AGENTS.md](../AGENTS.md) §3, §14–§15.
 
 ## Ролі
 
 | Роль | Склад |
 |---|---|
-| `core` | CORE + API + Dispatcher + Scheduler + Publisher-контракти + Redis + PostgreSQL + License Manager + Update Agent + Monitoring. |
+| `core` | CORE + API + Dispatcher + Scheduler + Redis + PostgreSQL + License Manager + Certificate Manager + міграції + proxy + Update Agent; точний список — каталог ролей. Publisher і Monitoring підключаються як додаткові ролі. |
 | `gpu` | Worker + ComfyUI + CUDA Runtime + Update Agent. |
 | `text` | Worker + Ollama + LLM Runtime + Update Agent. |
 | `voice` | Worker + TTS Runtime + Voice Models + Update Agent. |
@@ -14,15 +14,15 @@
 | `backup` | Backup Service + Snapshot Manager + Archive Service + Update Agent. |
 | `monitoring` | Grafana + Prometheus + Logs + Metrics + Update Agent. |
 
-Додаткові ролі Core — через `NODE_ADDITIONAL_ROLES` у `.env`. Перелік ролей для Wizard — `config/node_roles.json`.
+Локальні ролі оператор вибирає в **Налаштування → Ролі вузла**; запит застосовує deployment executor. `NODE_ADDITIONAL_ROLES` у `.env` — параметр runtime, не заміна підтвердження застосування. Перелік ролей і служб — [config/node_roles.json](../config/node_roles.json), застосований набір — `deployment-plan.json`; готовність вимірюється окремо.
 
 ## Capabilities
 
-Приклади: `image_generation`, `image_upscale`, `controlnet`, `inpainting`, `video_generation`, `tts`, `publish_youtube`, `publish_tiktok`. Worker заявляє їх при реєстрації і підтверджує self-test; диспетчер враховує VRAM, readiness моделей і свіжість self-test. Непідтверджені capabilities в dispatch не беруть участі.
+Приклади каталогу: `image_generation`, `image_upscale`, `controlnet`, `inpainting`, `video_generation`, `text_generation`, `speech_synthesis`, `publishing`. Назви task (`tts`, `publish`) та назви capabilities не тотожні; актуальні allowlists задає `config/node_roles.json`. Worker заявляє їх при реєстрації і підтверджує self-test; диспетчер враховує VRAM, readiness моделей і свіжість self-test. Непідтверджені capabilities в dispatch не беруть участі.
 
 ## Реєстрація Worker
 
-1. Bootstrap ставить роль і генерує CSR.
+1. Bootstrap запускає базові служби; роль вибирається у Wizard. Під час enrollment Worker готує CSR і ключі вузла.
 2. У Wizard вводяться Core URL + Registration Token (`VT-XXXX-XXXX-XXXX`, TTL 15 хв, одноразовий; таблиця `node_registration_tokens`).
 3. Worker шле `/api/nodes/register` (CSR, capabilities, hardware, `enrollment_id`).
 4. Core видає JWT + Worker Secret + конфігурацію; можливий mTLS (`NODE_MTLS_REQUIRED=true`).

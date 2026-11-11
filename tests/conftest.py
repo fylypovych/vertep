@@ -55,6 +55,8 @@ def pytest_configure(config):
     os.environ["STORAGE_ROOT"] = str(_TEST_STATE_ROOT / "storage")
     os.environ["UPDATE_STATE_DIR"] = str(_TEST_STATE_ROOT / "update")
     os.environ["SYSTEM_STATE_BACKEND"] = "file"
+    # Code defaults DEMO_MODE to off (I-10); the test suite runs the dev stand-ins unless a test says otherwise.
+    os.environ.setdefault("DEMO_MODE", "true")
     os.environ["RATE_LIMIT_PER_MINUTE"] = "10000"
     os.environ["REDIS_URL"] = "redis://127.0.0.1:1/15"
     # Fail-closed middleware needs a non-empty admin password before it will

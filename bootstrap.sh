@@ -474,6 +474,9 @@ for relative in "${monitoring_files[@]}"; do
   printf '%s  %s\n' "$artifact_sha" "$destination" | sha256sum -c - >/dev/null
   chmod 0640 "$destination"
 done
+if [[ -f "$INSTALL_ROOT/scripts/remove-vertep.py" ]]; then
+  python3 "$INSTALL_ROOT/scripts/remove-vertep.py" --root "$INSTALL_ROOT" --record
+fi
 env_value(){
   local key=$1
   [[ -f "$INSTALL_ROOT/.env" ]] || return 0
@@ -484,57 +487,9 @@ existing_node_role=$(env_value NODE_ROLE)
 existing_additional_roles=$(env_value NODE_ADDITIONAL_ROLES)
 NODE_ROLE=${VERTEP_ROLE:-${existing_node_role:-unassigned}}
 ADDITIONAL_ROLES=${VERTEP_ADDITIONAL_ROLES:-${existing_additional_roles:-}}
-if [[ "$NODE_ROLE" == "unassigned" ]] && [[ -t 0 ]]; then
-  echo "Select node role:"
-  echo "1) core"
-  echo "2) gpu"
-  echo "3) text"
-  echo "4) voice"
-  echo "5) publisher"
-  echo "6) backup"
-  echo "7) monitoring"
-  read -r -p "Role [1-7]: " role_choice
-  case "$role_choice" in
-    1) NODE_ROLE=core ;;
-    2) NODE_ROLE=gpu ;;
-    3) NODE_ROLE=text ;;
-    4) NODE_ROLE=voice ;;
-    5) NODE_ROLE=publisher ;;
-    6) NODE_ROLE=backup ;;
-    7) NODE_ROLE=monitoring ;;
-    *) fail "Invalid role choice" ;;
-  esac
-fi
-if [[ "$NODE_ROLE" == "unassigned" ]]; then
-  ADDITIONAL_ROLES=""
-elif [[ "$NODE_ROLE" == "core" ]]; then
-  if [[ -z "$ADDITIONAL_ROLES" ]] && [[ -t 0 ]]; then
-    echo "Activate additional roles on this core node? (comma-separated numbers, or empty for none)"
-    echo "1) gpu         — генерація зображень"
-    echo "2) text        — генерація тексту"
-    echo "3) voice       — синтез мовлення"
-    echo "4) publisher   — публікація в соцмережах"
-    echo "5) backup      — резервне копіювання"
-    echo "6) monitoring  — моніторинг і журнали"
-    read -r -p "Additional roles: " additional_choice
-    additional_roles_parsed=()
-    if [[ -n "$additional_choice" ]]; then
-      IFS=', ' read -ra choices <<< "$additional_choice"
-      for choice in "${choices[@]}"; do
-        case "$choice" in
-          1) additional_roles_parsed+=("gpu") ;;
-          2) additional_roles_parsed+=("text") ;;
-          3) additional_roles_parsed+=("voice") ;;
-          4) additional_roles_parsed+=("publisher") ;;
-          5) additional_roles_parsed+=("backup") ;;
-          6) additional_roles_parsed+=("monitoring") ;;
-          *) echo "Skipping unknown choice: $choice" ;;
-        esac
-      done
-    fi
-    ADDITIONAL_ROLES=$(IFS=,; echo "${additional_roles_parsed[*]}")
-  fi
-else
+# The role and additional roles are chosen in the First Run Wizard; bootstrap starts
+# only the base services. VERTEP_ROLE / VERTEP_ADDITIONAL_ROLES remain for automation.
+if [[ "$NODE_ROLE" != "core" ]]; then
   ADDITIONAL_ROLES=""
 fi
 if [[ "$NODE_ROLE" != "unassigned" ]]; then
@@ -931,6 +886,9 @@ if [[ $installation_complete == true ]]; then
   mv -f "$installation_tmp" "$INSTALL_ROOT/config/installation.json"
 fi
 systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
+if [[ -f "$INSTALL_ROOT/scripts/remove-vertep.py" ]]; then
+  python3 "$INSTALL_ROOT/scripts/remove-vertep.py" --root "$INSTALL_ROOT" --record
+fi
 server_ip=$(hostname -I | awk '{print $1}')
 if [[ $installation_complete == true ]]; then
   setup_url="https://$server_ip:8443/"

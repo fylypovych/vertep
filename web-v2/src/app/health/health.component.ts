@@ -1,21 +1,19 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, OnDestroy, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription, timer } from 'rxjs';
 import { SystemApiService } from '../core/api/system.api';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
-import { EmptyStateComponent } from '../shared/empty-state.component';
 import { HealthCheck, HealthHistoryEntry, MetricsResponse } from '../core/models';
-import { roleLabel } from '../core/presentation';
+import { checkName, checkReason, checkStatus, healthLabel, serviceChecks, stateChanges } from './health.presentation';
 import { RemoteState } from '../core/state/remote-state';
-import { RemoteMutation } from '../core/state/remote-state';
 
 @Component({
   selector: 'app-health',
   standalone: true,
-  imports: [TPipe, CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent, EmptyStateComponent],
+  imports: [TPipe, CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="space-y-6" data-testid="health-page">
       <div class="flex items-center justify-between">
@@ -23,7 +21,7 @@ import { RemoteMutation } from '../core/state/remote-state';
         <a [href]="grafanaUrl()" target="_blank" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium">Grafana</a>
       </div>
 
-      @if (healthState.loading()) {
+      @if (healthState.loading() && !healthState.data()) {
         <app-loading-state />
       } @else if (healthState.failed()) {
         <app-error-state [message]="healthState.error()!" (retry)="loadHealth()" />
@@ -31,11 +29,11 @@ import { RemoteMutation } from '../core/state/remote-state';
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div class="bg-slate-50 rounded-lg p-4">
             <p class="text-xs text-slate-500 mb-1">{{ 'Загальний стан' | t }}</p>
-            <p class="text-sm font-medium" [class.text-emerald-600]="healthOk()" [class.text-red-600]="!healthOk()">{{ (healthStatus()) | t }}</p>
+            <p class="text-sm font-medium" [class.text-emerald-600]="healthOk()" [class.text-red-600]="!healthOk()">{{ healthLabel(healthStatus()) | t }}</p>
           </div>
           <div class="bg-slate-50 rounded-lg p-4">
             <p class="text-xs text-slate-500 mb-1">{{ 'Сервіс' | t }}</p>
-            <p class="text-sm font-medium text-slate-900">{{ (service()) | t }}</p>
+            <p class="text-sm font-medium text-slate-900">{{ (service() === 'core' ? 'Основний вузол' : service()) | t }}</p>
           </div>
           <div class="bg-slate-50 rounded-lg p-4">
             <p class="text-xs text-slate-500 mb-1">{{ 'Активних завдань' | t }}</p>
@@ -48,15 +46,16 @@ import { RemoteMutation } from '../core/state/remote-state';
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             @for (check of checks(); track check.key) {
               <div class="flex items-center justify-between bg-slate-50 rounded-lg p-3">
-                <span class="text-sm text-slate-700">{{ check.key }}</span>
+                <span class="text-sm text-slate-700">{{ checkName(check.key) | t }}</span>
                 <div class="flex items-center gap-2">
-                  <span class="text-xs text-slate-500">{{ (check.value[1]) | t }}</span>
+                  <span class="text-xs text-slate-500" [attr.title]="check.value[1]">{{ checkReason(check.value[1]) | t }}</span>
+                  @if (check.required === false && check.value[0] !== null) { <span class="text-xs text-slate-500">{{ 'Необов’язкова перевірка' | t }}</span> }
                   <span class="px-2 py-0.5 rounded-full text-xs font-medium"
-                        [class.bg-emerald-50]="check.value[0]"
-                        [class.text-emerald-700]="check.value[0]"
-                        [class.bg-red-50]="!check.value[0]"
-                        [class.text-red-700]="!check.value[0]">
-                    {{ check.value[0] ? 'OK' : 'FAIL' }}
+                        [class.bg-emerald-50]="check.value[0] === true"
+                        [class.text-emerald-700]="check.value[0] === true"
+                        [class.bg-red-50]="check.value[0] === false"
+                        [class.text-red-700]="check.value[0] === false">
+                    {{ checkStatus(check.value[0]) | t }}
                   </span>
                 </div>
               </div>
@@ -106,8 +105,8 @@ import { RemoteMutation } from '../core/state/remote-state';
         </div>
 
         <div>
-          <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Історія стану' | t }}</h4>
-          @if (historyState.loading()) {
+          <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Зміни стану' | t }}</h4>
+          @if (historyState.loading() && !historyState.data().length) {
             <div class="animate-pulse bg-slate-100 rounded-lg h-20"></div>
           } @else if (historyState.failed()) {
             <app-error-state [message]="historyState.error()!" (retry)="loadHistory()" />
@@ -115,7 +114,7 @@ import { RemoteMutation } from '../core/state/remote-state';
             <p class="text-sm text-slate-500">{{ 'Немає історії' | t }}</p>
           } @else {
             <div class="space-y-2">
-              @for (entry of historyState.data() | slice:0:10; track entry.timestamp) {
+              @for (entry of historyChanges() | slice:0:10; track entry.timestamp) {
                 <div class="bg-slate-50 rounded-lg p-3">
                   <div class="flex items-center justify-between">
                     <span class="text-xs text-slate-500">{{ entry.timestamp | vertepDate }}</span>
@@ -124,17 +123,17 @@ import { RemoteMutation } from '../core/state/remote-state';
                           [class.text-emerald-700]="entry.status === 'HEALTHY'"
                           [class.bg-red-50]="entry.status !== 'HEALTHY'"
                           [class.text-red-700]="entry.status !== 'HEALTHY'">
-                      {{ (entry.status) | t }}
+                      {{ healthLabel(entry.status) | t }}
                     </span>
                   </div>
                   <div class="mt-1 flex flex-wrap gap-1 text-xs text-slate-500">
                     @for (check of objectEntries(entry.checks); track check.key) {
-                      <span class="px-1.5 py-0.5 rounded"
-                            [class.bg-emerald-50]="check.value[0]"
-                            [class.text-emerald-700]="check.value[0]"
-                            [class.bg-red-50]="!check.value[0]"
-                            [class.text-red-700]="!check.value[0]">
-                        {{ check.key }}: {{ check.value[0] ? 'OK' : 'FAIL' }}
+                      <span class="px-1.5 py-0.5 rounded" [attr.title]="check.value[1]"
+                            [class.bg-emerald-50]="check.value[0] === true"
+                            [class.text-emerald-700]="check.value[0] === true"
+                            [class.bg-red-50]="check.value[0] === false"
+                            [class.text-red-700]="check.value[0] === false">
+                        {{ checkName(check.key) | t }}: {{ checkStatus(check.value[0]) | t }}
                       </span>
                     }
                   </div>
@@ -163,6 +162,7 @@ export class HealthComponent implements OnInit, OnDestroy {
     this.loadHistory();
     this.pollTimer = timer(0, 10000).subscribe(() => {
       this.loadHealth();
+      this.loadHistory();
     });
   }
 
@@ -206,11 +206,12 @@ export class HealthComponent implements OnInit, OnDestroy {
     return this.healthState.data()?.jobs || 0;
   }
 
-  checks(): Array<{ key: string; value: [boolean, string] }> {
-    const health = this.healthState.data();
-    if (!health) return [];
-    return Object.entries(health.checks || {}).map(([key, value]) => ({ key, value: value as [boolean, string] }));
-  }
+  checkName = checkName;
+  checkReason = checkReason;
+  checkStatus = checkStatus;
+  healthLabel = healthLabel;
+  historyChanges() { return stateChanges(this.historyState.data()); }
+  checks() { return serviceChecks(this.healthState.data()?.checks || {}); }
 
   metrics(): MetricsResponse {
     return this.metricsState.data();
@@ -233,7 +234,5 @@ export class HealthComponent implements OnInit, OnDestroy {
     return Object.entries(byStatus).map(([status, count]) => ({ status, count }));
   }
 
-  objectEntries(obj: Record<string, unknown>): Array<{ key: string; value: [boolean, string] }> {
-    return Object.entries(obj || {}).map(([key, value]) => ({ key, value: value as [boolean, string] }));
-  }
+  objectEntries(obj: Record<string, unknown>) { return serviceChecks(obj || {}); }
 }
