@@ -154,6 +154,14 @@ def test_selected_gpu_failure_is_required_and_worker_separate(client):
     assert report['checks']['gpu_worker'] == 'OPTIONAL'  # Enrollment follows setup.
 
 
+def test_wizard_checks_contain_only_probes_not_selection_metadata(client):
+    api, _, _ = client
+    report = api.get('/api/setup/health?additional_roles=gpu&backend=skip').json()
+    assert report['ready'] is True
+    assert 'selected_roles' not in report['checks'] and 'selected_roles' not in report['details']
+    assert all(value == 'OK' or value == 'OPTIONAL' for value in report['checks'].values())
+
+
 def test_applied_plan_supersedes_stale_environment_and_pending_selection(client, monkeypatch):
     from core.deployment_plan import create_plan
     from core.node_registry import node_roles

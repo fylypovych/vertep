@@ -18,7 +18,7 @@ export class SystemApiService {
   saveTelegramAccess = (allowed: string, admins: string): Observable<unknown> => this.http.post(`${this.base.url}/telegram/setup`, { allowed_chat_ids: allowed, admin_chat_ids: admins }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   status = (): Observable<SystemStatus> => this.http.get<SystemStatus>(`${this.base.url}/status`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   health = (): Observable<HealthCheck> => this.http.get<HealthCheck>(`${this.base.url}/health`, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  healthHistory = (limit = 100): Observable<HealthHistoryResponse> => this.http.get<HealthHistoryResponse>(`${this.base.url}/health/history?limit=${limit}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  healthHistory = (limit = 100, changes = 0): Observable<HealthHistoryResponse> => this.http.get<HealthHistoryResponse>(`${this.base.url}/health/history?limit=${limit}${changes ? `&changes=${changes}` : ''}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   metrics = (): Observable<MetricsResponse> => this.http.get<MetricsResponse>(`${this.base.url}/metrics`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   securityCheck = (): Observable<SecurityCheckResponse> => this.http.get<SecurityCheckResponse>(`${this.base.url}/security/check`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   updateStatus = (): Observable<UpdateStatus> => this.http.get<UpdateStatus>(`${this.base.url}/system/update`, { headers: this.h() }).pipe(catchError(this.base.handleError));

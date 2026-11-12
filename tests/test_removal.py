@@ -26,6 +26,7 @@ class Runtime:
                 "State":{"Running":True},"Mounts":[],"NetworkSettings":{"Networks":{}}},
         }
         self.images={"sha256:own","sha256:foreign"}
+        self.digests={}
         self.networks={"private":{"Id":"net-own","Labels":{"com.docker.compose.network":"default"},"Containers":{"own":{}}}}
         self.volumes={"data":{"Name":"data","Labels":{"com.docker.compose.volume":"postgres-data"}}}
         self.ready={"ready":True,"queue_paused":True,"active_jobs":[],"busy_workers":[],"inflight":0}
@@ -49,6 +50,8 @@ class Runtime:
             data={"image":self.images,"network":self.networks,"volume":self.volumes}[kind]
             if verb=="ls":
                 output="\n".join(item["Id"] for item in data.values()) if kind=="network" else "\n".join(data)
+            elif verb=="inspect" and kind=="image":
+                output=json.dumps([{"Id":args[3],"RepoDigests":self.digests.get(args[3],[])}])
             elif verb=="inspect":
                 key=args[3]
                 if kind=="network" and key not in data:key=next(k for k,v in data.items() if v["Id"]==key)
@@ -71,13 +74,17 @@ def install(tmp_path):
     (root/"storage").mkdir()
     (root/"storage/video.mp4").write_bytes(b"user data")
     (root/"docker-compose.yml").write_text("services: {}")
-    (root/"manifest.json").write_text(json.dumps({"files":{"scripts/vertep":{},"docker-compose.yml":{}}}))
+    (root/"manifest.json").write_text(json.dumps({"files":{"scripts/vertep":{},"docker-compose.yml":{},"vertep-core.service":{}}}))
     system=tmp_path/"system"
     units=system/"etc/systemd/system";units.mkdir(parents=True)
     (units/"vertep-core.service").write_text("ExecStart="+str(root/"scripts/vertep"),encoding="utf-8")
     (root/"vertep-core.service").write_text(("ExecStart="+str(root/"scripts/vertep")).replace(str(root),"@VERTEP_ROOT@"),encoding="utf-8")
     runtime=Runtime(root)
     host=r.Host(root,runtime.run,system)
+    # Bootstrap records ownership before its first pull, then again after start.
+    own=runtime.containers.pop("own");runtime.images.discard("sha256:own")
+    r.record(host)
+    runtime.containers["own"]=own;runtime.images.add("sha256:own")
     r.record(host)
     runtime.calls.clear()
     return host,runtime,tmp_path/"journal"
@@ -273,3 +280,147 @@ def test_volume_backing_bind_mount_is_shared(install):
     runtime.volumes["data"]["Mountpoint"]="/var/lib/docker/volumes/data/_data"
     runtime.containers["foreign"]["Mounts"]=[{"Type":"bind","Source":"/var/lib/docker/volumes/data/_data"}]
     assert not r.plan(host,True)["volumes"]
+
+
+def _as_linux_root(monkeypatch, host):
+    monkeypatch.setattr(r.sys, "platform", "linux")
+    monkeypatch.setattr(r.os, "geteuid", lambda: 0, raising=False)
+    real_stat = Path.stat
+    def stat(path, *args, **kwargs):
+        value = real_stat(path, *args, **kwargs)
+        if path in {host.root, host.root/"config"}:
+            return SimpleNamespace(**{name: getattr(value, name) for name in dir(value) if name.startswith("st_")}
+                                   | {"st_uid": 0, "st_mode": value.st_mode & ~0o022})
+        return value
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(r, "Host", lambda root: host)
+    monkeypatch.setattr(r.sys.stdin, "isatty", lambda: False)
+
+
+def test_image_present_before_installation_is_retained(install):
+    host, runtime, journal = install
+    ledger_path = host.root/"config/removal-ownership.json"
+    ledger = json.loads(ledger_path.read_text())
+    assert ledger["image_provenance"]["preexisting"] == ["sha256:foreign"]
+    ledger["image_provenance"]["preexisting"].append("sha256:own")  # e.g. postgres pulled by the operator earlier
+    ledger_path.write_text(json.dumps(ledger))
+    selected = r.plan(host)
+    assert selected["images"] == []
+    assert "Образ існував до інсталяції Vertep: sha256:own" in selected["retained"]
+    assert r.execute(host, selected, journal)["state"] == "SUCCEEDED"
+    assert "sha256:own" in runtime.images
+
+
+def test_legacy_ledger_removes_only_images_of_the_signed_lock(install):
+    host, runtime, journal = install
+    ledger_path = host.root/"config/removal-ownership.json"
+    ledger = json.loads(ledger_path.read_text())
+    ledger.pop("image_provenance")  # inventory created after Vertep was already running
+    ledger_path.write_text(json.dumps(ledger))
+    third = copy.deepcopy(runtime.containers["own"])
+    third.update({"Id": "pg", "Image": "sha256:pg"})
+    third["Config"]["Labels"]["com.docker.compose.service"] = "postgres"
+    runtime.containers["pg"] = third
+    runtime.networks["private"]["Containers"]["pg"] = {}
+    runtime.images.add("sha256:pg")
+    runtime.digests = {"sha256:own": ["ghcr.io/owner/vertep-core@sha256:aa"],
+                       "sha256:pg": ["postgres@sha256:bb"]}
+    (host.root/"images.json").write_text(json.dumps(
+        {"core": {"reference": "ghcr.io/owner/vertep-core:0.0.3.64", "digest": "sha256:aa", "platforms": []}}))
+    selected = r.plan(host)
+    assert selected["images"] == ["sha256:own"]
+    assert "Походження образу не зафіксоване: sha256:pg" in selected["retained"]
+    r.execute(host, selected, journal)
+    assert runtime.images == {"sha256:foreign", "sha256:pg"}
+
+
+def test_purge_removes_emptied_layout_including_root(install):
+    host, runtime, journal = install
+    result = r.execute(host, r.plan(host, True), journal)
+    assert result["state"] == "SUCCEEDED"
+    assert not host.root.exists()
+    assert json.loads((journal/"state.json").read_text())["state"] == "SUCCEEDED"
+
+
+def test_purge_keeps_unknown_content_and_reports_partial(install):
+    host, runtime, journal = install
+    selected = r.plan(host, True)
+    (host.root/"operator-notes.txt").write_text("not Vertep")
+    result = r.execute(host, selected, journal)
+    assert result["state"] == "PARTIAL"
+    assert (host.root/"operator-notes.txt").read_text() == "not Vertep"
+    assert str(host.root/"operator-notes.txt") in result["retained_unknown"]
+    assert not (host.root/"config").exists() and not (host.root/"storage").exists()
+
+
+def test_cli_resume_finds_the_unfinished_journal(install, monkeypatch, tmp_path):
+    host, runtime, _ = install
+    base = tmp_path/"journals"
+    monkeypatch.setattr(r, "JOURNAL_BASE", base)
+    selected = r.plan(host)
+    runtime.fail = lambda args: args[:3] == ["docker", "image", "rm"]
+    with pytest.raises(RuntimeError):
+        r.execute(host, selected, base/"key-plan")
+    runtime.fail = None
+    # Another installation and a finished run are never resumed.
+    (base/"other").mkdir()
+    (base/"other/state.json").write_text(json.dumps({"state": "FAILED", "plan": {"root": "/srv/other"}}))
+    (base/"done").mkdir()
+    (base/"done/state.json").write_text(json.dumps({"state": "SUCCEEDED", "plan": {"root": str(host.root)}}))
+    _as_linux_root(monkeypatch, host)
+    assert r.main(["--root", str(host.root), "--resume", "--confirm", selected["plan_sha256"]]) == 0
+    assert json.loads((base/"key-plan/state.json").read_text())["state"] == "SUCCEEDED"
+    assert "sha256:own" not in runtime.images
+
+
+def test_resume_without_or_with_ambiguous_journal_is_refused(tmp_path):
+    base = tmp_path/"journals"
+    with pytest.raises(RuntimeError, match="Немає незавершеного"):
+        r.find_journal(base, Path("/srv/vertep"))
+    for name in ["a", "b"]:
+        (base/name).mkdir(parents=True)
+        (base/name/"state.json").write_text(json.dumps({"state": "FAILED", "plan": {"root": "/srv/vertep"}}))
+    with pytest.raises(RuntimeError, match="Кілька"):
+        r.find_journal(base, Path("/srv/vertep"))
+
+
+def test_reinstall_on_retained_data_keeps_identity_and_provenance(install):
+    host, runtime, journal = install
+    before = json.loads((host.root/"config/removal-ownership.json").read_text())
+    own = copy.deepcopy(runtime.containers["own"])
+    assert r.execute(host, r.plan(host), journal)["state"] == "SUCCEEDED"
+    # Bootstrap on the same root: retained config/data, new runtime files, units and containers.
+    (host.root/"scripts").mkdir(exist_ok=True)
+    (host.root/"scripts/vertep").write_text("runtime v2")
+    (host.root/"docker-compose.yml").write_text("services: {}")
+    (host.root/"vertep-core.service").write_text("ExecStart=@VERTEP_ROOT@/scripts/vertep")
+    (host.root/"manifest.json").write_text(json.dumps({"files": {"scripts/vertep": {}, "docker-compose.yml": {}, "vertep-core.service": {}}}))
+    (host.system/"etc/systemd/system/vertep-core.service").write_text("ExecStart="+str(host.root/"scripts/vertep"))
+    r.record(host)
+    runtime.containers["own"] = own
+    runtime.images.add("sha256:own")
+    runtime.networks["private"] = {"Id": "net-own", "Labels": {"com.docker.compose.network": "default"}, "Containers": {"own": {}}}
+    after = r.record(host)
+    assert after["installation_id"] == before["installation_id"]
+    assert after["image_provenance"] == before["image_provenance"]
+    assert set(after["files"]) <= {name for name in after["files"] if (host.root/name).exists()}
+    selected = r.plan(host)
+    assert selected["blocked"] == [] and selected["images"] == ["sha256:own"]
+
+
+def test_bootstrap_refuses_reinstall_over_unfinished_removal(tmp_path):
+    import shutil, subprocess
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("Bash unavailable")
+    source = (Path(__file__).resolve().parents[1]/"bootstrap.sh").read_text(encoding="utf-8")
+    guard = next(line for line in source.splitlines() if "removal-in-progress.json" in line)
+    block = source[source.index(guard):].split("\n\n", 1)[0]
+    script = 'set -eu\nfail(){ echo "REFUSED: $*"; exit 17; }\n' + block + '\necho PASSED\n'
+    (tmp_path/"config").mkdir()
+    run = lambda: subprocess.run([bash, "-c", script], env={"INSTALL_ROOT": str(tmp_path), "PATH": "/usr/bin:/bin"},
+                                 capture_output=True, text=True)
+    assert run().stdout.strip() == "PASSED"
+    (tmp_path/"config/removal-in-progress.json").write_text("{}")
+    result = run()
+    assert result.returncode == 17 and "removal is unfinished" in result.stdout

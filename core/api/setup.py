@@ -100,7 +100,7 @@ def first_run_health(role: str | None = None, backend: str | None = None,
     required = raw.get("required", REQUIRED_HEALTH_CHECKS.get(role, frozenset()))
     checks: dict[str, str] = {}
     for name, value in raw.items():
-        if name in {"role", "checked_at", "required"}:
+        if name in {"role", "selected_roles", "checked_at", "required"}:
             continue
         if isinstance(value, tuple):
             ok, message = value[0], value[1]

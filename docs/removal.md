@@ -28,6 +28,14 @@ JSON містить root, installation ID, точні container/network/image ID
 
 `--purge-data` — окремий явний вибір. Спочатку переглянути `sudo vertep remove --purge-data --dry-run`, потім підтвердити hash саме цього переліку. Видаляються лише перелічені локальні файли й підтверджені неспільні volumes. Перетини зі сторонніми bind mounts, symlinks і зміна даних блокують операцію. Спільні Docker resources не видаляються; journal та recovery executor зберігаються навіть у purge-режимі.
 
+Після purge executor прибирає порожні каталоги даних, lock-файл update fence і сам installation root, якщо він став порожнім. Невідомий вміст не видаляється: його шляхи наводяться в `retained_unknown`, а результат — PARTIAL.
+
+## Походження Docker images
+
+Видаляються лише images, які до хоста приніс Vertep. Перший запис ownership inventory, зроблений bootstrap до першого pull і до створення будь-якого контейнера цього root, фіксує всі images, що вже були на хості (`image_provenance.preexisting`). Такі images — зокрема `postgres`, `redis`, `nginx`, prometheus чи grafana, завантажені оператором раніше — ніколи не видаляються, навіть коли їх використовували контейнери Vertep. Images, які використовує сторонній контейнер, також зберігаються.
+
+Якщо inventory створено вже для працюючої інсталяції (старі версії без запису походження), походження невідоме. Тоді видаляються лише images, чий `repository@digest` збігається з підписаним `images.json` поточного чи збереженого release; решта зберігається з причиною у переліку.
+
 Пакети Docker/Compose, драйвери, Toolkit, Ollama, apt repositories, Docker daemon settings, UFW/SSH зберігаються. Поточні інсталятори не мають повного журналу їхнього походження й попереднього стану; обґрунтувати автоматичне видалення або rollback цих змін неможливо. Опції обходу цієї перевірки немає. Їх видалення потребує окремих перевірених доказів і явного рішення оператора поза автоматичним executor.
 
 ## Належність та виконання
@@ -40,6 +48,10 @@ Compose project name `vertep` не є достатнім доказом. Пер�
 
 Journal `state.json` і самодостатній `remove.py` зберігаються поза installation root у приватному каталозі `/var/lib/vertep-remove/<installation-and-plan-key>/`. Path виводиться після завершення або помилки; journal не містить значень secrets. Кожен завершений крок записується атомарно. При помилці результат FAILED, units не вмикаються назад і дані не домальовуються як видалені.
 
-Для продовження оператор запускає **збережений** executor: `sudo python3 /var/lib/vertep-remove/<key>/remove.py --root <installation-root> --resume --confirm <original-plan-sha256>`. Він використовує підтверджений перелік із journal і не додає нових цілей. Повторне виконання пропускає завершені кроки; відсутність уже видаленого ресурсу не є помилкою. Новий installation ID або новий перелік отримує окремий journal. Після переривання marker зберігає maintenance до завершення операції.
+Поки CLI ще встановлений, `sudo vertep remove --resume --confirm <original-plan-sha256>` сам знаходить єдиний незавершений journal цього root у `/var/lib/vertep-remove`; кілька незавершених journals або їх відсутність — відмова без змін. Після видалення CLI оператор запускає **збережений** executor: `sudo python3 /var/lib/vertep-remove/<key>/remove.py --root <installation-root> --resume --confirm <original-plan-sha256>`. Він використовує підтверджений перелік із journal і не додає нових цілей. Повторне виконання пропускає завершені кроки; відсутність уже видаленого ресурсу не є помилкою. Новий installation ID або новий перелік отримує окремий journal. Після переривання marker зберігає maintenance до завершення операції.
+
+## Повторна інсталяція
+
+Bootstrap на тому самому root після видалення без purge використовує збережені `config`, `.env`, дані й volumes як наявну інсталяцію: завершений `installation.json` не вимагає повторного майстра. Ownership inventory зберігає installation ID і запис походження images, а файли попереднього runtime, яких уже немає, з нього прибираються. Поки `config/removal-in-progress.json` існує, видалення не завершене: bootstrap відмовляє до будь-яких змін і пропонує продовжити видалення. Після purge root порожній або відсутній, тож bootstrap виконує чисту інсталяцію з майстром.
 
 Докази й межі перевірок — [приймання #446](acceptance/removal-446.md).

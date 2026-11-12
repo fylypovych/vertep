@@ -19,6 +19,7 @@ UNIT_NAMES = (
     "vertep-watchdog.timer", "vertep-startup-recovery.service",
     "vertep-host-health.service", "vertep-host-health.timer",
 )
+JOURNAL_BASE = Path("/var/lib/vertep-remove")
 
 
 def read(path, default=None):
@@ -121,7 +122,9 @@ def record(host):
     manifest = read(active/"manifest.json", {}) if active.is_dir() and active.resolve().is_relative_to(root/"releases") else read(root / "manifest.json", {})
     if not isinstance(manifest.get("files"), dict):
         raise RuntimeError("Немає manifest файлів runtime; належність ПЗ не доведена")
-    files = dict(previous.get("files", {}))
+    # Files of an earlier, already removed runtime are no longer evidence of ownership.
+    files = {name: value for name, value in previous.get("files", {}).items()
+             if (root / name).exists() or (root / name).is_symlink()}
     for name in manifest["files"]:
         relative = Path(name)
         candidate = root / relative
@@ -162,6 +165,11 @@ def record(host):
         if service in units and installed.is_file() and bundled.is_file() and not installed.is_symlink() and digest(installed) == digest(bundled):
             units[name] = digest(installed)
     owned = [item for item in host.inventory() if owned_container(item, root)]
+    # Image provenance: a snapshot is valid only before Vertep created any container for
+    # this root. Those images existed before Vertep and are never removed by it.
+    provenance = previous.get("image_provenance")
+    if not previous and not owned:
+        provenance = {"schema": 1, "preexisting": sorted(set(host.docker("image", "ls", "-q", "--no-trunc").split()))}
     resources = previous.get("resources", {"images": [], "volumes": [], "networks": []})
     resources["images"] = sorted(set(resources["images"]) | {item["Image"] for item in owned})
     resources["volumes"] = sorted(set(resources["volumes"]) | {m["Name"] for item in owned for m in item.get("Mounts", []) if m.get("Type") == "volume"})
@@ -170,7 +178,7 @@ def record(host):
         if (value.get("Labels") or {}).get("com.docker.compose.network"):
             resources["networks"] = sorted(set(resources["networks"]) | {value["Id"]})
     value = {"schema": 1, "root": str(root), "installation_id": previous.get("installation_id") or uuid.uuid4().hex,
-             "files": files, "units": units, "resources": resources,
+             "files": files, "units": units, "resources": resources, "image_provenance": provenance,
              "packages": {}, "package_provenance": "unknown; shared dependencies are retained"}
     atomic(path, value)
     return value
@@ -197,6 +205,36 @@ def volume_exclusive(value, foreign_volumes, foreign):
                     if source==location or source.is_relative_to(location) or location.is_relative_to(source):
                         return False
     return True
+
+
+def signed_image_references(root):
+    """repository@digest of images from the signed runtime locks of this root."""
+    references = set()
+    for path in [root / "images.json", *sorted((root / "releases").glob("*/images.json"))]:
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            lock = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        for item in (lock.values() if isinstance(lock, dict) else []):
+            if isinstance(item, dict) and isinstance(item.get("reference"), str) and isinstance(item.get("digest"), str):
+                reference = item["reference"]
+                repository = reference.rsplit(":", 1)[0] if ":" in reference.rsplit("/", 1)[-1] else reference
+                references.add(repository + "@" + item["digest"])
+    return references
+
+
+def image_owned(host, ident, provenance, signed):
+    """Remove only images Vertep brought to this host; unknown origin is retained."""
+    if isinstance(provenance, dict) and isinstance(provenance.get("preexisting"), list):
+        if ident in provenance["preexisting"]:
+            return False, "Образ існував до інсталяції Vertep: " + ident
+        return True, ""
+    value = json.loads(host.docker("image", "inspect", ident))[0]
+    if signed & set(value.get("RepoDigests") or []):
+        return True, ""
+    return False, "Походження образу не зафіксоване: " + ident
 
 
 def plan(host, purge=False):
@@ -254,7 +292,14 @@ def plan(host, purge=False):
     foreign_images = {item.get("Image") for item in foreign}
     known = ledger.get("resources", {})
     available_images = set(host.docker("image", "ls", "-q", "--no-trunc").split())
-    result["images"] = sorted(({item["Image"] for item in ours} | set(known.get("images", []))) & available_images - foreign_images)
+    candidates = sorted(({item["Image"] for item in ours} | set(known.get("images", []))) & (available_images - foreign_images))
+    signed = signed_image_references(root)
+    for ident in candidates:
+        owned, reason = image_owned(host, ident, ledger.get("image_provenance"), signed)
+        if owned:
+            result["images"].append(ident)
+        else:
+            result["retained"].append(reason)
     foreign_mounts = {m.get("Source") for item in foreign for m in item.get("Mounts", [])}
     for item in foreign:
         for mount in item.get("Mounts",[]):
@@ -372,7 +417,61 @@ def execute(host, selected, journal_dir, resume=False):
         atomic(host.root / "config/removal-in-progress.json", {"plan_sha256": selected["plan_sha256"]})
         # The marker closes admission across CORE processes; recheck drained runtime after publication.
         activity(host)
-        return _execute(host, selected, journal_dir)
+        state = _execute(host, selected, journal_dir)
+    if selected["purge_data"]:
+        # After the fence is released its lock file is no longer needed by any executor.
+        state = _finish_purge(host, journal_dir, state)
+    return state
+
+
+def _finish_purge(host, journal_dir, state):
+    """Remove the emptied installation layout; unknown content is kept and reported."""
+    root = host.root
+    for name in ["config/update/update.lock", "config/update/update.lock.guard"]:
+        target = root / name
+        if target.is_file() and not target.is_symlink() and target.parent.resolve().is_relative_to(root):
+            try:
+                target.unlink()
+            except OSError:
+                pass
+    for name in sorted(DATA):
+        directory = root / name
+        if directory.is_dir() and not directory.is_symlink():
+            for child in sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                if child.is_dir() and not child.is_symlink():
+                    try:
+                        child.rmdir()
+                    except OSError:
+                        pass
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+    leftovers = sorted(str(item) for item in root.iterdir()) if root.is_dir() else []
+    if leftovers:
+        state["retained_unknown"] = sorted(set(state.get("retained_unknown", [])) | set(leftovers))
+    elif root.is_dir():
+        root.rmdir()
+    state["state"] = "PARTIAL" if state.get("retained_unknown") else "SUCCEEDED"
+    atomic(journal_dir.resolve() / "state.json", state)
+    return state
+
+
+def find_journal(base, root):
+    """The one unfinished journal of this installation root, independent of its directory key."""
+    found = []
+    for path in sorted(base.glob("*/state.json")) if base.is_dir() else []:
+        if path.is_symlink() or path.parent.is_symlink():
+            continue
+        state = read(path, {})
+        if isinstance(state, dict) and (state.get("plan") or {}).get("root") == str(root) and state.get("state") != "SUCCEEDED":
+            found.append(path.parent)
+    if not found:
+        raise RuntimeError("Немає незавершеного журналу видалення для " + str(root))
+    if len(found) > 1:
+        raise RuntimeError("Кілька незавершених журналів; запустіть потрібний збережений executor: "
+                           + ", ".join(str(item / "remove.py") for item in found))
+    return found[0]
 
 
 def _execute(host, selected, journal_dir):
@@ -519,11 +618,13 @@ def main(argv=None):
             record(host); return 0
         ledger=read(host.root/"config/removal-ownership.json",{})
         key=hashlib.sha256((str(host.root)+str(ledger.get("installation_id",""))).encode()).hexdigest()[:24]
-        journal=Path("/var/lib/vertep-remove")/key
+        journal=JOURNAL_BASE/key
         if args.resume:
             recovery=Path(__file__).resolve().parent
-            if (recovery/"state.json").exists() and recovery.is_relative_to(Path("/var/lib/vertep-remove")):
+            if (recovery/"state.json").exists() and recovery.is_relative_to(JOURNAL_BASE):
                 journal=recovery
+            else:
+                journal=find_journal(JOURNAL_BASE,host.root)
             previous=read(journal/"state.json")
             if not previous: raise RuntimeError("Немає журналу для продовження")
             selected=previous["plan"]

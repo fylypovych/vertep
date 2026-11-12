@@ -1,12 +1,16 @@
 import { test, expect } from '@playwright/test';
 
 test('Health відокремлює metadata, optional і минулу GPU відмову; uk/en', async ({ page }) => {
+  const historyQueries: string[] = [];
   await page.route('**/api/**', async route => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     if (path.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', username: 'admin', role: 'admin' } });
+    if (path.endsWith('/health/history')) historyQueries.push(url.searchParams.get('changes') || '');
     if (path.endsWith('/health/history')) return route.fulfill({ json: { history: [
-      { timestamp: '2026-11-10T10:00:00Z', role: 'core', status: 'UNHEALTHY', checks: { role: 'core', required: ['gpu'], gpu: [false, 'health_probe_failed'] } },
-      ...['10:01', '10:02'].map(time => ({ timestamp: `2026-11-10T${time}:00Z`, role: 'core', status: 'HEALTHY', checks: { role: 'core', checked_at: time, required: ['docker'], docker: [true, 'health_probe_ok'] } })),
+      // Two polls of one failure fold into one incident; the same failure an hour later is separate.
+      ...['10:00:00', '10:00:10', '11:00:00'].map(time => ({ timestamp: `2026-11-10T${time}Z`, role: 'core', status: 'UNHEALTHY',
+        checks: { role: 'core', checked_at: time, required: ['gpu'], gpu: [false, 'health_probe_failed'] } })),
     ] } });
     if (path.endsWith('/health')) return route.fulfill({ json: { status: 'HEALTHY', service: 'core', jobs: 0, checks: {
       role: 'core', checked_at: 'now', required: ['docker', 'core_api'], selected_roles: ['core'],
@@ -24,12 +28,16 @@ test('Health відокремлює metadata, optional і минулу GPU ві�
   await expect(health).not.toContainText('role:');
   await expect(health).not.toContainText('checked_at');
   await expect(health).not.toContainText('required');
-  await expect(health.getByText('Docker: Справний', { exact: true })).toHaveCount(1);
+  await expect(health).toContainText('Несправності за останню добу');
+  await expect(health.getByText('Відеокарта: Несправний', { exact: true })).toHaveCount(2);
+  // Incidents come from the server journal, not from the last minutes of raw polling.
+  expect(historyQueries[0]).toBe('10');
   await page.evaluate(() => localStorage.setItem('vertep_language', 'en'));
   await page.reload();
   await expect(health).toContainText('Core API');
   await expect(health).toContainText('Not applicable');
   await expect(health).toContainText('Graphics card: Failed');
+  await expect(health).toContainText('Failures in the last day');
   await expect(health).not.toContainText('Система справна');
 });
 

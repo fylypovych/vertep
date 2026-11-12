@@ -20,6 +20,6 @@
 
 ## Workflow і gate
 
-Release workflow працює з конкретним commit: тести → Docker images (один SHA, теги = `VERSION`) → `vertep-runtime-<версія>.tar.gz` → manifest/checksums/SBOM/підпис → перевірка артефактів → публікація. Browser E2E gate для точного SHA має бути green. Помилка workflow версій не створює; виправлення — новим `пуш` з наступною версією.
+Release workflow працює з конкретним commit: тести → Docker images (один SHA, теги = `VERSION`) → `vertep-runtime-<версія>.tar.gz` → manifest/checksums/SBOM/підпис → перевірка артефактів → публікація. Browser E2E gate для точного SHA має бути green. Помилка workflow версій не створює; виправлення — новою командою `пуш` або `тест` з наступною версією (AGENTS.md §2.18).
 
 Завдання щодо версіонування й release workflow ведуться в GitHub Issues. Деталі артефактів — `release-contract.md`.

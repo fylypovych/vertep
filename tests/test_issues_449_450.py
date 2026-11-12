@@ -57,9 +57,9 @@ def test_history_keeps_failures_and_new_unselected_roles_do_not_fail(api, role):
     assert current["checks"]["selected_roles"] == ["core"]
     assert hc.health_status(current["checks"]) == "HEALTHY"  # JSON list tuples
     history = client.get("/api/health/history").json()["history"]
-    assert [entry["status"] for entry in history] == ["UNHEALTHY", "HEALTHY"]
+    # Only unhealthy events are journaled; the recorded failure keeps its own selection.
+    assert [entry["status"] for entry in history] == ["UNHEALTHY"]
     assert role in history[0]["checks"]["selected_roles"]
-    assert role not in history[1]["checks"]["selected_roles"]
 
 
 def test_history_skips_partial_line_without_losing_valid_failures(api):
@@ -68,8 +68,67 @@ def test_history_skips_partial_line_without_losing_valid_failures(api):
     path.parent.mkdir()
     record = {"status": "UNHEALTHY", "checks": {"gpu": [False, "past failure"]}}
     path.write_text(json.dumps(record) + '\n{"partial":\n')
-    assert client.get("/api/health/history?limit=-1").json() == {"history": []}
+    assert client.get("/api/health/history?limit=-1").json()["history"] == [record]
     assert client.get("/api/health/history").json()["history"] == [record]
+
+
+def _event(moment, status="UNHEALTHY", gpu=(False, "health_gpu_unavailable")):
+    return {"timestamp": moment.isoformat(), "role": "core", "status": status,
+            "checks": {"role": "core", "required": ["docker", "gpu"], "selected_roles": ["core", "gpu"],
+                       "docker": [True, "ok"], "gpu": list(gpu)}}
+
+
+def test_only_unhealthy_events_are_journaled_and_polling_is_one_incident(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from core import health_history as hh
+    start = datetime(2026, 11, 12, 10, tzinfo=timezone.utc)
+    hh.record(tmp_path, _event(start, "HEALTHY", (True, "ok")), start)
+    assert not (tmp_path / hh.CURRENT).exists()
+    first = [_event(start + timedelta(seconds=10 * i)) for i in range(30)]  # 5 minutes of polling
+    second = _event(start + timedelta(hours=2))  # the same failure again after a recovery
+    other = _event(start + timedelta(hours=2, seconds=10), gpu=(False, "health_gpu_runtime_failed"))
+    for item in [*first, second, other]:
+        hh.record(tmp_path, item, start)
+        hh.record(tmp_path, _event(start, "HEALTHY", (True, "ok")), start)
+    lines = hh.read_lines(tmp_path, start)
+    assert len(lines) == 32 and all(json.loads(line)["status"] == "UNHEALTHY" for line in lines)
+    assert hh.incidents(lines, 10) == [first[0], second, other]
+    assert hh.incidents(lines, 1) == [other]
+
+
+def test_daily_rotation_destroys_older_day_and_migrates_legacy_journal(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from core import health_history as hh
+    day = datetime(2026, 11, 12, 23, 59, tzinfo=timezone.utc)
+    legacy = [_event(day, "HEALTHY", (True, "ok")), _event(day)]
+    (tmp_path / hh.CURRENT).write_text("\n".join(json.dumps(x) for x in legacy) + '\n{"partial":\n')
+    assert hh.read_lines(tmp_path, day) == [json.dumps(legacy[1])]  # healthy spam is not kept
+    assert not (tmp_path / hh.CURRENT).exists()
+    hh.record(tmp_path, _event(day), day)
+    # Next day: today's file becomes the previous day, the migrated older one is destroyed.
+    tomorrow = day + timedelta(minutes=2)
+    hh.record(tmp_path, _event(tomorrow), tomorrow)
+    lines = hh.read_lines(tmp_path, tomorrow)
+    assert [json.loads(line)["timestamp"] for line in lines] == [day.isoformat(), tomorrow.isoformat()]
+    # Without events for more than a day, nothing older than the previous day survives.
+    later = tomorrow + timedelta(days=3)
+    assert hh.read_lines(tmp_path, later) == []
+    assert not (tmp_path / hh.PREVIOUS).exists() and not (tmp_path / hh.CURRENT).exists()
+    assert (tmp_path / hh.STAMP).read_text() == later.date().isoformat()
+
+
+def test_history_api_returns_incidents_of_unhealthy_journal(api):
+    client, root = api
+    save_plan(root, ["gpu"])
+    for _ in range(3):
+        assert client.get("/api/health").json()["status"] == "UNHEALTHY"
+    save_plan(root, [])
+    for _ in range(3):
+        assert client.get("/api/health").json()["status"] == "HEALTHY"
+    assert len(client.get("/api/health/history").json()["history"]) == 3
+    incidents = client.get("/api/health/history?changes=10").json()["history"]
+    assert [item["status"] for item in incidents] == ["UNHEALTHY"]
+    assert "gpu" in incidents[0]["checks"]["selected_roles"]
 
 
 @pytest.mark.parametrize("roles", [["voice"], ["publisher"], ["voice", "publisher"]])

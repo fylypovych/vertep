@@ -30,6 +30,8 @@ export const EN: Record<string, string> = {
   "Сервіс відповідає": "Service responds",
   "Діагностичні відомості": "Diagnostic details",
   "Зміни стану": "State changes",
+  "Несправності за останню добу": "Failures in the last day",
+  "Несправностей не зафіксовано": "No failures recorded",
   "Застосовані локальні ролі:": "Applied local roles:",
   "Стан віддалених вузлів; локально роль вимкнена": "Remote node status; role is disabled locally",
   "Локально вимкнено": "Disabled locally",

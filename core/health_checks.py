@@ -289,12 +289,11 @@ def run_checks(role: str | None = None, *, backend: str | None = None,
     if core_url:
         checks["core_api"] = check_core_api(core_url)
     from .first_run import default_update_state_dir
-    history_path = default_update_state_dir() / "health-history.jsonl"
+    from .health_history import record as record_history
     try:
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        with history_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"timestamp": checks["checked_at"], "role": role,
-                                "status": health_status(checks), "checks": checks}, ensure_ascii=False) + "\n")
+        # Only unhealthy events are kept; the call also performs the daily rotation.
+        record_history(default_update_state_dir(), {"timestamp": checks["checked_at"], "role": role,
+                                                    "status": health_status(checks), "checks": checks})
     except (OSError, ValueError):
         pass
     return checks

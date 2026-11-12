@@ -105,13 +105,13 @@ import { RemoteState } from '../core/state/remote-state';
         </div>
 
         <div>
-          <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Зміни стану' | t }}</h4>
+          <h4 class="text-sm font-medium text-slate-900 mb-2">{{ 'Несправності за останню добу' | t }}</h4>
           @if (historyState.loading() && !historyState.data().length) {
             <div class="animate-pulse bg-slate-100 rounded-lg h-20"></div>
           } @else if (historyState.failed()) {
             <app-error-state [message]="historyState.error()!" (retry)="loadHistory()" />
           } @else if (historyState.data().length === 0) {
-            <p class="text-sm text-slate-500">{{ 'Немає історії' | t }}</p>
+            <p class="text-sm text-slate-500">{{ 'Несправностей не зафіксовано' | t }}</p>
           } @else {
             <div class="space-y-2">
               @for (entry of historyChanges() | slice:0:10; track entry.timestamp) {
@@ -187,7 +187,8 @@ export class HealthComponent implements OnInit, OnDestroy {
 
   loadHistory(): void {
     this.historyState.run(() => new Promise<HealthHistoryEntry[]>((resolve, reject) => {
-      this.systemApi.healthHistory().subscribe({
+      // Unhealthy incidents of the current and previous day; repeated polling is folded.
+      this.systemApi.healthHistory(100, 10).subscribe({
         next: (data) => resolve((data.history || []) as unknown as HealthHistoryEntry[]),
         error: (err) => reject(err),
       });

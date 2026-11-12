@@ -122,6 +122,10 @@ if [[ $VERSION_ID == 26.04 && $existing_runtime == false && -c /dev/kfd && -d /d
   fail "Automatic AMD ROCm installation on Ubuntu 26.04 is not qualified; configure a compatible Docker/ROCm runtime first; no changes made"
 fi
 
+# A reinstall reuses retained config and data only after a finished removal.
+[[ ! -e "$INSTALL_ROOT/config/removal-in-progress.json" ]] \
+  || fail "Vertep removal is unfinished for $INSTALL_ROOT; resume it with 'sudo vertep remove --resume' or the saved executor in /var/lib/vertep-remove before reinstalling; no changes made"
+
 # Only a fully supported host may quiesce the existing installation.
 for trigger in vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer; do
   systemctl stop "$trigger" >/dev/null 2>&1 || true

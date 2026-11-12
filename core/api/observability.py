@@ -85,12 +85,18 @@ async def watchdog_report(request: Request):
 
 
 @router.get("/api/health/history")
-def health_history(limit: int = 100):
-    history_path = default_update_state_dir() / "health-history.jsonl"
-    if not history_path.exists():
-        return {"history": []}
+def health_history(limit: int = 100, changes: int = 0):
+    """Unhealthy events of the current and previous UTC day.
+
+    With ``changes`` repeated polling of one failure is folded into one incident,
+    represented by its first original event; the journal itself is not rewritten.
+    """
+    from ..health_history import incidents, read_lines
     try:
-        lines = history_path.read_text(encoding="utf-8").splitlines()[-max(1, min(limit, 1000)):]
+        lines = read_lines(default_update_state_dir())
+        if changes > 0:
+            return {"history": incidents(lines, min(changes, 100))}
+        lines = lines[-max(1, min(limit, 1000)):]
         history = []
         for line in lines:
             try:

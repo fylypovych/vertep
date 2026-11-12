@@ -42,12 +42,18 @@ export function checkReason(detail: string): string {
   return 'Діагностичні відомості';
 }
 
-/** Collapse only adjacent identical snapshots, retaining the original recorded outcome. */
-export function stateChanges<T extends { checks: Record<string, unknown>; status: string; role: string }>(history: T[]): T[] {
+/** Same incident rule as the API: identical adjacent events at most this far apart. */
+const INCIDENT_GAP_MS = 60_000;
+
+/** Fold repeated polling of one failure; separate incidents and the original events stay. */
+export function stateChanges<T extends { checks: Record<string, unknown>; status: string; role: string; timestamp?: string }>(history: T[]): T[] {
+  const signature = (item: T) => JSON.stringify([item.role, item.status,
+    item.checks['required'], item.checks['selected_roles'], serviceChecks(item.checks)]);
   return history.filter((entry, index) => {
     if (!index) return true;
-    const signature = (item: T) => JSON.stringify([item.role, item.status,
-      item.checks['required'], item.checks['selected_roles'], serviceChecks(item.checks)]);
-    return signature(entry) !== signature(history[index - 1]);
+    const previous = history[index - 1];
+    if (signature(entry) !== signature(previous)) return true;
+    const gap = Date.parse(entry.timestamp || '') - Date.parse(previous.timestamp || '');
+    return Number.isFinite(gap) && gap > INCIDENT_GAP_MS;
   }).reverse();
 }
