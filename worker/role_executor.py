@@ -215,11 +215,19 @@ def delete_text_model(model: str) -> None:
     response.raise_for_status()
 
 
-def list_voices() -> list[dict]:
+def voice_catalog() -> dict:
+    """The TTS runtime /voices document: voices, default_voice and speed_range."""
     endpoint = os.getenv("TTS_URL", "http://tts:8090").rstrip("/") + "/voices"
     response = httpx.get(endpoint, timeout=30)
     response.raise_for_status()
-    return response.json().get("voices", [])
+    document = response.json()
+    if not isinstance(document, dict):
+        raise ValueError("voice catalog is not an object")
+    return document
+
+
+def list_voices() -> list[dict]:
+    return voice_catalog().get("voices", [])
 
 
 def synthesize_voice(text: str, voice: str = "default", speed: int = 150) -> bytes:

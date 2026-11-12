@@ -618,7 +618,7 @@ def test_worker_refuses_an_attempt_whose_engine_drifted(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="engine_snapshot_mismatch"):
         role_executor.execute_assembly(
-            _worker_task(tmp_path, engine_snapshot={"engine_id": "shortgpt"}))
+            _worker_task(tmp_path, engine_snapshot={"engine_id": "retired-engine"}))
 
 
 @pytest.mark.parametrize("field", ["config_revision", "bridge_schema_version",

@@ -146,3 +146,46 @@ def test_synthesize_rejects_engine_failure(monkeypatch):
     monkeypatch.setattr(tts_service.subprocess, "run", _fail)
     response = client.post("/synthesize", json={"text": "привіт", "voice": "uk"})
     assert response.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# #455: readable voice names and the engine default voice
+# ---------------------------------------------------------------------------
+
+ESPEAK_VOICES = """Pty Language       Age/Gender VoiceName          File                 Other Languages
+ 5  en-us           --/M      English_(America)  gmw/en-US            (en 10)
+ 5  uk              --/M      Ukrainian          zle/uk
+ 5  mb-en1          --/M      en1                mb/mb-en1
+"""
+
+
+def test_voice_table_from_espeak_carries_readable_names(monkeypatch):
+    monkeypatch.setattr(tts_service, "_VOICE_DATA_DIR", "/nonexistent")
+    monkeypatch.setattr(tts_service.shutil, "which", lambda name: "/usr/bin/espeak-ng")
+    monkeypatch.setattr(tts_service.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout=ESPEAK_VOICES, returncode=0))
+    voices = tts_service._available_voices()
+    assert voices == ["en-us", "uk"]  # MBROLA is a separate engine
+    client = _client_with_voices(voices)
+    body = client.get("/voices").json()
+    assert body["voices"][1] == {"id": "uk", "name": "Ukrainian", "engine": "espeak-ng"}
+    assert body["voices"][0]["name"] == "English (America)"
+    assert body["default_voice"] == "default"
+
+
+def test_default_voice_uses_the_engine_default_without_v(monkeypatch):
+    monkeypatch.setattr(tts_service.shutil, "which", lambda name: "/usr/bin/espeak-ng")
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(stdout=b"RIFF....WAVE", returncode=0)
+
+    monkeypatch.setattr(tts_service.subprocess, "run", run)
+    client = _client_with_voices(["uk"])
+    response = client.post("/synthesize", json={"text": "OK", "voice": "default", "language": "uk"})
+    assert response.status_code == 200
+    assert "-v" not in calls[0]
+    assert client.post("/synthesize", json={"text": "OK", "voice": "uk", "speed": 150}).status_code == 200
+    assert calls[1][calls[1].index("-v") + 1] == "uk"
+    assert client.post("/synthesize", json={"text": "OK", "voice": "nope"}).status_code == 422

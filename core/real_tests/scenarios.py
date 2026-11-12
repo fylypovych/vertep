@@ -249,6 +249,22 @@ def load_scenarios() -> list[dict]:
     return scenarios
 
 
+def ir_issues() -> list[dict]:
+    """Open real-server Issues with catalog coverage; GitHub is not the list source (#451)."""
+    from scripts.qualify_infrastructure import IR_COVERAGE, SCENARIOS
+    return [
+        {"number": number, "id": item["id"], "coverage": item["coverage"], "note": item["note"],
+         "scenarios": [scenario["id"] for scenario in SCENARIOS if scenario.get("rt_issue") == number]}
+        for number, item in sorted(IR_COVERAGE.items())
+    ]
+
+
+def issue_fully_covered(number: int | None) -> bool:
+    """Only a catalog that verifies every criterion of an Issue may close it automatically."""
+    from scripts.qualify_infrastructure import IR_COVERAGE
+    return number is not None and (IR_COVERAGE.get(number) or {}).get("coverage") == "full"
+
+
 def _scenario_checks(scenario_id: str) -> list[str]:
     """Scenario-specific check lists (Issue i.0.0.0.89).
 

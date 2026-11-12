@@ -6,13 +6,37 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from adapters.providers import provider_matrix
-from worker.role_executor import (delete_text_model, list_text_models, list_voices,
-                                  synthesize_voice)
+from worker.role_executor import (delete_text_model, list_text_models, synthesize_voice,
+                                  voice_catalog)
 
 router = APIRouter()
 
 _PREVIEW_TEXT_LIMIT = 500
 _TTS_DISABLED_BACKENDS = {"none", "", "placeholder"}
+DEFAULT_VOICE = "default"
+
+
+def _normalized_catalog() -> dict:
+    """Runtime catalog as {id, name} voices and speed bounds (#455).
+
+    The runtime answers ``{"id": "uk", "name": "Ukrainian"}`` items; older shapes
+    (a bare string or only ``name``) are accepted. The id is what synthesis uses.
+    """
+    document = voice_catalog()
+    items = document.get("voices") if isinstance(document, dict) else document
+    if not isinstance(items, list):
+        raise ValueError("voices is not a list")
+    voices = []
+    for item in items:
+        ident = (item.get("id") or item.get("name")) if isinstance(item, dict) else item
+        if not isinstance(ident, str) or not ident:
+            raise ValueError("voice without identifier")
+        name = item.get("name") if isinstance(item, dict) and isinstance(item.get("name"), str) else ident
+        voices.append({"id": ident, "name": name or ident})
+    speed = (document.get("speed_range") if isinstance(document, dict) else None) or {"min": 1, "max": 500}
+    speed_range = {"min": int(speed.get("min", 1)), "max": int(speed.get("max", 500))}
+    return {"voices": voices, "default_voice": DEFAULT_VOICE, "speed_range": speed_range,
+            "speed_unit": "words_per_minute", "engine": document.get("engine") if isinstance(document, dict) else None}
 
 
 @router.get("/api/models/text")
@@ -49,9 +73,11 @@ def delete_text_model_endpoint(model: str):
 @router.get("/api/models/voices")
 def list_voices_endpoint():
     try:
-        return {"voices": list_voices()}
+        return _normalized_catalog()
     except httpx.HTTPError as error:
-        raise HTTPException(502, f"TTS runtime is unreachable: {error}") from error
+        raise HTTPException(502, "TTS runtime is unreachable") from error
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise HTTPException(502, "TTS runtime returned an unreadable voice catalog") from error
 
 
 @router.post("/api/models/voices/synthesize")
@@ -130,21 +156,24 @@ def voice_preview_endpoint(payload: dict):
             f"(reported '{node['observed']}')",
         )
 
-    voice = str(payload.get("voice") or "default").strip() or "default"
+    voice = str(payload.get("voice") or DEFAULT_VOICE).strip() or DEFAULT_VOICE
     try:
-        catalog = list_voices()
+        catalog = _normalized_catalog()
     except httpx.HTTPError as error:
-        raise HTTPException(502, f"TTS runtime is unreachable: {error}") from error
-    except (ValueError, KeyError, TypeError) as error:
-        raise HTTPException(502, f"TTS runtime returned an unreadable voice catalog: {error}") from error
-    names = {str(item.get("name") if isinstance(item, dict) else item) for item in catalog or []}
-    if names and voice not in names:
-        raise HTTPException(422, f"Unknown voice: {voice}")
+        raise HTTPException(502, "TTS runtime is unreachable") from error
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise HTTPException(502, "TTS runtime returned an unreadable voice catalog") from error
+    ids = {item["id"] for item in catalog["voices"]}
+    # "default" is the engine's own voice, not a catalog entry.
+    if voice != DEFAULT_VOICE and ids and voice not in ids:
+        raise HTTPException(422, "Unknown voice")
+    if not catalog["speed_range"]["min"] <= speed <= catalog["speed_range"]["max"]:
+        raise HTTPException(422, "Speed is outside the range of the TTS runtime")
 
     try:
         audio = synthesize_voice(text, voice, speed)
     except httpx.HTTPError as error:
-        raise HTTPException(502, f"Voice preview failed: {error}") from error
+        raise HTTPException(502, "Voice preview failed") from error
     if not audio:
         raise HTTPException(502, "TTS runtime returned no audio")
     return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")

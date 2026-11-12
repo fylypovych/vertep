@@ -1162,6 +1162,7 @@ class TestIssue95:
 
     def test_full_identity_and_coverage_can_close_issue(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
+        monkeypatch.setattr(gh_mod, "_issue_fully_covered", lambda number: True)
         sha = "e" * 40
         monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
@@ -1964,6 +1965,7 @@ class TestIssue138:
 
     def test_valid_baked_identity_can_close_issue(self, tmp_path, monkeypatch):
         sha = "f" * 40
+        monkeypatch.setattr(gh_mod, "_issue_fully_covered", lambda number: True)
         monkeypatch.delenv("GITHUB_SHA", raising=False)
         monkeypatch.setenv("VERTEP_RELEASE_IDENTITY_FILE",
                            _write_identity(tmp_path, sha=sha))
@@ -2043,6 +2045,9 @@ class TestIssue139:
 
         full = self._run(checks=[
             CheckResult(name=name, status=CheckStatus.PASS) for name in expected])
+        # #442 is only partly verified by its scenarios (#451): reported, never closed.
+        assert GitHubReporter().can_close_issue(full) is False
+        monkeypatch.setattr(gh_mod, "_issue_fully_covered", lambda number: True)
         assert GitHubReporter().can_close_issue(full) is True
 
     def test_skipped_or_warning_mandatory_does_not_close(self, monkeypatch):
@@ -2084,6 +2089,7 @@ class TestIssue139:
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"docker"})
+        monkeypatch.setattr(gh_mod, "_issue_fully_covered", lambda number: True)
         closes = {"count": 0}
 
         def fake_close(issue_number):
@@ -2388,3 +2394,57 @@ def test_vram_attestation_routing():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# Issue #451 — local catalog vs open real-server Issues
+# ---------------------------------------------------------------------------
+
+class TestIssue451:
+    OPEN_IR = {42, 47, 54, 63, 326, 329, 420, 441, 442}
+
+    def _client(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from core.api import real_tests as api
+        monkeypatch.setattr(api, "_check_operation", lambda: None)
+        app = FastAPI()
+        app.include_router(api.router)
+        return TestClient(app)
+
+    def test_catalog_is_local_and_maps_every_open_ir(self, monkeypatch):
+        body = self._client(monkeypatch).get("/api/real-tests/scenarios").json()
+        assert body["source"] == "local_catalog"
+        assert len(body["scenarios"]) == 8
+        issues = {item["number"]: item for item in body["issues"]}
+        assert set(issues) == self.OPEN_IR
+        assert issues[442]["scenarios"] == ["S01", "S04", "S05", "S06"]  # several scenarios, one Issue
+        for number in (63, 326, 329, 420):
+            assert issues[number]["coverage"] == "none" and issues[number]["scenarios"] == []
+            assert issues[number]["note"]
+        assert all(item["coverage"] != "full" for item in issues.values())
+        for scenario in body["scenarios"]:
+            assert scenario["issue_id"] == issues[scenario["rt_issue"]]["id"]
+            assert scenario["issue_coverage"] == "partial" and scenario["covers"]
+
+    def test_no_scenario_points_to_an_issue_without_coverage_entry(self):
+        from scripts.qualify_infrastructure import IR_COVERAGE, SCENARIOS, validate_rt_issues
+        assert validate_rt_issues() == []
+        for scenario in SCENARIOS:
+            assert IR_COVERAGE[scenario["rt_issue"]]["coverage"] != "none", scenario["id"]
+
+    def test_partial_coverage_never_closes_even_with_all_checks(self, monkeypatch):
+        sha = "a" * 40
+        monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
+        monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
+        closes = []
+        monkeypatch.setattr(gh_mod, "_close_issue", lambda number: closes.append(number))
+        for scenario in load_scenarios():
+            rt_id = scenario["rt"].split()[0]
+            run = TestRun(rt_id=rt_id, rt_issue_number=scenario["rt_issue"], version="test-ver",
+                          commit_sha=sha, final_result="PASS")
+            run.checks = [CheckResult(name=name, status=CheckStatus.PASS)
+                          for name in gh_mod._expected_mandatory_names(rt_id)]
+            run.github_report = {"reported_at": "2026-01-01T00:00:00Z", "version": "test-ver", "commit_sha": sha}
+            assert GitHubReporter().close_issue(run)["closed"] is False, rt_id
+        assert closes == []

@@ -1,7 +1,7 @@
 import { TPipe } from '../core/i18n/t.pipe';
 import { Component, signal, computed } from '@angular/core';
 
-import { RealTestsApiService, RealTestReport, RealTestScenario, RealTestRunSummary } from '../core/api/real-tests.api';
+import { RealTestsApiService, RealTestReport, RealTestScenario, RealTestRunSummary, RealTestIssueCoverage } from '../core/api/real-tests.api';
 
 type Tab = 'scenarios' | 'history';
 
@@ -15,6 +15,7 @@ type Tab = 'scenarios' | 'history';
 export class RealTestsComponent {
   tab = signal<Tab>('scenarios');
   scenarios = signal<RealTestScenario[]>([]);
+  issues = signal<RealTestIssueCoverage[]>([]);
   runs = signal<RealTestRunSummary[]>([]);
   loading = signal(true);
   error = signal<string | null>(null);
@@ -36,6 +37,7 @@ export class RealTestsComponent {
     this.api.scenarios().subscribe({
       next: (scenariosResponse) => {
         this.scenarios.set(scenariosResponse.scenarios);
+        this.issues.set(scenariosResponse.issues ?? []);
         this.api.listRuns(50).subscribe({
           next: (runsResponse) => {
             this.runs.set(runsResponse.runs);
@@ -183,6 +185,10 @@ export class RealTestsComponent {
       FAIL: 'Невдалося',
       PROCEDURE: 'Не переведено',
     }[result] ?? result;
+  }
+
+  coverageLabel(coverage: string): string {
+    return ({ full: 'Повне покриття сценаріями', partial: 'Часткове покриття сценаріями', none: 'Немає виконуваного сценарію' } as Record<string, string>)[coverage] || coverage;
   }
 
   tabCount = computed(() => this.scenarios().length + this.runs().length);

@@ -31,7 +31,7 @@ from .base import (
     VideoProvider,
 )
 from .compute_backends import ComfyUIDistributedProvider
-from .video_engines import MoneyPrinterEngine, NativeVertepEngine, ShortGPTEngine
+from .video_engines import MoneyPrinterEngine, NativeVertepEngine, UnsupportedVideoEngine
 
 
 # ---------------------------------------------------------------------------
@@ -360,8 +360,10 @@ def _make_video_engine() -> VideoEngine:
     )
     if engine_name == "money-printer":
         return MoneyPrinterEngine()
-    if engine_name == "shortgpt":
-        return ShortGPTEngine()
+    if engine_name not in {"", "native"}:
+        # A persisted engine Vertep no longer ships (e.g. a removed "shortgpt") is
+        # refused, not quietly assembled by Native (#456, Issue #122 §9.12).
+        return UnsupportedVideoEngine(engine_name)
     return NativeVertepEngine()
 
 
@@ -396,7 +398,7 @@ def provider_matrix() -> dict[str, dict]:
     """
     from adapters.providers.compute_backends import ComfyUIDistributedProvider
     from adapters.providers.tts_backends import KokoroProvider, PiperProvider
-    from adapters.providers.video_engines import MoneyPrinterEngine, ShortGPTEngine
+    from adapters.providers.video_engines import MoneyPrinterEngine
 
     matrix: dict[str, dict] = {}
 
@@ -466,9 +468,9 @@ def provider_matrix() -> dict[str, dict]:
     if engine_name == "money-printer":
         engine_configured = MoneyPrinterEngine().configured()
         engine_active = "money-printer"
-    elif engine_name == "shortgpt":
-        engine_configured = ShortGPTEngine().configured()
-        engine_active = "shortgpt"
+    elif engine_name not in {"", "native"}:
+        # Unsupported selection stays visible as selected and not configured (#456).
+        engine_active, engine_configured = engine_name, False
     else:
         engine_active, engine_configured = "native", True
     matrix["video_engine"] = {
@@ -478,7 +480,7 @@ def provider_matrix() -> dict[str, dict]:
         # (Issue #122 §9.12, P8 «відображений вибір має відповідати реально застосованому»).
         "backend": engine_active,
         "selected": engine_active,
-        "options": ["native", "money-printer", "shortgpt"],
+        "options": ["native", "money-printer"],
         "env": "VERTEP_VIDEO_ENGINE",
         "configured": engine_configured,
     }
@@ -557,5 +559,5 @@ __all__ = [
     "ComfyUIDistributedProvider",
     "NativeVertepEngine",
     "MoneyPrinterEngine",
-    "ShortGPTEngine",
+    "UnsupportedVideoEngine",
 ]

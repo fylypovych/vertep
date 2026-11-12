@@ -118,6 +118,24 @@ def switch_provider_backend(slot: str, payload: dict):
     """
     actor = str(payload.get("actor") or "").strip()[:120] or f"web:settings:{slot}"
     endpoint = payload.get("endpoint")
+    if slot == "video_engine" and payload.get("runtime") == "local":
+        # The runtime shipped with Vertep: its address is known and its key is generated
+        # by Vertep, so the operator supplies neither (#456).
+        from ..engine_config import LOCAL_ENGINE_RUNTIMES, local_runtime_state
+        backend = str(payload.get("backend") or "")
+        state = local_runtime_state(backend)
+        if backend not in LOCAL_ENGINE_RUNTIMES or not state.get("supported"):
+            raise HTTPException(422, "Engine has no local runtime")
+        if not state["available"]:
+            raise HTTPException(409, "Local engine runtime is not available on this server")
+        if state["deploying"] or not state["in_plan"]:
+            from .system import _read_optional_json, request_core_deployment
+            current = _read_optional_json(config_root() / "deployment-plan.json")
+            runtimes = sorted(set(current.get("engine_runtimes", [])) | {LOCAL_ENGINE_RUNTIMES[backend]})
+            deployment = request_core_deployment(current.get("additional_roles", []), runtimes)
+            return JSONResponse({"state": "RUNTIME_DEPLOYING", "deployment": deployment,
+                                 "local_runtime": local_runtime_state(backend)}, status_code=202)
+        endpoint = state["endpoint"]
     try:
         result = switch_provider(
             slot,

@@ -12,10 +12,17 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="Vertep TTS", version="1")
 VOICE_RE = re.compile(r"[A-Za-z0-9_-]{1,32}")
+# The Voice Worker self-test and preview send "default": the engine's own default
+# voice (espeak-ng without -v). It is not an entry of the voice table (#455).
+DEFAULT_VOICE = "default"
 
 # espeak-ng ships its voice table under this directory; the list is read once
 # at startup and cached so /voices and /synthesize agree on what is supported.
 _VOICE_DATA_DIR = os.environ.get("ESPEAK_VOICE_DIR", "/usr/lib/espeak-ng-data/voices")
+
+
+# Readable espeak-ng VoiceName per voice id, e.g. "uk" -> "Ukrainian".
+VOICE_NAMES: dict[str, str] = {}
 
 
 def _available_voices() -> list[str]:
@@ -37,9 +44,11 @@ def _available_voices() -> list[str]:
             return []
         # Stock espeak-ng distributes language files, not .idx/.list files.
         # Exclude MBROLA voices: that separate engine is not this runtime.
-        return sorted({parts[1] for line in result.stdout.splitlines()[1:]
-                       if len(parts := line.split()) >= 5
-                       and not parts[4].replace("\\", "/").startswith("mb/")})
+        names = {parts[1]: parts[3].replace("_", " ") for line in result.stdout.splitlines()[1:]
+                 if len(parts := line.split()) >= 5
+                 and not parts[4].replace("\\", "/").startswith("mb/")}
+        VOICE_NAMES.update(names)
+        return sorted(names)
     voices: list[str] = []
     for name in sorted(os.listdir(directory)):
         if not name.endswith(".idx") and not name.endswith(".list"):
@@ -109,7 +118,8 @@ def voices() -> dict:
     installed = VOICES or _available_voices()
     languages = _available_languages(installed)
     return {
-        "voices": [{"id": voice, "engine": "espeak-ng"} for voice in installed],
+        "voices": [{"id": voice, "name": VOICE_NAMES.get(voice, voice), "engine": "espeak-ng"} for voice in installed],
+        "default_voice": DEFAULT_VOICE,
         "models": ["espeak-ng"],
         "languages": languages,
         # Issue #198/#165.1: advertise ONLY the real espeak-ng runtime.  "mock"
@@ -127,6 +137,8 @@ def voices() -> dict:
 def _validate_voice(voice: str) -> None:
     if not VOICE_RE.fullmatch(voice):
         raise HTTPException(422, "Некоректний ідентифікатор голосу")
+    if voice == DEFAULT_VOICE:
+        return
     installed = VOICES or _available_voices()
     if installed and voice not in installed:
         raise HTTPException(422, f"Голос {voice!r} не підтримується цим espeak runtime")
@@ -163,14 +175,15 @@ def synthesize(request: SynthesisRequest) -> dict:
     _validate_language(request.language)
     if not (VOICES or _available_voices()):
         raise HTTPException(503, "Каталог голосів espeak-ng недоступний")
-    if request.language and request.voice.split("-")[0].lower() != request.language.lower():
+    if request.language and request.voice != DEFAULT_VOICE and request.voice.split("-")[0].lower() != request.language.lower():
         raise HTTPException(422, "Мова не відповідає вибраному голосу")
     executable = shutil.which(os.getenv("ESPEAK_EXECUTABLE", "espeak-ng"))
     if not executable:
         raise HTTPException(503, "espeak-ng недоступний")
     try:
         result = subprocess.run(
-            [executable, "--stdout", "-v", request.voice, "-s", str(request.speed), request.text],
+            [executable, "--stdout", *([] if request.voice == DEFAULT_VOICE else ["-v", request.voice]),
+             "-s", str(request.speed), request.text],
             check=True, capture_output=True, timeout=120,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:

@@ -144,22 +144,23 @@ def local_roles_status():
     }
 
 
-@router.post("/api/system/roles")
-def configure_local_roles(payload: dict):
-    requested = payload.get("roles")
-    if not isinstance(requested, list) or any(not isinstance(role, str) for role in requested):
-        raise HTTPException(422, "roles must be a list of role identifiers")
-    definitions = node_roles()
+def request_core_deployment(additional_roles: list[str], engine_runtimes: list[str] | None = None) -> dict:
+    """Queue one Core plan for the existing deployment executor (roles and engine runtimes).
+
+    Returns QUEUED/UNCHANGED; a conflicting pending request or a running update is 409.
+    """
+    current = _read_optional_json(config_root() / "deployment-plan.json")
+    runtimes = current.get("engine_runtimes", []) if engine_runtimes is None else engine_runtimes
     try:
-        plan = create_plan(definitions, "core", application_version(), requested)
+        plan = create_plan(node_roles(), "core", application_version(), additional_roles, runtimes)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    current = _read_optional_json(config_root() / "deployment-plan.json")
     path = config_root() / "deployment-request.json"
     pending = _read_optional_json(path)
     if pending:
         if pending.get("plan_sha256") == plan["sha256"]:
             return {"state": "QUEUED", "requested_roles": plan.get("additional_roles", []),
+                    "engine_runtimes": plan.get("engine_runtimes", []),
                     "message": "Зміни передано системному виконавцю"}
         raise HTTPException(409, "Попередня зміна ролей ще не завершена")
     update = update_status()
@@ -167,17 +168,18 @@ def configure_local_roles(payload: dict):
         raise HTTPException(409, "Триває оновлення системи; зміна ролей недоступна")
     if current.get("sha256") == plan["sha256"]:
         return {"state": "UNCHANGED", "active_roles": plan.get("additional_roles", []),
+                "engine_runtimes": plan.get("engine_runtimes", []),
                 "message": "Вибрані ролі вже активні"}
     setup = installation()
     backend = setup.get("ai_backend", {})
     request_value = {
         "schema": 1, "request_id": uuid.uuid4().hex, "requested_at": utc_now(),
         "role": "core", "additional_roles": plan.get("additional_roles", []),
+        "engine_runtimes": plan.get("engine_runtimes", []),
         "version": application_version(), "ai_backend": backend.get("type") or "ollama",
         "core_url": None, "plan_sha256": plan["sha256"],
         "ollama_model": backend.get("model") or os.getenv("OLLAMA_MODEL", "llama3.2"),
     }
-    path = config_root() / "deployment-request.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{request_value['request_id']}.tmp")
     temporary.write_text(json.dumps(request_value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -191,7 +193,17 @@ def configure_local_roles(payload: dict):
         temporary.unlink(missing_ok=True)
     return {"state": "QUEUED", "active_roles": current.get("additional_roles", []),
             "requested_roles": plan.get("additional_roles", []),
+            "engine_runtimes": plan.get("engine_runtimes", []),
             "message": "Зміни передано системному виконавцю"}
+
+
+@router.post("/api/system/roles")
+def configure_local_roles(payload: dict):
+    requested = payload.get("roles")
+    if not isinstance(requested, list) or any(not isinstance(role, str) for role in requested):
+        raise HTTPException(422, "roles must be a list of role identifiers")
+    # A role change keeps the engine runtimes the plan already runs (#456).
+    return request_core_deployment(requested)
 
 
 @router.get("/api/system/update/readiness")
@@ -440,6 +452,16 @@ async def system_models():
     from ..pull_executor import model_placement
     local["nodes"] = model_placement()
     return local
+
+
+@router.get("/api/system/models/catalog")
+async def system_model_catalog():
+    """Ollama library tags available for download; distinct from installed models (#454)."""
+    from ..model_catalog import load_catalog
+    try:
+        return load_catalog()
+    except (OSError, ValueError) as error:
+        raise HTTPException(503, "Model catalog is unavailable") from error
 
 
 @router.get("/api/system/models/nodes")

@@ -5,15 +5,16 @@ import { FormsModule } from '@angular/forms';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { PolicyService } from '../../core/services/policy.service';
+import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
 
-/** Settings → Публікація: parameters that publishing channels need from the owner. */
+/** Settings → Публікація: channel parameters and platform credentials, grouped by platform. */
 @Component({
   selector: 'app-settings-publishing',
   standalone: true,
-  imports: [TPipe, CommonModule, FormsModule],
+  imports: [TPipe, CommonModule, FormsModule, SecretGroupsComponent],
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-publishing">
     <h3 class="text-lg font-semibold mb-1">{{ 'Публікація' | t }}</h3>
-    <p class="text-sm text-slate-500 mb-4">{{ 'Токени платформ задаються в розділі «Секрети».' | t }}</p>
+    <p class="text-sm text-slate-500 mb-4">{{ 'Параметри каналів і облікові дані платформ для публікації відео.' | t }}</p>
     <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="publishing-error">{{ error() }}</div>
     <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-public-url">{{ 'Публічна адреса Vertep' | t }}</label>
     <input id="publishing-public-url" data-testid="publishing-public-url" [ngModel]="publicUrl()" (ngModelChange)="publicUrl.set($event)" [disabled]="!canEdit()"
@@ -25,6 +26,9 @@ import { PolicyService } from '../../core/services/policy.service';
     <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Бот має бути адміністратором цього каналу.' | t }}</p>
     <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" data-testid="publishing-save"
             [disabled]="!canEdit() || saving()" (click)="save()">{{ 'Зберегти' | t }}</button>
+    <h4 class="text-base font-semibold mt-6 mb-1">{{ 'Облікові дані платформ' | t }}</h4>
+    <p class="text-sm text-slate-500 mb-3">{{ 'Значення зберігаються в захищеному сховищі й після збереження не показуються.' | t }}</p>
+    <app-secret-groups [groups]="platformGroups" data-testid="publishing-credentials" />
   </div>`,
 })
 export class PublishingSectionComponent implements OnInit {
@@ -33,6 +37,19 @@ export class PublishingSectionComponent implements OnInit {
   saving = signal(false);
   error = signal<string | null>(null);
   readonly canEdit = computed(() => this.policy.can('update_settings').allowed);
+
+  /** Every social publishing credential the store knows; Telegram shares the bot token with communication. */
+  readonly platformGroups: SecretGroup[] = [
+    { id: 'telegram-publishing', label: 'Telegram', names: [],
+      shared: { name: 'telegram_bot_token', tab: 'secrets', tabLabel: 'Ключі інтеграцій',
+                note: 'Публікація в канал використовує той самий токен, що й Telegram-бот керування; він зберігається в одному місці.' } },
+    { id: 'youtube', label: 'YouTube', names: ['youtube_client_id', 'youtube_client_secret', 'youtube_access_token', 'youtube_refresh_token'] },
+    { id: 'facebook', label: 'Facebook', names: ['facebook_access_token'] },
+    { id: 'instagram', label: 'Instagram', names: ['instagram_client_id', 'instagram_client_secret', 'instagram_access_token', 'instagram_refresh_token'] },
+    { id: 'threads', label: 'Threads', names: ['threads_client_id', 'threads_client_secret', 'threads_access_token', 'threads_refresh_token'],
+      hint: 'Також потрібна публічна адреса Vertep вище.' },
+    { id: 'tiktok', label: 'TikTok', names: ['tiktok_client_id', 'tiktok_client_secret', 'tiktok_access_token', 'tiktok_refresh_token'] },
+  ];
 
   constructor(private settingsApi: SettingsApiService, private toast: ToastService, private policy: PolicyService) {}
 

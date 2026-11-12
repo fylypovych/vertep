@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..real_tests.runner import DESTRUCTIVE_CHECKS, RealTestRunner
-from ..real_tests.scenarios import available_checks, find_scenario, load_scenarios
+from ..real_tests.scenarios import available_checks, find_scenario, ir_issues, load_scenarios
 from ..real_tests.storage import get_test_run, list_test_runs, update_test_run
 from ..system_state import operation_allowed
 from ..version import application_version
@@ -115,18 +115,26 @@ def _observe_run(future: Future, test_run_id: str) -> None:
 def scenarios():
     _check_operation()
     loaded = load_scenarios()
+    issues = ir_issues()
+    coverage = {item["number"]: item for item in issues}
     return {
+        # Local catalog of runnable scenarios; several may verify parts of one Issue.
+        "source": "local_catalog",
         "scenarios": [
             {
                 "id": s["id"],
                 "name": s["name"],
                 "rt_id": s.get("rt", "").split()[0],
                 "rt_issue": s.get("rt_issue"),
+                "issue_id": (coverage.get(s.get("rt_issue")) or {}).get("id"),
+                "issue_coverage": (coverage.get(s.get("rt_issue")) or {}).get("coverage", "none"),
+                "covers": s.get("covers", []),
                 "description": s.get("description", ""),
                 "checks": s.get("checks", []),
             }
             for s in loaded
         ],
+        "issues": issues,
         "available_checks": available_checks(),
         "version": application_version(),
     }

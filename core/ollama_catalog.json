@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "source": "https://registry.ollama.ai/v2/library",
+  "verified_at": "2026-11-12",
+  "note": "Curated Ollama library tags for text generation. Each tag was confirmed to exist in the Ollama registry; download_bytes is the manifest layer total. Refresh with scripts/verify-ollama-catalog.py before a release.",
+  "models": [
+    {"name": "llama3.2:1b", "family": "Llama 3.2", "parameters": "1B", "download_bytes": 1321098329},
+    {"name": "llama3.2:3b", "family": "Llama 3.2", "parameters": "3B", "download_bytes": 2019393189},
+    {"name": "llama3.1:8b", "family": "Llama 3.1", "parameters": "8B", "download_bytes": 4920753328},
+    {"name": "qwen2.5:3b", "family": "Qwen 2.5", "parameters": "3B", "download_bytes": 1929912432},
+    {"name": "qwen2.5:7b", "family": "Qwen 2.5", "parameters": "7B", "download_bytes": 4683087332},
+    {"name": "qwen2.5:14b", "family": "Qwen 2.5", "parameters": "14B", "download_bytes": 8988124069},
+    {"name": "qwen3:8b", "family": "Qwen 3", "parameters": "8B", "download_bytes": 5225388164},
+    {"name": "mistral:7b", "family": "Mistral", "parameters": "7B", "download_bytes": 4372824384},
+    {"name": "gemma2:2b", "family": "Gemma 2", "parameters": "2B", "download_bytes": 1629518495},
+    {"name": "gemma2:9b", "family": "Gemma 2", "parameters": "9B", "download_bytes": 5443152417},
+    {"name": "gemma3:4b", "family": "Gemma 3", "parameters": "4B", "download_bytes": 3350272403},
+    {"name": "gemma3:12b", "family": "Gemma 3", "parameters": "12B", "download_bytes": 8164039732},
+    {"name": "phi3:mini", "family": "Phi-3", "parameters": "3.8B", "download_bytes": 2176178913},
+    {"name": "aya-expanse:8b", "family": "Aya Expanse", "parameters": "8B", "download_bytes": 5057000121}
+  ]
+}

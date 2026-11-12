@@ -7,12 +7,27 @@ export interface RealTestScenario {
   name: string;
   rt_id: string;
   rt_issue: number | null;
+  issue_id?: string | null;
+  /** How much of its GitHub Issue the catalog verifies: partial never auto-closes it. */
+  issue_coverage?: 'full' | 'partial' | 'none';
+  covers?: string[];
   description: string;
   checks: string[];
 }
 
+/** An open real-server Issue and the local scenarios that verify parts of it. */
+export interface RealTestIssueCoverage {
+  number: number;
+  id: string;
+  coverage: 'full' | 'partial' | 'none';
+  note: string;
+  scenarios: string[];
+}
+
 export interface RealTestScenariosResponse {
+  source?: string;
   scenarios: RealTestScenario[];
+  issues?: RealTestIssueCoverage[];
   available_checks: string[];
   version: string;
 }

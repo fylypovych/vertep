@@ -49,6 +49,9 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             deployed = json.loads((config_root() / "deployment-plan.json").read_text(encoding="utf-8"))
             for additional in deployed.get("additional_roles", []):
                 allowed.update(node_roles().get(additional, {}).get("capabilities", []))
+            from ..deployment_plan import ENGINE_RUNTIMES
+            for runtime in deployed.get("engine_runtimes", []):
+                allowed.update(ENGINE_RUNTIMES.get(runtime, {}).get("capabilities", ()))
         except (OSError, ValueError):
             pass
     declared = set(data.get("capabilities", [])) & allowed

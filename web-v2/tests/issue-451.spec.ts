@@ -32,3 +32,35 @@ test('Реальні тести: показує джерело каталогу,
   const count442 = issue442.filter(t => t.includes('#442')).length;
   expect(count442).toBeGreaterThanOrEqual(2);
 });
+
+const issues = [
+  { number: 42, id: 'ir.0.0.0.42', coverage: 'partial', note: 'S02 перевіряє лише multi-host enrollment', scenarios: ['S02'] },
+  { number: 63, id: 'ir.0.0.0.63', coverage: 'none', note: 'Перевіряє сам Runner', scenarios: [] },
+  { number: 329, id: 'ir.0.0.3.29', coverage: 'none', note: 'Ізоляція LAB', scenarios: [] },
+  { number: 442, id: 'ir.0.0.4.42', coverage: 'partial', note: 'S01, S04, S05, S06', scenarios: ['S01', 'S04', 'S05', 'S06'] },
+];
+
+test('Реальні тести: відкриті ir з покриттям, Issue без сценарію і часткове покриття не обіцяє закриття; uk/en', async ({ page }) => {
+  const covered = scenarios.map(item => ({ ...item, issue_id: `ir.${item.rt_issue}`, issue_coverage: 'partial', covers: ['AC1'] }));
+  await page.route('**/api/**', async (route: any) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/session')) return route.fulfill({ json: { authenticated: true, username: 'admin', user: 'admin', role: 'admin' } });
+    if (path.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL', reason: null }, version: '0' } });
+    if (path.endsWith('/real-tests/scenarios')) return route.fulfill({ json: { source: 'local_catalog', scenarios: covered, issues, available_checks: [], version: '0' } });
+    if (path.endsWith('/real-tests/runs')) return route.fulfill({ json: { runs: [] } });
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('/real-tests');
+  await expect(page.locator('[data-testid^="real-tests-scenario-S"]')).toHaveCount(8, { timeout: 20000 });
+  await expect(page.getByTestId('real-tests-scenario-issue-S01')).toContainText('Перевіряє критерії: AC1');
+  await expect(page.getByTestId('real-tests-scenario-partial-S01')).toContainText('автоматично його не закриває');
+  const list = page.getByTestId('real-tests-issues');
+  await expect(list.locator('li')).toHaveCount(4);
+  await expect(page.getByTestId('real-tests-issue-63')).toContainText('Немає виконуваного сценарію');
+  await expect(page.getByTestId('real-tests-issue-442')).toContainText('Часткове покриття сценаріями');
+  await expect(page.getByTestId('real-tests-issue-442')).toContainText('S01, S04, S05, S06');
+  await page.evaluate(() => localStorage.setItem('vertep_language', 'en'));
+  await page.reload();
+  await expect(page.getByTestId('real-tests-issue-63')).toContainText('No runnable scenario', { timeout: 20000 });
+  await expect(page.getByTestId('real-tests-scenario-partial-S01')).toContainText('does not close it automatically');
+});

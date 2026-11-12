@@ -85,7 +85,7 @@ class TestPreviewBackendGates:
         def _boom(*_args, **_kwargs):
             raise AssertionError("runtime must not be touched when disabled")
 
-        monkeypatch.setattr(models_api, "list_voices", _boom)
+        monkeypatch.setattr(models_api, "voice_catalog", _boom)
         monkeypatch.setattr(models_api, "synthesize_voice", _boom)
         assert _post(client, text="hi").status_code == 409
 
@@ -97,7 +97,7 @@ class TestPreviewRuntimeFailures:
         def _raise(*_args, **_kwargs):
             raise httpx.ConnectError("connection refused")
 
-        monkeypatch.setattr(models_api, "list_voices", _raise)
+        monkeypatch.setattr(models_api, "voice_catalog", _raise)
         response = _post(client, text="hi")
         assert response.status_code == 502
         assert "unreachable" in response.json()["detail"]
@@ -108,14 +108,14 @@ class TestPreviewRuntimeFailures:
         def _raise(*_args, **_kwargs):
             raise ValueError("malformed payload")
 
-        monkeypatch.setattr(models_api, "list_voices", _raise)
+        monkeypatch.setattr(models_api, "voice_catalog", _raise)
         response = _post(client, text="hi")
         assert response.status_code == 502
         assert "unreadable" in response.json()["detail"]
 
     def test_synthesis_failure_is_502(self, client, monkeypatch):
         monkeypatch.setenv("TTS_PROVIDER", "mock")
-        monkeypatch.setattr(models_api, "list_voices", lambda: [])
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": []})
 
         def _raise(*_args, **_kwargs):
             raise httpx.ConnectError("tts down")
@@ -125,7 +125,7 @@ class TestPreviewRuntimeFailures:
 
     def test_empty_audio_is_502(self, client, monkeypatch):
         monkeypatch.setenv("TTS_PROVIDER", "mock")
-        monkeypatch.setattr(models_api, "list_voices", lambda: [])
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": []})
         monkeypatch.setattr(models_api, "synthesize_voice", lambda *a, **k: b"")
         assert _post(client, text="hi").status_code == 502
 
@@ -133,7 +133,7 @@ class TestPreviewRuntimeFailures:
 class TestPreviewVoices:
     def test_unknown_voice_is_422(self, client, monkeypatch):
         monkeypatch.setenv("TTS_PROVIDER", "mock")
-        monkeypatch.setattr(models_api, "list_voices", lambda: [{"name": "uk"}])
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": [{"name": "uk"}]})
         monkeypatch.setattr(
             models_api, "synthesize_voice",
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("no synthesis")))
@@ -143,7 +143,7 @@ class TestPreviewVoices:
 
     def test_known_voice_reaches_synthesis(self, client, monkeypatch):
         monkeypatch.setenv("TTS_PROVIDER", "mock")
-        monkeypatch.setattr(models_api, "list_voices", lambda: [{"name": "uk"}])
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": [{"name": "uk"}]})
         seen = {}
 
         def _synth(text, voice, speed):
@@ -159,7 +159,7 @@ class TestPreviewVoices:
 
     def test_default_voice_used_when_unspecified(self, client, monkeypatch):
         monkeypatch.setenv("TTS_PROVIDER", "mock")
-        monkeypatch.setattr(models_api, "list_voices", lambda: [])
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": []})
         seen = {}
 
         def _synth(text, voice, speed):
@@ -170,3 +170,47 @@ class TestPreviewVoices:
         response = _post(client, text="hi")
         assert response.status_code == 200
         assert seen == {"voice": "default", "speed": 150}
+
+
+class TestIssue455Contract:
+    """The runtime answers {id, name} voices; CORE keeps the id for synthesis."""
+
+    RUNTIME = {"voices": [{"id": "uk", "name": "Ukrainian", "engine": "espeak-ng"},
+                          {"id": "en-us", "name": "English (America)", "engine": "espeak-ng"}],
+               "default_voice": "default", "speed_range": {"min": 80, "max": 450}}
+
+    def test_catalog_is_normalized_to_id_and_name(self, client, monkeypatch):
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: self.RUNTIME)
+        body = client.get("/api/models/voices").json()
+        assert body["voices"] == [{"id": "uk", "name": "Ukrainian"}, {"id": "en-us", "name": "English (America)"}]
+        assert body["default_voice"] == "default" and body["speed_range"] == {"min": 80, "max": 450}
+        assert body["speed_unit"] == "words_per_minute"
+
+    def test_unreachable_catalog_has_code_without_internal_detail(self, client, monkeypatch):
+        def _raise():
+            raise httpx.ConnectError("connect to http://tts:8090 refused")
+        monkeypatch.setattr(models_api, "voice_catalog", _raise)
+        response = client.get("/api/models/voices")
+        assert response.status_code == 502
+        assert response.json() == {"detail": "TTS runtime is unreachable", "code": "tts_runtime_is_unreachable"}
+
+    def test_preview_sends_the_id_and_accepts_the_engine_default(self, client, monkeypatch):
+        monkeypatch.setenv("TTS_PROVIDER", "mock")
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: self.RUNTIME)
+        seen = []
+        monkeypatch.setattr(models_api, "synthesize_voice", lambda text, voice, speed: seen.append(voice) or _wav())
+        assert _post(client, text="hi", voice="uk").status_code == 200
+        assert _post(client, text="hi").status_code == 200  # default is not a catalog entry
+        assert seen == ["uk", "default"]
+        unknown = _post(client, text="hi", voice="[object Object]")
+        assert unknown.status_code == 422 and unknown.json()["code"] == "unknown_voice"
+
+    @pytest.mark.parametrize("speed", [79, 451])
+    def test_speed_follows_the_runtime_range(self, client, monkeypatch, speed):
+        monkeypatch.setenv("TTS_PROVIDER", "mock")
+        monkeypatch.setattr(models_api, "voice_catalog", lambda: self.RUNTIME)
+        monkeypatch.setattr(models_api, "synthesize_voice",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no synthesis")))
+        response = _post(client, text="hi", speed=speed)
+        assert response.status_code == 422
+        assert response.json()["code"] == "speed_is_outside_the_range_of_the_tts_runtime"

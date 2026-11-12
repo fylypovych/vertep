@@ -17,7 +17,18 @@ Vertep- образів і не потрапляє в жодну роль в `con
 - ключ генерує `bootstrap.sh` у `config/moneyprinter-api.key` (права `0600`), але
   сам профіль лишається вимкненим.
 
-Увімкнення у встановленому runtime bundle:
+### Штатне ввімкнення з Web UI (#456)
+
+Налаштування → «Движок відео» → MoneyPrinterTurbo → «Локальний runtime у складі Vertep» → «Застосувати». Оператор не вводить ні адресу, ні токен:
+
+1. `POST /api/settings/providers/video_engine` з `runtime: "local"` ставить у план розгортання `engine_runtimes: ["moneyprinter"]` через той самий `deployment-request.json`, що й зміна ролей, і відповідає `202 RUNTIME_DEPLOYING`.
+2. Штатний deployment executor (`scripts/apply-deployment.py`) запускає `moneyprinter` і локальний `worker`. Worker отримує можливість `video_assembly` і задачу `assembly`, бо CORE зовнішній движок не виконує (Issue #122 P5); тому GPU-роль для цього не потрібна. Executor чекає healthy.
+3. Self-test локального worker перевіряє `http://moneyprinter:8098/health`. Wrapper стає healthy лише після власної перевірки upstream зі згенерованим ключем.
+4. UI після завершення розгортання повторює перемикання. CORE підставляє адресу `http://moneyprinter:8098`, а чинна перевірка `/runtime` і активація на worker підтверджують движок або відкочують його до попереднього.
+
+Ключ `config/moneyprinter-api.key` генерує bootstrap; його читає лише wrapper через Docker secret. Vertep до wrapper звертається без токена: порт не опубліковано, тож runtime доступний тільки з внутрішньої мережі. Зміна ролей зберігає runtime у плані. Образ випускається лише для `linux/amd64`: на іншій архітектурі локальний варіант відхиляється до будь-яких змін (409). Зовнішній runtime з адресою й токеном залишається окремим варіантом.
+
+Ручне ввімкнення у встановленому runtime bundle (без Web UI):
 
 ```bash
 COMPOSE_PROFILES=moneyprinter docker compose up -d moneyprinter

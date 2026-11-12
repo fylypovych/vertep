@@ -526,6 +526,8 @@ def test_a_worker_reports_the_effective_engine_of_its_own_executor(registry, mon
     _worker_registry(monkeypatch, registry)
     registry["engine"] = _Native()
     monkeypatch.setenv("MONEY_PRINTER_URL", "")
+    # Native readiness is the FFmpeg binary of this host (#456); the report is under test here.
+    monkeypatch.setattr(engine_config, "native_assembly_available", lambda: True)
     native = claim_video_engine_state()
     assert native["engine_id"] == "native"
     assert native["ready"] is True

@@ -55,8 +55,15 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
     try:
         if role == "core":
             additional = {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",") if item.strip()}
-            if not additional:
+            runtimes = {item.strip() for item in os.getenv("NODE_ENGINE_RUNTIMES", "").split(",") if item.strip()}
+            if not additional and not runtimes:
                 raise RuntimeError("Core has no local worker roles")
+            if "moneyprinter" in runtimes:
+                # The local engine runtime answers healthy only after its own self-test (#456).
+                response = httpx.get(os.getenv("MONEY_PRINTER_HEALTH_URL", "http://moneyprinter:8098/health"), timeout=15)
+                response.raise_for_status()
+                evidence["moneyprinter"] = {"http_status": response.status_code,
+                                            "sha256": hashlib.sha256(response.content).hexdigest()}
             health_urls = {
                 "gpu": os.getenv("COMFYUI_HEALTH_URL", "http://comfyui:8188/system_stats"),
                 "text": os.getenv("OLLAMA_HEALTH_URL", "http://ollama:11434/api/tags"),

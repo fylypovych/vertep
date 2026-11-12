@@ -26,8 +26,9 @@
 
 - Без прапорців — статичний `PLAN`-каталог, `overall=PLAN`, код 1 (`--plan-only` дозволяє код 0).
 - `--run` — виконує automated pytest-цілі сценаріїв: `PASS` лише коли **всі** пункти `PASS`; `FAIL`/`NO_TESTS` (порожній або повністю пропущений прогін) — `FAIL`; лише `PROCEDURE`/`NOT_RUN` — `PARTIAL`, код 1 (`--allow-procedures` піднімає такий прогін до `PASS`).
-- Код виходу 0 лише для `overall=PASS` (або `PLAN` з `--plan-only`); `--selected S99` чи `rt_issue` поза дозволеним набором `{34, 35, 42, 47, 54, 63}` — код 1.
+- Код виходу 0 лише для `overall=PASS` (або `PLAN` з `--plan-only`); `--selected S99` чи `rt_issue` поза Issues з частковим чи повним покриттям у `IR_COVERAGE` (зараз `{42, 47, 54, 441, 442}`) — код 1.
 - Кожен `rt_scenario` прив'язаний лише до свого `rt_issue`; сценарійні реальні процедури (bootstrap, backup roundtrip, міграція, перерваний update, trust релізу, publisher receipt) не підміняються generic health-пробами.
+- Каталог «Реальні тести» локальний (`SCENARIOS` у `scripts/qualify_infrastructure.py`), а не список GitHub Issues: 8 сценаріїв S01–S08 перевіряють окремі критерії; один Issue може мати кілька сценаріїв (#442 — S01, S04, S05, S06). `IR_COVERAGE` описує кожен відкритий real-server Issue: `partial` — сценарії перевіряють лише критерії з `covers`, `none` — виконуваного сценарію немає (#63, #326, #329, #420), `full` — усі критерії Issue мають mandatory checks. GitHub Runner публікує результат у Issue, але автоматично закриває його тільки при `full`; зараз жоден Issue не має повного покриття. Під час зміни відкритих `ir` або сценаріїв реєстр оновлюється разом із каталогом (#451).
 
 ## Redis queue contract (`tests/test_queue_redis_contract.py`)
 

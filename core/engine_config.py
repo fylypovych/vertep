@@ -21,17 +21,17 @@ engine-specific part that switch could not know:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from typing import Any
 
 from adapters.providers.base import BRIDGE_SCHEMA_VERSION, REASON_SNAPSHOT_MISMATCH
-from adapters.providers.video_engines import MoneyPrinterEngine, ShortGPTEngine
+from adapters.providers.video_engines import MoneyPrinterEngine
 
 #: Env var that holds the token of each external engine. Only the *name* is ever
 #: reported: a secret value never leaves the process.
 _SECRET_ENV_BY_ENGINE = {
     "money-printer": MoneyPrinterEngine.env_token,
-    "shortgpt": ShortGPTEngine.env_token,
 }
 
 #: Env var that holds the endpoint of each external engine. Taken from the engine
@@ -39,17 +39,50 @@ _SECRET_ENV_BY_ENGINE = {
 #: address under a name the runtime does not read.
 _ENDPOINT_ENV_BY_ENGINE = {
     "money-printer": MoneyPrinterEngine.env_url,
-    "shortgpt": ShortGPTEngine.env_url,
 }
 
+#: Address of the MoneyPrinterTurbo runtime shipped with Vertep: the Compose service on the
+#: internal network (#456). Its wrapper holds the generated upstream key itself, so Vertep
+#: needs no token to reach it and the operator never types an internal address.
+LOCAL_MONEY_PRINTER_URL = "http://moneyprinter:8098"
+LOCAL_ENGINE_RUNTIMES = {"money-printer": "moneyprinter"}
+
+
+def local_runtime_state(engine_id: str = "money-printer") -> dict[str, Any]:
+    """Whether the runtime shipped with Vertep is part of the plan, being deployed, or usable."""
+    import platform
+    from .first_run import config_root
+
+    runtime = LOCAL_ENGINE_RUNTIMES.get(engine_id)
+    if not runtime:
+        return {"supported": False}
+
+    def document(name: str) -> dict:
+        try:
+            value = json.loads((config_root() / name).read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    plan, request, status = document("deployment-plan.json"), document("deployment-request.json"), document("deployment-status.json")
+    deploying = runtime in (request.get("engine_runtimes") or []) or (
+        status.get("state") in {"QUEUED", "APPLYING"} and "moneyprinter" in (status.get("services") or []))
+    # The signed image is published for linux/amd64 only.
+    architecture = platform.machine().lower()
+    available = architecture in {"x86_64", "amd64"}
+    return {"supported": True, "runtime": runtime, "endpoint": LOCAL_MONEY_PRINTER_URL,
+            "in_plan": runtime in (plan.get("engine_runtimes") or []), "deploying": deploying,
+            "available": available, "reason": None if available else f"architecture_unsupported:{architecture}",
+            "deployment_state": status.get("state"), "deployment_error": status.get("error") if status.get("state") == "FAILED" else None}
+
+
 #: User-facing names of the engines. The technical values stay the API contract
-#: (``native`` / ``money-printer`` / ``shortgpt``, Issue #122 §1), so only the labels are
+#: (``native`` / ``money-printer``, Issue #122 §1), so only the labels are
 #: added here — Settings must be able to show "Vertep Native" and "MoneyPrinterTurbo"
 #: without the operator having to know the env value.
 ENGINE_LABELS = {
     "native": "Vertep Native",
     "money-printer": "MoneyPrinterTurbo",
-    "shortgpt": "ShortGPT",
 }
 
 
@@ -298,6 +331,12 @@ def verify_engine_snapshot(engine, snapshot: dict | None, *,
     return fields
 
 
+def native_assembly_available() -> bool:
+    """The FFmpeg binary Native assembly runs in CORE."""
+    import shutil
+    return shutil.which("ffmpeg") is not None
+
+
 def verify_effective_engine(*, probe: bool = True, engine=None) -> dict[str, Any]:
     """Verify the effective engine on the actual executor (P7).
 
@@ -320,6 +359,10 @@ def verify_effective_engine(*, probe: bool = True, engine=None) -> dict[str, Any
         "config_revision": engine_config_revision(engine),
     }
     if engine_id == "native":
+        # Native assembles in CORE with FFmpeg (control-plane, no GPU): "ready" means
+        # exactly that binary is present here, not that every pipeline stage is (#456).
+        if not native_assembly_available():
+            report.update(ready=False, reason="ffmpeg_missing")
         return report
     if not report["configured"]:
         report["ready"] = False
@@ -397,6 +440,10 @@ def effective_engine_config(*, probe: bool = False, engine=None) -> dict[str, An
         "worker_activation": {"ok": not mismatches, "mismatches": mismatches},
         "probed": bool(probe) and engine_id != "native",
         "options": options,
+        # The runtime shipped with Vertep and whether the effective engine uses it (#456).
+        "local_runtime": local_runtime_state(),
+        "runtime_mode": ("local" if engine_id == "money-printer" and os.getenv("MONEY_PRINTER_URL", "").rstrip("/") == LOCAL_MONEY_PRINTER_URL
+                         else "external" if engine_id != "native" else None),
         "system_state": get_system_state()["state"],
         "change_allowed": operation_allowed("configuration"),
         "values_exposed": False,

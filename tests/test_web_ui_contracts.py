@@ -282,6 +282,23 @@ def test_secrets_shape():
     assert isinstance(data["values_exposed"], bool)
 
 
+def test_publishing_settings_never_store_platform_credentials():
+    """#453: credentials moved to the Publishing tab still use the secret store only."""
+    from core.first_run import config_root
+    from core import publishing_settings as module
+    client = _client()
+    marker = "synthetic-publishing-token-453"
+    resp = client.put("/api/settings/publishing", auth=_auth(), json={
+        "public_url": "https://vertep.example.com", "telegram_channel_id": "@news_channel",
+        "youtube_access_token": marker, "telegram_bot_token": marker})
+    assert resp.status_code == 200
+    assert resp.json() == {"public_url": "https://vertep.example.com", "telegram_channel_id": "@news_channel"}
+    assert marker not in (config_root() / module._FILE).read_text(encoding="utf-8")
+    secrets = client.get("/api/settings/secrets", auth=_auth()).json()["secrets"]
+    assert all(isinstance(value, bool) for value in secrets.values())
+    assert marker not in client.get("/api/settings/publishing", auth=_auth()).text
+
+
 # ── System Roles ──────────────────────────────────────────────────
 
 def test_system_roles_shape():

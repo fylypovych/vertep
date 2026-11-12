@@ -40,7 +40,40 @@ VERSION_FILE = ROOT / "VERSION"
 TOOL = "qualify-infrastructure"
 ISSUE = "i.0.0.0.31"
 
-VALID_RT_ISSUES = {42, 47, 54, 441, 442}
+# Відкриті real-server Issues і їх покриття каталогом (#451). Каталог локальний:
+# GitHub не є джерелом списку сценаріїв. "partial" — сценарії перевіряють лише
+# перелічені критерії, тому Issue не закривається автоматично; "none" —
+# виконуваного сценарію немає. "full" дозволено лише після звірки кожного
+# критерію Issue з mandatory checks його сценаріїв.
+IR_COVERAGE = {
+    42: {"id": "ir.0.0.0.42", "coverage": "partial",
+         "note": "S02 перевіряє лише multi-host enrollment і сертифікати (AC1); ролі, моделі, Telegram, "
+                 "account/RBAC та узгодженість Web UI не мають сценарію."},
+    47: {"id": "ir.0.0.0.47", "coverage": "partial",
+         "note": "S08 перевіряє лише live publication receipt (AC3); artifact delivery, OAuth lifecycle, "
+                 "interruption без дублювання та UI не мають сценарію."},
+    54: {"id": "ir.0.0.0.53", "coverage": "partial",
+         "note": "S07 перевіряє лише release trust і key ceremony (AC1); TLS/PKI, sealing, OAuth, "
+                 "Monitoring та alerts не мають сценарію."},
+    63: {"id": "ir.0.0.0.63", "coverage": "none",
+         "note": "Перевіряє сам Runner і GitHub reporting/auto-close на контрольованому Issue; "
+                 "окремого сценарію каталогу немає."},
+    326: {"id": "ir.0.0.3.26", "coverage": "none",
+          "note": "Architecture 2.0: parity old-role/new-module, route switch, migration і retirement; "
+                  "виконуваного сценарію немає."},
+    329: {"id": "ir.0.0.3.29", "coverage": "none",
+          "note": "Ізоляція LAB VM/GPU R1–R6 перевіряється кваліфікацією LAB, а не Real Test Runner."},
+    420: {"id": "ir.0.0.4.20", "coverage": "none",
+          "note": "Перемикач статичного й динамічного workflow: наскрізний прогін із реальними вузлами; "
+                  "виконуваного сценарію немає."},
+    441: {"id": "ir.0.0.4.41", "coverage": "partial",
+          "note": "S03 перевіряє лише GPU і ComfyUI (#34/AC3); Text, Voice, review, revisions і MPT "
+                  "не мають сценарію."},
+    442: {"id": "ir.0.0.4.42", "coverage": "partial",
+          "note": "S01, S04, S05, S06 перевіряють bootstrap, backup, міграцію та переривання оновлення; "
+                  "rolling/canary update, Update Center і MPT recovery (#131) не мають сценарію."},
+}
+VALID_RT_ISSUES = {number for number, item in IR_COVERAGE.items() if item["coverage"] != "none"}
 
 # ---------------------------------------------------------------------------
 # Каталог сценаріїв кваліфікації інфраструктури.
@@ -58,6 +91,7 @@ SCENARIOS = [
         "automated": ["tests/test_bootstrap_wizard.py", "tests/test_first_run.py"],
         "rt": "rt::S01 clean bootstrap + First Run Wizard",
         "rt_issue": 442,
+        "covers": ["#35/AC1"],
         "description": "Automated/disposable qualification чистого Ubuntu-сумісного "
                        "bootstrap: roles, секрети, контейнери, health check.",
     },
@@ -67,6 +101,7 @@ SCENARIOS = [
         "automated": ["tests/test_node_registry.py", "tests/test_fleet_controls.py", "tests/test_worker_self_test.py"],
         "rt": "rt::S02 фізичний multi-host enrollment + certificates",
         "rt_issue": 42,
+        "covers": ["AC1"],
         "description": "Реєстрація вузлів, сертифікати, self-test, task/result "
                        "та remote-control сценарії між CORE та Worker.",
     },
@@ -76,6 +111,7 @@ SCENARIOS = [
         "automated": ["tests/test_core_generation_gate.py", "tests/test_compute_distributed.py"],
         "rt": "rt::S03 фізична GPU + ComfyUI workflow",
         "rt_issue": 441,
+        "covers": ["#34/AC3"],
         "description": "Інтеграційний harness сумісний з GPU/ComfyUI без вимоги "
                        "фізичної GPU: генерація через mock/fallback, execution op.",
     },
@@ -85,6 +121,7 @@ SCENARIOS = [
         "automated": ["tests/test_role_services.py"],
         "rt": "rt::S04 реальний backup/restore стенд",
         "rt_issue": 442,
+        "covers": ["#35/AC3"],
         "description": "Резервна копія, мутація даних, відновлення та перевірка "
                        "здоров'я у контрольованому середовищі.",
     },
@@ -94,6 +131,7 @@ SCENARIOS = [
         "automated": ["tests/test_persistent_user_data.py", "tests/test_deployment_plan.py"],
         "rt": "rt::S05 міграція існуючої інсталяції",
         "rt_issue": 442,
+        "covers": ["#35/AC2"],
         "description": "characters/brands/workflows/jobs → update/recreate/"
                        "rollback/restore simulation без втрати даних.",
     },
@@ -103,6 +141,7 @@ SCENARIOS = [
         "automated": ["tests/test_safe_update.py", "tests/test_rolling_update.py", "tests/test_updates.py"],
         "rt": "rt::S06 real update interruption/restart/rollback",
         "rt_issue": 442,
+        "covers": ["#35/AC5"],
         "description": "rolling/canary, interruption/restart, rollback/recovery "
                        "з інжекцією відмов під час оновлення.",
     },
@@ -112,6 +151,7 @@ SCENARIOS = [
         "automated": ["tests/test_key_lifecycle.py", "tests/test_update_security.py", "tests/test_release_qualification.py"],
         "rt": "rt::S07 key ceremony + recovery",
         "rt_issue": 54,
+        "covers": ["AC1"],
         "description": "signed artifacts, tamper/revoke/downgrade, key rotation "
                        "та recovery procedure.",
     },
@@ -121,6 +161,7 @@ SCENARIOS = [
         "automated": ["tests/test_publisher_live_adapters.py", "tests/test_publish_task_helpers.py"],
         "rt": "rt::S08 live platform publish receipt",
         "rt_issue": 47,
+        "covers": ["AC3"],
         "description": "Sandbox/fake publisher із перевірюваним receipt публікації.",
     },
 ]

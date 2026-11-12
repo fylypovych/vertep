@@ -47,6 +47,30 @@ export interface ModelNodeInfo {
   pending_command: boolean;
 }
 
+/** A tag of the Ollama library confirmed against the registry (core/ollama_catalog.json). */
+export interface ModelCatalogEntry {
+  name: string;
+  family: string;
+  parameters: string;
+  download_bytes: number;
+}
+
+export interface ModelCatalog {
+  source: string;
+  verified_at: string;
+  models: ModelCatalogEntry[];
+}
+
+/** A TTS runtime voice: ``id`` is sent to synthesis, ``name`` is shown (#455). */
+export interface VoiceOption { id: string; name: string }
+
+export interface VoiceCatalog {
+  voices: VoiceOption[];
+  default_voice: string;
+  speed_range: { min: number; max: number };
+  speed_unit?: string;
+}
+
 export interface ModelPullResponse {
   operation_id: string;
   status: string;
@@ -73,6 +97,9 @@ export interface ProviderMatrixResponse {
 }
 
 export interface ProviderSwitchResponse {
+  /** RUNTIME_DEPLOYING: the local runtime was queued for the deployment executor first. */
+  state?: string;
+  local_runtime?: LocalEngineRuntime;
   worker_activation?: { status: string; nodes?: string[] };
   slot: string;
   backend: string;
@@ -111,9 +138,24 @@ export interface EffectiveEngineConfig {
   reason: string | null;
   probed: boolean;
   options: EngineOption[];
+  /** The MoneyPrinterTurbo runtime shipped with Vertep (#456). */
+  local_runtime?: LocalEngineRuntime;
+  runtime_mode?: 'local' | 'external' | null;
   system_state: string;
   change_allowed: boolean;
   values_exposed: boolean;
+}
+
+export interface LocalEngineRuntime {
+  supported: boolean;
+  runtime?: string;
+  endpoint?: string;
+  in_plan?: boolean;
+  deploying?: boolean;
+  available?: boolean;
+  reason?: string | null;
+  deployment_state?: string | null;
+  deployment_error?: string | null;
 }
 
 export interface OperationState {
@@ -121,6 +163,7 @@ export interface OperationState {
   status: string;
   progress: number;
   current_phase: string;
+  model?: string;
   message?: string | null;
   error: string | null;
   result: any;
@@ -189,6 +232,11 @@ export class SettingsApiService {
     return this.http.get<ModelsResponse>(`${this.baseUrl}/system/models`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
+  /** Ollama library tags available for download, separate from installed models. */
+  modelCatalog(): Observable<ModelCatalog> {
+    return this.http.get<ModelCatalog>(`${this.baseUrl}/system/models/catalog`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  }
+
   modelNodes(): Observable<{ nodes: ModelNodeInfo[] }> {
     return this.http.get<{ nodes: ModelNodeInfo[] }>(`${this.baseUrl}/system/models/nodes`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
@@ -212,8 +260,8 @@ export class SettingsApiService {
     return this.http.delete<ModelDeleteResponse>(`${this.baseUrl}/system/models/${encodeURIComponent(name)}`, { params, headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
-  voices(): Observable<{ voices: string[] }> {
-    return this.http.get<{ voices: string[] }>(`${this.baseUrl}/models/voices`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
+  voices(): Observable<VoiceCatalog> {
+    return this.http.get<VoiceCatalog>(`${this.baseUrl}/models/voices`, { headers: this.getHeaders() }).pipe(catchError(this.handleError));
   }
 
   previewVoice(payload: { text: string; voice?: string; speed?: number }): Observable<Blob> {
@@ -279,13 +327,14 @@ export class SettingsApiService {
       .pipe(catchError(this.handleError));
   }
 
-  switchVideoEngine(backend: string, endpoint?: string, actor?: string): Observable<ProviderSwitchResponse> {
+  switchVideoEngine(backend: string, endpoint?: string, actor?: string, runtime?: 'local'): Observable<ProviderSwitchResponse> {
     return this.http.post<ProviderSwitchResponse>(
       `${this.baseUrl}/settings/providers/video_engine`,
       {
         backend,
         ...(endpoint ? { endpoint } : {}),
         ...(actor ? { actor } : {}),
+        ...(runtime ? { runtime } : {}),
       },
       { headers: this.getHeaders() },
     ).pipe(catchError(this.handleError));

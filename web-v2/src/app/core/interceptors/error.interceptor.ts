@@ -8,8 +8,8 @@ import {
   HttpRequest,
   HttpErrorResponse,
 } from '@angular/common/http';
-import { Observable, throwError } from 'rxjs';
-import { catchError } from 'rxjs/operators';
+import { Observable, from, throwError } from 'rxjs';
+import { catchError, switchMap } from 'rxjs/operators';
 
 const CYRILLIC = /[А-ЯЄІЇҐа-яєіїґ]/;
 
@@ -47,14 +47,28 @@ export class ErrorInterceptor implements HttpInterceptor {
   ): Observable<HttpEvent<unknown>> {
     return next.handle(req).pipe(
       catchError((error: HttpErrorResponse) => {
-        if (error instanceof HttpErrorResponse) {
-          const message = errorMessage(error, this.i18n);
-          Object.defineProperty(error, 'message', { value: message, configurable: true });
-          // Some components read the server text directly: they get the chosen language too.
-          if (typeof error.error?.detail === 'string') error.error.detail = message;
+        // A request for binary data (audio) receives its JSON error as a Blob: read it, so the
+        // code and detail reach the message instead of a generic status text (#455).
+        if (error instanceof HttpErrorResponse && error.error instanceof Blob && /json/i.test(error.error.type)) {
+          return from(error.error.text()).pipe(switchMap((text) => {
+            let body: unknown = null;
+            try { body = JSON.parse(text); } catch { /* not JSON after all: keep the status text */ }
+            return this.reject(new HttpErrorResponse({ error: body, headers: error.headers, status: error.status,
+              statusText: error.statusText, url: error.url ?? undefined }));
+          }));
         }
-        return throwError(() => error);
+        return this.reject(error);
       })
     );
+  }
+
+  private reject(error: HttpErrorResponse): Observable<never> {
+    if (error instanceof HttpErrorResponse) {
+      const message = errorMessage(error, this.i18n);
+      Object.defineProperty(error, 'message', { value: message, configurable: true });
+      // Some components read the server text directly: they get the chosen language too.
+      if (typeof error.error?.detail === 'string') error.error.detail = message;
+    }
+    return throwError(() => error);
   }
 }

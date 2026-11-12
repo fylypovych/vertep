@@ -19,7 +19,7 @@ from adapters.providers.runtime_manifest import load_manifest, generate_sbom
 """Phase 5 tests: VideoEngine pattern (native default + opt-in external engines).
 
 Covers the opt-in/fallback behaviour of the video-engine factory, the native
-FFmpeg render path, the remote (MoneyPrinter / ShortGPT) HTTP flow against a
+FFmpeg render path, the remote MoneyPrinterTurbo HTTP flow against a
 ``FakeTransport``, and parity between the native and external engines when
 driven from the **same** Job assets.
 
@@ -48,11 +48,18 @@ from adapters.providers import (
     _make_video_engine,
     MoneyPrinterEngine,
     NativeVertepEngine,
-    ShortGPTEngine,
+    UnsupportedVideoEngine,
     VideoEngine,
 )
 from adapters.ffmpeg import FFmpegAdapter
 from publishers.transport import FakeTransport
+
+
+class _UnpinnedEngine(RemoteVideoEngine):
+    """A remote engine without a pinned bridge contract (none ships with Vertep)."""
+    name = "unpinned"
+    env_url = "UNPINNED_ENGINE_URL"
+    env_token = "UNPINNED_ENGINE_TOKEN"
 
 
 def _image(path):
@@ -205,16 +212,14 @@ def test_video_engine_enables_money_printer_when_configured(monkeypatch):
     assert isinstance(_make_video_engine(), MoneyPrinterEngine)
 
 
-def test_video_engine_enables_shortgpt_when_configured(monkeypatch):
+def test_a_removed_engine_selection_is_refused_not_rendered_by_native(monkeypatch, tmp_path):
+    """#456: ShortGPT was removed; a persisted selection never falls back to Native."""
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "shortgpt")
-    monkeypatch.setenv("SHORTGPT_URL", "http://engine:9000")
-    assert isinstance(_make_video_engine(), ShortGPTEngine)
-
-
-def test_video_engine_keeps_shortgpt_selected_without_an_endpoint(monkeypatch):
-    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "shortgpt")
-    monkeypatch.setenv("SHORTGPT_URL", "")
-    assert isinstance(_make_video_engine(), ShortGPTEngine)
+    engine = _make_video_engine()
+    assert isinstance(engine, UnsupportedVideoEngine)
+    assert engine.engine_id == "shortgpt" and engine.configured() is False
+    with pytest.raises(RuntimeError, match="not supported"):
+        engine.render(tmp_path / "v.mp4", images=[], durations=[])
 
 
 # ---------------------------------------------------------------------------
@@ -534,31 +539,16 @@ def test_an_unreadable_import_is_never_registered(tmp_path, mp4_factory, monkeyp
 
 
 def test_remote_engine_sends_bearer_token(tmp_path):
-    """ShortGPTEngine uses legacy flow without material upload (Issue #122 P2)."""
+    """An external MoneyPrinterTurbo runtime receives the configured token as Bearer."""
     fake = FakeTransport([
-        httpx.Response(200, json={"job_id": "j1"}),
-        httpx.Response(200, json={"status": "FAILED", "error": "oom"}),
+        httpx.Response(200, json=_runtime_body()),
+        httpx.Response(400, json={"error": {"message": "stop after the first call"}}),
     ])
-    engine = ShortGPTEngine(
-        url="http://engine:9000", token="s3cret", transport=fake
-    )
-    with pytest.raises(RuntimeError) as exc:
+    engine = MoneyPrinterEngine(url="http://engine:8000", token="s3cret", transport=fake)
+    with pytest.raises(BridgeContractError):
         engine.render(tmp_path / "v.mp4", **(_job_assets(tmp_path)))
-    assert "oom" in str(exc.value)
     assert fake.requests[0][2]["headers"]["Authorization"] == "Bearer s3cret"
-    # ShortGPTEngine uses legacy /render endpoint
-    assert fake.requests[0][1].endswith("/render")
-
-
-def test_remote_engine_api_error_surfaces_http_code(tmp_path):
-    """ShortGPTEngine (legacy flow) surfaces HTTP errors (Issue #122 P2)."""
-    fake = FakeTransport([
-        httpx.Response(400, json={"error": {"message": "engine down"}}),
-    ])
-    engine = ShortGPTEngine(url="http://engine:9000", transport=fake)
-    with pytest.raises(RuntimeError) as exc:
-        engine.render(tmp_path / "v.mp4", **(_job_assets(tmp_path)))
-    assert "400" in str(exc.value)
+    assert all(request[2]["headers"]["Authorization"] == "Bearer s3cret" for request in fake.requests)
 
 
 def test_moneyprinter_upload_error_surfaces(tmp_path):
@@ -589,20 +579,6 @@ def test_remote_engine_contract_negative_cases(tmp_path):
     caps = engine.capabilities()
     assert caps["schema_version"] == "v1"
     assert "16:9" in caps["supported_aspect_ratios"]
-
-
-def test_remote_engine_artifact_delivery_empty_download(tmp_path):
-    """ShortGPTEngine (legacy flow) rejects empty download (Issue #122 P2)."""
-    fake = FakeTransport([
-        httpx.Response(200, json={"job_id": "j-empty"}),
-        httpx.Response(200, json={"status": "READY"}),
-        httpx.Response(200, content=b""),
-    ])
-    engine = ShortGPTEngine(url="http://engine:9000", transport=fake)
-    assets = _job_assets(tmp_path)
-    with pytest.raises(RuntimeError) as exc:
-        engine.render(tmp_path / "final" / "empty.mp4", **assets)
-    assert "empty" in str(exc.value).lower()
 
 
 def test_moneyprinter_refuses_a_download_that_is_not_decodable_media(tmp_path):
@@ -911,19 +887,6 @@ def test_cancel_of_an_in_flight_submit_is_not_reported_as_cancelled(tmp_path):
     assert engine.cancel("tsk-1", submit_key="job-1-v1-abc") is False
 
 
-def test_remote_engine_polling_transient_retry(tmp_path, mp4_factory):
-    fake = FakeTransport([
-        httpx.Response(200, json={"job_id": "j-retry"}),
-        httpx.Response(502, text="Bad Gateway"),
-        httpx.Response(200, json={"status": "READY"}),
-        httpx.Response(200, content=mp4_factory(2.0)),
-    ])
-    engine = ShortGPTEngine(url="http://engine:9000", transport=fake, poll_interval=0.01)
-    assets = _job_assets(tmp_path)
-    output = engine.render(tmp_path / "final" / "retry.mp4", **assets)
-    assert output.stat().st_size > 100
-
-
 # ---------------------------------------------------------------------------
 # Parity: native vs external on the same Job assets
 # ---------------------------------------------------------------------------
@@ -981,7 +944,7 @@ def _contract_engine(tmp_path, responses=None):
 
 def test_capabilities_are_callable_on_instance():
     money_printer = MoneyPrinterEngine(url="http://engine:8000")
-    generic = ShortGPTEngine(url="http://engine:9000")
+    generic = _UnpinnedEngine(url="http://engine:9000")
 
     caps = money_printer.capabilities()
     assert caps["contract_profile"] == "moneyprinter_v1"
@@ -1247,7 +1210,7 @@ def test_build_upstream_request_rejects_invalid_payloads(code, kwargs, tmp_path)
 
 def test_build_upstream_request_requires_pinned_profile():
     with pytest.raises(BridgeContractError) as exc:
-        ShortGPTEngine(url="http://engine:9000").build_upstream_request(
+        _UnpinnedEngine(url="http://engine:9000").build_upstream_request(
             subject="s",
             script="text",
             materials=[],
@@ -1323,32 +1286,14 @@ def test_parse_output_reference_normalises_task_scoped_paths():
         }
 
 
-def test_generic_profile_keeps_legacy_render_contract(tmp_path, mp4_factory):
-    clip = tmp_path / "scene.mp4"
-    clip.write_bytes(b"\x00" * 32)
-    assets = {
-        "images": None,
-        "clips": [clip],
-        "durations": [],
-        "audio": None,
-        "music": None,
-        "subtitles": None,
-        "aspect_ratio": "16:9",
-        "preset": None,
-        "watermark": None,
-        "task_type": "video",
-    }
-    fake = FakeTransport([
-        httpx.Response(200, json={"job_id": "j-generic"}),
-        httpx.Response(200, json={"status": "READY"}),
-        httpx.Response(200, content=mp4_factory(2.0)),
-    ])
-    output = ShortGPTEngine(url="http://engine:9000", transport=fake).render(
-        tmp_path / "final" / "v.mp4", **assets
-    )
-
-    assert output.stat().st_size > 100
-    assert fake.requests[-1][1].endswith("/download/j-generic")
+def test_an_engine_without_a_pinned_contract_cannot_render(tmp_path):
+    """The generic /render flow existed only for ShortGPT and was removed with it (#456)."""
+    fake = FakeTransport([])
+    with pytest.raises(BridgeContractError) as exc:
+        _UnpinnedEngine(url="http://engine:9000", transport=fake).render(
+            tmp_path / "final" / "v.mp4", **_job_assets(tmp_path))
+    assert exc.value.code == "upstream_mapping_unavailable"
+    assert fake.requests == []
 
 
 # ---------------------------------------------------------------------------

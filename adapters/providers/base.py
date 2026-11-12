@@ -305,7 +305,7 @@ class VideoEngine(ABC):
     ``VideoProvider`` *generates* raw AI clips/frames; ``VideoEngine`` *renders*
     the final video from already-produced assets (images/clips, voice, music,
     subtitles). ``NativeVertepEngine`` wraps the current FFmpeg assembly pipeline
-    and is the default; external engines (MoneyPrinter / ShortGPT style) can be
+    and is the default; the external MoneyPrinterTurbo engine can be
     plugged behind the same interface without Vertep giving up Job-state or
     character metadata — Vertep always owns the Job lifecycle, the engine only
     renders.

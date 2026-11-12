@@ -43,12 +43,13 @@ test('англійською кнопка називається UPDATE', async 
   await expect(page.getByTestId('update-check')).toHaveText('Check for updates');
 });
 
-test('секрети згруповані плитками за постачальником', async ({ page }) => {
+test('облікові дані соцмереж згруповані плитками за платформою у «Публікації»', async ({ page }) => {
   await mockApi(page, () => ({}));
-  await page.goto('/settings?tab=secrets');
+  await page.goto('/settings?tab=publishing');
   const youtube = page.getByTestId('secret-group-youtube');
   await expect(youtube).toContainText('YouTube', { timeout: 20000 });
   await expect(youtube).toContainText('youtube_client_id');
   await expect(youtube).toContainText('1/4');
-  await expect(page.getByTestId('secret-group-telegram')).toContainText('telegram_bot_token');
+  await page.goto('/settings?tab=secrets');
+  await expect(page.getByTestId('secret-group-telegram')).toContainText('telegram_bot_token', { timeout: 20000 });
 });

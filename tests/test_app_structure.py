@@ -60,6 +60,7 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["PUT", "/api/tasks/{task_id}/secrets"],
         ["GET", "/api/health/control"],  # Management remains reachable without a ready GPU.
         ["POST", "/api/setup/selection"],  # #445 stages the wizard's selected services.
+        ["GET", "/api/system/models/catalog"],  # #454 Ollama tags available for download.
     ]
     assert after == sorted(before + execution)
 

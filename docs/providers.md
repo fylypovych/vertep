@@ -27,7 +27,7 @@
 | Compute (GPU) | `vertep-worker` | `comfyui-distributed` | `VERTEP_COMPUTE_PROVIDER`, `COMFYUI_DISTRIBUTED_URL`, `COMFYUI_DISTRIBUTED_TOKEN` |
 | Image / Video | `vertep-worker` | спільний з Compute | `VERTEP_COMPUTE_PROVIDER` |
 | Assembly | `ffmpeg` | `ffmpeg` | — |
-| VideoEngine | `native` | `money-printer`, `shortgpt` | `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`, `MONEY_PRINTER_TOKEN`, `SHORTGPT_URL`, `SHORTGPT_TOKEN` |
+| VideoEngine | `native` | `money-printer` | `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`, `MONEY_PRINTER_TOKEN` |
 | Publisher | `vertep-official` | Telegram + офіційні API YouTube/TikTok/FB/IG/Threads | `PUBLISHER_MOCK` / credentials платформ |
 
 ## Ізольований runtime MoneyPrinterTurbo

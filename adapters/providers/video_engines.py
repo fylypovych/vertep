@@ -1,13 +1,13 @@
 """Video engine backends behind the ``VideoEngine`` interface.
 
 Phase 5 of the open-source audit formalizes the FFmpeg assembly pipeline as a
-high-level ``VideoEngine`` driver and makes external engines (MoneyPrinter /
-ShortGPT style, both MIT references) pluggable without Vertep giving up the Job
-lifecycle or character metadata.
+high-level ``VideoEngine`` driver and makes the external MoneyPrinterTurbo engine
+(MIT reference) pluggable without Vertep giving up the Job lifecycle or character
+metadata.
 
 * ``NativeVertepEngine`` — the default, wraps the current FFmpeg assembly
   pipeline (via ``AssemblyProvider``). No external service required.
-* ``MoneyPrinterEngine`` / ``ShortGPTEngine`` — opt-in HTTP-backed engines that
+* ``MoneyPrinterEngine`` — the opt-in HTTP-backed engine that
   submit the asset spec to a remote render endpoint, poll for status and
   download the rendered video. Vertep never owns the external render logic
   (REUSE, not copy). They talk to ``httpx`` only through an injectable transport
@@ -1300,34 +1300,11 @@ REASON_SUBMIT_UNKNOWN,
                 # even when submit, polling or the download failed.
                 shutil.rmtree(workdir, ignore_errors=True)
         else:
-            # Generic remote engine: use legacy flow without material upload
-            spec = self._asset_spec(
-                images=images, clips=clips, durations=durations, audio=audio,
-                music=music, subtitles=subtitles, aspect_ratio=aspect_ratio,
-                preset=preset, watermark=watermark, task_type=task_type,
+            # Only a pinned bridge contract can render; there is no generic flow.
+            raise BridgeContractError(
+                "upstream_mapping_unavailable",
+                f"{self.name} has no pinned bridge contract",
             )
-            submit = self._transport.post(
-                f"{self._url}/render",
-                headers=self._headers(),
-                json=spec,
-                timeout=30,
-            )
-            _check(submit)
-            job_id = submit.json().get("job_id")
-            if not job_id:
-                raise RuntimeError(f"{self.name} external engine returned no job_id")
-            self.current_job_id = job_id
-            download = None
-            try:
-                self._wait_for_status(job_id)
-                download = self._transport.get(
-                    f"{self._url}/download/{job_id}",
-                    headers=self._headers(),
-                    timeout=180,
-                )
-                _check(download)
-            finally:
-                self.current_job_id = None
 
         if not download:
             raise RuntimeError(f"{self.name} download failed - no response")
@@ -1481,51 +1458,6 @@ REASON_SUBMIT_UNKNOWN,
         if runtime_state in {"finished", "failed", "absent"}:
             return RELEASE_RELEASED
         return RELEASE_UNCONFIRMED
-
-    def _wait_for_status(self, job_id: str) -> dict:
-        deadline = time.monotonic() + self._timeout
-        consecutive_transient_errors = 0
-        while time.monotonic() < deadline:
-            try:
-                response = self._transport.get(
-                    f"{self._url}/api/v1/tasks/{job_id}",
-                    headers=self._headers(),
-                    timeout=10,
-                )
-                _check(response)
-                status = response.json()
-                consecutive_transient_errors = 0
-            except Exception as err:
-                consecutive_transient_errors += 1
-                if consecutive_transient_errors > 5:
-                    raise RuntimeError(
-                        f"{self.name} failed during polling: {err}"
-                    ) from err
-                time.sleep(self._poll_interval)
-                continue
-
-            # Use map_upstream_status for MoneyPrinterEngine
-            if isinstance(self, MoneyPrinterEngine):
-                mapped = self.map_upstream_status(status)
-                if mapped["state"] == "complete":
-                    return status
-                if mapped["state"] == "failed":
-                    raise RuntimeError(
-                        f"{self.name} external engine failed: "
-                        f"{mapped.get('error', 'unknown')}"
-                    )
-            else:
-                # Generic remote engine status check
-                state = str(status.get("status", "")).upper()
-                if state == "READY":
-                    return status
-                if state in {"FAILED", "ERROR"}:
-                    raise RuntimeError(
-                        f"{self.name} external engine failed: "
-                        f"{status.get('error', 'unknown')}"
-                    )
-            time.sleep(self._poll_interval)
-        raise TimeoutError(f"{self.name} render timed out: {job_id}")
 
 
 class MoneyPrinterEngine(RemoteVideoEngine):
@@ -1919,9 +1851,22 @@ class MoneyPrinterEngine(RemoteVideoEngine):
         }
 
 
-class ShortGPTEngine(RemoteVideoEngine):
-    """External ShortGPT-style engine (MIT reference) behind VideoEngine."""
+class UnsupportedVideoEngine(VideoEngine):
+    """A persisted selection of an engine Vertep no longer ships (#456).
 
-    name = "shortgpt"
-    env_url = "SHORTGPT_URL"
-    env_token = "SHORTGPT_TOKEN"
+    It is reported as selected and not configured, and every render is refused:
+    it is never quietly replaced by Native (Issue #122 §9.12).
+    """
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def provider(self) -> str:
+        return self._name
+
+    def configured(self) -> bool:
+        return False
+
+    def render(self, output, **kwargs):
+        raise RuntimeError(f"Video engine {self._name!r} is not supported; select native or money-printer")

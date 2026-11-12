@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from adapters.comfyui_runtime import (build_expected_inventory, write_expected_inventory)
-from core.deployment_plan import create_plan
+from core.deployment_plan import ENGINE_RUNTIME_SERVICES, ENGINE_RUNTIMES, create_plan
 from core.persistent_data import (
     LEGACY_EPHEMERAL_ROOTS,
     ensure_persistent_user_data_legacy_migration,
@@ -403,7 +403,10 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
     additional_roles = request.get("additional_roles", [])
     if not isinstance(additional_roles, list) or any(not isinstance(item, str) for item in additional_roles):
         raise ValueError("Некоректний список додаткових ролей")
-    plan = create_plan(roles, role, version, additional_roles)
+    engine_runtimes = request.get("engine_runtimes", [])
+    if not isinstance(engine_runtimes, list) or any(not isinstance(item, str) for item in engine_runtimes):
+        raise ValueError("Некоректний список runtime движків")
+    plan = create_plan(roles, role, version, additional_roles, engine_runtimes)
     if request.get("plan_sha256") != plan["sha256"]:
         raise RuntimeError("Запит на розгортання не відповідає підписаному каталогу ролей")
     core_url = request.get("core_url") or ""
@@ -479,14 +482,19 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         # restore the previously-working runtime so the host is not left half-applied.
         return _restore_runtime(compose_command(), previous_services, new_services, runner)
 
+    runtimes = [ENGINE_RUNTIMES[runtime] for runtime in plan.get("engine_runtimes", [])]
     update_env(env_path, {
         "NODE_ROLE": role,
         "NODE_ADDITIONAL_ROLES": ",".join(plan.get("additional_roles", [])),
+        # The local Worker executes the assembly of an engine runtime in the plan (#456).
+        "NODE_ENGINE_RUNTIMES": ",".join(plan.get("engine_runtimes", [])),
         "NODE_CAPABILITIES": ",".join(sorted({capability
                                                for selected_role in ([role] if role != "core" else additional_roles)
-                                               for capability in roles[selected_role]["capabilities"]})),
+                                               for capability in roles[selected_role]["capabilities"]}
+                                              | {capability for runtime in runtimes for capability in runtime["capabilities"]})),
         "SUPPORTED_TASKS": ",".join(sorted({task for selected_role in ([role] if role != "core" else additional_roles)
-                                                   for task in ROLE_TASKS.get(selected_role, set())})),
+                                                   for task in ROLE_TASKS.get(selected_role, set())}
+                                           | {task for runtime in runtimes for task in runtime["tasks"]})),
         "WORKER_REQUIRE_GPU": "false" if role == "core" else
                               ("true" if role == "gpu" else "false"),
         "CORE_URL": core_url,
@@ -496,7 +504,8 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
     atomic_json(plan_path, plan)
     compose = compose_command()
     selected = set(plan["services"])
-    all_services = BOOTSTRAP_SERVICES | {service for definition in roles.values()
+    # Engine runtimes are managed too, so removing one from the plan stops it (#456).
+    all_services = BOOTSTRAP_SERVICES | ENGINE_RUNTIME_SERVICES | {service for definition in roles.values()
                                         if isinstance(definition, dict)
                                         for service in definition["services"]}
     unwanted = sorted(all_services - selected)

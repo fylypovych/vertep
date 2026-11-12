@@ -197,7 +197,7 @@ def test_preview_refuses_a_switch_that_missed_the_executor(isolated_config, monk
     monkeypatch.setenv("TTS_PROVIDER", "none")
     monkeypatch.setattr(provider_switch, "load_provider_overrides",
                          lambda: {"TTS_PROVIDER": "mock"})
-    monkeypatch.setattr(models_api, "list_voices", lambda: [{"name": "uk"}])
+    monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": [{"name": "uk"}]})
     monkeypatch.setattr(models_api, "synthesize_voice",
                          lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no synthesis")))
     response = client.post("/api/models/voices/preview", json={"text": "hi"})

@@ -210,6 +210,11 @@ def _get_comments(issue_number: int) -> list[dict]:
     return all_comments
 
 
+def _issue_fully_covered(issue_number: int | None) -> bool:
+    from .scenarios import issue_fully_covered
+    return issue_fully_covered(issue_number)
+
+
 def _close_issue(issue_number: int) -> None:
     """Close a GitHub issue with 'completed' reason."""
     repo = _repo()
@@ -367,7 +372,8 @@ class GitHubReporter:
            identity of this deployment (env/git SHA and installed version),
            so a stale or forged report cannot close the Issue.
         6. All mandatory checks were evaluated and cover the scenario's full
-           mandatory check set.
+           mandatory check set, and the catalog declares the Issue fully
+           covered; partial coverage never closes a broad ir (#451).
         7. All mandatory checks have status PASS (not WARNING/SKIPPED/etc).
         8. The run has not already been used for acceptance.
         """
@@ -383,6 +389,10 @@ class GitHubReporter:
         if scenario is None:
             return False
         if scenario.get("rt_issue") != run.rt_issue_number:
+            return False
+        # A broad ir is closed only when the catalog verifies all of its criteria;
+        # a PASS of partial scenarios is reported but leaves the Issue open (#451).
+        if not _issue_fully_covered(run.rt_issue_number):
             return False
         reported = run.github_report
         if not reported or not reported.get("reported_at"):

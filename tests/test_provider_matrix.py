@@ -18,7 +18,6 @@ _RELEVANT_ENV = [
     "COMFYUI_DISTRIBUTED_URL",
     "VERTEP_VIDEO_ENGINE",
     "MONEY_PRINTER_URL",
-    "SHORTGPT_URL",
 ]
 
 
@@ -93,8 +92,11 @@ def test_provider_matrix_video_engine(monkeypatch):
     monkeypatch.setenv("MONEY_PRINTER_URL", "http://mp:8080")
     assert provider_matrix()["video_engine"]["backend"] == "money-printer"
 
+    # #456: a persisted selection of the removed ShortGPT stays visible and unconfigured.
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "shortgpt")
-    assert provider_matrix()["video_engine"]["backend"] == "shortgpt"
+    removed = provider_matrix()["video_engine"]
+    assert removed["backend"] == "shortgpt" and removed["configured"] is False
+    assert removed["options"] == ["native", "money-printer"]
 
 
 def test_a_selected_external_engine_is_never_substituted_by_native(monkeypatch):

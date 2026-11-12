@@ -1,5 +1,6 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, OnInit, computed, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, signal } from '@angular/core';
+import { Subscription, timer } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SettingsApiService, EffectiveEngineConfig, EngineField } from '../../core/api/settings.api';
@@ -27,13 +28,15 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
         <p>{{ 'Обрано:' | t }} <span data-testid="video-engine-selected">{{ (selectedLabel()) | t }}</span></p>
         <p>{{ 'Діє:' | t }} <span data-testid="video-engine-effective">{{ (effectiveLabel()) | t }}</span></p>
-        <p>{{ 'Готовність:' | t }} <span data-testid="video-engine-ready">{{ (cfg.ready ? 'Готовий' : 'Не готовий') | t }}</span></p>
+        <p>{{ 'Готовність движка складання:' | t }} <span data-testid="video-engine-ready">{{ (cfg.ready ? 'Готовий' : 'Не готовий') | t }}</span></p>
         <p *ngIf="cfg.reason" class="text-amber-700 md:col-span-3" data-testid="video-engine-reason">{{ 'Причина:' | t }} {{ (reasonLabel(cfg.reason)) | t }}</p>
         <p *ngIf="!cfg.agree" class="text-red-600 md:col-span-3" data-testid="video-engine-mismatch">{{ 'Обраний движок не відповідає застосованому — виконання відхилено без підміни.' | t }}</p>
         <p>{{ 'Ревізія конфігурації:' | t }} <code class="text-xs" data-testid="video-engine-revision">{{ cfg.config_revision }}</code></p>
-        <p>{{ 'Стан системи:' | t }} <span data-testid="video-engine-system-state">{{ (cfg.system_state) | t }}</span></p>
+        <p>{{ 'Режим системи:' | t }} <span data-testid="video-engine-system-state">{{ (cfg.system_state) | t }}</span></p>
         <p>Upstream: <code class="text-xs" data-testid="video-engine-upstream">{{ cfg.upstream_reference || '—' }}</code></p>
+        <p class="md:col-span-3 text-xs text-slate-500" data-testid="video-engine-scope">{{ scopeNote() | t }}</p>
       </div>
+      <p *ngIf="draftLabel() as draft" class="mt-3 text-sm text-amber-700" data-testid="video-engine-draft">{{ 'У формі вибрано' | t }} «{{ draft | t }}» — {{ 'ще не застосовано. Поля «Обрано» й «Діє» показують чинну конфігурацію.' | t }}</p>
       <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
         <label class="text-sm" for="video-engine-choice">{{ 'Движок' | t }}</label>
         <div class="flex items-center gap-2">
@@ -49,6 +52,16 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
         </div>
         <p *ngIf="infoOpen()" class="md:col-start-2 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded p-2"
            data-testid="video-engine-info">{{ (choiceExplanation()) | t }}</p>
+      </div>
+      <div *ngIf="localRuntime() as local" class="mt-3 text-sm" data-testid="video-engine-runtime-mode">
+        <label class="mr-4"><input type="radio" name="engine-runtime" value="local" [ngModel]="runtimeMode()" (ngModelChange)="runtimeMode.set($event)"
+               [disabled]="!canEdit() || applying() || !local.available" data-testid="video-engine-runtime-local"> {{ 'Локальний runtime у складі Vertep' | t }}</label>
+        <label><input type="radio" name="engine-runtime" value="external" [ngModel]="runtimeMode()" (ngModelChange)="runtimeMode.set($event)"
+               [disabled]="!canEdit() || applying()" data-testid="video-engine-runtime-external"> {{ 'Зовнішній runtime' | t }}</label>
+        <p *ngIf="runtimeMode() === 'local'" class="mt-1 text-xs text-slate-500">{{ 'Vertep сам розгорне контейнер MoneyPrinterTurbo, підключить його за внутрішньою адресою й використає згенерований ключ. Нічого вводити не потрібно.' | t }}</p>
+        <p *ngIf="!local.available" class="mt-1 text-xs text-amber-700" data-testid="video-engine-local-unavailable">{{ 'Локальний runtime недоступний на цьому сервері (образ випускається лише для amd64).' | t }}</p>
+        <p *ngIf="local.deploying || deploying()" class="mt-1 text-sm text-slate-600" data-testid="video-engine-deploying">{{ 'Розгортається локальний runtime…' | t }} {{ (deploymentPhase()) | t }}</p>
+        <p *ngIf="local.deployment_error" class="mt-1 text-sm text-red-600" data-testid="video-engine-deploy-error">{{ 'Розгортання runtime не вдалося' | t }}: {{ local.deployment_error }}</p>
       </div>
       <div *ngIf="endpointField() as field" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
         <label class="text-sm" for="video-engine-endpoint">{{ 'Адреса runtime (' | t }}{{ field.env }})</label>
@@ -75,7 +88,7 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
     </div>
   </div>`,
 })
-export class VideoEngineSectionComponent implements OnInit {
+export class VideoEngineSectionComponent implements OnInit, OnDestroy {
   config = signal<EffectiveEngineConfig | null>(null);
   loading = signal(false);
   error = signal<string | null>(null);
@@ -85,10 +98,14 @@ export class VideoEngineSectionComponent implements OnInit {
   choice = signal('native');
   endpoint = signal('');
   infoOpen = signal(false);
+  /** local: the MoneyPrinterTurbo runtime shipped with Vertep; external: an operator runtime (#456). */
+  runtimeMode = signal<'local' | 'external'>('local');
+  deploying = signal(false);
+  private deployPoll?: Subscription;
 
   private readonly explanations: Record<string, string> = {
     native: 'Vertep Native: відео збирає сам Vertep. Зовнішня програма не потрібна, а затвердження, версії та відновлення працюють повністю. Підходить для щоденної роботи та як запасний варіант.',
-    'money-printer': 'MoneyPrinterTurbo: фінальне відео збирає окрема зовнішня програма. Потрібні її адреса та токен, і вона має бути запущена. Якщо вона недоступна, завдання завершиться помилкою, а не перейде на Vertep Native без вашого відома.',
+    'money-printer': 'MoneyPrinterTurbo: фінальне відео збирає окремий runtime. Локальний runtime Vertep розгортає й підключає сам; для зовнішнього потрібні адреса й токен. Якщо runtime недоступний, завдання завершиться помилкою, а не перейде на Vertep Native без вашого відома.',
   };
 
   readonly choiceExplanation = computed(() => this.explanations[this.choice()]
@@ -123,6 +140,28 @@ export class VideoEngineSectionComponent implements OnInit {
 
   readonly selectedLabel = computed(() => this.labelOf(this.config()?.selected));
 
+  /** The runtime shipped with Vertep, offered only for the engine that has one. */
+  readonly localRuntime = computed(() => {
+    const local = this.config()?.local_runtime;
+    return this.choice() === 'money-printer' && local?.supported ? local : null;
+  });
+
+  readonly usesLocalRuntime = computed(() => !!this.localRuntime() && this.runtimeMode() === 'local');
+
+  /** A choice in the form that is not applied yet is named as such, never as the effective engine. */
+  readonly draftLabel = computed(() => {
+    const config = this.config();
+    if (!config || this.choice() === config.effective) return null;
+    return this.labelOf(this.choice());
+  });
+
+  /** What "ready" covers: the assembly engine, not every generator of the pipeline. */
+  readonly scopeNote = computed(() => this.config()?.effective === 'native'
+    ? 'Готовність стосується лише складання: Vertep Native збирає відео в CORE через FFmpeg і не потребує GPU. Сценарій, озвучка й зображення — окремі етапи; їх стан показано на вкладці «Ролі». Режим системи NORMAL не означає готовність усіх генераторів.'
+    : 'Готовність стосується лише runtime складання; стан інших етапів конвеєра показано на вкладці «Ролі». Режим системи NORMAL не означає готовність усіх генераторів.');
+
+  readonly deploymentPhase = computed(() => ({ QUEUED: 'очікує системного виконавця', APPLYING: 'контейнер завантажується й запускається' } as Record<string, string>)[this.config()?.local_runtime?.deployment_state || ''] || '');
+
   private labelOf(id?: string | null): string {
     const options = this.config()?.options ?? [];
     return options.find(option => option.id === id)?.label ?? id ?? '—';
@@ -133,11 +172,12 @@ export class VideoEngineSectionComponent implements OnInit {
     ? 'Очікує підтвердження Worker' : this.labelOf(this.config()?.effective));
 
   readonly endpointField = computed<EngineField | null>(
-    () => this.activeFields().find(field => field.name === 'endpoint') ?? null,
+    () => this.usesLocalRuntime() ? null : this.activeFields().find(field => field.name === 'endpoint') ?? null,
   );
 
+  /** The local runtime needs no token: its wrapper holds the generated key itself. */
   readonly tokenField = computed<EngineField | null>(
-    () => this.activeFields().find(field => field.name === 'token') ?? null,
+    () => this.usesLocalRuntime() ? null : this.activeFields().find(field => field.name === 'token') ?? null,
   );
 
   /** The runtime address the operator typed is not the one this engine is running with.
@@ -158,7 +198,10 @@ export class VideoEngineSectionComponent implements OnInit {
       the runtime address it uses. */
   readonly canApply = computed(() => {
     const config = this.config();
-    if (!config || !this.canEdit() || this.applying()) return false;
+    if (!config || !this.canEdit() || this.applying() || this.deploying()) return false;
+    if (this.usesLocalRuntime()) {
+      return !!this.localRuntime()?.available && (config.effective !== 'money-printer' || config.runtime_mode !== 'local');
+    }
     return this.choice() !== config.effective || this.choice() !== config.selected || this.endpointChanged();
   });
 
@@ -180,6 +223,7 @@ export class VideoEngineSectionComponent implements OnInit {
       config_revision_mismatch: 'не збігається ревізія конфігурації',
       native_engine: 'Vertep Native не потребує зовнішнього runtime',
       runtime_not_ready: 'runtime не готовий',
+      ffmpeg_missing: 'у CORE немає FFmpeg для складання відео',
       unknown: 'невідома причина',
       worker_activation_pending: 'очікується підтвердження Worker',
     };
@@ -192,7 +236,7 @@ export class VideoEngineSectionComponent implements OnInit {
       next: (config) => {
         this.config.set(config);
         this.error.set(null);
-        this.choose(config.effective, config, endpointSnapshot);
+        if (!this.deploying()) this.choose(config.effective, config, endpointSnapshot);
       },
       error: (err) => this.error.set(err?.error?.detail || err?.message || 'Не вдалося завантажити конфігурацію движка'),
     });
@@ -209,6 +253,7 @@ export class VideoEngineSectionComponent implements OnInit {
       return;
     }
     this.choice.set(effective);
+    this.runtimeMode.set(config.runtime_mode === 'external' ? 'external' : 'local');
     // The address is read from the same place the input is rendered from, so the form
     // never starts out describing something other than what it displays.
     const field = (config.required_fields?.[effective] ?? config.fields ?? [])
@@ -227,9 +272,15 @@ export class VideoEngineSectionComponent implements OnInit {
     this.applyError.set(null);
     this.rollbackNotice.set(null);
     const endpoint = field && this.endpoint().trim() ? this.endpoint().trim() : undefined;
-    this.settingsApi.switchVideoEngine(target, endpoint).subscribe({
+    const local = this.usesLocalRuntime();
+    this.settingsApi.switchVideoEngine(target, endpoint, undefined, local ? 'local' : undefined).subscribe({
       next: (result) => {
         this.applying.set(false);
+        if (result.state === 'RUNTIME_DEPLOYING') {
+          // The deployment executor starts the runtime first; the switch completes after it.
+          this.watchDeployment();
+          return;
+        }
         const applied = result.effective_engine ?? null;
         if (result.worker_activation?.status === 'AWAITING_WORKER') {
           this.rollbackNotice.set('Конфігурацію збережено; активацію на Worker ще не підтверджено.');
@@ -253,6 +304,37 @@ export class VideoEngineSectionComponent implements OnInit {
     });
   }
 
+  /** Follow the deployment of the local runtime and finish the switch once it runs. */
+  private watchDeployment(): void {
+    this.deploying.set(true);
+    this.deployPoll?.unsubscribe();
+    this.deployPoll = timer(3000, 3000).subscribe(() => {
+      this.settingsApi.videoEngine(false).subscribe({
+        next: (config) => {
+          this.config.set(config);
+          const local = config.local_runtime;
+          if (!local || local.deploying) return;
+          this.stopDeployment();
+          if (local.deployment_state === 'FAILED' || !local.in_plan) {
+            this.applyError.set(local.deployment_error || 'Розгортання runtime не вдалося');
+            this.rollbackNotice.set('Попередній движок збережено.');
+            return;
+          }
+          this.apply();
+        },
+        error: () => { /* transient; keep following */ },
+      });
+    });
+  }
+
+  private stopDeployment(): void {
+    this.deployPoll?.unsubscribe();
+    this.deployPoll = undefined;
+    this.deploying.set(false);
+  }
+
+  ngOnDestroy(): void { this.deployPoll?.unsubscribe(); }
+
   returnNative(): void {
     this.choice.set('native');
     this.apply();
@@ -265,6 +347,12 @@ export class VideoEngineSectionComponent implements OnInit {
         this.config.set(config);
         this.choose(config.effective, config);
         this.loading.set(false);
+        // A deployment started before a reload is followed again, not forgotten.
+        if (config.local_runtime?.deploying) {
+          this.choice.set('money-printer');
+          this.runtimeMode.set('local');
+          this.watchDeployment();
+        }
       },
       error: (err) => {
         this.error.set(err?.error?.detail || err?.message || 'Не вдалося завантажити конфігурацію движка');

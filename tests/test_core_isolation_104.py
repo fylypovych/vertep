@@ -65,7 +65,7 @@ class TestLocalFallbackGuard:
 
         class _Engine:
             engine_id = None
-            provider = "shortgpt"
+            provider = "money-printer"
 
             def render(self, *a, **k):
                 calls["render"] += 1
