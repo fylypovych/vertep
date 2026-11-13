@@ -38,7 +38,7 @@ build, container start та pinned execution не оголошуються PASS.
 
 | ID | Existing implementation / перевірка | Expected / actual |
 | --- | --- | --- |
-| AC1 | `services/moneyprinter_service.py`, `adapters/providers/video_engines.py`, `tests/test_mpt_media_matrix.py` | Потрібний справжній pinned submit/status/download із decoder matrix; BLOCKED runtime |
+| AC1 | `services/moneyprinter_service.py`, `adapters/providers/video_engines/`, `tests/test_mpt_media_matrix.py` | Потрібний справжній pinned submit/status/download із decoder matrix; BLOCKED runtime |
 | AC2 | `tests/test_assembly_worker_route.py`, CORE tasks API, Worker assembly executor | Потрібен pinned upstream на окремому process route; stand-in unit/regression не зараховано як повний PASS |
 | AC3 | `tests/test_mpt_recovery.py`, wrapper durable mapping | Потрібні незалежні CORE/Worker/bridge restarts та фактичний upstream submission count; BLOCKED runtime |
 | AC4 | `tests/test_moneyprinter_runtime.py`, existing early-audio staging | Unit regressions зберігаються; справжній pinned task до/після staging restart не виконаний |
