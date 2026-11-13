@@ -28,6 +28,8 @@ export interface RealTestScenariosResponse {
   source?: string;
   scenarios: RealTestScenario[];
   issues?: RealTestIssueCoverage[];
+  /** Manual comparison with the open GitHub Issues; not a live sync (#460). */
+  issues_snapshot?: { verified_at: string; method: string };
   available_checks: string[];
   version: string;
 }

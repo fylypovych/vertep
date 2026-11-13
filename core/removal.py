@@ -74,15 +74,30 @@ def atomic(path, value):
     temp.replace(path)
 
 
-def safe_root(value):
-    path = Path(value)
-    if not path.is_absolute() or path.is_symlink():
-        raise RuntimeError("Потрібен абсолютний installation root без symlink")
-    path = path.resolve()
+_SYSTEM_PREFIXES = ["/etc", "/usr", "/proc", "/sys", "/dev", "/bin", "/sbin", "/var/lib/docker"]
+
+
+def _check_root_location(path):
     if path in {Path("/"), Path("/opt"), Path("/usr"), Path("/etc"), Path("/var"), Path.home()} or len(path.parts) < 3:
         raise RuntimeError("Небезпечний installation root")
-    if any(path.is_relative_to(Path(prefix)) for prefix in ["/etc", "/usr", "/proc", "/sys", "/dev", "/bin", "/sbin", "/var/lib/docker"]):
+    if any(path.is_relative_to(Path(prefix)) for prefix in _SYSTEM_PREFIXES):
         raise RuntimeError("Installation root перетинається із системним каталогом")
+
+
+def safe_root(value):
+    path = Path(value)
+    if not path.is_absolute():
+        raise RuntimeError("Потрібен абсолютний installation root без symlink")
+    # The location is refused before the filesystem is touched: a system path such as
+    # /var/lib/docker may not even be readable, which must not escape as an OS error.
+    _check_root_location(Path(os.path.normpath(path)))
+    try:
+        if path.is_symlink():
+            raise RuntimeError("Потрібен абсолютний installation root без symlink")
+        path = path.resolve()
+    except OSError as error:
+        raise RuntimeError("Installation root недоступний для перевірки") from error
+    _check_root_location(path)
     return path
 
 

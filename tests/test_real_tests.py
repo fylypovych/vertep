@@ -2401,7 +2401,8 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 
 class TestIssue451:
-    OPEN_IR = {42, 47, 54, 63, 326, 329, 420, 441, 442}
+    # Compared with `gh issue list --state open` on 2026-11-13 (#460).
+    OPEN_IR = {42, 47, 54, 63, 326, 329, 420, 441, 442, 459}
 
     def _client(self, monkeypatch):
         from fastapi import FastAPI
@@ -2419,10 +2420,12 @@ class TestIssue451:
         issues = {item["number"]: item for item in body["issues"]}
         assert set(issues) == self.OPEN_IR
         assert issues[442]["scenarios"] == ["S01", "S04", "S05", "S06"]  # several scenarios, one Issue
-        for number in (63, 326, 329, 420):
+        for number in (63, 326, 329, 420, 459):
             assert issues[number]["coverage"] == "none" and issues[number]["scenarios"] == []
             assert issues[number]["note"]
         assert all(item["coverage"] != "full" for item in issues.values())
+        assert issues[459]["id"] == "ir.0.0.4.59" and "vertep remove" in issues[459]["note"]
+        assert body["issues_snapshot"]["verified_at"] == "2026-11-13"
         for scenario in body["scenarios"]:
             assert scenario["issue_id"] == issues[scenario["rt_issue"]]["id"]
             assert scenario["issue_coverage"] == "partial" and scenario["covers"]
@@ -2448,3 +2451,26 @@ class TestIssue451:
             run.github_report = {"reported_at": "2026-01-01T00:00:00Z", "version": "test-ver", "commit_sha": sha}
             assert GitHubReporter().close_issue(run)["closed"] is False, rt_id
         assert closes == []
+
+
+def test_registry_drift_against_github_is_detected_not_assumed():
+    """#460: equality of two static lists proves nothing; the drift check compares with GitHub."""
+    from types import SimpleNamespace
+    from scripts import qualify_infrastructure as q
+    current = sorted(q.IR_COVERAGE)
+    assert q.open_ir_drift(current) == {"missing": [], "stale": []}
+    assert q.open_ir_drift([*current, 999]) == {"missing": [999], "stale": []}
+    assert q.open_ir_drift([n for n in current if n != 459]) == {"missing": [], "stale": [459]}
+    listing = [{"number": 459, "title": "ir.0.0.4.59 — remove"}, {"number": 460, "title": "i.0.0.4.60 — catalog"},
+               {"number": 35, "title": "ri.0.0.0.35 — legacy alias"}]
+    fake = lambda *a, **k: SimpleNamespace(stdout=json.dumps(listing))
+    assert q.github_open_ir(runner=fake) == [35, 459]
+
+
+def test_check_open_ir_exit_code_reports_drift(monkeypatch, capsys):
+    from scripts import qualify_infrastructure as q
+    monkeypatch.setattr(q, "github_open_ir", lambda: sorted(q.IR_COVERAGE))
+    assert q.main(["--check-open-ir"]) == 0
+    monkeypatch.setattr(q, "github_open_ir", lambda: [*sorted(q.IR_COVERAGE), 777])
+    assert q.main(["--check-open-ir"]) == 1
+    assert '"missing": [777]' in capsys.readouterr().out

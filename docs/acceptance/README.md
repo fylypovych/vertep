@@ -17,3 +17,4 @@
 - [voice-publisher-acceptance.md](voice-publisher-acceptance.md) — Voice / Publisher acceptance — #360, #361.
 - [web-gpu-acceptance.md](web-gpu-acceptance.md) — Приймання #352 та #353.
 - [removal-446.md](removal-446.md) — Реалізація й межі перевірки видалення Vertep.
+- [video-engines-456.md](video-engines-456.md) — Відеодвижки #456: рішення власника видалити ShortGPT (#462) і локальний MoneyPrinterTurbo.

@@ -1789,8 +1789,12 @@ def test_settings_roles_shows_deployment_status():
         expect(page.locator("[data-testid='role-runtime-status-list']")).to_be_visible()
         # The status is shown in Ukrainian, not as the API code.
         expect(page.locator("[data-testid='role-status-core']")).to_have_text("Готовий")
-        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("Працює з проблемами")
-        expect(page.locator("[data-testid='role-status-text']")).to_have_text("Недоступний")
+        # #450: a role not applied on this server is "locally disabled"; the measured state of
+        # remote nodes is shown separately, so it never reads as a local activation.
+        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("Локально вимкнено")
+        gpu_card = page.locator("[data-testid='role-status-gpu']").locator("xpath=..")
+        expect(gpu_card).to_contain_text("Стан віддалених вузлів; локально роль вимкнена: Працює з проблемами")
+        expect(page.locator("[data-testid='role-status-text']")).to_have_text("Локально вимкнено")
         page.locator("nav a[href='/settings?tab=system']").click()
         expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()
         page.go_back()
@@ -2885,6 +2889,8 @@ def test_real_backend_video_engine_refuses_a_runtime_it_cannot_prove():
             page.goto(f"{BASE_URL}/settings?tab=video-engine")
             expect(page.get_by_test_id("video-engine-panel")).to_be_visible(timeout=20000)
             page.select_option("[data-testid='video-engine-select']", "money-printer")
+            # #456: the local runtime is the default; an operator runtime is chosen explicitly.
+            page.check("[data-testid='video-engine-runtime-external']")
             page.fill("[data-testid='video-engine-endpoint']", "http://127.0.0.1:9/")
             page.click("[data-testid='video-engine-apply']")
 
@@ -3069,6 +3075,8 @@ def test_real_backend_video_engine_applies_a_runtime_and_returns_to_native():
                 expect(page.get_by_test_id("video-engine-panel")).to_be_visible(timeout=20000)
 
                 page.select_option("[data-testid='video-engine-select']", "money-printer")
+                # #456: the local runtime is the default; an operator runtime is chosen explicitly.
+                page.check("[data-testid='video-engine-runtime-external']")
                 page.fill("[data-testid='video-engine-endpoint']", endpoint)
                 with page.expect_response(
                         lambda response: "/api/settings/providers/video_engine" in response.url

@@ -5,7 +5,7 @@ import { CommonModule } from '@angular/common';
 import { KeyValuePipe } from '@angular/common';
 import { SecurityApiService } from '../../core/api/security.api';
 import { ToastService } from '../../core/services/toast.service';
-import { SecurityCheck, CertificatesResponse } from '../../core/models';
+import { SecurityCheck, CertificatesResponse, SecurityEffectiveConfig } from '../../core/models';
 import { LoadingStateComponent } from '../../shared/loading-state.component';
 import { ErrorStateComponent } from '../../shared/error-state.component';
 
@@ -55,7 +55,8 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
             <li>LLM: {{ (effective.llm_provider || 'не налаштовано') | t }}</li>
             <li>TTS: {{ (effective.tts_provider || 'не налаштовано') | t }}</li>
             <li>{{ 'Публікація:' | t }} {{ (effective.publisher_mock ? 'тестовий режим' : 'робочий режим') | t }}</li>
-            <li>{{ 'Пароль адміністратора:' | t }} {{ (effective.admin_password_set ? 'встановлено' : 'відсутній') | t }}</li>
+            <li data-testid="security-admin-credentials">{{ 'Обліковий запис адміністратора:' | t }} {{ adminState(effective) | t }}<span *ngIf="adminSources(effective) as sources"> ({{ sources | t }})</span>
+              <span *ngIf="adminHint(effective) as hint" class="block text-xs text-amber-700">{{ hint | t }}</span></li>
             <li>{{ 'Токен вузла:' | t }} {{ (effective.node_api_token_set ? 'встановлено' : 'відсутній') | t }}</li>
             <li>{{ 'Пароль PostgreSQL:' | t }} {{ (effective.postgres_password_set ? 'встановлено' : 'відсутній') | t }}</li>
             <li>{{ 'Ключ сховища секретів:' | t }} {{ (effective.secret_store_passphrase_set ? 'встановлено' : 'відсутній') | t }}</li>
@@ -138,6 +139,27 @@ export class SecuritySectionComponent implements OnInit {
       next: () => { this.toast.show('Сертифікат оновлено', 'success'); this.ngOnInit(); },
       error: (err) => this.toast.show(err.message || 'Помилка оновлення сертифіката', 'error'),
     });
+  }
+
+  /** The administrator account by the sources authentication uses (#457). */
+  adminState(effective: SecurityEffectiveConfig): string {
+    const state = effective.admin_credentials?.state ?? (effective.admin_password_set ? 'configured' : 'missing');
+    return ({ configured: 'налаштовано', invalid: 'пароль не може бути перевірений', missing: 'не налаштовано' } as Record<string, string>)[state];
+  }
+
+  adminSources(effective: SecurityEffectiveConfig): string | null {
+    const names: Record<string, string> = { first_run: 'створено в майстрі першого запуску', user_store: 'обліковий запис користувачів', environment: 'змінна ADMIN_PASSWORD' };
+    const sources = effective.admin_credentials?.sources ?? [];
+    return sources.length ? sources.map(source => names[source] ?? source).join(', ') : null;
+  }
+
+  adminHint(effective: SecurityEffectiveConfig): string | null {
+    const credentials = effective.admin_credentials;
+    if (!credentials) return null;
+    if (credentials.state === 'invalid') return 'Збережений пароль адміністратора пошкоджено або має непідтримуваний формат: вхід цим обліковим записом неможливий.';
+    if (credentials.state === 'missing') return 'Жодного облікового запису адміністратора не знайдено: ні з майстра першого запуску, ні у сховищі користувачів, ні в ADMIN_PASSWORD.';
+    if (credentials.problems.length) return 'Частина записів адміністратора пошкоджена; вхід працює через інше джерело.';
+    return null;
   }
 
   label(status: string): string {

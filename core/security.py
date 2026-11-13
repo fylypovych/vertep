@@ -103,6 +103,62 @@ def _session_token(user: str = "admin", role: str = "admin") -> str:
     return f"{payload}.{signature}"
 
 
+_HASH_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _usable_password_hash(encoded) -> bool:
+    """Whether a stored hash has the shape ``_verify_hash`` can check (never the value)."""
+    if not isinstance(encoded, str):
+        return False
+    parts = encoded.split("$", 3)
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256" or not parts[2]:
+        return False
+    try:
+        iterations = int(parts[1])
+    except ValueError:
+        return False
+    return iterations > 0 and bool(_HASH_DIGEST.fullmatch(parts[3]))
+
+
+def admin_credentials_status() -> dict:
+    """State of the administrator credentials, by the sources ``_authenticate_user`` uses.
+
+    In authentication order: the administrator created by First Run (installation),
+    an admin account in the user store (``users.json`` / ``USERS_JSON``), the
+    ``ADMIN_PASSWORD`` fallback. A source counts only when its password can be
+    verified; an empty ``ADMIN_PASSWORD`` alone is not "no password" (#457). Only
+    the state and source names are reported — never a password or hash.
+    """
+    from .first_run import installation
+
+    sources: list[str] = []
+    problems: list[str] = []
+    try:
+        administrator = installation().get("administrator")
+    except Exception:  # noqa: BLE001 - an unreadable installation is a problem, not success
+        administrator, problems = None, ["first_run_unreadable"]
+    if administrator is not None:
+        if (isinstance(administrator, dict) and str(administrator.get("username") or "").strip()
+                and _usable_password_hash(administrator.get("password_hash"))):
+            sources.append("first_run")
+        else:
+            problems.append("first_run_invalid")
+    try:
+        users = load_all_users()
+    except Exception:  # noqa: BLE001
+        users, problems = {}, [*problems, "user_store_unreadable"]
+    admins = [record for record in users.values()
+              if isinstance(record, dict) and _normalize_role(record.get("role")) == "admin"]
+    if any(_usable_password_hash(record.get("password_hash")) for record in admins):
+        sources.append("user_store")
+    if any(not _usable_password_hash(record.get("password_hash")) for record in admins):
+        problems.append("user_store_invalid")
+    if os.getenv("ADMIN_PASSWORD", ""):
+        sources.append("environment")
+    state = "configured" if sources else ("invalid" if problems else "missing")
+    return {"state": state, "sources": sources, "problems": problems}
+
+
 def _account_role(user: str, stored_role: str) -> str:
     """The configured installation administrator always retains the admin role.
 

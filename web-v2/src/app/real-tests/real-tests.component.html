@@ -114,6 +114,9 @@
         <div class="rounded-lg border border-slate-200 bg-white p-4" data-testid="real-tests-issues">
           <p class="font-medium text-slate-900">{{ 'Відкриті GitHub Issues реального приймання' | t }}</p>
           <p class="mt-1 text-xs text-slate-500">{{ 'Issue — це перелік критеріїв приймання, сценарій — виконувана перевірка частини з них. Issue без сценарію запускати тут нічим.' | t }}</p>
+          @if (issuesSnapshot(); as snapshot) {
+            <p class="mt-1 text-xs text-slate-500" data-testid="real-tests-issues-snapshot">{{ 'Перелік звірено з GitHub вручну:' | t }} {{ snapshot.verified_at }}. {{ 'Це знімок у складі версії, а не жива синхронізація з GitHub.' | t }}</p>
+          }
           <ul class="mt-3 space-y-2 text-sm">
             @for (issue of issues(); track issue.number) {
               <li [attr.data-testid]="'real-tests-issue-' + issue.number">

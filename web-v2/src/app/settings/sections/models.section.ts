@@ -109,7 +109,13 @@ export function pullFailure(detail: string, status?: number): PullFailure {
       <h4 class="text-sm font-semibold mb-2">{{ 'Встановлені моделі (CORE)' | t }}</h4>
       <app-loading-state *ngIf="loading()" />
       <app-error-state *ngIf="error()" [message]="error()!" (retry)="loadModels()" />
-      <p *ngIf="!loading() && !error() && !models().length" class="text-sm text-slate-500" data-testid="installed-empty">{{ 'Моделей ще не встановлено' | t }}</p>
+      <div *ngIf="!loading() && !error() && localStatus() === 'unavailable'" class="p-3 bg-red-50 border border-red-200 rounded-lg text-sm" data-testid="installed-unavailable" role="alert">
+        <p class="text-red-700">{{ 'Не вдалося отримати список моделей локальної Ollama.' | t }}</p>
+        <p *ngIf="localError()" class="text-xs text-slate-500 mt-1">{{ localError()! | t }}</p>
+        <button type="button" class="mt-1 text-sm text-red-700 font-medium underline" (click)="loadModels()" data-testid="installed-retry">{{ 'Повторити' | t }}</button>
+      </div>
+      <p *ngIf="!loading() && !error() && (localStatus() === 'not_configured' || localStatus() === 'not_selected')" class="text-sm text-slate-500" data-testid="installed-not-local">{{ 'Локальна Ollama на CORE не використовується; моделі Text-вузлів показано в розподілі по вузлах.' | t }}</p>
+      <p *ngIf="!loading() && !error() && localStatus() === 'ok' && !models().length" class="text-sm text-slate-500" data-testid="installed-empty">{{ 'Моделей ще не встановлено' | t }}</p>
       <div *ngIf="!loading() && !error()" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       <div *ngFor="let model of models()" class="flex justify-between gap-2 border border-slate-200 rounded-xl p-4" [attr.data-testid]="'model-row-' + model.name">
         <span>{{ model.name }}</span>
@@ -149,6 +155,8 @@ export function pullFailure(detail: string, status?: number): PullFailure {
 export class ModelsSectionComponent implements OnInit, OnDestroy {
   models = signal<ModelInfo[]>([]);
   catalog = signal<ModelCatalogEntry[]>([]);
+  localStatus = signal<string>('ok');
+  localError = signal<string | null>(null);
   catalogError = signal<string | null>(null);
   catalogChoice = signal('');
   pullError = signal<PullFailure | null>(null);
@@ -227,6 +235,8 @@ export class ModelsSectionComponent implements OnInit, OnDestroy {
     this.settings.models().subscribe({
       next: (data) => {
         this.models.set((data['models'] as ModelInfo[]) || []);
+        this.localStatus.set(data.local_status ?? 'ok');
+        this.localError.set(data.local_error ?? null);
         if (data.nodes) this.nodes.set(data.nodes);
         this.loading.set(false);
       },

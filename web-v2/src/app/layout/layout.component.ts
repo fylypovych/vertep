@@ -45,8 +45,8 @@ import { LoadingStateComponent } from '../shared/loading-state.component';
       <app-confirm-dialog />
       <app-post-setup-dialog />
 
-      <!-- Global loader -->
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      <!-- Global loader: only for requests explicitly marked BLOCKING_REQUEST (#458) -->
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" data-testid="global-loading-overlay"
            *ngIf="loadingService.loading()">
         <app-loading-state size="w-16 h-16" />
       </div>

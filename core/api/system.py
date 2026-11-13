@@ -20,6 +20,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from ..certificates import list_certificates
+from ._internal import _internal_api
 from ..deployment_plan import create_plan
 from ..first_run import config_root, installation
 from ..models import (JobStatus, RollingUpdateRequest, CoordinatorUpdateRequest,
@@ -441,17 +442,45 @@ async def system_restart(payload: dict | None = None):
 
 @router.get("/api/system/models")
 async def system_models():
-    """Local Ollama model list plus the per-node placement/readiness view."""
-    try:
-        local = await _internal_api("GET", "OLLAMA_URL", "/api/tags")
-    except Exception:  # noqa: BLE001 - placement stays usable without local Ollama
-        local = None
-    if not isinstance(local, dict):
-        local = {}
-    local.setdefault("models", [])
+    """Local Ollama model list plus the per-node placement/readiness view.
+
+    ``local_status`` tells an empty list apart from a list that could not be read
+    (#461): ``ok`` (the list, possibly empty), ``not_configured`` (no local Ollama on
+    CORE, e.g. an external Text Node serves the models) or ``unavailable`` with a
+    sanitized ``local_error``. Per-node placement stays available in every case.
+    """
     from ..pull_executor import model_placement
-    local["nodes"] = model_placement()
-    return local
+
+    result: dict = {"models": [], "local_status": "ok", "local_error": None}
+    if not os.getenv("OLLAMA_URL", "").strip():
+        result["local_status"] = "not_configured"
+    else:
+        try:
+            local = await _internal_api("GET", "OLLAMA_URL", "/api/tags")
+            models = local.get("models") if isinstance(local, dict) else None
+            if not isinstance(models, list):
+                raise ValueError("unreadable model list")
+            result["models"] = [item for item in models if isinstance(item, dict) and item.get("name")]
+        except HTTPException as error:
+            result.update(local_status="unavailable", local_error=str(error.detail))
+        except (ValueError, TypeError, AttributeError):
+            result.update(local_status="unavailable", local_error="Ollama повернула некоректний список моделей")
+        if result["local_status"] == "unavailable" and not _local_ollama_selected():
+            # CORE without a Text role or Ollama backend has no local Ollama to fail:
+            # its models live on Text nodes (placement below), not an error here.
+            result.update(local_status="not_selected", local_error=None)
+    result["nodes"] = model_placement()
+    return result
+
+
+def _local_ollama_selected() -> bool:
+    """The same selection Health uses: a local Text role or the Ollama backend."""
+    try:
+        from ..health_checks import effective_health_role, health_selection
+        _roles, required = health_selection(effective_health_role())
+        return "ollama" in required
+    except (ValueError, OSError):
+        return True  # unknown selection: report the failure instead of hiding it
 
 
 @router.get("/api/system/models/catalog")

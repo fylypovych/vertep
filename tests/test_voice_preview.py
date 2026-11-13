@@ -214,3 +214,20 @@ class TestIssue455Contract:
         response = _post(client, text="hi", speed=speed)
         assert response.status_code == 422
         assert response.json()["code"] == "speed_is_outside_the_range_of_the_tts_runtime"
+
+
+def test_core_models_api_imports_beside_an_older_worker_package(monkeypatch):
+    """The fleet acceptance mounts this CORE over a published image whose ``worker``
+    predates ``voice_catalog``; CORE must still start (lazy import, #455/#456)."""
+    import importlib
+    import sys
+    import types
+
+    old = types.ModuleType("worker.role_executor")
+    for name in ("delete_text_model", "list_text_models", "synthesize_voice", "list_voices"):
+        setattr(old, name, lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "worker.role_executor", old)
+    monkeypatch.delitem(sys.modules, "core.api.models", raising=False)
+    module = importlib.import_module("core.api.models")
+    assert callable(module.voice_catalog)
+    monkeypatch.delitem(sys.modules, "core.api.models", raising=False)

@@ -259,6 +259,12 @@ def ir_issues() -> list[dict]:
     ]
 
 
+def ir_issues_snapshot() -> dict:
+    """When and how the registry was last compared with the open GitHub Issues (#460)."""
+    from scripts.qualify_infrastructure import IR_COVERAGE_SNAPSHOT
+    return dict(IR_COVERAGE_SNAPSHOT)
+
+
 def issue_fully_covered(number: int | None) -> bool:
     """Only a catalog that verifies every criterion of an Issue may close it automatically."""
     from scripts.qualify_infrastructure import IR_COVERAGE

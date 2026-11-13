@@ -31,6 +31,9 @@ export interface TelegramBotInfo {
 export interface ModelsResponse {
   models: Array<{ name: string; size: number; modified_at: string; digest: string }>;
   nodes?: ModelNodeInfo[];
+  /** ok: the local list (possibly empty); unavailable: it could not be read (#461). */
+  local_status?: 'ok' | 'unavailable' | 'not_configured' | 'not_selected';
+  local_error?: string | null;
 }
 
 export interface ModelNodeInfo {

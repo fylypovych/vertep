@@ -278,10 +278,14 @@ def _integration_summary() -> list[dict]:
 def _effective_config_summary() -> dict:
     """Report effective configuration values (key/cert paths, integrations)."""
     from ..first_run import config_root
+    from ..security import admin_credentials_status
     config_path = config_root()
+    admin = admin_credentials_status()
     return {
         "config_root": str(config_path),
-        "admin_password_set": bool(os.getenv("ADMIN_PASSWORD")),
+        # The effective administrator account, not only the ADMIN_PASSWORD env fallback (#457).
+        "admin_password_set": admin["state"] == "configured",
+        "admin_credentials": admin,
         "node_api_token_set": bool(os.getenv("NODE_API_TOKEN")),
         "postgres_password_set": bool(os.getenv("POSTGRES_PASSWORD")),
         "secret_store_passphrase_set": bool(os.getenv("SECRET_STORE_PASSPHRASE") or os.getenv("SECRET_STORE_PASSPHRASE_FILE")),

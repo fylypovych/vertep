@@ -850,9 +850,17 @@ export interface SecurityIntegrationStatus {
   status: string;
 }
 
+/** The administrator account as authentication uses it (#457); never a password or hash. */
+export interface AdminCredentials {
+  state: 'configured' | 'invalid' | 'missing';
+  sources: Array<'first_run' | 'user_store' | 'environment'>;
+  problems: string[];
+}
+
 export interface SecurityEffectiveConfig {
   config_root?: string;
   admin_password_set?: boolean;
+  admin_credentials?: AdminCredentials;
   node_api_token_set?: boolean;
   postgres_password_set?: boolean;
   secret_store_passphrase_set?: boolean;

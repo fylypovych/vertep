@@ -6,14 +6,23 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from adapters.providers import provider_matrix
-from worker.role_executor import (delete_text_model, list_text_models, synthesize_voice,
-                                  voice_catalog)
+from worker.role_executor import delete_text_model, list_text_models, synthesize_voice
 
 router = APIRouter()
 
 _PREVIEW_TEXT_LIMIT = 500
 _TTS_DISABLED_BACKENDS = {"none", "", "placeholder"}
 DEFAULT_VOICE = "default"
+
+
+def voice_catalog() -> dict:
+    """The TTS runtime /voices document, imported at call time.
+
+    CORE must start even beside a ``worker`` package of another release (the fleet
+    acceptance mounts this CORE over a published image), so the import is lazy.
+    """
+    from worker.role_executor import voice_catalog as fetch
+    return fetch()
 
 
 def _normalized_catalog() -> dict:

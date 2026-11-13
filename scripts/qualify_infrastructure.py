@@ -72,7 +72,28 @@ IR_COVERAGE = {
     442: {"id": "ir.0.0.4.42", "coverage": "partial",
           "note": "S01, S04, S05, S06 перевіряють bootstrap, backup, міграцію та переривання оновлення; "
                   "rolling/canary update, Update Center і MPT recovery (#131) не мають сценарію."},
+    459: {"id": "ir.0.0.4.59", "coverage": "none",
+          "note": "Приймання vertep remove на реальному Ubuntu/systemd, reboot і повторна інсталяція; "
+                  "виконуваного сценарію видалення в каталозі немає."},
 }
+#: The registry is a manual snapshot of the open real-server Issues, not a live GitHub
+#: sync (#460). ``--check-open-ir`` compares it with GitHub and fails on any drift.
+IR_COVERAGE_SNAPSHOT = {"verified_at": "2026-11-13",
+                        "method": "gh issue list --state open: titles ir./ri./rt."}
+
+
+def open_ir_drift(open_numbers) -> dict:
+    """Open real-server Issues missing from the registry, and registry entries no longer open."""
+    open_set = {int(number) for number in open_numbers}
+    return {"missing": sorted(open_set - set(IR_COVERAGE)), "stale": sorted(set(IR_COVERAGE) - open_set)}
+
+
+def github_open_ir(repository: str = "fylypovych/vertep", runner=subprocess.run) -> list[int]:
+    """Open ir/ri/rt Issue numbers as GitHub reports them now (needs an authenticated gh)."""
+    result = runner(["gh", "issue", "list", "-R", repository, "--state", "open", "--limit", "1000",
+                     "--json", "number,title"], capture_output=True, text=True, timeout=120, check=True)
+    return sorted(item["number"] for item in json.loads(result.stdout)
+                  if re.match(r"^(ir|ri|rt)\.", str(item.get("title") or "")))
 VALID_RT_ISSUES = {number for number, item in IR_COVERAGE.items() if item["coverage"] != "none"}
 
 # ---------------------------------------------------------------------------
@@ -482,7 +503,16 @@ def main(argv: list[str] | None = None) -> int:
         "--plan-only", action="store_true",
         help="Дозволити код 0 для статичного PLAN-каталогу (не є доказом).",
     )
+    parser.add_argument(
+        "--check-open-ir", action="store_true",
+        help="Звірити IR_COVERAGE з відкритими ir/ri/rt Issues у GitHub (потрібен gh); код 1 при розбіжності.",
+    )
     args = parser.parse_args(argv)
+
+    if args.check_open_ir:
+        drift = open_ir_drift(github_open_ir())
+        print(json.dumps({"snapshot": IR_COVERAGE_SNAPSHOT, **drift}, ensure_ascii=False))
+        return 1 if drift["missing"] or drift["stale"] else 0
 
     problems = validate_rt_issues()
     if problems:

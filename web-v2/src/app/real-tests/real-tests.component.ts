@@ -16,6 +16,7 @@ export class RealTestsComponent {
   tab = signal<Tab>('scenarios');
   scenarios = signal<RealTestScenario[]>([]);
   issues = signal<RealTestIssueCoverage[]>([]);
+  issuesSnapshot = signal<{ verified_at: string; method: string } | null>(null);
   runs = signal<RealTestRunSummary[]>([]);
   loading = signal(true);
   error = signal<string | null>(null);
@@ -38,6 +39,7 @@ export class RealTestsComponent {
       next: (scenariosResponse) => {
         this.scenarios.set(scenariosResponse.scenarios);
         this.issues.set(scenariosResponse.issues ?? []);
+        this.issuesSnapshot.set(scenariosResponse.issues_snapshot ?? null);
         this.api.listRuns(50).subscribe({
           next: (runsResponse) => {
             this.runs.set(runsResponse.runs);

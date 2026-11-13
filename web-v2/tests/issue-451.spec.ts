@@ -38,6 +38,7 @@ const issues = [
   { number: 63, id: 'ir.0.0.0.63', coverage: 'none', note: 'Перевіряє сам Runner', scenarios: [] },
   { number: 329, id: 'ir.0.0.3.29', coverage: 'none', note: 'Ізоляція LAB', scenarios: [] },
   { number: 442, id: 'ir.0.0.4.42', coverage: 'partial', note: 'S01, S04, S05, S06', scenarios: ['S01', 'S04', 'S05', 'S06'] },
+  { number: 459, id: 'ir.0.0.4.59', coverage: 'none', note: 'Приймання vertep remove на реальному Ubuntu/systemd', scenarios: [] },
 ];
 
 test('Реальні тести: відкриті ir з покриттям, Issue без сценарію і часткове покриття не обіцяє закриття; uk/en', async ({ page }) => {
@@ -46,7 +47,7 @@ test('Реальні тести: відкриті ir з покриттям, Issu
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/session')) return route.fulfill({ json: { authenticated: true, username: 'admin', user: 'admin', role: 'admin' } });
     if (path.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL', reason: null }, version: '0' } });
-    if (path.endsWith('/real-tests/scenarios')) return route.fulfill({ json: { source: 'local_catalog', scenarios: covered, issues, available_checks: [], version: '0' } });
+    if (path.endsWith('/real-tests/scenarios')) return route.fulfill({ json: { source: 'local_catalog', scenarios: covered, issues, issues_snapshot: { verified_at: '2026-11-13', method: 'gh' }, available_checks: [], version: '0' } });
     if (path.endsWith('/real-tests/runs')) return route.fulfill({ json: { runs: [] } });
     return route.fulfill({ json: {} });
   });
@@ -55,7 +56,14 @@ test('Реальні тести: відкриті ir з покриттям, Issu
   await expect(page.getByTestId('real-tests-scenario-issue-S01')).toContainText('Перевіряє критерії: AC1');
   await expect(page.getByTestId('real-tests-scenario-partial-S01')).toContainText('автоматично його не закриває');
   const list = page.getByTestId('real-tests-issues');
-  await expect(list.locator('li')).toHaveCount(4);
+  await expect(list.locator('li')).toHaveCount(5);
+  // #460: the open remove acceptance Issue is visible as uncovered, with no run button or close promise.
+  const remove = page.getByTestId('real-tests-issue-459');
+  await expect(remove).toContainText('ir.0.0.4.59');
+  await expect(remove).toContainText('Немає виконуваного сценарію');
+  await expect(remove.getByRole('button')).toHaveCount(0);
+  await expect(page.getByTestId('real-tests-issues-snapshot')).toContainText('2026-11-13');
+  await expect(page.getByTestId('real-tests-issues-snapshot')).toContainText('не жива синхронізація');
   await expect(page.getByTestId('real-tests-issue-63')).toContainText('Немає виконуваного сценарію');
   await expect(page.getByTestId('real-tests-issue-442')).toContainText('Часткове покриття сценаріями');
   await expect(page.getByTestId('real-tests-issue-442')).toContainText('S01, S04, S05, S06');
