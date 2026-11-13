@@ -246,6 +246,8 @@ def test_actual_settings_mpt_task_restart_rollback_and_native(config_contour):
             page.get_by_test_id("video-engine-info-toggle").click()
             def apply(endpoint):
                 page.get_by_test_id("video-engine-select").select_option("money-printer")
+                # #456: the local runtime is the default; this acceptance drives an external runtime.
+                page.get_by_test_id("video-engine-runtime-external").check()
                 page.get_by_test_id("video-engine-endpoint").fill(endpoint)
                 with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/api/settings/providers/video_engine"), timeout=30000) as saved:
                     page.get_by_test_id("video-engine-apply").click()

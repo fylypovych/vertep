@@ -1,5 +1,6 @@
 // English text by its Ukrainian source; a missing entry shows Ukrainian (#433, #434).
 export const EN: Record<string, string> = {
+  "Сервер не відповів вчасно. Невідомо, чи збережено зміни: введені значення лишилися у формі, можна повторити збереження.": "The server did not answer in time. It is unknown whether the changes were saved: the entered values stay in the form and the save can be repeated.",
   "Не вдалося отримати список моделей локальної Ollama.": "The local Ollama model list could not be retrieved.",
   "Локальна Ollama на CORE не використовується; моделі Text-вузлів показано в розподілі по вузлах.": "CORE does not use a local Ollama; Text node models are shown in the per-node placement.",
   "Ollama повернула некоректний список моделей": "Ollama returned an unreadable model list",

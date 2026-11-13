@@ -72,3 +72,23 @@ def test_password_change_and_restart_keep_the_indicator_consistent(config):
     assert security.admin_credentials_status()["state"] == "configured"
     assert security._authenticate_user("owner", "changed-password-456") == "admin"
     assert security._authenticate_user("owner", "first-run-password-123") is None
+
+
+@pytest.mark.parametrize("damaged", [{"username": "admin"}, {"username": "admin", "password_hash": "md5$abc"}])
+def test_damaged_first_run_with_env_fallback_agrees_with_authentication(config, monkeypatch, damaged):
+    """#463: the status and the actual sign-in agree; a damaged record never crashes it."""
+    _install(config, damaged)
+    monkeypatch.setenv("ADMIN_USER", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "synthetic-fallback-1")
+    status = security.admin_credentials_status()
+    assert status == {"state": "configured", "sources": ["environment"], "problems": ["first_run_invalid"]}
+    assert security._authenticate_user("admin", "synthetic-fallback-1") == "admin"
+    assert security._authenticate_user("admin", "wrong-password-1") is None
+    summary = _effective_config_summary()
+    assert summary["admin_password_set"] is True and "synthetic-fallback-1" not in json.dumps(summary)
+
+
+def test_damaged_first_run_without_fallback_blocks_and_says_so(config):
+    _install(config, {"username": "admin"})
+    assert security.admin_credentials_status()["state"] == "invalid"
+    assert security._authenticate_user("admin", "anything-123") is None

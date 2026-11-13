@@ -41,3 +41,14 @@ test('env-only адміністратор і англійська локаль',
   const row = await open(page, securityCheck({ state: 'configured', sources: ['environment'], problems: [] }, true));
   await expect(row).toContainText('Administrator account: configured (ADMIN_PASSWORD variable)', { timeout: 20000 });
 });
+
+test('#463: пошкоджений запис майстра з робочим ADMIN_PASSWORD — налаштовано через fallback і з попередженням; uk/en', async ({ page }) => {
+  const body = securityCheck({ state: 'configured', sources: ['environment'], problems: ['first_run_invalid'] }, true);
+  let row = await open(page, body);
+  await expect(row).toContainText('налаштовано (змінна ADMIN_PASSWORD)', { timeout: 20000 });
+  await expect(row).toContainText('Частина записів адміністратора пошкоджена; вхід працює через інше джерело.');
+  await page.evaluate(() => localStorage.setItem('vertep_language', 'en'));
+  await page.reload();
+  row = page.getByTestId('security-admin-credentials');
+  await expect(row).toContainText('Some administrator records are damaged; sign-in works through another source.', { timeout: 20000 });
+});

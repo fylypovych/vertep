@@ -335,7 +335,10 @@ def session_response(identity: tuple[str, str] | None) -> dict:
 
 def _authenticate_user(user: str, password: str) -> str | None:
     configured = configured_user()
-    if configured and _constant_time_equals(user, configured[0]) and _verify_hash(password, configured[1]["password_hash"]):
+    # A damaged First Run record (no or unusable hash) cannot verify a password; it must
+    # not crash authentication and hide the configured fallbacks below (#463).
+    if (configured and _constant_time_equals(user, configured[0])
+            and _verify_hash(password, str(configured[1].get("password_hash") or ""))):
         return "admin"
     users = _load_all_users()
     record = users.get(user)

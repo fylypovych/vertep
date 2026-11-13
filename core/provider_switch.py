@@ -579,7 +579,10 @@ def _verify_effective_engine(slot: str, requested: str) -> dict[str, Any]:
             f"Engine '{requested}' is not effective; "
             f"readiness: {config.get('reason') or 'unknown'}",
         )
-    if not config["ready"]:
+    if not config["ready"] and requested != "native":
+        # Native is the fallback the operator returns to; its readiness (FFmpeg in CORE,
+        # #456) is reported in the read model but never traps the selection on an
+        # external engine (#463 follow-up of the 0.0.3.68 acceptance run).
         raise ProviderSwitchError(
             409,
             f"Engine '{requested}' runtime is not ready: "

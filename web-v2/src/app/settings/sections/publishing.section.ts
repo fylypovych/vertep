@@ -1,11 +1,15 @@
 import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, computed, signal } from '@angular/core';
+import { TimeoutError, timeout } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { PolicyService } from '../../core/services/policy.service';
 import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
+
+/** How long an explicit save may wait for the server before the form is released (#464). */
+export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
 
 /** Settings → Публікація: channel parameters and platform credentials, grouped by platform. */
 @Component({
@@ -15,7 +19,7 @@ import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-publishing">
     <h3 class="text-lg font-semibold mb-1">{{ 'Публікація' | t }}</h3>
     <p class="text-sm text-slate-500 mb-4">{{ 'Параметри каналів і облікові дані платформ для публікації відео.' | t }}</p>
-    <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="publishing-error">{{ error() }}</div>
+    <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="publishing-error">{{ error()! | t }}</div>
     <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-public-url">{{ 'Публічна адреса Vertep' | t }}</label>
     <input id="publishing-public-url" data-testid="publishing-public-url" [ngModel]="publicUrl()" (ngModelChange)="publicUrl.set($event)" [disabled]="!canEdit()"
            placeholder="https://vertep.example.com" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
@@ -25,7 +29,7 @@ import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
            placeholder="{{ '@назва_каналу' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
     <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Бот має бути адміністратором цього каналу.' | t }}</p>
     <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" data-testid="publishing-save"
-            [disabled]="!canEdit() || saving()" (click)="save()">{{ 'Зберегти' | t }}</button>
+            [disabled]="!canEdit() || saving()" (click)="save()">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
     <h4 class="text-base font-semibold mt-6 mb-1">{{ 'Облікові дані платформ' | t }}</h4>
     <p class="text-sm text-slate-500 mb-3">{{ 'Значення зберігаються в захищеному сховищі й після збереження не показуються.' | t }}</p>
     <app-secret-groups [groups]="platformGroups" data-testid="publishing-credentials" />
@@ -61,16 +65,26 @@ export class PublishingSectionComponent implements OnInit {
   }
 
   save(): void {
+    if (this.saving()) return;
     this.saving.set(true);
     this.error.set(null);
-    this.settingsApi.savePublishingSettings({ public_url: this.publicUrl(), telegram_channel_id: this.telegramChannel() }).subscribe({
+    this.settingsApi.savePublishingSettings({ public_url: this.publicUrl(), telegram_channel_id: this.telegramChannel() })
+      // A hung save ends with a local, honest state instead of an endless "saving" (#464).
+      // timeout() unsubscribes, which cancels the request: a late answer cannot replace the form.
+      .pipe(timeout(PUBLISHING_SAVE_TIMEOUT_MS)).subscribe({
       next: (value) => {
         this.saving.set(false);
         this.publicUrl.set(value.public_url);
         this.telegramChannel.set(value.telegram_channel_id);
         this.toast.show('Налаштування публікації збережено', 'success');
       },
-      error: (err) => { this.saving.set(false); this.error.set(err.message); },
+      error: (err) => {
+        this.saving.set(false);
+        // The server may or may not have stored the values: say so, keep the draft, allow a retry.
+        this.error.set(err instanceof TimeoutError
+          ? 'Сервер не відповів вчасно. Невідомо, чи збережено зміни: введені значення лишилися у формі, можна повторити збереження.'
+          : err.message);
+      },
     });
   }
 }

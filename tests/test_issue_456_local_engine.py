@@ -162,10 +162,25 @@ def test_core_worker_self_test_proves_the_local_runtime(monkeypatch):
 def test_native_ready_means_ffmpeg_in_core_and_nothing_more(monkeypatch):
     from adapters.providers import NativeVertepEngine
     monkeypatch.setattr(engine_config, "native_assembly_available", lambda: False)
-    report = engine_config.verify_effective_engine(engine=NativeVertepEngine())
+    report = engine_config.effective_engine_config(engine=NativeVertepEngine())
     assert report["ready"] is False and report["reason"] == "ffmpeg_missing"
-    monkeypatch.setattr(engine_config, "native_assembly_available", lambda: True)
+    # The Worker's activation report for Native does not depend on its own FFmpeg.
     assert engine_config.verify_effective_engine(engine=NativeVertepEngine())["ready"] is True
+    monkeypatch.setattr(engine_config, "native_assembly_available", lambda: True)
+    assert engine_config.effective_engine_config(engine=NativeVertepEngine())["ready"] is True
+
+
+def test_return_to_native_is_never_trapped_by_its_readiness(monkeypatch, tmp_path):
+    """Native is the fallback: missing FFmpeg is reported, not a refusal to switch back."""
+    from core import provider_switch
+    monkeypatch.setattr(engine_config, "native_assembly_available", lambda: False)
+    monkeypatch.setattr(engine_config, "effective_engine_config", lambda probe=False: {
+        "effective": "native", "agree": True, "ready": False, "reason": "ffmpeg_missing"})
+    assert provider_switch._verify_effective_engine("video_engine", "native")["effective_engine"]["reason"] == "ffmpeg_missing"
+    monkeypatch.setattr(engine_config, "effective_engine_config", lambda probe=False: {
+        "effective": "money-printer", "agree": True, "ready": False, "reason": "upstream_unreachable"})
+    with pytest.raises(provider_switch.ProviderSwitchError):
+        provider_switch._verify_effective_engine("video_engine", "money-printer")
 
 
 def test_shortgpt_is_gone_from_code_configuration_and_ui():
