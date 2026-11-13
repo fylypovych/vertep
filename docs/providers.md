@@ -30,6 +30,10 @@
 | VideoEngine | `native` | `money-printer` | `VERTEP_VIDEO_ENGINE`, `MONEY_PRINTER_URL`, `MONEY_PRINTER_TOKEN` |
 | Publisher | `vertep-official` | Telegram + офіційні API YouTube/TikTok/FB/IG/Threads | `PUBLISHER_MOCK` / credentials платформ |
 
+## LLM у Text Worker
+
+Task `script` виконується на Worker через `providers.llm().generate_script()` (`DefaultLLMProvider` → багатоступінчастий `ScriptAgent` → `adapters/llm_clients.py:get_llm_client()`). Backend визначається `VERTEP_LLM_PROVIDER` на момент виконання, тож перемикання, доставлене heartbeat-ом, діє для наступного task. Протокол Ollama (`/api/generate`, `OLLAMA_SCRIPT_MODEL` → `OLLAMA_MODEL`) чи OpenAI-сумісного backend (`/chat/completions`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, ключ `OPENAI_API_KEY`/`LLM_API_KEY`) залишається в адаптері. Непідтримуваний backend або OpenAI-сумісний backend без ключа завершує task явною помилкою `LLMBackendError` без переходу на Ollama чи demo; ключ не потрапляє в artifact чи повідомлення помилки.
+
 ## Ізольований runtime MoneyPrinterTurbo
 
 `money-printer` — єдиний зовнішній VideoEngine, який має власний pinned-контейнер:

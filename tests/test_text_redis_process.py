@@ -23,6 +23,7 @@ import redis
 
 from tests.acceptance_provenance import acceptance_provenance
 from tests import media_harness as harness
+from tests.script_llm_stub import staged_response
 from worker.role_executor import execute_role_task
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,7 +72,7 @@ def contour(tmp_path, monkeypatch, request):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(body)
-            script = script_response
+            script = staged_response(body.get("prompt", ""), script_response)
             data = json.dumps({"response": json.dumps(script)}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

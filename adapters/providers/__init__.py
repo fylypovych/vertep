@@ -40,9 +40,15 @@ from .video_engines import MoneyPrinterEngine, NativeVertepEngine, UnsupportedVi
 
 
 class DefaultLLMProvider(LLMProvider):
-    """Default LLM provider backed by ScriptAgent."""
+    """Default LLM provider: staged ``ScriptAgent`` over the selected backend.
 
-    def __init__(self, script_agent: Any) -> None:
+    The backend (Ollama / OpenAI-compatible) is resolved per call from
+    ``VERTEP_LLM_PROVIDER`` through ``adapters.llm_clients``, so a provider
+    switch delivered to the Worker applies to the next script task.  An
+    unsupported or unusable backend raises ``LLMBackendError``.
+    """
+
+    def __init__(self, script_agent: Any = None) -> None:
         self._agent = script_agent
 
     def generate_script(
@@ -50,8 +56,19 @@ class DefaultLLMProvider(LLMProvider):
         topic: str,
         system_prompt: str = "",
         character: dict | None = None,
+        *,
+        revision: str | None = None,
+        brief: str | None = None,
+        timeout: float | None = None,
+        post: Any = None,
     ) -> dict:
-        return self._agent.generate_script(topic, system_prompt, character)
+        from adapters.llm_clients import get_llm_client
+        from core.script_agent import ScriptAgent
+
+        client = get_llm_client(purpose="script", timeout=timeout, post=post)
+        agent = ScriptAgent(lambda prompt: client.complete(prompt, format_json=True))
+        return agent.generate_script(topic, system_prompt, character,
+                                     revision=revision, brief=brief)
 
 
 class DefaultImageProvider(ImageProvider):
@@ -298,15 +315,12 @@ def _create_default_registry() -> ProviderRegistry:
     """Build a registry with the default backend implementations."""
     registry = ProviderRegistry()
 
-    # LLM — wrap ScriptAgent (the actual pipeline LLM orchestrator).
-    # Lazy import to avoid circular dependency with core package.
-    from core.script_agent import ScriptAgent
-
     from adapters.comfyui import ComfyUIAdapter
     from adapters.ffmpeg import FFmpegAdapter
     from adapters.tts import TTSAdapter
 
-    registry.register("llm", DefaultLLMProvider(ScriptAgent()))
+    # LLM — staged ScriptAgent over the configured backend (resolved per call).
+    registry.register("llm", DefaultLLMProvider())
 
     comfyui = ComfyUIAdapter()
     registry.register("compute", _make_compute())

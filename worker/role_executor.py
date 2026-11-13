@@ -110,39 +110,29 @@ def execute_text(task: dict) -> list[dict]:
 
 
 def execute_script(task: dict) -> list[dict]:
-    """Generate a video script on the Text Worker via Ollama.
+    """Generate a video script on the Text Worker: Structure -> Scenes -> Assembly.
 
-    Mirrors the contract of ``core.script_agent.ScriptAgent.generate_script``
-    but runs on the worker so CORE never performs LLM inference.  In
-    ``DEMO_MODE`` a deterministic demo script is returned without any network
-    call (used by local fallback / tests).
+    The task runs through the formal Provider Layer: ``providers.llm()``
+    executes the staged ``core.script_agent.ScriptAgent`` over the backend
+    selected by ``VERTEP_LLM_PROVIDER`` (Ollama / OpenAI-compatible); the
+    backend protocol stays in ``adapters.llm_clients``.  The Worker supplies
+    its traced HTTP transport, so CORE never performs inference.  Every stage
+    is a separate request bounded by the script timeout; an invalid scene is
+    regenerated on its own and errors (including an unsupported backend)
+    propagate so CORE applies its retries.  In ``DEMO_MODE`` a deterministic
+    demo script is returned without any network call (used by local fallback /
+    tests).
     """
-    from core.script_prompt import build_script_prompt
-    from core.script_schema import normalize_script
-
     if os.getenv("DEMO_MODE", "false").lower() == "true":
         from core.script_agent import ScriptAgent
         script = ScriptAgent().generate_script(task["topic"], task.get("system_prompt", ""), task.get("character"))
         return [_artifact("script.json", "script", json.dumps(script, ensure_ascii=False).encode("utf-8"))]
 
-    endpoint = f"{os.getenv('OLLAMA_URL', 'http://ollama:11434')}/api/generate"
-    model = os.getenv("OLLAMA_SCRIPT_MODEL") or os.getenv("OLLAMA_MODEL", "llama3.2")
-
-    # Build prompt with revision if provided
-    base_prompt = task.get("prompt") or build_script_prompt(task["topic"], task.get("system_prompt", ""), task.get("character"))
-    revision = task.get("revision")
-    if revision:
-        base_prompt = f"{base_prompt}\n\nREVISION INSTRUCTION: {revision}\n\nApply the above revision instruction to the script. Return the complete revised script as JSON."
-
-    payload = {"model": model, "prompt": base_prompt, "stream": False, "format": "json"}
     timeout = int(task.get("timeout", os.getenv("OLLAMA_SCRIPT_TIMEOUT", "300")))
-    response = migration_post(httpx, endpoint, json=payload, timeout=timeout)
-    response.raise_for_status()
-    raw = response.json().get("response", "")
-    if not raw:
-        raise RuntimeError("Ollama returned empty response for script generation")
-    data = json.loads(raw)
-    script = normalize_script(data, task["topic"])
+    script = providers.llm().generate_script(
+        task["topic"], task.get("system_prompt", ""), task.get("character"),
+        revision=task.get("revision"), brief=task.get("prompt"), timeout=timeout,
+        post=lambda url, **kwargs: migration_post(httpx, url, **kwargs))
     return [_artifact("script.json", "script", json.dumps(script, ensure_ascii=False).encode("utf-8"))]
 
 

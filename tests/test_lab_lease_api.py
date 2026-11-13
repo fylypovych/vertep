@@ -195,7 +195,10 @@ def test_role_service_runs_report_tasks_only_and_needs_a_lease(monkeypatch, tmp_
     answer = service.post("/invoke", headers=headers, json={
         "task": {"kind": "audit"}, "model": "ollama:m", "role": "reviewer",
         "resource_lease": {"lease_id": "l"}, "workspace": {"root": str(tmp_path)}}).json()
-    assert answer == {"status": "ok", "tokens_used": 5, "result": {"summary": "звіт"}}
+    assert answer["status"] == "ok" and answer["tokens_used"] == 5
+    assert answer["result"]["summary"] == "звіт"
+    assert answer["result"]["report_only"] is True
+    assert answer["result"]["code_examined"] is False
 
 
 def test_role_service_never_reads_outside_the_workspace(tmp_path):

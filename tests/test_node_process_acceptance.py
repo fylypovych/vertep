@@ -251,12 +251,14 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
             self.send_response(200); self.end_headers(); self.wfile.write(body)
         def do_POST(self):
             calls.append(("POST", self.path))
-            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             if self.path == "/gpu":
                 payload = image
             elif self.path == "/api/generate":
                 script = {"title": "Measured runtime", "description": "", "hashtags": [],
                     "scenes": [{"prompt": "Measured scene", "video_prompt": "Measured video", "voiceover": "", "duration": 4}]}
+                from tests.script_llm_stub import staged_response
+                script = staged_response(json.loads(body or b"{}").get("prompt", ""), script)
                 payload = json.dumps({"response": json.dumps(script)}).encode()
             elif self.path == "/synthesize":
                 import io, wave

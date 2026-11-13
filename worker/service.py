@@ -269,6 +269,9 @@ def _executor_resolves(key: str, value: str) -> bool:
         return True
     from adapters.providers import providers as registry
 
+    if key == "VERTEP_LLM_PROVIDER":
+        from adapters.llm_clients import SUPPORTED_BACKENDS
+        return expected in SUPPORTED_BACKENDS
     if key == "VERTEP_VIDEO_ENGINE":
         engine = registry.video_engine()
         if str(getattr(engine, "engine_id", "") or "").strip().lower() != expected:

@@ -196,6 +196,7 @@ def test_script_agent_uses_backend_agnostic_client(monkeypatch):
                     "description": "опис",
                     "hashtags": ["#v"],
                     "voiceover": "закадровий",
+                    "scenes_plan": [{"summary": "перша сцена", "estimated_duration": 4}],
                 })
             return json.dumps({
                 "prompt": "картинка",

@@ -9,7 +9,7 @@ LAB працює окремо від production CORE: policy gate, audit trail, 
 - Backend і CLI — `lab/api.py`, `lab/cli.py`; однакова policy та audit trail.
 - Панель — `deploy/lab/web/app/src/`, складання й запуск — [Lab Web](../deploy/lab/web/README.md).
 - Compose — `deploy/lab/docker-compose.web.yml`; планувальник — `installer/vertep-lab.service` / `.timer`.
-- Вбудований `lab-executor` виконує завдання аудиту, перевірки й звіту; він не змінює код і не запускає тести. Інші завдання отримують BLOCKED.
+- Вбудований `lab-executor` виконує завдання аудиту, перевірки й звіту; він не змінює код і не запускає тести. Інші завдання отримують BLOCKED. Вміст файлів читається лише за явними `paths` у межах робочої копії й ліміту контексту; відповідь містить `report_only`, `code_examined`, `files_read` і `limitations` (недоступна копія, лише перелік файлів, відсутні/відхилені шляхи, обрізання). Звіт моделі й `status: ok` не є доказом PASS критеріїв.
 - Авторизація owner-операцій — `LAB_OWNER_TOKEN` / `LAB_OWNER_IDENTITY`; CLI приймає `--owner-token`, API — `X-Lab-Owner-Token`. Grant не замінює дозвіл на production, push або release.
 - Для GitHub потрібні налаштовані транспорт, репозиторій і дозвіл на конкретну дію. Dry-run не доводить зміни в GitHub.
 

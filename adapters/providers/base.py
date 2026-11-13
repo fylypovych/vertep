@@ -13,7 +13,12 @@ from pathlib import Path
 
 
 class LLMProvider(ABC):
-    """LLM-based text / script generation."""
+    """LLM-based text / script generation.
+
+    ``revision`` and ``brief`` refine the script request; ``timeout`` bounds
+    each backend request and ``post`` lets the executing Worker supply its
+    traced HTTP transport.  The backend protocol stays in the adapter.
+    """
 
     @abstractmethod
     def generate_script(
@@ -21,6 +26,11 @@ class LLMProvider(ABC):
         topic: str,
         system_prompt: str = "",
         character: dict | None = None,
+        *,
+        revision: str | None = None,
+        brief: str | None = None,
+        timeout: float | None = None,
+        post=None,
     ) -> dict:
         ...
 
