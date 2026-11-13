@@ -19,6 +19,7 @@ from core.models import WorkerHeartbeat
 from core.telegram import handlers
 from core.telegram_store import is_allowed_chat
 from services import backup_service
+from tests.telegram_patching import patch_telegram
 
 
 def available_voice(worker):
@@ -38,9 +39,9 @@ def test_empty_allowlist_admits_only_admins(monkeypatch):
 def test_control_commands_require_admin(monkeypatch):
     _allow(monkeypatch, allowed="2", admins="1")
     sent, cancelled = [], []
-    monkeypatch.setattr(handlers, "TelegramAdapter",
+    patch_telegram(monkeypatch, "TelegramAdapter",
                         lambda: SimpleNamespace(send_message=lambda chat, text: sent.append(text)))
-    monkeypatch.setattr(handlers, "cancel_job", cancelled.append)
+    patch_telegram(monkeypatch, "cancel_job", cancelled.append)
     handlers.store.jobs["j"] = SimpleNamespace(job_id="j", status=SimpleNamespace(value="NEW"))
     try:
         handlers._handle_telegram_message("2", "s", "/cancel j", {})
@@ -54,7 +55,7 @@ def test_control_commands_require_admin(monkeypatch):
 def test_callback_from_unlisted_chat_is_refused(monkeypatch):
     _allow(monkeypatch, allowed="2")
     answers = []
-    monkeypatch.setattr(handlers, "TelegramAdapter",
+    patch_telegram(monkeypatch, "TelegramAdapter",
                         lambda: SimpleNamespace(answer_callback=lambda cid, text: answers.append(text)))
     handlers._handle_telegram_callback({"id": "c", "data": "vid_ok:x:1", "message": {"chat": {"id": 9}}})
     assert answers == ["Доступ заборонено."]

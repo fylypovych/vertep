@@ -13,6 +13,7 @@ from core.telegram import handlers
 from publishers import FakeTransport
 from publishers.base import fetch_permalink
 from publishers.tiktok import TikTokPublisher
+from tests.telegram_patching import patch_telegram
 
 
 def test_watchdog_uses_a_thread_and_prepares_a_job_once(monkeypatch):
@@ -89,21 +90,21 @@ def test_production_mock_flag_does_not_fake_a_post(monkeypatch, tmp_path):
 
 
 def _status_line(monkeypatch):
-    monkeypatch.setattr(handlers, "_call_core_api", lambda *a, **k: None)
-    monkeypatch.setattr(handlers, "_format_last_backup", lambda: "")
+    patch_telegram(monkeypatch, "_call_core_api", lambda *a, **k: None)
+    patch_telegram(monkeypatch, "_format_last_backup", lambda: "")
     return next(line for line in handlers._system_status_text().splitlines() if line.startswith("Dispatcher"))
 
 
 def test_dispatcher_indicator_reports_the_service(monkeypatch):
     monkeypatch.setenv("DISPATCHER_URL", "http://dispatcher:8094")
-    monkeypatch.setattr(handlers.httpx, "get", lambda url, timeout: httpx.Response(
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: httpx.Response(
         200, request=httpx.Request("GET", url)))
     assert _status_line(monkeypatch) == "Dispatcher: running"
 
     def down(url, timeout):
         raise httpx.ConnectError("down")
 
-    monkeypatch.setattr(handlers.httpx, "get", down)
+    monkeypatch.setattr(httpx, "get", down)
     assert _status_line(monkeypatch) == "Dispatcher: error"
 
 

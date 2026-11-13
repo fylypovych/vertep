@@ -12,6 +12,7 @@ import time
 import httpx
 import pytest
 
+import worker.model_commands as model_commands
 import worker.service as worker_service
 from worker.service import (
     _MODEL_CATALOG_CACHE,
@@ -178,7 +179,7 @@ class TestHandleModelCommand:
     def test_ignores_non_dict_and_bad_operation_id(self, monkeypatch):
         spawned = []
         monkeypatch.setattr(
-            worker_service, "_run_model_command",
+            model_commands, "_run_model_command",
             lambda *a, **k: spawned.append(a))
         handle_model_command(None, "http://core", "node", {})
         handle_model_command("nope", "http://core", "node", {})
@@ -196,7 +197,7 @@ class TestHandleModelCommand:
             spawned.append(1)
             gate.wait(2)
 
-        monkeypatch.setattr(worker_service, "_run_model_command", _stub)
+        monkeypatch.setattr(model_commands, "_run_model_command", _stub)
         command = {"operation_id": _op_id(), "action": "pull", "model": "m"}
         handle_model_command(command, "http://core", "node", {})
         handle_model_command(command, "http://core", "node", {})
@@ -212,7 +213,7 @@ class TestHandleModelCommand:
             spawned.append(1)
             gate.wait(2)
 
-        monkeypatch.setattr(worker_service, "_run_model_command", _stub)
+        monkeypatch.setattr(model_commands, "_run_model_command", _stub)
         command = {"operation_id": _op_id("b"), "action": "pull", "model": "m"}
         handle_model_command(command, "http://core", "node", {})
         with _MODEL_COMMANDS_LOCK:
@@ -229,7 +230,7 @@ class TestHandleModelCommand:
     def test_prunes_dead_entries_over_limit(self, monkeypatch):
         spawned = []
         monkeypatch.setattr(
-            worker_service, "_run_model_command",
+            model_commands, "_run_model_command",
             lambda *a, **k: spawned.append(1))
         for i in range(_MODEL_COMMAND_LIMIT + 6):
             thread = threading.Thread(target=lambda: None)
@@ -265,7 +266,7 @@ class TestRunModelCommand:
                 return results.pop(0)
             return False
 
-        monkeypatch.setattr(worker_service, "_report_model_progress", _report)
+        monkeypatch.setattr(model_commands, "_report_model_progress", _report)
         return calls
 
     def test_cancel_action_reports_cancelled(self, monkeypatch):

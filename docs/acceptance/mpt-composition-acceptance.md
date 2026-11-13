@@ -94,7 +94,7 @@ engines, fake acceptance або заміна погодженого pinned ко�
 | ID | Реалізація / test | Expected / actual |
 | --- | --- | --- |
 | AC1 | `core/api/auth.py`, `events.py`, `telegram.py`, `status.py`, `core/lifecycle.py`, `core/web_ui.py`; `test_all_method_path_contracts_match_the_before_extraction_snapshot` | Ті самі маршрути/session/state; snapshot збігається |
-| AC2 | `core/telegram/handlers.py`, `core/api/_internal.py`; migrated private callers | Немає `core.app` imports, `sys.modules`, runtime attribute lookup або root re-export shims; dispatch table/wait timeouts збережено |
+| AC2 | `core/telegram/` (`handlers`, `common`, `status`, `system_ops`, `job_callbacks`), `core/api/_internal.py`; migrated private callers | Немає `core.app` imports, `sys.modules`, runtime attribute lookup або root re-export shims; dispatch table/wait timeouts збережено |
 | AC3 | `core/app.py`, `tests/test_app_structure.py` | Composition only, ≤300 lines, відсутні endpoint/business definitions, одна дозволена top-level assignment `app = FastAPI(...)` |
 | AC4 | Generation gate, Telegram durable tests, full suite, compileall/diff-check | Не додаються routes/roles/UI; повний результат записується після завершення перевірок |
 

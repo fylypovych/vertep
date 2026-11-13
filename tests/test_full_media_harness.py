@@ -180,7 +180,7 @@ class TestFirstRunAcceptance:
             "answer_callback": lambda self, callback_id, text=None, **kw: answers.append(text),
             "send_message": lambda self, chat_id, text, markup=None: None,
         })()
-        with patch.object(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter):
+        with patch("core.telegram.job_callbacks.TelegramAdapter", lambda: adapter):
             _owner_core_telegram_handlers._handle_video_callback(
                 {"id": "cb-foreign", "message": {"chat": {"id": "999"}}},
                 "999", "vid_ok", f"{job_id}:1")

@@ -24,6 +24,7 @@ from unittest.mock import patch
 from core.models import JobStatus
 from core.pipeline import JobStore, finalize_job
 from core.repository import FileRepository
+from tests.telegram_patching import patch_telegram
 
 
 def _write_file(path: Path, content: bytes = b"fake video") -> Path:
@@ -120,9 +121,7 @@ class TestSharedRegenerationAndApi:
         root, store, job = _produce_v1(tmp_path)
         original_post = jobs_mod.store
         jobs_mod.store = store
-        monkeypatch.setattr(
-            "core.telegram.handlers._finalize_video_regenerate",
-            lambda j: _write_file(store.root / j.job_id / "final" / "video-v2.mp4") or j)
+        patch_telegram(monkeypatch, "_finalize_video_regenerate", lambda j: _write_file(store.root / j.job_id / "final" / "video-v2.mp4") or j)
         try:
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.post(f"/api/jobs/{job.job_id}/video/regenerate",

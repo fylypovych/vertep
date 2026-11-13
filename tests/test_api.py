@@ -60,6 +60,7 @@ def _mock_storyboard_queue(self, job, revision=None):
 
 
 import pytest
+from tests.telegram_patching import patch_telegram
 
 
 @pytest.fixture(autouse=True)
@@ -1117,7 +1118,7 @@ def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tm
     """
     module = importlib.import_module('core.app')
     adapter = Mock()
-    monkeypatch.setattr(_owner_core_telegram_handlers, 'TelegramAdapter', lambda: adapter)
+    patch_telegram(monkeypatch, 'TelegramAdapter', lambda: adapter)
     monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
     monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "brands"))
     (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
@@ -1132,11 +1133,11 @@ def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tm
     (workflows_root / "image" / "demo.json").write_text(json.dumps({"nodes": []}), encoding="utf-8")
     monkeypatch.setenv("WORKFLOWS_ROOT", str(workflows_root))
     pending = {'audit-chat': {'pending': {'text': 'topic', 'source_id': 's1', 'message': {'chat': {'id': '42'}}}, 'brand_id': 'brand01'}}
-    monkeypatch.setattr(_owner_core_telegram_handlers, '_telegram_pending_character', pending)
-    monkeypatch.setattr(_owner_core_telegram_handlers, 'load_character', lambda *a, **kw: None)
+    patch_telegram(monkeypatch, '_telegram_pending_character', pending)
+    patch_telegram(monkeypatch, 'load_character', lambda *a, **kw: None)
     job = SimpleNamespace(job_id='job-123', model_dump=lambda **kw: {'job_id': 'job-123'})
-    monkeypatch.setattr(_owner_core_telegram_handlers, '_create_job_from_telegram', Mock(return_value=job))
-    monkeypatch.setattr(_owner_core_telegram_handlers, '_queue_storyboard', Mock())
+    patch_telegram(monkeypatch, '_create_job_from_telegram', Mock(return_value=job))
+    patch_telegram(monkeypatch, '_queue_storyboard', Mock())
     result = _owner_core_telegram_handlers._handle_character_selection({'id': 'cb'}, 'audit-chat', 'test-char')
     assert result.get('job_id') == 'job-123'
     client = TestClient(app)
@@ -1454,7 +1455,7 @@ def test_system_test_full_uses_job_scenes(monkeypatch):
     _cm = _Mod("core.certificates")
     _cm.list_certificates = lambda: []
     sys.modules["core.certificates"] = _cm
-    monkeypatch.setattr("core.telegram.handlers._call_core_api", lambda *a, **kw: {})
+    patch_telegram(monkeypatch, "_call_core_api", lambda *a, **kw: {})
     try:
         resp = _tc.post("/api/system/test", json={"scope": "full"})
         assert resp.status_code == 200
@@ -1743,7 +1744,7 @@ def test_vid_ok_rejects_wrong_chat(monkeypatch):
     store.jobs["vid-1"] = job
     adapter = Mock()
     adapter.answer_callback = Mock(return_value={"status": "ok"})
-    monkeypatch.setattr("core.telegram.handlers.TelegramAdapter", lambda: adapter)
+    patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
     cb = {"id": "cb-vid", "data": "vid_ok:vid-1", "message": {"chat": {"id": "222"}}}
     _handle_video_callback(cb, "222", "vid_ok", "vid-1")
     text = adapter.answer_callback.call_args[0][1]
@@ -1762,7 +1763,7 @@ def test_vid_ok_accepts_correct_chat(monkeypatch):
     store.jobs["vid-2"] = job
     adapter = Mock()
     adapter.answer_callback = Mock(return_value={"status": "ok"})
-    monkeypatch.setattr("core.telegram.handlers.TelegramAdapter", lambda: adapter)
+    patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
     import core.pipeline as _pipe
     monkeypatch.setattr(_pipe, "approve_video", lambda store, job, actor, **kw: job)
     cb = {"id": "cb-vid-ok", "data": "vid_ok:vid-2", "message": {"chat": {"id": "111"}}}
@@ -1784,7 +1785,7 @@ def test_vid_ok_accepts_source_with_message_id(monkeypatch):
     store.jobs["vid-3"] = job
     adapter = Mock()
     adapter.answer_callback = Mock(return_value={"status": "ok"})
-    monkeypatch.setattr("core.telegram.handlers.TelegramAdapter", lambda: adapter)
+    patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
     import core.pipeline as _pipe
     monkeypatch.setattr(_pipe, "approve_video", lambda store, job, actor, **kw: job)
     cb = {"id": "cb-vid-ok-message", "data": "vid_ok:vid-3", "message": {"chat": {"id": "111"}}}
@@ -2056,7 +2057,7 @@ def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypa
     adapter = Mock()
     adapter.configured.return_value = True
     adapter.get_me.return_value = {"ok": True, "result": {"username": "testbot"}}
-    monkeypatch.setattr(_owner_core_telegram_handlers, 'TelegramAdapter', lambda: adapter)
+    patch_telegram(monkeypatch, 'TelegramAdapter', lambda: adapter)
 
     # Enable webhook
     monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "true")

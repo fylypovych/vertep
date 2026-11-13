@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from tests.acceptance_provenance import acceptance_provenance
+from tests.telegram_patching import patch_telegram
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -452,7 +453,7 @@ def test_telegram_restore_caller_reports_refusals_and_retry_through_core(
     monkeypatch.setenv("INTERNAL_API_KEY", internal_key)
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "telegram-operations"))
     _TelegramAnswers.answers = []
-    monkeypatch.setattr(handlers, "TelegramAdapter", _TelegramAnswers)
+    patch_telegram(monkeypatch, "TelegramAdapter", _TelegramAnswers)
 
     data = backup_process["storage"] / "telegram-record.json"
     original = b"approved telegram record"
@@ -702,7 +703,7 @@ def test_telegram_restore_completes_with_a_terminal_success_on_healthy_dependenc
     monkeypatch.setenv("INTERNAL_API_KEY", core["internal_key"])
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "telegram-operations"))
     _TelegramAnswers.answers = []
-    monkeypatch.setattr(handlers, "TelegramAdapter", _TelegramAnswers)
+    patch_telegram(monkeypatch, "TelegramAdapter", _TelegramAnswers)
 
     path = "/api/workflows/image/restore-probe.json"
     assert api.put(path, json=RESTORED_WORKFLOW).status_code == 200

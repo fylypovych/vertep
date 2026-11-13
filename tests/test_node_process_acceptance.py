@@ -23,6 +23,7 @@ from tests.test_provider_process_acceptance import config_contour, ROOT, PASSWOR
 from tests.test_text_redis_process import port, wait
 from tests.test_queue_redis_contract import redis_url
 from tests.test_media_browser_e2e import sync_playwright, expect
+from tests.telegram_patching import patch_telegram
 
 
 requires_openssl = pytest.mark.skipif(
@@ -356,7 +357,7 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
             monkeypatch.setenv("UPDATE_STATE_DIR", str(c["root"] / "update"))
             monkeypatch.setenv("CORE_API_URL", c["url"])
             monkeypatch.setenv("INTERNAL_API_KEY", "disposable-node-internal-key")
-            adapter = Mock(); monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
+            adapter = Mock(); patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
             _sys_test_full_confirm({"id": "measured-full-confirm"}, "42", "sys_test_full_confirm", "")
             operation = next(op for op in list_operations() if op["type"] == "test")
             assert operation["status"] == "COMPLETED" and operation["result"]["result"] == "HEALTHY", operation
@@ -493,7 +494,7 @@ def test_unhealthy_full_test_cannot_report_callback_success(config_contour, monk
     monkeypatch.setenv("CORE_API_URL", c["url"])
     monkeypatch.setenv("INTERNAL_API_KEY", "disposable-node-internal-key")
     adapter = Mock()
-    monkeypatch.setattr(_owner_core_telegram_handlers, "TelegramAdapter", lambda: adapter)
+    patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
     _sys_test_full_confirm({"id": "failed-full-confirm"}, "42", "sys_test_full_confirm", "")
     operation = next(op for op in list_operations() if op["type"] == "test")
     assert operation["status"] == "FAILED"

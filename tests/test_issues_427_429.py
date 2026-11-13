@@ -42,7 +42,7 @@ def test_no_job_is_created_while_an_update_runs(tmp_path, monkeypatch, state, op
 
 def test_api_and_telegram_share_the_block_and_the_panel_mirrors_it():
     assert "jobs_may_be_created()" in Path("core/api/jobs.py").read_text(encoding="utf-8")
-    assert "jobs_may_be_created()" in Path("core/telegram/handlers.py").read_text(encoding="utf-8")
+    assert "jobs_may_be_created()" in Path("core/telegram/job_callbacks.py").read_text(encoding="utf-8")
     policy = Path("web-v2/src/app/core/services/policy.service.ts").read_text(encoding="utf-8")
     assert "!operation.startsWith('restore:')" in policy
 

@@ -6,6 +6,7 @@ from core.api.job_helpers import _validate_publication_receipt
 from core.models import JobStatus
 from core.telegram import handlers
 from publishers.base import publisher_mock_enabled
+from tests.telegram_patching import patch_telegram
 
 MOCK = {"channel": "youtube", "status": "PUBLISHED", "remote_id": "mock-1", "timestamp": 1.0,
         "url": "https://example.invalid/youtube/mock-1", "upload": {"mode": "mock"}}
@@ -38,7 +39,7 @@ def test_receipt_without_permalink_must_declare_it(monkeypatch):
 def test_status_counts_real_jobs_and_nodes(monkeypatch):
     jobs = {"a": SimpleNamespace(status=JobStatus.NEW), "b": SimpleNamespace(status=JobStatus.FAILED)}
     monkeypatch.setattr(handlers.store, "jobs", jobs)
-    monkeypatch.setattr(handlers, "_call_core_api",
+    patch_telegram(monkeypatch, "_call_core_api",
                         lambda method, path: [{"status": "ONLINE"}, {"status": "OFFLINE"}])
     assert handlers._format_workers_summary() == "Вузли: 1/2 online"
     summary = handlers._format_jobs_summary()
@@ -46,7 +47,7 @@ def test_status_counts_real_jobs_and_nodes(monkeypatch):
 
 
 def test_unknown_node_list_is_not_reported_as_zero(monkeypatch):
-    monkeypatch.setattr(handlers, "_call_core_api", lambda method, path: None)
+    patch_telegram(monkeypatch, "_call_core_api", lambda method, path: None)
     assert handlers._format_workers_summary() == "Вузли: дані недоступні"
 
 

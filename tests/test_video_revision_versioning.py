@@ -324,8 +324,8 @@ class TestRegenerationDedup:
         adapter = Mock()
         module = importlib.import_module("core.app")
         callback = {"id": "cb-dedup", "data": "vid_regen:test-job-001", "message": {"chat": {"id": "42"}}}
-        with patch("core.telegram.handlers.TelegramAdapter", lambda: adapter):
-            with patch.object(_owner_core_telegram_handlers, "store", SimpleNamespace(jobs={"test-job-001": job})):
+        with patch("core.telegram.job_callbacks.TelegramAdapter", lambda: adapter):
+            with patch("core.telegram.job_callbacks.store", SimpleNamespace(jobs={"test-job-001": job})):
                 _owner_core_telegram_handlers._handle_video_callback(callback, "42", "vid_regen", "test-job-001")
         assert adapter.answer_callback.called
         assert "вже генерується" in adapter.answer_callback.call_args_list[-1][0][1]

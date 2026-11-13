@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.72
+- Рефакторинг (#447, крок 4): `core/telegram/handlers.py` (2105 рядків) розділено на `handlers` (маршрутизація callback/повідомлень і polling, реекспорт), `common` (спільні помічники, `_call_core_api`, стан), `status` (статус і звірка операцій), `system_ops` (меню `sys_*` і dispatch-таблиця) та `job_callbacks` (callbacks job); поведінка не змінювалась.
+- Рефакторинг (#447, крок 5): з `worker/service.py` винесено `worker/model_commands.py` (каталог і команди моделей), `worker/enrollment.py` (CSR, enroll, renew) та `worker/node_role.py` (роль і capabilities); `worker.service` реекспортує ці імена, `python -m worker.service` не змінився.
+- Рефакторинг (#447, крок 6): inline-шаблон `job-detail.component.ts` винесено в `job-detail.component.html`; скомпільований chunk ідентичний попередньому.
+- Рефакторинг (#447, крок 7): `web-v2/src/app/core/models.ts` розділено на `core/models/domain.ts`, `operations.ts`, `dto.ts` з реекспортом через `core/models.ts`; вихід збірки ідентичний попередньому.
+- Тести: додано `tests/telegram_patching.py` (`patch_telegram` підміняє залежність у кожному Telegram-модулі); підміни команд моделей спрямовано на `worker.model_commands`; тести беруть `core.operations`, `core.runtime_identity`, `core.pipeline`, `httpx` напряму, а не через `core.telegram.handlers`; оновлено посилання в `docs/acceptance/mpt-composition-acceptance.md`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.71
 - Рефакторинг (#447, крок 2): `task_result` у `core/api/tasks.py` (876 рядків) розкладено на маршрутизатор і окремі обробники результатів у новому `core/api/task_results.py` (`image_storyboard_result`, `storyboard_result`, `script_result`, `assembly_result`, `publish_result`, `tts_result`, `scene_result`, `_text_task_lease`); перевірка токена, claim і renew лишились у `tasks.py`; поведінка не змінювалась.
 - Рефакторинг (#447, крок 3): `core/api/job_helpers.py` (2375 рядків) розділено на пакет `core/api/job_helpers/` за доменами (`common`, `assembly`, `scene_tasks`, `tts`, `script`, `publish`, `recovery`, `dispatch`, `actions`); пакет реекспортує всі попередні імена, поведінка не змінювалась.

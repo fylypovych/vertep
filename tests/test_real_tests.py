@@ -25,6 +25,7 @@ from core.real_tests.storage import (
 )
 from core.real_tests.github import GitHubReporter, _TransientError
 import core.real_tests.github as gh_mod
+from tests.telegram_patching import patch_telegram
 
 
 # ---------------------------------------------------------------------------
@@ -2244,12 +2245,12 @@ def test_backup_browser_telegram_rbac(monkeypatch, tmp_path):
     assert len(calls) == 1
 
     adapter = Mock()
-    monkeypatch.setattr(handlers, "TelegramAdapter", lambda: adapter)
+    patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
     def internal_http(method, path, payload=None, timeout=30):
         response = client.request(method, path, json=payload, headers={"Authorization": "",
             "x-vertep-internal-key": "disposable-backup-rbac-key"})
         return response.json() if response.status_code < 400 else {"_error": f"HTTP {response.status_code}"}
-    monkeypatch.setattr(handlers, "_call_core_api", internal_http)
+    patch_telegram(monkeypatch, "_call_core_api", internal_http)
     def callback(identifier, chat):
         return {"id": identifier, "data": "sys_backup_confirm", "from": {"id": int(chat)},
                 "message": {"chat": {"id": chat}}}
