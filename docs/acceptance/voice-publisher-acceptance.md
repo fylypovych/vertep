@@ -11,7 +11,7 @@ JUnit містить `source_sha`, `tracked_diff_sha256`, hash тесту та �
 | AC | Реалізація | Test ID / expected |
 | --- | --- | --- |
 | AC1 / #165.1 | `services/tts_service.py`: каталог stock espeak-ng, supported provider/model/language/voice/speed | `test_voice_http_acceptance::test_actual_espeak_catalog_parameters_and_measurements`: справжній WAV, 120 WPM довше за 240 WPM, інша voice/language дає інший hash; unsupported → 422 |
-| AC2 / #165.2 | `core/api/tasks.py`: issued snapshot та чинний owner/lease до file replacement, registration, ack | `test_voice_http_acceptance::test_issued_voice_result_before_mutation`: missing/mismatch/snapshot/foreign/expired → 400/409 без зміни файлів, artifacts та owner; live config drift не підміняє issued task |
+| AC2 / #165.2 | `core/api/task_results.py` (`tts_result`): issued snapshot та чинний owner/lease до file replacement, registration, ack | `test_voice_http_acceptance::test_issued_voice_result_before_mutation`: missing/mismatch/snapshot/foreign/expired → 400/409 без зміни файлів, artifacts та owner; live config drift не підміняє issued task |
 | AC3 / #165.3 | Voice loss/lease/restart recovery, збереження TTS stage; штатна assembly | `test_delivery_process_acceptance::test_actual_voice_audio_assembly_recovery`: normal/loss/reconnect/lease/restart → accepted video з декодованим audio stream; cancel/stale/duplicate → 409; hash audio збігається з Worker contract |
 
 espeak-ng виконується в окремому TTS HTTP процесі. Локально використано portable

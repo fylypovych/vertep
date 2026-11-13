@@ -51,7 +51,7 @@ def test_scheduler_failure_falls_back_to_the_local_rule(monkeypatch):
     def fail(*args, **kwargs):
         raise httpx.ConnectError("down")
 
-    monkeypatch.setattr(job_helpers.httpx, "post", fail)
+    monkeypatch.setattr(job_helpers.common.httpx, "post", fail)
     job = SimpleNamespace(scheduled_for=None, model_dump=lambda mode: {})
     assert job_helpers._job_is_due(job) is True
     job.scheduled_for = "2999-01-01T00:00:00Z"

@@ -40,7 +40,7 @@ def test_service_selection_matches_in_process_selection(monkeypatch, worker, tas
     worker = {**worker, "last_seen": datetime.now(timezone.utc).isoformat()}
     monkeypatch.setenv("INTERNAL_API_KEY", "dispatch-key")
     client = TestClient(app)
-    monkeypatch.setattr(job_helpers.httpx, "post",
+    monkeypatch.setattr(job_helpers.common.httpx, "post",
                         lambda url, json, headers, timeout: client.post("/select", json=json, headers=headers))
 
     monkeypatch.delenv("DISPATCHER_URL", raising=False)

@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from core.api import job_helpers, tasks as tasks_api
+from core.api import job_helpers, task_results, tasks as tasks_api
 from core.artifacts import register_artifact
 from core.models import (Job, JobStatus, StageName, StageStatus, TaskClaim, TaskRenew,
                          TaskResult, utc_now)
@@ -210,10 +210,17 @@ def assembly_state(tmp_path, monkeypatch):
     job.scenes[0].status = StageStatus.READY
 
     queue = TaskQueue()
-    monkeypatch.setattr(job_helpers, "store", store)
-    monkeypatch.setattr(job_helpers, "task_queue", queue)
+    for module in (job_helpers.assembly, job_helpers.scene_tasks, job_helpers.tts,
+                   job_helpers.recovery, job_helpers.dispatch, job_helpers.actions):
+        monkeypatch.setattr(module, "store", store)
+    for module in (job_helpers.assembly, job_helpers.scene_tasks, job_helpers.tts,
+                   job_helpers.script, job_helpers.publish, job_helpers.recovery,
+                   job_helpers.dispatch, job_helpers.actions):
+        monkeypatch.setattr(module, "task_queue", queue)
     monkeypatch.setattr(tasks_api, "store", store)
     monkeypatch.setattr(tasks_api, "task_queue", queue)
+    monkeypatch.setattr(task_results, "store", store)
+    monkeypatch.setattr(task_results, "task_queue", queue)
     return {"store": store, "job": job, "queue": queue, "tmp_path": tmp_path,
             "materials": [scene_clip]}
 
@@ -1565,7 +1572,7 @@ def _publish_route(assembly_state, monkeypatch):
     monkeypatch.setattr(jobs_api, "providers", type("_P", (), {
         "publisher": staticmethod(lambda: publisher),
     }))
-    monkeypatch.setattr(job_helpers, "task_queue", assembly_state["queue"])
+    monkeypatch.setattr(job_helpers.publish, "task_queue", assembly_state["queue"])
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     return jobs_api.publish_job, publisher
 

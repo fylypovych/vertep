@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.71
+- Рефакторинг (#447, крок 2): `task_result` у `core/api/tasks.py` (876 рядків) розкладено на маршрутизатор і окремі обробники результатів у новому `core/api/task_results.py` (`image_storyboard_result`, `storyboard_result`, `script_result`, `assembly_result`, `publish_result`, `tts_result`, `scene_result`, `_text_task_lease`); перевірка токена, claim і renew лишились у `tasks.py`; поведінка не змінювалась.
+- Рефакторинг (#447, крок 3): `core/api/job_helpers.py` (2375 рядків) розділено на пакет `core/api/job_helpers/` за доменами (`common`, `assembly`, `scene_tasks`, `tts`, `script`, `publish`, `recovery`, `dispatch`, `actions`); пакет реекспортує всі попередні імена, поведінка не змінювалась.
+- Тести, що підміняли `store`, `task_queue`, `workflow_registry` чи helper-функції, тепер патчать доменний модуль; allowlist `test_core_generation_gate` вказує на `core/api/job_helpers/script.py`; оновлено посилання в `docs/core-generation-gate.md`, `docs/content-pipeline.md`, `docs/acceptance/voice-publisher-acceptance.md`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.70
 - Рефакторинг: `adapters/providers/video_engines.py` розділено на пакет `adapters/providers/video_engines/` (`native`, `remote`, `moneyprinter`, `contract`, `unsupported`, `_media`); публічні імена `NativeVertepEngine`, `RemoteVideoEngine`, `MoneyPrinterEngine`, `UnsupportedVideoEngine` збережено, поведінка не змінювалась. Оновлено посилання в `docs/acceptance/mpt-composition-acceptance.md`.
 

@@ -8,7 +8,7 @@
 2. **Scenes** — окремий LLM-виклик на сцену (промпт персонажа + сценарію).
 3. **Assembly** — збір фінального script, нормалізація через `ScriptDocument`.
 
-Нормативний контракт — Structure / Scenes / Assembly, точкова перегенерація невалідної сцени та конфіг персонажа ([AGENTS.md](../AGENTS.md) §14). Фактичний production-шлях: `core/pipeline.py:generate_script()` → `core/api/job_helpers.py:_enqueue_script_task()` → Worker task `script` → `worker/role_executor.py:execute_script()`. `core/script_agent.py:ScriptAgent` використовується Worker у demo-режимі; CORE не виконує LLM-генерацію напряму. Наявність класу не доводить, що production виконує його багатоступінчастий алгоритм; контракт і реалізація мають перевірятися окремо.
+Нормативний контракт — Structure / Scenes / Assembly, точкова перегенерація невалідної сцени та конфіг персонажа ([AGENTS.md](../AGENTS.md) §14). Фактичний production-шлях: `core/pipeline.py:generate_script()` → `core/api/job_helpers/script.py:_enqueue_script_task()` → Worker task `script` → `worker/role_executor.py:execute_script()`. `core/script_agent.py:ScriptAgent` використовується Worker у demo-режимі; CORE не виконує LLM-генерацію напряму. Наявність класу не доводить, що production виконує його багатоступінчастий алгоритм; контракт і реалізація мають перевірятися окремо.
 
 ## Storyboard та approval
 

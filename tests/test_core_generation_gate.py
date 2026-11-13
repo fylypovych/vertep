@@ -155,7 +155,7 @@ def core_violations():
 ALLOWLIST = {
     # LLM — ScriptAgent local fallback when no Text Worker is available
     # (guarded by local_fallback_allowed() / _has_text_worker()).
-    ("core/api/job_helpers.py", "script_agent.ScriptAgent.generate_script"):
+    ("core/api/job_helpers/script.py", "script_agent.ScriptAgent.generate_script"):
         "LOCAL_WORKER_FALLBACK: ScriptAgent().generate_script() when no Text Worker",
 
     # LLM — ScriptAgent is the shared LLM/script inference implementation. It is

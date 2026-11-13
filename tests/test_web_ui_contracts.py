@@ -453,7 +453,7 @@ def test_workflow_usage_reports_jobs_and_characters(tmp_path, monkeypatch):
     from core import state
     from core.api import job_helpers
     monkeypatch.setattr(state.workflow_registry, "root", tmp_path / "workflows")
-    monkeypatch.setattr(job_helpers, "workflow_registry", state.workflow_registry)
+    monkeypatch.setattr(job_helpers.scene_tasks, "workflow_registry", state.workflow_registry)
     monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
     character_dir = tmp_path / "characters" / "narrator"
     character_dir.mkdir(parents=True)
@@ -493,7 +493,7 @@ def test_workflow_delete_conflict_structured_409(tmp_path, monkeypatch):
     from core import state
     from core.api import job_helpers
     monkeypatch.setattr(state.workflow_registry, "root", tmp_path / "workflows")
-    monkeypatch.setattr(job_helpers, "workflow_registry", state.workflow_registry)
+    monkeypatch.setattr(job_helpers.scene_tasks, "workflow_registry", state.workflow_registry)
     client = _client()
     # Save a test workflow
     saved = client.put("/api/workflows/image/conflict-test.json", json={"node1": {"class_type": "TestNode", "inputs": {}}})

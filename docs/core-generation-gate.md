@@ -70,7 +70,7 @@ Native FFmpeg assembly у CORE залишається control-plane операц
 `ALLOWLIST` у тесті містить задокументовані винятки (§2.2, §2.3) з прив'язкою
 до конкретного файлу й call-site:
 
-- `core/api/job_helpers.py:217` — ScriptAgent local fallback.
+- `core/api/job_helpers/script.py:71` — ScriptAgent local fallback.
 - `core/script_agent.py:21` — місце визначення LLM inference (виконується на Text Worker
   через `worker/role_executor.py`, не CORE orchestration).
 - під час аудиту також задокументовано `core/pipeline.py:385` (assembly) та
@@ -103,7 +103,7 @@ Native FFmpeg assembly у CORE залишається control-plane операц
 | `core/pipeline.py:356` | `providers.publisher().publish()` (через `_publish_local`) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
 | `core/app.py:848` | `providers.publisher().publish()` (Telegram callback) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
 | `core/api/jobs.py:368` | `providers.publisher().available_channels()` | control-plane (metadata) | дозволено |
-| `core/api/job_helpers.py:217` | `ScriptAgent().generate_script()` (local) | LOCAL_WORKER_FALLBACK | allowlist |
+| `core/api/job_helpers/script.py:71` | `ScriptAgent().generate_script()` (local) | LOCAL_WORKER_FALLBACK | allowlist |
 | `core/script_agent.py:21` | `get_llm_client().complete()` | LLM inference impl (Text Worker) | allowlist |
 | `core/app.py` | `provider_matrix()` | control-plane (status) | дозволено |
 

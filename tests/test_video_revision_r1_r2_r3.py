@@ -131,8 +131,8 @@ class TestR1VideoRevisionDrivesGeneration:
         job.status = JobStatus.SCRIPT_APPROVED
         job.video_revision_upstream = "Make it brighter"
         captured: list[object] = []
-        monkeypatch.setattr(helpers, "store", store)
-        monkeypatch.setattr(helpers, "queue_storyboard",
+        monkeypatch.setattr(helpers.dispatch, "store", store)
+        monkeypatch.setattr(helpers.dispatch, "queue_storyboard",
                             lambda st, jb, revision=None: captured.append(revision))
         helpers._prepare_and_dispatch(job)
         assert captured == ["Make it brighter"]
@@ -143,8 +143,8 @@ class TestR1VideoRevisionDrivesGeneration:
         _render_v1(store, job)
         job.status = JobStatus.SCRIPT_APPROVED
         captured: list[object] = []
-        monkeypatch.setattr(helpers, "store", store)
-        monkeypatch.setattr(helpers, "queue_storyboard",
+        monkeypatch.setattr(helpers.dispatch, "store", store)
+        monkeypatch.setattr(helpers.dispatch, "queue_storyboard",
                             lambda st, jb, revision=None: captured.append(revision))
         helpers._prepare_and_dispatch(job)
         assert captured == [None]

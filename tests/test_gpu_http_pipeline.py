@@ -790,7 +790,7 @@ def _dispatched_video_task(monkeypatch, *, node_name=None, vram_mb=32768,
     monkeypatch.setattr("core.security._valid_worker_request", lambda node, request: True)
     # The final assembly is not part of this contour: it would run FFmpeg in a
     # background thread, so it is observed but not executed here.
-    monkeypatch.setattr("core.api.tasks._finalize_and_notify", lambda job, images: None)
+    monkeypatch.setattr("core.api.task_results._finalize_and_notify", lambda job, images: None)
     client = _core_client()
     auth = _register_gpu(client, node_name, vram_mb=vram_mb)
     job = _video_job(monkeypatch, min_vram_mb=min_vram_mb, scenes=scenes)
@@ -934,7 +934,7 @@ def test_core_does_not_dispatch_a_video_task_to_a_node_without_enough_vram(comfy
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
     monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     monkeypatch.setattr("core.security._valid_worker_request", lambda node, request: True)
-    monkeypatch.setattr("core.api.tasks._finalize_and_notify", lambda job, images: None)
+    monkeypatch.setattr("core.api.task_results._finalize_and_notify", lambda job, images: None)
     client = _core_client()
     small = _unique_node("gpu-small")
     auth = _register_gpu(client, small, vram_mb=8192)

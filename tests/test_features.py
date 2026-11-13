@@ -398,8 +398,8 @@ def test_script_task_failure_retries_then_fails():
               publication_results={}, published_to=[])
     store = MagicMock()
     store.update = lambda j, status=None, msg="": setattr(j, "status", status)
-    with patch("core.api.job_helpers._enqueue_script_task") as mock_enqueue, \
-         patch("core.api.job_helpers._load_character_prompt", return_value=("", None)):
+    with patch("core.api.job_helpers.script._enqueue_script_task") as mock_enqueue, \
+         patch("core.api.job_helpers.script._load_character_prompt", return_value=("", None)):
         _handle_script_result(store, job, {"success": False, "task_id": "task-1", "error": "LLM timeout"}, [])
         assert job.script_attempt == 1
         assert mock_enqueue.called
@@ -427,8 +427,8 @@ def test_script_retry_carries_revision_and_dead_letters():
         captured["revision"] = revision
         captured["task_id"] = "retry-task"
         return {"task_id": "retry-task"}
-    with patch("core.api.job_helpers._enqueue_script_task", side_effect=_capture_enqueue), \
-         patch("core.api.job_helpers._load_character_prompt", return_value=("", None)):
+    with patch("core.api.job_helpers.script._enqueue_script_task", side_effect=_capture_enqueue), \
+         patch("core.api.job_helpers.script._load_character_prompt", return_value=("", None)):
         _handle_script_result(store, job, {"success": False, "task_id": "task-1", "error": "timeout"}, [])
         assert captured["revision"] == "поправка: додати кадр"
         _handle_script_result(store, job, {"success": False, "task_id": "retry-task", "error": "timeout again"}, [])

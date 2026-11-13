@@ -250,7 +250,7 @@ def test_publish_exhaustion_after_transient_failures():
     job.retries = job.max_retries
     assert job.retries >= job.max_retries
     # A further claim should not re-queue (budget exhausted).
-    from core.api.job_helpers import can_retry
+    from core.dispatcher import can_retry
     assert not can_retry(job)
 
 

@@ -108,7 +108,7 @@ def test_publish_result_failure_retries_up_to_max():
         enqueued.append(ch)
         return {"task_id": "retry-1"}
 
-    with patch("core.api.job_helpers._enqueue_publish_task", side_effect=fake_enqueue):
+    with patch("core.api.job_helpers.publish._enqueue_publish_task", side_effect=fake_enqueue):
         for i in range(3):
             _handle_publish_result(store, job, {"success": False, "task_id": f"task-{i+1}", "error": "boom"}, [], "youtube")
     assert len(enqueued) == 3
@@ -119,7 +119,7 @@ def test_publish_result_failure_after_max_retries_marks_failed():
     job = _make_job(max_retries=1)
     job.publish_task_ids = {"task-1": "youtube"}
     store = _make_store()
-    with patch("core.api.job_helpers._enqueue_publish_task") as mock_enq:
+    with patch("core.api.job_helpers.publish._enqueue_publish_task") as mock_enq:
         for i in range(2):
             _handle_publish_result(store, job, {"success": False, "task_id": f"task-{i+1}", "error": "boom"}, [], "youtube")
     assert job.publish_retry_count["youtube"] == 2
@@ -132,7 +132,7 @@ def test_publish_result_dead_letter_records_failure_after_max_retries():
     job = _make_job(max_retries=0)
     job.publish_task_ids = {"task-1": "youtube"}
     store = _make_store()
-    with patch("core.api.job_helpers._enqueue_publish_task"):
+    with patch("core.api.job_helpers.publish._enqueue_publish_task"):
         _handle_publish_result(store, job, {"success": False, "task_id": "task-1", "error": "permanent"}, [], "youtube")
     assert job.publication_results.get("youtube", {}).get("status") == "FAILED"
     assert "permanent" in job.publication_results["youtube"]["error"]
@@ -178,7 +178,7 @@ def test_enqueue_publish_task_local_fallback_no_publisher(monkeypatch):
         called["channel"] = ch
         return {"channel": ch, "status": "PUBLISHED"}
 
-    monkeypatch.setattr(jh, "_publish_local", fake_publish_local)
+    monkeypatch.setattr(jh.publish, "_publish_local", fake_publish_local)
     result = _enqueue_publish_task(store, job, "youtube")
     assert result is None
     assert called["channel"] == "youtube"
@@ -286,7 +286,7 @@ def test_publish_result_idempotent_skip_does_not_requeue():
     job.publish_task_ids = {"task-1": "youtube"}
     job.published_channels = {"youtube"}
     store = _make_store()
-    with patch("core.api.job_helpers._enqueue_publish_task") as mock_enq:
+    with patch("core.api.job_helpers.publish._enqueue_publish_task") as mock_enq:
         _handle_publish_result(store, job, {"success": True, "task_id": "task-1"},
                               [_receipt_artifact("youtube", "PUBLISHED")], "youtube")
     assert mock_enq.call_count == 0
@@ -302,7 +302,7 @@ def test_publish_result_rejects_mismatched_receipt():
     bad = json.loads(base64.b64decode(bad_artifact["data_base64"]))
     bad["video_version"] = 99
     bad_artifact["data_base64"] = base64.b64encode(json.dumps(bad).encode()).decode()
-    with patch("core.api.job_helpers._enqueue_publish_task") as mock_enq:
+    with patch("core.api.job_helpers.publish._enqueue_publish_task") as mock_enq:
         _handle_publish_result(store, job, {"success": True, "task_id": "task-1"},
                               [bad_artifact], "youtube")
     assert mock_enq.call_count == 0
@@ -315,7 +315,7 @@ def test_publish_result_not_configured_clears_intent():
     job.publish_task_ids = {"task-1": "tiktok"}
     job.publish_intent = {"tiktok": {"video_version": 1}}
     store = _make_store()
-    with patch("core.api.job_helpers._enqueue_publish_task") as mock_enq:
+    with patch("core.api.job_helpers.publish._enqueue_publish_task") as mock_enq:
         _handle_publish_result(store, job, {"success": True, "task_id": "task-1"},
                               [_receipt_artifact("tiktok", "NOT_CONFIGURED", error="no token")], "tiktok")
     assert mock_enq.call_count == 0
@@ -341,7 +341,7 @@ def test_publish_retry_uses_bounded_backoff(monkeypatch):
         enqueued.append(ch)
         return {"task_id": f"retry-{len(enqueued)}"}
 
-    with patch("core.api.job_helpers._enqueue_publish_task", side_effect=fake_enqueue):
+    with patch("core.api.job_helpers.publish._enqueue_publish_task", side_effect=fake_enqueue):
         for i in range(3):
             _handle_publish_result(store, job, {"success": False, "task_id": f"task-{i+1}", "error": "boom"}, [], "youtube")
     assert len(enqueued) == 2

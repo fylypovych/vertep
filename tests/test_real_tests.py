@@ -2172,9 +2172,10 @@ def test_web_ui_media_mutation_routes_exist():
     assert "jobs" in content.lower()
     assert "workflows" in content.lower()
     # Core API job helpers exist
-    helpers_path = pathlib.Path("core/api/job_helpers.py")
-    assert helpers_path.is_file()
-    helpers_content = helpers_path.read_text(encoding="utf-8")
+    helpers_path = pathlib.Path("core/api/job_helpers")
+    assert helpers_path.is_dir()
+    helpers_content = "".join(
+        path.read_text(encoding="utf-8") for path in sorted(helpers_path.glob("*.py")))
     assert "create_job" in helpers_content or "prepare_job" in helpers_content
 
 
