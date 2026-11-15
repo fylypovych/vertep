@@ -91,6 +91,10 @@ def write_character(root, character_id: str, voice: dict | None = None) -> Path:
         "model": "uk_male", "speed": 160,
     }), encoding="utf-8")
     (directory / "system_prompt.txt").write_text("Ти операційний.", encoding="utf-8")
+    # A ready character carries every §3.2 file (i.0.0.4.76); empty documents keep the
+    # previous behaviour, where absent files were read as {}.
+    for name in ("visual.json", "generation.json", "publishing.json"):
+        (directory / name).write_text("{}", encoding="utf-8")
     return directory
 
 

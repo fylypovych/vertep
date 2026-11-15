@@ -1,3 +1,7 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.75
+- Тести Browser E2E: `tests/media_harness.py` створює повного тестового персонажа (усі файли §3.2), тож після i.0.0.4.76 він знову з'являється в `GET /api/characters`; виправлено падіння `tests/test_media_browser_e2e.py` (Browser E2E для 0.0.3.74).
+- Тести CI `local-contracts`: `tests/test_workflow_http_process.py` і `tests/test_workflow_backup_execution.py` очікують поетапну генерацію сценарію (Structure + запит на кожну сцену, #465) через `staged_requests()` замість одного LLM-запиту на script-задачу.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.74
 - TTS (#470, `i.0.0.4.70`): preview і synthesis голосу виконуються через Worker dispatch — job-less задача `voice_preview` (`core/voice_dispatch.py`), Voice Worker повертає audio з `audio_contract/v1`; без готового Voice Worker — 503, timeout — 504, помилка Worker — 502, fallback у CORE немає; `synthesize_voice` прибрано з CORE.
 - CORE Generation Gate (#471, `i.0.0.4.71`): gate виявляє `synthesize_voice` і Worker-виконавці, `with ... as`, `importlib`/`__import__`/`getattr`, прямі HTTP inference-запити; allowlist прив'язано до enclosing function, shared implementation `core/gpu/backends.py` — лише за умови імпорту тільки Worker; межі статичного аналізу описано в `docs/core-generation-gate.md`.

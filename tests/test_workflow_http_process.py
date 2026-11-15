@@ -11,6 +11,11 @@ import pytest
 from tests.test_text_redis_process import contour, heartbeat, ROOT, TOKEN
 
 
+def staged_requests(context, text_tasks: int) -> int:
+    """LLM requests of ``text_tasks`` staged script runs: Structure + one per scene (#465)."""
+    return text_tasks * (1 + len(context["script_response"]["scenes"]))
+
+
 @pytest.fixture
 def workflow_contour(tmp_path, monkeypatch, request):
     definitions = tmp_path / "dag"
@@ -45,7 +50,7 @@ def test_core_worker_http_dispatch_approval_restart(workflow_contour):
     artifacts = status["tasks"]["script"]["output"]
     assert json.loads(base64.b64decode(artifacts[0]["data_base64"]))["title"] == "Controlled Text output"
     assert status["tasks"]["revision"]["status"] == "PENDING"
-    assert len(context["requests"]) == 1
+    assert len(context["requests"]) == staged_requests(context, 1)
     # Wrong lease and incompatible protocol cannot mutate execution state.
     stale = api.post("/api/tasks/result/workflow", json={"node_name": "text-process", "task_id": first["task_id"], "lease_id": "wrong", "result": []})
     assert stale.status_code == 409
@@ -60,7 +65,7 @@ def test_core_worker_http_dispatch_approval_restart(workflow_contour):
     assert second["success"] and second["dependencies"] == ["script"]
     completed = api.get(f"/api/workflow-execution/{job}").json()
     assert completed["status"] == "COMPLETED"
-    assert len(context["requests"]) == 2
+    assert len(context["requests"]) == staged_requests(context, 2)
 
 
 def test_workflow_redis_document_survives_redis_restart(workflow_contour):

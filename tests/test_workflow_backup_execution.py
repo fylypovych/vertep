@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from tests.test_workflow_http_process import workflow_contour
+from tests.test_workflow_http_process import staged_requests, workflow_contour
 from tests.test_text_redis_process import ROOT, TOKEN, heartbeat
 
 
@@ -68,4 +68,4 @@ def test_backup_cli_process_resume_preserves_approval_artifacts_and_module_state
     worker()
     final = api.get(f"/api/workflow-execution/{job}").json()
     assert final["status"] == "COMPLETED"
-    assert len(context["requests"]) == 2
+    assert len(context["requests"]) == staged_requests(context, 2)
