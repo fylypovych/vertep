@@ -70,3 +70,5 @@ audit-0311-closed-issues.md
 
 # Named local Browser test runs
 /web-v2/test-results-*/
+/.swarm
+/.claude-flow

@@ -34,7 +34,8 @@ def characters():
     result = []
     for path in root.glob("*/character.json"):
         try:
-            result.append(load_character(root, path.parent.name).model_dump())
+            # An incomplete character is not offered as ready (i.0.0.4.76).
+            result.append(load_character(root, path.parent.name, require_complete=True).model_dump())
         except (OSError, ValueError):
             continue
     return result

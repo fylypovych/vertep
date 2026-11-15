@@ -151,6 +151,10 @@ def test_backend_error_propagates_and_is_not_retried_as_invalid_scene(production
 
 
 def test_each_stage_uses_script_timeout(production):
+    """i.0.0.4.74: the task timeout is one budget; each stage gets what is left of it."""
     fake = production(FakeOllama())
     run(task(timeout=42))
-    assert {call["timeout"] for call in fake.calls} == {42}
+    timeouts = [call["timeout"] for call in fake.calls]
+    assert len(timeouts) > 1
+    assert all(41 < value <= 42 for value in timeouts)
+    assert timeouts == sorted(timeouts, reverse=True)

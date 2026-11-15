@@ -192,6 +192,16 @@ async def _watchdog() -> None:
                 job.status = JobStatus.NEW
                 _submit_prepare(job)
         for task in task_queue.requeue_expired():
+            if task.get("kind") == "voice_preview":
+                # Issue i.0.0.4.70: a preview is interactive — an expired lease
+                # fails the waiting request explicitly instead of re-running.
+                from . import voice_dispatch
+                task_queue.discard(task["task_id"])
+                node_name = voice_dispatch.owner(task["task_id"])
+                voice_dispatch.fail(task["task_id"], "voice task lease expired")
+                if node_name:
+                    voice_dispatch.release_worker(node_name, task["task_id"])
+                continue
             voice_job = store.jobs.get(task.get("job_id"))
             if task.get("task") == "publish" and voice_job and task["task_id"] in voice_job.publish_task_ids:
                 from .api.job_helpers import _handle_publish_result

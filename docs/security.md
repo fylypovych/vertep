@@ -13,7 +13,10 @@
 
 - Web TLS (`vertep.crt`/`vertep.key`) + node CA (`node-ca.crt`/`node-ca.key`); SAN/IP/DNS onboarding; expiry visibility; renew/revoke/CRL з фактичним відхиленням відкликаних сертифікатів.
 - Worker enrollment — CSR + одноразовий Registration Token + JWT/Worker Secret; опційно mTLS (`NODE_MTLS_REQUIRED=true`).
-- Setup-токен — з лімітом спроб і терміном дії.
+- Ідентичність вузла для mTLS (`X-Vertep-Client-DN` / `X-Vertep-Client-Serial`) proxy бере лише з TLS-сертифіката, перевіреного за node CA (`$ssl_client_verify = SUCCESS`), в усіх locations `deploy/proxy.conf` і `deploy/proxy.conf.template`; інакше заголовки не передаються в CORE, тож підставлені клієнтом значення відкидаються (i.0.0.4.72). Приймання — `tests/test_proxy_client_identity.py` на реальному nginx (`VERTEP_NGINX_EXECUTABLE`, без nginx — skip; `VERTEP_REQUIRE_PROXY_ACCEPTANCE=1` робить його обов'язковим).
+- Setup-токен — з лімітом спроб і терміном дії. Невдалі спроби рахуються на реального клієнта (`SETUP_RATE_LIMIT_PER_10_MINUTES`, типово 10) і загалом на інсталяцію (`SETUP_RATE_LIMIT_GLOBAL_PER_10_MINUTES`, типово 100). Клієнт визначається за `X-Real-IP`, який proxy перезаписує, і лише коли запит прийшов від довіреного proxy (`TRUSTED_PROXY_HOSTS`, типово `proxy`; імена, IP або CIDR); від інших відправників заголовок ігнорується (i.0.0.4.82).
+- Cookies сесії й CSRF отримують `Secure` за HTTPS (пряме TLS або `X-Forwarded-Proto: https` від proxy); прямий http-доступ для розробки працює без `Secure`.
+- Ключ сховища секретів (`secret-store.key`) створюється одразу з правами 0600 (`O_CREAT|O_EXCL`), без вікна з правами за umask; sealing і заборона перезапису наявного ключа збережені.
 
 ## Доступ (RBAC)
 

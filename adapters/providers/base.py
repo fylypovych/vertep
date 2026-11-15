@@ -31,6 +31,7 @@ class LLMProvider(ABC):
         brief: str | None = None,
         timeout: float | None = None,
         post=None,
+        checkpoint=None,
     ) -> dict:
         ...
 

@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,8 +59,45 @@ class FakeCore:
         return _answer(url, payload=[])
 
 
+class _LoopTime:
+    """The ``time`` module as the Worker loop sees it, with only its ``sleep`` replaced.
+
+    i.0.0.4.83: patching ``service.time.sleep`` replaced the process-wide
+    ``time.sleep``, so ``subprocess.run(timeout=...)`` of the ``nvidia-smi`` probe
+    consumed the loop's ticks. Swapping the module reference of ``service`` keeps
+    every other component on the real clock.
+    """
+
+    def __init__(self, sleep):
+        self.sleep = sleep
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+FAKE_NVIDIA_SMI = """#!/bin/sh
+sleep 0.3
+echo "Fake GPU, 8192, 4096, 40, 10, 550.00, 8.6"
+"""
+
+
+def _controlled_nvidia_smi(monkeypatch, tmp_path, present: bool) -> None:
+    """PATH with a slow fake ``nvidia-smi`` or without any, whatever the host has."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if present:
+        fake = bin_dir / "nvidia-smi"
+        fake.write_text(FAKE_NVIDIA_SMI)
+        fake.chmod(0o755)
+    kept = [entry for entry in os.environ.get("PATH", "").split(os.pathsep)
+            if entry and not (Path(entry) / "nvidia-smi").exists()]
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), *kept]))
+    assert (shutil.which("nvidia-smi") is not None) is present
+
+
+@pytest.mark.parametrize("nvidia_smi", [True, False], ids=["nvidia-smi", "no-nvidia-smi"])
 @pytest.mark.parametrize("renew_status,result_status", [(409, 409), (404, 404), (200, 404), (200, 409)])
-def test_worker_loop_survives_a_disowned_task(monkeypatch, tmp_path, renew_status, result_status):
+def test_worker_loop_survives_a_disowned_task(monkeypatch, tmp_path, renew_status, result_status, nvidia_smi):
     release = threading.Event()
     core = FakeCore(renew_status, result_status, release)
     ticks = []
@@ -81,7 +119,8 @@ def test_worker_loop_survives_a_disowned_task(monkeypatch, tmp_path, renew_statu
     monkeypatch.setenv("NODE_CONFIG_PATH", str(tmp_path / "node.json"))
     monkeypatch.setenv("WORKER_REQUIRE_GPU", "false")
     monkeypatch.setattr(service.httpx, "Client", core)
-    monkeypatch.setattr(service.time, "sleep", sleep)
+    _controlled_nvidia_smi(monkeypatch, tmp_path, nvidia_smi)
+    monkeypatch.setattr(service, "time", _LoopTime(sleep))
     monkeypatch.setattr(service, "execute_task", execute)
     monkeypatch.setattr(service, "role_self_test", lambda *a: dict(passed))
     monkeypatch.setattr(service, "enroll", lambda *a: "token")
@@ -98,6 +137,7 @@ def test_worker_loop_survives_a_disowned_task(monkeypatch, tmp_path, renew_statu
     assert core.calls.count("/api/tasks/result") == 1, "a disowned result is not retried"
     if renew_status != 200:
         assert core.calls.count("/api/tasks/renew") == 1, "a lost lease is not renewed again"
+    assert time.sleep is not sleep, "the process-wide time.sleep stays untouched"
 
 
 def _node(monkeypatch, responses):

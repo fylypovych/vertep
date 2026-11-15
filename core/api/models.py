@@ -6,7 +6,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from adapters.providers import provider_matrix
-from worker.role_executor import delete_text_model, list_text_models, synthesize_voice
+from worker.role_executor import delete_text_model, list_text_models
+
+from .. import voice_dispatch
 
 router = APIRouter()
 
@@ -89,22 +91,51 @@ def list_voices_endpoint():
         raise HTTPException(502, "TTS runtime returned an unreadable voice catalog") from error
 
 
+def _tts_backend() -> str:
+    return str(provider_matrix().get("tts", {}).get("backend") or "").strip().lower()
+
+
+def _optional_text(payload: dict, key: str) -> dict:
+    value = payload.get(key)
+    if value is None or value == "":
+        return {}
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(422, f"{key} must be a string")
+    return {key: value.strip()}
+
+
+def synthesize_through_worker(text: str, voice: str, speed: int, **options) -> bytes:
+    """Run the synthesis on a Voice Worker (Issue i.0.0.4.70); CORE never calls TTS."""
+    return voice_dispatch.synthesize(text, voice, speed, **options)
+
+
+def _worker_path_error(error: voice_dispatch.VoiceDispatchError) -> HTTPException:
+    """Fixed, coded messages: no CORE fallback hides an unavailable Worker path."""
+    if isinstance(error, voice_dispatch.VoiceWorkerUnavailable):
+        return HTTPException(503, "No ready Voice Worker is available")
+    if isinstance(error, voice_dispatch.VoiceDispatchTimeout):
+        return HTTPException(504, "Voice Worker did not return audio in time")
+    return HTTPException(502, "Voice preview failed")
+
+
 @router.post("/api/models/voices/synthesize")
 def synthesize_voice_endpoint(payload: dict):
     text = payload.get("text")
     if not text or not isinstance(text, str):
         raise HTTPException(422, "text is required")
     voice = payload.get("voice", "default")
-    speed = int(payload.get("speed", 150))
     try:
-        audio = synthesize_voice(text, voice, speed)
-        return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
+        speed = int(payload.get("speed", 150))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(422, "speed must be an integer") from error
+    options = {**_optional_text(payload, "language"), **_optional_text(payload, "model")}
+    try:
+        audio = synthesize_through_worker(text, voice, speed, **options)
+    except voice_dispatch.VoiceDispatchError as error:
+        raise _worker_path_error(error) from error
     except httpx.HTTPError as error:
         raise HTTPException(502, f"TTS synthesis failed: {error}") from error
-
-
-def _tts_backend() -> str:
-    return str(provider_matrix().get("tts", {}).get("backend") or "").strip().lower()
+    return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
 
 
 @router.post("/api/models/voices/preview")
@@ -166,6 +197,7 @@ def voice_preview_endpoint(payload: dict):
         )
 
     voice = str(payload.get("voice") or DEFAULT_VOICE).strip() or DEFAULT_VOICE
+    options = {**_optional_text(payload, "language"), **_optional_text(payload, "model")}
     try:
         catalog = _normalized_catalog()
     except httpx.HTTPError as error:
@@ -180,7 +212,9 @@ def voice_preview_endpoint(payload: dict):
         raise HTTPException(422, "Speed is outside the range of the TTS runtime")
 
     try:
-        audio = synthesize_voice(text, voice, speed)
+        audio = synthesize_through_worker(text, voice, speed, **options)
+    except voice_dispatch.VoiceDispatchError as error:
+        raise _worker_path_error(error) from error
     except httpx.HTTPError as error:
         raise HTTPException(502, "Voice preview failed") from error
     if not audio:

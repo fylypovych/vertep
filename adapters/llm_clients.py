@@ -20,6 +20,23 @@ import httpx
 SUPPORTED_BACKENDS = ("ollama", "openai")
 
 
+def backend_readiness(provider: str | None = None) -> tuple[str, bool]:
+    """The LLM backend name and whether an executor can really run it (i.0.0.4.79).
+
+    One rule for the status read-model (``provider_matrix``) and the Worker
+    config activation: an unknown backend is reported under its own name and is
+    not ready (``get_llm_client`` refuses it); ``openai`` is ready only with an
+    API key in this process. No network call, no secret value is returned.
+    """
+    name = provider if provider is not None else os.getenv("VERTEP_LLM_PROVIDER")
+    name = (name or "ollama").lower().strip() or "ollama"
+    if name not in SUPPORTED_BACKENDS:
+        return name, False
+    if name == "openai":
+        return name, bool(os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY"))
+    return name, True
+
+
 class LLMBackendError(RuntimeError):
     """The selected LLM backend is unsupported or not usable as configured.
 

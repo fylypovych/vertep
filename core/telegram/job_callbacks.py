@@ -18,7 +18,10 @@ from core.api.job_helpers import (
 )
 from core.artifacts import register_artifact
 from core.configuration import (
+    DefaultCharacterError,
+    default_character_id,
     load_character,
+    missing_character_files,
     read_json,
 )
 from core.models import (
@@ -68,14 +71,17 @@ def _send_character_selection(chat_id: str, brand_id: str) -> dict:
     characters = []
     for char_dir in character_dirs:
         char_config_path = char_dir / "character.json"
-        if char_config_path.exists():
+        if char_config_path.exists() and not missing_character_files(characters_root, char_dir.name):
             try:
                 config = read_json(char_config_path)
                 characters.append({"id": char_dir.name, "name": config.get("name", char_dir.name)})
             except (ValueError, OSError):
                 continue
     if not characters:
-        character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
+        try:
+            character_id = default_character_id("TELEGRAM_DEFAULT_CHARACTER")
+        except DefaultCharacterError as error:
+            return TelegramAdapter().send_message(chat_id, f"Не вдалося обрати персонажа: {error}")
         pending = _telegram_pending_character.get(chat_id, {}).get("pending", {})
         from .workflows import offer_workflows
         offered = offer_workflows(chat_id, _telegram_pending_character[chat_id], character_id)
@@ -251,7 +257,10 @@ def _create_job_from_telegram(pending: dict, brand_id: str, character_id: str | 
     message = pending["message"]
     chat_id = message.get("chat", {}).get("id", "unknown")
     if character_id is None:
-        character_id = os.getenv("TELEGRAM_DEFAULT_CHARACTER", "did_samogon")
+        try:
+            character_id = default_character_id("TELEGRAM_DEFAULT_CHARACTER")
+        except DefaultCharacterError as error:
+            raise HTTPException(422, str(error)) from error
     source = f"telegram:{chat_id}:{source_id or 'unknown'}"
     if source_id and store.repository.has_telegram_update(chat_id, source_id):
         existing = next((job for job in store.jobs.values() if job.source == source), None)

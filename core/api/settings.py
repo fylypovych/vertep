@@ -1,4 +1,5 @@
 """Settings, integrations and logo routes for the Vertep CORE web application."""
+import asyncio
 import os
 
 import httpx
@@ -227,7 +228,7 @@ async def put_logo(request: Request):
     if len(body) > 2 * 1024 * 1024:
         raise HTTPException(413, "Logo too large")
     logo_path = config_root() / "dashboard-logo.png"
-    logo_path.write_bytes(body)
+    await asyncio.to_thread(logo_path.write_bytes, body)  # i.0.0.4.77
     return {"saved": True}
 
 

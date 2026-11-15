@@ -113,6 +113,9 @@ def restore_process_environment():
     leaked MONEY_PRINTER_URL or TTS_PROVIDER broke unrelated process tests much later.
     """
     saved = dict(os.environ)
+    # i.0.0.4.75: the suite runs with the configuration of .env.example, where the
+    # default character is configured; tests of a missing default delete it.
+    os.environ.setdefault("DEFAULT_CHARACTER", "did_samogon")
     yield
     for name in set(os.environ) - set(saved):
         os.environ.pop(name, None)

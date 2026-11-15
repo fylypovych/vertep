@@ -109,6 +109,14 @@ def execute_text(task: dict) -> list[dict]:
     return [_artifact("response.txt", "text", text.encode("utf-8"))]
 
 
+def _script_stop_reason(task: dict) -> str | None:
+    if task.get("cancelled"):
+        return "cancelled"
+    if task.get("lease_lost"):
+        return "lease lost"
+    return None
+
+
 def execute_script(task: dict) -> list[dict]:
     """Generate a video script on the Text Worker: Structure -> Scenes -> Assembly.
 
@@ -128,11 +136,22 @@ def execute_script(task: dict) -> list[dict]:
         script = ScriptAgent().generate_script(task["topic"], task.get("system_prompt", ""), task.get("character"))
         return [_artifact("script.json", "script", json.dumps(script, ensure_ascii=False).encode("utf-8"))]
 
+    from core.script_agent import ScriptBudget
+
     timeout = int(task.get("timeout", os.getenv("OLLAMA_SCRIPT_TIMEOUT", "300")))
+    # i.0.0.4.74: the task timeout is the budget of the whole Structure -> Scenes
+    # run. The Worker loop marks the very task dict it executes when CORE cancels
+    # it or its lease is lost; no new LLM request starts after that.
+    budget = ScriptBudget(timeout, stop=lambda: _script_stop_reason(task))
+
+    def post(url, **kwargs):
+        kwargs["timeout"] = budget.bound(kwargs.get("timeout", timeout))
+        return migration_post(httpx, url, **kwargs)
+
     script = providers.llm().generate_script(
         task["topic"], task.get("system_prompt", ""), task.get("character"),
         revision=task.get("revision"), brief=task.get("prompt"), timeout=timeout,
-        post=lambda url, **kwargs: migration_post(httpx, url, **kwargs))
+        post=post, checkpoint=budget.check)
     return [_artifact("script.json", "script", json.dumps(script, ensure_ascii=False).encode("utf-8"))]
 
 
@@ -283,13 +302,21 @@ def execute_voice(task: dict) -> list[dict]:
         "voice": config["voice"],
         "speed": config["speed"],
     }
-    # The character voice config parameterizes the synthesis request; the
-    # runtime may ignore fields it does not support (e.g. model/language).
-    if config["language"]:
-        payload["language"] = config["language"]
-    if config["model"]:
-        payload["model"] = config["model"]
-    payload["provider"] = config["provider"]
+    preview = task.get("kind") == "voice_preview"
+    if preview:
+        # Issue i.0.0.4.70: a Web UI preview dispatched by CORE sends only the
+        # parameters the operator chose, exactly as the former CORE request did.
+        for key in ("language", "model"):
+            if task.get(key):
+                payload[key] = str(task[key])
+    else:
+        # The character voice config parameterizes the synthesis request; the
+        # runtime may ignore fields it does not support (e.g. model/language).
+        if config["language"]:
+            payload["language"] = config["language"]
+        if config["model"]:
+            payload["model"] = config["model"]
+        payload["provider"] = config["provider"]
     response = migration_post(httpx, endpoint, json=payload, timeout=180)
     response.raise_for_status()
     content_type = response.headers.get("content-type", "")
@@ -314,8 +341,8 @@ def execute_voice(task: dict) -> list[dict]:
         "format": "audio_contract/v1",
         "provider": config["provider"],
         "voice": config["voice"],
-        "language": config["language"],
-        "model": config["model"] or None,
+        "language": payload.get("language") if preview else config["language"],
+        "model": (payload.get("model") if preview else config["model"]) or None,
         "engine": engine or None,
         "mime_type": mime_type,
         "size": len(data),

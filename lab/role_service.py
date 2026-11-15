@@ -44,12 +44,10 @@ def _collect_context(root: str, paths: list) -> tuple[str, dict]:
         coverage["limitations"] = _limitations(coverage)
         return "(робоча копія недоступна)", coverage
     coverage["workspace_available"] = True
-    # The control image has no git, so the listing walks the tree.
-    listing = sorted(str(path.relative_to(base)) for path in base.rglob("*")
-                     if path.is_file() and ".git" not in path.relative_to(base).parts)
+    listing, more = _list_files(base)
     coverage["listed_files"] = len(listing)
-    coverage["listing_truncated"] = len(listing) > MAX_LISTED_FILES
-    parts = ["Файли (лише назви, вміст не прочитано):\n" + "\n".join(listing[:MAX_LISTED_FILES])]
+    coverage["listing_truncated"] = more
+    parts = ["Файли (лише назви, вміст не прочитано):\n" + "\n".join(listing)]
     remaining = MAX_CONTEXT_BYTES
     resolved = base.resolve()
     for name in requested:
@@ -64,18 +62,42 @@ def _collect_context(root: str, paths: list) -> tuple[str, dict]:
             coverage["not_read_limit"].append(name)
             continue
         try:
-            content = target.read_text(encoding="utf-8", errors="replace")
+            # i.0.0.4.81: read no more than the remaining context, plus one
+            # character to know whether the file goes on.
+            with target.open(encoding="utf-8", errors="replace") as handle:
+                text = handle.read(remaining)
+                truncated = bool(handle.read(1))
+            total_bytes = target.stat().st_size
         except OSError:
             coverage["missing"].append(name)
             continue
-        text = content[:remaining]
         remaining -= len(text)
-        coverage["read"].append({"path": name, "chars": len(text), "total_chars": len(content),
-                                 "truncated": len(text) < len(content)})
+        coverage["read"].append({"path": name, "chars": len(text),
+                                 "total_chars": None if truncated else len(text),
+                                 "total_bytes": total_bytes, "truncated": truncated,
+                                 "empty": not text.strip()})
         parts.append(f"--- {name}\n{text}")
-    coverage["code_examined"] = bool(coverage["read"])
+    # Only content that says something counts as examined code (i.0.0.4.81).
+    coverage["code_examined"] = any(not item["empty"] for item in coverage["read"])
     coverage["limitations"] = _limitations(coverage)
     return "\n\n".join(parts), coverage
+
+
+def _list_files(base: Path) -> tuple[list[str], bool]:
+    """Up to ``MAX_LISTED_FILES`` workspace files in a stable order, and whether more exist.
+
+    The walk stops as soon as one file beyond the limit is seen, so a large
+    tree is not traversed in full just to be cut afterwards (i.0.0.4.81).
+    The control image has no git, so the listing walks the tree; ``.git`` is pruned.
+    """
+    listed: list[str] = []
+    for current, directories, files in os.walk(base):
+        directories[:] = sorted(name for name in directories if name != ".git")
+        for name in sorted(files):
+            if len(listed) == MAX_LISTED_FILES:
+                return listed, True
+            listed.append(str((Path(current) / name).relative_to(base)))
+    return listed, False
 
 
 def _limitations(coverage: dict) -> list[str]:
@@ -85,7 +107,7 @@ def _limitations(coverage: dict) -> list[str]:
     elif not coverage["requested_paths"]:
         notes.append("Не задано paths: модель отримала лише перелік файлів, вміст коду не читався.")
     if coverage["listing_truncated"]:
-        notes.append(f"Перелік файлів обрізано до {MAX_LISTED_FILES} з {coverage['listed_files']}.")
+        notes.append(f"Перелік файлів обрізано до {MAX_LISTED_FILES}: у робочій копії є ще файли.")
     if coverage["missing"]:
         notes.append("Відсутні або недоступні файли: " + ", ".join(coverage["missing"]) + ".")
     if coverage["outside_workspace"]:
@@ -93,10 +115,13 @@ def _limitations(coverage: dict) -> list[str]:
     truncated = [item["path"] for item in coverage["read"] if item["truncated"]]
     if truncated:
         notes.append(f"Вміст обрізано лімітом {MAX_CONTEXT_BYTES} символів: " + ", ".join(truncated) + ".")
+    empty = [item["path"] for item in coverage["read"] if item["empty"]]
+    if empty:
+        notes.append("Порожні файли (вміст для дослідження відсутній): " + ", ".join(empty) + ".")
     if coverage["not_read_limit"]:
         notes.append("Не прочитано через вичерпаний ліміт контексту: " + ", ".join(coverage["not_read_limit"]) + ".")
-    if coverage["workspace_available"] and not coverage["read"]:
-        notes.append("Жоден файл не прочитано: звіт не підтверджує реалізацію.")
+    if coverage["workspace_available"] and not coverage["code_examined"]:
+        notes.append("Жоден файл зі змістом не прочитано: звіт не підтверджує реалізацію.")
     notes.append(NOT_ACCEPTANCE)
     return notes
 

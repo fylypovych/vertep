@@ -16,7 +16,7 @@ Bootstrap: preflight-перевірки → директорії `/opt/vertep/{d
 
 ## Ролі вузлів
 
-Core / GPU / Text / Voice / Publisher / Backup / Monitoring (склад — `nodes-and-capabilities.md`). Роль і додаткові ролі Core обираються в First Run Wizard; bootstrap про них не питає. Для автоматизованого встановлення — `VERTEP_ROLE` і `VERTEP_ADDITIONAL_ROLES`; результат зберігається в `NODE_ROLE` і `NODE_ADDITIONAL_ROLES` у `.env`.
+Core / GPU / Text / Voice / Publisher / Backup / Monitoring (склад — `nodes-and-capabilities.md`). Роль і додаткові ролі Core обираються в First Run Wizard; bootstrap про них не питає. Для автоматизованого встановлення — `VERTEP_ROLE` і `VERTEP_ADDITIONAL_ROLES`; результат зберігається в `NODE_ROLE` і `NODE_ADDITIONAL_ROLES` у `.env`. Персонаж за замовчуванням (варіант «За замовчуванням» у Web, API без `character_id`, Telegram) задається `DEFAULT_CHARACTER` — id наявного каталогу `characters/<id>/`: для автоматизованого встановлення передайте `DEFAULT_CHARACTER` у bootstrap або впишіть його в `.env`; значення, задане в `.env`, зберігається при оновленнях. Без нього job потребує явного вибору персонажа (див. `characters-and-workflows.md`).
 
 ## First Run Wizard (9 кроків)
 

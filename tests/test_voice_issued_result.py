@@ -81,8 +81,10 @@ def _write_character(root, character_id: str, voice: dict | None = None) -> str:
     return character_id
 
 
-def _new_job_with_voice_task(character_id: str, voice_config: dict | None = None,
-                             characters_root: str = "characters"):
+def _new_job_with_voice_task(character_id: str, voice_config: dict | None,
+                             characters_root: str):
+    # i.0.0.4.76: the partial test character lives in an isolated root, never in
+    # the production catalog ``characters/``.
     import os
     os.environ["CHARACTERS_ROOT"] = characters_root
     _write_character(characters_root, character_id)
@@ -263,14 +265,14 @@ def test_voice_contract_sha256_mismatch_is_rejected(tmp_path):
 # ── #165.3: Text/Storyboard→Voice→audio→assembly harness rows ──
 
 
-def test_voice_worker_produces_verifiable_audio_contract(monkeypatch):
+def test_voice_worker_produces_verifiable_audio_contract(monkeypatch, tmp_path):
     """Issue #165.3: the Voice Worker executes a real TTS task and produces
     an audio artifact with a verifiable audio_contract/v1."""
     job, scene = _new_job_with_voice_task("char-contract", {
         "task": "voice", "topic": "озвучка одна", "provider": "espeak-ng",
         "voice": "uk", "language": "uk", "model": "uk_male", "speed": 160,
         "scene_id": "scene-001", "character_id": "char-contract",
-    }, characters_root="characters")
+    }, characters_root=str(tmp_path))
     task = {
         "task": "voice", "task_id": "voice-task-001", "job_id": job.job_id,
         "topic": "озвучка одна", "provider": "espeak-ng", "voice": "uk",

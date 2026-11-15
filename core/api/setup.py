@@ -136,17 +136,22 @@ async def first_run_complete(request: Request):
             if not role_definition or not core_url.startswith("https://"):
                 raise ValueError("A valid HTTPS Core URL is required")
             node_id = re.sub(r"[^a-z0-9-]", "-", str(payload.get("installation_name", "")).lower()).strip("-")
-            csr = create_node_csr(node_id)
+            # i.0.0.4.77: key generation runs openssl; keep it off the event loop.
+            csr = await asyncio.to_thread(create_node_csr, node_id)
             core_certificate = str(payload.get("core_certificate") or "")
             verify: str | bool = True
             if core_certificate:
                 if len(core_certificate) > 32768 or "BEGIN CERTIFICATE" not in core_certificate:
                     raise ValueError("Core certificate must be PEM encoded")
                 pinned = config_root() / "core-onboarding.crt"
-                pinned.write_text(core_certificate, encoding="utf-8")
-                os.chmod(pinned, 0o600)
+
+                def pin() -> None:
+                    pinned.write_text(core_certificate, encoding="utf-8")
+                    os.chmod(pinned, 0o600)
+
+                await asyncio.to_thread(pin)
                 verify = str(pinned)
-            enrollment_id = _ensure_enrollment_id(config_root() / "pki")
+            enrollment_id = await asyncio.to_thread(_ensure_enrollment_id, config_root() / "pki")
             response = await _enroll_with_retry(
                 core_url,
                 {"registration_token": payload.get("registration_token"), "node_id": node_id,

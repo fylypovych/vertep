@@ -16,7 +16,7 @@ parser = argparse.ArgumentParser(prog="vertep-cli")
 parser.add_argument("--url", default=os.getenv("VERTEP_CORE_URL", "http://127.0.0.1:8080"))
 sub = parser.add_subparsers(dest="command", required=True)
 sub.add_parser("jobs")
-create = sub.add_parser("create"); create.add_argument("topic"); create.add_argument("--character", default="did_samogon")
+create = sub.add_parser("create"); create.add_argument("topic"); create.add_argument("--character", help="character id; omitted = CORE DEFAULT_CHARACTER")
 action = sub.add_parser("action"); action.add_argument("job_id"); action.add_argument("action", choices=["pause","resume","retry","regenerate","cancel","approve","publish"])
 sub.add_parser("workers"); sub.add_parser("characters"); sub.add_parser("workflows"); sub.add_parser("metrics")
 module = sub.add_parser("module")
@@ -47,7 +47,7 @@ paths = {"jobs":"/api/jobs", "workers":"/api/workers", "characters":"/api/charac
          "workflows":"/api/workflows", "metrics":"/api/metrics"}
 method, body = "GET", None
 if args.command == "create":
-    path, method, body = "/api/jobs", "POST", {"topic": args.topic, "character_id": args.character}
+    path, method, body = "/api/jobs", "POST", {"topic": args.topic, **({"character_id": args.character} if args.character else {})}
 elif args.command == "action":
     path, method = f"/api/jobs/{args.job_id}/{args.action}", "POST"
 else:

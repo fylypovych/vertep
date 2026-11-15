@@ -198,7 +198,7 @@ def test_preview_refuses_a_switch_that_missed_the_executor(isolated_config, monk
     monkeypatch.setattr(provider_switch, "load_provider_overrides",
                          lambda: {"TTS_PROVIDER": "mock"})
     monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": [{"name": "uk"}]})
-    monkeypatch.setattr(models_api, "synthesize_voice",
+    monkeypatch.setattr(models_api, "synthesize_through_worker",
                          lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no synthesis")))
     response = client.post("/api/models/voices/preview", json={"text": "hi"})
     assert response.status_code == 409
@@ -363,8 +363,10 @@ def test_switch_reaches_the_executor_and_drives_preview_and_restart(isolated_con
         assert switched["executor_config"] == {"TTS_PROVIDER": "mock"}
 
         monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
-        heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "voice-01"},
-                                headers={"X-Vertep-Token": "worker-token"}).json()
+        heartbeat = client.post("/api/workers/heartbeat", json={
+            "node_name": "voice-01", "vram_mb": 0, "role": "voice", "supported_tasks": ["voice"],
+            "capabilities": ["speech_synthesis"], "voice_catalog": {"voices": ["uk"]}},
+            headers={"X-Vertep-Token": "worker-token"}).json()
         assert heartbeat["provider_config"]["TTS_PROVIDER"] == "mock"
 
         # The Worker applies the heartbeat delivery to its own executor env.
@@ -374,9 +376,31 @@ def test_switch_reaches_the_executor_and_drives_preview_and_restart(isolated_con
         assert worker_service.executor_provider_config()["TTS_PROVIDER"] == "mock"
 
         # Preview now proves the effective configuration end-to-end through the
-        # real Worker executor path (role_executor → loopback runtime).
-        preview = client.post("/api/models/voices/preview",
-                              json={"text": "привіт", "voice": "uk"})
+        # real Worker executor path: CORE dispatches, the Worker claims and runs
+        # role_executor → loopback runtime (Issue i.0.0.4.70).
+        monkeypatch.setenv("NODE_ROLE", "voice")
+        stop = threading.Event()
+
+        def _voice_worker():
+            worker_headers = {"X-Vertep-Token": "worker-token"}
+            while not stop.is_set():
+                task = client.post("/api/tasks/claim", headers=worker_headers, json={
+                    "node_name": "voice-01", "vram_mb": 0,
+                    "supported_tasks": ["voice"]}).json().get("task")
+                if not task:
+                    stop.wait(0.02)
+                    continue
+                result = worker_service.execute_task(None, task, "voice-01")
+                client.post("/api/tasks/result", json=result, headers=worker_headers)
+
+        voice_worker = threading.Thread(target=_voice_worker, daemon=True)
+        voice_worker.start()
+        try:
+            preview = client.post("/api/models/voices/preview",
+                                  json={"text": "привіт", "voice": "uk"})
+        finally:
+            stop.set()
+            voice_worker.join(timeout=5)
         assert preview.status_code == 200, preview.text
         assert preview.headers["content-type"].startswith("audio/")
         assert seen["request"]["voice"] == "uk"

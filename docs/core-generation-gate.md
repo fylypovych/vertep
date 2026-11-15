@@ -31,12 +31,21 @@ generation calls у `core/`.
 | LLM | `providers.llm().generate_script()` / `get_llm_client().complete()` | Text Worker |
 | Script | `ScriptAgent().generate_script()` | Text Worker |
 | TTS | `providers.tts().synthesize()` | Voice Worker |
+| TTS runtime | `worker.role_executor.synthesize_voice()` | Voice Worker |
 | GPU | `providers.compute().generate_output()` | GPU Worker |
 | Image | `providers.image().generate()` | GPU Worker |
 | Video (AI) | `providers.video().generate()` | GPU Worker |
 | Publisher | `providers.publisher().publish()` | Publisher Worker |
 
 Прямі звернення до адаптерів (`ComfyUIAdapter()`, `TTSAdapter()`) у CORE також заборонені.
+
+Preview і synthesis голосу (`/api/models/voices/preview`, `/api/models/voices/synthesize`)
+ставлять у чергу задачу `voice_preview` без Job (`core/voice_dispatch.py`, i.0.0.4.70 #470).
+Voice Worker забирає її через `/api/tasks/claim`, виконує `execute_role_task()` і повертає
+аудіо з `audio_contract/v1` через `/api/tasks/result`; CORE перевіряє sha256 і параметри
+контракту. Без готового Voice Worker — `503 no_ready_voice_worker_is_available`, без відповіді
+вчасно (`VOICE_PREVIEW_TIMEOUT_SECONDS`, типово 180) — `504`, помилка Worker — `502`;
+fallback у CORE немає. Каталог голосів (`/voices`) лишається metadata-запитом control-plane.
 
 ### 2.2 Control-plane / orchestration (дозволені в CORE)
 
@@ -67,16 +76,57 @@ Native FFmpeg assembly у CORE залишається control-plane операц
 відмовляється fail-closed guard'ом `_is_native_engine()` у
 `core/pipeline.py:finalize_job()` до будь-якого render.
 
-`ALLOWLIST` у тесті містить задокументовані винятки (§2.2, §2.3) з прив'язкою
-до конкретного файлу й call-site:
+Що ще розпізнає gate (i.0.0.4.71 #471):
 
-- `core/api/job_helpers/script.py:71` — ScriptAgent local fallback.
-- `core/script_agent.py:21` — місце визначення LLM inference (виконується на Text Worker
-  через `worker/role_executor.py`, не CORE orchestration).
-- під час аудиту також задокументовано `core/pipeline.py:385` (assembly) та
-  `core/app.py:848`, `core/pipeline.py:356` (publisher fallback). Оскільки ці ділянки
-  не збігаються з literal-патернами gate (виклики через локальну змінну), вони не
-  активують спрацювання, але внесені в audit-журнал (див. §5).
+- alias клієнта з `with`/`async with ... as c` (`c.post(...)` → `httpx.Client.post`);
+- `importlib.import_module("…")`, `import_module("…")`, `__import__("…")` з константним ім'ям модуля;
+- `getattr(module, "name")` з константним ім'ям; `getattr` з неконстантним ім'ям на модулі
+  генерації (`worker.role_executor`, `adapters.comfyui`, `adapters.tts`, `adapters.llm_clients`,
+  `core.gpu.backends`) — окреме порушення `DYNAMIC`;
+- прямі HTTP-запити `httpx`/`requests` (`get/post/put/patch/request/stream/send`), коли
+  константна частина URL називає inference endpoint: `api/generate`, `api/chat`, `api/embed(dings)`,
+  `chat/completions`, `v1/completions`, `audio/speech`, `images/generations`, `synthesize`, `prompt`;
+- виклики Worker-виконавців `worker.role_executor` (`synthesize_voice`, `execute_role_task`,
+  `execute_text/script/storyboard/voice/image/video/publisher`).
+
+Config/status/probe-запити (`/api/tags`, `/api/pull`, `/models`, `/voices`, `/system_stats`,
+`/health`), `voice_catalog()`, `list_text_models()`, постановка задач у чергу та FFmpeg-монтаж
+не є порушеннями; негативні та контрольні fixtures — у `TestBlindSpots`.
+
+### 3.1 Межі статичного аналізу
+
+Gate — евристика за AST, а не універсальний доказ відсутності генерації в CORE. Він не бачить:
+
+- URL, зібраний повністю динамічно (`f"{base}/api/{operation}"`, змінна з URL, конфіг);
+  так, forwarder лабораторії `core/api/lab_lease.py:inference` (gated forwarder за
+  `docs/lab/lab-gpu-contract.md`) статично не розпізнається;
+- HTTP-клієнти, крім `httpx`/`requests`, сокети, subprocess, сторонні SDK;
+- `getattr` з неконстантним ім'ям на модулі поза переліком модулів генерації,
+  `exec`/`eval`, передачу функцій як аргументів і виклики через структури даних;
+- аліаси, перевизначені умовно або в іншому модулі.
+
+Тому gate доповнює, а не замінює, архітектурний review та інтеграційні тести execution boundary
+(наприклад, `tests/test_voice_worker_dispatch.py`).
+
+### 3.2 Винятки
+
+`ALLOWLIST` прив'язує кожен виняток до файлу, **enclosing function** (qualname, напр.
+`OllamaProvider._infer`) і call-site. Новий заборонений виклик у тому самому файлі, але іншій
+функції, або інша ціль у дозволеній функції виняток не успадковує; другий такий самий виклик
+у дозволеній функції робить запис неоднозначним — тест падає.
+
+| Файл | Функція | Call-site | Підстава |
+|---|---|---|---|
+| `core/api/job_helpers/script.py` | `_generate_script_local` | `ScriptAgent.generate_script` | LOCAL_WORKER_FALLBACK |
+| `core/script_agent.py` | `ScriptAgent._complete` | `get_llm_client` | LLM-реалізація, виконується Text Worker |
+| `core/pipeline.py` | `_do_publish_single` | `publisher.publish` | LOCAL_WORKER_FALLBACK |
+| `core/pipeline.py` | `finalize_job` | `video_engine.render` | control-plane: native FFmpeg assembly |
+| `core/gpu/backends.py` | `OllamaProvider._infer`, `OpenAIProvider._infer` | HTTP inference | shared implementation, виконується Worker GPU router |
+| `core/api/lab_lease.py` | `_unload_model` | `POST /api/generate` з `keep_alive=0` | control-plane: вивантаження моделі, без inference |
+
+Shared implementation у `core/` дозволена лише тоді, коли її не імпортує runtime CORE:
+`TestSharedImplementationBoundary` перевіряє, що `core.gpu.backends` імпортує тільки
+`worker/gpu_routing.py`, а не `core/`, `services/`, `adapters/`, `scripts/` чи `installer/`.
 
 Кожен новий generation call у CORE, не внесений у `ALLOWLIST`, — помилка тестів.
 

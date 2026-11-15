@@ -690,6 +690,7 @@ SCHEDULER_URL=http://scheduler:8095
 CERTIFICATE_MANAGER_URL=http://certificate-manager:8096
 BACKUP_URL=http://backup-service:8092
 OLLAMA_URL=http://ollama:11434
+${DEFAULT_CHARACTER:+DEFAULT_CHARACTER=$DEFAULT_CHARACTER}
 EOF
 python3 - "$existing_env_tmp" "$env_tmp" <<'PY'
 import sys

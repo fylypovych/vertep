@@ -108,18 +108,30 @@ def _key_encryption_key(salt: bytes) -> bytes | None:
 
 
 def _write_sealed_key(path: Path, key: bytes) -> None:
+    """Write the key to a fresh temporary file that is 0600 from its creation.
+
+    i.0.0.4.82: ``O_CREAT | O_EXCL`` with mode 0600 leaves no window in which the
+    key is readable under a permissive umask; callers then link/replace it in place.
+    """
     salt, nonce = os.urandom(16), os.urandom(12)
     kek = _key_encryption_key(salt)
     if kek is None:
-        path.write_text(base64.urlsafe_b64encode(key).decode("ascii"), encoding="ascii")
+        content = base64.urlsafe_b64encode(key).decode("ascii").encode("ascii")
     else:
-        path.write_text(json.dumps({"version": 1, "algorithm": "scrypt+A256GCM",
-                                    "salt": base64.b64encode(salt).decode(),
-                                    "nonce": base64.b64encode(nonce).decode(),
-                                    "ciphertext": base64.b64encode(
-                                        AESGCM(kek).encrypt(nonce, key, _KEY_AAD)).decode()}),
-                        encoding="utf-8")
-    os.chmod(path, 0o600)
+        content = json.dumps({"version": 1, "algorithm": "scrypt+A256GCM",
+                              "salt": base64.b64encode(salt).decode(),
+                              "nonce": base64.b64encode(nonce).decode(),
+                              "ciphertext": base64.b64encode(
+                                  AESGCM(kek).encrypt(nonce, key, _KEY_AAD)).decode()}).encode("utf-8")
+    path.unlink(missing_ok=True)  # a stale temporary of a crashed run, never the live key
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)  # exactly 0600 whatever the umask removed
+        os.write(descriptor, content)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _decode_key(encoded: str) -> bytes:

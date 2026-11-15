@@ -7,6 +7,8 @@ router and delegates its old symbols to these implementations.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import os
 import secrets
@@ -567,6 +569,65 @@ async def delete_system_model(name: str, request: Request, node: str | None = No
 # ---------------------------------------------------------------------------
 
 
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+
+def _storage_probe(storage_root: Path) -> None:
+    """Prove the storage executes a durable write: create, fsync and delete a probe file."""
+    storage_root.mkdir(parents=True, exist_ok=True)
+    probe = storage_root / f".self-test-{uuid.uuid4().hex}.tmp"
+    with probe.open("wb") as handle:
+        handle.write(b"vertep-storage-self-test")
+        handle.flush()
+        os.fsync(handle.fileno())
+    probe.unlink()
+
+
+def _stream_digest(path: Path) -> tuple[str, int]:
+    """SHA256 and size of a file read in chunks, never the whole file in memory."""
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _verified_task_artifacts(store, recent_jobs: list) -> list[dict]:
+    """Artifacts of recent jobs whose bytes still match their recorded identity.
+
+    Runs in a worker thread (i.0.0.4.77). An artifact counts only when it stays
+    inside its job directory, belongs to a task and has the recorded size and
+    SHA256; a missing, outside-path or corrupt file is simply not verified.
+    """
+    verified = []
+    for job in recent_jobs:
+        base = (store.root / job.job_id).resolve()
+        for artifact in job.artifacts:
+            path = (base / artifact.path).resolve()
+            if not path.is_relative_to(base) or not path.is_file() or not artifact.task_id:
+                continue
+            try:
+                sha256, size = _stream_digest(path)
+            except OSError:
+                continue
+            if size == artifact.size and sha256 == artifact.sha256:
+                verified.append({"job_id": job.job_id, "task_id": artifact.task_id,
+                                 "sha256": artifact.sha256, "bytes": size, "kind": artifact.kind})
+    recent = {job.job_id: job for job in recent_jobs}
+    for completed in store.repository.completed_tasks():
+        job = recent.get(completed["job_id"])
+        if completed.get("task_type") != "script" or not job or not job.script:
+            continue
+        path = store.root / job.job_id / "script.json"
+        if path.is_file() and json.loads(path.read_text(encoding="utf-8")) == job.script:
+            sha256, size = _stream_digest(path)
+            verified.append({"job_id": job.job_id, "task_id": completed["task_id"],
+                             "sha256": sha256, "bytes": size, "kind": "script"})
+    return verified
+
+
 @router.post("/api/system/test")
 async def system_test(payload: dict | None = None):
     """Run system self-test (Quick or Full).
@@ -620,13 +681,8 @@ async def system_test(payload: dict | None = None):
         try:
             from ..first_run import default_storage_root
             storage_root = default_storage_root()
-            storage_root.mkdir(parents=True, exist_ok=True)
-            probe = storage_root / f".self-test-{uuid.uuid4().hex}.tmp"
-            with probe.open("wb") as handle:
-                handle.write(b"vertep-storage-self-test")
-                handle.flush()
-                os.fsync(handle.fileno())
-            probe.unlink()
+            # audit-1511 В3: the write/fsync/delete probe runs off the event loop.
+            await asyncio.to_thread(_storage_probe, storage_root)
             result["storage"] = {
                 "writable": True,
                 "execution_probe": "write-fsync-delete",
@@ -652,28 +708,8 @@ async def system_test(payload: dict | None = None):
                     elif status in {StageStatus.PENDING.value, StageStatus.RUNNING.value,
                                     StageStatus.PAUSED.value}:
                         task_stats["pending"] += 1
-            import hashlib
-            verified = []
-            for job in recent_jobs:
-                base = (store.root / job.job_id).resolve()
-                for artifact in job.artifacts:
-                    path = (base / artifact.path).resolve()
-                    if not path.is_relative_to(base) or not path.is_file() or not artifact.task_id:
-                        continue
-                    data = path.read_bytes()
-                    if len(data) == artifact.size and hashlib.sha256(data).hexdigest() == artifact.sha256:
-                        verified.append({"job_id": job.job_id, "task_id": artifact.task_id,
-                            "sha256": artifact.sha256, "bytes": len(data), "kind": artifact.kind})
-            recent = {job.job_id: job for job in recent_jobs}
-            for completed in store.repository.completed_tasks():
-                job = recent.get(completed["job_id"])
-                if completed.get("task_type") != "script" or not job or not job.script:
-                    continue
-                path = store.root / job.job_id / "script.json"
-                if path.is_file() and json.loads(path.read_text(encoding="utf-8")) == job.script:
-                    data = path.read_bytes()
-                    verified.append({"job_id": job.job_id, "task_id": completed["task_id"],
-                        "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "kind": "script"})
+            # i.0.0.4.77: reading and hashing artifacts never blocks the event loop.
+            verified = await asyncio.to_thread(_verified_task_artifacts, store, recent_jobs)
             task_stats["completed"] = max(task_stats["completed"], len({item["task_id"] for item in verified}))
             result["task_results"] = {**task_stats, "verified_artifacts": verified}
         except Exception as error:

@@ -150,22 +150,17 @@ def _terminate_process(process) -> None:
 
 
 def _kill_process_group(pgid: int, sig: int) -> None:
-    """Kill an entire process group using the kill command (works in containers)."""
-    # Try kill -SIG -pgid (sends signal to entire process group)
+    """Signal exactly one process group: the spawned privileged command tree.
+
+    Only ``os.killpg`` is used. The external ``kill -SIG -PGID`` of procps-ng
+    4.0.4 (Ubuntu 24.04) signalled every process of the user instead of the
+    group, so a cancelled update could kill the whole host; ``pkill -g`` was
+    a redundant second path. A group id that is not a dedicated child group
+    (``<= 1`` or our own) is refused.
+    """
+    if pgid <= 1 or pgid == os.getpgid(0):
+        return
     try:
-        subprocess.run(["kill", f"-{sig}", f"-{pgid}"],
-                       capture_output=True, timeout=5)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
-    # Also try pkill as fallback
-    try:
-        subprocess.run(["pkill", f"-{sig}", "-g", str(pgid)],
-                       capture_output=True, timeout=5)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
-    # Also try os.killpg as last resort for the group
-    try:
-        import signal
         os.killpg(pgid, sig)
     except (ProcessLookupError, PermissionError, OSError):
         pass

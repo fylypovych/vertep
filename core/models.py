@@ -288,7 +288,8 @@ class JobCreate(BaseModel):
     acl: list[str] = Field(default_factory=list)
     workflow_template: str | None = None
     topic: str = Field(min_length=1, max_length=500)
-    character_id: str = Field(default="did_samogon", pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
+    # i.0.0.4.75: omitted = the configured DEFAULT_CHARACTER, never a hardcoded id.
+    character_id: str | None = Field(default=None, pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
     priority: int = Field(default=5, ge=1, le=10)
     source: str = "web"
     task_type: str = "image"

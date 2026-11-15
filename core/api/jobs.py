@@ -4,6 +4,7 @@ Extracted from ``core/app.py``: everything under ``/api/jobs`` plus the job
 artifact download/upload/export/import endpoints and the legacy asset ``video``
 and ``job_file`` endpoints.
 """
+import asyncio
 import io
 import json
 import os
@@ -19,7 +20,7 @@ from starlette.responses import Response
 from adapters.providers import providers
 
 from ..artifacts import register_artifact, verify_artifacts, write_manifest
-from ..configuration import load_character
+from ..configuration import DefaultCharacterError, default_character_id, load_character
 from ..dispatcher import can_retry
 from ..file_validation import validate_signature
 from ..models import JobCreate, JobStatus, JobUpdate, StageName, StageStatus
@@ -70,6 +71,11 @@ def public_video(job_id: str, version: int, expires: int, signature: str):
 def create_job(request: JobCreate):
     if not jobs_may_be_created():
         raise HTTPException(503, "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.")
+    if request.character_id is None:
+        try:
+            request.character_id = default_character_id()
+        except DefaultCharacterError as error:
+            raise HTTPException(422, str(error)) from error
     if request.workflow_template:
         from core.workflow.runtime import workflow_runtime
         runtime = workflow_runtime()
@@ -605,8 +611,12 @@ async def upload_job_file(job_id: str, folder: str, filename: str, request: Requ
     destination = store.root / job_id / folder / safe_name
     if destination.exists():
         raise HTTPException(409, "File already exists")
-    destination.write_bytes(data)
-    artifact = register_artifact(job, store.root, destination, "input", workflow="user-upload")
+    def save() -> object:
+        destination.write_bytes(data)
+        return register_artifact(job, store.root, destination, "input", workflow="user-upload")
+
+    # i.0.0.4.77: writing and hashing the upload stays off the event loop.
+    artifact = await asyncio.to_thread(save)
     store.event(job, f"INPUT {artifact.artifact_id} UPLOADED")
     return artifact
 
@@ -643,8 +653,15 @@ async def import_project(request: Request):
         original = json.loads(archive.read("job.json"))
     except (ValueError, KeyError, zipfile.BadZipFile, json.JSONDecodeError) as error:
         raise HTTPException(400, f"Invalid project archive: {error}") from error
+    character_id = original.get("character_id")
+    if not character_id:
+        try:
+            character_id = default_character_id()
+        except DefaultCharacterError as error:
+            raise HTTPException(422, f"Imported project has no character: {error}") from error
+        original["character_id"] = character_id
     imported = store.create(str(original.get("topic") or "Imported project"),
-                            str(original.get("character_id") or "did_samogon"),
+                            str(character_id),
                             int(original.get("priority", 5)), source="import")
     new_id = imported.job_id
     imported_status = str(original.get("status", JobStatus.PAUSED.value))
@@ -661,14 +678,19 @@ async def import_project(request: Request):
         store.delete(new_id)
         raise HTTPException(400, f"Invalid project metadata: {error}") from error
     destination_root = store.root / new_id
-    for item in archive.infolist():
-        if item.is_dir() or item.filename == "job.json":
-            continue
-        destination = destination_root / item.filename
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(archive.read(item))
+
+    def extract() -> None:
+        for item in archive.infolist():
+            if item.is_dir() or item.filename == "job.json":
+                continue
+            destination = destination_root / item.filename
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(archive.read(item))
+        write_manifest(imported, store.root)
+
+    # i.0.0.4.77: unpacking and hashing the archive stays off the event loop.
+    await asyncio.to_thread(extract)
     store.jobs[new_id] = imported
-    write_manifest(imported, store.root)
     store.event(imported, "PROJECT IMPORTED AND PAUSED")
     return imported
 

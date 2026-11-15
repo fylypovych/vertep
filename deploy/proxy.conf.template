@@ -1,3 +1,8 @@
+# i.0.0.4.72: node identity comes only from a TLS peer certificate that nginx
+# verified against node-ca; anything else is sent as an empty header, which
+# nginx drops, so a client-supplied X-Vertep-Client-DN/Serial never reaches CORE.
+map $ssl_client_verify $vertep_client_dn { SUCCESS $ssl_client_s_dn; default ""; }
+map $ssl_client_verify $vertep_client_serial { SUCCESS $ssl_client_serial; default ""; }
 server {
   listen 8443 ssl;
   server_name ${WEB_DOMAIN};
@@ -8,13 +13,21 @@ server {
   ssl_verify_client optional;
   ssl_protocols TLSv1.2 TLSv1.3;
   client_max_body_size 256m;
-  location / { proxy_pass http://core:8080; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; }
+  location / {
+    proxy_pass http://core:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Vertep-Client-DN $vertep_client_dn;
+    proxy_set_header X-Vertep-Client-Serial $vertep_client_serial;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+  }
   location ~ ^/api/(workers/heartbeat|tasks/(claim|renew|cancellations|result)|logs/ingest|node/status|nodes/[a-z0-9-]+/renew) {
     if ($ssl_client_verify != SUCCESS) { return 401; }
     proxy_pass http://core:8080;
     proxy_set_header Host $host;
-    proxy_set_header X-Vertep-Client-DN $ssl_client_s_dn;
-    proxy_set_header X-Vertep-Client-Serial $ssl_client_serial;
+    proxy_set_header X-Vertep-Client-DN $vertep_client_dn;
+    proxy_set_header X-Vertep-Client-Serial $vertep_client_serial;
+    proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Proto https;
   }
 }

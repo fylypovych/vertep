@@ -29,13 +29,90 @@ import base64 as basic64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
+import socket
 import os
 import re
 import secrets
 import time
 from fastapi import APIRouter
 router = APIRouter()
+
+_SETUP_ALL_CLIENTS = "*all-clients*"
+_TRUSTED_PROXY_CACHE: dict[str, tuple[float, set[str]]] = {}
+
+
+def _trusted_proxy_addresses() -> set[str]:
+    """Addresses of the reverse proxy whose ``X-Real-IP`` is trusted.
+
+    ``TRUSTED_PROXY_HOSTS`` (default ``proxy``, the shipped compose service) lists
+    host names, IPs or CIDRs; names are resolved and cached for a minute. When
+    nothing resolves, no forwarded header is trusted.
+    """
+    entries = [item.strip() for item in os.getenv("TRUSTED_PROXY_HOSTS", "proxy").split(",") if item.strip()]
+    addresses: set[str] = set()
+    now = time.monotonic()
+    for entry in entries:
+        try:
+            ipaddress.ip_network(entry, strict=False)
+            addresses.add(entry)
+            continue
+        except ValueError:
+            pass
+        cached = _TRUSTED_PROXY_CACHE.get(entry)
+        if cached and cached[0] > now:
+            addresses |= cached[1]
+            continue
+        try:
+            resolved = {info[4][0] for info in socket.getaddrinfo(entry, None)}
+        except OSError:
+            resolved = set()
+        _TRUSTED_PROXY_CACHE[entry] = (now + 60, resolved)
+        addresses |= resolved
+    return addresses
+
+
+def _is_trusted_proxy(peer: str) -> bool:
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    for entry in _trusted_proxy_addresses():
+        try:
+            if address in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _setup_client_identity(request) -> str:
+    """The client a setup attempt is counted for (i.0.0.4.82).
+
+    ``X-Real-IP`` is honoured only from the trusted proxy, which overwrites it with
+    the TLS peer; from anyone else it is ignored, so a forged header cannot pick
+    another client's bucket or escape its own.
+    """
+    peer = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-real-ip", "").strip()
+    if forwarded and _is_trusted_proxy(peer):
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            return peer
+    return peer
+
+
+def _https_request(request) -> bool:
+    """HTTPS as seen by the browser: direct TLS or the proxy's X-Forwarded-Proto.
+
+    The shipped proxy overwrites ``X-Forwarded-Proto``; a forged value can only
+    add ``Secure``, which never weakens the cookie (i.0.0.4.82).
+    """
+    return (request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower() == "https")
+
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -52,11 +129,15 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         if not is_configured() and setup_route:
             expected_setup = os.getenv("SETUP_TOKEN_HASH", "")
             if expected_setup and request.url.path.startswith("/api/setup"):
-                client = request.client.host if request.client else "unknown"
+                # i.0.0.4.82: attempts are counted per real client (trusted proxy
+                # X-Real-IP) plus one installation-wide ceiling.
+                client = _setup_client_identity(request)
                 window = setup_request_windows[client]
+                shared = setup_request_windows[_SETUP_ALL_CLIENTS]
                 timestamp = time.time()
-                while window and window[0] < timestamp - 600:
-                    window.popleft()
+                for attempts in (window, shared):
+                    while attempts and attempts[0] < timestamp - 600:
+                        attempts.popleft()
                 expires = os.getenv("SETUP_TOKEN_EXPIRES_AT", "")
                 try:
                     expired = bool(expires) and datetime.fromisoformat(
@@ -69,9 +150,11 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                     hashlib.sha256(request.headers.get("x-vertep-setup-token", "").encode()).hexdigest(),
                     expected_setup)
                 if not valid_setup_code:
-                    if len(window) >= int(os.getenv("SETUP_RATE_LIMIT_PER_10_MINUTES", "10")):
+                    if (len(window) >= int(os.getenv("SETUP_RATE_LIMIT_PER_10_MINUTES", "10"))
+                            or len(shared) >= int(os.getenv("SETUP_RATE_LIMIT_GLOBAL_PER_10_MINUTES", "100"))):
                         return Response("Setup attempts are temporarily locked", 429, {"Retry-After": "600"})
                     window.append(timestamp)
+                    shared.append(timestamp)
                     return Response("Invalid setup code", 401)
             return self._secure(await call_next(request))
         if request.method != "GET":
@@ -139,7 +222,16 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                    "/api/tasks/cancellations", "/api/tasks/result", "/api/logs/ingest",
                    "/api/node/status", "/lab-lease/v1/")
         worker_input = request.method == "GET" and re.fullmatch(r"/api/tasks/[^/]+/(inputs|character-references)/.+", request.url.path)
-        if worker_input or request.url.path.startswith(machine) or re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", request.url.path):
+        # Worker-only routes that check the node token themselves; exact paths and
+        # methods, so no sibling admin route is opened (audit-1511 В1).
+        worker_exact = ((request.method, request.url.path) in {
+            ("GET", "/api/tasks/publisher-readiness"),
+            ("POST", "/api/workers/model-progress"),
+            ("POST", "/api/watchdog/report")}
+            or (request.method == "POST"
+                and re.fullmatch(r"/api/nodes/[a-z0-9-]+/self-test", request.url.path)))
+        if (worker_input or worker_exact or request.url.path.startswith(machine)
+                or re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", request.url.path)):
             # Machine routes validate and bind the token to node_name themselves.
             # Keeping that check in one place also supports hashed per-worker tokens.
             response = await call_next(request)
@@ -278,9 +370,11 @@ def login(request: Request, response: Response):
     if role is None:
         return _json_error("Unauthorized", 401)
     token = _session_token(user, role)
-    response.set_cookie("vertep_session", token, httponly=True, samesite="Strict", max_age=28800)
+    secure = _https_request(request)
+    response.set_cookie("vertep_session", token, httponly=True, samesite="Strict", max_age=28800,
+                        secure=secure)
     csrf = hmac.new(supplied.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
-    response.set_cookie("vertep_csrf", csrf, samesite="Strict", max_age=28800)
+    response.set_cookie("vertep_csrf", csrf, samesite="Strict", max_age=28800, secure=secure)
     return session_response((user, role))
 
 

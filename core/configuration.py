@@ -1,10 +1,40 @@
 import json
+import os
 import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
+
+
+class DefaultCharacterError(ValueError):
+    """No usable default character is configured (i.0.0.4.75)."""
+
+
+def default_character_id(*preferred: str) -> str:
+    """The configured default character: no character id lives in runtime code.
+
+    ``preferred`` names more specific settings (e.g. ``TELEGRAM_DEFAULT_CHARACTER``)
+    checked before ``DEFAULT_CHARACTER``. The first one that is set must name an
+    existing character in ``CHARACTERS_ROOT``; an invalid value is an error, it
+    never falls through to another character silently.
+    """
+    root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
+    for name in (*preferred, "DEFAULT_CHARACTER"):
+        value = os.getenv(name, "").strip()
+        if not value:
+            continue
+        if not SAFE_ID.fullmatch(value) or not (root / value / "character.json").is_file():
+            raise DefaultCharacterError(
+                f"Configured default character {name}={value!r} does not exist")
+        missing = missing_character_files(root, value)
+        if missing:
+            raise DefaultCharacterError(
+                f"Configured default character {name}={value!r} is incomplete: missing {', '.join(missing)}")
+        return value
+    raise DefaultCharacterError(
+        "No default character is configured (DEFAULT_CHARACTER); choose a character explicitly")
 
 
 import secrets
@@ -49,8 +79,33 @@ def read_json(path: Path, default: dict | None = None) -> dict:
         return default or {}
 
 
-def load_character(root: Path, character_id: str) -> CharacterConfig:
+# AGENTS.md §3.2: a character is ready only with its complete configuration.
+REQUIRED_CHARACTER_FILES = ("character.json", "system_prompt.txt", "voice.json",
+                            "visual.json", "generation.json", "publishing.json")
+
+
+class IncompleteCharacterError(ValueError):
+    """A character directory lacks required configuration files (i.0.0.4.76)."""
+
+
+def missing_character_files(root: Path, character_id: str) -> list[str]:
+    directory = Path(root) / character_id
+    return [name for name in REQUIRED_CHARACTER_FILES if not (directory / name).is_file()]
+
+
+def load_character(root: Path, character_id: str, *, require_complete: bool = False) -> CharacterConfig:
+    """Load a character; ``require_complete`` refuses one missing a §3.2 file.
+
+    The standard paths that announce a character as ready (character listing,
+    default selection, Telegram selection) require completeness; an explicit
+    id keeps loading as before.
+    """
     directory = root / character_id
+    if require_complete:
+        missing = missing_character_files(root, character_id)
+        if missing:
+            raise IncompleteCharacterError(
+                f"Character {character_id!r} is incomplete: missing {', '.join(missing)}")
     base = read_json(directory / "character.json")
     base.update({
         "system_prompt": (directory / "system_prompt.txt").read_text(encoding="utf-8") if (directory / "system_prompt.txt").exists() else "",

@@ -15,6 +15,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import httpx
 from adapters.comfyui import PromptCancelledError
+from core.script_agent import ScriptStopped
 from adapters import comfyui_runtime
 from adapters.providers import providers
 from adapters.providers.base import ComputeProvider
@@ -270,8 +271,10 @@ def _executor_resolves(key: str, value: str) -> bool:
     from adapters.providers import providers as registry
 
     if key == "VERTEP_LLM_PROVIDER":
-        from adapters.llm_clients import SUPPORTED_BACKENDS
-        return expected in SUPPORTED_BACKENDS
+        # i.0.0.4.79: a delivered backend counts as applied only when this
+        # node's executor can run it (known backend, and openai has its key).
+        from adapters.llm_clients import backend_readiness
+        return backend_readiness(expected)[1]
     if key == "VERTEP_VIDEO_ENGINE":
         engine = registry.video_engine()
         if str(getattr(engine, "engine_id", "") or "").strip().lower() != expected:
@@ -616,7 +619,7 @@ def execute_task(adapter: ComputeProvider, task: dict, node_name: str) -> dict:
                 "filename": artifacts[0]["filename"],
                 "image_base64": images[0]["image_base64"] if images else None,
                 "images": images, "artifacts": artifacts}
-    except PromptCancelledError as error:
+    except (PromptCancelledError, ScriptStopped) as error:
         # CORE requested the cancellation: this is a terminal, expected outcome and
         # must not be reported as a failure (which would trigger a pointless retry
         # of a scene the operator already abandoned).
@@ -794,6 +797,9 @@ def main() -> None:
                 if future is not None and active_task and not active_task.get("lease_lost"):
                     cancellations = renew_active_task(client, core, payload["node_name"], active_task)
                     if any(item["task_id"] == active_task["task_id"] for item in cancellations):
+                        # The running executor sees this on its own task dict and
+                        # starts no further request (i.0.0.4.74).
+                        active_task["cancelled"] = True
                         from worker.gpu_routing import cancel as cancel_gpu_inference
                         cancel_gpu_inference(active_task["task_id"])
                         if active_task.get("task") == "assembly":

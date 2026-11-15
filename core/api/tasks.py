@@ -19,6 +19,7 @@ from ..orchestration import start_scene, transition_stage
 from ..security import _valid_worker_request
 from ..state import logger, store, task_queue
 from ..version import worker_incompatibility
+from .. import voice_dispatch
 from ..turns import may_claim_now, record_claim
 from ..alert_store import get_alert_store
 from ..system_state import dispatch_allowed, get_system_state
@@ -119,6 +120,26 @@ def _claim_task(payload: TaskClaim):
         task = task_queue.claim()
         if not task:
             break
+        if voice_dispatch.is_preview_task(task):
+            # Issue i.0.0.4.70: a job-less voice preview runs on a Voice Worker.
+            if not voice_dispatch.is_pending(task["task_id"]):
+                task_queue.ack(task["task_id"])
+                continue
+            if voice_dispatch.worker_for([worker_data], task) is None:
+                held_tasks.append(task["task_id"])
+                continue
+            if not voice_dispatch.claimed(task["task_id"], payload.node_name):
+                task_queue.ack(task["task_id"])
+                continue
+            for held_task_id in held_tasks:
+                task_queue.release(held_task_id)
+            held_tasks.clear()
+            store.workers[payload.node_name] = worker_data
+            store.workers[payload.node_name]["status"] = "BUSY"
+            store.workers[payload.node_name]["current_job"] = None
+            store.workers[payload.node_name]["current_task"] = task["task_id"]
+            store.save_worker(store.workers[payload.node_name])
+            return {"task": task}
         job = store.jobs.get(task["job_id"])
         if job is None:
             # The Job was deleted: its task can never run and must not block the queue.
@@ -379,6 +400,11 @@ def _claim_task(payload: TaskClaim):
 def renew_task(payload: TaskRenew, request: Request):
     if not _valid_worker_request(payload.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
+    if voice_dispatch.is_pending(payload.task_id):
+        if voice_dispatch.owner(payload.task_id) != payload.node_name:
+            raise HTTPException(
+                409, "Task is no longer assigned to this worker")
+        return {"renewed": task_queue.renew(payload.task_id)}
     text_job = next((job for job in store.jobs.values() if payload.task_id in {
                     job.script_task_id, job.storyboard_task_id}), None)
     if text_job is not None:
@@ -714,6 +740,15 @@ def retry_dead_letter_task(task_id: str):
 def task_result(result: TaskResult, request: Request):
     if not _valid_worker_request(result.node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
+    if result.job_id == voice_dispatch.PREVIEW_JOB_ID:
+        accepted = voice_dispatch.complete(
+            result.task_id, result.node_name, success=result.success,
+            artifacts=result.artifacts, error=result.error)
+        task_queue.ack(result.task_id)
+        voice_dispatch.release_worker(result.node_name, result.task_id)
+        if not accepted:
+            raise HTTPException(409, "Voice preview is no longer awaited")
+        return {"accepted": True}
     job = store.jobs.get(result.job_id)
     if not job:
         raise HTTPException(404, "Job not found")

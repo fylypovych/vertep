@@ -277,12 +277,14 @@ def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
     char_dir_for_config = char_dir
     char_dir_for_characterize = char_dir
     char_dir_for_characterize.mkdir(parents=True, exist_ok=True)
-    (char_dir_for_characterize / "character.json").write_text(json.dumps({
+    # i.0.0.4.76: a selectable character carries every §3.2 file.
+    from core.configuration import CharacterConfig, save_character
+    save_character(char_dir_for_characterize.parent, CharacterConfig.model_validate({
         "id": "did_samogon", "name": "Дід Самогонщик", "language": "uk", "enabled": True,
         "system_prompt": "Ти дід самогонщик.", "voice": {"provider": "none"},
         "visual": {"style": "documentary"}, "generation": {"workflow": "workflows/image/demo.json"},
         "publishing": {"enabled": False, "channels": []},
-    }), encoding="utf-8")
+    }))
     monkeypatch.setenv("CHARACTERS_ROOT", str(character_root))
     client = TestClient(app)
     brand_dir = brand_root / "brand01"
@@ -328,12 +330,14 @@ def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_pa
     character_root.mkdir(parents=True, exist_ok=True)
     char_dir = character_root / "did_samogon"
     char_dir.mkdir(parents=True, exist_ok=True)
-    (char_dir / "character.json").write_text(json.dumps({
+    # i.0.0.4.76: a selectable character carries every §3.2 file.
+    from core.configuration import CharacterConfig, save_character
+    save_character(char_dir.parent, CharacterConfig.model_validate({
         "id": "did_samogon", "name": "Дід Самогонщик", "language": "uk", "enabled": True,
         "system_prompt": "Ти дід самогонщик.", "voice": {"provider": "none"},
         "visual": {"style": "documentary"}, "generation": {"workflow": "workflows/image/demo.json"},
         "publishing": {"enabled": False, "channels": []},
-    }), encoding="utf-8")
+    }))
     monkeypatch.setenv("CHARACTERS_ROOT", str(character_root))
     client = TestClient(app)
     brand_dir = brand_root / "brand01"

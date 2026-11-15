@@ -7,10 +7,18 @@ callable.  The Text Worker passes its own LLM transport (``execute_script``);
 Failures are never masked: an unparseable structure, an invalid scene that
 stays invalid after its own regeneration budget, or a backend error abort the
 task so CORE applies its regular retry/``max_retries`` policy.
+
+i.0.0.4.74 (#474): the whole multi-stage run shares one task budget
+(:class:`ScriptBudget`). Before every LLM request — the structure, each scene
+and each scene retry — the ``checkpoint`` stops the run on cancellation, lost
+lease or an exhausted budget, so no new request starts after the right to run
+is gone. A request already in flight is not interrupted: its transport timeout
+is cut to the remaining budget, which is the real upper bound of a stop.
 """
 
 import json
 import os
+import time
 from collections.abc import Callable
 
 from pydantic import ValidationError
@@ -22,10 +30,55 @@ from .script_schema import ScriptScene, normalize_script
 STRUCTURE_STAGE = "STAGE=structure"
 SCENE_STAGE = "STAGE=scene"
 MAX_SCENES = 200
+# Stand-in scene that lets the Assembly contract check structure metadata alone.
+_PLACEHOLDER_SCENE = {"prompt": "structure check", "video_prompt": "structure check", "duration": 1}
 
 
 class ScriptGenerationError(RuntimeError):
     """A script stage produced no usable result within its limits."""
+
+
+class ScriptBudgetExceeded(ScriptGenerationError):
+    """The task budget ran out: a regular failure, so CORE applies its retries."""
+
+
+class ScriptStopped(RuntimeError):
+    """The executor lost the right to run (cancelled or lease lost): no new request."""
+
+
+class ScriptBudget:
+    """One time budget and ownership check for a whole script task.
+
+    ``seconds`` is the existing task timeout (``task.timeout`` /
+    ``OLLAMA_SCRIPT_TIMEOUT``), applied to the run instead of to each request.
+    ``stop`` returns a reason (``"cancelled"``, ``"lease lost"``) once the
+    executor no longer owns the task, or ``None``. ``clock`` is injectable for
+    tests.
+    """
+
+    def __init__(self, seconds: float, *, stop: Callable[[], str | None] | None = None,
+                 clock: Callable[[], float] | None = None) -> None:
+        self.seconds = float(seconds)
+        self._stop = stop
+        self._clock = clock = clock or time.monotonic
+        self._deadline = clock() + self.seconds
+
+    def remaining(self) -> float:
+        return self._deadline - self._clock()
+
+    def check(self) -> None:
+        reason = self._stop() if self._stop is not None else None
+        if reason:
+            raise ScriptStopped(f"Script generation stopped: {reason}")
+        if self.remaining() <= 0:
+            raise ScriptBudgetExceeded(
+                f"Script task budget of {self.seconds:g}s is exhausted")
+
+    def bound(self, timeout: float | None) -> float:
+        """Check, then cut a transport timeout to the remaining budget."""
+        self.check()
+        remaining = self.remaining()
+        return remaining if timeout is None else min(float(timeout), remaining)
 
 
 def _scene_attempts() -> int:
@@ -37,9 +90,11 @@ def _scene_attempts() -> int:
 
 class ScriptAgent:
     def __init__(self, complete: Callable[[str], str] | None = None,
-                 *, scene_attempts: int | None = None) -> None:
+                 *, scene_attempts: int | None = None,
+                 checkpoint: Callable[[], None] | None = None) -> None:
         self._complete_fn = complete
         self._scene_attempts = scene_attempts
+        self._checkpoint = checkpoint
 
     def generate_script(self, topic: str, system_prompt: str = "", character: dict | None = None,
                         revision: str | None = None, brief: str | None = None) -> dict:
@@ -55,6 +110,9 @@ class ScriptAgent:
 
     # -- transport -----------------------------------------------------------
     def _complete(self, prompt: str) -> str:
+        # Before every request: structure, next scene and scene retry (#474).
+        if self._checkpoint is not None:
+            self._checkpoint()
         if self._complete_fn is not None:
             return self._complete_fn(prompt)
         return get_llm_client().complete(prompt, format_json=True)
@@ -99,7 +157,22 @@ class ScriptAgent:
         }
         if isinstance(data.get("platforms"), dict):
             structure["platforms"] = data["platforms"]
+        self._check_structure_metadata(structure, context["topic"])
         return structure
+
+    @staticmethod
+    def _check_structure_metadata(structure: dict, topic: str) -> None:
+        """Validate title/description/hashtags/voiceover/platforms before any scene.
+
+        i.0.0.4.80: the same ``normalize_script`` / ``ScriptDocument`` contract as
+        Assembly, applied to the structure with one placeholder scene, so invalid
+        metadata fails before the scenes spend LLM requests. Nothing is relaxed.
+        """
+        metadata = {key: value for key, value in structure.items() if key != "scenes_plan"}
+        try:
+            normalize_script({**metadata, "scenes": [_PLACEHOLDER_SCENE]}, topic)
+        except ValueError as error:
+            raise ScriptGenerationError(f"Script structure metadata is invalid: {error}") from error
 
     # -- Scenes --------------------------------------------------------------
     def _generate_scene(self, context: dict, structure: dict, number: int, entry: dict) -> dict:
@@ -139,7 +212,10 @@ class ScriptAgent:
             "prompt": prompt,
             "video_prompt": data.get("video_prompt") or prompt,
             "voiceover": data.get("voiceover") or data.get("text") or "",
-            "duration": data.get("duration", entry["estimated_duration"]),
+            # ``null`` means "no value", like an absent key: the planned duration
+            # applies instead of a pointless regeneration (i.0.0.4.80).
+            "duration": (entry["estimated_duration"] if data.get("duration") is None
+                         else data["duration"]),
         }
         try:
             return ScriptScene.model_validate(scene).model_dump()

@@ -61,12 +61,14 @@ class DefaultLLMProvider(LLMProvider):
         brief: str | None = None,
         timeout: float | None = None,
         post: Any = None,
+        checkpoint: Any = None,
     ) -> dict:
         from adapters.llm_clients import get_llm_client
         from core.script_agent import ScriptAgent
 
         client = get_llm_client(purpose="script", timeout=timeout, post=post)
-        agent = ScriptAgent(lambda prompt: client.complete(prompt, format_json=True))
+        agent = ScriptAgent(lambda prompt: client.complete(prompt, format_json=True),
+                            checkpoint=checkpoint)
         return agent.generate_script(topic, system_prompt, character,
                                      revision=revision, brief=brief)
 
@@ -417,14 +419,13 @@ def provider_matrix() -> dict[str, dict]:
     matrix: dict[str, dict] = {}
 
     # LLM
-    llm_name = os.getenv("VERTEP_LLM_PROVIDER", "ollama").lower().strip()
-    llm_configured = True
-    if llm_name == "openai":
-        llm_configured = bool(
-            os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
-        )
+    # i.0.0.4.79: the same readiness rule as the executor; an unknown backend is
+    # shown as itself and not configured, never masked as a ready Ollama.
+    from adapters.llm_clients import backend_readiness
+
+    llm_name, llm_configured = backend_readiness()
     matrix["llm"] = {
-        "backend": "openai" if llm_name == "openai" else "ollama",
+        "backend": llm_name,
         "options": ["ollama", "openai"],
         "env": "VERTEP_LLM_PROVIDER",
         "configured": llm_configured,

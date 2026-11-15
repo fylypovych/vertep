@@ -86,7 +86,7 @@ class TestPreviewBackendGates:
             raise AssertionError("runtime must not be touched when disabled")
 
         monkeypatch.setattr(models_api, "voice_catalog", _boom)
-        monkeypatch.setattr(models_api, "synthesize_voice", _boom)
+        monkeypatch.setattr(models_api, "synthesize_through_worker", _boom)
         assert _post(client, text="hi").status_code == 409
 
 
@@ -120,13 +120,13 @@ class TestPreviewRuntimeFailures:
         def _raise(*_args, **_kwargs):
             raise httpx.ConnectError("tts down")
 
-        monkeypatch.setattr(models_api, "synthesize_voice", _raise)
+        monkeypatch.setattr(models_api, "synthesize_through_worker", _raise)
         assert _post(client, text="hi").status_code == 502
 
     def test_empty_audio_is_502(self, client, monkeypatch):
         monkeypatch.setenv("TTS_PROVIDER", "mock")
         monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": []})
-        monkeypatch.setattr(models_api, "synthesize_voice", lambda *a, **k: b"")
+        monkeypatch.setattr(models_api, "synthesize_through_worker", lambda *a, **k: b"")
         assert _post(client, text="hi").status_code == 502
 
 
@@ -135,7 +135,7 @@ class TestPreviewVoices:
         monkeypatch.setenv("TTS_PROVIDER", "mock")
         monkeypatch.setattr(models_api, "voice_catalog", lambda: {"voices": [{"name": "uk"}]})
         monkeypatch.setattr(
-            models_api, "synthesize_voice",
+            models_api, "synthesize_through_worker",
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("no synthesis")))
         response = _post(client, text="hi", voice="nope")
         assert response.status_code == 422
@@ -150,7 +150,7 @@ class TestPreviewVoices:
             seen.update(text=text, voice=voice, speed=speed)
             return _wav()
 
-        monkeypatch.setattr(models_api, "synthesize_voice", _synth)
+        monkeypatch.setattr(models_api, "synthesize_through_worker", _synth)
         response = _post(client, text="привіт", voice="uk", speed=170)
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("audio/")
@@ -166,7 +166,7 @@ class TestPreviewVoices:
             seen.update(voice=voice, speed=speed)
             return b"RIFF\x04\x00\x00\x00WAVE"
 
-        monkeypatch.setattr(models_api, "synthesize_voice", _synth)
+        monkeypatch.setattr(models_api, "synthesize_through_worker", _synth)
         response = _post(client, text="hi")
         assert response.status_code == 200
         assert seen == {"voice": "default", "speed": 150}
@@ -198,7 +198,7 @@ class TestIssue455Contract:
         monkeypatch.setenv("TTS_PROVIDER", "mock")
         monkeypatch.setattr(models_api, "voice_catalog", lambda: self.RUNTIME)
         seen = []
-        monkeypatch.setattr(models_api, "synthesize_voice", lambda text, voice, speed: seen.append(voice) or _wav())
+        monkeypatch.setattr(models_api, "synthesize_through_worker", lambda text, voice, speed: seen.append(voice) or _wav())
         assert _post(client, text="hi", voice="uk").status_code == 200
         assert _post(client, text="hi").status_code == 200  # default is not a catalog entry
         assert seen == ["uk", "default"]
@@ -209,7 +209,7 @@ class TestIssue455Contract:
     def test_speed_follows_the_runtime_range(self, client, monkeypatch, speed):
         monkeypatch.setenv("TTS_PROVIDER", "mock")
         monkeypatch.setattr(models_api, "voice_catalog", lambda: self.RUNTIME)
-        monkeypatch.setattr(models_api, "synthesize_voice",
+        monkeypatch.setattr(models_api, "synthesize_through_worker",
                             lambda *a, **k: (_ for _ in ()).throw(AssertionError("no synthesis")))
         response = _post(client, text="hi", speed=speed)
         assert response.status_code == 422
