@@ -167,7 +167,14 @@ def _kill_process_group(pgid: int, sig: int) -> None:
 
 
 def _wait_for_group_exit(pgid: int, timeout: float) -> None:
-    """Wait for all processes in a process group to exit."""
+    """Wait for all processes in a process group to exit.
+
+    SIGTERM is repeated while members are alive: a signal that reaches a child
+    between fork and exec can be lost (observed under qemu-user on the arm64 CI),
+    and a member that is still starting must not outlive the fence until the
+    SIGKILL deadline and land its delayed side effect.
+    """
+    import signal
     import time
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -176,6 +183,7 @@ def _wait_for_group_exit(pgid: int, timeout: float) -> None:
         if not alive:
             return
         time.sleep(0.1)
+        _kill_process_group(pgid, signal.SIGTERM)
     # Force kill with SIGKILL if still alive
     _kill_process_group(pgid, 9)  # SIGKILL
     # Wait a bit more
@@ -188,7 +196,12 @@ def _wait_for_group_exit(pgid: int, timeout: float) -> None:
 
 
 def _get_group_pids(pgid: int) -> list[int]:
-    """Get all PIDs in a process group by reading /proc."""
+    """Running PIDs of a process group, read from /proc.
+
+    A zombie has already exited and can no longer act, so it does not keep the
+    group "alive" (a reparented, unreaped orphan would otherwise hold the wait
+    until the SIGKILL deadline).
+    """
     pids = []
     try:
         # Read all PIDs from /proc
@@ -196,9 +209,13 @@ def _get_group_pids(pgid: int) -> list[int]:
             if entry.isdigit():
                 pid = int(entry)
                 try:
-                    if os.getpgid(pid) == pgid:
-                        pids.append(pid)
-                except (ProcessLookupError, PermissionError, OSError):
+                    if os.getpgid(pid) != pgid:
+                        continue
+                    stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+                    if stat[stat.rindex(")") + 2:].startswith("Z"):
+                        continue
+                    pids.append(pid)
+                except (ProcessLookupError, PermissionError, OSError, ValueError):
                     pass
     except (OSError, IOError):
         pass

@@ -81,3 +81,47 @@ def test_shared_or_invalid_groups_are_refused(monkeypatch, pgid):
 def test_no_external_kill_binaries_are_used():
     source = (ROOT / "scripts" / "update-agent.py").read_text(encoding="utf-8")
     assert '["kill"' not in source and '["pkill"' not in source
+
+
+def test_a_lost_sigterm_is_repeated_before_the_delayed_side_effect(tmp_path):
+    """CI arm64 (qemu-user): a SIGTERM that reaches a grandchild between fork and
+    exec can be lost. The watchdog keeps signalling the group while it waits, so
+    such a grandchild still dies before its delayed side effect (3s), long before
+    the SIGKILL deadline."""
+    agent = _load_agent()
+    marker = tmp_path / "late-side-effect.txt"
+    grandchild = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"   # the first SIGTERM is lost
+        "time.sleep(0.5)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_DFL)\n"
+        "time.sleep(2.5)\n"
+        "open(sys.argv[1], 'w').write('applied')\n")
+    parent = subprocess.Popen(
+        [sys.executable, "-c",
+         "import subprocess, sys, time\n"
+         "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])\n"
+         "time.sleep(30)\n", grandchild, str(marker)],
+        start_new_session=True)
+    try:
+        time.sleep(0.3)  # the grandchild is ignoring SIGTERM right now
+        started = time.monotonic()
+        agent._terminate_process(parent)
+        assert time.monotonic() - started < 3.0, "the group must stop before the side effect"
+        time.sleep(3.5)
+        assert not marker.exists(), "a grandchild that lost SIGTERM survived the fence"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait(timeout=10)
+
+
+def test_zombies_do_not_count_as_alive(tmp_path):
+    agent = _load_agent()
+    child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    group = os.getpgid(child.pid)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and agent._get_group_pids(group):
+        time.sleep(0.05)
+    assert agent._get_group_pids(group) == []  # exited but not yet reaped: a zombie
+    child.wait(timeout=10)

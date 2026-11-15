@@ -1,5 +1,56 @@
 # Аудит Vertep — 15.11.2026
 
+## Актуальна незалежна звірка #469–#483 — 15.11.2026
+
+**Цей розділ має пріоритет над попередніми позначками IMPLEMENTED та історичними висновками нижче.** Перевірено актуальні описи/коментарі всіх 15 Issues через автентифікований GitHub CLI, поточний код і цільові тести. Local HEAD та remote main: `1af8f9cd54090bef0408dff86627ff661bf59af9`, версія 0.0.3.73. Виправлення #470–#483 лишаються незакоміченими; посилання на базовий SHA не є посиланням на commit їх реалізації.
+
+### Вердикт
+
+- 12 Issues локально підтверджені: #470–#472, #474–#475, #477–#483. Вони **OPEN**, бо §4.5 AGENTS.md вимагає потрапляння реалізації в main перед completed. Дозвіл на аудит/закриття не дає права на push; нового дубліката лише для публікації не створено.
+- #473 — фактичний невиконаний scope перенесено до [#484, i.0.0.4.84](https://github.com/fylypovych/vertep/issues/484).
+- #476 — тільки невиконаний залишок перенесено до [#485, i.0.0.4.85](https://github.com/fylypovych/vertep/issues/485); готові локальні guards не призначено повторно.
+- #473 і #476 закриваються **not_planned**, не completed, після перевірки повноти наступників (§4.5). Це не успішне приймання.
+- #469 лишається **BLOCKED / OPEN** за чинною передумовою VM. Тимчасове блокування не є підставою дублювати цей Issue чи створювати новий ir. Реальний scope залишається #329/#63; інші стендові ir не змінювались.
+
+| Issue | Аудит | Результат / GitHub | Доказ або залишок |
+|---|---|---|---|
+| [#469](https://github.com/fylypovych/vertep/issues/469) (`i.0.0.4.69`) | F3 | BLOCKED; OPEN | Передумова VM не підтверджена; не реалізовано. Без дублювання #329/#63. |
+| [#470](https://github.com/fylypovych/vertep/issues/470) (`i.0.0.4.70`) | A1 | LOCAL VERIFIED; OPEN | Worker dispatch + preview: 14 + 24 PASS; контрольований HTTP TTS, не physical multi-host. |
+| [#471](https://github.com/fylypovych/vertep/issues/471) (`i.0.0.4.71`) | A2 | LOCAL VERIFIED; OPEN | Generation gate: 44 PASS; межі статичного аналізу задокументовані. |
+| [#472](https://github.com/fylypovych/vertep/issues/472) (`i.0.0.4.72`) | A3 | LOCAL VERIFIED; OPEN | nginx 1.24: 6 PASS; worker route auth: 12 PASS. Production PKI — #54. |
+| [#473](https://github.com/fylypovych/vertep/issues/473) (`i.0.0.4.73`) | A4 | FAIL; NOT_PLANNED → #484 | mTLS=true зі спільним token дає True без індивідуального credential; перенесено до i.0.0.4.84. |
+| [#474](https://github.com/fylypovych/vertep/issues/474) (`i.0.0.4.74`) | A5 | LOCAL VERIFIED; OPEN | Budget/cancel/lease: 13 PASS; in-flight HTTP має bounded timeout, не миттєве переривання. |
+| [#475](https://github.com/fylypovych/vertep/issues/475) (`i.0.0.4.75`) | A6 | LOCAL VERIFIED; OPEN | Default character: 20 PASS; configured selection та явна відмова без default. |
+| [#476](https://github.com/fylypovych/vertep/issues/476) (`i.0.0.4.76`) | A7 | PARTIAL; NOT_PLANNED → #485 | 13 PASS не покривають permissive explicit-ID readiness. Залишок — i.0.0.4.85. |
+| [#477](https://github.com/fylypovych/vertep/issues/477) (`i.0.0.4.77`) | A8 | LOCAL VERIFIED; OPEN | Hash/upload/storage off-loop: 13 PASS; integrity/containment збережені. |
+| [#478](https://github.com/fylypovych/vertep/issues/478) (`i.0.0.4.78`) | A9 | LOCAL VERIFIED; OPEN | Release notes: 3 PASS, фактичний git show звірено; файл ще untracked. |
+| [#479](https://github.com/fylypovych/vertep/issues/479) (`i.0.0.4.79`) | P3 LLM | LOCAL VERIFIED; OPEN | Readiness/config/Worker: 15 PASS. |
+| [#480](https://github.com/fylypovych/vertep/issues/480) (`i.0.0.4.80`) | P3 script | LOCAL VERIFIED; OPEN | Structure metadata/duration/brief: 18 PASS. |
+| [#481](https://github.com/fylypovych/vertep/issues/481) (`i.0.0.4.81`) | P3 LAB | LOCAL VERIFIED; OPEN | Context limits/empty content/report_only: 13 PASS. |
+| [#482](https://github.com/fylypovych/vertep/issues/482) (`i.0.0.4.82`) | P3 security | LOCAL VERIFIED; OPEN | Cookie/key permissions/setup rate limit: 12 PASS. |
+| [#483](https://github.com/fylypovych/vertep/issues/483) (`i.0.0.4.83`) | P3 тести | LOCAL VERIFIED; OPEN | Worker loop fixture isolation: 24 PASS. |
+
+### Нові перевірки цієї звірки
+
+- `.venv/bin/python -m pytest -q` для 15 цільових файлів (voice dispatch/preview, generation gate, proxy/auth, budget, default/completeness, system I/O, notes, LLM readiness, structure, LAB context, security, Worker isolation): **239 passed, 5 skipped**, 35.98 с. JUnit: `/tmp/vertep-review-469-483.xml`, log: `/tmp/vertep-review-469-483.log` (тимчасові локальні артефакти, не довгострокові GitHub-докази).
+- П'ять proxy skips викликані відсутністю nginx у PATH. Повтор `tests/test_proxy_client_identity.py` з явним `VERTEP_NGINX_EXECUTABLE` і `VERTEP_REQUIRE_PROXY_ACCEPTANCE=1`: **6 passed, 0 skipped**, 19.28 с. Log: `/tmp/vertep-review-proxy-472.log`. Разом **244 унікальні cases PASS**, один статичний proxy case повторено; не 245 унікальних тестів.
+- Контрольований експеримент #473: synthetic token, mTLS=true, valid certificate stub, individual verification=False, порожня node map → shared token прийнято. Це code-level доказ дефекту, не експлуатація production.
+- Контрольований експеримент #476: `missing_character_files` повертає visual/generation/publishing; `load_character(..., "char-contract")` успішний, enabled=True. Видалення не є єдиним рішенням: допустиме мінімальне доповнення або ізоляція за погодженим scope. Критерій — completeness/readiness, а не обов'язкове видалення каталогу.
+- `git diff --check` — PASS. Повний pytest/Browser тут не повторювали. Попередні 3873 PASS та інші історичні цифри нижче не є результатом цієї звірки.
+
+### Уточнення попередніх відміток
+
+- IMPLEMENTED нижче означає локальну реалізацію, а не виконання всіх умов GitHub completed.
+- Для #470 окремі OS-процеси чи фізичний TTS не є новою умовою цього i: інтеграційний тест проходить фактичні CORE/Worker handlers з контрольованим backend.
+- Для #474 миттєве переривання вже активного HTTP-запиту не було критерієм; межа зупинки задокументована.
+- Для #482 конфігурація trusted proxy/global ceiling реалізує затверджені критерії; сама поява технічних knobs не доводить непогодженої продуктової функції.
+- К1/В1–В6, описані нижче, не видаються за новий повний незалежний аудит: В1 і В3 охоплено цільовими тестами, інші позаскопові твердження не стали додатковими gates закриття цих 15 Issues.
+
+Код, VERSION, CHANGELOG, tags та branches цією звіркою не змінювалися; усі попередні незакомічені зміни збережено. Змінено лише цей звіт, додано підсумки до GitHub Issues та наступників залишку.
+
+---
+
+
 ## Висновок і межі перевірки
 
 Версія 0.0.3.73 закрила основні архітектурні розбіжності попереднього аудиту: F1, F2 і F5 виправлено, F4 виправлено в межах Issue #467. Водночас виявлено:

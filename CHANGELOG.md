@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.76
+- Update agent: поки в групі fenced-оновлення лишаються живі процеси, SIGTERM групі повторюється на кожному кроці очікування — сигнал, втрачений між fork і exec дочірнього процесу (спостерігалось під qemu-user на arm64 CI), більше не дає онуку пережити fence до SIGKILL і записати відкладений побічний ефект; zombie-процеси не вважаються живими. Виправлено плаваюче падіння `test_run_fenced_kills_child_processes_of_apply` (CI `bootstrap-lifecycle-acceptance (arm64)`).
+- Тести: `tests/test_update_agent_kill_scope.py` моделює втрачений SIGTERM і zombie-процес групи.
+- Аудит `audit/audit-1511.md`: додано незалежну звірку #469–#483.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.75
 - Тести Browser E2E: `tests/media_harness.py` створює повного тестового персонажа (усі файли §3.2), тож після i.0.0.4.76 він знову з'являється в `GET /api/characters`; виправлено падіння `tests/test_media_browser_e2e.py` (Browser E2E для 0.0.3.74).
 - Тести CI `local-contracts`: `tests/test_workflow_http_process.py` і `tests/test_workflow_backup_execution.py` очікують поетапну генерацію сценарію (Structure + запит на кожну сцену, #465) через `staged_requests()` замість одного LLM-запиту на script-задачу.
