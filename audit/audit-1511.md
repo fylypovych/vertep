@@ -1,5 +1,35 @@
 # Аудит Vertep — 15.11.2026
 
+## Актуальне приймання після публікації — main 0.0.3.77, 15.11.2026
+
+**Цей розділ замінює попередній висновок про незакомічені виправлення та OPEN для 12 локально підтверджених Issues.** Звірено актуальні описи й коментарі #469–#483 та наступників #484/#485. До початку звірки робоче дерево чисте; local HEAD = remote main = `057c84f8f50016e54cecffaaa9a2bb1160113e29` (0.0.3.77).
+
+Реалізація ввійшла до [commit 0.0.3.74](https://github.com/fylypovych/vertep/commit/4a5c9b051b115e6e6c367cb1bae1ad3a3e983063); його входження в поточний main перевірено. Перевірені core/worker/lab/adapters/deploy зміни від 0.0.3.74 збережені. Умова §4.5 про публікацію реалізації тепер виконана.
+
+| Issues / ідентифікатори | Підсумок |
+|---|---|
+| #470–#472 / i.0.0.4.70–72 | COMPLETED: TTS dispatch, generation gate, proxy identity |
+| #474–#475 / i.0.0.4.74–75 | COMPLETED: script budget/cancel/lease, configured default character |
+| #477–#483 / i.0.0.4.77–83 | COMPLETED: off-loop I/O, historical notes, LLM readiness, script validation, LAB context, security hardening, test isolation |
+| #473 / i.0.0.4.73 | Залишається CLOSED / NOT_PLANNED; невиконане — [#484 / i.0.0.4.84](https://github.com/fylypovych/vertep/issues/484), OPEN |
+| #476 / i.0.0.4.76 | Залишається CLOSED / NOT_PLANNED; невиконане — [#485 / i.0.0.4.85](https://github.com/fylypovych/vertep/issues/485), OPEN |
+| #469 / i.0.0.4.69 | BLOCKED / OPEN: VM-передумова не підтверджена, наскрізний цикл не реалізовано |
+
+Нових наступників не створено: фактичні залишки вже повністю обліковані в #484/#485, а тимчасове відкладення #469 не потребує дубліката. Закриті раніше #473/#476 не змінювалися. Реальні ir #329/#63/#54 та інші залишаються незалежними від automated приймання цих i.
+
+### Повторні докази
+
+- Той самий набір 15 цільових файлів: **239 passed, 5 skipped**, 31.95 с; JUnit `/tmp/vertep-review-377.xml`, log `/tmp/vertep-review-377.log`.
+- Усі 5 skips — proxy без nginx у PATH. Явний nginx 1.24, `VERTEP_REQUIRE_PROXY_ACCEPTANCE=1`: **6 passed, 0 skipped**, 22.79 с; `/tmp/vertep-review-377-proxy.log`. Разом **244 унікальні PASS**; один статичний proxy case виконано двічі.
+- Розподіл результатів за критеріями збережено в таблиці попередньої звірки та нових підсумкових GitHub-коментарях. Вони тепер застосовуються до опублікованого SHA, а не dirty working tree.
+- [Browser E2E поточного SHA](https://github.com/fylypovych/vertep/actions/runs/43747512439): success. [CI](https://github.com/fylypovych/vertep/actions/runs/43747528987): in_progress на момент читання; це не green CI. Повний suite/Browser локально не повторювали, production/physical перевірки не виконували.
+- `git diff --check`: PASS. Критерії цих i підтверджені цільовими автоматизованими тестами; нових вимог загального CI, Release або фізичного стенда не додавали.
+
+За прямим дорученням користувача 12 виконаних Issues закрито completed із підсумковими коментарями та commit-посиланнями. Зміни цього проходу: лише цей звіт і GitHub-коментарі/статуси; код, VERSION, CHANGELOG, Git history, push/release не змінювалися. Попередні розділи нижче збережено як історію перевірок.
+
+---
+
+
 ## Актуальна незалежна звірка #469–#483 — 15.11.2026
 
 **Цей розділ має пріоритет над попередніми позначками IMPLEMENTED та історичними висновками нижче.** Перевірено актуальні описи/коментарі всіх 15 Issues через автентифікований GitHub CLI, поточний код і цільові тести. Local HEAD та remote main: `1af8f9cd54090bef0408dff86627ff661bf59af9`, версія 0.0.3.73. Виправлення #470–#483 лишаються незакоміченими; посилання на базовий SHA не є посиланням на commit їх реалізації.

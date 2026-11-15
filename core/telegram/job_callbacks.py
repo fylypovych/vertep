@@ -19,6 +19,7 @@ from core.api.job_helpers import (
 from core.artifacts import register_artifact
 from core.configuration import (
     DefaultCharacterError,
+    IncompleteCharacterError,
     default_character_id,
     load_character,
     missing_character_files,
@@ -273,7 +274,11 @@ def _create_job_from_telegram(pending: dict, brand_id: str, character_id: str | 
     if not jobs_may_be_created():
         raise HTTPException(503, "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.")
     try:
-        character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id)
+        # i.0.0.4.85: a Telegram job is a new job too; an incomplete character is refused.
+        character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), character_id,
+                                   require_complete=True)
+    except IncompleteCharacterError as error:
+        raise HTTPException(422, str(error)) from error
     except Exception as error:
         raise HTTPException(400, f"Unknown character: {character_id}") from error
     generation = character.generation if hasattr(character, 'generation') else {}

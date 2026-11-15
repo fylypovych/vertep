@@ -63,7 +63,8 @@ def _verify_hash(value: str, encoded: str) -> bool:
 
 def _valid_worker_token(node_name: str, supplied: str, client_dn: str = "",
                         client_serial: str = "") -> bool:
-    if os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true":
+    mtls_required = os.getenv("NODE_MTLS_REQUIRED", "false").lower() == "true"
+    if mtls_required:
         common_names = re.findall(r"(?:^|[,/])\s*CN=([^,/]+)", client_dn)
         if (not common_names or not _constant_time_equals(common_names[-1], node_name)
                 or not verify_node_certificate(node_name, client_serial)):
@@ -78,7 +79,10 @@ def _valid_worker_token(node_name: str, supplied: str, client_dn: str = "",
             if node.strip() == node_name:
                 return _verify_hash(supplied, encoded.strip())
     expected = _worker_tokens().get(node_name)
-    if expected is None:
+    if expected is None and not mtls_required:
+        # Legacy non-mTLS compatibility: one shared token for nodes without their own.
+        # Under mTLS a node must present its own credential; the shared token never
+        # stands in for it, even with a valid certificate (i.0.0.4.84).
         expected = os.getenv("NODE_API_TOKEN", "") or None
     if expected is None or expected == "":
         return False

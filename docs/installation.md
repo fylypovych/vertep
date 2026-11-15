@@ -12,7 +12,9 @@ Ubuntu Server 24.04 або 26.04 (amd64/arm64), з активним systemd; о�
 curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh | sudo bash
 ```
 
-Bootstrap: preflight-перевірки → директорії `/opt/vertep/{data,config,logs,backups,storage,models,runtime,tls}` → завантаження runtime з GitHub Release (перевірка підпису manifest і SHA-256) → генерація секретів (`openssl rand -hex`, `/opt/vertep/config/`, `0600`) → запуск базових служб без ролі → `docker compose up` → очікування HEALTHY → міграція БД → health check відповідного підписаного runtime. CORE management/control readiness та готовність вибраних ролей мають різний scope; endpoint HTTP 200 сам по собі не доводить готовності всіх ролей. Фінал: `https://<SERVER-IP>:8443` і Installation Manifest. Повторний запуск безпечний: перевикористовує volumes/секрети, замінює лише release-керовані файли.
+Перший етап bootstrap — вибір продукту (лише під час першої інсталяції): «1) Vertep» або «2) Лабораторія Vertep (LAB, окрема VM)»; питання ставиться в терміналі навіть за `curl … | sudo bash`, без термінала (CI, автоматизація) встановлюється Vertep, явний вибір — `VERTEP_INSTALL_TARGET=vertep|lab`. Якщо на сервері вже встановлено Vertep (`/opt/vertep`), bootstrap без питань оновлює Vertep; якщо LAB (`/opt/vertep-lab`) — оновлює LAB через `bootstrap-lab.sh` тієї самої релізної версії. Vertep і LAB на одному сервері не поєднуються.
+
+Далі для Vertep: preflight-перевірки → директорії `/opt/vertep/{data,config,logs,backups,storage,models,runtime,tls}` → завантаження runtime з GitHub Release (перевірка підпису manifest і SHA-256) → генерація секретів (`openssl rand -hex`, `/opt/vertep/config/`, `0600`) → запуск базових служб без ролі → `docker compose up` → очікування HEALTHY → міграція БД → health check відповідного підписаного runtime. CORE management/control readiness та готовність вибраних ролей мають різний scope; endpoint HTTP 200 сам по собі не доводить готовності всіх ролей. Фінал: `https://<SERVER-IP>:8443` і Installation Manifest. Повторний запуск безпечний: перевикористовує volumes/секрети, замінює лише release-керовані файли.
 
 ## Ролі вузлів
 

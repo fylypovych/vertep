@@ -20,7 +20,8 @@ from starlette.responses import Response
 from adapters.providers import providers
 
 from ..artifacts import register_artifact, verify_artifacts, write_manifest
-from ..configuration import DefaultCharacterError, default_character_id, load_character
+from ..configuration import (DefaultCharacterError, default_character_id, load_character,
+                             missing_character_files)
 from ..dispatcher import can_retry
 from ..file_validation import validate_signature
 from ..models import JobCreate, JobStatus, JobUpdate, StageName, StageStatus
@@ -76,6 +77,11 @@ def create_job(request: JobCreate):
             request.character_id = default_character_id()
         except DefaultCharacterError as error:
             raise HTTPException(422, str(error)) from error
+    # i.0.0.4.85: a new job never starts from an incomplete character (§3.2), also
+    # when it is named explicitly; reading existing jobs stays permissive.
+    missing = missing_character_files(Path(os.getenv("CHARACTERS_ROOT", "characters")), request.character_id)
+    if missing and (Path(os.getenv("CHARACTERS_ROOT", "characters")) / request.character_id).is_dir():
+        raise HTTPException(422, f"Character {request.character_id!r} is incomplete: missing {', '.join(missing)}")
     if request.workflow_template:
         from core.workflow.runtime import workflow_runtime
         runtime = workflow_runtime()

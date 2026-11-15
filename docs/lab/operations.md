@@ -4,7 +4,7 @@
 
 ## Розгортання
 
-LAB розгортається на окремій Ubuntu VM; інструкція панелі й Compose — [Lab Web](../../deploy/lab/web/README.md). Bootstrap — `bootstrap-lab.sh`. Наявність запущеної панелі не активує автономний executor, policy gate або GPU sharing. Повне приймання стенду — [кваліфікація](lab-qualification.md).
+LAB розгортається на окремій Ubuntu VM; інструкція панелі й Compose — [Lab Web](../../deploy/lab/web/README.md). Bootstrap — `bootstrap-lab.sh`; його також запускає загальний `bootstrap.sh`, якщо під час першої інсталяції обрано LAB (`VERTEP_INSTALL_TARGET=lab` для автоматизації), а на сервері з уже встановленою LAB `bootstrap.sh` оновлює її до останнього релізу. Наявність запущеної панелі не активує автономний executor, policy gate або GPU sharing. Повне приймання стенду — [кваліфікація](lab-qualification.md).
 
 ## Перевірка стану
 

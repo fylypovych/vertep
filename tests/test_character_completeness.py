@@ -87,3 +87,45 @@ def test_voice_issued_result_fixture_no_longer_writes_the_production_catalog():
     source = (ROOT / "tests/test_voice_issued_result.py").read_text(encoding="utf-8")
     assert 'characters_root="characters"' not in source
     assert 'characters_root: str = "characters"' not in source
+
+
+# ── i.0.0.4.85 (#485): explicit ID of an incomplete character cannot start a new job ──
+
+def test_api_refuses_a_new_job_for_an_incomplete_explicit_character(catalog):
+    from core.state import store
+    before = set(store.jobs)
+    response = TestClient(app).post("/api/jobs", json={"topic": "x", "character_id": "partial-char"})
+    assert response.status_code == 422
+    assert "incomplete" in response.json()["detail"] and "visual.json" in response.json()["detail"]
+    assert set(store.jobs) == before
+
+
+def test_api_accepts_the_complete_control_character(catalog):
+    response = TestClient(app).post("/api/jobs", json={"topic": "x", "character_id": "did_samogon"})
+    assert response.status_code == 200, response.text
+    assert response.json()["character_id"] == "did_samogon"
+
+
+def test_api_unknown_character_keeps_its_previous_answer(catalog):
+    assert TestClient(app).post("/api/jobs", json={"topic": "x", "character_id": "absent-char"}).status_code == 400
+
+
+def test_telegram_refuses_an_incomplete_explicit_character(catalog):
+    from fastapi import HTTPException
+    pending = {"text": "тема", "source_id": "tg-485", "message": {"chat": {"id": 485}}}
+    with pytest.raises(HTTPException) as error:
+        callbacks._create_job_from_telegram(pending, "brand01", "partial-char")
+    assert error.value.status_code == 422 and "incomplete" in str(error.value.detail)
+
+
+def test_existing_job_of_an_incomplete_character_is_still_readable(catalog):
+    """Reading a historical job does not declare readiness, so it stays permissive."""
+    from core.state import store
+    job = store.create(topic="history", character_id="partial-char", priority=5)
+    try:
+        response = TestClient(app).get(f"/api/jobs/{job.job_id}")
+        assert response.status_code == 200
+        assert response.json()["character_id"] == "partial-char"
+        assert load_character(catalog, "partial-char").id == "partial-char"
+    finally:
+        store.delete(job.job_id)

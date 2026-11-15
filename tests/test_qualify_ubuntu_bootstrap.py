@@ -31,7 +31,7 @@ def test_credentials_are_compared_without_the_regenerated_setup_token(tmp_path, 
     assert "a" not in fingerprints.values()
 
 
-# ── Temporary single-release exception for the B3 rollback probe (15.11.2026) ──
+# ── B3 rollback probe: release selection (temporary exception removed in 0.0.3.78) ──
 
 import io
 import json
@@ -53,28 +53,26 @@ def _releases(monkeypatch, target, tags):
     monkeypatch.setattr(target.urllib.request, "urlopen", lambda *a, **k: Answer(payload))
 
 
-def test_single_published_release_is_the_dedicated_not_run_case(monkeypatch):
+def test_a_single_published_release_fails_the_probe_again(monkeypatch):
     target = module()
-    _releases(monkeypatch, target, ["0.0.3.72"])
-    with pytest.raises(target.NoRollbackProbeRelease):
-        target.rollback_probe_release("0.0.3.72")
+    _releases(monkeypatch, target, ["0.0.3.77"])
+    with pytest.raises(RuntimeError, match="no other published release"):
+        target.rollback_probe_release("0.0.3.77")
 
 
-def test_another_published_release_is_still_probed(monkeypatch):
+def test_another_published_release_is_probed(monkeypatch):
     target = module()
-    _releases(monkeypatch, target, ["0.0.3.76", "0.0.3.72"])
-    assert target.rollback_probe_release("0.0.3.76") == "0.0.3.72"
+    _releases(monkeypatch, target, ["0.0.3.77", "0.0.3.72"])
+    assert target.rollback_probe_release("0.0.3.77") == "0.0.3.72"
 
 
 def test_configured_probe_release_wins(monkeypatch):
     target = module()
-    monkeypatch.setenv("VERTEP_ROLLBACK_PROBE_RELEASE", "0.0.3.60")
-    assert target.rollback_probe_release("0.0.3.72") == "0.0.3.60"
+    monkeypatch.setenv("VERTEP_ROLLBACK_PROBE_RELEASE", "0.0.3.72")
+    assert target.rollback_probe_release("0.0.3.77") == "0.0.3.72"
 
 
-def test_the_exception_is_narrow_and_temporary():
+def test_the_temporary_not_run_exception_is_gone():
     source = (Path(__file__).parents[1] / "scripts" / "qualify_ubuntu_bootstrap.py").read_text(encoding="utf-8")
-    # Only the dedicated exception becomes NOT_RUN; any other RuntimeError is still FAIL.
-    assert "except NoRollbackProbeRelease as error:" in source
-    assert 'report.get("not_run") == ["failure_rollback"]' in source
-    assert "TEMPORARY owner-approved exception" in source
+    assert "NoRollbackProbeRelease" not in source and "not_run" not in source
+    assert 'return 0 if report["result"] == "PASS" else 1' in source

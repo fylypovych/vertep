@@ -61,6 +61,7 @@ def _mock_storyboard_queue(self, job, revision=None):
 
 import pytest
 from tests.telegram_patching import patch_telegram
+from tests.character_files import complete_character
 
 
 @pytest.fixture(autouse=True)
@@ -330,6 +331,7 @@ def test_telegram_attachment_metadata_is_registered_as_input(monkeypatch, tmp_pa
     character_root.mkdir(parents=True, exist_ok=True)
     char_dir = character_root / "did_samogon"
     char_dir.mkdir(parents=True, exist_ok=True)
+    complete_character(char_dir)
     # i.0.0.4.76: a selectable character carries every §3.2 file.
     from core.configuration import CharacterConfig, save_character
     save_character(char_dir.parent, CharacterConfig.model_validate({
@@ -1073,6 +1075,7 @@ def test_job_create_workflow_uses_full_path(monkeypatch, tmp_path):
     (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
     char_dir = tmp_path / "characters" / "test-char"
     char_dir.mkdir(parents=True, exist_ok=True)
+    complete_character(char_dir)
     (char_dir / "character.json").write_text(json.dumps({
         "id": "test-char", "name": "Test", "language": "uk",
         "generation": {"workflow": "workflows/image/demo.json"},
@@ -1097,6 +1100,7 @@ def test_job_create_rejects_invalid_workflow_path(monkeypatch, tmp_path):
     (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
     char_dir = tmp_path / "characters" / "test-char"
     char_dir.mkdir(parents=True, exist_ok=True)
+    complete_character(char_dir)
     (char_dir / "character.json").write_text(json.dumps({
         "id": "test-char", "name": "Test", "language": "uk",
         "generation": {"workflow": "invalid/path"},
@@ -1128,6 +1132,7 @@ def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tm
     (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
     char_dir = tmp_path / "characters" / "test-char"
     char_dir.mkdir(parents=True, exist_ok=True)
+    complete_character(char_dir)
     (char_dir / "character.json").write_text(json.dumps({
         "id": "test-char", "name": "Test", "language": "uk",
         "generation": {"workflow": "workflows/image/demo.json"},
@@ -2026,6 +2031,7 @@ def test_telegram_webhook_creates_job_with_character_workflow(tmp_path, monkeypa
     char_root.mkdir(parents=True, exist_ok=True)
     char_dir = char_root / "test-telegram-char"
     char_dir.mkdir(parents=True, exist_ok=True)
+    complete_character(char_dir)
     (char_dir / "character.json").write_text(json.dumps({
         "id": "test-telegram-char",
         "name": "Telegram Test Character",

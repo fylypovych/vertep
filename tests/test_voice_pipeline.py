@@ -42,6 +42,7 @@ from core.storyboard import StoryboardService
 from worker import role_executor
 from core.api.job_helpers import _persist_tts_contract, _tts_task_for
 from core.orchestration import initialize_plan
+from tests.character_files import complete_character
 
 
 # Worker-facing machine routes authenticate the worker token themselves and
@@ -81,6 +82,7 @@ def _complete_script_task(client, job_id, node_name="text-worker"):
 def _write_character(root: Path, character_id: str) -> Path:
     directory = root / character_id
     directory.mkdir(parents=True, exist_ok=True)
+    complete_character(directory)
     (directory / "character.json").write_text(
         json.dumps({"name": "Voice Char", "language": "uk"}), encoding="utf-8")
     (directory / "voice.json").write_text(json.dumps({

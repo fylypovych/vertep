@@ -64,6 +64,57 @@ select_runtime_health_contract(){
   fi
 }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run bootstrap as root (curl … | sudo bash)"
+
+# First step: what this host runs. An installed product is updated as it is; only a
+# first installation asks whether to install Vertep or the Vertep laboratory (LAB,
+# a separate VM, AGENTS.md §4.6). VERTEP_INSTALL_TARGET=vertep|lab answers without a
+# terminal; with neither, automation keeps installing Vertep as before.
+run_lab_bootstrap(){
+  local releases_api=${VERTEP_LAB_RELEASES_API:-https://api.github.com/repos/fylypovych/vertep/releases/latest}
+  local tag script
+  tag=${VERTEP_LAB_REF:-$(curl -fsS --connect-timeout 10 --retry 3 --retry-delay 5 "$releases_api" \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)}
+  [[ -n $tag ]] || fail "could not determine the release for the Vertep laboratory"
+  script=$(mktemp)
+  curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 5 \
+    "${VERTEP_LAB_BOOTSTRAP_BASE:-https://raw.githubusercontent.com/fylypovych/vertep}/$tag/bootstrap-lab.sh" \
+    -o "$script" || fail "could not download bootstrap-lab.sh for release $tag"
+  progress "Vertep laboratory $tag"
+  VERTEP_LAB_REF=$tag exec bash "$script"
+}
+select_install_target(){
+  local lab_root=${VERTEP_LAB_ROOT:-/opt/vertep-lab} target=${VERTEP_INSTALL_TARGET:-} answer
+  if [[ -f "$INSTALL_ROOT/.env" || -f "$INSTALL_ROOT/docker-compose.yml" ]]; then
+    [[ -z $target || $target == vertep ]] \
+      || fail "Vertep is installed in $INSTALL_ROOT; install the laboratory on a separate VM; no changes made"
+    return 0
+  fi
+  if [[ -f "$lab_root/lab.env" || -d "$lab_root/src/.git" ]]; then
+    [[ -z $target || $target == lab ]] \
+      || fail "the Vertep laboratory is installed in $lab_root; install Vertep on a separate VM; no changes made"
+    run_lab_bootstrap
+  fi
+  if [[ -z $target ]]; then
+    if { exec 3</dev/tty; } 2>/dev/null; then
+      printf '\nЩо встановити на цей сервер?\n  1) Vertep\n  2) Лабораторія Vertep (LAB, окрема VM)\n'
+      read -r -p "Ваш вибір [1-2, типово 1]: " answer <&3 || answer=""
+      exec 3<&-
+      case $answer in
+        ""|1|vertep) target=vertep ;;
+        2|lab) target=lab ;;
+        *) fail "unknown choice '$answer'; no changes made" ;;
+      esac
+    else
+      target=vertep
+    fi
+  fi
+  case $target in
+    vertep) return 0 ;;
+    lab) run_lab_bootstrap ;;
+    *) fail "VERTEP_INSTALL_TARGET must be 'vertep' or 'lab'; no changes made" ;;
+  esac
+}
+select_install_target
 # Capability gate MUST precede stopping services, package installation or writes.
 # Bootstrap owns systemd lifecycle; a container with an executable systemctl
 # but no running manager is not a supported bootstrap host.
@@ -550,6 +601,11 @@ for service in "${role_services[@]}"; do
 done
 comfyui_image_service=comfyui
 [[ $gpu_vendor == amd ]] && comfyui_image_service=comfyui-amd
+if printf '%s\n' "${role_services[@]}" | grep -qx comfyui && [[ $gpu_vendor == none ]]; then
+  # ComfyUI needs a GPU runtime; without one it only crash-loops until the health
+  # timeout. Fail now with the cause; there is no automatic CPU fallback.
+  fail "role $NODE_ROLE${ADDITIONAL_ROLES:+ (+$ADDITIONAL_ROLES)} runs ComfyUI and needs an NVIDIA or AMD GPU, but none was detected"
+fi
 if printf '%s\n' "${role_services[@]}" | grep -qx comfyui; then
   jq -e --arg service "$comfyui_image_service" --arg platform "$platform" \
     '.images[$service].platforms | index($platform) != null' "$manifest_tmp" >/dev/null \

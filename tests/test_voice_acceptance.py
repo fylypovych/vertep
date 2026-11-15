@@ -31,6 +31,7 @@ from core.storyboard import StoryboardService
 from worker import role_executor
 
 from core.state import task_queue
+from tests.character_files import complete_character
 
 
 # Worker-facing machine routes authenticate the worker token themselves and
@@ -71,6 +72,7 @@ def _write_character(root, character_id, voice=None):
     from pathlib import Path
     d = Path(root) / character_id
     d.mkdir(parents=True, exist_ok=True)
+    complete_character(d)
     (d / "character.json").write_text(
         json.dumps({"name": "Voice Char", "language": "uk"}), encoding="utf-8")
     voice = voice or {"provider": "mock", "voice": "uk", "language": "uk",

@@ -215,16 +215,6 @@ def renew_certificate() -> None:
 RELEASES_API = "https://api.github.com/repos/fylypovych/vertep/releases"
 
 
-class NoRollbackProbeRelease(RuntimeError):
-    """Only the installed release is published, so B3 has nothing to roll back from.
-
-    TEMPORARY owner-approved exception (15.11.2026): the published release history
-    was reduced to a single release, and the release gate requires this job, so no
-    second release could ever be published. This case alone is reported NOT_RUN;
-    remove the exception once a second release is published again.
-    """
-
-
 def rollback_probe_release(installed: str) -> str:
     """Another published release: old ones get removed, so a fixed version stops existing."""
     configured = os.getenv("VERTEP_ROLLBACK_PROBE_RELEASE")
@@ -236,7 +226,7 @@ def rollback_probe_release(installed: str) -> str:
         tags = [item["tag_name"] for item in json.load(response) if not item["draft"] and not item["prerelease"]]
     others = [tag for tag in tags if tag != installed]
     if not others:
-        raise NoRollbackProbeRelease("no other published release to probe the rollback with")
+        raise RuntimeError("no other published release to probe the rollback with")
     return others[0]
 
 
@@ -364,16 +354,8 @@ def main() -> int:
         assert persisted["postgres_rows"] == 1 and persisted["storage_file"], "data was lost on rerun"
         assert steps["persistence"]["certificate_kept"], "rerun replaced the renewed certificate"
         assert steps["persistence"]["credentials_kept"], "rerun changed generated credentials"
-        try:
-            steps["failure_rollback"] = bootstrap_failure_rollback(evidence_dir)
-            report["result"] = "PASS"
-        except NoRollbackProbeRelease as error:
-            # Temporary exception (see NoRollbackProbeRelease): every other step of
-            # this job has passed; only the B3 rollback probe could not run.
-            steps["failure_rollback"] = {"result": "NOT_RUN", "reason": str(error),
-                                         "temporary_exception": True}
-            report["not_run"] = ["failure_rollback"]
-            report["result"] = "PARTIAL"
+        steps["failure_rollback"] = bootstrap_failure_rollback(evidence_dir)
+        report["result"] = "PASS"
     except (AssertionError, RuntimeError, OSError, subprocess.SubprocessError, ValueError) as error:
         report["error"] = str(error)[-4000:]
     finally:
@@ -385,8 +367,7 @@ def main() -> int:
         (evidence_dir / "compose-logs.txt").write_text(text, encoding="utf-8")
         arguments.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({key: report.get(key) for key in ("result", "installed_version", "error")}))
-    # PARTIAL is accepted only for the temporary single-release exception above.
-    return 0 if report["result"] == "PASS" or report.get("not_run") == ["failure_rollback"] else 1
+    return 0 if report["result"] == "PASS" else 1
 
 
 if __name__ == "__main__":

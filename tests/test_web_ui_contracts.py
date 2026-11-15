@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core.app import app
+from tests.character_files import complete_character
 
 
 # Worker endpoints require an authenticated worker token (deny-by-default since
@@ -457,6 +458,7 @@ def test_workflow_usage_reports_jobs_and_characters(tmp_path, monkeypatch):
     monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
     character_dir = tmp_path / "characters" / "narrator"
     character_dir.mkdir(parents=True)
+    complete_character(character_dir)
     (character_dir / "character.json").write_text(
         '{"id": "narrator", "name": "Narrator"}', encoding="utf-8"
     )
