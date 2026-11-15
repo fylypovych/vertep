@@ -1,3 +1,7 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.77
+- CI `ubuntu-bootstrap-lifecycle`: тимчасовий виняток, погоджений власником 15.11.2026 — коли на GitHub опублікований лише встановлений Release, проба відкату B3 у `scripts/qualify_ubuntu_bootstrap.py` звітує `NOT_RUN` (`result: PARTIAL`, `not_run: ["failure_rollback"]`, `temporary_exception: true`) замість FAIL; решта кроків job обов'язкові, інші помилки й далі дають FAIL. Виняток розриває замкнене коло «release gate потребує зеленого CI — CI потребує другого опублікованого Release» і буде прибраний після публікації наступного Release.
+- Тести: `tests/test_qualify_ubuntu_bootstrap.py` перевіряють вибір release для проби відкату та вузькість винятку.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.76
 - Update agent: поки в групі fenced-оновлення лишаються живі процеси, SIGTERM групі повторюється на кожному кроці очікування — сигнал, втрачений між fork і exec дочірнього процесу (спостерігалось під qemu-user на arm64 CI), більше не дає онуку пережити fence до SIGKILL і записати відкладений побічний ефект; zombie-процеси не вважаються живими. Виправлено плаваюче падіння `test_run_fenced_kills_child_processes_of_apply` (CI `bootstrap-lifecycle-acceptance (arm64)`).
 - Тести: `tests/test_update_agent_kill_scope.py` моделює втрачений SIGTERM і zombie-процес групи.
