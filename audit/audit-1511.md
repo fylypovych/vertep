@@ -1,5 +1,27 @@
 # Аудит Vertep — 15.11.2026
 
+## Актуальна звірка #484–486 — 16.11.2026, main 0.0.3.79
+
+Цей розділ замінює попередні OPEN/FAIL/PARTIAL висновки щодо A4/#484 та A7/#485; старі записи нижче збережено як історію. До перевірки робоче дерево чисте, HEAD = remote main `40235dfa645dabcecfc5380698cec4f226175517`. Прочитано актуальні описи й коментарі #484–486, перевірено код, commit 0.0.3.78–0.0.3.79 і наявні #42/#47/#420/#487 для уникнення дублювання.
+
+| Issue | Результат і докази |
+|---|---|
+| [#484 · i.0.0.4.84](https://github.com/fylypovych/vertep/issues/484) | COMPLETED. A4: `core/security.py::_valid_worker_token` дозволяє shared fallback тільки без mTLS. Власні tokens/hashes, certificate identity і revocation збережено. `tests/test_mtls_shared_token.py` відтворює первісний дефект і перевіряє позитивні/негативні випадки; `test_worker_routes_auth.py` підтверджує routes. Реалізація — [0.0.3.78](https://github.com/fylypovych/vertep/commit/804a9451a06fdb92d54a6da69e4f3f6c58170464). |
+| [#485 · i.0.0.4.85](https://github.com/fylypovych/vertep/issues/485) | COMPLETED. A7: `core/api/jobs.py::create_job` та `core/telegram/job_callbacks.py::_create_job_from_telegram` відхиляють incomplete explicit-ID персонажа для нового job; історичне читання збережено. У поточному каталозі немає `char-contract`, усі shipped characters повні. Перевірено completeness/default/isolated voice issued-result regressions. Реалізація — 0.0.3.78–0.0.3.79. |
+| [#486 · var.0.0.4.86](https://github.com/fylypovych/vertep/issues/486) | PARTIAL → CLOSED/NOT_PLANNED після перенесення. Кодове розділення підтверджено в [0.0.3.79](https://github.com/fylypovych/vertep/commit/40235dfa645dabcecfc5380698cec4f226175517): окремий publisher secret, task scope без intake token, одна реалізація `publishers/telegram`, brand target, без глобальної міграції, channel readiness і Web UI credential. Live-публікація та фактичні права двох ботів НЕ підтверджені; залишок — [#489 · ir.0.0.4.89](https://github.com/fylypovych/vertep/issues/489), OPEN. |
+
+#486 — додаткове рішення власника після первісного аудиту, а не новий дефект A1–A9. Реальна перевірка у #489 переносить тільки його невиконаний критерій двох ботів. Загальні Publisher/live-platform сценарії залишаються #47, polling/operations — #42; однакові докази повторно не вимагати. Модульне пакування Telegram та Application Modules залишаються в #487; цей аудит не оголошує їх виконаними. Попереднє рішення тримати real acceptance всередині VAR замінено поточним дорученням користувача перенести залишок у i/ir.
+
+### Перевірки та межі
+
+- **108 passed**, без skips: `test_mtls_shared_token.py`, `test_worker_routes_auth.py`, `test_character_completeness.py`, `test_default_character.py`, `test_voice_issued_result.py`, `test_telegram_split_486.py`, `test_issue_411_publisher_channels.py`, `test_setup_starts_telegram_polling.py`.
+- **23 passed, 27 deselected**: `test_issues_427_429.py -k 'telegram or node_token or core_readiness or every_brand_channel'`. Перевірено readiness з правами/без прав, missing target і кількома каналами брендів. Deselected не зараховано як PASS.
+- Разом **131 passed**; журнали цього запуску: `/tmp/vertep-audit-1611-tests.log`, `/tmp/vertep-audit-1611-readiness.log`. Попередні заяви автора про повний suite/215 Browser tests не зараховувались як власний повторний прогін.
+- Повний suite, Browser E2E, production, live Telegram, Dell R720/VMware/GPU не перевірялися. Відсутність live доказів не означає доведений дефект коду. Реальна PKI лишається #54; #469 і решта стендових критеріїв не закриті цим аудитом.
+- За прямим дорученням #484/#485 закриті completed; #486 — not_planned з посиланням на наступника. Історичні #473/#476 не змінювались. Код, VERSION, CHANGELOG, branches/commits/releases не змінювалися; звіт лишається локальним, без push.
+
+---
+
 ## Актуальне приймання після публікації — main 0.0.3.77, 15.11.2026
 
 **Цей розділ замінює попередній висновок про незакомічені виправлення та OPEN для 12 локально підтверджених Issues.** Звірено актуальні описи й коментарі #469–#483 та наступників #484/#485. До початку звірки робоче дерево чисте; local HEAD = remote main = `057c84f8f50016e54cecffaaa9a2bb1160113e29` (0.0.3.77).
@@ -234,7 +256,7 @@ Production-готовність, як і раніше, не підтвердже
 - `core/pull_executor.py` (Ollama pull з CORE) — **залишено**: це керування моделями без генерації, правило CORE Generation Gate не порушено.
 - `docs/core-generation-gate.md` — **виправлено**. Таблиця §5 посилається на функції, а не на номери рядків. Неіснуючий `core/app.py:848` прибрано: Telegram ставить публікацію в чергу. Додано `_enqueue_publish_task` і `publisher_readiness`.
 - `get_best_provider(exclude=...)` — **залишено**: основа для можливого failover, видалення прибрало б можливість.
-- `shell=True` у `services/backup_service.py` — **оформлено Issue** [#488](https://github.com/fylypovych/vertep/issues/488) (`i.0.0.4.88`). Під час оформлення додатково знайдено, що пароль Redis із `REDIS_URL` потрапляє в argv.
+- `shell=True` у `services/backup_service.py` — **оформлено Issue** [#488](https://github.com/fylypovych/vertep/issues/488) (`i.0.0.4.88`). Під час оформлення додатково знайдено, що пароль Redis із `REDIS_URL` потрапляє в argv. **Виконано локально 16.11.2026**: вбудовані команди запускаються без shell, пароль Redis передається через `REDISCLI_AUTH`, `{file}`/`{path}` підставляються з `shlex.quote`; override оператора лишаються shell-рядками (`docs/backup-restore.md`). Тести: `tests/test_backup_commands_488.py`.
 - `node-exporter` з `/:/host:ro,rslave` і `pid: host` — **прийнятий ризик** без змін: стандартна конфігурація за документацією node-exporter.
 - `release.yml`/`scripts/release.py` — **виправлено**:
   - dispatch передає `expected_sha`; workflow зупиняється, якщо `main` уже не на перевіреному commit, а `scripts/release.py` відмовляється від run з іншим `headSha`;

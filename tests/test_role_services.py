@@ -408,7 +408,7 @@ def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"i" * 32).decode("ascii"))
     monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
     # Mock pg_dump and redis-cli to create dummy dump files
-    def mock_run(cmd, shell=True, timeout=None, capture_output=True):
+    def mock_run(cmd, shell=False, timeout=None, capture_output=True, env=None):
         if "pg_dump" in cmd:
             pg_dump_path.parent.mkdir(parents=True, exist_ok=True)
             pg_dump_path.write_bytes(b"PG_DUMP_CONTENT")

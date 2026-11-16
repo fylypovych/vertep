@@ -41,6 +41,13 @@ tmpfs `/tmp` (128 MiB). Більший dump потребує окремого п
 
 Штатний сценарій приймання: backup → контрольована зміна/видалення даних → restore → verified health (файли, записи БД, jobs/history/receipts, checksums). Успішний mock restore доказом не є.
 
+## Команди бази даних і віддаленого копіювання
+
+- Вбудовані `pg_dump`, `pg_restore` і `redis-cli BGSAVE` запускаються списком аргументів, без shell. Параметри підключення беруться з `POSTGRES_HOST`/`POSTGRES_PORT`/`POSTGRES_USER`/`POSTGRES_DB` і `REDIS_URL`. Паролі передаються лише через env процесу (`PGPASSWORD`, `REDISCLI_AUTH`), тож у списку процесів їх не видно.
+- `BACKUP_PG_DUMP_CMD`, `BACKUP_PG_RESTORE_CMD`, `BACKUP_REDIS_DUMP_CMD` і `BACKUP_REMOTE_CMD` — override оператора. Це shell-рядок під відповідальність оператора: pipe і змінні працюють як раніше. Порожнє значення вимикає відповідний dump.
+- У `BACKUP_REMOTE_CMD` шлях snapshot підставляється замість `{file}`/`{path}` уже екранованим (`shlex.quote`), тому власні лапки навколо плейсхолдера не потрібні.
+- Помилка будь-якої команди — жорстка помилка snapshot чи відновлення.
+
 ## Зв'язки
 
 - Pre-update backup — частина `update-system.md`.

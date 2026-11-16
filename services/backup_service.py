@@ -13,6 +13,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+import shlex
 import subprocess
 import time
 import urllib.request
@@ -442,9 +443,12 @@ def _remote_copy(destination: Path) -> bool:
     cmd = os.getenv("BACKUP_REMOTE_CMD", "").strip()
     if not cmd:
         return False
-    expanded = cmd.replace("{file}", str(destination)).replace("{path}", str(destination))
+    # i.0.0.4.88: the operator's command is a shell string under the operator's
+    # responsibility; the snapshot path is substituted shell-quoted, never raw.
+    quoted = shlex.quote(str(destination))
+    expanded = cmd.replace("{file}", quoted).replace("{path}", quoted)
     try:
-        result = subprocess.run(expanded, shell=True, timeout=300, capture_output=True)
+        result = _run_command(expanded, timeout=300)
     except Exception as error:
         raise RuntimeError(f"BACKUP_REMOTE_CMD failed to run: {error}") from error
     if result.returncode != 0:
@@ -466,14 +470,44 @@ def _pg_dump_path() -> str:
     return "/tmp/vertep.dump"
 
 
-def _pg_dump_default() -> str | None:
-    return ("pg_dump -h ${POSTGRES_HOST:-postgres} -p ${POSTGRES_PORT:-5432} -U ${POSTGRES_USER:-vertep}"
-            " -d ${POSTGRES_DB:-vertep} -Fc -f " + _pg_dump_path())
+def _postgres_connection() -> list[str]:
+    """Connection arguments of the built-in PostgreSQL commands.
+
+    The password is never an argument: pg_dump/pg_restore read ``PGPASSWORD`` from
+    the environment the backup service already runs with.
+    """
+    return ["-h", os.getenv("POSTGRES_HOST") or "postgres", "-p", os.getenv("POSTGRES_PORT") or "5432",
+            "-U", os.getenv("POSTGRES_USER") or "vertep", "-d", os.getenv("POSTGRES_DB") or "vertep"]
 
 
-def _redis_dump_default() -> str | None:
-    redis_url = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379/0")
-    return f"redis-cli -u {redis_url} BGSAVE"
+def _pg_dump_default() -> list[str]:
+    return ["pg_dump", *_postgres_connection(), "-Fc", "-f", _pg_dump_path()]
+
+
+def _pg_restore_default(dump: Path) -> list[str]:
+    return ["pg_restore", *_postgres_connection(), "-c", "--if-exists", str(dump)]
+
+
+def _redis_dump_default() -> tuple[list[str], dict[str, str]]:
+    """``redis-cli BGSAVE`` as arguments plus the environment carrying the password.
+
+    i.0.0.4.88: the password from ``REDIS_URL`` goes through ``REDISCLI_AUTH``, so
+    it is not visible in the process list and its characters are never parsed by a shell.
+    """
+    from urllib.parse import unquote, urlsplit
+    url = urlsplit(os.getenv("REDIS_URL") or "redis://redis:6379/0")
+    database = (url.path or "/0").lstrip("/") or "0"
+    argv = ["redis-cli", "-h", url.hostname or "redis", "-p", str(url.port or 6379), "-n", database, "BGSAVE"]
+    password = unquote(url.password) if url.password else os.getenv("REDIS_PASSWORD", "")
+    return argv, ({"REDISCLI_AUTH": password} if password else {})
+
+
+def _run_command(command: str | list[str], *, timeout: int, env: dict[str, str] | None = None):
+    """Run a backup command: a list without a shell, an operator override string with one."""
+    environment = {**os.environ, **env} if env else None
+    if isinstance(command, list):
+        return subprocess.run(command, timeout=timeout, capture_output=True, env=environment)
+    return subprocess.run(command, shell=True, timeout=timeout, capture_output=True, env=environment)
 
 
 def _redis_dump_path() -> str:
@@ -521,10 +555,11 @@ def _archive(destination: Path) -> None:
                 archive.addfile(info)
         # Issue #60: pg_dump and redis-cli failures must be hard errors — a backup that
         # claims to include database state but silently skipped the dump is misleading.
-        pg_cmd = os.getenv("BACKUP_PG_DUMP_CMD", _pg_dump_default() or "").strip()
+        override = os.getenv("BACKUP_PG_DUMP_CMD")
+        pg_cmd = _pg_dump_default() if override is None else override.strip()
         if pg_cmd:
             try:
-                result = subprocess.run(pg_cmd, shell=True, timeout=120, capture_output=True)
+                result = _run_command(pg_cmd, timeout=120)
             except Exception as exc:
                 raise RuntimeError(f"pg_dump failed to run: {exc}") from exc
             if result.returncode != 0:
@@ -537,10 +572,11 @@ def _archive(destination: Path) -> None:
                 raise RuntimeError("pg_dump succeeded but dump file was not created")
             archive.add(str(dump_path), arcname="db/postgres.dump", recursive=False)
             dump_path.unlink(missing_ok=True)
-        redis_cmd = os.getenv("BACKUP_REDIS_DUMP_CMD", _redis_dump_default() or "").strip()
+        override = os.getenv("BACKUP_REDIS_DUMP_CMD")
+        redis_cmd, redis_env = (_redis_dump_default() if override is None else (override.strip(), None))
         if redis_cmd:
             try:
-                result = subprocess.run(redis_cmd, shell=True, timeout=60, capture_output=True)
+                result = _run_command(redis_cmd, timeout=60, env=redis_env)
             except Exception as exc:
                 raise RuntimeError(f"redis-cli BGSAVE failed to run: {exc}") from exc
             if result.returncode != 0:
@@ -898,8 +934,9 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
             if db_root.is_dir():
                 pg_dump = db_root / "postgres.dump"
                 if pg_dump.exists():
-                    pg_restore = os.getenv("BACKUP_PG_RESTORE_CMD", f"pg_restore -h ${{POSTGRES_HOST:-postgres}} -p ${{POSTGRES_PORT:-5432}} -U ${{POSTGRES_USER:-vertep}} -d ${{POSTGRES_DB:-vertep}} -c --if-exists {pg_dump}")
-                    result = subprocess.run(pg_restore, shell=True, timeout=300, capture_output=True)
+                    override = os.getenv("BACKUP_PG_RESTORE_CMD")
+                    pg_restore = _pg_restore_default(pg_dump) if override is None else override
+                    result = _run_command(pg_restore, timeout=300)
                     if result.returncode != 0:
                         raise RuntimeError(f"pg_restore failed: {result.stderr.decode()}")
                 redis_rdb = db_root / "redis.rdb"

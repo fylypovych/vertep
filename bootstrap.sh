@@ -547,6 +547,15 @@ ADDITIONAL_ROLES=${VERTEP_ADDITIONAL_ROLES:-${existing_additional_roles:-}}
 if [[ "$NODE_ROLE" != "core" ]]; then
   ADDITIONAL_ROLES=""
 fi
+# Owner decision 16.11.2026: an install or update goes through on a host without a GPU;
+# an active additional gpu role (it runs ComfyUI) is switched off there and stays off
+# until it is enabled again on a host with a GPU. A dedicated gpu node still fails below.
+gpu_role_disabled=false
+if [[ $gpu_vendor == none && ",${ADDITIONAL_ROLES// /}," == *",gpu,"* ]]; then
+  ADDITIONAL_ROLES=$(printf '%s\n' ${ADDITIONAL_ROLES//,/ } | grep -vx gpu | paste -sd, - || true)
+  gpu_role_disabled=true
+  printf 'VERTEP: no NVIDIA or AMD GPU detected; the additional role gpu (ComfyUI) is switched off\n' >&2
+fi
 if [[ "$NODE_ROLE" != "unassigned" ]]; then
   jq -e --arg role "$NODE_ROLE" 'has($role)' "$INSTALL_ROOT/config/node_roles.json" >/dev/null \
     || fail "node role $NODE_ROLE is absent from the signed role catalog"
@@ -789,6 +798,32 @@ if additional:
     plan["additional_roles"] = [r for r in additional.split(",") if r]
 plan["sha256"] = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 open(output, "w", encoding="utf-8").write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
+PY
+fi
+if [[ $gpu_role_disabled == true ]]; then
+# The applied plan of an existing installation still lists the gpu role: drop it, and
+# the services, capabilities and modules only it brought, so health and the deployment
+# executor follow the roles that actually run.
+python3 - "$INSTALL_ROOT/config/deployment-plan.json" "$INSTALL_ROOT/config/node_roles.json" <<'PY'
+import hashlib, json, sys
+path, catalog_path = sys.argv[1:]
+plan = json.load(open(path, encoding="utf-8"))
+catalog = json.load(open(catalog_path, encoding="utf-8"))
+if "gpu" in plan.get("additional_roles", []):
+    extras = [role for role in plan["additional_roles"] if role != "gpu"]
+    kept = [catalog[role] for role in [plan.get("role"), *extras] if isinstance(catalog.get(role), dict)]
+    engine = {"worker", "video_assembly"} if plan.get("engine_runtimes") else set()
+    for field in ("services", "capabilities", "modules"):
+        provided = {item for definition in kept for item in definition.get(field, [])} | engine
+        only_gpu = set(catalog["gpu"].get(field, [])) - provided
+        plan[field] = [item for item in plan.get(field, []) if item not in only_gpu]
+    if extras:
+        plan["additional_roles"] = extras
+    else:
+        plan.pop("additional_roles")
+    plan.pop("sha256", None)
+    plan["sha256"] = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    open(path, "w", encoding="utf-8").write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
 PY
 fi
 chmod 0600 "$INSTALL_ROOT/config/deployment-plan.json"

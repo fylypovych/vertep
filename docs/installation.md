@@ -20,6 +20,8 @@ curl -fsSL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap.sh
 
 Core / GPU / Text / Voice / Publisher / Backup / Monitoring (склад — `nodes-and-capabilities.md`). Роль і додаткові ролі Core обираються в First Run Wizard; bootstrap про них не питає. Для автоматизованого встановлення — `VERTEP_ROLE` і `VERTEP_ADDITIONAL_ROLES`; результат зберігається в `NODE_ROLE` і `NODE_ADDITIONAL_ROLES` у `.env`. Персонаж за замовчуванням (варіант «За замовчуванням» у Web, API без `character_id`, Telegram) задається `DEFAULT_CHARACTER` — id наявного каталогу `characters/<id>/`: для автоматизованого встановлення передайте `DEFAULT_CHARACTER` у bootstrap або впишіть його в `.env`; значення, задане в `.env`, зберігається при оновленнях. Без нього job потребує явного вибору персонажа (див. `characters-and-workflows.md`).
 
+Роль GPU запускає ComfyUI і потребує NVIDIA або AMD GPU. Якщо на Core додаткову роль `gpu` активовано, а GPU під час встановлення чи оновлення не знайдено (наприклад, Hyper-V VM без passthrough), bootstrap вимикає цю роль: прибирає її з `NODE_ADDITIONAL_ROLES` і `config/deployment-plan.json` і продовжує з рештою ролей. Повернути роль можна на хості з GPU. Окремий GPU-вузол (`NODE_ROLE=gpu`) без GPU одразу завершується помилкою.
+
 ## First Run Wizard (9 кроків)
 
 Роль вузла (non-Core: Core URL + Certificate + Registration Token) → назва інсталяції → адміністратор → секрети (автогенерація) → обладнання (автодетект) → AI Backend (Ollama / External OpenAI / External API / Skip) → Health Check → Installation Manifest → Готово (Installation ID, Core URL/Certificate/Token).
