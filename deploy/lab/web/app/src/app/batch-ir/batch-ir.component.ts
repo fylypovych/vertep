@@ -43,7 +43,7 @@ import { LabApiService } from '../lab-api.service';
       </table>
       <h2>Доказ (один на пакет)</h2>
       <textarea rows="10" style="width: 100%" data-testid="batch-ir-evidence"
-                [(ngModel)]="evidenceJson"></textarea>
+                [placeholder]="evidenceHint" [(ngModel)]="evidenceJson"></textarea>
       <p>
         <label>
           <input type="checkbox" data-testid="batch-ir-confirm"
@@ -71,14 +71,17 @@ export class BatchIrComponent {
   readonly results = signal<string[]>([]);
   readonly error = signal('');
   readonly confirmed = signal(false);
-  evidenceJson = JSON.stringify({
-    version: '0.0.0.0',
-    commit: '0000000',
-    environment: 'lab-vm',
-    expected: 'усі критерії виконані',
-    actual: 'усі критерії виконані',
-    reviewer: 'independent-reviewer',
-    test_results: { passed: 1, failed: 0, skipped: 0 },
+  // The field starts empty: a prefilled sample looked like a ready, passing proof
+  // (observed on the LAB VM, 16.11.2026). The shape is only a placeholder hint.
+  evidenceJson = '';
+  readonly evidenceHint = JSON.stringify({
+    version: '<версія Vertep, напр. 0.0.3.86>',
+    commit: '<повний SHA commit, 40 символів>',
+    environment: '<стенд: сервер, ОС, GPU>',
+    expected: '<очікуваний результат критерію>',
+    actual: '<фактичний результат на стенді>',
+    reviewer: '<незалежний рецензент, не автор>',
+    test_results: { passed: 0, failed: 0, skipped: 0 },
   }, null, 2);
 
   constructor() {
@@ -118,6 +121,10 @@ export class BatchIrComponent {
   }
 
   private parseEvidence(): Record<string, any> | null {
+    if (!this.evidenceJson.trim()) {
+      this.error.set('вставте доказ: реальний результат перевірки на стенді (JSON)');
+      return null;
+    }
     try {
       return JSON.parse(this.evidenceJson) as Record<string, any>;
     } catch {

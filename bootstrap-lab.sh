@@ -81,8 +81,12 @@ docker compose --env-file "$env_file" -p vertep-lab-web \
 
 owner_token=$(sed -n 's/^LAB_OWNER_TOKEN=//p' "$env_file")
 printf '\nЛабораторію встановлено (%s).\n' "$REF"
-printf 'Панель доступна лише локально: http://127.0.0.1:8444\n'
-printf 'З вашого комп'"'"'ютера: ssh -L 8444:127.0.0.1:8444 <користувач>@<адреса VM>\n'
+web_port=$(sed -n 's/^LAB_WEB_PORT=//p' "$env_file"); web_port=${web_port:-8444}
+ssh_user=${SUDO_USER:-$(logname 2>/dev/null || true)}; ssh_user=${ssh_user:-<користувач>}
+vm_address=$(hostname -I 2>/dev/null | awk '{print $1}'); vm_address=${vm_address:-<адреса VM>}
+printf 'Панель доступна лише локально на VM: http://127.0.0.1:%s\n' "$web_port"
+printf 'З вашого комп'"'"'ютера: ssh -L %s:127.0.0.1:%s %s@%s\n' "$web_port" "$web_port" "$ssh_user" "$vm_address"
+printf 'і відкрийте http://127.0.0.1:%s\n' "$web_port"
 printf 'Токен власника: %s\n' "$owner_token"
 printf 'Налаштування: %s (спільний GPU вимкнено, доки ви його не ввімкнете).\n' "$env_file"
 printf 'Сертифікат Vertep для спільного GPU покладіть у %s/ca/vertep-ca.pem\n' "$LAB_ROOT"

@@ -94,3 +94,19 @@ def test_lab_images_set_readable_modes_explicitly():
     assert "COPY --chmod=0644 deploy/lab/web/nginx.conf /etc/nginx/nginx.conf" in web
     assert "chmod -R a+rX /srv/lab-web" in web
     assert "chmod -R a+rX $VERTEP_LAB_HOME/lab" in sandbox
+
+
+FINISH = re.compile(r"web_port=\$\(sed -n 's/\^LAB_WEB_PORT=//p'.*?\nprintf 'і відкрийте http://127\.0\.0\.1:%s\\n' \"\$web_port\"\n", re.S)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.parametrize("env_port,expected_port", [("", "8444"), ("LAB_WEB_PORT=9555\n", "9555")])
+def test_the_finish_message_names_the_real_address(tmp_path, env_port, expected_port):
+    env_file = tmp_path / "lab.env"
+    env_file.write_text("LAB_OWNER_TOKEN=x\n" + env_port, encoding="utf-8")
+    script = (f"env_file={env_file}; SUDO_USER=lab\n"
+              "hostname(){ echo '192.0.2.10 10.0.0.5'; }\n" + FINISH.search(LAB_BOOTSTRAP).group(0))
+    result = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert f"ssh -L {expected_port}:127.0.0.1:{expected_port} lab@192.0.2.10" in result.stdout
+    assert f"http://127.0.0.1:{expected_port}" in result.stdout and "<" not in result.stdout

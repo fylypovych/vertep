@@ -1,9 +1,11 @@
 import { Component, inject, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { LabApiService } from '../lab-api.service';
 
 @Component({
   selector: 'app-history',
   standalone: true,
+  imports: [DatePipe],
   template: `
     <h1>Історія рішень (audit trail)</h1>
     <section class="panel">
@@ -21,7 +23,7 @@ import { LabApiService } from '../lab-api.service';
         <tbody>
           @for (item of records(); track $index) {
             <tr [attr.data-testid]="'history-' + item['action']">
-              <td>{{ item['at'] }}</td>
+              <td>{{ item['timestamp'] | date:'yyyy-MM-dd HH:mm:ss' }}</td>
               <td>{{ item['actor'] }}</td>
               <td>{{ item['action'] }}</td>
               <td>{{ item['subject'] }}</td>
