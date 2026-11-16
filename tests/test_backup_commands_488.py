@@ -126,3 +126,35 @@ def test_no_built_in_command_uses_a_shell():
     source = Path(backup_service.__file__).read_text(encoding="utf-8")
     assert source.count("shell=True") == 1  # only _run_command, for operator strings
     assert "${POSTGRES_HOST" not in source and "redis-cli -u" not in source
+
+
+@pytest.mark.parametrize("scheme,username,expected_options", [
+    ("rediss", "backup%20user", ["--tls", "--user", "backup user"]),
+    ("rediss", "", ["--tls"]),
+    ("redis", "backup%40user", ["--user", "backup@user"]),
+    ("redis", "", []),
+])
+def test_redis_url_transport_and_acl_reach_subprocess(monkeypatch, tmp_path,
+                                                    scheme, username, expected_options):
+    """#490: exercise the archive path, including the subprocess argv/env boundary."""
+    url = f"{scheme}://{username}:{quote(PASSWORD, safe='')}@cache.example:6380/2"
+    monkeypatch.setenv("REDIS_URL", url)
+    monkeypatch.setenv("BACKUP_PG_DUMP_CMD", "")
+    monkeypatch.delenv("BACKUP_REDIS_DUMP_CMD", raising=False)
+    monkeypatch.delenv("BACKUP_REDIS_LOGICAL", raising=False)
+    rdb = tmp_path / "redis dump.rdb"
+    monkeypatch.setenv("BACKUP_REDIS_DUMP_PATH", str(rdb))
+    monkeypatch.setattr(backup_service, "_sources", lambda: [])
+    recorder = Recorder(lambda command: rdb.write_bytes(b"redis fixture"))
+    monkeypatch.setattr(backup_service.subprocess, "run", recorder)
+
+    backup_service._archive(tmp_path / "snapshot.tar.gz")
+
+    assert len(recorder.calls) == 1
+    call = recorder.calls[0]
+    assert call["command"] == ["redis-cli", "-h", "cache.example", "-p", "6380",
+                               "-n", "2", *expected_options, "BGSAVE"]
+    assert call["shell"] is False
+    assert call["env"]["REDISCLI_AUTH"] == PASSWORD
+    assert all(PASSWORD not in arg and quote(PASSWORD, safe='') not in arg and url not in arg
+               for arg in call["command"])

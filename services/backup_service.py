@@ -497,7 +497,12 @@ def _redis_dump_default() -> tuple[list[str], dict[str, str]]:
     from urllib.parse import unquote, urlsplit
     url = urlsplit(os.getenv("REDIS_URL") or "redis://redis:6379/0")
     database = (url.path or "/0").lstrip("/") or "0"
-    argv = ["redis-cli", "-h", url.hostname or "redis", "-p", str(url.port or 6379), "-n", database, "BGSAVE"]
+    argv = ["redis-cli", "-h", url.hostname or "redis", "-p", str(url.port or 6379), "-n", database]
+    if url.scheme == "rediss":
+        argv.append("--tls")
+    if url.username:
+        argv.extend(["--user", unquote(url.username)])
+    argv.append("BGSAVE")
     password = unquote(url.password) if url.password else os.getenv("REDIS_PASSWORD", "")
     return argv, ({"REDISCLI_AUTH": password} if password else {})
 

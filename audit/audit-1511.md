@@ -1,5 +1,17 @@
 # Аудит Vertep — 15.11.2026
 
+## Актуальна звірка #488 — 16.11.2026, main 0.0.3.80
+
+**P3 backup-команди: PARTIAL; попередня позначка «виконано локально» нижче не є повним прийманням.** HEAD = remote main `f86cc786b93eff741941fae8c919771fa04f23e5`; [реалізація 0.0.3.80](https://github.com/fylypovych/vertep/commit/f86cc786b93eff741941fae8c919771fa04f23e5) опублікована. Сторонню незакомічену зміну `tests/test_node_process_acceptance.py` збережено; цей файл не входив у прогін.
+
+- **Підтверджено:** `services/backup_service.py::_pg_dump_default`, `_pg_restore_default`, `_run_command` запускають built-in argv без shell; Redis password передається через `REDISCLI_AUTH`, PostgreSQL успадковує `PGPASSWORD`; `_remote_copy` екранує snapshot path. Операторські shell overrides дозволені критеріями й описані в `docs/backup-restore.md`; hard errors для ненульових кодів/відсутніх dumps збережені.
+- **Залишок:** `_redis_dump_default` губить TLS scheme і ACL username з `REDIS_URL`. Для синтетичного `rediss://backup_user:synthetic_password@cache.example:6380/2` отримано `['redis-cli', '-h', 'cache.example', '-p', '6380', '-n', '2', 'BGSAVE']`: немає `--tls` і `--user`. Старий виклик через `-u` передавав ці дані. Це регресія перетворення конфігурації, а не нова функціональність. Наявність такого URL в production не встановлена.
+- **GitHub:** [#488 · i.0.0.4.88](https://github.com/fylypovych/vertep/issues/488) закрито **NOT_PLANNED** після перевіреного перенесення залишку до [#490 · i.0.0.4.90](https://github.com/fylypovych/vertep/issues/490), **OPEN**. Виконані частини повторно не призначені. Новий ir не створено: залишок перевіряється кодом; live backup/restore лишається окремим стендовим прийманням.
+- **Тести:** `test_backup_commands_488.py`, `test_backup_restore.py`, `test_backup_restore_durable.py`, `test_backup_read_only.py`, `test_access_and_backup_defaults.py`, `test_backup_confirmation_progress.py`, `test_backup_module_state.py` — **66 passed, 1 skipped, 11 warnings**, 2.60 с. Skip: `VERTEP_TEST_REDIS_URL` не заданий. Журнал: `/tmp/vertep-488-review.log`. Окреме безмережеве відтворення втрати TLS/username підтверджене; live PostgreSQL/Redis не запускались. Зелені тести не покривають знайдені URL cases.
+- Node-exporter залишається прийнятим власником ризиком поза scope. Змінено тільки цей звіт та GitHub Issues; без змін коду, commit, push або release.
+
+---
+
 ## Актуальна звірка #484–486 — 16.11.2026, main 0.0.3.79
 
 Цей розділ замінює попередні OPEN/FAIL/PARTIAL висновки щодо A4/#484 та A7/#485; старі записи нижче збережено як історію. До перевірки робоче дерево чисте, HEAD = remote main `40235dfa645dabcecfc5380698cec4f226175517`. Прочитано актуальні описи й коментарі #484–486, перевірено код, commit 0.0.3.78–0.0.3.79 і наявні #42/#47/#420/#487 для уникнення дублювання.

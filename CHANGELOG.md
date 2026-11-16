@@ -1,3 +1,7 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.82
+- Бекапи (#490, `i.0.0.4.90`): вбудований `redis-cli BGSAVE` зберігає TLS для `rediss://` (`--tls`) і ACL-користувача з `REDIS_URL` (`--user`, після URL decoding). Пароль, як і раніше, передається лише через `REDISCLI_AUTH`. Тести: `tests/test_backup_commands_488.py`; документація: `docs/backup-restore.md`.
+- Аудит `audit/audit-1511.md`: незалежна звірка #488 і перенесення залишку до #490.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.81
 - Тести Browser E2E: `tests/test_node_process_acceptance.py` налаштовує вузол Publisher окремим ботом-публікатором `TELEGRAM_PUBLISHER_BOT_TOKEN` і Telegram-каналом бренду через `targets_readiness` (після var.0.0.4.86). Виправлено падіння кроку «Приймання HTTP corpus без secrets та disposable monitoring» для 0.0.3.80: вузол Publisher звітував «Жоден канал публікації не налаштовано».
 
