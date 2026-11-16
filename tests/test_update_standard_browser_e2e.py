@@ -119,7 +119,12 @@ def test_update_browser_drives_the_standard_executor_with_rollback_and_retry(
         assert context.request.post(f"{url}/api/session",
                                     headers={"Authorization": f"Basic {credentials}"}).ok
         page.goto(f"{url}/settings?tab=update")
-        expect(page.get_by_test_id("settings-update")).to_be_visible()
+        # The first load of the production bundle shares a runner busy with Docker
+        # installations; 5 s once missed it (CI #453). A failure names where the page went.
+        try:
+            expect(page.get_by_test_id("settings-update")).to_be_visible(timeout=30_000)
+        except AssertionError as error:
+            raise AssertionError(f"{error}\nurl={page.url} page_errors={page_errors}") from error
 
         def install() -> str:
             _finish_a_check(page, state_dir)

@@ -1,5 +1,18 @@
 # Аудит Vertep — 15.11.2026
 
+## Приймання #490 — 16.11.2026, main 0.0.3.82
+
+**P3 backup-команди: кодовий залишок #488/#490 виконано.** Цей висновок замінює попередні PARTIAL/OPEN та локальні позначки нижче; історичні записи збережено.
+
+- [#490 · i.0.0.4.90](https://github.com/fylypovych/vertep/issues/490) — **CLOSED / COMPLETED**. Перевірено [commit 0.0.3.82](https://github.com/fylypovych/vertep/commit/a0df51cd10d3958dc6ebcb3476cda30875a73af9); HEAD = remote main, до аудиту робоче дерево чисте.
+- `services/backup_service.py::_redis_dump_default` зберігає TLS (`rediss` → `--tls`) і URL-decoded ACL username (`--user`); звичайний Redis без username не змінюється. Пароль передається через `REDISCLI_AUTH`, не argv; built-in команди без shell.
+- Чотири cases `test_redis_url_transport_and_acl_reach_subprocess` проходять `_archive` → `_run_command` до перехопленого `subprocess.run`: TLS/plain, з username/без нього, URL decoding, password зі спецсимволами, argv/env та shell=False. PostgreSQL commands, quoted paths, операторські overrides і hard-error гілки збережені.
+- Повторно: **70 passed, 1 skipped, 11 warnings**, 2.53 с. Набір: `test_backup_commands_488.py`, `test_backup_restore.py`, `test_backup_restore_durable.py`, `test_backup_read_only.py`, `test_access_and_backup_defaults.py`, `test_backup_confirmation_progress.py`, `test_backup_module_state.py`. Журнал: `/tmp/vertep-490-acceptance.log`. Skip — `VERTEP_TEST_REDIS_URL` не заданий; його не зараховано як PASS.
+- Live PostgreSQL/Redis backup/restore та реальна TLS-сесія не перевірялися; automated contract не замінює стенд. Повний suite/Browser E2E не запускалися, commit має `[skip ci]`; green CI не заявляється. Для типу i погоджені критерії виконані; нових i/ir немає, чинні live вимоги не дублюються.
+- #488 залишається CLOSED/NOT_PLANNED як джерело перенесення. Node-exporter поза scope. Код не змінено; доповнення звіту локальне, без commit/push/release. `git diff --check` — OK.
+
+---
+
 ## Актуальна звірка #488 — 16.11.2026, main 0.0.3.80
 
 **P3 backup-команди: PARTIAL; попередня позначка «виконано локально» нижче не є повним прийманням.** HEAD = remote main `f86cc786b93eff741941fae8c919771fa04f23e5`; [реалізація 0.0.3.80](https://github.com/fylypovych/vertep/commit/f86cc786b93eff741941fae8c919771fa04f23e5) опублікована. Сторонню незакомічену зміну `tests/test_node_process_acceptance.py` збережено; цей файл не входив у прогін.
