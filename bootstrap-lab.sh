@@ -9,7 +9,7 @@ REPOSITORY=${VERTEP_LAB_REPOSITORY:-https://github.com/fylypovych/vertep.git}
 RELEASES_API=${VERTEP_LAB_RELEASES_API:-https://api.github.com/repos/fylypovych/vertep/releases/latest}
 LAB_ROOT=${VERTEP_LAB_ROOT:-/opt/vertep-lab}
 REF=${VERTEP_LAB_REF:-}
-MIN_RAM_MB=${VERTEP_LAB_MIN_RAM_MB:-8192}
+MIN_RAM_MB=${VERTEP_LAB_MIN_RAM_MB:-4096}  # owner decision 16.11.2026 (was 8192)
 MIN_DISK_MB=${VERTEP_LAB_MIN_DISK_MB:-30720}
 
 fail(){ printf 'VERTEP LAB: %s\n' "$*" >&2; exit 1; }

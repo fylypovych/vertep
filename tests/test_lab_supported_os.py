@@ -42,3 +42,16 @@ def test_r1_qualification_accepts_both_hosts(version, ok):
     from lab import qualification_run as run
     assert run.EXPECTED_OS_VERSIONS == ("24.04", "26.04")
     assert version.startswith(run.EXPECTED_OS_VERSIONS) == ok
+
+
+def test_the_lab_install_needs_at_least_4_gb_of_ram():
+    """Owner decision 16.11.2026: a VM with nominal 8 GB reports ~7.4 GB; the floor is 4096 MB."""
+    assert "MIN_RAM_MB=${VERTEP_LAB_MIN_RAM_MB:-4096}" in LAB_BOOTSTRAP
+
+
+@pytest.mark.parametrize("gib,ok", [(3.9, False), (4.0, True), (7.25, True), (8.0, True), (16.0, False)])
+def test_r1_ram_range_is_4_to_8_gb(gib, ok):
+    """Owner decision 16.11.2026: R1 RAM 4–8 GB (was 16–32); a nominal 8 GB VM reports ~7.25 GiB."""
+    from lab import qualification_run as run
+    low, high = run.EXPECTED_RAM_GB
+    assert (low, high) == (4.0, 8.0) and (low <= gib <= high) == ok

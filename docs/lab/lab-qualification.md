@@ -21,7 +21,7 @@ Ubuntu Server 24.04 або 26.04 VM з production-priority Dispatcher/GPU та �
 | --- | --- | --- |
 | OS | Ubuntu Server 24.04 або 26.04 LTS | R1 |
 | vCPU | 4–8 | R1 |
-| RAM | 16–32 GB | R1 |
+| RAM | 4–8 GB (рішення власника 16.11.2026; раніше 16–32 GB) | R1 |
 | SSD | 100–200 GB | R1 |
 | Docker + systemd | окрема інсталяція лабораторії | R1 |
 | GPU | фізичний, production-priority, **без passthrough у lab-контейнер** | R2, R3 |

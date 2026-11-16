@@ -62,7 +62,7 @@ ISOLATION_EXPECTATIONS: dict[str, str] = {
 
 #: Approved envelope of the laboratory stand (Issue #252, R1).
 EXPECTED_VCPU = (4, 8)
-EXPECTED_RAM_GB = (16.0, 32.0)
+EXPECTED_RAM_GB = (4.0, 8.0)  # owner decision 16.11.2026 (was 16–32 GB)
 EXPECTED_DISK_GB = (100.0, 200.0)
 EXPECTED_OS = "ubuntu"
 EXPECTED_OS_VERSIONS = ("24.04", "26.04")

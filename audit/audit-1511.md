@@ -19,6 +19,8 @@
 
 **Знахідка Г3 — LAB не встановлюється на Ubuntu 26.04. Виправлено локально.** На VM `lab` спільний bootstrap 0.0.3.83 після вибору «2) Лабораторія» зупинився з `VERTEP LAB: Ubuntu Server 24.04 LTS is required`. Причина: у 0.0.3.60 підтримку 26.04 додали в `bootstrap.sh`/`install.sh`, але пропустили `bootstrap-lab.sh` (є з 0.0.3.33) і кваліфікацію R1 (`lab/qualification_run.py`, `EXPECTED_OS_VERSION = "24.04"`). Тепер обидва приймають 24.04 і 26.04, як Vertep; `lab/qualification.py` і `docs/lab/lab-qualification.md` узгоджено. Тести: `tests/test_lab_supported_os.py`; разом з усіма тестами LAB і вибору продукту — 542 passed, 3 skipped. LAB на VM ще не встановлено.
 
+Після 0.0.3.84 (`VERTEP_LAB_REF=main`) перевірка ОС на VM `lab` пройшла; наступна зупинка — `at least 8192 MB RAM is required (found 7422)`. **Рішення власника (16.11.2026): мінімум RAM для встановлення LAB — 4096 МБ.** Змінено типове значення `VERTEP_LAB_MIN_RAM_MB` у `bootstrap-lab.sh`; тест — `tests/test_lab_supported_os.py`. **Рішення власника (16.11.2026): кваліфікаційний діапазон RAM R1 — 4–8 ГБ (було 16–32 ГБ).** Змінено `lab/qualification_run.py::EXPECTED_RAM_GB` і `docs/lab/lab-qualification.md`; тест — `tests/test_lab_supported_os.py`. Тести LAB — 501 passed, 3 skipped.
+
 Відкритим лишається те, що потребує стенду: #469 (LAB), #489 (живий Telegram, два боти), негативна перевірка A3 на розгорнутому proxy, GPU/VRAM, відкат і відновлення, медіаконвеєр, квитанції publishers, LAB 24/7.
 
 ---
