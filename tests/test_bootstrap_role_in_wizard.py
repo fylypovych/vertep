@@ -10,4 +10,5 @@ def test_bootstrap_does_not_ask_for_roles():
     assert "Select node role" not in source and "Additional roles:" not in source
     assert not re.search(r"read -r -p \"(Role|Additional)", source)
     # Without an automation override the node starts unassigned and the wizard decides.
-    assert 'NODE_ROLE=${VERTEP_ROLE:-${existing_node_role:-unassigned}}' in source
+    # A completed wizard is recorded in the applied plan, which wins over .env (16.11.2026).
+    assert "NODE_ROLE=${VERTEP_ROLE:-${plan_role:-${existing_node_role:-unassigned}}}" in source

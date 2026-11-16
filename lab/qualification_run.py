@@ -65,7 +65,7 @@ EXPECTED_VCPU = (4, 8)
 EXPECTED_RAM_GB = (16.0, 32.0)
 EXPECTED_DISK_GB = (100.0, 200.0)
 EXPECTED_OS = "ubuntu"
-EXPECTED_OS_VERSION = "24.04"
+EXPECTED_OS_VERSIONS = ("24.04", "26.04")
 
 
 def utcnow() -> str:
@@ -426,7 +426,7 @@ def _artifacts(context: QualificationContext, names) -> list[dict]:
 
 
 def run_r1(context: QualificationContext) -> dict:
-    """R1 — isolated Ubuntu 24.04 VM, resources, lifecycle, isolation negatives."""
+    """R1 — isolated Ubuntu 24.04/26.04 VM, resources, lifecycle, isolation negatives."""
     facts = _base_facts(context)
     host = facts["environment"]["host"]
     disk = collect_disk_facts(context.disk_paths)
@@ -441,9 +441,9 @@ def run_r1(context: QualificationContext) -> dict:
     os_release = host.get("os_release") or {}
     os_id = str(os_release.get("ID", "")).lower()
     os_version = str(os_release.get("VERSION_ID", ""))
-    if os_id != EXPECTED_OS or not os_version.startswith(EXPECTED_OS_VERSION):
+    if os_id != EXPECTED_OS or not os_version.startswith(EXPECTED_OS_VERSIONS):
         problems.append(
-            f"stand is not Ubuntu Server {EXPECTED_OS_VERSION}: "
+            f"stand is not Ubuntu Server {' / '.join(EXPECTED_OS_VERSIONS)}: "
             f"{os_release.get('PRETTY_NAME') or host.get('platform')}")
     cpu = int(host.get("cpu_count") or 0)
     if not EXPECTED_VCPU[0] <= cpu <= EXPECTED_VCPU[1]:

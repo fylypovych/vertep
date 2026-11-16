@@ -540,8 +540,29 @@ env_value(){
 }
 existing_node_role=$(env_value NODE_ROLE)
 existing_additional_roles=$(env_value NODE_ADDITIONAL_ROLES)
-NODE_ROLE=${VERTEP_ROLE:-${existing_node_role:-unassigned}}
-ADDITIONAL_ROLES=${VERTEP_ADDITIONAL_ROLES:-${existing_additional_roles:-}}
+# Owner decision 16.11.2026: on an existing installation the applied deployment plan
+# (written by the First Run Wizard and Settings -> Roles) is the source of the roles;
+# .env follows it. VERTEP_ROLE / VERTEP_ADDITIONAL_ROLES still override for automation.
+applied_plan="$INSTALL_ROOT/config/deployment-plan.json"
+plan_role=""; plan_additional_roles=""
+if [[ -f $applied_plan ]]; then
+  plan_role=$(jq -r '.role // empty' "$applied_plan" 2>/dev/null || true)
+  plan_additional_roles=$(jq -r '(.additional_roles // []) | join(",")' "$applied_plan" 2>/dev/null || true)
+  [[ $plan_role == unassigned ]] && plan_role=""
+fi
+NODE_ROLE=${VERTEP_ROLE:-${plan_role:-${existing_node_role:-unassigned}}}
+if [[ -n ${VERTEP_ADDITIONAL_ROLES:-} ]]; then
+  ADDITIONAL_ROLES=$VERTEP_ADDITIONAL_ROLES
+elif [[ -n $plan_role && $plan_role == "$NODE_ROLE" ]]; then
+  ADDITIONAL_ROLES=$plan_additional_roles
+else
+  ADDITIONAL_ROLES=${existing_additional_roles:-}
+fi
+if [[ -n $plan_role && ( $plan_role != "${existing_node_role:-}" || $plan_additional_roles != "${existing_additional_roles:-}" ) ]]; then
+  printf 'VERTEP: roles follow the applied deployment plan (%s%s); .env had %s%s\n' \
+    "$plan_role" "${plan_additional_roles:+ +$plan_additional_roles}" \
+    "${existing_node_role:-none}" "${existing_additional_roles:+ +$existing_additional_roles}" >&2
+fi
 # The role and additional roles are chosen in the First Run Wizard; bootstrap starts
 # only the base services. VERTEP_ROLE / VERTEP_ADDITIONAL_ROLES remain for automation.
 if [[ "$NODE_ROLE" != "core" ]]; then
@@ -800,30 +821,23 @@ plan["sha256"] = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(","
 open(output, "w", encoding="utf-8").write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
 PY
 fi
-if [[ $gpu_role_disabled == true ]]; then
-# The applied plan of an existing installation still lists the gpu role: drop it, and
-# the services, capabilities and modules only it brought, so health and the deployment
-# executor follow the roles that actually run.
-python3 - "$INSTALL_ROOT/config/deployment-plan.json" "$INSTALL_ROOT/config/node_roles.json" <<'PY'
-import hashlib, json, sys
-path, catalog_path = sys.argv[1:]
+# The applied plan must list exactly the roles that run: an explicit automation override
+# or a switched-off gpu role is written back with the signed planner (create_plan).
+if [[ $NODE_ROLE != unassigned ]]; then
+python3 - "$applied_plan" "$INSTALL_ROOT/config/node_roles.json" "$INSTALL_ROOT/runtime/deployment-plan.py" \
+  "$NODE_ROLE" "$ADDITIONAL_ROLES" <<'PY' || fail "the deployment plan could not be synchronised with the node roles"
+import importlib.util, json, sys
+path, catalog_path, planner_path, role, additional = sys.argv[1:]
 plan = json.load(open(path, encoding="utf-8"))
-catalog = json.load(open(catalog_path, encoding="utf-8"))
-if "gpu" in plan.get("additional_roles", []):
-    extras = [role for role in plan["additional_roles"] if role != "gpu"]
-    kept = [catalog[role] for role in [plan.get("role"), *extras] if isinstance(catalog.get(role), dict)]
-    engine = {"worker", "video_assembly"} if plan.get("engine_runtimes") else set()
-    for field in ("services", "capabilities", "modules"):
-        provided = {item for definition in kept for item in definition.get(field, [])} | engine
-        only_gpu = set(catalog["gpu"].get(field, [])) - provided
-        plan[field] = [item for item in plan.get(field, []) if item not in only_gpu]
-    if extras:
-        plan["additional_roles"] = extras
-    else:
-        plan.pop("additional_roles")
-    plan.pop("sha256", None)
-    plan["sha256"] = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    open(path, "w", encoding="utf-8").write(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
+extras = sorted({item.strip() for item in additional.split(",") if item.strip()})
+if plan.get("role") != role or sorted(plan.get("additional_roles", [])) != extras:
+    spec = importlib.util.spec_from_file_location("vertep_deployment_plan", planner_path)
+    planner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(planner)
+    catalog = json.load(open(catalog_path, encoding="utf-8"))
+    synced = planner.create_plan(catalog, role, plan.get("version") or "", extras,
+                                 plan.get("engine_runtimes") or [])
+    open(path, "w", encoding="utf-8").write(json.dumps(synced, ensure_ascii=False, indent=2) + "\n")
 PY
 fi
 chmod 0600 "$INSTALL_ROOT/config/deployment-plan.json"
@@ -923,6 +937,17 @@ while read -r stale_id stale_name; do
   docker rm -f "$stale_id" >/dev/null
 done < <(docker ps -a --format '{{.ID}} {{.Names}}')
 "${compose[@]}" up -d --remove-orphans "${role_services[@]}"
+# `up` only starts the selected services and never stops one whose role was dropped (a
+# switched-off gpu role left ComfyUI crash-looping). Remove the containers of services
+# that neither the node roles nor the applied plan (it carries the engine runtimes) select.
+mapfile -t kept_services < <({ printf '%s\n' "${role_services[@]}"
+  jq -r '.services[]?' "$applied_plan" 2>/dev/null || true; } | awk 'NF && !seen[$0]++')
+while read -r running_service; do
+  [[ -z $running_service ]] && continue
+  printf '%s\n' "${kept_services[@]}" | grep -qx "$running_service" && continue
+  printf 'VERTEP: removing service %s; no selected role runs it\n' "$running_service" >&2
+  "${compose[@]}" rm -sf "$running_service" >/dev/null
+done < <("${compose[@]}" ps -a --services 2>/dev/null || true)
 migrate_id=$("${compose[@]}" ps -aq migrate)
 [[ -n $migrate_id && $(docker inspect -f '{{.State.ExitCode}}' "$migrate_id") -eq 0 ]] \
   || fail "database migration did not complete successfully"

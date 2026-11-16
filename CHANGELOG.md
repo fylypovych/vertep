@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.84
+- Bootstrap (рішення власника 16.11.2026): на наявній інсталяції ролі визначає застосований план CORE `config/deployment-plan.json`, який пишуть майстер і екран «Ролі»; `.env` переписується під нього, про розбіжність виводиться попередження. Порядок джерел: `VERTEP_ROLE`/`VERTEP_ADDITIONAL_ROLES`, далі план, далі `.env`. Якщо обрані ролі відрізняються від плану (override автоматизації або вимкнена роль `gpu`), план перебудовується підписаним `runtime/deployment-plan.py::create_plan` зі збереженням engine runtimes.
+- Bootstrap після запуску обраних сервісів видаляє контейнери сервісів, яких немає ні в ролях вузла, ні в застосованому плані. Виправлено ComfyUI вимкненої ролі `gpu`, що перезапускався по колу на VM без GPU. Сервіси engine runtimes (`moneyprinter`) зберігаються.
+- LAB: `bootstrap-lab.sh` і кваліфікація R1 (`lab/qualification_run.py`) підтримують Ubuntu Server 24.04 і 26.04, як Vertep з 0.0.3.60; раніше LAB на 26.04 зупинявся з `Ubuntu Server 24.04 LTS is required`.
+- Тести: `tests/test_bootstrap_gpu_detection.py`, `tests/test_bootstrap_role_in_wizard.py`, `tests/test_lab_supported_os.py`. Документація: `docs/installation.md`, `docs/lab/lab-qualification.md`. Аудит `audit/audit-1511.md`: реліз 0.0.3.83, оновлення VM без GPU, знахідки Г1–Г3.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.83
 - Тести CI `fleet-persistence-runtime-acceptance`: `tests/test_update_standard_browser_e2e.py` чекає першого завантаження вкладки «Оновлення» до 30 с замість 5. Під час CI #453 runner був зайнятий Docker-контейнерами, і сторінка не встигла завантажитися. Локально на свіжій збірці Web блок з'являється за 0,25 с без помилок. Якщо тест впаде знову, повідомлення покаже адресу сторінки та помилки JavaScript.
 - Аудит `audit/audit-1511.md`: приймання #490.

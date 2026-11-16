@@ -60,7 +60,7 @@ def test_the_precondition_runs_before_the_runtime_is_written_or_started():
 # ── Owner decision 16.11.2026: an update goes through; the additional gpu role is switched off ──
 
 DISABLE = re.compile(r'gpu_role_disabled=false\n.*?\nfi\n', re.S)
-PLAN_FIX = re.compile(r'if \[\[ \$gpu_role_disabled == true \]\]; then\n.*?\nPY\nfi\n', re.S)
+PLAN_SYNC = re.compile(r'if \[\[ \$NODE_ROLE != unassigned \]\]; then\npython3 - "\$applied_plan".*?\nPY\nfi\n', re.S)
 
 
 def _disable(vendor, role, extra):
@@ -94,6 +94,22 @@ def test_switching_off_happens_before_services_and_the_env_are_derived():
     assert position > BOOTSTRAP.index('gpu_vendor=none; gpu_name="GPU not found"')
 
 
+def _plan_sync(tmp_path, plan, role, additional):
+    import json
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    (tmp_path / "config/node_roles.json").write_text(
+        (ROOT / "config/node_roles.json").read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "runtime/deployment-plan.py").write_text(
+        (ROOT / "core/deployment_plan.py").read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "config/deployment-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    script = (f"INSTALL_ROOT={tmp_path}; applied_plan=$INSTALL_ROOT/config/deployment-plan.json\n"
+              f"NODE_ROLE={role}; ADDITIONAL_ROLES='{additional}'\n"
+              'fail(){ echo "FAIL $*" >&2; exit 1; }\n' + PLAN_SYNC.search(BOOTSTRAP).group(0))
+    subprocess.run([shutil.which("bash"), "-c", script], check=True, timeout=30)
+    return json.loads((tmp_path / "config/deployment-plan.json").read_text(encoding="utf-8"))
+
+
 @pytest.mark.skipif(shutil.which("bash") is None or shutil.which("python3") is None,
                     reason="bash and python3 are required")
 def test_the_applied_plan_drops_the_gpu_role(tmp_path):
@@ -102,13 +118,109 @@ def test_the_applied_plan_drops_the_gpu_role(tmp_path):
     sys.path.insert(0, str(ROOT))
     from core.deployment_plan import create_plan, verify_plan
     catalog = json.loads((ROOT / "config/node_roles.json").read_text(encoding="utf-8"))
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config/node_roles.json").write_text(json.dumps(catalog), encoding="utf-8")
     roles = ["gpu", "text", "voice", "publisher", "backup", "monitoring"]
-    plan = create_plan(catalog, "core", "0.0.3.79", roles)
-    (tmp_path / "config/deployment-plan.json").write_text(json.dumps(plan), encoding="utf-8")
-    script = f"INSTALL_ROOT={tmp_path}; gpu_role_disabled=true\n" + PLAN_FIX.search(BOOTSTRAP).group(0)
-    subprocess.run([shutil.which("bash"), "-c", script], check=True, timeout=30)
-    fixed = json.loads((tmp_path / "config/deployment-plan.json").read_text(encoding="utf-8"))
+    fixed = _plan_sync(tmp_path, create_plan(catalog, "core", "0.0.3.79", roles), "core",
+                       ",".join(roles[1:]))
     assert fixed == create_plan(catalog, "core", "0.0.3.79", roles[1:])
     assert verify_plan(fixed) and "comfyui" not in fixed["services"] and "worker" in fixed["services"]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("python3") is None,
+                    reason="bash and python3 are required")
+def test_a_plan_that_already_matches_is_left_untouched(tmp_path):
+    import json
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from core.deployment_plan import create_plan
+    catalog = json.loads((ROOT / "config/node_roles.json").read_text(encoding="utf-8"))
+    plan = create_plan(catalog, "core", "0.0.3.70", ["text", "backup"], ["moneyprinter"])
+    assert _plan_sync(tmp_path, plan, "core", "backup,text") == plan  # engine runtimes kept
+
+
+# ── Owner decision 16.11.2026: the applied plan, not .env, is the source of the roles ──
+
+ROLE_SOURCE = re.compile(r'applied_plan="\$INSTALL_ROOT/config/deployment-plan.json"\n.*?\nfi\nif \[\[ -n \$plan_role.*?\nfi\n', re.S)
+
+
+def _roles(tmp_path, env_roles, plan=None, override_role="", override_extra=""):
+    import json
+    (tmp_path / "config").mkdir(exist_ok=True)
+    if plan is not None:
+        (tmp_path / "config/deployment-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    script = (f"INSTALL_ROOT={tmp_path}\nexisting_node_role=core; existing_additional_roles='{env_roles}'\n"
+              f"VERTEP_ROLE='{override_role}'; VERTEP_ADDITIONAL_ROLES='{override_extra}'\n"
+              + ROLE_SOURCE.search(BOOTSTRAP).group(0) + 'printf "%s|%s" "$NODE_ROLE" "$ADDITIONAL_ROLES"\n')
+    result = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return result.stdout, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("jq") is None, reason="bash and jq are required")
+def test_the_applied_plan_wins_over_a_stale_env(tmp_path):
+    """The test stand: .env kept six roles, the plan applied from the Web held three."""
+    out, err = _roles(tmp_path, "gpu,text,voice,publisher,backup,monitoring",
+                      {"role": "core", "additional_roles": ["backup", "monitoring", "text"]})
+    assert out == "core|backup,monitoring,text"
+    assert "roles follow the applied deployment plan" in err
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("jq") is None, reason="bash and jq are required")
+@pytest.mark.parametrize("plan,override_extra,expected", [
+    (None, "", "core|text,voice"),                                           # no plan yet: .env
+    ({"role": "unassigned", "services": []}, "", "core|text,voice"),         # bootstrap placeholder plan
+    ({"role": "core", "additional_roles": ["text"]}, "backup", "core|backup"),  # automation override
+    ({"role": "core"}, "", "core|"),                                          # plan without extras
+])
+def test_role_source_order(tmp_path, plan, override_extra, expected):
+    out, _ = _roles(tmp_path, "text,voice", plan, override_extra=override_extra)
+    assert out == expected
+
+
+REMOVE_DROPPED = re.compile(r'mapfile -t kept_services < <\(.*?\ndone < <\("\$\{compose\[@\]\}" ps -a --services 2>/dev/null \|\| true\)\n', re.S)
+
+
+def _remove_dropped(tmp_path, existing, role_services, plan_services=None):
+    import json
+    plan = tmp_path / "deployment-plan.json"
+    if plan_services is not None:
+        plan.write_text(json.dumps({"services": plan_services}), encoding="utf-8")
+    match = REMOVE_DROPPED.search(BOOTSTRAP)
+    assert match, "removing the services of dropped roles is missing"
+    script = (
+        "removed=()\n"
+        f'fake(){{ case "$*" in "ps -a --services") printf "%s\\n" {" ".join(existing)};; '
+        'rm\\ -sf\\ *) removed+=("${@: -1}");; esac; }\n'
+        f"compose=(fake); applied_plan={plan}; role_services=({' '.join(role_services)})\n"
+        + match.group(0) + 'printf "%s " "${removed[@]}"\n')
+    result = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return set(result.stdout.split()), result.stderr
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("jq") is None, reason="bash and jq are required")
+def test_the_containers_of_dropped_roles_are_removed(tmp_path):
+    """The test stand after 0.0.3.83: comfyui kept restarting; tts/publisher-worker left the plan."""
+    removed, err = _remove_dropped(
+        tmp_path, ["core", "worker", "ollama", "comfyui", "tts", "publisher-worker"],
+        ["core", "worker", "ollama"], ["core", "worker", "ollama"])
+    assert removed == {"comfyui", "tts", "publisher-worker"}
+    assert "removing service comfyui" in err
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("jq") is None, reason="bash and jq are required")
+def test_engine_runtime_services_of_the_plan_are_kept(tmp_path):
+    removed, _ = _remove_dropped(tmp_path, ["core", "worker", "moneyprinter"], ["core", "worker"],
+                                 ["core", "worker", "moneyprinter"])
+    assert removed == set()
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("jq") is None, reason="bash and jq are required")
+def test_without_a_plan_only_the_role_services_count(tmp_path):
+    removed, _ = _remove_dropped(tmp_path, ["proxy", "core", "comfyui"], ["proxy", "core"])
+    assert removed == {"comfyui"}
+
+
+def test_dropped_services_are_removed_after_the_selected_services_start():
+    position = REMOVE_DROPPED.search(BOOTSTRAP).start()
+    assert BOOTSTRAP.index('"${compose[@]}" up -d --remove-orphans "${role_services[@]}"') < position
+    assert position < BOOTSTRAP.index("deadline=$((SECONDS+600))")

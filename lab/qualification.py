@@ -1,7 +1,7 @@
 """Evidence model of the laboratory qualification matrix (Issue #252).
 
 Issue ``ir.0.0.2.52`` requires a *real* qualification of the laboratory on an
-isolated Ubuntu Server 24.04 VM with a production-priority dispatcher and a
+isolated Ubuntu Server 24.04/26.04 VM with a production-priority dispatcher and a
 physical GPU.  Rows R1–R6 are only proven by observations collected on that
 stand; a unit test, a browser run or a literal evidence dictionary proves
 nothing.
@@ -95,16 +95,16 @@ COMMON_FACTS: tuple[str, ...] = (
 CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         id="R1",
-        title="Ізольована Ubuntu 24.04 VM: ресурси, життєвий цикл, відсутність production-доступу",
+        title="Ізольована Ubuntu 24.04/26.04 VM: ресурси, життєвий цикл, відсутність production-доступу",
         expected=(
-            "Окрема Ubuntu Server 24.04 VM із Docker/systemd: незалежні start/stop/restart, "
+            "Окрема Ubuntu Server 24.04/26.04 VM із Docker/systemd: незалежні start/stop/restart, "
             "виміряні CPU/RAM/SSD або погоджені ресурси, status усередині контейнера; "
             "production socket/DB/volumes/secrets/config недоступні у негативних тестах; "
             "мережа лише allowlisted endpoints; без GPU passthrough."
         ),
         required_facts=("resources", "isolation", "network", "gpu_passthrough", "container"),
         required_rights=(
-            "owner: deploy лабораторії на окрему Ubuntu Server 24.04 VM",
+            "owner: deploy лабораторії на окрему Ubuntu Server 24.04/26.04 VM",
             "owner: доступ до systemd/Docker журналів цієї VM",
         ),
         source="#107 «Затверджене розміщення», isolation criteria 1–3, Етап 5.4–5.7",

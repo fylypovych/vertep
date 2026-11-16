@@ -3,7 +3,7 @@
 > Статус: процедура кваліфікації; не результат приймання | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../AGENTS.md).
 
 **Мета:** зібрати перевірювані докази реальної кваліфікації лабораторії на окремій
-Ubuntu Server 24.04 VM з production-priority Dispatcher/GPU та перевірити їх
+Ubuntu Server 24.04 або 26.04 VM з production-priority Dispatcher/GPU та перевірити їх
 машино-читним валідатором.
 
 **Межі:** цей документ описує *процедуру та інструмент збору доказів*. Підготовка
@@ -19,7 +19,7 @@ Ubuntu Server 24.04 VM з production-priority Dispatcher/GPU та перевір
 
 | Передумова | Значення | Навіщо |
 | --- | --- | --- |
-| OS | Ubuntu Server 24.04 LTS | R1 |
+| OS | Ubuntu Server 24.04 або 26.04 LTS | R1 |
 | vCPU | 4–8 | R1 |
 | RAM | 16–32 GB | R1 |
 | SSD | 100–200 GB | R1 |
@@ -78,7 +78,7 @@ python scripts/qualify_lab.py --validate /opt/vertep-lab/qualification/evidence.
    (`/var/run/docker.sock` нечитний, `/opt/vertep/*`, `/data/*`, `/etc/vertep`
    незаписні), allowlist мережі та відсутність GPU passthrough.
 
-Row `PASS` вимагає: Ubuntu 24.04, ресурси в envelope (або погоджене відхилення),
+Row `PASS` вимагає: Ubuntu 24.04 або 26.04, ресурси в envelope (або погоджене відхилення),
 жодної доступної production-точки, налаштований allowlist, відсутність
 passthrough та артефакт життєвого циклу.
 

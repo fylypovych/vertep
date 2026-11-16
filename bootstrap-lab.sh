@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command Vertep laboratory install for a separate, clean Ubuntu Server 24.04 VM.
+# One-command Vertep laboratory install for a separate, clean Ubuntu Server 24.04 / 26.04 VM.
 # One brace group: `curl … | bash` must parse the whole script before anything runs.
 {
 set -Eeuo pipefail
@@ -17,7 +17,9 @@ progress(){ printf '\n==> %s\n' "$*"; }
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run as root (curl … | sudo bash)"
 . /etc/os-release
-[[ ${ID:-} == ubuntu && ${VERSION_ID:-} == 24.04 ]] || fail "Ubuntu Server 24.04 LTS is required"
+# The same supported hosts as bootstrap.sh (0.0.3.60); docker.io/docker-compose-v2 come from Ubuntu.
+[[ ${ID:-} == ubuntu && ( ${VERSION_ID:-} == 24.04 || ${VERSION_ID:-} == 26.04 ) ]] \
+  || fail "Ubuntu Server 24.04 or 26.04 LTS is required"
 # The laboratory must stay isolated from production (AGENTS.md §4.6).
 [[ ! -e /opt/vertep/docker-compose.yml ]] || fail "Vertep is installed here; use a separate VM"
 ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
