@@ -39,12 +39,18 @@ if [[ -z $REF ]]; then
   [[ -n $REF ]] || fail "could not determine the latest release"
 fi
 install -d -m 0700 "$LAB_ROOT"
+# The checkout is copied into images that run as unprivileged users (nginx, the sandbox):
+# it stays readable inside the 0700 LAB_ROOT. Only git runs with umask 022; the secrets
+# written below keep the script's umask 077. A checkout made by an older bootstrap with
+# 0600 files is opened up once.
 if [[ -d $LAB_ROOT/src/.git ]]; then
-  git -C "$LAB_ROOT/src" fetch -q --depth 1 origin "$REF" </dev/null
-  git -C "$LAB_ROOT/src" checkout -q --detach FETCH_HEAD </dev/null
+  (umask 022
+   git -C "$LAB_ROOT/src" fetch -q --depth 1 origin "$REF" </dev/null
+   git -C "$LAB_ROOT/src" checkout -q --detach FETCH_HEAD </dev/null)
 else
-  git clone -q --depth 1 --branch "$REF" "$REPOSITORY" "$LAB_ROOT/src" </dev/null
+  (umask 022; git clone -q --depth 1 --branch "$REF" "$REPOSITORY" "$LAB_ROOT/src" </dev/null)
 fi
+chmod -R go+rX "$LAB_ROOT/src"
 
 progress "Preparing configuration"
 env_file=$LAB_ROOT/lab.env

@@ -1,3 +1,7 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.86
+- LAB: виправлено `lab-web`, що перезапускався по колу з `open() "/etc/nginx/nginx.conf" failed (13: Permission denied)` на VM лабораторії. `bootstrap-lab.sh` працює з `umask 077`, тож git-клон мав файли `0600`, які Docker переносив в образи з непривілейованими користувачами. Тепер git виконується з `umask 022` (секрети `lab.env` і далі з `umask 077`), клон старого bootstrap відкривається на читання, а `deploy/lab/Dockerfile.web` і `deploy/lab/Dockerfile.sandbox` задають права читання явно.
+- Тести: `tests/test_lab_supported_os.py` (реальний git-клон з `umask 077`). Аудит `audit/audit-1511.md`: знахідка Г4.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.85
 - LAB (рішення власника 16.11.2026): мінімум RAM для встановлення через `bootstrap-lab.sh` — 4096 МБ (було 8192). VM з номінальними 8 ГБ бачить ~7,4 ГБ і раніше не встановлювалась.
 - LAB (рішення власника 16.11.2026): кваліфікаційний діапазон RAM R1 — 4–8 ГБ (було 16–32 ГБ): `lab/qualification_run.py::EXPECTED_RAM_GB`, `docs/lab/lab-qualification.md`.

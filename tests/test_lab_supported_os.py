@@ -55,3 +55,42 @@ def test_r1_ram_range_is_4_to_8_gb(gib, ok):
     from lab import qualification_run as run
     low, high = run.EXPECTED_RAM_GB
     assert (low, high) == (4.0, 8.0) and (low <= gib <= high) == ok
+
+
+# ── LAB VM 16.11.2026: lab-web crash-looped with nginx.conf "Permission denied" ──
+
+CHECKOUT = re.compile(r'if \[\[ -d \$LAB_ROOT/src/\.git \]\]; then\n.*?\nchmod -R go\+rX "\$LAB_ROOT/src"\n', re.S)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None or shutil.which("git") is None, reason="bash and git are required")
+@pytest.mark.parametrize("existing", [False, True])
+def test_the_checkout_is_readable_by_unprivileged_image_users(tmp_path, existing):
+    import os
+    import stat
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    git = ["git", "-C", str(origin), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+    (origin / "nginx.conf").write_text("events {}\n")
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-qm", "c"], check=True)
+    root = tmp_path / "lab"
+    root.mkdir(mode=0o700)
+    if existing:  # a checkout made by the old bootstrap with umask 077
+        subprocess.run(["bash", "-c", f"umask 077; git clone -q {origin} {root}/src"], check=True)
+        assert stat.S_IMODE(os.stat(root / "src/nginx.conf").st_mode) == 0o600
+    script = (f"set -e; umask 077; LAB_ROOT={root}; REF=main; REPOSITORY={origin}\n"
+              + CHECKOUT.search(LAB_BOOTSTRAP).group(0)
+              + f'touch {root}/secret; stat -c %a {root}/secret\n')
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(os.stat(root / "src/nginx.conf").st_mode) & 0o044 == 0o044
+    assert result.stdout.strip() == "600"  # later files (lab.env secrets) keep umask 077
+
+
+def test_lab_images_set_readable_modes_explicitly():
+    web = (ROOT / "deploy/lab/Dockerfile.web").read_text(encoding="utf-8")
+    sandbox = (ROOT / "deploy/lab/Dockerfile.sandbox").read_text(encoding="utf-8")
+    assert "COPY --chmod=0644 deploy/lab/web/nginx.conf /etc/nginx/nginx.conf" in web
+    assert "chmod -R a+rX /srv/lab-web" in web
+    assert "chmod -R a+rX $VERTEP_LAB_HOME/lab" in sandbox
