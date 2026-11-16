@@ -18,13 +18,13 @@ function mockApi(page: any, state: State) {
         if (state.hang) {
           // The server never answers in time; its late answer would name another URL.
           return new Promise<void>(resolve => state.late.push(async () => {
-            await route.fulfill({ json: { public_url: 'https://late.example', telegram_channel_id: body.telegram_channel_id } }).catch(() => {});
+            await route.fulfill({ json: { public_url: 'https://late.example' } }).catch(() => {});
             resolve();
           }));
         }
         return route.fulfill({ json: body });
       }
-      return route.fulfill({ json: { public_url: '', telegram_channel_id: '@news_channel' } });
+      return route.fulfill({ json: { public_url: '' } });
     }
     return route.fulfill({ json: request.method() === 'GET' ? [] : {} });
   });
@@ -62,7 +62,7 @@ test('завислий PUT завершується локальним timeout �
   state.hang = false;
   await save.click();
   await expect.poll(() => state.puts.length).toBe(2);
-  expect(state.puts[1]).toEqual({ public_url: 'https://draft.example/v2', telegram_channel_id: '@news_channel' });
+  expect(state.puts[1]).toEqual({ public_url: 'https://draft.example/v2' });
   await expect(page.getByTestId('publishing-error')).toHaveCount(0);
   await expect(input).toHaveValue('https://draft.example/v2');
 });

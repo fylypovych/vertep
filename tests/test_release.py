@@ -616,6 +616,7 @@ def test_verify_release_requires_runtime_bundle_and_tag_points_to_commit(tmp_pat
                     {"name": f"vertep-runtime-{version}.tar.gz"},
                     {"name": f"manifest-{version}.json"},
                     {"name": f"update-manifest-{version}.json"},
+                    {"name": f"sbom-{version}.cdx.json"},
                     {"name": f"SHA256SUMS-{version}"},
                 ],
             }
@@ -702,6 +703,7 @@ def test_verify_release_dereferences_annotated_tag(tmp_path, monkeypatch):
                     {"name": f"vertep-runtime-{version}.tar.gz"},
                     {"name": f"manifest-{version}.json"},
                     {"name": f"update-manifest-{version}.json"},
+                    {"name": f"sbom-{version}.cdx.json"},
                     {"name": f"SHA256SUMS-{version}"},
                 ],
             }
@@ -730,6 +732,7 @@ def test_verify_release_rejects_mismatched_tag_commit(tmp_path, monkeypatch):
                 {"name": f"vertep-runtime-{version}.tar.gz"},
                 {"name": f"manifest-{version}.json"},
                 {"name": f"update-manifest-{version}.json"},
+                {"name": f"sbom-{version}.cdx.json"},
                 {"name": f"SHA256SUMS-{version}"},
             ],
         }

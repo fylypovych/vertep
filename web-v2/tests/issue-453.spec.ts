@@ -3,7 +3,8 @@ import { test, expect } from '@playwright/test';
 const SOCIAL = ['youtube_client_id', 'youtube_client_secret', 'youtube_access_token', 'youtube_refresh_token', 'facebook_access_token',
   'instagram_client_id', 'instagram_client_secret', 'instagram_access_token', 'instagram_refresh_token',
   'threads_client_id', 'threads_client_secret', 'threads_access_token', 'threads_refresh_token',
-  'tiktok_client_id', 'tiktok_client_secret', 'tiktok_access_token', 'tiktok_refresh_token'];
+  'tiktok_client_id', 'tiktok_client_secret', 'tiktok_access_token', 'tiktok_refresh_token',
+  'telegram_publisher_bot_token'];
 const SERVICE = ['telegram_bot_token', 'money_printer_token', 'external_ai_api_key', 'smtp_password'];
 
 function mockApi(page: any, store: Record<string, string>, writes: { method: string; name: string; body?: any }[]) {
@@ -24,12 +25,12 @@ function mockApi(page: any, store: Record<string, string>, writes: { method: str
       if (method === 'DELETE') { delete store[name]; writes.push({ method, name }); }
       return route.fulfill({ json: { secrets: {} } });
     }
-    if (path.endsWith('/settings/publishing')) return route.fulfill({ json: { public_url: 'https://vertep.example.com', telegram_channel_id: '@news' } });
+    if (path.endsWith('/settings/publishing')) return route.fulfill({ json: { public_url: 'https://vertep.example.com' } });
     return route.fulfill({ json: method === 'GET' ? [] : {} });
   });
 }
 
-test('соцмережі керуються у «Публікації», сервісні ключі — у «Ключах інтеграцій», Telegram token один', async ({ page }) => {
+test('соцмережі керуються у «Публікації», сервісні ключі — у «Ключах інтеграцій», Telegram-публікатор окремо від бота запитів', async ({ page }) => {
   const store: Record<string, string> = { telegram_bot_token: 'old-bot', youtube_refresh_token: 'old-refresh' };
   const writes: { method: string; name: string }[] = [];
   await mockApi(page, store, writes);
@@ -38,13 +39,14 @@ test('соцмережі керуються у «Публікації», сер�
   const credentials = page.getByTestId('settings-publishing');
   await expect(credentials.getByTestId('secret-group-youtube')).toContainText('1/4', { timeout: 20000 });
   for (const name of SOCIAL) await expect(credentials).toContainText(name);
-  for (const platform of ['youtube', 'facebook', 'instagram', 'threads', 'tiktok']) {
+  for (const platform of ['youtube', 'facebook', 'instagram', 'threads', 'tiktok', 'telegram-publishing']) {
     await expect(credentials.getByTestId(`secret-group-${platform}`)).toBeVisible();
   }
-  // Telegram publishing shows the shared token state and links to its single editing place.
-  const telegram = credentials.getByTestId('secret-shared-telegram-publishing');
-  await expect(telegram).toContainText('Збережено');
-  await expect(telegram.getByRole('button', { name: 'Редагувати' })).toHaveCount(0);
+  // var.0.0.4.86: Telegram publishes with its own bot; the request bot's saved token does not count.
+  const telegram = credentials.getByTestId('secret-group-telegram-publishing');
+  await expect(telegram).toContainText('0/1');
+  await expect(telegram).toContainText('Бренди → Канали');
+  await expect(credentials.getByTestId('secret-shared-telegram-publishing')).toHaveCount(0);
   // Editing in the publishing tab writes through the existing secret API, no other value is touched.
   const tiktok = credentials.getByTestId('secret-group-tiktok');
   await tiktok.getByText('tiktok_access_token').locator('xpath=ancestor::div[contains(@class,"border-t")][1]')
@@ -58,8 +60,7 @@ test('соцмережі керуються у «Публікації», сер�
   const html = await page.content();
   for (const value of ['old-bot', 'old-refresh', 'new-tiktok']) expect(html).not.toContain(value);
 
-  await telegram.getByRole('link').click();
-  await expect(page).toHaveURL(/tab=secrets/);
+  await page.goto('/settings?tab=secrets');
   const keys = page.getByTestId('settings-secrets');
   await expect(keys.getByRole('heading', { name: 'Ключі інтеграцій' })).toBeVisible();
   await expect(keys.getByTestId('secret-group-telegram')).toContainText('Збережено');
@@ -76,5 +77,5 @@ test('старе посилання tab=secrets відкриває «Ключі 
   await expect(page.getByTestId('secret-group-telegram')).toContainText('Telegram bot');
   await page.goto('/settings?tab=publishing');
   await expect(page.getByTestId('settings-publishing')).toContainText('Platform credentials', { timeout: 20000 });
-  await expect(page.getByTestId('secret-shared-telegram-publishing')).toContainText('same token as the Telegram control bot');
+  await expect(page.getByTestId('secret-group-telegram-publishing')).toContainText('A separate bot used only for publishing to channels');
 });

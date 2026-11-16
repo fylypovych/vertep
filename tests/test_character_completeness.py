@@ -74,13 +74,13 @@ def test_telegram_does_not_offer_an_incomplete_character(catalog, monkeypatch):
     assert buttons == ["select_character:did_samogon"]
 
 
-def test_shipped_char_contract_is_not_announced_ready(monkeypatch):
-    """The committed char-contract stays on disk (deleting it needs the owner) but is not ready."""
-    monkeypatch.setenv("CHARACTERS_ROOT", str(ROOT / "characters"))
-    if (ROOT / "characters/char-contract").is_dir():
-        assert missing_character_files(ROOT / "characters", "char-contract")
-        ids = [item["id"] for item in TestClient(app).get("/api/characters").json()]
-        assert "char-contract" not in ids and "did_samogon" in ids
+def test_every_shipped_character_is_complete():
+    """i.0.0.4.85: the catalog seeded into installations holds only complete characters;
+    the incomplete test artefact char-contract was removed by the owner's decision."""
+    shipped = sorted(path.name for path in (ROOT / "characters").iterdir() if path.is_dir())
+    assert shipped and "char-contract" not in shipped
+    assert {name: missing_character_files(ROOT / "characters", name) for name in shipped} == {
+        name: [] for name in shipped}
 
 
 def test_voice_issued_result_fixture_no_longer_writes_the_production_catalog():

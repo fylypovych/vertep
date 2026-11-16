@@ -116,18 +116,25 @@ def test_admin_panel_values_reach_the_tasks(monkeypatch, tmp_path):
     _settings_root(monkeypatch, tmp_path)
     monkeypatch.setenv("SESSION_SECRET", "s")
     monkeypatch.delenv("PUBLIC_URL", raising=False)
-    save_publishing_settings("https://core.example/", "@vertep")
-    assert publishing_settings() == {"public_url": "https://core.example", "telegram_channel_id": "@vertep"}
+    save_publishing_settings("https://core.example/")
+    # var.0.0.4.86: the Telegram channel is a brand target, not a publishing setting.
+    assert publishing_settings() == {"public_url": "https://core.example"}
     assert job_helpers._public_video_url(_job())["video_url"].startswith("https://core.example/api/public/")
 
 
-@pytest.mark.parametrize("url,channel", [("http://core.example", ""), ("core.example", ""),
-                                         ("https://core.example?x=1", ""), ("", "not a channel")])
-def test_invalid_publishing_settings_are_refused(monkeypatch, tmp_path, url, channel):
+@pytest.mark.parametrize("url", ["http://core.example", "core.example", "https://core.example?x=1"])
+def test_invalid_publishing_settings_are_refused(monkeypatch, tmp_path, url):
     from core.publishing_settings import save_publishing_settings
     _settings_root(monkeypatch, tmp_path)
     with pytest.raises(ValueError):
-        save_publishing_settings(url, channel)
+        save_publishing_settings(url)
+
+
+@pytest.mark.parametrize("target,valid", [("@vertep_channel", True), ("-1001234567890", True),
+                                          ("not a channel", False), ("@abc", False), ("", False)])
+def test_telegram_channel_target_format(target, valid):
+    from core.publishing_settings import valid_telegram_channel
+    assert valid_telegram_channel(target) is valid
 
 
 def test_no_public_url_means_no_link(monkeypatch, tmp_path):

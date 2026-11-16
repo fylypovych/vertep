@@ -32,11 +32,26 @@ def test_wizard_bot_token_starts_polling(monkeypatch, tmp_path, token, restarts)
     assert len(calls) == restarts
 
 
-@pytest.mark.parametrize("channel,ready", [("", False), ("@vertep_channel", True)])
-def test_telegram_publication_is_ready_only_with_a_channel(monkeypatch, channel, ready):
-    """The bot token alone is not a publication target: the tile must not say «Готово»."""
-    from adapters.publisher import TelegramChannelPublisher
-    import core.publishing_settings as settings
+@pytest.mark.parametrize("channels,ready", [([], False), (["@vertep_channel"], True)])
+def test_telegram_publication_is_ready_only_with_a_channel(monkeypatch, channels, ready):
+    """The publisher-bot token alone is not a publication target: the tile must not say «Готово».
+    var.0.0.4.86: the target is a brand's Telegram channel."""
+    from adapters.publisher import PUBLISHERS
+    import core.publishing_targets as targets
+    monkeypatch.delenv("PUBLISHER_MOCK", raising=False)
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", "123:abc")
+    monkeypatch.setattr(targets, "all_targets", lambda channel_type: list(channels))
+    assert PUBLISHERS["telegram"].ready() is ready
+
+
+def test_the_request_bot_token_does_not_make_publication_ready(monkeypatch):
+    """var.0.0.4.86: only the separate publisher bot publishes to the channel."""
+    from adapters.publisher import PUBLISHERS
+    import core.publishing_targets as targets
+    monkeypatch.delenv("PUBLISHER_MOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_PUBLISHER_BOT_TOKEN", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
-    monkeypatch.setattr(settings, "publishing_settings", lambda: {"public_url": "", "telegram_channel_id": channel})
-    assert TelegramChannelPublisher().ready() is ready
+    monkeypatch.setattr(targets, "all_targets", lambda channel_type: ["@vertep_channel"])
+    monkeypatch.setattr("publishers.oauth._get_secret",
+                        lambda name: "123:abc" if name.upper() == "TELEGRAM_BOT_TOKEN" else None)
+    assert PUBLISHERS["telegram"].ready() is False

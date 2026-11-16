@@ -57,11 +57,9 @@ export const EN: Record<string, string> = {
   "Не вдалося видалити модель": "The model could not be deleted",
   "Тут зберігаються токени, API keys і паролі сервісів, з якими працює Vertep. «Збережено» означає наявність значення, а не перевірку його дійсності чи готовність підключення. Доступність сервісів показано в розділі «Стан підключень».": "Tokens, API keys and passwords of the services Vertep works with are stored here. “Saved” means a value exists, not that it is valid or the connection is ready. Service availability is shown in “Connection status”.",
   "Облікові дані соцмереж для публікації задаються у вкладці": "Social network publishing credentials are set in the tab",
-  "Один бот для керування Vertep, сповіщень і публікації в канал Telegram. Канал задається у вкладці «Публікація».": "One bot for Vertep control, notifications and publishing to a Telegram channel. The channel is set in the “Publishing” tab.",
   "Параметри каналів і облікові дані платформ для публікації відео.": "Channel parameters and platform credentials for video publishing.",
   "Облікові дані платформ": "Platform credentials",
   "Значення зберігаються в захищеному сховищі й після збереження не показуються.": "Values are kept in the protected store and are not shown after saving.",
-  "Публікація в канал використовує той самий токен, що й Telegram-бот керування; він зберігається в одному місці.": "Channel publishing uses the same token as the Telegram control bot; it is stored in one place.",
   "Також потрібна публічна адреса Vertep вище.": "The public Vertep address above is also required.",
   "Змінити у вкладці": "Change in the tab",
   "Перевіряє критерії:": "Verifies criteria:",
@@ -127,7 +125,6 @@ export const EN: Record<string, string> = {
   "Вимкнення зайвих служб": "Stopping unselected services",
   "Системний виконавець не прийняв запит. Перевірте службу розгортання.": "The deployment executor has not accepted the request. Check the deployment service.",
   "Немає завершення розгортання. Перевірте системний виконавець і його журнал.": "Deployment has not completed. Check the deployment executor and its log.",
-
   "Додаткові ролі на цьому сервері": "Additional roles on this server",
   "Токен доступу": "Access token",
   "Токен оновлення": "Refresh token",
@@ -159,7 +156,6 @@ export const EN: Record<string, string> = {
   "16:9 (YouTube, горизонтальне)": "16:9 (YouTube, landscape)",
   "1:1 (квадратне)": "1:1 (square)",
   "9:16 (Shorts/Reels/TikTok, вертикальне)": "9:16 (Shorts/Reels/TikTok, portrait)",
-  "@назва_каналу": "@channel_name",
   "API key (для зовнішнього backend)": "API key (for an external backend)",
   "CPU навантаження": "CPU load",
   "Dead-letter задачі": "Dead-letter tasks",
@@ -204,7 +200,6 @@ export const EN: Record<string, string> = {
   "Без workflow": "No workflow",
   "Безпека": "Security",
   "Бекенд": "Backend",
-  "Бот має бути адміністратором цього каналу.": "The bot must be an administrator of this channel.",
   "Бот нікому не відповідає, доки не вказано, кому це дозволено. Кілька ідентифікаторів чатів розділяйте комами.": "The bot answers nobody until allowed chats are set. Separate several chat IDs with commas.",
   "Бренд": "Brand",
   "Бренд активний": "Brand is active",
@@ -342,7 +337,6 @@ export const EN: Record<string, string> = {
   "Зображення": "Images",
   "Зображення завантажаться після натискання «Зберегти».": "Images are uploaded after you click “Save”.",
   "Зразки зовнішності. Вони автоматично використовуються в кожній генерації зображень цього персонажа. До 5 файлів PNG, JPEG або WebP, кожен до 10 МБ.": "Appearance samples. They are used automatically in every image generation for this character. Up to 5 PNG, JPEG or WebP files, each up to 10 MB.",
-  "Канал Telegram": "Telegram channel",
   "Канали": "Channels",
   "Канали (через кому)": "Channels (comma-separated)",
   "Канали бренду": "Brand channels",
@@ -1213,7 +1207,9 @@ export const EN: Record<string, string> = {
   "ключ даних не читається": "the data key is unreadable",
   "нерозпізнаний формат ключа даних": "unrecognized data key format",
   "термін дії минув": "expired",
-  "термін дії спливає": "expiring"
+  "термін дії спливає": "expiring",
+  "Окремий бот лише для публікації в канали. Канал задається для бренду: Бренди → Канали; бот має бути адміністратором каналу з правом публікації.": "A separate bot used only for publishing to channels. The channel is set per brand: Brands → Channels; the bot must be a channel administrator allowed to post.",
+  "Бот для запитів користувачів, керування Vertep і сповіщень. У канали він не публікує: для цього окремий бот у вкладці «Публікація».": "The bot for user requests, Vertep control and notifications. It does not publish to channels: a separate bot on the Publishing tab does that."
 };
 /** Texts built at run time: the values stay as they are. */
 export const EN_PATTERNS: [RegExp, string][] = [

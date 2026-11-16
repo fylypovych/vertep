@@ -1,4 +1,9 @@
-"""Publication parameters the owner enters in Settings → Публікація."""
+"""Publication parameters the owner enters in Settings → Публікація.
+
+var.0.0.4.86: the Telegram channel is a target of a brand (Бренди → Канали), not
+an installation-wide setting; a former ``telegram_channel_id`` is not migrated
+(owner decision) and is ignored.
+"""
 
 from __future__ import annotations
 
@@ -17,20 +22,24 @@ def publishing_settings() -> dict:
         stored = json.loads((config_root() / _FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         stored = {}
-    return {"public_url": str(stored.get("public_url") or ""),
-            "telegram_channel_id": str(stored.get("telegram_channel_id") or "")}
+    return {"public_url": str(stored.get("public_url") or "")}
 
 
-def save_publishing_settings(public_url: str, telegram_channel_id: str) -> dict:
+TELEGRAM_CHANNEL = re.compile(r"@[A-Za-z0-9_]{5,32}|-?\d{1,20}")
+
+
+def valid_telegram_channel(target: str) -> bool:
+    """A Telegram channel target: @username or a numeric chat id."""
+    return bool(TELEGRAM_CHANNEL.fullmatch(target.strip()))
+
+
+def save_publishing_settings(public_url: str) -> dict:
     public_url = public_url.strip().rstrip("/")
-    telegram_channel_id = telegram_channel_id.strip()
     if public_url:
         parts = urlsplit(public_url)
         if parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment:
             raise ValueError("Публічна адреса має мати вигляд https://домен")
-    if telegram_channel_id and not re.fullmatch(r"@[A-Za-z0-9_]{5,32}|-?\d{1,20}", telegram_channel_id):
-        raise ValueError("Канал Telegram: @назва або числовий ідентифікатор")
-    value = {"public_url": public_url, "telegram_channel_id": telegram_channel_id}
+    value = {"public_url": public_url}
     path = config_root() / _FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{_FILE}.tmp")

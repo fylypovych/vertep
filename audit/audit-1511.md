@@ -229,6 +229,19 @@ Production-готовність, як і раніше, не підтвердже
 - `node-exporter` монтує `/` хоста з `pid: host` (`deploy/docker-compose.yml:327-332`).
 - `release.yml` має input `skip_tests`. Dispatch з `scripts/release.py:420` іде через `--ref main`, а не конкретний SHA. SBOM входить у bundle, але окремим asset не публікується.
 
+**Рішення власника щодо семи P3 без Issue (16.11.2026) і виконання (локально, без commit/push):**
+- Readiness publishers повз `providers.publisher()` — **виправлено**. `GET /api/tasks/publisher-readiness` іде через `providers.publisher().available_channels()` і новий `PublisherProvider.readiness(channel, targets)`, без прямого `PUBLISHERS`. Тест: `tests/test_issues_427_429.py::test_core_readiness_goes_through_the_publisher_provider`.
+- `core/pull_executor.py` (Ollama pull з CORE) — **залишено**: це керування моделями без генерації, правило CORE Generation Gate не порушено.
+- `docs/core-generation-gate.md` — **виправлено**. Таблиця §5 посилається на функції, а не на номери рядків. Неіснуючий `core/app.py:848` прибрано: Telegram ставить публікацію в чергу. Додано `_enqueue_publish_task` і `publisher_readiness`.
+- `get_best_provider(exclude=...)` — **залишено**: основа для можливого failover, видалення прибрало б можливість.
+- `shell=True` у `services/backup_service.py` — **оформлено Issue** [#488](https://github.com/fylypovych/vertep/issues/488) (`i.0.0.4.88`). Під час оформлення додатково знайдено, що пароль Redis із `REDIS_URL` потрапляє в argv.
+- `node-exporter` з `/:/host:ro,rslave` і `pid: host` — **прийнятий ризик** без змін: стандартна конфігурація за документацією node-exporter.
+- `release.yml`/`scripts/release.py` — **виправлено**:
+  - dispatch передає `expected_sha`; workflow зупиняється, якщо `main` уже не на перевіреному commit, а `scripts/release.py` відмовляється від run з іншим `headSha`;
+  - `sbom-<версія>.cdx.json` публікується окремим asset, входить у `SHA256SUMS-<версія>` і в перелік обов'язкових assets `verify_release`;
+  - `skip_tests` залишено лише для ручного запуску; якщо його використано, опис GitHub Release отримує позначку про пропущені тести.
+  - Тести: `tests/test_release_hardening.py`, `tests/test_release.py`. Документація: `docs/versioning.md`.
+
 ## Знахідки виконавця поза Issues (15.11.2026)
 
 Виявлено під час виконання #470–#479 (К1 — під час перевірки #469–#483); у scope жодного Issue не входять (§0.3, §4.4). Виправлено за прямим дорученням власника 15.11.2026 — див. «Виправлення знахідок поза Issues» нижче.

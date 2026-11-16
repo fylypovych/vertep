@@ -37,7 +37,7 @@ def _public_video_url(job) -> dict:
     return {"video_url": f"{base}/api/public/videos/{job.job_id}/{version}/{expires}/{signature}.mp4"}
 
 
-def _publish_task_for(job, channel: str) -> dict:
+def _publish_task_for(job, channel: str, target: str | None = None) -> dict:
     """Build a publish task carrying the durable delivery contract.
 
     The contract pins the exact video version (path + sha256 + size) that the
@@ -55,12 +55,17 @@ def _publish_task_for(job, channel: str) -> dict:
         "video_size": delivery.get("size"),
         "attempt": (job.publish_retry_count.get(channel, 0) + 1),
     }
+    telegram_chat_id = ""
+    if channel == "telegram":
+        # var.0.0.4.86: the target is the Telegram channel of the job's brand.
+        from ...publishing_targets import telegram_target
+        telegram_chat_id = telegram_target(job, target)
+        intent["target"] = telegram_chat_id
     job.publish_intent[channel] = intent
     # Threads downloads the video itself; other channels receive the file.
     public_link = _public_video_url(job) if channel == "threads" else {}
     if channel == "telegram":
-        from ...publishing_settings import publishing_settings
-        public_link = {"telegram_chat_id": publishing_settings()["telegram_channel_id"]}
+        public_link = {"telegram_chat_id": telegram_chat_id}
     return {"job_id": job.job_id,
             "task": "publish",
             "priority": job.priority,
@@ -137,13 +142,14 @@ def _enqueue_publish_task(
         job_store,
         job,
         channel: str,
-        delay: float = 0) -> dict | None:
+        delay: float = 0,
+        target: str | None = None) -> dict | None:
     has_publisher = _has_publisher_worker(job_store)
     from ...local_fallback import local_fallback_allowed
     if not has_publisher and local_fallback_allowed():
         _publish_local(job_store, job, channel)
         return None
-    task = _publish_task_for(job, channel)
+    task = _publish_task_for(job, channel, target)
     if delay:
         task["not_before"] = time.time() + delay
     queued = task_queue.enqueue(task)

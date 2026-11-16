@@ -24,10 +24,6 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
     <input id="publishing-public-url" data-testid="publishing-public-url" [ngModel]="publicUrl()" (ngModelChange)="publicUrl.set($event)" [disabled]="!canEdit()"
            placeholder="https://vertep.example.com" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
     <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Потрібна для Threads: платформа сама завантажує відео за посиланням, тому адреса має відкриватися з інтернету. Внутрішня адреса не підійде.' | t }}</p>
-    <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-telegram-channel">{{ 'Канал Telegram' | t }}</label>
-    <input id="publishing-telegram-channel" data-testid="publishing-telegram-channel" [ngModel]="telegramChannel()" (ngModelChange)="telegramChannel.set($event)" [disabled]="!canEdit()"
-           placeholder="{{ '@назва_каналу' | t }}" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
-    <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Бот має бути адміністратором цього каналу.' | t }}</p>
     <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" data-testid="publishing-save"
             [disabled]="!canEdit() || saving()" (click)="save()">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
     <h4 class="text-base font-semibold mt-6 mb-1">{{ 'Облікові дані платформ' | t }}</h4>
@@ -37,16 +33,14 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
 })
 export class PublishingSectionComponent implements OnInit {
   publicUrl = signal('');
-  telegramChannel = signal('');
   saving = signal(false);
   error = signal<string | null>(null);
   readonly canEdit = computed(() => this.policy.can('update_settings').allowed);
 
-  /** Every social publishing credential the store knows; Telegram shares the bot token with communication. */
+  /** Every social publishing credential the store knows; Telegram publishes with its own bot (var.0.0.4.86). */
   readonly platformGroups: SecretGroup[] = [
-    { id: 'telegram-publishing', label: 'Telegram', names: [],
-      shared: { name: 'telegram_bot_token', tab: 'secrets', tabLabel: 'Ключі інтеграцій',
-                note: 'Публікація в канал використовує той самий токен, що й Telegram-бот керування; він зберігається в одному місці.' } },
+    { id: 'telegram-publishing', label: 'Telegram', names: ['telegram_publisher_bot_token'],
+      hint: 'Окремий бот лише для публікації в канали. Канал задається для бренду: Бренди → Канали; бот має бути адміністратором каналу з правом публікації.' },
     { id: 'youtube', label: 'YouTube', names: ['youtube_client_id', 'youtube_client_secret', 'youtube_access_token', 'youtube_refresh_token'] },
     { id: 'facebook', label: 'Facebook', names: ['facebook_access_token'] },
     { id: 'instagram', label: 'Instagram', names: ['instagram_client_id', 'instagram_client_secret', 'instagram_access_token', 'instagram_refresh_token'] },
@@ -59,7 +53,7 @@ export class PublishingSectionComponent implements OnInit {
 
   ngOnInit(): void {
     this.settingsApi.publishingSettings().subscribe({
-      next: (value) => { this.publicUrl.set(value.public_url); this.telegramChannel.set(value.telegram_channel_id); },
+      next: (value) => this.publicUrl.set(value.public_url),
       error: (err) => this.error.set(err.message),
     });
   }
@@ -68,14 +62,13 @@ export class PublishingSectionComponent implements OnInit {
     if (this.saving()) return;
     this.saving.set(true);
     this.error.set(null);
-    this.settingsApi.savePublishingSettings({ public_url: this.publicUrl(), telegram_channel_id: this.telegramChannel() })
+    this.settingsApi.savePublishingSettings({ public_url: this.publicUrl() })
       // A hung save ends with a local, honest state instead of an endless "saving" (#464).
       // timeout() unsubscribes, which cancels the request: a late answer cannot replace the form.
       .pipe(timeout(PUBLISHING_SAVE_TIMEOUT_MS)).subscribe({
       next: (value) => {
         this.saving.set(false);
         this.publicUrl.set(value.public_url);
-        this.telegramChannel.set(value.telegram_channel_id);
         this.toast.show('Налаштування публікації збережено', 'success');
       },
       error: (err) => {

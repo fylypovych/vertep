@@ -187,6 +187,14 @@ class PublisherProvider(ABC):
         """Return True when the channel credentials are present and usable."""
         ...
 
+    def readiness(self, channel: str, targets: list[str] | None = None) -> dict:
+        """Readiness report of a channel without secret values.
+
+        ``targets`` are the publication targets to check (Telegram brand channels);
+        ``None`` checks the channel credentials only.
+        """
+        return {"ready": bool(self.ready(channel))}
+
     def missing_scopes(self, channel: str) -> list[str]:
         """Return OAuth scopes missing for the channel."""
         ...

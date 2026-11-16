@@ -650,6 +650,9 @@ def _do_publish_single(job: Job, channel: str) -> dict:
     video_path = job.output_path or ""
     metadata = (job.script or {}) | {"job_id": job.job_id, "character_id": job.character_id,
                                      "brand_id": job.brand_id}
+    if channel == "telegram":
+        from .publishing_targets import telegram_target
+        metadata["telegram_chat_id"] = telegram_target(job)
     publisher = providers.publisher()
     if channel not in publisher.available_channels():
         return {"channel": channel, "status": "FAILED", "error": f"Unknown channel: {channel}"}

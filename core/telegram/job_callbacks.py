@@ -195,7 +195,8 @@ def _publish_to_channel(job, channel) -> dict:
     in_flight = {value for value in (getattr(job, "publish_task_ids", None) or {}).values()}
     if channel.channel_type in in_flight:
         return {"status": "QUEUED", "channel": channel.channel_type, "duplicate": True}
-    queued = _enqueue_publish_task(store, job, channel.channel_type)
+    # The chosen brand channel is the target, so a Telegram post goes to it (var.0.0.4.86).
+    queued = _enqueue_publish_task(store, job, channel.channel_type, target=channel.target)
     if queued is None:
         return {"status": "NOT_CONFIGURED", "error": f"Publisher для {channel.channel_type} не налаштовано"}
     if job.status != JobStatus.PUBLISHING:

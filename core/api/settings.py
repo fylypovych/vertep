@@ -86,8 +86,7 @@ def put_dispatch_settings(payload: dict):
 def put_publishing_settings(payload: dict):
     from ..publishing_settings import save_publishing_settings
     try:
-        return save_publishing_settings(str(payload.get("public_url") or ""),
-                                        str(payload.get("telegram_channel_id") or ""))
+        return save_publishing_settings(str(payload.get("public_url") or ""))
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
 

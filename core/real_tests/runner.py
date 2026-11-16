@@ -399,7 +399,7 @@ _SECRET_KEY_NAME_RE = re.compile(
     r"(?i)(api[_-]?key|apikey|token|secret|password|passwd|pwd|passphrase|"
     r"private[_-]?key|aws_[a-z_]*|access[_-]?key|client[_-]?secret|credentials?|"
     r"authorization|session[_-]?id|session[_-]?secret|proxy[_-]?password|"
-    r"encryption[_-]?key|internal[_-]?api[_-]?key|telegram_bot_token|"
+    r"encryption[_-]?key|internal[_-]?api[_-]?key|telegram_bot_token|telegram_publisher_bot_token|"
     r"youtube_client_secret|smtp_password|license[_-]?key)")
 
 

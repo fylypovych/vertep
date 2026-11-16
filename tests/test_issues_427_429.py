@@ -319,7 +319,7 @@ def test_absent_credentials_are_not_ready(monkeypatch):
 
 def test_telegram_checks_the_bot_without_sending(monkeypatch):
     _clean(monkeypatch)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", SECRET)
     transport = FakeTransport([httpx.Response(401)])
     state = TelegramPublisher(transport).readiness()
     assert state["ready"] is False and SECRET not in json.dumps(state)
@@ -337,7 +337,7 @@ GET_ME = httpx.Response(200, json={"ok": True, "result": {"id": 1, "is_bot": Tru
 
 def test_telegram_without_a_channel_is_not_ready(monkeypatch):
     _clean(monkeypatch)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", SECRET)
     publisher, transport = _telegram([GET_ME])
     state = publisher.channel_readiness("")
     assert state["ready"] is False and "канал" in state["reason"]
@@ -361,7 +361,7 @@ def test_telegram_without_a_channel_is_not_ready(monkeypatch):
     (httpx.Response(403, json={"description": "bot was kicked"}), False)])
 def test_telegram_channel_permission_decides_readiness(monkeypatch, answer, ready):
     _clean(monkeypatch)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", SECRET)
     publisher, transport = _telegram([GET_ME, answer])
     state = publisher.channel_readiness("@channel")
     assert state["ready"] is ready and SECRET not in json.dumps(state)
@@ -402,7 +402,7 @@ def _node_with_telegram(monkeypatch, responses, target):
     from publishers import LIVE_PUBLISHERS
     from worker import service
     _clean(monkeypatch)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", SECRET)
     monkeypatch.setenv("NODE_NAME", "publisher-1")
     for name, publisher in LIVE_PUBLISHERS.items():
         if name != "telegram":
@@ -440,14 +440,46 @@ def test_a_node_token_with_the_right_to_post_is_ready(monkeypatch):
 def test_core_reports_the_target_it_checks_without_secrets(monkeypatch):
     from core.api import tasks
     monkeypatch.setattr(tasks, "_valid_worker_request", lambda node, request: True)
-    monkeypatch.setattr("core.publishing_settings.publishing_settings", lambda: {"telegram_channel_id": "@channel"})
+    # var.0.0.4.86: CORE reports the enabled Telegram channels of all brands.
+    monkeypatch.setattr("core.publishing_targets.all_targets", lambda channel_type: ["@channel", "@second"])
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     app = FastAPI()
     app.include_router(tasks.router)
     answer = TestClient(app).get("/api/tasks/publisher-readiness", headers={"x-vertep-node": "p"}).json()
-    assert answer["targets"] == {"telegram": "@channel"}
+    assert answer["targets"] == {"telegram": ["@channel", "@second"]}
     assert SECRET not in json.dumps(answer)
+
+
+def test_core_readiness_goes_through_the_publisher_provider(monkeypatch):
+    """Audit 15.11 P3: readiness uses providers.publisher(), not PUBLISHERS directly."""
+    from adapters.providers import providers
+    from adapters.providers.base import PublisherProvider
+    from core.api import tasks
+    monkeypatch.setattr(tasks, "_valid_worker_request", lambda node, request: True)
+    monkeypatch.setattr("core.publishing_targets.all_targets", lambda channel_type: ["@brand_news"])
+    asked = []
+
+    class Fake(PublisherProvider):
+        def configured(self, channel): return True
+        def publish(self, channel, video_path, metadata): return {}
+        def available_channels(self): return ["telegram", "youtube"]
+        def readiness(self, channel, targets=None):
+            asked.append((channel, targets))
+            return {"ready": True}
+
+    original = providers.publisher()
+    providers.replace("publisher", Fake())
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        app = FastAPI()
+        app.include_router(tasks.router)
+        answer = TestClient(app).get("/api/tasks/publisher-readiness", headers={"x-vertep-node": "p"}).json()
+    finally:
+        providers.replace("publisher", original)
+    assert answer["channels"] == {"telegram": {"ready": True}, "youtube": {"ready": True}}
+    assert asked == [("telegram", ["@brand_news"]), ("youtube", None)]
 
 # ---- #426
 def test_release_bundle_refuses_a_private_key(tmp_path):
@@ -469,3 +501,23 @@ def test_public_root_keys_and_metadata_validate_as_committed():
     metadata = json.loads(Path("installer/root-keys/root-metadata.json").read_text(encoding="utf-8"))
     validated = validate_root_metadata(metadata, Path("installer/root-keys"))
     assert validated
+
+
+@pytest.mark.parametrize("member_second,ready", [
+    ({"status": "administrator", "can_post_messages": True}, True),
+    ({"status": "member"}, False)])
+def test_a_node_is_ready_only_when_it_may_post_in_every_brand_channel(monkeypatch, member_second, ready):
+    """var.0.0.4.86: CORE sends the list of enabled brand channels."""
+    allowed = httpx.Response(200, json={"result": {"status": "administrator", "can_post_messages": True}})
+    service, transport = _node_with_telegram(monkeypatch, [GET_ME, allowed,
+                                                           httpx.Response(200, json={"result": member_second})],
+                                             ["@channel", "@second"])
+    if ready:
+        assert service.publisher_readiness()["ready_channels"] == ["telegram"]
+    else:
+        with pytest.raises(RuntimeError) as refused:
+            service.publisher_readiness()
+        assert "telegram" in str(refused.value) and SECRET not in str(refused.value)
+    assert [request[1].rsplit("/", 1)[-1] for request in transport.requests] == [
+        "getMe", "getChatMember", "getChatMember"]
+    _only_read(transport)

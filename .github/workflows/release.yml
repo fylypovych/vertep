@@ -7,6 +7,10 @@ on:
         description: 'Пропустити тести лише за прямим дорученням користувача'
         type: boolean
         default: false
+      expected_sha:
+        description: 'Commit, для якого запускається реліз (scripts/release.py передає його завжди)'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -24,6 +28,17 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # workflow_dispatch accepts only a ref, so the run is bound to the commit the
+      # caller verified: if main moved after the dispatch, the release stops here.
+      - name: Verify the dispatched commit
+        if: ${{ inputs.expected_sha != '' }}
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ACTUAL_SHA: ${{ github.sha }}
+        run: |
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA" \
+            || { echo "Release dispatched for $EXPECTED_SHA, but main is at $ACTUAL_SHA" >&2; exit 1; }
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -183,6 +198,7 @@ jobs:
             -czf "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
             -C "${{ runner.temp }}/runtime" .
           cp "${{ runner.temp }}/runtime/manifest.json" "${{ runner.temp }}/manifest-$version.json"
+          cp "${{ runner.temp }}/runtime/sbom.cdx.json" "${{ runner.temp }}/sbom-$version.cdx.json"
           python scripts/build-update-manifest.py \
             --package "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
             --version "$version" \
@@ -205,7 +221,7 @@ jobs:
           PY
           cd "${{ runner.temp }}"
           sha256sum "vertep-runtime-$version.tar.gz" "manifest-$version.json" \
-            "update-manifest-$version.json" > "SHA256SUMS-$version"
+            "update-manifest-$version.json" "sbom-$version.cdx.json" > "SHA256SUMS-$version"
       - name: Appliance release qualification
         shell: bash
         env:
@@ -248,9 +264,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKIP_TESTS: ${{ inputs.skip_tests }}
         run: |
           version="$(tr -d '\r\n' < VERSION)"
           repo="$GITHUB_REPOSITORY"
+          body="${{ runner.temp }}/release-body.md"
+          cp "releases/$version.md" "$body"
+          if [ "$SKIP_TESTS" = "true" ]; then
+            printf '\n> Тести release workflow пропущено за прямим дорученням власника (skip_tests). CI та Browser E2E для цього commit пройдено (release gate).\n' >> "$body"
+          fi
           # `releases/latest` is what bootstrap.sh and every update agent read, so a release
           # must only become visible after all assets are uploaded: create it as a draft,
           # verify the assets, then publish.
@@ -275,12 +297,13 @@ jobs:
           # eventually consistent and may not show a just-created draft yet.
           release_id="$(gh api -X POST "repos/$repo/releases" \
             -f tag_name="$version" -f name="Vertep $version" \
-            -F body=@"releases/$version.md" -F draft=true -F prerelease=false \
+            -F body=@"$body" -F draft=true -F prerelease=false \
             --jq .id)"
           [ -n "$release_id" ] || { echo "Draft release $version was not created" >&2; exit 1; }
           for file in "${{ runner.temp }}/vertep-runtime-$version.tar.gz" \
                       "${{ runner.temp }}/manifest-$version.json" \
                       "${{ runner.temp }}/update-manifest-$version.json" \
+                      "${{ runner.temp }}/sbom-$version.cdx.json" \
                       "${{ runner.temp }}/SHA256SUMS-$version"; do
             gh api -X POST \
               "https://uploads.github.com/repos/$repo/releases/$release_id/assets?name=$(basename "$file")" \
@@ -289,7 +312,7 @@ jobs:
           uploaded="$(gh api "repos/$repo/releases/$release_id" \
             --jq '[.assets[] | select(.state=="uploaded") | .name] | join("\n")')"
           for name in "vertep-runtime-$version.tar.gz" "manifest-$version.json" \
-                      "update-manifest-$version.json" "SHA256SUMS-$version"; do
+                      "update-manifest-$version.json" "sbom-$version.cdx.json" "SHA256SUMS-$version"; do
             printf '%s\n' "$uploaded" | grep -Fxq "$name" \
               || { echo "Draft release $version is missing asset $name" >&2; exit 1; }
           done

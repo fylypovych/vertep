@@ -19,7 +19,7 @@ function mockApi(page: any, state: State) {
         if (state.failSave) return route.fulfill({ status: 503, json: { detail: 'Сервер тимчасово недоступний' } });
         return route.fulfill({ json: JSON.parse(request.postData() || '{}') });
       }
-      return route.fulfill({ json: { public_url: '', telegram_channel_id: '@news_channel' } });
+      return route.fulfill({ json: { public_url: '' } });
     }
     if (path.endsWith('/settings/secrets')) return route.fulfill({ status: 500, json: { detail: 'down' } });  // a concurrent failing request
     return route.fulfill({ json: request.method() === 'GET' ? [] : {} });

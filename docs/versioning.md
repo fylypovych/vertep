@@ -20,6 +20,6 @@
 
 ## Workflow і gate
 
-Release workflow працює з конкретним commit: тести → Docker images (один SHA, теги = `VERSION`) → `vertep-runtime-<версія>.tar.gz` → manifest/checksums/SBOM/підпис → перевірка артефактів → публікація. Browser E2E gate для точного SHA має бути green. Помилка workflow версій не створює; виправлення — новою командою `пуш` або `тест` з наступною версією (AGENTS.md §2.18).
+Release workflow працює з конкретним commit: тести → Docker images (один SHA, теги = `VERSION`) → `vertep-runtime-<версія>.tar.gz` → manifest/checksums/SBOM/підпис → перевірка артефактів → публікація. Browser E2E gate для точного SHA має бути green. `scripts/release.py` передає в dispatch `expected_sha`: якщо `main` змінився після перевірки gate, workflow зупиняється до збірки. Release містить окремі assets `vertep-runtime-<версія>.tar.gz`, `manifest-<версія>.json`, `update-manifest-<версія>.json`, `sbom-<версія>.cdx.json` і `SHA256SUMS-<версія>` (охоплює всі чотири). Прапорець `skip_tests` доступний лише при ручному запуску workflow; якщо його використано, опис GitHub Release отримує позначку про пропущені тести. Помилка workflow версій не створює; виправлення — новою командою `пуш` або `тест` з наступною версією (AGENTS.md §2.18).
 
 Завдання щодо версіонування й release workflow ведуться в GitHub Issues. Деталі артефактів — `release-contract.md`.

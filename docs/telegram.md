@@ -4,7 +4,7 @@
 
 ## Підключення бота
 
-Адмінка → **Система → Захищені інтеграції** → токен бота в `telegram_bot_token`; розділ **Telegram**: `TELEGRAM_WEBHOOK_SECRET` (опційно), `TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_ADMIN_CHAT_IDS`. Polling (`getUpdates` з durable offset) стартує з CORE; `PUBLIC_URL`/webhook для штатного flow не потрібні (legacy webhook вимкнений за замовчуванням).
+Адмінка → **Система → Захищені інтеграції** → токен бота в `telegram_bot_token`; розділ **Telegram**: `TELEGRAM_WEBHOOK_SECRET` (опційно), `TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_ADMIN_CHAT_IDS`. Це **бот для запитів** користувачів: створення завдань, вибір персонажа й workflow, погодження, статуси. Публікацію в Telegram-канали виконує окремий бот-публікатор (`docs/publishing.md`, var.0.0.4.86); токен цього бота публікатору не передається. Polling (`getUpdates` з durable offset) стартує з CORE; `PUBLIC_URL`/webhook для штатного flow не потрібні (legacy webhook вимкнений за замовчуванням).
 
 ## Контентний flow
 

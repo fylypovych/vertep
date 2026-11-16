@@ -145,17 +145,18 @@ Shared implementation у `core/` дозволена лише тоді, коли 
 
 ## 5. Результат аудиту (вересень 2026)
 
-Стан `core/` після впровадження gate:
+Стан `core/` після впровадження gate (місця вказано функціями, а не номерами рядків; звірено 16.11.2026):
 
 | Файл | Викликання | Класифікація | Дія |
 |---|---|---|---|
-| `core/pipeline.py:385` | `providers.video_engine().render()` | control-plane (assembly) | дозволено, AGENTS.md §14 |
-| `core/pipeline.py:356` | `providers.publisher().publish()` (через `_publish_local`) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
-| `core/app.py:848` | `providers.publisher().publish()` (Telegram callback) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
-| `core/api/jobs.py:368` | `providers.publisher().available_channels()` | control-plane (metadata) | дозволено |
-| `core/api/job_helpers/script.py:71` | `ScriptAgent().generate_script()` (local) | LOCAL_WORKER_FALLBACK | allowlist |
-| `core/script_agent.py:21` | `get_llm_client().complete()` | LLM inference impl (Text Worker) | allowlist |
-| `core/app.py` | `provider_matrix()` | control-plane (status) | дозволено |
+| `core/pipeline.py` · `finalize_job` | `providers.video_engine().render()` | control-plane (assembly) | дозволено, AGENTS.md §14 |
+| `core/pipeline.py` · `_do_publish_single` | `providers.publisher().publish()` (через `_publish_local`) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
+| `core/api/job_helpers/publish.py` · `_enqueue_publish_task` | `_publish_local()` без Publisher Worker (зокрема для публікації з Telegram) | LOCAL_WORKER_FALLBACK, лише dev/demo (`require_no_local_execution`) | задокументовано, буде видалено |
+| `core/api/jobs.py` · `publish_job` | `providers.publisher().available_channels()` | control-plane (metadata) | дозволено |
+| `core/api/tasks.py` · `publisher_readiness` | `providers.publisher().readiness()` | control-plane (status, без секретів) | дозволено |
+| `core/api/job_helpers/script.py` · `_generate_script_local` | `ScriptAgent().generate_script()` (local) | LOCAL_WORKER_FALLBACK | allowlist |
+| `core/script_agent.py` · `ScriptAgent._complete` | `get_llm_client().complete()` | LLM inference impl (Text Worker) | allowlist |
+| `core/api/status.py`, `core/api/system.py` | `provider_matrix()` | control-plane (status) | дозволено |
 
 **Висновок:** усі production generation stages у CORE оркеструють tasks і приймають
 results. Прямі direct inference/synthesis/render/upload у CORE відсутні або явно

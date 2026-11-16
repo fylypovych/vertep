@@ -179,7 +179,7 @@ export interface WorkflowModeState {
   active_dynamic_jobs: number;
 }
 
-export interface PublishingSettings { public_url: string; telegram_channel_id: string; }
+export interface PublishingSettings { public_url: string; }
 
 @Injectable({ providedIn: 'root' })
 export class SettingsApiService {

@@ -238,6 +238,15 @@ class DefaultPublisherProvider(PublisherProvider):
             return False
         return pub.ready()
 
+    def readiness(self, channel: str, targets: list[str] | None = None) -> dict:
+        from adapters.publisher import PUBLISHERS
+        pub = PUBLISHERS.get(channel)
+        if pub is None:
+            return {"ready": False, "error": f"Unknown channel: {channel}"}
+        if targets is not None and hasattr(pub, "targets_readiness"):
+            return pub.targets_readiness(targets)
+        return pub.readiness()
+
     def missing_scopes(self, channel: str) -> list[str]:
         from adapters.publisher import PUBLISHERS
         pub = PUBLISHERS.get(channel)

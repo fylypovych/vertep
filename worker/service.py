@@ -469,8 +469,14 @@ def publisher_readiness() -> dict:
     # Only a credential held by this node is probed here; CORE judges the ones it stores.
     # A channel-bound publisher checks the exact target CORE configured: without it
     # (or without CORE) its own valid token does not make it ready.
-    states = {name: (publisher.channel_readiness(targets.get(name, ""))
-                     if hasattr(publisher, "channel_readiness") else publisher.readiness())
+    def own_state(name, publisher):
+        if hasattr(publisher, "targets_readiness"):
+            target = targets.get(name) or []
+            # Brand channels arrive as a list (var.0.0.4.86); an older CORE sent one string.
+            return publisher.targets_readiness([target] if isinstance(target, str) and target
+                                               else list(target) if isinstance(target, list) else [])
+        return publisher.readiness()
+    states = {name: own_state(name, publisher)
               for name, publisher in LIVE_PUBLISHERS.items() if os.getenv(publisher.credential_env)}
     ready = {name for name, state in states.items() if state["ready"]}
     reasons = {name: state["reason"] for name, state in states.items() if not state["ready"]}

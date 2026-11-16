@@ -44,7 +44,7 @@ export class SecretsSectionComponent {
 
   readonly serviceGroups: SecretGroup[] = [
     { id: 'telegram', label: 'Telegram-бот', names: ['telegram_bot_token'],
-      hint: 'Один бот для керування Vertep, сповіщень і публікації в канал Telegram. Канал задається у вкладці «Публікація».' },
+      hint: 'Бот для запитів користувачів, керування Vertep і сповіщень. У канали він не публікує: для цього окремий бот у вкладці «Публікація».' },
     { id: 'moneyprinter', label: 'MoneyPrinterTurbo', names: ['money_printer_token'] },
     { id: 'ai', label: 'Зовнішній AI', names: ['external_ai_api_key'] },
     { id: 'email', label: 'Пошта (SMTP)', names: ['smtp_password'] },

@@ -58,7 +58,8 @@ def test_telegram_token_in_a_url_is_masked():
 
 
 def test_failed_telegram_upload_does_not_leak_the_token(monkeypatch, tmp_path):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", SECRET)
+    # var.0.0.4.86: the channel is published by its own bot.
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", SECRET)
     video = tmp_path / "v.mp4"
     video.write_bytes(b"video")
 

@@ -13,7 +13,7 @@ function mockApi(page: any, role: string, saved: unknown[]) {
         saved.push(body);
         return route.fulfill({ json: body });
       }
-      return route.fulfill({ json: { public_url: '', telegram_channel_id: '@old_channel' } });
+      return route.fulfill({ json: { public_url: 'https://old.example' } });
     }
     return route.fulfill({ json: request.method() === 'GET' ? [] : {} });
   });
@@ -24,12 +24,14 @@ test('адмін зберігає параметри публікації й б�
   await mockApi(page, 'admin', saved);
   await page.goto('/settings');
   await page.locator("a[href='/settings?tab=publishing']").click();
-  await expect(page.getByTestId('publishing-telegram-channel')).toHaveValue('@old_channel', { timeout: 20000 });
+  await expect(page.getByTestId('publishing-public-url')).toHaveValue('https://old.example', { timeout: 20000 });
+  // var.0.0.4.86: the Telegram channel is set per brand, not here.
+  await expect(page.getByTestId('publishing-telegram-channel')).toHaveCount(0);
   await page.getByTestId('publishing-public-url').fill('http://internal');
   await page.getByTestId('publishing-save').click();
   await expect(page.getByTestId('publishing-error')).toContainText('https://домен');
   await page.getByTestId('publishing-public-url').fill('https://vertep.example.com');
   await page.getByTestId('publishing-save').click();
   await expect.poll(() => saved.length).toBe(1);
-  expect(saved[0]).toEqual({ public_url: 'https://vertep.example.com', telegram_channel_id: '@old_channel' });
+  expect(saved[0]).toEqual({ public_url: 'https://vertep.example.com' });
 });

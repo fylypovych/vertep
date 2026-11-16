@@ -14,7 +14,7 @@ _SECRET_KEY_VALUE = re.compile(
     r"(?:access_token|access_key|api[_-]?key|client[_-]?secret|refresh[_-]?token|auth[_-]?token|"
     r"session[_-]?id|password|passwd|passphrase|secret|token|proxy[_-]?password|"
     r"private[_-]?key|ssh[_-]?private[_-]?key|aws[_-]?access[_-]?key|aws[_-]?secret[_-]?key|"
-    r"aws_access_key|credentials|basic[_-]?auth|smtp_password|youtube_client_secret|telegram_bot_token|"
+    r"aws_access_key|credentials|basic[_-]?auth|smtp_password|youtube_client_secret|telegram_bot_token|telegram_publisher_bot_token|"
     r"external_ai_api_key|license_key|ssh_private_key|secret_store_passphrase)"
     r"(?:\"|\')?\s*[:=]\s*)"
     # A quoted value is consumed whole; an unquoted value may itself contain
@@ -31,7 +31,7 @@ _JSON_SECRET_KEY = re.compile(
       (?:access_token|access_key|api[_-]?key|client[_-]?secret|refresh[_-]?token|auth[_-]?token|
          session[_-]?id|password|passwd|passphrase|secret|token|authorization|
          proxy[_-]?password|private_key|ssh_private_key|aws_[a-z_]*|aws_access_key|credentials|
-         telegram_bot_token|youtube_client_secret|smtp_password|secret_store_passphrase)
+         telegram_bot_token|telegram_publisher_bot_token|youtube_client_secret|smtp_password|secret_store_passphrase)
       (?:\\?['\"])\s*:\s*)
     (?:
       (?P<quote>\\?['\"])(?P<quoted>[^'\"\\]*(?:\\.[^'\"\\]*)*)(?P=quote)

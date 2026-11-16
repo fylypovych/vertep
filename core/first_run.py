@@ -20,7 +20,7 @@ _secret_lock = threading.RLock()
 _SECRET_AAD = b"vertep-secret-store:v1"
 _KEY_AAD = b"vertep-secret-store-key:v1"
 INTEGRATION_SECRET_NAMES = frozenset({
-    "smtp_password", "telegram_bot_token", "youtube_client_secret",
+    "smtp_password", "telegram_bot_token", "telegram_publisher_bot_token", "youtube_client_secret",
     "facebook_access_token", "tiktok_client_secret", "external_ai_api_key",
     "license_key", "ssh_private_key",
     "money_printer_token",
@@ -29,6 +29,11 @@ INTEGRATION_SECRET_NAMES = frozenset({
     "instagram_access_token", "instagram_refresh_token", "instagram_client_id", "instagram_client_secret",
     "threads_access_token", "threads_refresh_token", "threads_client_id", "threads_client_secret",
 })
+
+
+# Secrets of the bot that takes user requests: never delivered to a publish task
+# (var.0.0.4.86 — the Telegram channel is published by its own bot).
+INTAKE_ONLY_SECRET_NAMES = frozenset({"telegram_bot_token"})
 
 
 def _project_root() -> Path:

@@ -461,20 +461,23 @@ def _approved_input_references(snapshot: dict) -> set[str]:
 @router.get("/api/tasks/publisher-readiness")
 def publisher_readiness(request: Request):
     """Channel readiness for a Publisher Node; never carries secret values."""
-    from adapters.publisher import PUBLISHERS
+    from adapters.providers import providers
     node_name = request.headers.get("x-vertep-node", "")
     if not node_name or not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
-    from ..publishing_settings import publishing_settings
-    channels = {name: publisher.readiness() for name, publisher in PUBLISHERS.items()}
-    # The target is a setting, not a secret: a node holding its own Telegram token
-    # checks its right to post in this exact channel.
-    return {"channels": channels, "targets": {"telegram": publishing_settings()["telegram_channel_id"]}}
+    from ..publishing_targets import all_targets
+    targets = {"telegram": all_targets("telegram")}
+    publisher = providers.publisher()
+    channels = {name: publisher.readiness(name, targets.get(name))
+                for name in publisher.available_channels()}
+    # Targets are settings, not secrets: a node holding its own publisher-bot token
+    # checks its right to post in exactly these brand channels (var.0.0.4.86).
+    return {"channels": channels, "targets": targets}
 
 
 def _publish_secret_scope(task_id: str, request: Request) -> tuple[set[str], str]:
     """Names this node may use: only the channel of the publish task it runs now."""
-    from ..first_run import INTEGRATION_SECRET_NAMES
+    from ..first_run import INTAKE_ONLY_SECRET_NAMES, INTEGRATION_SECRET_NAMES
     node_name = request.headers.get("x-vertep-node", "")
     if not node_name or not _valid_worker_request(node_name, request):
         raise HTTPException(401, "Token is not valid for this worker")
@@ -483,7 +486,9 @@ def _publish_secret_scope(task_id: str, request: Request) -> tuple[set[str], str
     channel = job.publish_task_ids.get(task_id) if job else None
     if worker.get("current_task") != task_id or not channel:
         raise HTTPException(409, "Task is no longer owned by this worker")
-    return {name for name in INTEGRATION_SECRET_NAMES if name.startswith(f"{channel}_")}, channel
+    # var.0.0.4.86: the bot that takes user requests is not a publication credential.
+    return {name for name in INTEGRATION_SECRET_NAMES
+            if name.startswith(f"{channel}_") and name not in INTAKE_ONLY_SECRET_NAMES}, channel
 
 
 @router.get("/api/tasks/{task_id}/secrets")

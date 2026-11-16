@@ -249,6 +249,13 @@ def get_channel(channel_id: str):
     return channel.model_dump()
 
 
+def _check_channel_target(channel_type: str, target: str) -> None:
+    """A brand's Telegram channel is published by the publisher bot (var.0.0.4.86)."""
+    from ..publishing_settings import valid_telegram_channel
+    if channel_type == "telegram" and not valid_telegram_channel(target):
+        raise HTTPException(400, "Канал Telegram: @назва або числовий ідентифікатор")
+
+
 @router.post("/api/brands/{brand_id}/channels")
 def create_channel(brand_id: str, config: ChannelCreate):
     if not SAFE_ID.fullmatch(brand_id):
@@ -257,6 +264,7 @@ def create_channel(brand_id: str, config: ChannelCreate):
         raise HTTPException(400, "Brand ID mismatch")
     if config.channel_type not in CHANNEL_TYPES:
         raise HTTPException(400, f"Invalid channel type. Allowed: {', '.join(sorted(CHANNEL_TYPES))}")
+    _check_channel_target(config.channel_type, config.target)
     channel = Channel(channel_id=f"ch-{uuid.uuid4().hex[:12]}", brand_id=config.brand_id,
                       channel_type=config.channel_type, target=config.target,
                       enabled=config.enabled, metadata=config.metadata)
@@ -270,6 +278,7 @@ def update_channel(channel_id: str, config: ChannelUpdate):
     if not existing:
         raise HTTPException(404, "Channel not found")
     if config.target is not None:
+        _check_channel_target(existing.channel_type, config.target)
         existing.target = config.target
     if config.enabled is not None:
         existing.enabled = config.enabled

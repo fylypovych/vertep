@@ -72,8 +72,8 @@ def fake_time(step: float = 100.0):
 
 def test_trigger_returns_the_run_created_by_this_dispatch(monkeypatch):
     release = load_script("release.py", "vertep_release_hardening")
-    listings = iter([[{"databaseId": 7}], [{"databaseId": 7}],
-                     [{"databaseId": 7}, {"databaseId": 9}]])
+    listings = iter([[{"databaseId": 7, "headSha": "old"}], [{"databaseId": 7, "headSha": "old"}],
+                     [{"databaseId": 7, "headSha": "old"}, {"databaseId": 9, "headSha": "x"}]])
     dispatched = []
     monkeypatch.setattr(release, "gh_run_json", lambda _root, _args: next(listings))
     monkeypatch.setattr(release, "gh_run", lambda _root, args: dispatched.append(args) or "")
@@ -83,7 +83,29 @@ def test_trigger_returns_the_run_created_by_this_dispatch(monkeypatch):
     run_id = release.GitHubActionsTrigger().run(Path("."), workflow="Vertep Release", sha="x")
 
     assert run_id == "9"
-    assert dispatched == [["workflow", "run", "Vertep Release", "--ref", "main"]]
+    assert dispatched == [["workflow", "run", "Vertep Release", "--ref", "main", "-f", "expected_sha=x"]]
+
+
+def test_trigger_refuses_a_run_for_another_commit(monkeypatch):
+    """Audit 15.11 P3: the release run is bound to the SHA whose gates were verified."""
+    release = load_script("release.py", "vertep_release_hardening")
+    listings = iter([[], [{"databaseId": 9, "headSha": "moved"}]])
+    monkeypatch.setattr(release, "gh_run_json", lambda _root, _args: next(listings))
+    monkeypatch.setattr(release, "gh_run", lambda *_a: "")
+    monkeypatch.setattr(release, "time", types.SimpleNamespace(time=release.time.time,
+                                                              sleep=lambda _s: None))
+    with pytest.raises(RuntimeError, match="main змінився"):
+        release.GitHubActionsTrigger().run(Path("."), workflow="Vertep Release", sha="verified")
+
+
+def test_release_workflow_checks_sha_publishes_sbom_and_marks_skipped_tests():
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "expected_sha:" in workflow
+    assert 'test "$ACTUAL_SHA" = "$EXPECTED_SHA"' in workflow
+    # SBOM is a separate release asset, covered by SHA256SUMS and the asset check.
+    assert workflow.count("sbom-$version.cdx.json") >= 4
+    assert 'SKIP_TESTS: ${{ inputs.skip_tests }}' in workflow
+    assert "skip_tests" in workflow and '-F body=@"$body"' in workflow
 
 
 def test_trigger_fails_when_no_new_run_appears(monkeypatch):

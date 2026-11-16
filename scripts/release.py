@@ -291,6 +291,7 @@ def verify_release(root: Path, version: str, expected_sha: str) -> None:
         f"vertep-runtime-{version}.tar.gz",
         f"manifest-{version}.json",
         f"update-manifest-{version}.json",
+        f"sbom-{version}.cdx.json",
         f"SHA256SUMS-{version}",
     ]
     missing = [name for name in required if name not in assets]
@@ -404,26 +405,36 @@ class GitHubActionsTrigger:
     """Trigger and monitor a GitHub Actions workflow run via the `gh` CLI."""
 
     @staticmethod
-    def _dispatch_run_ids(root: Path, workflow: str) -> set[str]:
+    def _dispatch_runs(root: Path, workflow: str) -> dict[str, str]:
+        """Recent dispatch runs of ``workflow`` on main: run id -> head SHA."""
         result = gh_run_json(root, [
             "run", "list", "--workflow", workflow, "--branch", "main",
-            "--event", "workflow_dispatch", "--limit", "30", "--json", "databaseId",
+            "--event", "workflow_dispatch", "--limit", "30", "--json", "databaseId,headSha",
         ])
-        return {str(item["databaseId"]) for item in result} if isinstance(result, list) else set()
+        if not isinstance(result, list):
+            return {}
+        return {str(item["databaseId"]): str(item.get("headSha") or "") for item in result}
 
     def run(self, root: Path, *, workflow: str, sha: str) -> str:
-        # GitHub workflow_dispatch accepts branch/tag refs, not bare commit SHAs.
-        # Using "main" — prepare_release already pushed HEAD there.
+        # GitHub workflow_dispatch accepts branch/tag refs, not bare commit SHAs, so the
+        # run is bound to ``sha`` through the ``expected_sha`` input: the workflow stops
+        # if main is no longer at the commit whose gates were verified here.
         # The run created by this dispatch is the one that was not listed before it; taking
         # the newest run after a fixed sleep could pick up an unrelated, earlier run.
-        known = self._dispatch_run_ids(root, workflow)
-        gh_run(root, ["workflow", "run", workflow, "--ref", "main"])
+        known = set(self._dispatch_runs(root, workflow))
+        gh_run(root, ["workflow", "run", workflow, "--ref", "main", "-f", f"expected_sha={sha}"])
         deadline = time.time() + 180
         while time.time() < deadline:
             time.sleep(5)
-            fresh = self._dispatch_run_ids(root, workflow) - known
+            fresh = {run_id: head for run_id, head in self._dispatch_runs(root, workflow).items()
+                     if run_id not in known}
             if fresh:
-                return max(fresh, key=int)
+                run_id = max(fresh, key=int)
+                if fresh[run_id] and fresh[run_id] != sha:
+                    raise RuntimeError(
+                        f"Release workflow запущено для {fresh[run_id]}, очікувався {sha}: "
+                        "main змінився після перевірки gate")
+                return run_id
         raise RuntimeError(
             f"Не вдалося отримати run_id для workflow «{workflow}»"
         )
