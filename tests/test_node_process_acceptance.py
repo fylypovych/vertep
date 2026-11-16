@@ -228,12 +228,14 @@ def test_measured_seven_role_runtime_api_fleet_and_dispatch(config_contour, node
     for key, value in node_dependencies["env"].items():
         monkeypatch.setenv(key, value)
     # A Publisher Node is ready only with a usable channel (i.0.0.4.14).
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "controlled-token")
-    # ...and the channel CORE configured in Settings -> Publishing (no CORE contact in this probe).
+    # var.0.0.4.86: publication uses the separate publisher bot, not the request bot.
+    monkeypatch.setenv("TELEGRAM_PUBLISHER_BOT_TOKEN", "controlled-token")
+    # ...and the brand Telegram channel CORE reports (no CORE contact in this probe).
     from publishers import LIVE_PUBLISHERS
     telegram = LIVE_PUBLISHERS["telegram"]
-    configured = type(telegram).channel_readiness
-    monkeypatch.setattr(telegram, "channel_readiness", lambda chat_id: configured(telegram, chat_id or "@measured_channel"))
+    configured = type(telegram).targets_readiness
+    monkeypatch.setattr(telegram, "targets_readiness",
+                        lambda chat_ids: configured(telegram, list(chat_ids) or ["@measured_channel"]))
     from worker.service import role_self_test
     from core.dispatcher import available_worker
     from core.models import Job, JobStatus

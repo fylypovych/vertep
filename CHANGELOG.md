@@ -1,3 +1,6 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.81
+- Тести Browser E2E: `tests/test_node_process_acceptance.py` налаштовує вузол Publisher окремим ботом-публікатором `TELEGRAM_PUBLISHER_BOT_TOKEN` і Telegram-каналом бренду через `targets_readiness` (після var.0.0.4.86). Виправлено падіння кроку «Приймання HTTP corpus без secrets та disposable monitoring» для 0.0.3.80: вузол Publisher звітував «Жоден канал публікації не налаштовано».
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.80
 - Bootstrap (рішення власника 16.11.2026): на хості без NVIDIA/AMD GPU (наприклад, Hyper-V VM без passthrough) встановлення й оновлення проходять. Активну додаткову роль `gpu` (ComfyUI) bootstrap вимикає: прибирає її з `NODE_ADDITIONAL_ROLES` і `config/deployment-plan.json` разом із сервісами, можливостями й модулями, які давала лише вона, і продовжує з рештою ролей. Окремий GPU-вузол (`NODE_ROLE=gpu`) без GPU, як і раніше, завершується помилкою.
 - Бекапи (#488, `i.0.0.4.88`): вбудовані `pg_dump`, `pg_restore` і `redis-cli BGSAVE` запускаються списком аргументів без shell. Пароль Redis передається через `REDISCLI_AUTH` і не потрапляє в argv. Override оператора `BACKUP_*_CMD` лишаються shell-рядками; у `BACKUP_REMOTE_CMD` шлях snapshot підставляється через `shlex.quote`.
