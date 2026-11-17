@@ -153,7 +153,7 @@ async def module_token(request: Request):
         raise HTTPException(401, "Token is not valid for this worker")
     registry = _registry()
     placed = registry.placement.placement.get(module_id, [])
-    declared = {p for i in registry.instances(module_id) for p in i.manifest.permissions}
+    declared = registry.declared_permissions(module_id)
     if node_name not in placed or not declared <= set(registry.placement.approvals.get(module_id, [])):
         audit("module.token.issue", "denied", node=node_name, module=module_id, reason="placement_or_approval")
         raise HTTPException(403, "Module is not placed on this node or not approved")
@@ -202,7 +202,90 @@ def module_database(request: Request):
         raise HTTPException(404, "Module database is not provisioned")
     credentials = json.loads(stored)
     audit("module.database", "allowed", module=caller.module_id, node=caller.node_id)
-    return {key: credentials[key] for key in ("role", "schema", "password", "database")}
+    # Address as seen from module containers (may differ from CORE's own DSN host).
+    from urllib.parse import urlsplit
+    dsn = urlsplit(os.getenv("VERTEP_MODULE_DATABASE_URL") or os.getenv("DATABASE_URL") or "")
+    return {**{key: credentials[key] for key in ("role", "schema", "password", "database")},
+            "host": os.getenv("VERTEP_MODULE_DATABASE_HOST") or dsn.hostname,
+            "port": int(os.getenv("VERTEP_MODULE_DATABASE_PORT") or dsn.port or 5432)}
+
+
+# -- shared capabilities for modules -------------------------------------------------
+
+@router.post("/api/modules/self/tasks")
+async def module_submit_task(request: Request):
+    """Run one task on an existing shared Worker capability declared in ``requires``."""
+    from core.workflow.runtime import workflow_runtime
+    registry = _registry()
+    caller = _caller_module(request, registry)
+    if caller is None:
+        raise HTTPException(401, "Module token is not valid")
+    payload = await request.json()
+    capability, task_type = str(payload.get("capability", "")), str(payload.get("task_type", ""))
+    declared = {r["name"] for r in caller.manifest.requires if r["type"] == "capability"}
+    if capability not in declared or not re.fullmatch(r"[a-z][a-z0-9_]*", task_type or "-"):
+        audit("module.task", "denied", module=caller.module_id, capability=capability, reason="undeclared_capability")
+        raise HTTPException(403, "Module may use only capabilities it declares")
+    params = payload.get("input") or {}
+    if not isinstance(params, dict) or any(key in params for key in ("module_owner", "owner", "acl")):
+        raise HTTPException(422, "Invalid module task input")
+    runtime = workflow_runtime()
+    definition = {"name": f"module:{caller.module_id}", "version": "1.0.0",
+                  "tasks": [{"id": "task", "type": task_type, "capabilities_required": [capability],
+                             "timeout_minutes": int(payload.get("timeout_minutes", 10))}]}
+    from core.system_state import dispatch_allowed
+    with runtime.engine._lock:
+        job_id = runtime.engine.create_job(definition, {**params, "module_owner": caller.module_id})
+        runtime.engine.start_job(job_id, allow_dispatch=dispatch_allowed())
+    audit("module.task", "allowed", module=caller.module_id, capability=capability, job=job_id)
+    return {"task_id": job_id}
+
+
+@router.get("/api/modules/self/tasks/{task_id}")
+def module_task_status(task_id: str, request: Request):
+    from core.workflow.runtime import workflow_runtime
+    registry = _registry()
+    caller = _caller_module(request, registry)
+    if caller is None:
+        raise HTTPException(401, "Module token is not valid")
+    runtime = workflow_runtime()
+    job = runtime.engine._jobs.get(task_id)
+    if job is None or job["params"].get("module_owner") != caller.module_id:
+        audit("module.task.read", "denied", module=caller.module_id, job=task_id)
+        raise HTTPException(404, "Module task not found")
+    runtime.tick()
+    task = job["tasks"]["task"]
+    return {"task_id": task_id, "status": job["status"], "output": task.get("output"), "error": task.get("error")}
+
+
+# -- node assignments for Worker supervisors ---------------------------------------------
+
+@router.post("/api/modules/node-assignments")
+async def node_assignments(request: Request):
+    """Signed packages of application modules placed and approved for this node."""
+    from core.security import _valid_worker_request
+    payload = await request.json()
+    node_name = str(payload.get("node_name", ""))
+    if not node_name or not _valid_worker_request(node_name, request):
+        audit("module.assignments", "denied", node=node_name, reason="worker_auth")
+        raise HTTPException(401, "Token is not valid for this worker")
+    from core.workflow.runtime import workflow_runtime
+    runtime = workflow_runtime()
+    if runtime is None:
+        return {"modules": []}
+    registry = runtime.modules
+    result = []
+    for module_id, record in runtime.lifecycle.records().items():
+        if node_name not in registry.placement.placement.get(module_id, []):
+            continue
+        manifest = runtime.lifecycle._manifest(record)
+        if manifest.kind != "application" or record["state"] not in ("INSTALLED", "ACTIVE", "INACTIVE"):
+            continue
+        if not set(manifest.permissions) <= set(registry.placement.approvals.get(module_id, [])):
+            continue
+        result.append({"module_id": module_id, "version": record["version"], "package": record["package"]})
+    audit("module.assignments", "allowed", node=node_name, modules=[item["module_id"] for item in result])
+    return {"modules": result}
 
 
 def store_module_secrets(registry, module_id: str, values: dict) -> list[str]:

@@ -95,5 +95,5 @@ def stop(module_id: str) -> None:
 
 
 def running(module_id: str) -> bool:
-    result = _docker("inspect", "--format", "{{.State.Running}}", resource_name(module_id), check=False)
+    result = _docker("inspect", "--type", "container", "--format", "{{.State.Running}}", resource_name(module_id), check=False)
     return result.returncode == 0 and result.stdout.strip() == "true"

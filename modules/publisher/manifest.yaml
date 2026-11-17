@@ -1,0 +1,18 @@
+name: publisher
+version: "0.0.3.90"
+label: PublisherModule
+role: publisher
+capabilities:
+  - publishing
+entrypoint: modules.publisher.publisher_module:PublisherModule
+depends_on: []
+resources:
+  min_vram_mb: 0
+  cpu_cores: 1
+  ram_mb: 512
+  gpu_required: false
+coexists_with:
+  - publisher_node
+feature_flag: VERTEP_PUBLISHER_MODULE_ENABLED
+description: >
+  Публікаційний модуль (Publisher Module) над чинним виконавцем Publisher Node; платформи — адаптери publishers/.

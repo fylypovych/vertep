@@ -21,6 +21,10 @@ def _select_worker(
         task_type: str | None = None,
         min_vram_mb: int | None = None,
         voice_requirements: dict | None = None):
+    from ...module.routing import eligible
+    workers = eligible(workers, task_type)  # #497: lifecycle-managed functions run only on READY placed instances
+    if not workers:
+        return None
     dispatcher_url = os.getenv("DISPATCHER_URL", "").rstrip("/")
     if not dispatcher_url:
         return available_worker(

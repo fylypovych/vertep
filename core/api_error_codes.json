@@ -166,5 +166,8 @@
  "Module API is unavailable": "module_api_is_unavailable",
  "Module database is not provisioned": "module_database_is_not_provisioned",
  "Unknown module lifecycle action": "unknown_module_lifecycle_action",
- "Module archive not found": "module_archive_not_found"
+ "Module archive not found": "module_archive_not_found",
+ "Module may use only capabilities it declares": "module_may_use_only_declared_capabilities",
+ "Invalid module task input": "invalid_module_task_input",
+ "Module task not found": "module_task_not_found"
 }

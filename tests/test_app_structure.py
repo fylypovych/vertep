@@ -78,6 +78,9 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/nodes/module-registry/archives"],
         ["GET", "/api/nodes/module-registry/archives/{name}"],
         ["POST", "/api/nodes/module-registry/archives/{name}/restore"],
+        ["POST", "/api/modules/self/tasks"],  # #495 shared capability for modules, node assignments.
+        ["GET", "/api/modules/self/tasks/{task_id}"],
+        ["POST", "/api/modules/node-assignments"],
     ]
     assert after == sorted(before + execution)
 

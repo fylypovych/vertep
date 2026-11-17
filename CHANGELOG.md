@@ -1,3 +1,11 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.90
+- Модулі (#495): демонстраційний application-модуль `examples/modules/demo-notes` (API, UI, власна таблиця, фонова служба, виклик спільної `text_generation` через CORE) і скрипт збирання/підпису; Worker-супервізор `worker/application_supervisor.py` запускає контейнери розміщених модулів (`VERTEP_APPLICATION_MODULES=true`).
+- Модулі (#495): API для модулів — задачі на задекларованих спільних capabilities (`/api/modules/self/tasks`), адреса власної БД, призначення модулів вузлу (`/api/modules/node-assignments`).
+- Модулі (#497): Text, Image/Video, Voice, Publisher і Backup керуються як bundled-модулі через спільні lifecycle/placement; перемикання маршруту при claim (`core/module/routing.py`), legacy-шлях ролі збережено до перевіреного retirement; нові модулі `publisher` і `backup` над чинними виконавцями.
+- Модулі: виправлено блокування event loop CORE під час self-test lifecycle, видачу токена до першого звіту вузла, placement до першого звіту та відновлення версії під час rollback.
+- Тести CI: модульна БД працює з PostgreSQL у кодуванні SQL_ASCII (`client_encoding=UTF8`), ролі модулів унікальні для кожної бази кластера; демо-e2e пропускається з поясненням, якщо контейнери не досягають loopback CORE.
+- Тести: `tests/test_demo_module_e2e.py`, `tests/test_demo_module_negative.py`, `tests/test_role_module_migration.py`, `tests/test_role_module_routing.py`; документація — `docs/architecture/contracts/module_contract.md` §17–19, AGENTS.md §14.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.89
 - Модулі (#492): розділено вузол, визначення модуля та екземпляр модуля на вузлі (`core/module/instances.py`); кілька вузлів із тим самим модулем більше не затирають один одного.
 - Модулі (#492): manifest схеми 2.x з negotiation і читанням legacy 1.x; адміністраторський placement, LAB-placement лише на nonproduction VM, dispatch лише на READY розміщені екземпляри з фіксацією версії вибраного вузла.

@@ -30,15 +30,26 @@ def schema_name(module_id: str) -> str:
 class ModuleDatabase:
     def __init__(self, admin_dsn: str) -> None:
         self.admin_dsn = admin_dsn
+        self._database: str | None = None
+
+    def role_name(self, module_id: str) -> str:
+        """Roles are cluster-wide; bind the name to this database so installations
+        sharing a PostgreSQL cluster never share or drop each other's roles."""
+        if self._database is None:
+            with self._connect() as connection:
+                self._database = connection.execute("SELECT current_database()").fetchone()[0]
+        import hashlib
+        return f"{schema_name(module_id)[:50]}_{hashlib.sha256(self._database.encode()).hexdigest()[:8]}"
 
     def _connect(self):
-        return psycopg.connect(self.admin_dsn, autocommit=True)
+        # UTF8 even on SQL_ASCII databases: identifiers and text come back as str.
+        return psycopg.connect(self.admin_dsn, autocommit=True, client_encoding="UTF8")
 
     # -- provisioning -----------------------------------------------------------
     def ensure(self, module_id: str, schema: str | None = None) -> dict:
         """Create role + schema if missing. Returns credentials for the platform secret store."""
         schema = schema or schema_name(module_id)
-        role = schema_name(module_id)
+        role = self.role_name(module_id)
         password = secrets.token_urlsafe(24)
         with self._connect() as connection:
             exists = connection.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,)).fetchone()
@@ -82,7 +93,7 @@ class ModuleDatabase:
     def migrate(self, module_id: str, migrations: list[dict], sources: dict[str, str], schema: str | None = None) -> list[str]:
         """Apply missing migrations in declared order, each atomically, as the module role."""
         schema = schema or schema_name(module_id)
-        role = schema_name(module_id)
+        role = self.role_name(module_id)
         done = {item["id"] for item in self.applied(module_id, schema)}
         applied = []
         with self._connect() as connection:
@@ -181,7 +192,7 @@ class ModuleDatabase:
             connection.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
 
     def drop(self, module_id: str) -> None:
-        role = schema_name(module_id)
+        role = self.role_name(module_id)
         self.drop_schema(schema_name(module_id))
         with self._connect() as connection:
             if connection.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,)).fetchone():

@@ -59,7 +59,7 @@ def inventory():
 def execute_module(name, task):
     from worker.migration import ROUTES, enabled, execute, inventory as builtin_inventory
     for role, (module_name, _, _) in ROUTES.items():
-        if module_name == name and enabled(name):
+        if module_name == name and (enabled(name) or task.get("module_routed") is True):
             manifest = next(item for item in builtin_inventory() if item["name"] == name)
             if task.get("module_version") and task["module_version"] != manifest["version"]:
                 raise ValueError("Bundled module version mismatch")

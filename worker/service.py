@@ -738,6 +738,15 @@ def main() -> None:
                 payload["model_catalog"] = text_model_catalog()
                 from worker.module_runtime import inventory as module_inventory
                 payload["module_inventory"] = module_inventory()
+                from worker import application_supervisor
+                if application_supervisor.enabled():
+                    try:
+                        payload["module_inventory"] = [item for item in payload["module_inventory"]
+                                                       if item.get("kind") != "application"] + \
+                            application_supervisor.reconcile(client, core, payload["node_name"])
+                    except (httpx.HTTPError, OSError, subprocess.SubprocessError) as error:
+                        # Application containers never block the Worker's own heartbeat.
+                        logger.warning("Application module reconcile failed", extra={"error": str(error)})
                 payload["protocol_version"] = "1.0.0"
                 payload["cpu_cores"] = os.cpu_count() or 1
                 payload["provider_config"] = executor_provider_config()

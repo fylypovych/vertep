@@ -2,7 +2,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 from ..models import NodeAction, utc_now
 from ..node_registry import (create_registration_token, enroll_node, registered_nodes,
                              renew_node, record_self_test, revoke_node, verify_node_certificate, node_roles,
@@ -178,16 +178,20 @@ def module_lifecycle_records():
 
 
 @router.post("/api/nodes/module-registry/lifecycle/{action}")
-async def module_lifecycle_action(action: str, request: Request):
-    """install | activate | deactivate | update | rollback | uninstall (administrator only)."""
+def module_lifecycle_action(action: str, request: Request, payload: dict = Body(default_factory=dict)):
+    """install | activate | deactivate | update | rollback | uninstall (administrator only).
+
+    Synchronous on purpose: drain and self-test wait for Worker reports, which
+    must keep flowing through the event loop meanwhile.
+    """
     from core.module.gateway import audit
     from core.module.lifecycle import LifecycleError
     actor = _require_admin(request)
-    payload = await request.json()
     lifecycle = _lifecycle()
     module_id = str(payload.get("module_id", ""))
     operations = {
-        "install": lambda: lifecycle.install(payload.get("package") or {}),
+        "install": lambda: (lifecycle.install_bundled(str(payload["bundled"])) if payload.get("bundled")
+                            else lifecycle.install(payload.get("package") or {})),
         "activate": lambda: lifecycle.activate(module_id),
         "deactivate": lambda: lifecycle.deactivate(module_id),
         "update": lambda: lifecycle.update(payload.get("package") or {}, confirmed=payload.get("confirm") is True),

@@ -1,6 +1,6 @@
 Module Contract
 
-> Статус: контракт; реалізація — `core/module/manifest.py`, `core/module/instances.py`, `core/module/registry.py`, `core/module/trust.py`, `core/module/gateway.py`, `core/module/lifecycle.py`, `core/module/data.py`, `core/module/service.py`, `worker/application_container.py`; автоматизовані перевірки — `tests/test_module_contract.py`, `tests/test_module_trust_isolation.py`, `tests/test_module_ui_browser_e2e.py`, `tests/test_module_lifecycle.py` | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
+> Статус: контракт; реалізація — `core/module/manifest.py`, `core/module/instances.py`, `core/module/registry.py`, `core/module/trust.py`, `core/module/gateway.py`, `core/module/lifecycle.py`, `core/module/data.py`, `core/module/service.py`, `worker/application_container.py`; автоматизовані перевірки — `tests/test_module_contract.py`, `tests/test_module_trust_isolation.py`, `tests/test_module_ui_browser_e2e.py`, `tests/test_module_lifecycle.py`, `tests/test_demo_module_e2e.py`, `tests/test_demo_module_negative.py`, `tests/test_role_module_migration.py`, `tests/test_role_module_routing.py` | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
 
 ===============
 
@@ -162,3 +162,61 @@ ui:
 - Формат `vertep-module-archive/1` (звичайний tar, без шифрування): `archive.json` (версія формату, модуль, версія, `encrypted: false`, sha256 кожного файлу), `manifest.json`, `package.json` (підписаний пакет), `database.json`, `migrations/*.sql`, `config/*`, `files/*`. Дані Monitoring (історія метрик у схемі модуля) входять так само. Secrets платформи й пароль ролі в архів не потрапляють.
 - Каталог архівів `0700`, файли `0600`; доступ — лише адміністратор: `GET /api/nodes/module-registry/archives`, `GET .../archives/{name}` (завантаження), `POST .../archives/{name}/restore` (відновлення в стан `INSTALLED`). Vertep архіви не видаляє — лише адміністратор вручну.
 - Архів модуля не замінює зашифрований system backup і secrets: system backup/restore, локальне завантаження backup, окремий ключ #417, перевірка цілісності, post-restore health, checkpoint/references і fencing старих leases працюють без змін ([backup/restore](../../backup-restore.md)).
+
+17. Спільні можливості для модулів і Worker-супервізор
+---------------------------------
+- Модуль виконує задачу на наявній спільній capability лише через CORE: `requires: [{type: capability, name: text_generation, min_version: "1.0"}]`, далі `POST /api/modules/self/tasks` `{"capability", "task_type", "input"}` своїм токеном і `GET /api/modules/self/tasks/{task_id}` (лише власні задачі). CORE створює звичайну workflow-задачу, Dispatcher віддає її готовому сумісному Worker з lease/fencing, результат перевіряється як будь-який workflow-результат.
+- `GET /api/modules/self/database` повертає також адресу БД для контейнерів модулів (`VERTEP_MODULE_DATABASE_HOST`/`VERTEP_MODULE_DATABASE_PORT`, типово з DSN).
+- Worker із `VERTEP_APPLICATION_MODULES=true` (`worker/application_supervisor.py`) на кожному heartbeat отримує `POST /api/modules/node-assignments` (розміщені на вузлі, погоджені, встановлені application-модулі), сам перевіряє підписи пакетів власним trust root, запускає/перезапускає контейнер потрібної версії з токеном від CORE, зупиняє непризначені контейнери й повідомляє екземпляр із `endpoint`; READY лише за відповіддю `/health`. Параметри: `VERTEP_APPLICATION_CORE_URL` (адреса CORE для контейнерів), `VERTEP_APPLICATION_BIND`, `VERTEP_NODE_ADDRESS`, `VERTEP_APPLICATION_PORT_BASE`, `VERTEP_APPLICATION_STATE`.
+
+18. Демонстраційний модуль `demo-notes` ([#495](https://github.com/fylypovych/vertep/issues/495))
+---------------------------------
+Зразок для наступних міграцій, без бізнес-логіки й без GPU: `examples/modules/demo-notes/`.
+
+- `app.py` — контейнерний застосунок: API `/notes` (лише з токеном від CORE gateway), власна таблиця `notes` у схемі `mod_demo_notes`, фонова служба `summarizer`, яка ставить задачу на спільну `text_generation` і зберігає перевірений результат; `/health`, підписаний `ui/index.html`.
+- `migrations/m001_notes.sql` (1.0.0), `m002_reviewed.sql` (1.1.0), `Dockerfile` (користувач 65532).
+- `build.py` — збирає образ, публікує його в registry, закріплює manifest за отриманим sha256 digest і підписує пакет Ed25519 (`--version 1.0.0|1.1.0 --registry --key --signer --publisher --repository --output`).
+
+Автоматизоване приймання (disposable: Docker registry, контейнер модуля, PostgreSQL у контейнері, CORE на loopback, Worker-супервізор і штатний виконавець задач; LLM — локальна заглушка):
+
+| Test ID | Що доводить |
+| --- | --- |
+| `tests/test_demo_module_e2e.py::test_demo_module_full_lifecycle` | install (підписаний пакет, образ за digest) → placement/погодження → запуск обмеженого контейнера Worker-ом → activate (схема, migration, self-test) → API/UI через gateway → фонова задача через CORE на Worker (`text_generation`) → deactivate → update 1.1.0 (новий migration, дані збережено) → rollback → uninstall з перевіреним архівом → restore з архіву → дані прочитано знову; audit |
+| `tests/test_demo_module_negative.py` | відсутня залежність, несумісна версія CORE, немає погодження прав, немає готовності, невдалий self-test, не налаштована БД — без хибного READY; відсутній/невдалий модуль не блокує API й workflow платформи |
+
+Реальні CPU-вузли, перезапуск і оновлення на стенді — [#442](https://github.com/fylypovych/vertep/issues/442); приклад не є GPU-кваліфікацією.
+
+19. Чинні ролі під керуванням модулів ([#497](https://github.com/fylypovych/vertep/issues/497))
+---------------------------------
+Mapping за main 0.0.3.89 (`config/node_roles.json`, `worker/role_executor.py`, `worker/migration.py`):
+
+| Роль / сервіси вузла | Модуль (bundled у релізі) | Задачі → capability | Залежності вузла (не модулі) | Стан до #497 → зроблено в #497 |
+| --- | --- | --- | --- | --- |
+| text: worker, ollama | `text` | text, script, storyboard → `text_generation` | ollama / LLM runtime | шлях роль→модуль лише через env-прапорець вузла → керування через lifecycle/placement |
+| gpu: worker, comfyui | `image` | image, video → `image_generation`, `video_generation` | ComfyUI, CUDA/ROCm | те саме; GPU parity — [#441](https://github.com/fylypovych/vertep/issues/441) |
+| voice: worker, tts | `audio` | voice → `speech_synthesis` | TTS runtime, моделі голосів | те саме |
+| publisher: worker, publisher-worker | `publisher` | publish → `publishing` | адаптери `publishers/<platform>/` | модульного шляху не було → новий тонкий модуль над чинним виконавцем |
+| backup: worker, backup-service | `backup` | backup → `backup` | backup/snapshot/archive сервіси | те саме; system backup/restore CORE не змінюється |
+| gpu: `assembly` (FFmpeg) | — | — | — | власник [#498](https://github.com/fylypovych/vertep/issues/498), тут не переноситься |
+| monitoring | — | — | — | власник [#503](https://github.com/fylypovych/vertep/issues/503) |
+| core | — | — | PostgreSQL, Redis, proxy | CORE самодостатній, не модуль |
+
+Повторно використано без змін: черга Redis і Job lifecycle, lease/fencing, cancel/stale fencing, self-test/readiness Worker, виконавці ролей, provider interfaces, shadow parity із replay зовнішніх ефектів (`worker/migration_trace.py`), workflow DAG/static-dynamic вибір/review/revision/checkpoint.
+
+**Перемикання маршруту** (`core/module/routing.py`): у `_select_worker` і відповіді `POST /api/tasks/claim`.
+- Функція без запису lifecycle або лише `INSTALLED` — legacy-шлях ролі без змін.
+- `ACTIVE` — задачу забирає лише вузол із READY розміщеним екземпляром; задача отримує `module_name`, `module_version`, `module_routed: true`, Worker виконує той самий виконавець через модульний шлях (`worker/migration.py`), один attempt — один owner.
+- `INACTIVE`/`FAILED`/під час update — жоден вузол не забирає задачу, вона чекає в черзі (без мовчазного повернення до legacy).
+- `uninstall` повертає функцію на legacy-шлях. Bundled-модулі встановлюються `POST /api/nodes/module-registry/lifecycle/install` `{"bundled": "<text|image|audio|publisher|backup>"}` із manifest поточного релізу (довіра — підписаний реліз); оновлюються разом із релізом, а не окремим `update`.
+- Worker завжди звітує bundled-модуль своєї ролі з `enabled` (env-прапорець). Без прапорця й без lifecycle екземпляр `NOT_READY` (`bundled_not_managed`) і не додає неперевірених capabilities.
+- Обмеження: job-less voice preview (`voice_dispatch`) лишається на legacy-шляху.
+
+**Compatibility guards** (автоматизовано): legacy-конфіг ролей і env-прапорці `VERTEP_<MODULE>_MODULE_ENABLED`/`_SHADOW` працюють як раніше; невідповідність версії модуля CORE і Worker не дає READY; перезапуск CORE зберігає стан lifecycle.
+
+| Test ID | Доказ |
+| --- | --- |
+| `tests/test_role_module_migration.py::test_route_switch_parity_rollback_and_restart` | реальний контур CORE+Redis+виконавець Text із контрольованим Ollama: legacy → installed (без перемикання) → ACTIVE (claim із прив'язкою, модульний шлях, parity результату) → restart CORE → deactivate (задача чекає) → невідповідність версії (без READY) → uninstall (повернення legacy, задача, що чекала, виконана) |
+| `tests/test_role_module_migration.py::test_routed_task_cancel_fences_a_stale_module_result` | скасування Job під час задачі на модульному маршруті: пізній результат відхиляється (409), черга порожня, Job `CANCELLED` |
+| `tests/test_role_module_routing.py` | Image/Video, Voice, Publisher, Backup: bundled install/placement/activate/deactivate/uninstall і прив'язка за видом задачі; той самий виконавець через модульний шлях, один owner на attempt; shadow без другої публікації |
+
+**Retirement (не виконувати без доказів [#441](https://github.com/fylypovych/vertep/issues/441)/[#442](https://github.com/fylypovych/vertep/issues/442) і прямого дозволу власника):** env-прапорці `VERTEP_TEXT|IMAGE|AUDIO|PUBLISHER|BACKUP_MODULE_ENABLED` і `_SHADOW`; legacy-шлях ролі в `worker/migration.py`/`execute_role_task`; рольові дані `modules`/`services` у `config/node_roles.json` як користувацький вибір; вибір ролі у Wizard/Web UI ([#496](https://github.com/fylypovych/vertep/issues/496)); поле `coexists_with` у bundled manifest.

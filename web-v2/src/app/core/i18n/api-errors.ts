@@ -169,4 +169,7 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "module_database_is_not_provisioned": { uk: "Базу даних модуля не створено", en: "Module database is not provisioned" },
   "unknown_module_lifecycle_action": { uk: "Невідома дія життєвого циклу модуля", en: "Unknown module lifecycle action" },
   "module_archive_not_found": { uk: "Архів модуля не знайдено", en: "Module archive not found" },
+  "module_may_use_only_declared_capabilities": { uk: "Модуль може використовувати лише оголошені можливості", en: "Module may use only capabilities it declares" },
+  "invalid_module_task_input": { uk: "Некоректні вхідні дані задачі модуля", en: "Invalid module task input" },
+  "module_task_not_found": { uk: "Задачу модуля не знайдено", en: "Module task not found" },
 };

@@ -23,7 +23,7 @@ LEGACY_SCHEMA_VERSION = "1.0"
 MODULE_KINDS = ("execution", "application")
 PLACEMENT_TARGETS = ("any", "isolated_lab")
 SCALING_MODES = ("replicated", "single_owner")
-INTERFACE_TYPES = ("api", "event", "extension_point")
+INTERFACE_TYPES = ("api", "event", "extension_point", "capability")  # capability: shared Worker capability via CORE
 
 _VERSION = re.compile(r"\d+\.\d+\.\d+(?:\.\d+)?")
 _INTERFACE_VERSION = re.compile(r"\d+\.\d+")

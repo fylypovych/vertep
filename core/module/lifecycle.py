@@ -36,6 +36,18 @@ from .registry import ModuleRegistry
 ARCHIVE_FORMAT = "vertep-module-archive/1"
 JOURNAL_FORMAT = "vertep-module-journal/1"
 INSTALLED, ACTIVE, INACTIVE, FAILED = "INSTALLED", "ACTIVE", "INACTIVE", "FAILED"
+# Execution modules shipped inside the signed Vertep release (#497): their code
+# and manifest come with the release itself, so no separate package signature.
+BUNDLED = ("text", "image", "audio", "publisher", "backup")
+
+
+def bundled_manifest(name: str) -> dict:
+    import yaml
+    if name not in BUNDLED:
+        raise LifecycleError(f"Unknown bundled module: {name}")
+    path = Path(__file__).resolve().parents[2] / "modules" / name / "manifest.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return data.get("manifest", data)
 
 
 class LifecycleError(RuntimeError):
@@ -127,7 +139,7 @@ class ModuleLifecycle:
     def _publish(self, record: dict) -> None:
         """Dispatch/API/UI follow the lifecycle: only ACTIVE instances may be READY."""
         if self.registry is not None:
-            self.registry.set_lifecycle_state(record["module_id"], record["state"])
+            self.registry.set_lifecycle_state(record["module_id"], record["state"], self._manifest(record))
 
     def _manifest(self, record: dict) -> ModuleManifest:
         return ModuleManifest.from_dict(record["package"]["manifest"])
@@ -196,8 +208,19 @@ class ModuleLifecycle:
         return record
 
     # -- operations ---------------------------------------------------------------------
+    def _verify(self, package: dict) -> ModuleManifest:
+        if "bundled" in package:
+            # Always the manifest of the running release, never a supplied copy.
+            return ModuleManifest.from_dict(bundled_manifest(package["bundled"]))
+        return self.verify(package)  # signature, trust, provenance, UI digests
+
+    def install_bundled(self, name: str) -> dict:
+        return self.install({"bundled": name, "manifest": bundled_manifest(name), "files": {}})
+
     def install(self, package: dict) -> dict:
-        manifest = self.verify(package)  # signature, trust, provenance, UI digests
+        manifest = self._verify(package)
+        if "bundled" in package:
+            package = {"bundled": package["bundled"], "manifest": bundled_manifest(package["bundled"]), "files": {}}
         with self._lock(manifest.module_id):
             if self.record(manifest.module_id):
                 raise LifecycleError("Module is already installed; use update")
@@ -280,6 +303,8 @@ class ModuleLifecycle:
     def update(self, package: dict, *, confirmed: bool) -> dict:
         if confirmed is not True:
             raise LifecycleError("Update requires explicit administrator confirmation")
+        if "bundled" in package:
+            raise LifecycleError("Bundled modules are updated with the Vertep release")
         manifest = self.verify(package)
         module_id = manifest.module_id
         with self._lock(module_id):
@@ -342,7 +367,9 @@ class ModuleLifecycle:
             return
         state = record["state"]
         if reactivate or state == ACTIVE:
-            # No false READY: the restored version must pass its own self-test.
+            # Publish the restored version first (inactive) so nodes converge to it,
+            # then require its own self-test: no false READY.
+            self._save({**record, "state": INACTIVE})
             state = ACTIVE if self.self_test(self._manifest(record)) else FAILED
         self._save({**record, "state": state})
 
@@ -473,7 +500,7 @@ class ModuleLifecycle:
         """Reinstall a module from its archive (state INSTALLED until the admin activates)."""
         index, members = self.read_archive(path)
         package = json.loads(members["package.json"])
-        manifest = self.verify(package)
+        manifest = self._verify(package)
         module_id = manifest.module_id
         with self._lock(module_id):
             if self.record(module_id):

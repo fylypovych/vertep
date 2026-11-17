@@ -878,7 +878,7 @@ def execute_role_task(role: str, task: dict, *, _routing: bool = False, _migrati
         allowed = {task for local_role in local_roles for task in ROLE_TASKS.get(local_role, set())}
     if task_type not in allowed:
         raise PermissionError(f"Role {role} is not authorized to execute {task_type}")
-    if not _migration and not _routing and role in {"text", "gpu", "voice"}:
+    if not _migration and not _routing and role in {"text", "gpu", "voice", "publisher", "backup"}:
         from worker.migration import execute
         return execute(role, task, execute_role_task)
     if not _routing and task.get("task") in {"script", "text", "image", "video"}:

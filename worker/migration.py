@@ -16,7 +16,9 @@ _modules = {}
 _metrics = {}
 ROUTES = {"text": ("text", "TextModule", {"text", "script", "storyboard"}),
           "gpu": ("image", "ImageModule", {"image", "video"}),
-          "voice": ("audio", "AudioModule", {"voice"})}
+          "voice": ("audio", "AudioModule", {"voice"}),
+          "publisher": ("publisher", "PublisherModule", {"publish"}),
+          "backup": ("backup", "BackupModule", {"backup"})}
 
 
 def enabled(name, suffix="ENABLED"):
@@ -50,7 +52,8 @@ def execute(role, task, legacy):
             module = cls(executor=lambda value: legacy(role, value, _migration=True))
             _modules[role] = module
     started = monotonic()
-    selected = "module" if enabled(name) else "role"
+    # CORE binds a task to a lifecycle-managed module (#497); the env flag stays as legacy control.
+    selected = "module" if enabled(name) or task.get("module_routed") is True else "role"
     record = {"task_id": key[0], "lease_id": key[1], "owner": os.getenv("NODE_NAME", role), "path": selected}
     try:
         if enabled(name, "SHADOW"):
@@ -90,8 +93,7 @@ def inventory():
     for role, (name, _, _) in ROUTES.items():
         if os.getenv("NODE_ROLE") and os.environ["NODE_ROLE"] != role:
             continue
-        if not (enabled(name) or enabled(name, "SHADOW")):
-            continue
+        flagged = enabled(name) or enabled(name, "SHADOW")
         from pathlib import Path
         import yaml
         manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "modules" / name / "manifest.yaml").read_text(encoding="utf-8"))
@@ -99,5 +101,7 @@ def inventory():
         resources = data.get("resources", {})
         result.append({**data, "dependencies": data.get("depends_on", []), "resource_requirements": {
             "min_vram_mb": resources.get("min_vram_mb", 0), "min_cpu_cores": resources.get("cpu_cores", 0), "min_ram_mb": resources.get("ram_mb", 0)},
-            "ready": True, "origin": "bundled", "metrics": overview().get(name, {})})
+            # Reported for the node role even without the env flag; CORE treats it
+            # as executable only when flagged or managed by the module lifecycle.
+            "ready": True, "origin": "bundled", "enabled": flagged, "metrics": overview().get(name, {})})
     return result

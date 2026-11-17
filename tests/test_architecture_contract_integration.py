@@ -53,7 +53,7 @@ def test_signed_packages_cli_and_tamper(tmp_path):
     saved = {key: os.environ.get(key) for key in ("VERTEP_MODULE_ROOT", "VERTEP_MODULE_TRUST_ROOT")}
     try:
         os.environ.update({key: env[key] for key in saved})
-        assert inventory()[0]["name"] == "example"
+        assert "example" in [item["name"] for item in inventory()]  # bundled role modules are listed too (#497)
         assert execute_module("example", {"text": "actual module output", "module_version": "1.0.0"}) == "ACTUAL MODULE OUTPUT"
         with pytest.raises(ValueError, match="version"):
             execute_module("example", {"text": "x", "module_version": "2.0.0"})

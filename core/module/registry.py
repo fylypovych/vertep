@@ -60,6 +60,8 @@ class ModuleRegistry:
             if claims & {(p["type"], p["name"]) for p in other.provides}:
                 return False
         for requirement in manifest.requires:
+            if requirement["type"] == "capability":
+                continue  # served by Worker capabilities through CORE
             provided = [p for other in self._modules.values() if other.name != name for p in other.provides
                         if p["type"] == requirement["type"] and p["name"] == requirement["name"]]
             low = tuple(int(x) for x in requirement["min_version"].split("."))

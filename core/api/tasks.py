@@ -73,6 +73,12 @@ def claim_task(payload: TaskClaim, request: Request):
         if not may_claim_now(payload.node_name, store.workers):
             return {"task": None, "worker_state": "WAITING_FOR_TURN"}
         answer = _claim_task(payload)
+        if answer and isinstance(answer.get("task"), dict):
+            from ..module.routing import binding, task_kind
+            routed = binding(task_kind(answer["task"]), payload.node_name)
+            if isinstance(routed, dict):
+                # Same task, same lease/fencing; executed through the managed module path.
+                answer = {**answer, "task": {**answer["task"], **routed}}
         if answer and answer.get("task"):
             record_claim(payload.node_name, store.workers)
             store.save_worker(store.workers[payload.node_name])

@@ -121,6 +121,7 @@ class ModuleInstance:
     reported_ready: bool
     origin: str = "package"
     endpoint: str | None = None
+    unflagged: bool = False  # release-bundled role module without its node env flag
     state: str = NOT_READY
     reasons: list[str] = field(default_factory=list)
 
@@ -146,6 +147,7 @@ class ModuleInstanceRegistry:
         # module_id -> lifecycle state from core/module/lifecycle.py; modules
         # without a lifecycle record (legacy/bundled) are unaffected.
         self._lifecycle: dict[str, str] = {}
+        self._installed: dict[str, ModuleManifest] = {}  # manifests of lifecycle-installed modules
 
     # -- reporting -------------------------------------------------------------
     def report_node(self, node_id: str, inventory: Iterable[dict]) -> list[ModuleInstance]:
@@ -163,7 +165,8 @@ class ModuleInstanceRegistry:
             if endpoint is not None and (not isinstance(endpoint, str) or not re.fullmatch(r"https?://[A-Za-z0-9.:\[\]-]+(?::\d+)?", endpoint)):
                 raise ValueError("Invalid module instance endpoint")
             parsed[manifest.module_id] = ModuleInstance(node_id, manifest, item.get("ready") is True,
-                                                        str(item.get("origin") or "package"), endpoint)
+                                                        str(item.get("origin") or "package"), endpoint,
+                                                        unflagged=item.get("origin") == "bundled" and item.get("enabled") is False)
         with self._lock:
             candidate = {key: value for key, value in self._instances.items() if key[0] != node_id}
             candidate.update({(node_id, module_id): instance for module_id, instance in parsed.items()})
@@ -190,6 +193,9 @@ class ModuleInstanceRegistry:
             raise ValueError("Placement must be a list of node ids")
         with self._lock:
             definitions = [i.manifest for i in self._instances.values() if i.module_id == module_id]
+            if module_id in self._installed:
+                # Placement precedes the first Worker report for installed modules.
+                definitions.append(self._installed[module_id])
             if not definitions:
                 raise ValueError("Unknown module: no node reports this module")
             for manifest in definitions:
@@ -215,19 +221,31 @@ class ModuleInstanceRegistry:
                 if profile != {"environment": "nonproduction", "isolation": "vm"}:
                     raise ValueError("LAB placement requires a separate nonproduction VM node")
 
-    def set_lifecycle_state(self, module_id: str, state: str | None) -> None:
+    def set_lifecycle_state(self, module_id: str, state: str | None, manifest: ModuleManifest | None = None) -> None:
         with self._lock:
             if state is None:
                 self._lifecycle.pop(module_id, None)
+                self._installed.pop(module_id, None)
             else:
                 self._lifecycle[module_id] = state
+                if manifest is not None:
+                    self._installed[module_id] = manifest
             self._evaluate(self._instances)
+
+    def declared_permissions(self, module_id: str) -> set[str]:
+        with self._lock:
+            declared = {p for i in self._instances.values() if i.module_id == module_id for p in i.manifest.permissions}
+            if module_id in self._installed:
+                declared |= set(self._installed[module_id].permissions)
+            return declared
 
     def approve_permissions(self, module_id: str, permissions: list[str]) -> dict:
         if not isinstance(permissions, list) or any(not isinstance(p, str) for p in permissions):
             raise ValueError("Permissions must be a list of strings")
         with self._lock:
             declared = {p for i in self._instances.values() if i.module_id == module_id for p in i.manifest.permissions}
+            if module_id in self._installed:
+                declared |= set(self._installed[module_id].permissions)
             if not declared and not permissions:
                 pass
             elif set(permissions) - declared:
@@ -245,6 +263,10 @@ class ModuleInstanceRegistry:
             reasons = []
             if not instance.reported_ready:
                 reasons.append("self_test_not_passed")
+            if instance.unflagged and manifest.module_id not in self._lifecycle:
+                # Neither flagged on the node nor managed by the module lifecycle:
+                # the legacy role path only, no module capability.
+                reasons.append("bundled_not_managed")
             lifecycle = self._lifecycle.get(manifest.module_id)
             if lifecycle is not None and lifecycle != "ACTIVE":
                 # Deactivated, updating, failed or uninstalled: no new dispatch/API/UI.
@@ -349,6 +371,8 @@ class ModuleInstanceRegistry:
                             for v in versions):
                         reasons.append(f"dependency_unmet:{name}")
                 for requirement in instance.manifest.requires:
+                    if requirement["type"] == "capability":
+                        continue  # served by Worker capabilities through CORE, not by a module
                     if not interface_ok(requirement, [i for i in ready if i is not instance]):
                         reasons.append(f"interface_unmet:{requirement['type']}:{requirement['name']}")
                 if reasons:

@@ -64,7 +64,7 @@ def module_url(dsn, credentials):
 
 
 def rows(dsn, sql):
-    with psycopg.connect(dsn) as connection:
+    with psycopg.connect(dsn, client_encoding="UTF8") as connection:
         return connection.execute(sql).fetchall()
 
 
@@ -80,7 +80,7 @@ def test_install_activate_update_rollback_uninstall_restore(tmp_path, key, modul
     lifecycle.activate("notes")
     credentials = lifecycle.credentials["notes"]
     url = module_url(module_postgres, credentials)
-    with psycopg.connect(url) as connection:  # the module's own role and search_path
+    with psycopg.connect(url, client_encoding="UTF8") as connection:  # the module's own role and search_path
         connection.execute("INSERT INTO items (body) VALUES ('first'), ('second')")
     config = lifecycle.data_dir("notes") / "config/settings.json"
     config.write_text('{"theme": "dark"}')
@@ -91,7 +91,7 @@ def test_install_activate_update_rollback_uninstall_restore(tmp_path, key, modul
     lifecycle.update(package(key, version="1.1.0", migrations={"m1": M1, "m2": M2}), confirmed=True)
     assert lifecycle.record("notes")["version"] == "1.1.0" and lifecycle.record("notes")["state"] == "ACTIVE"
     assert tables(module_postgres, "mod_notes") == ["_vertep_migrations", "items", "tags"]
-    with psycopg.connect(url) as connection:
+    with psycopg.connect(url, client_encoding="UTF8") as connection:
         connection.execute("INSERT INTO tags (item, tag) VALUES (1, 'x')")
     config.write_text('{"theme": "light"}')
 
@@ -115,14 +115,14 @@ def test_install_activate_update_rollback_uninstall_restore(tmp_path, key, modul
     assert {"database.json", "config/settings.json", "files/history.csv", "migrations/m1.sql", "package.json"} <= names
     assert credentials["password"].encode() not in blob  # secrets are not archived
     assert tables(module_postgres, "mod_notes") == []
-    assert not rows(module_postgres, "SELECT 1 FROM pg_roles WHERE rolname='mod_notes'")
+    assert not rows(module_postgres, f"SELECT 1 FROM pg_roles WHERE rolname='{credentials['role']}'")
     assert not lifecycle.data_dir("notes").exists() and lifecycle.record("notes") is None
 
     lifecycle.restore_archive(archive)
     assert lifecycle.record("notes")["state"] == "INSTALLED"
     restored = module_url(module_postgres, lifecycle.credentials["notes"])
     assert [r[0] for r in rows(restored, "SELECT body FROM items ORDER BY id")] == ["first", "second"]
-    with psycopg.connect(restored) as connection:  # sequences continue after restored rows
+    with psycopg.connect(restored, client_encoding="UTF8") as connection:  # sequences continue after restored rows
         connection.execute("INSERT INTO items (body) VALUES ('third')")
     assert config.read_text() == '{"theme": "dark"}'
     assert archive.exists()  # never deleted by Vertep
@@ -136,7 +136,7 @@ def test_failed_update_rolls_back_runtime_db_and_config(tmp_path, key, module_po
     lifecycle.install(package(key))
     lifecycle.activate("notes")
     url = module_url(module_postgres, lifecycle.credentials["notes"])
-    with psycopg.connect(url) as connection:
+    with psycopg.connect(url, client_encoding="UTF8") as connection:
         connection.execute("INSERT INTO items (body) VALUES ('kept')")
     migrations = {"m1": M1, "m2": "CREATE TABLE tags (id int); SELECT 1/0" if failure == "migration" else M2}
     with pytest.raises(Exception):
@@ -199,7 +199,7 @@ def test_restart_recovery_after_a_killed_update(tmp_path, key, module_postgres):
     lifecycle.install(package(key))
     lifecycle.activate("notes")
     url = module_url(module_postgres, lifecycle.credentials["notes"])
-    with psycopg.connect(url) as connection:
+    with psycopg.connect(url, client_encoding="UTF8") as connection:
         connection.execute("INSERT INTO items (body) VALUES ('before')")
     _crash(tmp_path, key, module_postgres, "after_apply", "update")
     assert json.loads((tmp_path / "lc/journal/notes.json").read_text())["phase"] == "applied"
@@ -288,14 +288,14 @@ def test_module_roles_are_confined_to_their_own_schema(tmp_path, key, module_pos
     for name in ("notes", "other"):
         lifecycle.install(package(key, name=name))
         lifecycle.activate(name)
-    with psycopg.connect(module_postgres, autocommit=True) as connection:
+    with psycopg.connect(module_postgres, autocommit=True, client_encoding="UTF8") as connection:
         connection.execute("CREATE TABLE public.platform_state (secret text)")
         connection.execute("INSERT INTO public.platform_state VALUES ('platform')")
         connection.execute("INSERT INTO mod_other.items (body) VALUES ('other-data')")
     url = module_url(module_postgres, lifecycle.credentials["notes"])
     for statement in ("SELECT * FROM mod_other.items", "SELECT * FROM public.platform_state",
                       "CREATE TABLE public.injected (x int)", "CREATE SCHEMA rogue"):
-        with psycopg.connect(url) as connection, pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with psycopg.connect(url, client_encoding="UTF8") as connection, pytest.raises(psycopg.errors.InsufficientPrivilege):
             connection.execute(statement)
 
 

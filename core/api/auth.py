@@ -234,7 +234,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         # core/module/gateway.py. Signed module UI files are code, like the
         # public Web UI bundle, and carry no data (digest-checked, audited).
         module_machine = ((request.url.path.startswith("/api/modules/") and request.headers.get("x-vertep-module-token"))
-                          or (request.method == "POST" and request.url.path == "/api/modules/token")
+                          or (request.method == "POST" and request.url.path in {"/api/modules/token", "/api/modules/node-assignments"})
                           or (request.method == "GET" and request.url.path.startswith("/api/modules/ui/")))
         if (module_machine or worker_input or worker_exact or request.url.path.startswith(machine)
                 or re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", request.url.path)):
