@@ -1,8 +1,10 @@
-## ПРАВИЛЬНА НАЗВА: 0.0.3.100
-- Виправлено Angular build у `web-v2/`: додано `owner_brand_id` та `active` в інтерфейси `Character` та `CharacterForm`; додано метод `moduleCharacterCollaborations` у `ResourcesApiService`; виправлено компонент `CharactersComponent` — коректні методи `moduleAddCollaboration`/`moduleRemoveCollaboration` (приймають brandId), payload для create/update включає `references`, `collaborations`, `is_owner`; видалено невикористовуване `newCollabPermission`.
-- Виправлено тести CI (`test_health_and_job_flow`, `test_regenerate_preserves_inputs_and_replaces_generated_artifacts`, `test_job_export_import_and_optimistic_lock`, `test_distributed_worker_result`): додано helper `_complete_assembly_task()` для завершення assembly задач; оновлено тести для очікування статусу ASSEMBLY та завершення assembly перед перехідом до VIDEO_PENDING_APPROVAL; `test_distributed_worker_result` реєструє GPU worker з capability `video_assembly`.
-- Виправлено тест API routes snapshot (`test_all_method_path_contracts_match_the_before_extraction_snapshot`): додано відсутній маршрут `GET /api/nodes/module-catalog` до списку execution.
-- Assembly pipeline (#498): всі тести тепер правильно перевіряють job flow через ASSEMBLY статус (Worker з video_assembly capability виконує фінальний монтаж).
+## ПРАВИЛЬНА НАЗВА: 0.0.4.1
+- Узгоджено VERSION і релізну документацію після виправлення назви попереднього commit на 0.0.4.0; продовжено нумерацію з переносом розряду.
+- Виправлено Angular build: тип запиту збереження персонажа відокремлено від відповіді модуля, явно типізовано відповіді DELETE в ResourcesApiService.
+- Узгоджено UI співпраці персонажа з backend: список brand IDs, додавання та видалення за brand ID, без неіснуючих полів permission_level/id/active для співпраці.
+
+## ПРАВИЛЬНА НАЗВА: 0.0.4.0
+- Додано owner_brand_id та active до типів персонажа, метод читання співпраці й обов'язкові поля payload; виклики додавання та видалення співпраці прив'язано до brand ID.
 
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.99
 - Виправлено тести CI (`test_health_and_job_flow`, `test_regenerate_preserves_inputs_and_replaces_generated_artifacts`, `test_job_export_import_and_optimistic_lock`, `test_distributed_worker_result`): додано helper `_complete_assembly_task()` для завершення assembly задач; оновлено тести для очікування статусу ASSEMBLY та завершення assembly перед перехідом до VIDEO_PENDING_APPROVAL; `test_distributed_worker_result` реєструє GPU worker з capability `video_assembly`.

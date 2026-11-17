@@ -259,13 +259,9 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               <div class="space-y-2">
                 <div *ngFor="let collab of collaborations()" class="flex items-center justify-between p-2 bg-slate-50 rounded">
                   <div>
-                    <span class="font-medium">{{ collab.collaborator_brand_id }}</span>
-                    <span class="ml-2 px-2 py-0.5 text-xs rounded" [class]="collab.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'">
-                      {{ collab.active ? 'Активна' : 'Неактивна' }}
-                    </span>
-                    <span class="ml-2 text-xs text-slate-500">({{ collab.permission_level }})</span>
+                    <span class="font-medium">{{ collab }}</span>
                   </div>
-<button (click)="removeCollaboration(collab.collaborator_brand_id || collab.brand_id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
+                  <button (click)="removeCollaboration(collab)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
                 </div>
                 @if (collaborations().length === 0) {
                   <p class="text-sm text-slate-500">{{ 'Співпраці немає' | t }}</p>
@@ -292,13 +288,12 @@ import { ErrorStateComponent } from '../shared/error-state.component';
       <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
         <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Співпраця для персонажа' | t }}</h3>
         <div class="space-y-3">
-          @for (collab of collaborations(); track collab.id) {
+          @for (collab of collaborations(); track collab) {
             <div class="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
               <div>
-                <p class="font-medium">{{ collab.collaborator_brand_id }}</p>
-                <p class="text-sm text-slate-500">{{ collab.permission_level }} • {{ collab.active ? 'Активна' : 'Неактивна' }}</p>
+                <p class="font-medium">{{ collab }}</p>
               </div>
-              <button (click)="removeCollaboration(collab.collaborator_brand_id || collab.brand_id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
+              <button (click)="removeCollaboration(collab)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
             </div>
           } @empty {
             <p class="text-sm text-slate-500 text-center py-4">{{ 'Співпраці немає' | t }}</p>
@@ -342,7 +337,7 @@ export class CharactersComponent implements OnInit {
 
   constructor(readonly resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, public policy: PolicyService) {}
 
-  collaborations = signal<any[]>([]);
+  collaborations = signal<string[]>([]);
   newCollabBrandId = '';
   showCollabModal = signal(false);
   collabCharacterId: string | null = null;
@@ -505,10 +500,10 @@ export class CharactersComponent implements OnInit {
     ).subscribe((results) => done(results.filter((item) => item === null).length));
   }
 
-saveCharacter(): void {
+  saveCharacter(): void {
     if (!this.canSaveCharacter) return;
     if (!this.form.name) {
-      this.toast.show('Назва є об\'язковою', 'error');
+      this.toast.show('Назва є обов\'язковою', 'error');
       return;
     }
     this.saving.set(true);
@@ -525,9 +520,6 @@ saveCharacter(): void {
       publishing: this.form.publishing || { enabled: false, channels: '' },
       owner_brand_id: 'vertep', // Default owner brand
       active: false,
-      references: [],
-      collaborations: [],
-      is_owner: true,
     };
 
     const request = this.editingId
@@ -594,7 +586,7 @@ saveCharacter(): void {
 
   addCollaboration(): void {
     if (!this.collabCharacterId || !this.newCollabBrandId.trim()) return;
-    this.resources.moduleAddCollaboration(this.collabCharacterId, this.newCollabBrandId).subscribe({
+    this.resources.moduleAddCollaboration(this.collabCharacterId, this.newCollabBrandId.trim()).subscribe({
       next: () => {
         this.newCollabBrandId = '';
         this.manageCollaborations({ id: this.collabCharacterId });
