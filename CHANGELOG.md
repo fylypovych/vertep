@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.91
+- Модулі (#496): адміністраторська каталог модулів і вузлів (`/api/nodes/module-catalog`) — одна користувацька вибірка «модуль + вузол» замість внутрішніх ролей/Worker/capabilities; вузол, що не може запустити модуль (GPU, пам'ять, профіль LAB, відсутне runtime), показує чесну причину і відмовляє в розміщенні; нічого не показується READY без звіту Worker і lifecycle модуля.
+- Модулі (#496): валідація placement з причиною (`core/module/catalog.py::check_placement`), новий метод `ModuleInstanceRegistry.installed_manifest()`.
+- Модулі (#498): весь фінальний монтаж (включно з нативним FFmpeg) виконується Worker-ом; CORE лише формує незмінну спробу (snapshot engine/config/input, submit key), ставить в чергу і пізніше верифікує/імпортує результат; немає CORE-side render і fallback — відсутній/нездатний Worker залишає задачу в черзі (відмова, не підміна).
+- Web UI: новий розділ «Модулі» (`/modules`) з `ModuleManagementComponent`, API сервіси `ModuleManagementApiService` (catalog, lifecycle, placement, approval) і `CoreRuntimeApiService` (runtime state); бічна панель — «Розширення модулів» замість «Ролі», налаштування — видалено `RolesSectionComponent`; мастер першого запуску — «Встановлення: CORE або вузол» з вибором модулів замість ролей вузла.
+- Тести: `tests/test_module_catalog.py` (i.0.0.4.96 AC2/AC4/AC5), оновлено `test_bootstrap_wizard.py`, `test_demo_module_e2e.py`, `test_module_trust_isolation.py`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.90
 - Модулі (#495): демонстраційний application-модуль `examples/modules/demo-notes` (API, UI, власна таблиця, фонова служба, виклик спільної `text_generation` через CORE) і скрипт збирання/підпису; Worker-супервізор `worker/application_supervisor.py` запускає контейнери розміщених модулів (`VERTEP_APPLICATION_MODULES=true`).
 - Модулі (#495): API для модулів — задачі на задекларованих спільних capabilities (`/api/modules/self/tasks`), адреса власної БД, призначення модулів вузлу (`/api/modules/node-assignments`).

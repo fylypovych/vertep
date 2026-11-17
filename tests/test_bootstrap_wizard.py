@@ -545,7 +545,7 @@ class TestSetupBackendFieldAlignment:
 class TestSetupWizardHTML:
     def test_has_all_sections(self):
         html = (ROOT / "web-v2" / "src" / "app" / "setup" / "setup.component.html").read_text(encoding="utf-8")
-        for s in ("Роль вузла", "Назва інсталяції", "Адміністратор", "Секрети", "Обладнання", "AI Backend",
+        for s in ("Встановлення: CORE або вузол", "Назва інсталяції", "Адміністратор", "Секрети", "Обладнання", "AI Backend",
                   "Telegram-бот", "Health Check", "Підсумок налаштувань", "Ключ резервних копій", "Готово"):
             assert s in html
 

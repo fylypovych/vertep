@@ -87,6 +87,14 @@ export class SetupComponent implements OnInit, OnDestroy {
   keySaved = signal(false);
 
   selectedRole = computed(() => this.roles().find(entry => entry.id === this.role()));
+  /** #496: the administrator chooses modules; the legacy role id stays the compatible deployment detail. */
+  moduleLabel(roleId: string): string {
+    return ({ gpu: 'Зображення та відео (потрібен GPU)', text: 'Текст і сценарії', voice: 'Голос',
+              publisher: 'Публікація', backup: 'Резервні копії', monitoring: 'Моніторинг' } as Record<string, string>)[roleId] || roleId;
+  }
+  installOption(roleId: string): string {
+    return roleId === 'core' ? 'Vertep із CORE (центральна машина)' : `Приєднати вузол: ${this.moduleLabel(roleId)}`;
+  }
   manifestRows = computed(() => {
     const done = this.result();
     if (!done) return [];
@@ -97,7 +105,7 @@ export class SetupComponent implements OnInit, OnDestroy {
     const rows = [
       { label: 'Назва системи', value: value(done['installation_name']) },
       { label: 'Версія', value: value(done['version']) },
-      { label: 'Роль вузла', value: role?.label || value(done['node_role']) },
+      { label: 'Встановлено', value: role ? this.installOption(role.id) : value(done['node_role']) },
       { label: 'Адреса CORE', value: value(done.core_url) },
       { label: 'Домен', value: typeof done['web_domain'] === 'string' && done['web_domain'].trim() ? done['web_domain'] : 'Не налаштовано' },
       { label: 'AI Backend', value: backend?.['type'] === 'skip' ? 'Пропустити' : value(backend?.['type']) },
@@ -121,7 +129,7 @@ export class SetupComponent implements OnInit, OnDestroy {
       const registration = token as Record<string, unknown>;
       if (typeof registration['token'] === 'string') rows.push({ label: 'Одноразовий токен підключення', value: registration['token'] });
       if (typeof registration['role'] === 'string') {
-        rows.push({ label: 'Роль вузла для підключення', value: this.roles().find(role => role.id === registration['role'])?.label || registration['role'] });
+        rows.push({ label: 'Вузол для підключення', value: registration['role'] ? this.installOption(String(registration['role'])) : registration['role'] });
       }
       if (typeof registration['expires_at'] === 'string') {
         const expires = new Date(registration['expires_at']);

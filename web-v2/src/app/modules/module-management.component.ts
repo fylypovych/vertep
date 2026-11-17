@@ -1,0 +1,197 @@
+import { Component, OnDestroy, OnInit, computed, signal } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { Observable, Subscription, forkJoin, of, timer } from 'rxjs';
+import { catchError } from 'rxjs/operators';
+import { TPipe } from '../core/i18n/t.pipe';
+import { PolicyService } from '../core/services/policy.service';
+import { CatalogModule, CatalogNode, CoreRuntimeApiService, CoreRuntimeState, ModuleManagementApiService } from '../core/api/modules.api';
+
+const STATE_TEXT: Record<string, string> = {
+  NOT_INSTALLED: 'Не встановлено', INSTALLED: 'Встановлено', ACTIVE: 'Активний', INACTIVE: 'Вимкнено', FAILED: 'Збій',
+};
+
+const REASON_TEXT: Record<string, string> = {
+  self_test_not_passed: 'Самоперевірка не пройдена', core_incompatible: 'Несумісна версія CORE',
+  placement_required: 'Не вибрано вузол', not_placed_on_node: 'Не розміщено на цьому вузлі',
+  permission_approval_required: 'Права не погоджено', lifecycle_installed: 'Ще не активовано',
+  lifecycle_inactive: 'Вимкнено', lifecycle_failed: 'Збій модуля', bundled_not_managed: 'Працює як роль (не модуль)',
+  interface_conflict: 'Конфлікт інтерфейсів', endpoint_missing: 'Немає адреси екземпляра', dependency_cycle: 'Циклічна залежність',
+};
+
+/**
+ * One administrator choice: module and target node (#496). Worker, capabilities and
+ * deployment roles stay internal; a node that cannot run a module shows why and
+ * cannot be selected, and nothing is shown ready without a Worker report.
+ */
+@Component({
+  selector: 'app-module-management',
+  standalone: true,
+  imports: [CommonModule, TPipe],
+  template: `
+  <div class="p-6 space-y-4" data-testid="module-management">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">{{ 'Модулі' | t }}</h1>
+      <p class="text-sm text-slate-500">{{ 'Оберіть модуль і вузол. Вузол без потрібних ресурсів показує причину й не приймає модуль.' | t }}</p>
+    </div>
+    @if (error()) { <div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert" data-testid="module-error">{{ error() }}</div> }
+    @if (core(); as runtime) {
+      @if (deploymentText(runtime)) {
+        <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 text-sm space-y-1" data-testid="core-runtime">
+          <p role="status" data-testid="deployment-state">{{ deploymentText(runtime) | t }}</p>
+          @if (runtime.deployment?.message) { <p class="text-amber-700">{{ runtime.deployment!.message! | t }}</p> }
+          @if (runtime.deployment?.error) { <p class="text-red-700" data-testid="deployment-error">{{ runtime.deployment!.error }}</p> }
+        </div>
+      }
+    }
+    @for (module of modules(); track module.module_id) {
+      <section class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3" [attr.data-testid]="'module-' + module.module_id">
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="text-lg font-semibold">{{ module.label | t }}</h2>
+          <span class="text-xs text-slate-500">{{ module.module_id }} · {{ module.version }}</span>
+          <span class="text-xs rounded px-2 py-0.5 bg-slate-100 dark:bg-slate-700" [attr.data-testid]="'module-state-' + module.module_id">{{ stateText(module.state) | t }}</span>
+          @if (module.requires_gpu) { <span class="text-xs rounded px-2 py-0.5 bg-amber-100 text-amber-800">{{ 'Потрібен GPU' | t }}</span> }
+          @if (module.target === 'isolated_lab') { <span class="text-xs rounded px-2 py-0.5 bg-sky-100 text-sky-800">{{ 'Лише окрема nonproduction VM' | t }}</span> }
+        </div>
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-slate-500"><th class="py-1">{{ 'Вузол' | t }}</th><th>{{ 'Розміщення' | t }}</th><th>{{ 'Готовність' | t }}</th></tr></thead>
+          <tbody>
+          @for (entry of module.nodes; track entry.node_id) {
+            <tr class="border-t border-slate-100 dark:border-slate-700 align-top" [attr.data-testid]="'module-node-' + module.module_id + '-' + entry.node_id">
+              <td class="py-1.5 pr-2">{{ entry.node_id }}</td>
+              <td class="py-1.5 pr-2">
+                <label class="inline-flex items-center gap-2">
+                  <input type="checkbox" [disabled]="!isAdmin() || busy() || entry.compatible_reasons.length > 0"
+                         [checked]="selected(module.module_id).includes(entry.node_id)"
+                         (change)="toggle(module, entry.node_id, $event)"
+                         [attr.data-testid]="'place-' + module.module_id + '-' + entry.node_id">
+                  <span>{{ 'Розмістити' | t }}</span>
+                </label>
+                @for (reason of entry.compatible_reasons; track reason) {
+                  <div class="text-xs text-amber-700" [attr.data-testid]="'incompatible-' + module.module_id + '-' + entry.node_id">{{ reason | t }}</div>
+                }
+                @if (isAdmin() && module.runtime_role && isCore(entry.node_id) && entry.runtime_missing) {
+                  <button class="mt-1 text-xs text-emerald-700 underline disabled:opacity-50" [disabled]="busy() || runtimePending()"
+                          (click)="prepareCore(module.runtime_role)" [attr.data-testid]="'prepare-core-' + module.module_id">{{ 'Підготувати середовище на центральному вузлі' | t }}</button>
+                }
+              </td>
+              <td class="py-1.5" [attr.data-testid]="'ready-' + module.module_id + '-' + entry.node_id">
+                @if (entry.instance; as instance) {
+                  {{ (instance.state === 'READY' ? 'Готовий' : 'Не готовий') | t }}
+                  @for (reason of instance.reasons; track reason) { <div class="text-xs text-slate-500">{{ reasonText(reason) | t }}</div> }
+                } @else { <span class="text-slate-400">{{ 'Вузол не повідомляв модуль' | t }}</span> }
+              </td>
+            </tr>
+          }
+          </tbody>
+        </table>
+        @if (isAdmin()) {
+          <div class="flex flex-wrap gap-2 text-sm">
+            @if (module.state === 'NOT_INSTALLED' && module.bundled) {
+              <button class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50" [disabled]="busy()" (click)="run('install', { bundled: module.module_id })" [attr.data-testid]="'install-' + module.module_id">{{ 'Встановити' | t }}</button>
+            }
+            @if (module.state !== 'NOT_INSTALLED') {
+              <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy() || !placementChanged(module)" (click)="savePlacement(module)" [attr.data-testid]="'save-placement-' + module.module_id">{{ 'Зберегти розміщення' | t }}</button>
+            }
+            @if (module.permissions.length && !approved(module)) {
+              <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy()" (click)="approve(module)" [attr.data-testid]="'approve-' + module.module_id">{{ 'Погодити права' | t }}: {{ module.permissions.join(', ') }}</button>
+            }
+            @if (module.state === 'INSTALLED' || module.state === 'INACTIVE' || module.state === 'FAILED') {
+              <button class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50" [disabled]="busy()" (click)="run('activate', { module_id: module.module_id })" [attr.data-testid]="'activate-' + module.module_id">{{ 'Активувати' | t }}</button>
+            }
+            @if (module.state === 'ACTIVE') {
+              <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy()" (click)="run('deactivate', { module_id: module.module_id })" [attr.data-testid]="'deactivate-' + module.module_id">{{ 'Вимкнути' | t }}</button>
+            }
+            @if (module.state !== 'NOT_INSTALLED') {
+              <button class="px-3 py-1.5 rounded-lg border border-red-300 text-red-700 disabled:opacity-50" [disabled]="busy()" (click)="uninstall(module)" [attr.data-testid]="'uninstall-' + module.module_id">{{ 'Видалити (з архівом)' | t }}</button>
+            }
+          </div>
+        }
+      </section>
+    }
+  </div>`,
+})
+export class ModuleManagementComponent implements OnInit, OnDestroy {
+  modules = signal<CatalogModule[]>([]);
+  nodes = signal<CatalogNode[]>([]);
+  core = signal<CoreRuntimeState | null>(null);
+  error = signal<string | null>(null);
+  busy = signal(false);
+  private choices = signal<Record<string, string[]>>({});
+  isAdmin = computed(() => this.policy.userRole() === 'admin');
+
+  constructor(private api: ModuleManagementApiService, private runtime: CoreRuntimeApiService, private policy: PolicyService) {}
+
+  private poll?: Subscription;
+  ngOnInit(): void { this.poll = timer(0, 3000).subscribe(() => this.refreshRuntime()); this.load(); }
+  ngOnDestroy(): void { this.poll?.unsubscribe(); }
+  private refreshRuntime(): void {
+    this.runtime.state().pipe(catchError(() => of(null))).subscribe(core => this.core.set(core));
+  }
+
+  load(): void {
+    forkJoin({ catalog: this.api.catalog(), core: this.runtime.state().pipe(catchError(() => of(null))) }).subscribe({
+      next: ({ catalog, core }) => {
+        this.modules.set(catalog.modules);
+        this.nodes.set(catalog.nodes);
+        this.core.set(core);
+        this.choices.set(Object.fromEntries(catalog.modules.map(module => [module.module_id, [...module.placement]])));
+      },
+      error: (error: Error) => this.error.set(error.message),
+    });
+  }
+
+  stateText(state: string): string { return STATE_TEXT[state] || state; }
+  reasonText(reason: string): string {
+    if (reason.startsWith('dependency_unmet:')) return 'Залежність не виконана';
+    if (reason.startsWith('interface_unmet:')) return 'Потрібний інтерфейс недоступний';
+    return REASON_TEXT[reason] || reason;
+  }
+  selected(moduleId: string): string[] { return this.choices()[moduleId] || []; }
+  isCore(nodeId: string): boolean { return this.nodes().some(node => node.node_id === nodeId && node.role === 'core'); }
+  approved(module: CatalogModule): boolean { return module.permissions.every(item => module.approved_permissions.includes(item)); }
+  placementChanged(module: CatalogModule): boolean {
+    return [...this.selected(module.module_id)].sort().join(',') !== [...module.placement].sort().join(',');
+  }
+  runtimePending(): boolean {
+    const runtime = this.core();
+    return !!runtime?.queued || ['QUEUED', 'APPLYING'].includes(runtime?.deployment?.state || '');
+  }
+  /** Same deployment states the system executor reports (formerly the roles tab). */
+  deploymentText(runtime: CoreRuntimeState): string {
+    const deployment = runtime.deployment || {};
+    if (deployment.stalled) return 'Потрібна перевірка системного виконавця';
+    if (deployment.state === 'FAILED') return 'Застосування не вдалося';
+    if (deployment.state === 'SUCCEEDED') return 'Локальне розгортання застосовано; готовність показано окремо';
+    return ({ QUEUED: 'Очікує системного виконавця', PREPARING: 'Підготовка розгортання', PULLING: 'Завантаження служб',
+      STARTING: 'Запуск служб', VERIFYING: 'Перевірка готовності служб', STOPPING: 'Вимкнення зайвих служб' } as Record<string, string>)[deployment.phase || '']
+      || (runtime.queued ? 'Очікує системного виконавця' : '');
+  }
+
+  toggle(module: CatalogModule, nodeId: string, event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    const current = this.selected(module.module_id).filter(item => item !== nodeId);
+    this.choices.set({ ...this.choices(), [module.module_id]: checked ? [...current, nodeId] : current });
+  }
+
+  private act(request: Observable<unknown>): void {
+    this.busy.set(true);
+    this.error.set(null);
+    request.subscribe({
+      next: () => { this.busy.set(false); this.load(); },
+      error: (error: Error) => { this.busy.set(false); this.error.set(error.message); this.load(); },
+    });
+  }
+
+  run(action: string, body: Record<string, unknown>): void { this.act(this.api.lifecycle(action, body)); }
+  savePlacement(module: CatalogModule): void { this.act(this.api.placement(module.module_id, this.selected(module.module_id))); }
+  approve(module: CatalogModule): void { this.act(this.api.approve(module.module_id, module.permissions)); }
+  prepareCore(role: string): void {
+    const active = this.core()?.active_roles || [];
+    this.act(this.runtime.prepare([...new Set([...active, role])]));
+  }
+  uninstall(module: CatalogModule): void {
+    if (window.confirm(`${module.label}: видалити модуль? Перед видаленням буде створено й перевірено архів даних.`)) {
+      this.run('uninstall', { module_id: module.module_id, confirm: true });
+    }
+  }
+}

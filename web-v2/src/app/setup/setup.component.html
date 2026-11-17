@@ -21,28 +21,22 @@
       </div>
     } @else {
       <section [class.hidden]="step() !== 0">
-        <h2 class="wizard-title">{{ 'Роль вузла' | t }}</h2>
-        <p class="text-sm text-slate-600">{{ 'Оберіть, що цей сервер виконуватиме. Можливості будуть визначені автоматично після встановлення.' | t }}</p>
-        <label class="wizard-label">Node Role
+        <h2 class="wizard-title">{{ 'Встановлення: CORE або вузол' | t }}</h2>
+        <p class="text-sm text-slate-600">{{ 'Перша центральна машина встановлює Vertep із CORE і вибраними модулями. Новий сервер або VM приєднується як вузол наявної системи; модулі для нього обираються в панелі. Другий CORE або LAB автоматично не встановлюються.' | t }}</p>
+        <label class="wizard-label">{{ 'Що встановити на цьому сервері' | t }}
           <select id="nodeRole" class="wizard-input" [ngModel]="role()" (ngModelChange)="role.set($event)" [disabled]="roleLocked()">
-            @for (entry of roles(); track entry.id) { <option [value]="entry.id">{{ (entry.label) | t }}</option> }
+            @for (entry of roles(); track entry.id) { <option [value]="entry.id">{{ installOption(entry.id) | t }}</option> }
           </select>
         </label>
-        @if (selectedRole(); as current) {
-          <div id="roleDetails" class="wizard-box">{{ (current.label) | t }}
-
-Modules: {{ current.modules.join(', ') }}
-Capabilities: {{ current.capabilities.join(', ') }}</div>
-        }
         @if (role() === 'core') {
           <fieldset class="mt-4 space-y-2" id="additionalRoles">
-            <legend class="wizard-label">{{ 'Додаткові ролі на цьому сервері' | t }}</legend>
+            <legend class="wizard-label">{{ 'Модулі на центральній машині' | t }}</legend>
             @for (entry of additionalRoleOptions(); track entry.id) {
               <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" [id]="'setup-role-' + entry.id"
                   [ngModel]="additionalRoles().includes(entry.id)"
                   (ngModelChange)="toggleAdditionalRole(entry.id, $event)">
-                {{ entry.label | t }}
+                {{ moduleLabel(entry.id) | t }}
               </label>
             }
           </fieldset>

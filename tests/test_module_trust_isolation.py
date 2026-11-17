@@ -280,6 +280,9 @@ def gateway(tmp_path, monkeypatch):
     class Runtime:
         modules = registry
     monkeypatch.setattr("core.workflow.runtime.workflow_runtime", lambda: Runtime)
+    from core.state import store
+    for node in ("app-node", "lab-vm"):  # nodes CORE knows from their Worker reports
+        monkeypatch.setitem(store.workers, node, {"node_name": node, "role": "core", "status": "READY"})
     ui = {"entry": "index.html", "navigation": [{"id": "notes", "label": "Нотатки"}],
           "files": {"index.html": hashlib.sha256(UI_HTML).hexdigest()}}
     notes = {**app_manifest("notes", api={"namespace": "notes", "version": "1.3", "routes": ["/items", "/items/{id}"]},

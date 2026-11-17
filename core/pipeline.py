@@ -790,94 +790,28 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     job_dir = store.root / job.job_id
     final_dir = job_dir / "final"
     video_engine = providers.video_engine()
-    if effective_engine_id(video_engine) != "native":
-        # Issue #122 P5: an external engine is executed by a Worker, never inside
-        # CORE. CORE only decides the attempt (immutable engine/config snapshot,
-        # durable submit key) and dispatches it; there is no CORE-side fallback to
-        # Native, so a missing or incapable executor is a refusal, not a
-        # substitution (§9.12).
-        from .api.job_helpers import (_assembly_submit_key, _assembly_input_digest,
-                                      _assembly_task_for, _engine_snapshot,
-                                      _enqueue_assembly_task)
-        digest = _assembly_input_digest(
-            job, materials=plan["materials"], audio=plan["audio"],
-            music=plan["music"], subtitles=subtitles, watermark=plan["watermark"],
-            script=plan["script"],
-        )
-        submit_key = _assembly_submit_key(job, version=next_version, input_digest=digest)
-        snapshot = _engine_snapshot(job, version=next_version, submit_key=submit_key,
-                                 engine=video_engine)
-        task = _assembly_task_for(job, submit_key=submit_key, snapshot=snapshot,
-                                  job_store=store, **plan)
-        _enqueue_assembly_task(job, task)
-        store.event(job, f"ASSEMBLY v{next_version} DISPATCHED TO WORKER "
-                         f"(engine={snapshot['engine_id']})")
-        return job
-    # i.0.0.1.4 (#104): native FFmpeg assembly in CORE is control-plane
-    # (AGENTS.md §20), but the same CORE path must never execute another
-    # VideoEngine. The guard below fails closed before any render for a
-    # foreign or unidentifiable engine.
-    if not _is_native_engine(video_engine):
-        identity = getattr(video_engine, "engine_id", None) or \
-            getattr(video_engine, "provider", None) or "unknown"
-        store.event(job, f"ASSEMBLY REFUSED: engine '{identity}' is not native; "
-                         f"CORE renders only the native engine (i.0.0.1.4)")
-        transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED,
-                         f"engine '{identity}' is not native")
-        store.update(job, JobStatus.FAILED,
-                     f"ASSEMBLY REFUSED: ENGINE '{identity}' IS NOT NATIVE")
-        return job
-    # Use VideoEngine for rendering (per AGENTS.md §4.1/§28, Issue #31).
-    # VideoEngine wraps AssemblyProvider for the native engine only — external
-    # engines are dispatched to a Worker above.
-    video_engine.render(
-        output,
-        images=None if job.task_type == "video" else plan["materials"],
-        clips=plan["materials"] if job.task_type == "video" else None,
-        durations=plan["durations"],
-        audio=plan["audio"],
-        music=plan["music"],
-        subtitles=subtitles,
-        aspect_ratio=plan["aspect_ratio"],
-        preset=plan["preset"],
-        watermark=plan["watermark"],
-        task_type=plan["task_type"],
+    # i.0.0.4.98 (#498): every final assembly, including the native FFmpeg engine,
+    # is executed by a Worker. CORE only decides the attempt (immutable
+    # engine/config/input snapshot, durable submit key), dispatches it and later
+    # verifies/imports the result. There is no CORE-side render and no fallback
+    # to one: a missing or incapable Worker leaves the task queued (refusal, not
+    # substitution).
+    from .api.job_helpers import (_assembly_submit_key, _assembly_input_digest,
+                                  _assembly_task_for, _engine_snapshot,
+                                  _enqueue_assembly_task)
+    digest = _assembly_input_digest(
+        job, materials=plan["materials"], audio=plan["audio"],
+        music=plan["music"], subtitles=subtitles, watermark=plan["watermark"],
         script=plan["script"],
     )
-    if subtitles:
-        register_artifact(job, store.root, subtitles, "subtitles", workflow="srt")
-    # Issue #82: the render can take minutes, so a pause/cancel accepted while it
-    # runs must win over the result. Re-reading the persisted state under the lock
-    # closes the window between the entry check and the version registration —
-    # otherwise a cancelled Job would be resurrected as VIDEO_PENDING_APPROVAL.
-    with store.lock:
-        superseded = job.status in {JobStatus.PAUSED, JobStatus.CANCELLED}
-    if superseded:
-        try:
-            output.unlink(missing_ok=True)
-        except OSError:
-            pass
-        transition_stage(job, StageName.ASSEMBLY, StageStatus.CANCELLED,
-                         "render superseded by pause/cancel")
-        store.event(job, f"ASSEMBLY RESULT DISCARDED (v{next_version}): "
-                         f"job is {job.status.value} — no version registered")
-        release_video_regeneration(store, job)
-        return job
-    register_artifact(job, store.root, output, "video", workflow="ffmpeg")
-    job.video_engine_snapshot = {
-        "engine_id": "native",
-        "bridge_schema_version": None,
-        "video_version": next_version,
-        "config_revision": None,
-    }
-    _finish_video_version(job, store, output, next_version)
-    store.update(job, JobStatus.VIDEO_READY, f"VIDEO READY (v{next_version})")
-    transition_stage(job, StageName.ASSEMBLY, StageStatus.READY)
-    store.update(job, JobStatus.VIDEO_PENDING_APPROVAL, f"VIDEO PENDING APPROVAL (v{next_version})")
-    if job.source.startswith("telegram:"):
-        _send_video_approval_to_telegram(job)
-    else:
-        _progress(job, "VIDEO_PENDING_APPROVAL")
+    submit_key = _assembly_submit_key(job, version=next_version, input_digest=digest)
+    snapshot = _engine_snapshot(job, version=next_version, submit_key=submit_key,
+                             engine=video_engine)
+    task = _assembly_task_for(job, submit_key=submit_key, snapshot=snapshot,
+                              job_store=store, **plan)
+    _enqueue_assembly_task(job, task)
+    store.event(job, f"ASSEMBLY v{next_version} DISPATCHED TO WORKER "
+                     f"(engine={snapshot['engine_id']})")
     return job
 
 

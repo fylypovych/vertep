@@ -224,6 +224,7 @@ def _instance(admin):
 def test_demo_module_full_lifecycle(stand):
     admin, packages, node = stand["admin"], stand["packages"], stand["node"]
     # Install is a real signed package with an image pinned by its pushed digest.
+    _until(lambda: NODE in {n["node_id"] for n in admin.get("/api/nodes/module-catalog").json()["nodes"]}, 60, "node report")
     assert _action(admin, "install", package=packages["1.0.0"])["state"] == "INSTALLED"
     assert admin.put("/api/nodes/module-registry/placement/demo-notes", json={"node_ids": [NODE]}).status_code == 200
     assert admin.put("/api/nodes/module-registry/approval/demo-notes", json={"permissions": ["demo-notes.data"]}).status_code == 200

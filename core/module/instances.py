@@ -232,6 +232,15 @@ class ModuleInstanceRegistry:
                     self._installed[module_id] = manifest
             self._evaluate(self._instances)
 
+    def installed_manifest(self, module_id: str) -> ModuleManifest | None:
+        with self._lock:
+            if module_id in self._installed:
+                return self._installed[module_id]
+            for instance in self._instances.values():
+                if instance.module_id == module_id:
+                    return instance.manifest
+            return None
+
     def declared_permissions(self, module_id: str) -> set[str]:
         with self._lock:
             declared = {p for i in self._instances.values() if i.module_id == module_id for p in i.manifest.permissions}

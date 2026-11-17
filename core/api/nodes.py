@@ -111,7 +111,12 @@ async def module_placement(module_id: str, request: Request):
     # Non-GET /api/nodes/* is administrator-only in the auth middleware.
     payload = await request.json()
     try:
-        result = _module_registry().set_placement(module_id, payload.get("node_ids"))
+        from core.module.catalog import check_placement
+        node_ids = payload.get("node_ids")
+        if isinstance(node_ids, list) and all(isinstance(node, str) for node in node_ids):
+            # A node that cannot run the module is refused with the reason (#496).
+            check_placement(_module_registry(), module_id, node_ids)
+        result = _module_registry().set_placement(module_id, node_ids)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     from core.module.gateway import audit
@@ -146,6 +151,17 @@ async def module_secret_values(module_id: str, request: Request):
         raise HTTPException(422, str(error)) from error
     audit("module.secrets.store", "allowed", module=module_id, names=names)
     return {"module_id": module_id, "stored": names}
+
+
+@router.get("/api/nodes/module-catalog")
+def module_catalog():
+    """Modules x nodes with state, readiness and honest compatibility reasons (#496)."""
+    from core.workflow.runtime import workflow_runtime
+    from core.module.catalog import catalog
+    runtime = workflow_runtime()
+    if runtime is None:
+        raise HTTPException(409, "Workflow templates are not configured")
+    return catalog(runtime)
 
 
 @router.get("/api/nodes/module-registry/audit")
