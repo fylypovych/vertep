@@ -48,6 +48,25 @@ class ModuleRegistry:
 
         if cyclic(name):
             return False
+        if not manifest.core_compatible(self.system_versions.get("core_runtime")):
+            return False
+        # Distinct modules may not claim one API namespace or provided interface.
+        claims = {(p["type"], p["name"]) for p in manifest.provides}
+        for other in self._modules.values():
+            if other.name == name:
+                continue
+            if manifest.api and other.api and manifest.api["namespace"] == other.api["namespace"]:
+                return False
+            if claims & {(p["type"], p["name"]) for p in other.provides}:
+                return False
+        for requirement in manifest.requires:
+            provided = [p for other in self._modules.values() if other.name != name for p in other.provides
+                        if p["type"] == requirement["type"] and p["name"] == requirement["name"]]
+            low = tuple(int(x) for x in requirement["min_version"].split("."))
+            high = tuple(int(x) for x in requirement["max_version"].split(".")) if "max_version" in requirement else None
+            if not any(low <= tuple(int(x) for x in p["version"].split(".")) and (high is None or tuple(int(x) for x in p["version"].split(".")) <= high)
+                       for p in provided):
+                return False
 
         # Check dependencies
         for dep in manifest.dependencies:
@@ -98,6 +117,9 @@ class ModuleRegistry:
             return False
         for other in self._modules.values():
             if other.name != name and any((dep.get("name") if isinstance(dep, dict) else dep) == name for dep in other.dependencies):
+                return False
+            provided = {(p["type"], p["name"]) for p in self._modules[name].provides}
+            if other.name != name and any((r["type"], r["name"]) in provided for r in other.requires):
                 return False
 
         manifest = self._modules.pop(name)

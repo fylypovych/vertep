@@ -38,6 +38,7 @@ export const routes: Routes = [
       { path: 'health', loadComponent: () => import('./health/health.component').then(m => m.HealthComponent), title: 'Стан системи', data: { metadata: { title: 'Стан системи', icon: 'health-icon' } } },
       { path: 'real-tests', loadComponent: () => import('./real-tests/real-tests.component').then(m => m.RealTestsComponent), title: 'Реальні тести', data: { metadata: { title: 'Реальні тести', icon: 'health-icon', adminOnly: true } }, canActivate: [AdminGuard] },
       { path: 'settings', loadComponent: () => import('./settings/settings.component').then(m => m.SettingsComponent), title: 'Налаштування', data: { metadata: { title: 'Налаштування', icon: 'settings-icon', adminOnly: true } }, canActivate: [AdminGuard] },
+      { path: 'modules/:moduleId', loadComponent: () => import('./modules/module-extension.component').then(m => m.ModuleExtensionComponent), title: 'Модуль', data: { metadata: { title: 'Модуль' } } },
       { path: 'profile', loadComponent: () => import('./profile/profile.component').then(m => m.ProfileComponent), title: 'Профіль', data: { metadata: { title: 'Профіль', icon: 'profile-icon' } } },
     ],
   },

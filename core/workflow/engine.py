@@ -175,10 +175,16 @@ class WorkflowEngine:
                         task["error"] = "Required module is not discovered"
                         continue
                     payload["module_name"] = definition["module"]
-                    payload["module_version"] = manifest.version
-                    payload["resource_requirements"] = manifest.resource_requirements
-                    capabilities.update(manifest.capabilities)
-                    vram = max(vram, manifest.resource_requirements.get("min_vram_mb", 0))
+                    targets = self.module_registry.dispatch_targets(definition["module"]) if hasattr(self.module_registry, "dispatch_targets") else None
+                    if targets is not None:
+                        # node_id -> version/requirements of READY placed instances;
+                        # the Dispatcher fixes module_version for the chosen node.
+                        payload["module_targets"] = targets
+                    else:
+                        payload["module_version"] = manifest.version
+                        payload["resource_requirements"] = manifest.resource_requirements
+                        capabilities.update(manifest.capabilities)
+                        vram = max(vram, manifest.resource_requirements.get("min_vram_mb", 0))
                 payload.update(workflow_job_id=job_id, params=deepcopy(job["params"]), dependencies={dep: deepcopy(job["tasks"][dep]["output"]) for dep in task["dependencies"]})
                 payload["inference_operation_id"] = f"{job_id}:{task_id}:r{task.get('revision', 1)}"
                 request = TaskRequest(task_id=dispatch_id, task_type=definition.get("type", ""),

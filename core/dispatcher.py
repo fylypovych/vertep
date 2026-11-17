@@ -377,7 +377,9 @@ class Dispatcher:
         existing = self._task_leases.get(task.task_id)
         if existing and existing["expires_at"] > datetime.now(timezone.utc):
             return TaskResponse(accepted=False, declined_reason="Task already has an owner")
-        required_cap = task.capabilities_required or {task.task_type}
+        targeted = isinstance(task.payload, dict) and task.payload.get("module_targets") is not None
+        # A module task is matched by its READY placed instances, not by task type.
+        required_cap = task.capabilities_required or (set() if targeted else {task.task_type})
         candidates = self._find_candidates(required_cap, task)
         if not candidates:
             return TaskResponse(
@@ -390,6 +392,9 @@ class Dispatcher:
                 accepted=False,
                 declined_reason="No suitable worker after filtering",
             )
+        targets = task.payload.get("module_targets") if isinstance(task.payload, dict) else None
+        if targets is not None:
+            task.payload["module_version"] = targets[candidate["node_id"]]["version"]
         lease_duration = __import__("datetime").timedelta(
             minutes=self.config.get("lease_duration_minutes", 30)
         )
@@ -469,9 +474,19 @@ class Dispatcher:
             if resources.get("busy"):
                 continue
             payload = getattr(task, "payload", {})
-            if payload.get("module_name") and resources.get("module_versions", {}).get(payload["module_name"]) != payload.get("module_version"):
+            targets = payload.get("module_targets")
+            if targets is not None:
+                # Only READY, placed, compatible instances on this node qualify.
+                target = targets.get(node_id)
+                if target is None:
+                    continue
+                requirements = target.get("resource_requirements", {})
+                if (resources.get("vram_mb") or 0) < requirements.get("min_vram_mb", 0):
+                    continue
+            elif payload.get("module_name") and resources.get("module_versions", {}).get(payload["module_name"]) != payload.get("module_version"):
                 continue
-            requirements = payload.get("resource_requirements", {})
+            else:
+                requirements = payload.get("resource_requirements", {})
             if (resources.get("cpu_cores") or 0) < requirements.get("min_cpu_cores", 0) or (resources.get("ram_mb") or 0) < requirements.get("min_ram_mb", 0):
                 continue
             if task.vram_mb is not None:

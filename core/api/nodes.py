@@ -92,6 +92,165 @@ def nodes():
             for node in registered_nodes()]
 
 
+def _module_registry():
+    from core.workflow.runtime import workflow_runtime
+    runtime = workflow_runtime()
+    if runtime is None:
+        raise HTTPException(409, "Workflow templates are not configured")
+    return runtime.modules
+
+
+@router.get("/api/nodes/module-registry")
+def module_registry():
+    """Nodes, module definitions, node/module instances, placement and conflicts."""
+    return _module_registry().snapshot()
+
+
+@router.put("/api/nodes/module-registry/placement/{module_id}")
+async def module_placement(module_id: str, request: Request):
+    # Non-GET /api/nodes/* is administrator-only in the auth middleware.
+    payload = await request.json()
+    try:
+        result = _module_registry().set_placement(module_id, payload.get("node_ids"))
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    from core.module.gateway import audit
+    audit("module.placement", "allowed", module=module_id, nodes=result["node_ids"])
+    return result
+
+
+@router.put("/api/nodes/module-registry/approval/{module_id}")
+async def module_permission_approval(module_id: str, request: Request):
+    """Administrator approves the exact declared permission set (new or expanded)."""
+    from core.module.gateway import audit
+    payload = await request.json()
+    try:
+        result = _module_registry().approve_permissions(module_id, payload.get("permissions"))
+    except ValueError as error:
+        audit("module.approval", "denied", module=module_id, reason=str(error))
+        raise HTTPException(422, str(error)) from error
+    audit("module.approval", "allowed", module=module_id, permissions=result["permissions"],
+          actor=(getattr(request.state, "vertep_identity", None) or [None])[0])
+    return result
+
+
+@router.put("/api/nodes/module-registry/secrets/{module_id}")
+async def module_secret_values(module_id: str, request: Request):
+    """Store values for a module's declared secret references in the platform store."""
+    from core.module.gateway import audit, store_module_secrets
+    payload = await request.json()
+    try:
+        names = store_module_secrets(_module_registry(), module_id, payload.get("secrets"))
+    except ValueError as error:
+        audit("module.secrets.store", "denied", module=module_id)
+        raise HTTPException(422, str(error)) from error
+    audit("module.secrets.store", "allowed", module=module_id, names=names)
+    return {"module_id": module_id, "stored": names}
+
+
+@router.get("/api/nodes/module-registry/audit")
+def module_audit(request: Request):
+    from core.module.gateway import read_audit
+    _require_admin(request)
+    return {"events": read_audit()}
+
+
+def _lifecycle():
+    from core.workflow.runtime import workflow_runtime
+    runtime = workflow_runtime()
+    if runtime is None:
+        raise HTTPException(409, "Workflow templates are not configured")
+    return runtime.lifecycle
+
+
+def _require_admin(request: Request) -> str:
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        raise HTTPException(403, "Administrator role required")
+    return identity[0]
+
+
+@router.get("/api/nodes/module-registry/lifecycle")
+def module_lifecycle_records():
+    return {"modules": [{key: record.get(key) for key in ("module_id", "version", "state")}
+                        | {"previous_version": (record.get("previous") or {}).get("version")}
+                        for record in _lifecycle().records().values()]}
+
+
+@router.post("/api/nodes/module-registry/lifecycle/{action}")
+async def module_lifecycle_action(action: str, request: Request):
+    """install | activate | deactivate | update | rollback | uninstall (administrator only)."""
+    from core.module.gateway import audit
+    from core.module.lifecycle import LifecycleError
+    actor = _require_admin(request)
+    payload = await request.json()
+    lifecycle = _lifecycle()
+    module_id = str(payload.get("module_id", ""))
+    operations = {
+        "install": lambda: lifecycle.install(payload.get("package") or {}),
+        "activate": lambda: lifecycle.activate(module_id),
+        "deactivate": lambda: lifecycle.deactivate(module_id),
+        "update": lambda: lifecycle.update(payload.get("package") or {}, confirmed=payload.get("confirm") is True),
+        "rollback": lambda: lifecycle.rollback(module_id),
+        "uninstall": lambda: lifecycle.uninstall(module_id, confirmed=payload.get("confirm") is True),
+    }
+    if action not in operations:
+        raise HTTPException(404, "Unknown module lifecycle action")
+    try:
+        result = operations[action]()
+    except (LifecycleError, ValueError, KeyError) as error:
+        audit("module.lifecycle", "failed", operation=action, module=module_id or None, actor=actor, reason=str(error))
+        raise HTTPException(409, f"Module lifecycle action failed: {error}") from error
+    audit("module.lifecycle", "allowed", operation=action, module=result.get("module_id"), actor=actor, state=result.get("state"))
+    return result
+
+
+@router.get("/api/nodes/module-registry/archives")
+def module_archives(request: Request):
+    _require_admin(request)
+    return {"archives": _lifecycle().archives()}
+
+
+@router.get("/api/nodes/module-registry/archives/{name}")
+def module_archive_download(name: str, request: Request):
+    from fastapi.responses import FileResponse
+    from core.module.gateway import audit
+    actor = _require_admin(request)
+    path = _lifecycle().root / "archives" / name
+    if "/" in name or not name.endswith(".tar") or not path.is_file():
+        raise HTTPException(404, "Module archive not found")
+    audit("module.archive.download", "allowed", archive=name, actor=actor)
+    return FileResponse(path, media_type="application/x-tar", filename=name)
+
+
+@router.post("/api/nodes/module-registry/archives/{name}/restore")
+def module_archive_restore(name: str, request: Request):
+    from core.module.gateway import audit
+    from core.module.lifecycle import LifecycleError
+    actor = _require_admin(request)
+    path = _lifecycle().root / "archives" / name
+    if "/" in name or not name.endswith(".tar") or not path.is_file():
+        raise HTTPException(404, "Module archive not found")
+    try:
+        result = _lifecycle().restore_archive(path)
+    except (LifecycleError, ValueError) as error:
+        audit("module.archive.restore", "failed", archive=name, actor=actor, reason=str(error))
+        raise HTTPException(409, f"Module lifecycle action failed: {error}") from error
+    audit("module.archive.restore", "allowed", archive=name, actor=actor, module=result["module_id"])
+    return result
+
+
+@router.put("/api/nodes/module-registry/profile/{node_id}")
+async def module_node_profile(node_id: str, request: Request):
+    payload = await request.json()
+    if node_id not in {node["node_id"] for node in registered_nodes()}:
+        raise HTTPException(404, "Node not found")
+    try:
+        return _module_registry().set_node_profile(node_id, str(payload.get("environment", "")),
+                                                   str(payload.get("isolation", "")))
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
 
 @router.get("/api/nodes/{node_id}")
 def node_detail(node_id: str):

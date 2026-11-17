@@ -1,10 +1,13 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, computed, inject } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { SidebarService } from '../core/services/sidebar.service';
 import { SystemApiService } from '../core/api/system.api';
 import { PolicyService } from '../core/services/policy.service';
+import { ModulesApiService } from '../core/api/modules.api';
+
+const MODULE_ICON = `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>`;
 
 interface NavItem {
   id: string;
@@ -195,9 +198,14 @@ export class SidebarComponent implements OnInit {
     },
   ];
 
+  /** READY signed module UI extensions; an unavailable list adds nothing. */
+  moduleItems = signal<NavItem[]>([]);
+
   visibleGroups = computed(() => {
     const isAdmin = this.policy.userRole() === 'admin';
-    return this.navGroups
+    const modules = this.moduleItems();
+    const groups = modules.length ? [...this.navGroups, { label: 'Модулі', items: modules }] : this.navGroups;
+    return groups
       .map(group => ({
         label: group.label,
         items: group.items.filter(item => !item.adminOnly || isAdmin),
@@ -215,12 +223,19 @@ export class SidebarComponent implements OnInit {
 
   runtimeVersion: string | null = null;
 
-  constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService) {}
+  constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService,
+              private modulesApi: ModulesApiService) {}
 
   ngOnInit(): void {
     this.systemApi.status().subscribe({
       next: (s) => { this.runtimeVersion = s.version || null; },
       error: () => { this.runtimeVersion = null; },
     });
+    this.modulesApi.uiExtensions().subscribe(list => this.moduleItems.set(list.map(extension => ({
+      id: 'module-' + extension.module_id,
+      path: '/modules/' + extension.module_id,
+      label: extension.navigation?.[0]?.label || extension.module_id,
+      icon: MODULE_ICON,
+    }))));
   }
 }

@@ -152,5 +152,19 @@
  "Непідтримувана роль вузла": "unsupported_node_role",
  "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.": "job_creation_disabled",
  "Попередня зміна ролей ще не завершена": "role_change_in_progress",
- "Триває оновлення системи; зміна ролей недоступна": "role_change_blocked_by_update"
+ "Триває оновлення системи; зміна ролей недоступна": "role_change_blocked_by_update",
+ "Administrator role required": "administrator_role_required",
+ "Module token is not valid": "module_token_is_not_valid",
+ "Module is not placed on this node or not approved": "module_not_placed_or_not_approved",
+ "Module UI is not available": "module_ui_is_not_available",
+ "Module UI is unavailable": "module_ui_is_unavailable",
+ "Module UI does not match its signed digest": "module_ui_digest_mismatch",
+ "Module API is not available": "module_api_is_not_available",
+ "Module API version is not available": "module_api_version_is_not_available",
+ "Module API route is not declared": "module_api_route_is_not_declared",
+ "Module may call only APIs it declares": "module_may_call_only_declared_apis",
+ "Module API is unavailable": "module_api_is_unavailable",
+ "Module database is not provisioned": "module_database_is_not_provisioned",
+ "Unknown module lifecycle action": "unknown_module_lifecycle_action",
+ "Module archive not found": "module_archive_not_found"
 }

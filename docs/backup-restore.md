@@ -6,6 +6,8 @@
 
 Повний склад: PostgreSQL (обов'язковий dump — пропуск dump не може завершитися успіхом), Redis, jobs/artifacts, персонажі, бренди, workflow, конфігурація, encrypted secrets, потрібний runtime state. Inventory архіву підтверджує фактичний склад включно з БД. Порожні каталоги відновлюються як порожні.
 
+Архів, який створюється перед видаленням модуля (незашифрований, лише для адміністратора), — окремий механізм і system backup не замінює ([Module Contract §16](architecture/contracts/module_contract.md)).
+
 ## Операції
 
 - Створення, список (ID, час, тип, розмір, checksum/integrity), прогрес — через Web UI (**System → Zero-Shell lifecycle**) або Telegram-меню `Система` (див. `telegram.md`).

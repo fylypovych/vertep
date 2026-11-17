@@ -28,8 +28,8 @@ if args.command == "module":
     from core.module.packages import ModulePackages
     project_root = Path(__file__).resolve().parents[1]
     trust_root = Path(os.environ.get("VERTEP_MODULE_TRUST_ROOT", str(project_root / "config/module-trust")))
-    keys = {path.stem: path.read_bytes() for path in trust_root.glob("*.pem")}
-    packages = ModulePackages(Path(os.environ.get("VERTEP_MODULE_ROOT", str(project_root / "data/modules"))), keys)
+    from core.module.trust import TrustStore
+    packages = ModulePackages(Path(os.environ.get("VERTEP_MODULE_ROOT", str(project_root / "data/modules"))), TrustStore.from_root(trust_root))
     if args.operation != "list" and not args.target:
         parser.error("module operation requires a target")
     if args.operation == "install":

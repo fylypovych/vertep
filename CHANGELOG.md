@@ -1,3 +1,11 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.89
+- Модулі (#492): розділено вузол, визначення модуля та екземпляр модуля на вузлі (`core/module/instances.py`); кілька вузлів із тим самим модулем більше не затирають один одного.
+- Модулі (#492): manifest схеми 2.x з negotiation і читанням legacy 1.x; адміністраторський placement, LAB-placement лише на nonproduction VM, dispatch лише на READY розміщені екземпляри з фіксацією версії вибраного вузла.
+- Модулі (#493): довіра видавцю/provenance (`publishers.json`), fork без успадкування довіри, підписані digest UI; погодження permissions адміністратором і повторне погодження при розширенні.
+- Модулі (#493): application-код лише в обмеженому контейнері (`worker/application_container.py`), API gateway `/api/modules/{namespace}/v{major}/...`, scoped secrets модулів, ізольовані UI extensions у sandbox iframe Web UI, повний audit trail модулів.
+- Модулі (#494): транзакційний lifecycle install/activate/deactivate/update/rollback/uninstall з журналом і відновленням після перезапуску; власна схема й роль PostgreSQL з migrations; перевірений незашифрований архів перед видаленням (лише адміністратор).
+- Тести: `tests/test_module_contract.py`, `tests/test_module_trust_isolation.py`, `tests/test_module_ui_browser_e2e.py`, `tests/test_module_lifecycle.py` (реальні PostgreSQL, Docker, Chromium); документація — `docs/architecture/contracts/module_contract.md`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.88
 - README: актуалізовано встановлення Ubuntu 24.04/26.04, дві Telegram-інтеграції, поточні можливості LAB та команди `пуш` / `тест` / `реліз`.
 - README: погоджену модель VERTEP → ВУЗОЛ → МОДУЛЬ, вимоги #487/#491 та перенесення FFmpeg на Worker відокремлено від уже реалізованих можливостей; додано посилання на агрегатор і GPU/NOGPU приймання.

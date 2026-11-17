@@ -72,7 +72,7 @@ def test_signed_packages_cli_and_tamper(tmp_path):
     with pytest.raises(Exception):
         manager.install(tampered)
     assert manager.list() == []
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="not trusted"):
         ModulePackages(tmp_path / "untrusted", {}).install(package)
 
 

@@ -230,7 +230,13 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             ("POST", "/api/watchdog/report")}
             or (request.method == "POST"
                 and re.fullmatch(r"/api/nodes/[a-z0-9-]+/self-test", request.url.path)))
-        if (worker_input or worker_exact or request.url.path.startswith(machine)
+        # Module-token calls and the Worker token issue validate themselves in
+        # core/module/gateway.py. Signed module UI files are code, like the
+        # public Web UI bundle, and carry no data (digest-checked, audited).
+        module_machine = ((request.url.path.startswith("/api/modules/") and request.headers.get("x-vertep-module-token"))
+                          or (request.method == "POST" and request.url.path == "/api/modules/token")
+                          or (request.method == "GET" and request.url.path.startswith("/api/modules/ui/")))
+        if (module_machine or worker_input or worker_exact or request.url.path.startswith(machine)
                 or re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", request.url.path)):
             # Machine routes validate and bind the token to node_name themselves.
             # Keeping that check in one place also supports hashed per-worker tokens.
@@ -318,6 +324,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             csrf = request.cookies.get("vertep_csrf", "")
             if not csrf or not secrets.compare_digest(csrf, request.headers.get("x-csrf-token", "")):
                 return Response("Invalid CSRF token", 403)
+        request.state.vertep_identity = (actor, role)
         response = await call_next(request)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             logger.info("Administrative action", extra={"action": f"{request.method} {request.url.path}",
@@ -326,6 +333,12 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _secure(response):
+        if response.headers.get("content-security-policy", "").startswith("sandbox "):
+            # Module UI extension: keep its sandbox CSP and same-origin framing only.
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"

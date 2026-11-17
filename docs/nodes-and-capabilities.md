@@ -20,6 +20,8 @@
 
 Приклади каталогу: `image_generation`, `image_upscale`, `controlnet`, `inpainting`, `video_generation`, `text_generation`, `speech_synthesis`, `publishing`. Назви task (`tts`, `publish`) та назви capabilities не тотожні; актуальні allowlists задає `config/node_roles.json`. Worker заявляє їх при реєстрації і підтверджує self-test; диспетчер враховує VRAM, readiness моделей і свіжість self-test. Непідтверджені capabilities в dispatch не беруть участі.
 
+Вузол, визначення модуля та встановлений на вузлі екземпляр модуля — окремі ідентичності; readiness екземпляра, placement адміністратора, LAB placement і schema manifest описані в [Module Contract](architecture/contracts/module_contract.md).
+
 ## Реєстрація Worker
 
 1. Bootstrap запускає базові служби; роль вибирається у Wizard. Під час enrollment Worker готує CSR і ключі вузла.

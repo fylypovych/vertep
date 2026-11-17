@@ -29,6 +29,7 @@ from .api.auth import router as auth_router
 from .api.events import router as events_router
 from .api.telegram import router as telegram_router
 from .api.status import router as status_router
+from .module.gateway import router as module_gateway_router
 
 app = FastAPI(title="Vertep CORE", version=application_version(), lifespan=lifespan)
 app.add_middleware(AdminAuthMiddleware)
@@ -54,6 +55,7 @@ app.include_router(auth_router)
 app.include_router(events_router)
 app.include_router(telegram_router)
 app.include_router(status_router)
+app.include_router(module_gateway_router)
 telegram_pump.register_restart(handlers._restart_telegram_polling)
 telegram_pump.register_service(lambda: handlers.telegram_polling_service)
 install_error_codes(app)

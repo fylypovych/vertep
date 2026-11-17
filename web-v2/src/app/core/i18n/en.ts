@@ -1209,7 +1209,10 @@ export const EN: Record<string, string> = {
   "термін дії минув": "expired",
   "термін дії спливає": "expiring",
   "Окремий бот лише для публікації в канали. Канал задається для бренду: Бренди → Канали; бот має бути адміністратором каналу з правом публікації.": "A separate bot used only for publishing to channels. The channel is set per brand: Brands → Channels; the bot must be a channel administrator allowed to post.",
-  "Бот для запитів користувачів, керування Vertep і сповіщень. У канали він не публікує: для цього окремий бот у вкладці «Публікація».": "The bot for user requests, Vertep control and notifications. It does not publish to channels: a separate bot on the Publishing tab does that."
+  "Бот для запитів користувачів, керування Vertep і сповіщень. У канали він не публікує: для цього окремий бот у вкладці «Публікація».": "The bot for user requests, Vertep control and notifications. It does not publish to channels: a separate bot on the Publishing tab does that.",
+  "Завантаження розширення модуля…": "Loading the module extension…",
+  "Розширення модуля недоступне. Інші розділи панелі працюють.": "The module extension is unavailable. Other panel sections keep working.",
+  "Модуль": "Module"
 };
 /** Texts built at run time: the values stay as they are. */
 export const EN_PATTERNS: [RegExp, string][] = [

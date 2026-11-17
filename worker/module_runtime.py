@@ -13,13 +13,16 @@ def packages():
     if not os.getenv("VERTEP_MODULE_ROOT") and not Path(root).exists():
         return None
     trust = Path(os.getenv("VERTEP_MODULE_TRUST_ROOT", str(project / "config/module-trust")))
-    return ModulePackages(Path(root), {path.stem: path.read_bytes() for path in trust.glob("*.pem")})
+    from core.module.trust import TrustStore
+    return ModulePackages(Path(root), TrustStore.from_root(trust))
 
 
 def load_module(manager, name):
     manager.info(name)  # Must still be enabled with compatible dependencies.
     package = manager._records[name]["package"]
-    manager.verify(package)
+    if manager.verify(package).kind == "application":
+        # Application code is never imported into a Vertep process.
+        raise ValueError("Application modules run only in their own container")
     source = base64.b64decode(package["files"]["module.py"], validate=True)
     namespace = {"__name__": f"vertep_module_{name}"}
     exec(compile(source, f"signed-module:{name}", "exec"), namespace)
@@ -36,6 +39,11 @@ def inventory():
     if manager is None:
         return result
     for manifest in manager.registry.list_modules():
+        if manifest.kind == "application":
+            from worker.application_container import running
+            if running(manifest.module_id):
+                result.append({**manifest.to_dict(), "ready": True, "resources": {}})
+            continue
         try:
             module = load_module(manager, manifest.name)
             health = module["health"]()

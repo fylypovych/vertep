@@ -61,6 +61,23 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/health/control"],  # Management remains reachable without a ready GPU.
         ["POST", "/api/setup/selection"],  # #445 stages the wizard's selected services.
         ["GET", "/api/system/models/catalog"],  # #454 Ollama tags available for download.
+        ["GET", "/api/nodes/module-registry"],  # #492 node/module/instance registry.
+        ["PUT", "/api/nodes/module-registry/placement/{module_id}"],
+        ["PUT", "/api/nodes/module-registry/profile/{node_id}"],
+        ["PUT", "/api/nodes/module-registry/approval/{module_id}"],  # #493 permissions, secrets, audit, gateway.
+        ["PUT", "/api/nodes/module-registry/secrets/{module_id}"],
+        ["GET", "/api/nodes/module-registry/audit"],
+        ["POST", "/api/modules/token"],
+        ["GET", "/api/modules/self/secrets"],
+        ["GET", "/api/modules/ui-extensions"],
+        ["GET", "/api/modules/ui/{module_id}/{version}/{path:path}"],
+        *[[method, "/api/modules/{namespace}/v{major}/{path:path}"] for method in ("GET", "POST", "PUT", "PATCH", "DELETE")],
+        ["GET", "/api/modules/self/database"],  # #494 lifecycle, data and archives.
+        ["GET", "/api/nodes/module-registry/lifecycle"],
+        ["POST", "/api/nodes/module-registry/lifecycle/{action}"],
+        ["GET", "/api/nodes/module-registry/archives"],
+        ["GET", "/api/nodes/module-registry/archives/{name}"],
+        ["POST", "/api/nodes/module-registry/archives/{name}/restore"],
     ]
     assert after == sorted(before + execution)
 

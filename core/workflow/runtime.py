@@ -45,7 +45,8 @@ class PollingWorkerTransport:
             active["delivered"] = True
             request, lease = active["request"], active["lease"]
             task_type = {"text_generation": "script", "image_generation": "image", "video_generation": "video", "voice_synthesis": "voice", "speech_synthesis": "voice", "video_assembly": "assembly", "publishing": "publish"}.get(request.task_type, request.task_type)
-            return {**request.payload.get("params", {}), **request.payload, "task_id": request.task_id,
+            payload = {key: value for key, value in request.payload.items() if key != "module_targets"}
+            return {**payload.get("params", {}), **payload, "task_id": request.task_id,
                     "job_id": request.payload["workflow_job_id"], "task": task_type,
                     "lease_id": lease["lease_id"], "protocol_version": "1.0.0", "architecture_workflow": True}
 
@@ -69,10 +70,13 @@ class WorkflowRuntime:
         self.root = root
         self.dispatcher = Dispatcher()
         self.transports = {}
-        from core.module.registry import ModuleRegistry
         from core.module.discovery import ModuleDiscovery
-        self.modules = ModuleRegistry({"core_runtime": (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip()})
-        self._module_reports = {}
+        from core.module.instances import ModuleInstanceRegistry, PlacementStore, default_placement_path
+        # One registry keeps node, module definition and node/module instance
+        # apart; several nodes may hold READY instances of one module.
+        self.modules = ModuleInstanceRegistry({"core_runtime": (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip()},
+                                              PlacementStore(default_placement_path()))
+        self._base_capabilities = {}
         self.discovery = ModuleDiscovery(self.modules)
         backend = os.getenv("WORKFLOW_STATE_BACKEND", "file")
         if backend == "file":
@@ -81,6 +85,8 @@ class WorkflowRuntime:
             from .database_state import DatabaseWorkflowState
             state = DatabaseWorkflowState(backend, os.environ["WORKFLOW_STATE_URL"])
         self.engine = WorkflowEngine(state, self.dispatcher, module_registry=self.modules)
+        from core.module.service import attach
+        self.lifecycle = attach(self)
 
     def definitions(self):
         definitions = {}
@@ -112,6 +118,8 @@ class WorkflowRuntime:
             worker = store.workers.get(name)
             if worker is None:
                 self.dispatcher.unregister_node(name)
+                self.modules.remove_node(name)
+                self._base_capabilities.pop(name, None)
                 continue
             try:
                 info["last_heartbeat"] = datetime.fromisoformat(worker["last_seen"].replace("Z", "+00:00"))
@@ -177,32 +185,17 @@ class WorkflowRuntime:
             lease = transport.active["lease"]
             self.dispatcher.revoke_task(lease["task_id"])
             transport.result(lease["lease_id"], None, "Worker process restarted")
-        from core.module.manifest import ModuleManifest
-        reported = {}
-        for module in worker.get("module_inventory", []):
-            manifest = ModuleManifest.from_dict(module)
-            if module.get("ready") is True:
-                reported[manifest.name] = manifest
-        reports = {**self._module_reports, name: reported}
-        from core.module.registry import ModuleRegistry
-        rebuilt = ModuleRegistry(self.modules.system_versions)
-        pending = {}
-        for report in reports.values():
-            pending.update(report)
-        versions = {}
-        while pending:
-            loaded = [key for key, manifest in pending.items() if rebuilt.register_module(manifest, force=True)]
-            if not loaded:
-                raise ValueError("Worker module dependencies are incompatible")
-            for key in loaded:
-                manifest = pending.pop(key)
-        for key, manifest in reported.items():
-            versions[key] = manifest.version
-            capabilities.update(manifest.capabilities)
-        self.modules = rebuilt
-        self._module_reports = reports
-        self.engine.module_registry = rebuilt
-        self.discovery.registry = rebuilt
+        reported = self.modules.report_node(name, worker.get("module_inventory", []))
+        self._base_capabilities[name] = set(capabilities)
+        versions = {instance.module_id: instance.manifest.version for instance in reported if instance.state == "READY"}
+        capabilities = capabilities | self.modules.node_capabilities(name)
+        # A report can change dependency readiness of instances on other nodes.
+        for other, info in self.dispatcher._node_registry.items():
+            if other != name and other in self._base_capabilities:
+                info["capabilities"] = self._base_capabilities[other] | self.modules.node_capabilities(other)
+                self.dispatcher._node_capabilities[other] = info["capabilities"]
+                info["resources"]["module_versions"] = {i.module_id: i.manifest.version for i in self.modules.instances()
+                                                        if i.node_id == other and i.state == "READY"}
         self.discovery.report_worker_capabilities(name, sorted(capabilities), worker)
         self.dispatcher.register_node(name, capabilities, {"vram_mb": worker.get("free_vram_mb") if worker.get("free_vram_mb") is not None else worker.get("vram_mb", 0),
             "cpu_cores": worker.get("cpu_cores") or 0, "ram_mb": worker.get("ram_mb") or 0,
