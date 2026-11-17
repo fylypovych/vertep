@@ -38,7 +38,7 @@ JOURNAL_FORMAT = "vertep-module-journal/1"
 INSTALLED, ACTIVE, INACTIVE, FAILED = "INSTALLED", "ACTIVE", "INACTIVE", "FAILED"
 # Execution modules shipped inside the signed Vertep release (#497): their code
 # and manifest come with the release itself, so no separate package signature.
-BUNDLED = ("text", "image", "audio", "publisher", "backup")
+BUNDLED = ("text", "image", "audio", "publisher", "backup", "characters")
 
 
 def bundled_manifest(name: str) -> dict:

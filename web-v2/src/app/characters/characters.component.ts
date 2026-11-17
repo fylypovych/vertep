@@ -4,7 +4,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import { catchError, concatMap, from, of, toArray } from 'rxjs';
-import { CharacterReference, ResourcesApiService } from '../core/api/resources.api';
+import { CharacterReference, ResourcesApiService, ModuleCharacter, MigrationResult } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { PolicyService } from '../core/services/policy.service';
@@ -20,9 +20,14 @@ import { ErrorStateComponent } from '../shared/error-state.component';
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="characters-page">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">{{ 'Персонажі' | t }}</h3>
-        <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="(createCharacterReason || 'Новий персонаж') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
-          {{ 'Новий персонаж' | t }}
-        </button>
+        <div class="flex items-center gap-2">
+          @if (policy.can('admin_module_migrate').allowed) {
+            <button (click)="runMigration()" data-testid="migrate-characters-button" class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium">Міграція</button>
+          }
+          <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="(createCharacterReason || 'Новий персонаж') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
+            {{ 'Новий персонаж' | t }}
+          </button>
+        </div>
       </div>
 
       <div class="mb-4">
@@ -39,12 +44,28 @@ import { ErrorStateComponent } from '../shared/error-state.component';
             <div class="border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow">
               <div class="flex items-center justify-between mb-2">
                 <h4 class="font-semibold text-slate-900">{{ character.name }}</h4>
-                <span class="text-xs text-slate-500">{{ character.language }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-slate-500">{{ character.language }}</span>
+                  @if (character.owner_brand_id) {
+                    <span class="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded">{{ character.owner_brand_id }}</span>
+                  }
+                  @if (character.active !== undefined) {
+                    <span class="px-2 py-0.5 text-xs rounded" [class]="character.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'">
+                      {{ character.active ? 'Активний' : 'Неактивний' }}
+                    </span>
+                  }
+                </div>
               </div>
               <p class="text-sm text-slate-600 mb-3">{{ character.id }}</p>
-              <div class="flex gap-2">
+              <div class="flex flex-wrap gap-2 mb-2">
                 <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">{{ 'Редагувати' | t }}</button>
                 <button (click)="deleteCharacter(character.id!)" [disabled]="!canDeleteCharacter" [title]="(deleteCharacterReason || 'Видалити') | t" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-character-button">{{ 'Видалити' | t }}</button>
+                @if (character.active !== false) {
+                  <button (click)="deactivateCharacter(character.id!)" class="text-sm text-amber-600 hover:text-amber-700 font-medium" data-testid="deactivate-character-button">{{ 'Деактивувати' | t }}</button>
+                } @else {
+                  <button (click)="activateCharacter(character.id!)" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium" data-testid="activate-character-button">{{ 'Активувати' | t }}</button>
+                }
+                <button (click)="manageCollaborations(character)" class="text-sm text-violet-600 hover:text-violet-700 font-medium" data-testid="collaborations-button">{{ 'Співпраця' | t }}</button>
               </div>
             </div>
           } @empty {
@@ -87,10 +108,20 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                   <option value="de">{{ 'Німецька' | t }}</option>
                 </select>
               </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Власник (бренд)' | t }}</label>
+                <input [(ngModel)]="form.owner_brand_id" placeholder="vertep" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+              </div>
               <div class="flex items-end">
                 <div class="flex items-center gap-2">
                   <input type="checkbox" [(ngModel)]="form.enabled" id="enabled">
-                  <label for="enabled" class="text-sm text-slate-700">{{ 'Персонаж активний' | t }}</label>
+                  <label for="enabled" class="text-sm text-slate-700">{{ 'Персонаж увімкнений (legacy)' | t }}</label>
+                </div>
+              </div>
+              <div class="flex items-end">
+                <div class="flex items-center gap-2">
+                  <input type="checkbox" [(ngModel)]="form.active" id="active">
+                  <label for="active" class="text-sm text-slate-700">{{ 'Модуль активний' | t }}</label>
                 </div>
               </div>
               <div class="md:col-span-2">
@@ -220,10 +251,75 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               <p class="text-xs text-slate-500 mt-1">{{ 'Доступні: youtube, tiktok, facebook, instagram, threads, telegram' | t }}</p>
             </div>
           </div>
+
+          <!-- Collaborations -->
+          <div class="border border-slate-200 rounded-lg p-3">
+            <h4 class="text-xs font-medium text-slate-500 mb-2">{{ 'Співпраця' | t }}</h4>
+            @if (editingId) {
+              <div class="space-y-2">
+                <div *ngFor="let collab of collaborations()" class="flex items-center justify-between p-2 bg-slate-50 rounded">
+                  <div>
+                    <span class="font-medium">{{ collab.collaborator_brand_id }}</span>
+                    <span class="ml-2 px-2 py-0.5 text-xs rounded" [class]="collab.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'">
+                      {{ collab.active ? 'Активна' : 'Неактивна' }}
+                    </span>
+                    <span class="ml-2 text-xs text-slate-500">({{ collab.permission_level }})</span>
+                  </div>
+                  <button (click)="removeCollaboration(collab.id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
+                </div>
+                @if (collaborations().length === 0) {
+                  <p class="text-sm text-slate-500">{{ 'Співпраці немає' | t }}</p>
+                }
+                <div class="flex gap-2 mt-3">
+                  <input [(ngModel)]="newCollabBrandId" placeholder="ID бренду-партнера" class="flex-1 px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                  <select [(ngModel)]="newCollabPermission" class="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                    <option value="read">{{ 'Читання' | t }}</option>
+                    <option value="write">{{ 'Запис' | t }}</option>
+                    <option value="admin">{{ 'Адміністрування' | t }}</option>
+                  </select>
+                  <button (click)="addCollaboration()" class="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 text-sm font-medium">{{ 'Додати' | t }}</button>
+                </div>
+              </div>
+            } @else {
+              <p class="text-sm text-slate-500">{{ 'Збережіть персонажа, щоб керувати співпрацею' | t }}</p>
+            }
+          </div>
         </div>
         <div class="flex justify-end gap-2 mt-6">
           <button (click)="closeModal()" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Скасувати' | t }}</button>
           <button (click)="saveCharacter()" [disabled]="saving() || !canSaveCharacter" [title]="(saveCharacterReason || 'Зберегти') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collaborations Modal -->
+    <div *ngIf="showCollabModal()" data-testid="collaborations-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
+        <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Співпраця для персонажа' | t }}</h3>
+        <div class="space-y-3">
+          @for (collab of collaborations(); track collab.id) {
+            <div class="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+              <div>
+                <p class="font-medium">{{ collab.collaborator_brand_id }}</p>
+                <p class="text-sm text-slate-500">{{ collab.permission_level }} • {{ collab.active ? 'Активна' : 'Неактивна' }}</p>
+              </div>
+              <button (click)="removeCollaboration(collab.id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
+            </div>
+          } @empty {
+            <p class="text-sm text-slate-500 text-center py-4">{{ 'Співпраці немає' | t }}</p>
+          }
+        </div>
+        <div class="flex gap-2 mt-4">
+          <input [(ngModel)]="newCollabBrandId" placeholder="ID бренду-партнера" class="flex-1 px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+          <select [(ngModel)]="newCollabPermission" class="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+            <option value="read">{{ 'Читання' | t }}</option>
+            <option value="write">{{ 'Запис' | t }}</option>
+            <option value="admin">{{ 'Адміністрування' | t }}</option>
+          </select>
+          <button (click)="addCollaboration()" class="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 text-sm font-medium">{{ 'Додати' | t }}</button>
+        </div>
+        <div class="flex justify-end mt-4">
+          <button (click)="showCollabModal.set(false)" class="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">{{ 'Закрити' | t }}</button>
         </div>
       </div>
     </div>
@@ -255,6 +351,12 @@ export class CharactersComponent implements OnInit {
   pageSize = 10;
 
   constructor(readonly resources: ResourcesApiService, private toast: ToastService, private confirm: ConfirmService, public policy: PolicyService) {}
+
+  collaborations = signal<any[]>([]);
+  newCollabBrandId = '';
+  newCollabPermission = 'read';
+  showCollabModal = signal(false);
+  collabCharacterId: string | null = null;
 
   get canCreateCharacter(): boolean { return this.policy.can('create_character').allowed; }
   get createCharacterReason(): string | null { return this.policy.disabledReason('create_character'); }
@@ -292,14 +394,14 @@ export class CharactersComponent implements OnInit {
   loadCharacters(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.resources.characters().subscribe({
+    this.resources.moduleCharacters().subscribe({
       next: (characters) => {
         this.characters = characters.map(c => ({
           ...c,
-          voice: typeof c.voice === 'object' && c.voice ? c.voice : { provider: 'none', voice: '' },
-          visual: typeof c.visual === 'object' && c.visual ? c.visual : { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
-          generation: typeof c.generation === 'object' && c.generation ? c.generation : { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
-          publishing: typeof c.publishing === 'object' && c.publishing ? c.publishing : { enabled: false, channels: '' },
+          voice: c.voice || { provider: 'none', voice: '' },
+          visual: c.visual || { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
+          generation: c.generation || { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
+          publishing: c.publishing || { enabled: false, channels: '' },
         }));
         this.loading.set(false);
       },
@@ -314,6 +416,8 @@ export class CharactersComponent implements OnInit {
       visual: { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
       generation: { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
       publishing: { enabled: false, channels: '' },
+      owner_brand_id: 'vertep',
+      active: false,
     };
   }
 
@@ -354,7 +458,7 @@ export class CharactersComponent implements OnInit {
   }
 
   private loadReferences(id: string): void {
-    this.resources.characterReferences(id).subscribe({
+    this.resources.moduleCharacterReferences(id).subscribe({
       next: (items) => { if (this.editingId === id) this.references.set(items); },
       error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося завантажити референси', 'error'),
     });
@@ -373,7 +477,7 @@ export class CharactersComponent implements OnInit {
       return;
     }
     for (const file of files) {
-      this.resources.uploadCharacterReference(id, file).subscribe({
+      this.resources.moduleUploadCharacterReference(id, file).subscribe({
         next: () => this.loadReferences(id),
         error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося завантажити зображення', 'error'),
       });
@@ -388,7 +492,7 @@ export class CharactersComponent implements OnInit {
   deleteReference(name: string): void {
     const id = this.editingId;
     if (!id) return;
-    this.resources.deleteCharacterReference(id, name).subscribe({
+    this.resources.moduleDeleteCharacterReference(id, name).subscribe({
       next: () => this.loadReferences(id),
       error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося видалити зображення', 'error'),
     });
@@ -405,7 +509,7 @@ export class CharactersComponent implements OnInit {
     };
     if (!id || !files.length) { done(files.length); return; }
     from(files).pipe(
-      concatMap((file) => this.resources.uploadCharacterReference(id, file).pipe(
+      concatMap((file) => this.resources.moduleUploadCharacterReference(id, file).pipe(
         catchError(() => of(null)),
       )),
       toArray(),
@@ -419,7 +523,7 @@ export class CharactersComponent implements OnInit {
       return;
     }
     this.saving.set(true);
-    const payload: Character = {
+    const payload = {
       id: this.form.id,
       name: this.form.name,
       language: this.form.language || 'uk',
@@ -430,11 +534,13 @@ export class CharactersComponent implements OnInit {
       visual: this.form.visual || { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
       generation: this.form.generation || { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
       publishing: this.form.publishing || { enabled: false, channels: '' },
+      owner_brand_id: 'vertep', // Default owner brand
+      active: false,
     };
 
     const request = this.editingId
-      ? this.resources.updateCharacter(this.editingId, payload)
-      : this.resources.createCharacter(payload);
+      ? this.resources.moduleUpdateCharacter(this.editingId, payload)
+      : this.resources.moduleCreateCharacter(payload);
 
     request.subscribe({
       next: (saved) => this.finishSave(saved?.id ?? this.form.id),
@@ -450,7 +556,7 @@ export class CharactersComponent implements OnInit {
     if (!this.canDeleteCharacter) return;
     this.confirm.confirm({ title: 'Видалити персонажа', message: `Ви впевнені, що хочете видалити ${id}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.resources.deleteCharacter(id).subscribe({
+      this.resources.moduleDeleteCharacter(id).subscribe({
         next: () => {
           this.loadCharacters();
           this.toast.show('Персонаж видалено', 'success');
@@ -470,5 +576,57 @@ export class CharactersComponent implements OnInit {
 
   nextPage(): void {
     if (this.page < this.pages) this.page++;
+  }
+
+  activateCharacter(id: string): void {
+    this.resources.moduleActivateCharacter(id).subscribe({
+      next: () => { this.loadCharacters(); this.toast.show('Персонаж активовано', 'success'); },
+      error: (err) => this.toast.show(err.message || 'Помилка активації', 'error'),
+    });
+  }
+
+  deactivateCharacter(id: string): void {
+    this.resources.moduleDeactivateCharacter(id).subscribe({
+      next: () => { this.loadCharacters(); this.toast.show('Персонаж деактивовано', 'success'); },
+      error: (err) => this.toast.show(err.message || 'Помилка деактивації', 'error'),
+    });
+  }
+
+  manageCollaborations(character: any): void {
+    this.collabCharacterId = character.id;
+    this.resources.moduleCharacterCollaborations(character.id).subscribe({
+      next: (collabs) => { this.collaborations.set(collabs); this.showCollabModal.set(true); },
+      error: (err) => this.toast.show(err.message || 'Не вдалося завантажити співпрацю', 'error'),
+    });
+  }
+
+  addCollaboration(): void {
+    if (!this.collabCharacterId || !this.newCollabBrandId.trim()) return;
+    this.resources.moduleAddCharacterCollaboration(this.collabCharacterId, {
+      collaborator_brand_id: this.newCollabBrandId,
+      permission_level: this.newCollabPermission,
+    }).subscribe({
+      next: () => {
+        this.newCollabBrandId = '';
+        this.manageCollaborations({ id: this.collabCharacterId });
+        this.toast.show('Співпрацю додано', 'success');
+      },
+      error: (err) => this.toast.show(err.message || 'Помилка додавання співпраці', 'error'),
+    });
+  }
+
+  removeCollaboration(collabId: number): void {
+    if (!this.collabCharacterId) return;
+    this.resources.moduleRemoveCharacterCollaboration(this.collabCharacterId, collabId).subscribe({
+      next: () => { this.manageCollaborations({ id: this.collabCharacterId }); this.toast.show('Співпрацю видалено', 'success'); },
+      error: (err) => this.toast.show(err.message || 'Помилка видалення співпраці', 'error'),
+    });
+  }
+
+  runMigration(): void {
+    this.resources.moduleMigrateCharacters().subscribe({
+      next: (result: any) => this.toast.show(`Міграція завершена: ${result.migrated} перенесено, ${result.skipped} пропущено`, 'success'),
+      error: (err) => this.toast.show(err.message || 'Помилка міграції', 'error'),
+    });
   }
 }

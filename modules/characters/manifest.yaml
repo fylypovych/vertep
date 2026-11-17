@@ -1,0 +1,63 @@
+schema_version: "2.0"
+name: characters
+module_id: characters
+version: "1.0.0"
+kind: application
+core_compatibility: {min: "0.0.3.91", max: "0.0.9.99"}
+dependencies: []
+capabilities:
+  - characters_api
+resource_requirements:
+  min_vram_mb: 0
+  min_cpu_cores: 1
+  min_ram_mb: 512
+placement:
+  target: any
+  scaling: single_owner
+  requires_gpu: false
+provides:
+  - {type: api, name: characters, version: "1.0"}
+requires: []
+api:
+  namespace: characters
+  version: "1.0"
+  routes:
+    - "/characters"
+    - "/characters/{id}"
+    - "/characters/{id}/references"
+    - "/characters/{id}/references/{filename}"
+    - "/characters/{id}/collaborations"
+    - "/characters/{id}/collaborations/{brand_id}"
+    - "/characters/{id}/activate"
+    - "/characters/{id}/deactivate"
+    - "/characters/{id}/can-generate"
+ui:
+  entry: index.html
+  navigation:
+    - {id: characters, label: "Персонажі"}
+  files:
+    index.html: "7007776034055aeee8eeaa6bf0d7ad78f0531ffbdbad8eb674dfc4d439a04d1e"
+permissions:
+  - characters.read
+  - characters.write
+  - characters.collaborate
+secret_refs: []
+migrations:
+  - {id: m001_initial, version: "1.0.0"}
+services:
+  - {name: api}
+health:
+  self_test: health
+  timeout_seconds: 30
+publisher: vertep
+provenance:
+  repository: github.com/fylypovych/vertep
+container:
+  image: "registry.example/vertep/characters@sha256:<64 hex>"
+  port: 8080
+description: >
+  Characters Application Module: єдина бібліотека персонажів з моделлю ownership/collaboration.
+  Кожен character має рівно одного brand owner. Чужий бренд використовує персонажа для співпраці
+  без співвласності, копіювання identity або перевизначення базового профілю.
+  Activation/deactivation блокує нові співпраці, зберігає references/materials.
+  Неповний профіль блокує генерацію з поясненням missing fields.

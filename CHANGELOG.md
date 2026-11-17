@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.92
+- Characters Application Module (#499): повний модуль `modules/characters/` (manifest schema 2.0, application, namespace `characters`, UI entry `index.html`); власницька модель (один бренд-власник), співпраця без співвласності (read/write/admin), активація/деактивація блокує нові співпраці, перевірка повноти профілю блокує генерацію, міграція зберігає ID/історію/посилання.
+- Characters: CRUD API (`/api/modules/characters/v1/characters`), референси, співпраця, активація/деактивація, міграція legacy даних (`migrate_existing_characters`); таблиці: `characters`, `character_profiles`, `character_references`, `character_collaborations`, `character_audit`.
+- CORE інтеграція: `"characters"` у `BUNDLED` lifecycle та `BUNDLED_LABELS` каталогу; тест `tests/test_characters_module.py` (каталог, install/lifecycle, сумісність).
+- Web UI: оновлено `ResourcesApiService` з методами модуля (`moduleCharacters`, `moduleCreateCharacter`, `moduleUpdateCharacter`, `moduleDeleteCharacter`, `moduleCharacterReferences`, `moduleUploadCharacterReference`, `moduleDeleteCharacterReference`, `moduleCharacterCollaborations`, `moduleAddCharacterCollaboration`, `moduleRemoveCharacterCollaboration`, `moduleActivateCharacter`, `moduleDeactivateCharacter`, `moduleMigrateCharacters`).
+- Web UI: `CharactersComponent` мігрує на module API, UI для власник бренд, активний статус, активація/деактивація, керування співпрацею, кнопка міграції (admin).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.91
 - Модулі (#496): адміністраторська каталог модулів і вузлів (`/api/nodes/module-catalog`) — одна користувацька вибірка «модуль + вузол» замість внутрішніх ролей/Worker/capabilities; вузол, що не може запустити модуль (GPU, пам'ять, профіль LAB, відсутне runtime), показує чесну причину і відмовляє в розміщенні; нічого не показується READY без звіту Worker і lifecycle модуля.
 - Модулі (#496): валідація placement з причиною (`core/module/catalog.py::check_placement`), новий метод `ModuleInstanceRegistry.installed_manifest()`.

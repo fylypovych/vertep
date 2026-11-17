@@ -13,7 +13,7 @@ from .lifecycle import BUNDLED, bundled_manifest
 from .manifest import ModuleManifest
 
 BUNDLED_LABELS = {"text": "Текст і сценарії", "image": "Зображення та відео", "audio": "Голос",
-                  "publisher": "Публікація", "backup": "Резервні копії"}
+                  "publisher": "Публікація", "backup": "Резервні копії", "characters": "Персонажі"}
 
 
 def _deployed_roles(node: dict) -> set[str]:

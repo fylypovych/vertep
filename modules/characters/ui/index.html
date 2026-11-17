@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Characters Module</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #f8fafc; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #1e293b; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+        .character-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+        .character-card h3 { margin: 0 0 8px; color: #1e293b; }
+        .character-card .meta { font-size: 12px; color: #64748b; margin-bottom: 8px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 500; }
+        .badge-owner { background: #dbeafe; color: #1e40af; }
+        .badge-collab { background: #fef3c7; color: #92400e; }
+        .badge-active { background: #dcfce7; color: #166534; }
+        .badge-inactive { background: #f1f5f9; color: #475569; }
+        .references { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+        .reference { width: 60px; height: 60px; border-radius: 4px; object-fit: cover; border: 1px solid #e2e8f0; }
+        .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .btn-primary { background: #059669; color: white; }
+        .btn-danger { background: #dc2626; color: white; }
+        .btn-secondary { background: #e2e8f0; color: #1e293b; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; margin-bottom: 4px; font-weight: 500; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 14px; }
+        .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .modal.hidden { display: none; }
+        .modal-content { background: white; border-radius: 12px; padding: 24px; width: 90%; max-width: 600px; max-height: 90vh; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="flex items-center justify-between mb-6">
+            <h1>Персонажі</h1>
+            <button class="btn btn-primary" onclick="openCreateModal()">Новий персонаж</button>
+        </div>
+
+        <div id="characters-grid" class="grid">
+            <!-- Characters loaded via JS -->
+        </div>
+    </div>
+
+    <!-- Create/Edit Modal -->
+    <div id="modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 id="modal-title">Новий персонаж</h2>
+            <form id="character-form">
+                <input type="hidden" name="id" id="char-id">
+                <div class="form-group">
+                    <label>Назва</label>
+                    <input type="text" name="name" id="char-name" required>
+                </div>
+                <div class="form-group">
+                    <label>ID</label>
+                    <input type="text" name="id" id="char-id-input" disabled>
+                </div>
+                <div class="form-group">
+                    <label>Мова</label>
+                    <select name="language" id="char-language">
+                        <option value="uk">Українська</option>
+                        <option value="en">English</option>
+                        <option value="pl">Polski</option>
+                        <option value="de">Deutsch</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="enabled" id="char-enabled" checked>
+                        <span>Персонаж активний</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>Workflow</label>
+                    <input type="text" name="workflow" id="char-workflow" placeholder="workflows/image/demo.json">
+                </div>
+                <div class="form-group">
+                    <label>Системний промпт</label>
+                    <textarea name="system_prompt" id="char-system_prompt" rows="4"></textarea>
+                </div>
+                <div class="flex justify-end gap-2 mt-6">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
+                    <button type="submit" class="btn btn-primary">Зберегти</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/modules/characters/v1';
+        const TOKEN = ''; // Will be set by CORE gateway
+
+        async function api(path, options = {}) {
+            const response = await fetch(API_BASE + path, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-vertep-module-token': TOKEN,
+                    ...options.headers
+                }
+            });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({ error: 'Request failed' }));
+                throw new Error(error.error || `HTTP ${response.status}`);
+            }
+            return response.json();
+        }
+
+        async function loadCharacters() {
+            const chars = await api('/characters');
+            const grid = document.getElementById('characters-grid');
+            grid.innerHTML = chars.map(char => `
+                <div class="character-card">
+                    <h3>${char.name} <span class="badge ${char.is_owner ? 'badge-owner' : 'badge-collab'}">${char.is_owner ? 'Власник' : 'Співпраця'}</span></h3>
+                    <div class="meta">ID: ${char.id} | Мова: ${char.language}</div>
+                    <div class="meta">
+                        <span class="badge ${char.active ? 'badge-active' : 'badge-inactive'}">${char.active ? 'Активний' : 'Неактивний'}</span>
+                        Бренд: ${char.owner_brand_id}
+                    </div>
+                    ${char.references && char.references.length ? `
+                        <div class="references">
+                            ${char.references.map(ref => `<img src="/api/modules/characters/v1/characters/${char.id}/references/${ref.filename}" class="reference" alt="Reference">`).join('')}
+                        </div>
+                    ` : ''}
+                    <div class="flex gap-2 mt-4">
+                        <button class="btn btn-secondary" onclick="editCharacter('${char.id}')">Редагувати</button>
+                        <button class="btn ${char.active ? 'btn-secondary' : 'btn-primary'}" onclick="toggleActive('${char.id}', ${!char.active})">${char.active ? 'Деактивувати' : 'Активувати'}</button>
+                        <button class="btn btn-danger" onclick="deleteCharacter('${char.id}')">Видалити</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function openCreateModal() {
+            document.getElementById('modal-title').textContent = 'Новий персонаж';
+            document.getElementById('character-form').reset();
+            document.getElementById('char-id').value = '';
+            document.getElementById('char-id-input').value = '';
+            document.getElementById('modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.add('hidden');
+        }
+
+        async function editCharacter(id) {
+            const char = await api(`/characters/${id}`);
+            document.getElementById('modal-title').textContent = 'Редагувати персонажа';
+            document.getElementById('char-id').value = char.id;
+            document.getElementById('char-id-input').value = char.id;
+            document.getElementById('char-name').value = char.name;
+            document.getElementById('char-language').value = char.language;
+            document.getElementById('char-enabled').checked = char.enabled;
+            document.getElementById('char-workflow').value = char.workflow || '';
+            document.getElementById('char-system_prompt').value = char.system_prompt || '';
+            document.getElementById('modal').classList.remove('hidden');
+        }
+
+        document.getElementById('character-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('char-id').value;
+            const data = {
+                name: document.getElementById('char-name').value,
+                language: document.getElementById('char-language').value,
+                enabled: document.getElementById('char-enabled').checked,
+                workflow: document.getElementById('char-workflow').value || undefined,
+                system_prompt: document.getElementById('char-system_prompt').value,
+            };
+            try {
+                if (id) {
+                    await api(`/characters/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+                } else {
+                    await api('/characters', { method: 'POST', body: JSON.stringify(data) });
+                }
+                closeModal();
+                loadCharacters();
+            } catch (error) {
+                alert(error.message);
+            }
+        });
+
+        async function toggleActive(id, active) {
+            try {
+                await api(`/characters/${id}/${active ? 'activate' : 'deactivate'}`, { method: 'POST' });
+                loadCharacters();
+            } catch (error) {
+                alert(error.message);
+            }
+        }
+
+        async function deleteCharacter(id) {
+            if (!confirm('Ви впевнені, що хочете видалити цього персонажа?')) return;
+            try {
+                await api(`/characters/${id}`, { method: 'DELETE' });
+                loadCharacters();
+            } catch (error) {
+                alert(error.message);
+            }
+        }
+
+        // Load on start
+        loadCharacters();
+    </script>
+</body>
+</html>

@@ -7,10 +7,37 @@ import { Character, Brand, Channel, Workflow, BrandCreateDTO, BrandUpdateDTO, Ch
 
 export interface CharacterReference { filename: string; sha256: string; size: number; }
 
+export interface ModuleCharacter {
+  id: string;
+  name: string;
+  language: string;
+  enabled: boolean;
+  workflow?: string;
+  owner_brand_id: string;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+  system_prompt: string;
+  voice: Record<string, unknown>;
+  visual: Record<string, unknown>;
+  generation: Record<string, unknown>;
+  publishing: Record<string, unknown>;
+  references: CharacterReference[];
+  collaborations: string[];
+  is_owner: boolean;
+}
+
+export interface MigrationResult {
+  migrated: string[];
+  skipped: Array<{ id: string; reason: string }>;
+  errors: Array<{ id: string; error: string }>;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
   constructor(private http: HttpClient, private base: BaseApiService) {}
+  // Legacy character endpoints (filesystem-based)
   characters = (): Observable<Character[]> => this.http.get<Character[]>(`${this.base.url}/characters`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   characterReferences = (id: string): Observable<CharacterReference[]> => this.http.get<CharacterReference[]>(`${this.base.url}/characters/${encodeURIComponent(id)}/references`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   uploadCharacterReference = (id: string, file: File): Observable<CharacterReference> => this.http.post<CharacterReference>(`${this.base.url}/characters/${encodeURIComponent(id)}/references`, file).pipe(catchError(this.base.handleError));
@@ -20,6 +47,23 @@ export class ResourcesApiService {
   createCharacter = (p: Character): Observable<Character> => this.http.post<Character>(`${this.base.url}/characters`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   updateCharacter = (id: string, p: Character): Observable<Character> => this.http.put<Character>(`${this.base.url}/characters/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   deleteCharacter = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/characters/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+
+  // Characters Module API (Application Module)
+  moduleCharacters = (): Observable<ModuleCharacter[]> => this.http.get<ModuleCharacter[]>(`${this.base.url}/modules/characters/v1/characters`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCharacter = (id: string): Observable<ModuleCharacter> => this.http.get<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateCharacter = (p: ModuleCharacter): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateCharacter = (id: string, p: ModuleCharacter): Observable<ModuleCharacter> => this.http.put<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeleteCharacter = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleActivateCharacter = (id: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/activate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeactivateCharacter = (id: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/deactivate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCharacterReferences = (id: string): Observable<CharacterReference[]> => this.http.get<CharacterReference[]>(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUploadCharacterReference = (id: string, file: File): Observable<CharacterReference> => this.http.post<CharacterReference>(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references`, file).pipe(catchError(this.base.handleError));
+  moduleDeleteCharacterReference = (id: string, name: string): Observable<unknown> => this.http.delete(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCharacterReferenceUrl = (id: string, name: string): string => `${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}`;
+  moduleAddCollaboration = (id: string, brandId: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/collaborations`, { brand_id: brandId }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRemoveCollaboration = (id: string, brandId: string): Observable<ModuleCharacter> => this.http.delete(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/collaborations/${this.base.enc(brandId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleMigrateCharacters = (defaultOwnerBrand = 'vertep'): Observable<MigrationResult> => this.http.post<MigrationResult>(`${this.base.url}/modules/characters/v1/migrate`, { default_owner_brand: defaultOwnerBrand }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+
   brands = (): Observable<Brand[]> => this.http.get<Brand[]>(`${this.base.url}/brands`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   createBrand = (p: BrandCreateDTO): Observable<Brand> => this.http.post<Brand>(`${this.base.url}/brands`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
   updateBrand = (id: string, p: BrandUpdateDTO): Observable<Brand> => this.http.put<Brand>(`${this.base.url}/brands/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
