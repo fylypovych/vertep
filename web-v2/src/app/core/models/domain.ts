@@ -293,6 +293,8 @@ export interface CharacterForm {
   generation: CharacterGeneration;
   publishing: CharacterPublishing;
   workflow?: string;
+  owner_brand_id?: string;
+  active?: boolean;
 }
 
 export interface Character {
@@ -306,6 +308,8 @@ export interface Character {
   generation: CharacterGeneration;
   publishing: CharacterPublishing;
   workflow?: string;
+  owner_brand_id?: string;
+  active?: boolean;
 }
 
 export type ChannelType = string;

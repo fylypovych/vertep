@@ -265,18 +265,13 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                     </span>
                     <span class="ml-2 text-xs text-slate-500">({{ collab.permission_level }})</span>
                   </div>
-                  <button (click)="removeCollaboration(collab.id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
+<button (click)="removeCollaboration(collab.collaborator_brand_id || collab.brand_id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
                 </div>
                 @if (collaborations().length === 0) {
                   <p class="text-sm text-slate-500">{{ 'Співпраці немає' | t }}</p>
                 }
                 <div class="flex gap-2 mt-3">
                   <input [(ngModel)]="newCollabBrandId" placeholder="ID бренду-партнера" class="flex-1 px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                  <select [(ngModel)]="newCollabPermission" class="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-                    <option value="read">{{ 'Читання' | t }}</option>
-                    <option value="write">{{ 'Запис' | t }}</option>
-                    <option value="admin">{{ 'Адміністрування' | t }}</option>
-                  </select>
                   <button (click)="addCollaboration()" class="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 text-sm font-medium">{{ 'Додати' | t }}</button>
                 </div>
               </div>
@@ -303,7 +298,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                 <p class="font-medium">{{ collab.collaborator_brand_id }}</p>
                 <p class="text-sm text-slate-500">{{ collab.permission_level }} • {{ collab.active ? 'Активна' : 'Неактивна' }}</p>
               </div>
-              <button (click)="removeCollaboration(collab.id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
+              <button (click)="removeCollaboration(collab.collaborator_brand_id || collab.brand_id)" class="text-sm text-red-600 hover:text-red-700">{{ 'Видалити' | t }}</button>
             </div>
           } @empty {
             <p class="text-sm text-slate-500 text-center py-4">{{ 'Співпраці немає' | t }}</p>
@@ -311,11 +306,6 @@ import { ErrorStateComponent } from '../shared/error-state.component';
         </div>
         <div class="flex gap-2 mt-4">
           <input [(ngModel)]="newCollabBrandId" placeholder="ID бренду-партнера" class="flex-1 px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-          <select [(ngModel)]="newCollabPermission" class="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-            <option value="read">{{ 'Читання' | t }}</option>
-            <option value="write">{{ 'Запис' | t }}</option>
-            <option value="admin">{{ 'Адміністрування' | t }}</option>
-          </select>
           <button (click)="addCollaboration()" class="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 text-sm font-medium">{{ 'Додати' | t }}</button>
         </div>
         <div class="flex justify-end mt-4">
@@ -354,7 +344,6 @@ export class CharactersComponent implements OnInit {
 
   collaborations = signal<any[]>([]);
   newCollabBrandId = '';
-  newCollabPermission = 'read';
   showCollabModal = signal(false);
   collabCharacterId: string | null = null;
 
@@ -516,10 +505,10 @@ export class CharactersComponent implements OnInit {
     ).subscribe((results) => done(results.filter((item) => item === null).length));
   }
 
-  saveCharacter(): void {
+saveCharacter(): void {
     if (!this.canSaveCharacter) return;
     if (!this.form.name) {
-      this.toast.show('Назва є обов\'язковою', 'error');
+      this.toast.show('Назва є об\'язковою', 'error');
       return;
     }
     this.saving.set(true);
@@ -536,6 +525,9 @@ export class CharactersComponent implements OnInit {
       publishing: this.form.publishing || { enabled: false, channels: '' },
       owner_brand_id: 'vertep', // Default owner brand
       active: false,
+      references: [],
+      collaborations: [],
+      is_owner: true,
     };
 
     const request = this.editingId
@@ -602,10 +594,7 @@ export class CharactersComponent implements OnInit {
 
   addCollaboration(): void {
     if (!this.collabCharacterId || !this.newCollabBrandId.trim()) return;
-    this.resources.moduleAddCharacterCollaboration(this.collabCharacterId, {
-      collaborator_brand_id: this.newCollabBrandId,
-      permission_level: this.newCollabPermission,
-    }).subscribe({
+    this.resources.moduleAddCollaboration(this.collabCharacterId, this.newCollabBrandId).subscribe({
       next: () => {
         this.newCollabBrandId = '';
         this.manageCollaborations({ id: this.collabCharacterId });
@@ -615,9 +604,9 @@ export class CharactersComponent implements OnInit {
     });
   }
 
-  removeCollaboration(collabId: number): void {
+  removeCollaboration(brandId: string): void {
     if (!this.collabCharacterId) return;
-    this.resources.moduleRemoveCharacterCollaboration(this.collabCharacterId, collabId).subscribe({
+    this.resources.moduleRemoveCollaboration(this.collabCharacterId, brandId).subscribe({
       next: () => { this.manageCollaborations({ id: this.collabCharacterId }); this.toast.show('Співпрацю видалено', 'success'); },
       error: (err) => this.toast.show(err.message || 'Помилка видалення співпраці', 'error'),
     });
