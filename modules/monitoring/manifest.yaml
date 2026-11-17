@@ -1,0 +1,46 @@
+module:
+  name: "monitoring"
+  version: "1.0.0"
+  schema_version: "2.0"
+  kind: "application"
+  namespace: "monitoring"
+  title: "Моніторинг"
+  description: "Модуль моніторингу системи, метрик, логів та алертів"
+  author: "Vertep Team"
+  license: "MIT"
+  homepage: ""
+  repository: ""
+  min_core_version: "0.0.3.95"
+  max_core_version: ""
+  dependencies: []
+  provides_capabilities: ["monitoring", "metrics", "alerting"]
+  requires_capabilities: []
+  ui:
+    entry: "index.html"
+    sandbox: true
+    permissions: ["storage", "network"]
+  database:
+    schema: "monitoring"
+    migrations_dir: "migrations"
+    role_prefix: "monitoring"
+  runtime:
+    cpu_arch: ["amd64", "arm64"]
+    memory_mb: 128
+    disk_mb: 500
+    gpu: false
+    network: true
+  configuration:
+    schema: {}
+    defaults: {}
+  secrets: []
+  health_check:
+    path: "/health"
+    interval_sec: 15
+    timeout_sec: 5
+  lifecycle:
+    install_timeout_sec: 60
+    activate_timeout_sec: 30
+    deactivate_timeout_sec: 10
+    update_timeout_sec: 60
+    rollback_timeout_sec: 30
+    uninstall_timeout_sec: 30

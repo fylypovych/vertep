@@ -159,6 +159,58 @@ export interface PublishingMigrationResult {
   skipped: number;
 }
 
+export interface ModuleMetric {
+  id: string;
+  name: string;
+  value: number;
+  labels: Record<string, string>;
+  timestamp: string;
+  node_id?: string;
+}
+
+export interface ModuleAlert {
+  id: string;
+  name: string;
+  severity: string;
+  condition: string;
+  message: string;
+  active: boolean;
+  fired_at?: string;
+  resolved_at?: string;
+  labels: Record<string, string>;
+}
+
+export interface ModuleHealthCheck {
+  id: string;
+  component: string;
+  status: string;
+  message: string;
+  details: Record<string, unknown>;
+  checked_at: string;
+}
+
+export interface ModuleSystemLog {
+  id: number;
+  level: string;
+  component: string;
+  message: string;
+  context: Record<string, unknown>;
+  timestamp: string;
+}
+
+export interface SystemStats {
+  online_nodes: number;
+  active_alerts: number;
+  critical_alerts: number;
+  recent_errors: number;
+  health_summary: Record<string, number>;
+}
+
+export interface MonitoringMigrationResult {
+  migrated: number;
+  skipped: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
@@ -252,6 +304,25 @@ export class ResourcesApiService {
   moduleAddPublicationCollaboration = (publicationId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModulePublishingCollaboration> => this.http.post<ModulePublishingCollaboration>(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(publicationId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleRemovePublicationCollaboration = (publicationId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(publicationId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleMigratePublishingChannels = (channels: ModulePublishingChannel[]): Observable<PublishingMigrationResult> => this.http.post<PublishingMigrationResult>(`${this.base.url}/modules/publishing/v1/channels/migrate`, { channels }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+
+  // Monitoring Module API (Application Module)
+  moduleMetrics = (): Observable<ModuleMetric[]> => this.http.get<ModuleMetric[]>(`${this.base.url}/modules/monitoring/v1/metrics`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleLatestMetrics = (): Observable<ModuleMetric[]> => this.http.get<ModuleMetric[]>(`${this.base.url}/modules/monitoring/v1/metrics/latest`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRecordMetric = (p: ModuleMetric): Observable<ModuleMetric> => this.http.post<ModuleMetric>(`${this.base.url}/modules/monitoring/v1/metrics`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAlerts = (): Observable<ModuleAlert[]> => this.http.get<ModuleAlert[]>(`${this.base.url}/modules/monitoring/v1/alerts`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAlert = (id: string): Observable<ModuleAlert> => this.http.get<ModuleAlert>(`${this.base.url}/modules/monitoring/v1/alerts/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateAlert = (p: ModuleAlert): Observable<ModuleAlert> => this.http.post<ModuleAlert>(`${this.base.url}/modules/monitoring/v1/alerts`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateAlert = (id: string, p: ModuleAlert): Observable<ModuleAlert> => this.http.put<ModuleAlert>(`${this.base.url}/modules/monitoring/v1/alerts/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleFireAlert = (id: string, message: string): Observable<ModuleAlert> => this.http.post<ModuleAlert>(`${this.base.url}/modules/monitoring/v1/alerts/${this.base.enc(id)}/fire`, { message }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleResolveAlert = (id: string): Observable<ModuleAlert> => this.http.post<ModuleAlert>(`${this.base.url}/modules/monitoring/v1/alerts/${this.base.enc(id)}/resolve`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleHealth = (): Observable<ModuleHealthCheck[]> => this.http.get<ModuleHealthCheck[]>(`${this.base.url}/modules/monitoring/v1/health`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleHealthHistory = (component: string): Observable<ModuleHealthCheck[]> => this.http.get<ModuleHealthCheck[]>(`${this.base.url}/modules/monitoring/v1/health/${encodeURIComponent(component)}/history`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRecordHealth = (p: ModuleHealthCheck): Observable<ModuleHealthCheck> => this.http.post<ModuleHealthCheck>(`${this.base.url}/modules/monitoring/v1/health`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleLogs = (): Observable<ModuleSystemLog[]> => this.http.get<ModuleSystemLog[]>(`${this.base.url}/modules/monitoring/v1/logs`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAddLog = (p: ModuleSystemLog): Observable<{ id: string }> => this.http.post<{ id: string }>(`${this.base.url}/modules/monitoring/v1/logs`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleStats = (): Observable<SystemStats> => this.http.get<SystemStats>(`${this.base.url}/modules/monitoring/v1/stats`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCleanup = (retentionDays: number): Observable<{ cleaned: boolean }> => this.http.post<{ cleaned: boolean }>(`${this.base.url}/modules/monitoring/v1/cleanup`, { retention_days: retentionDays }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleMigrateMonitoring = (data: any): Observable<MonitoringMigrationResult> => this.http.post<MonitoringMigrationResult>(`${this.base.url}/modules/monitoring/v1/migrate`, { data }, { headers: this.h() }).pipe(catchError(this.base.handleError));
 
   brands = (): Observable<Brand[]> => this.http.get<Brand[]>(`${this.base.url}/brands`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   createBrand = (p: BrandCreateDTO): Observable<Brand> => this.http.post<Brand>(`${this.base.url}/brands`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
