@@ -1,3 +1,10 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.97
+- Web UI Application Module (#504): повний модуль `modules/web-ui/` (manifest schema 2.0, application, namespace `web-ui`, UI entry `index.html`); залежності від усіх модулів (`characters`, `brands`, `storyboard`, `publishing`, `monitoring`); уніфікований веб-інтерфейс з боковим меню навігації, дашбордом статистики, інтеграцією всіх модулів через iframe, управління темами, конфігурацією та навігацією.
+- Web UI: API для конфігурації (`/api/modules/web-ui/v1/config`), тем (`/themes`), навігації (`/navigation`), інформації про модулі (`/modules`); таблиці: `ui_config`, `ui_themes`, `ui_navigation`; capabilities: web_ui.
+- CORE інтеграція: `"web-ui"` у `BUNDLED` lifecycle та `BUNDLED_LABELS` каталогу; тест `tests/test_web_ui_module.py` (каталог, install/lifecycle, сумісність, залежності, capabilities).
+- Web UI: оновлено `ResourcesApiService` з методами модуля (`moduleUIConfigs`, `moduleSetUIConfig`, `moduleUIThemes`, `moduleDefaultUITheme`, `moduleCreateUITheme`, `moduleUpdateUITheme`, `moduleDeleteUITheme`, `moduleUINavigation`, `moduleCreateUINavigation`, `moduleUpdateUINavigation`, `moduleDeleteUINavigation`, `moduleModuleInfo`, `moduleMigrateWebUI`).
+- Головний UI: `index.html` з адаптивним сайдбаром, дашбордом (вузли, алерти, персонажі, публікації), швидкими діями, вкладками для кожного модуля, модальним вікном тем.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.96
 - Monitoring Application Module (#503): повний модуль `modules/monitoring/` (manifest schema 2.0, application, namespace `monitoring`, UI entry `index.html`); метрики (name, value, labels, node_id), алерти (info/warning/critical, fire/resolve), health checks (healthy/degraded/unhealthy), системні логи (debug/info/warning/error/critical), агрегована статистика системи, очищення старих даних.
 - Monitoring: CRUD API (`/api/modules/monitoring/v1/metrics`, `/alerts`, `/health`, `/logs`, `/stats`), fire/resolve алерти, історія health checks, очистка; таблиці: `metrics`, `alerts`, `health_checks`, `system_logs`; capabilities: monitoring, metrics, alerting.

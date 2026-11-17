@@ -1,0 +1,46 @@
+module:
+  name: "web-ui"
+  version: "1.0.0"
+  schema_version: "2.0"
+  kind: "application"
+  namespace: "web-ui"
+  title: "Web UI"
+  description: "Веб-інтерфейс Vertep: дашборд, управління модулями, персонажами, брендами, сценаріями, публікацією, моніторингом"
+  author: "Vertep Team"
+  license: "MIT"
+  homepage: ""
+  repository: ""
+  min_core_version: "0.0.3.96"
+  max_core_version: ""
+  dependencies: ["characters", "brands", "storyboard", "publishing", "monitoring"]
+  provides_capabilities: ["web_ui"]
+  requires_capabilities: []
+  ui:
+    entry: "index.html"
+    sandbox: false
+    permissions: ["storage", "network"]
+  database:
+    schema: "web_ui"
+    migrations_dir: "migrations"
+    role_prefix: "web_ui"
+  runtime:
+    cpu_arch: ["amd64", "arm64"]
+    memory_mb: 512
+    disk_mb: 100
+    gpu: false
+    network: true
+  configuration:
+    schema: {}
+    defaults: {}
+  secrets: []
+  health_check:
+    path: "/health"
+    interval_sec: 30
+    timeout_sec: 5
+  lifecycle:
+    install_timeout_sec: 60
+    activate_timeout_sec: 30
+    deactivate_timeout_sec: 10
+    update_timeout_sec: 60
+    rollback_timeout_sec: 30
+    uninstall_timeout_sec: 30

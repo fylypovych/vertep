@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vertep - Web UI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+<body class="bg-slate-50 min-h-screen">
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 transform transition-transform duration-300 lg:translate-x-0">
+            <div class="flex flex-col h-full">
+                <div class="p-4 border-b border-slate-200">
+                    <h1 class="text-xl font-bold text-emerald-600 flex items-center gap-2">
+                        <span class="material-icons">smart_toy</span>
+                        Vertep
+                    </h1>
+                </div>
+                <nav class="flex-1 overflow-y-auto p-4 space-y-1" id="navMenu">
+                </nav>
+                <div class="p-4 border-t border-slate-200">
+                    <div class="text-xs text-slate-500 text-center">v0.0.3.97</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Mobile sidebar overlay -->
+        <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden hidden"></div>
+
+        <!-- Main content -->
+        <main class="flex-1 lg:ml-64">
+            <!-- Top bar -->
+            <header class="sticky top-0 z-30 bg-white border-b border-slate-200">
+                <div class="flex items-center justify-between h-16 px-4 lg:px-6">
+                    <div class="flex items-center gap-4">
+                        <button id="menuBtn" class="lg:hidden p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">
+                            <span class="material-icons">menu</span>
+                        </button>
+                        <h2 id="pageTitle" class="text-lg font-semibold text-slate-900">Дашборд</h2>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button id="themeBtn" class="p-2 text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100" title="Тема">
+                            <span class="material-icons">palette</span>
+                        </button>
+                        <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg text-sm text-slate-600">
+                            <span class="material-icons text-emerald-600">circle</span>
+                            <span>Онлайн</span>
+                        </div>
+                        <div class="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-medium">V</div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page content -->
+            <div class="p-4 lg:p-6" id="pageContent">
+                <!-- Dashboard (default) -->
+                <div id="pageDashboard" class="page-content">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                        <div class="bg-white rounded-xl border border-slate-200 p-5">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-slate-500">Онлайн вузли</p>
+                                    <p id="statNodes" class="text-3xl font-bold text-emerald-600">—</p>
+                                </div>
+                                <div class="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center">
+                                    <span class="material-icons text-emerald-600">dns</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl border border-slate-200 p-5">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-slate-500">Активні алерти</p>
+                                    <p id="statAlerts" class="text-3xl font-bold text-amber-600">—</p>
+                                </div>
+                                <div class="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+                                    <span class="material-icons text-amber-600">warning</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl border border-slate-200 p-5">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-slate-500">Персонажів</p>
+                                    <p id="statCharacters" class="text-3xl font-bold text-blue-600">—</p>
+                                </div>
+                                <div class="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
+                                    <span class="material-icons text-blue-600">person</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl border border-slate-200 p-5">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-slate-500">Опубліковано сьогодні</p>
+                                    <p id="statPublished" class="text-3xl font-bold text-violet-600">—</p>
+                                </div>
+                                <div class="w-12 h-12 rounded-full bg-violet-100 flex items-center justify-center">
+                                    <span class="material-icons text-violet-600">publish</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="bg-white rounded-xl border border-slate-200 p-5">
+                            <h3 class="text-lg font-semibold mb-4">Останні алерти</h3>
+                            <div id="recentAlerts" class="space-y-3 max-h-64 overflow-y-auto"></div>
+                        </div>
+                        <div class="bg-white rounded-xl border border-slate-200 p-5">
+                            <h3 class="text-lg font-semibold mb-4">Швидкі дії</h3>
+                            <div class="grid grid-cols-2 gap-3">
+                                <button class="quick-action p-4 border border-slate-200 rounded-lg hover:border-emerald-300 hover:bg-emerald-50 transition-colors" data-page="characters">
+                                    <span class="material-icons text-2xl text-emerald-600">person_add</span>
+                                    <p class="mt-2 font-medium">Новий персонаж</p>
+                                </button>
+                                <button class="quick-action p-4 border border-slate-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors" data-page="storyboard">
+                                    <span class="material-icons text-2xl text-blue-600">add_circle</span>
+                                    <p class="mt-2 font-medium">Новий сценарій</p>
+                                </button>
+                                <button class="quick-action p-4 border border-slate-200 rounded-lg hover:border-violet-300 hover:bg-violet-50 transition-colors" data-page="publishing">
+                                    <span class="material-icons text-2xl text-violet-600">cloud_upload</span>
+                                    <p class="mt-2 font-medium">Опублікувати</p>
+                                </button>
+                                <button class="quick-action p-4 border border-slate-200 rounded-lg hover:border-amber-300 hover:bg-amber-50 transition-colors" data-page="monitoring">
+                                    <span class="material-icons text-2xl text-amber-600">add_alert</span>
+                                    <p class="mt-2 font-medium">Створити алерт</p>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Module pages will be loaded dynamically -->
+                <div id="pageCharacters" class="page-content hidden"></div>
+                <div id="pageBrands" class="page-content hidden"></div>
+                <div id="pageStoryboard" class="page-content hidden"></div>
+                <div id="pagePublishing" class="page-content hidden"></div>
+                <div id="pageMonitoring" class="page-content hidden"></div>
+                <div id="pageModules" class="page-content hidden"></div>
+                <div id="pageSettings" class="page-content hidden"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Theme Modal -->
+    <div id="themeModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
+            <h3 class="text-lg font-semibold text-slate-900 mb-4">Вибір теми</h3>
+            <div id="themeOptions" class="space-y-3"></div>
+            <div class="flex justify-end mt-6">
+                <button id="themeCloseBtn" class="px-4 py-2 text-slate-600 hover:text-slate-800">Закрити</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { ResourcesApiService, ModuleCharacter, ModuleBrand, ModuleScript, ModulePublishingChannel, ModulePublication, ModuleMetric, ModuleAlert, ModuleHealthCheck, SystemStats } from '/src/app/core/api/resources.api.js';
+        import { BaseApiService } from '/src/app/core/api/base-api.service.js';
+        import { HttpClient } from '@angular/common/http';
+
+        const API = '/api/modules/web-ui/v1';
+        const MODULE_APIS = {
+            characters: '/api/modules/characters/v1',
+            brands: '/api/modules/brands/v1',
+            storyboard: '/api/modules/storyboard/v1',
+            publishing: '/api/modules/publishing/v1',
+            monitoring: '/api/modules/monitoring/v1',
+        };
+
+        let currentPage = 'dashboard';
+
+        async function fetchJSON(url, options = {}) {
+            const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
+            if (!res.ok) throw new Error((await res.json()).error || 'Request failed');
+            return res.json();
+        }
+
+        function showPage(page) {
+            document.querySelectorAll('.page-content').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`page${page.charAt(0).toUpperCase() + page.slice(1)}`).classList.remove('hidden');
+            document.querySelectorAll('#navMenu button').forEach(btn => {
+                const isActive = btn.dataset.page === page;
+                btn.classList.toggle('bg-emerald-50', isActive);
+                btn.classList.toggle('text-emerald-700', isActive);
+                btn.classList.toggle('border-l-2', isActive);
+                btn.classList.toggle('border-emerald-600', isActive);
+            });
+            currentPage = page;
+            document.getElementById('pageTitle').textContent = getPageTitle(page);
+            if (page !== 'dashboard') loadPageContent(page);
+        }
+
+        function getPageTitle(page) {
+            const titles = {
+                dashboard: 'Дашборд',
+                characters: 'Персонажі',
+                brands: 'Бренди',
+                storyboard: 'Сторіборд',
+                publishing: 'Публікація',
+                monitoring: 'Моніторинг',
+                modules: 'Модулі',
+                settings: 'Налаштування'
+            };
+            return titles[page] || page;
+        }
+
+        async function loadNavigation() {
+            const nav = await fetchJSON(`${API}/navigation`);
+            const menu = document.getElementById('navMenu');
+            menu.innerHTML = `
+                <button data-page="dashboard" class="nav-btn w-full text-left px-3 py-2.5 rounded-lg text-slate-600 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-3 border-l-2 border-emerald-600 bg-emerald-50 text-emerald-700">
+                    <span class="material-icons">dashboard</span>
+                    Дашборд
+                </button>
+            `;
+            nav.forEach(item => {
+                if (!item.visible) return;
+                const btn = document.createElement('button');
+                btn.className = 'nav-btn w-full text-left px-3 py-2.5 rounded-lg text-slate-600 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-3 border-l-2 border-transparent';
+                btn.dataset.page = item.module_namespace || item.path.replace('/', '');
+                btn.innerHTML = `<span class="material-icons">${item.icon}</span> ${item.label}`;
+                btn.onclick = () => showPage(btn.dataset.page);
+                menu.appendChild(btn);
+            });
+            // Add modules and settings
+            const extraItems = [
+                { page: 'modules', icon: 'extension', label: 'Модулі' },
+                { page: 'settings', icon: 'settings', label: 'Налаштування' }
+            ];
+            extraItems.forEach(item => {
+                const btn = document.createElement('button');
+                btn.className = 'nav-btn w-full text-left px-3 py-2.5 rounded-lg text-slate-600 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-3 border-l-2 border-transparent';
+                btn.dataset.page = item.page;
+                btn.innerHTML = `<span class="material-icons">${item.icon}</span> ${item.label}`;
+                btn.onclick = () => showPage(item.page);
+                menu.appendChild(btn);
+            });
+        }
+
+        async function loadDashboardStats() {
+            try {
+                const [monitoringStats, characters, brands, publications] = await Promise.all([
+                    fetchJSON(`${MODULE_APIS.monitoring}/stats`),
+                    fetchJSON(`${MODULE_APIS.characters}/characters`),
+                    fetchJSON(`${MODULE_APIS.brands}/brands`),
+                    fetchJSON(`${MODULE_APIS.publishing}/publications`)
+                ]);
+                document.getElementById('statNodes').textContent = monitoringStats.online_nodes || 0;
+                document.getElementById('statAlerts').textContent = monitoringStats.active_alerts || 0;
+                document.getElementById('statCharacters').textContent = characters.length || 0;
+                const today = new Date().toISOString().split('T')[0];
+                const todayPubs = publications.filter(p => p.created_at?.startsWith(today)).length;
+                document.getElementById('statPublished').textContent = todayPubs;
+
+                // Recent alerts
+                const alerts = await fetchJSON(`${MODULE_APIS.monitoring}/alerts?active_only=true`);
+                const container = document.getElementById('recentAlerts');
+                container.innerHTML = '';
+                alerts.slice(0, 5).forEach(a => {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center justify-between p-2 bg-slate-50 rounded';
+                    const severityColors = { critical: 'text-red-600', warning: 'text-amber-600', info: 'text-blue-600' };
+                    div.innerHTML = `
+                        <div class="flex items-center gap-2">
+                            <span class="material-icons ${severityColors[a.severity] || 'text-slate-600'}">warning</span>
+                            <span class="font-medium">${a.name}</span>
+                        </div>
+                        <span class="text-xs px-2 py-0.5 rounded bg-slate-200">${a.severity}</span>
+                    `;
+                    container.appendChild(div);
+                });
+                if (alerts.length === 0) {
+                    container.innerHTML = '<p class="text-sm text-slate-500 text-center py-4">Алертів немає</p>';
+                }
+            } catch (e) {
+                console.error('Failed to load dashboard stats:', e);
+            }
+        }
+
+        async function loadPageContent(page) {
+            const container = document.getElementById(`page${page.charAt(0).toUpperCase() + page.slice(1)}`);
+            switch (page) {
+                case 'characters':
+                    container.innerHTML = '<iframe src="/modules/characters/v1/index.html" class="w-full h-[calc(100vh-200px)] border-0"></iframe>';
+                    break;
+                case 'brands':
+                    container.innerHTML = '<iframe src="/modules/brands/v1/index.html" class="w-full h-[calc(100vh-200px)] border-0"></iframe>';
+                    break;
+                case 'storyboard':
+                    container.innerHTML = '<iframe src="/modules/storyboard/v1/index.html" class="w-full h-[calc(100vh-200px)] border-0"></iframe>';
+                    break;
+                case 'publishing':
+                    container.innerHTML = '<iframe src="/modules/publishing/v1/index.html" class="w-full h-[calc(100vh-200px)] border-0"></iframe>';
+                    break;
+                case 'monitoring':
+                    container.innerHTML = '<iframe src="/modules/monitoring/v1/index.html" class="w-full h-[calc(100vh-200px)] border-0"></iframe>';
+                    break;
+                case 'modules':
+                    await loadModulesPage(container);
+                    break;
+                case 'settings':
+                    await loadSettingsPage(container);
+                    break;
+            }
+        }
+
+        async function loadModulesPage(container) {
+            const modules = await fetchJSON(`${API}/modules`);
+            container.innerHTML = `
+                <h3 class="text-lg font-semibold mb-4">Управління модулями</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="modulesGrid"></div>
+            `;
+            const grid = document.getElementById('modulesGrid');
+            modules.forEach(m => {
+                const card = document.createElement('div');
+                card.className = 'bg-white rounded-xl border border-slate-200 p-5';
+                card.innerHTML = `
+                    <div class="flex items-center justify-between mb-3">
+                        <h4 class="font-semibold text-slate-900">${m.label}</h4>
+                        <span class="px-2 py-0.5 text-xs rounded ${m.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${m.enabled ? 'Увімкнено' : 'Вимкнено'}</span>
+                    </div>
+                    <p class="text-sm text-slate-500 mb-3">Namespace: ${m.namespace}</p>
+                    <div class="flex gap-2">
+                        <button class="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50" onclick="window.open('${m.path}', '_blank')">Відкрити</button>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        async function loadSettingsPage(container) {
+            container.innerHTML = `
+                <h3 class="text-lg font-semibold mb-4">Налаштування Web UI</h3>
+                <div class="space-y-6">
+                    <div class="bg-white rounded-xl border border-slate-200 p-5">
+                        <h4 class="font-semibold mb-3">Тема інтерфейсу</h4>
+                        <div id="themeSelector" class="space-y-3"></div>
+                    </div>
+                    <div class="bg-white rounded-xl border border-slate-200 p-5">
+                        <h4 class="font-semibold mb-3">Конфігурація</h4>
+                        <div id="configList" class="space-y-3"></div>
+                    </div>
+                </div>
+            `;
+            // Load themes
+            const themes = await fetchJSON(`${API}/themes`);
+            const selector = document.getElementById('themeSelector');
+            themes.forEach(t => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-3 border border-slate-200 rounded-lg';
+                const isDefault = t.is_default;
+                div.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded flex items-center justify-center" style="background: ${t.colors.primary || '#10b981'}">
+                            <span class="material-icons text-white text-sm">palette</span>
+                        </div>
+                        <div>
+                            <p class="font-medium">${t.name}</p>
+                            <p class="text-sm text-slate-500">${isDefault ? 'За замовчуванням' : 'Користувацька'}</p>
+                        </div>
+                    </div>
+                    ${!isDefault ? `<button class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700" onclick="setDefaultTheme('${t.id}')">Встановити як основну</button>` : ''}
+                `;
+                selector.appendChild(div);
+            });
+            // Load configs
+            const configs = await fetchJSON(`${API}/config`);
+            const configList = document.getElementById('configList');
+            configs.forEach(c => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-3 border border-slate-200 rounded-lg';
+                div.innerHTML = `
+                    <div>
+                        <p class="font-medium font-mono text-sm">${c.key}</p>
+                        <p class="text-sm text-slate-500">${c.description || '—'}</p>
+                    </div>
+                    <pre class="text-xs max-w-xs overflow-auto">${JSON.stringify(c.value, null, 2)}</pre>
+                `;
+                configList.appendChild(div);
+            });
+        }
+
+        window.setDefaultTheme = async (themeId) => {
+            await fetchJSON(`${API}/themes/${themeId}`, { method: 'PATCH', body: JSON.stringify({ is_default: true }) });
+            loadSettingsPage(document.getElementById('pageSettings'));
+        };
+
+        // Quick actions
+        document.addEventListener('click', (e) => {
+            const action = e.target.closest('.quick-action');
+            if (action) {
+                showPage(action.dataset.page);
+            }
+        });
+
+        // Menu toggle
+        document.getElementById('menuBtn').onclick = () => {
+            document.getElementById('sidebar').classList.toggle('translate-x-0');
+            document.getElementById('sidebarOverlay').classList.toggle('hidden');
+        };
+        document.getElementById('sidebarOverlay').onclick = () => {
+            document.getElementById('sidebar').classList.remove('translate-x-0');
+            document.getElementById('sidebarOverlay').classList.add('hidden');
+        };
+
+        // Theme modal
+        document.getElementById('themeBtn').onclick = () => {
+            document.getElementById('themeModal').classList.remove('hidden');
+            loadThemeModal();
+        };
+        document.getElementById('themeCloseBtn').onclick = () => document.getElementById('themeModal').classList.add('hidden');
+
+        async function loadThemeModal() {
+            const themes = await fetchJSON(`${API}/themes`);
+            const container = document.getElementById('themeOptions');
+            container.innerHTML = '';
+            themes.forEach(t => {
+                const div = document.createElement('div');
+                div.className = `p-3 border rounded-lg cursor-pointer ${t.is_default ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'}`;
+                div.onclick = () => setTheme(t.id);
+                div.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded flex items-center justify-center" style="background: ${t.colors.primary || '#10b981'}">
+                            <span class="material-icons text-white">palette</span>
+                        </div>
+                        <div>
+                            <p class="font-medium">${t.name}</p>
+                            <p class="text-sm text-slate-500">${t.is_default ? 'Поточна' : 'Доступна'}</p>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function setTheme(themeId) {
+            await fetchJSON(`${API}/themes/${themeId}`, { method: 'PATCH', body: JSON.stringify({ is_default: true }) });
+            document.getElementById('themeModal').classList.add('hidden');
+            // Reload page to apply theme
+            window.location.reload();
+        }
+
+        // Initialize
+        async function init() {
+            await loadNavigation();
+            await loadDashboardStats();
+            // Auto-refresh dashboard every 60 seconds
+            setInterval(loadDashboardStats, 60000);
+        }
+
+        init();
+    </script>
+</body>
+</html>

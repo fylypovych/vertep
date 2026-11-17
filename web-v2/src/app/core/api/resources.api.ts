@@ -211,6 +211,46 @@ export interface MonitoringMigrationResult {
   skipped: number;
 }
 
+export interface ModuleUIConfig {
+  id: string;
+  key: string;
+  value: Record<string, unknown>;
+  description: string;
+  updated_at: string;
+}
+
+export interface ModuleUITheme {
+  id: string;
+  name: string;
+  colors: Record<string, string>;
+  is_default: boolean;
+  created_at: string;
+}
+
+export interface ModuleUINavigation {
+  id: string;
+  label: string;
+  path: string;
+  icon: string;
+  order: number;
+  module_namespace?: string;
+  required_permissions: string[];
+  visible: boolean;
+}
+
+export interface ModuleInfo {
+  namespace: string;
+  label: string;
+  path: string;
+  icon: string;
+  enabled: boolean;
+}
+
+export interface WebUIMigrationResult {
+  migrated: number;
+  skipped: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
@@ -323,6 +363,24 @@ export class ResourcesApiService {
   moduleStats = (): Observable<SystemStats> => this.http.get<SystemStats>(`${this.base.url}/modules/monitoring/v1/stats`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleCleanup = (retentionDays: number): Observable<{ cleaned: boolean }> => this.http.post<{ cleaned: boolean }>(`${this.base.url}/modules/monitoring/v1/cleanup`, { retention_days: retentionDays }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleMigrateMonitoring = (data: any): Observable<MonitoringMigrationResult> => this.http.post<MonitoringMigrationResult>(`${this.base.url}/modules/monitoring/v1/migrate`, { data }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+
+  // Web UI Module API (Application Module)
+  moduleUIConfigs = (): Observable<ModuleUIConfig[]> => this.http.get<ModuleUIConfig[]>(`${this.base.url}/modules/web-ui/v1/config`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUIConfig = (key: string): Observable<ModuleUIConfig> => this.http.get<ModuleUIConfig>(`${this.base.url}/modules/web-ui/v1/config/${this.base.enc(key)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleSetUIConfig = (key: string, value: Record<string, unknown>, description: string): Observable<ModuleUIConfig> => this.http.post<ModuleUIConfig>(`${this.base.url}/modules/web-ui/v1/config`, { key, value, description }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUIThemes = (): Observable<ModuleUITheme[]> => this.http.get<ModuleUITheme[]>(`${this.base.url}/modules/web-ui/v1/themes`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUITheme = (id: string): Observable<ModuleUITheme> => this.http.get<ModuleUITheme>(`${this.base.url}/modules/web-ui/v1/themes/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDefaultUITheme = (): Observable<ModuleUITheme> => this.http.get<ModuleUITheme>(`${this.base.url}/modules/web-ui/v1/themes/default`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateUITheme = (p: ModuleUITheme): Observable<ModuleUITheme> => this.http.post<ModuleUITheme>(`${this.base.url}/modules/web-ui/v1/themes`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateUITheme = (id: string, p: ModuleUITheme): Observable<ModuleUITheme> => this.http.put<ModuleUITheme>(`${this.base.url}/modules/web-ui/v1/themes/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeleteUITheme = (id: string): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/web-ui/v1/themes/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUINavigation = (): Observable<ModuleUINavigation[]> => this.http.get<ModuleUINavigation[]>(`${this.base.url}/modules/web-ui/v1/navigation`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUINavigationItem = (id: string): Observable<ModuleUINavigation> => this.http.get<ModuleUINavigation>(`${this.base.url}/modules/web-ui/v1/navigation/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateUINavigation = (p: ModuleUINavigation): Observable<ModuleUINavigation> => this.http.post<ModuleUINavigation>(`${this.base.url}/modules/web-ui/v1/navigation`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateUINavigation = (id: string, p: ModuleUINavigation): Observable<ModuleUINavigation> => this.http.put<ModuleUINavigation>(`${this.base.url}/modules/web-ui/v1/navigation/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeleteUINavigation = (id: string): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/web-ui/v1/navigation/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleModuleInfo = (): Observable<ModuleInfo[]> => this.http.get<ModuleInfo[]>(`${this.base.url}/modules/web-ui/v1/modules`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleMigrateWebUI = (data: any): Observable<WebUIMigrationResult> => this.http.post<WebUIMigrationResult>(`${this.base.url}/modules/web-ui/v1/migrate`, { data }, { headers: this.h() }).pipe(catchError(this.base.handleError));
 
   brands = (): Observable<Brand[]> => this.http.get<Brand[]>(`${this.base.url}/brands`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   createBrand = (p: BrandCreateDTO): Observable<Brand> => this.http.post<Brand>(`${this.base.url}/brands`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
