@@ -114,6 +114,51 @@ export interface StoryboardMigrationResult {
   skipped: number;
 }
 
+export interface ModulePublishingChannel {
+  id: string;
+  brand_id: string;
+  platform: string;
+  channel_name: string;
+  channel_id: string;
+  credentials: Record<string, unknown>;
+  active: boolean;
+  owner_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModulePublication {
+  id: string;
+  brand_id: string;
+  storyboard_id: string;
+  video_path: string;
+  title: string;
+  description: string;
+  tags: string[];
+  scheduled_at?: string;
+  status: string;
+  platform_results: Record<string, unknown>;
+  owner_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModulePublishingCollaboration {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  collaborator_user_id: string;
+  permission_level: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublishingMigrationResult {
+  migrated: number;
+  skipped: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
@@ -187,6 +232,26 @@ export class ResourcesApiService {
   moduleAddStoryboardCollaboration = (storyboardId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModuleStoryboardCollaboration> => this.http.post<ModuleStoryboardCollaboration>(`${this.base.url}/modules/storyboard/v1/storyboards/${this.base.enc(storyboardId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleRemoveStoryboardCollaboration = (storyboardId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/storyboard/v1/storyboards/${this.base.enc(storyboardId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleMigrateScripts = (scripts: ModuleScript[]): Observable<StoryboardMigrationResult> => this.http.post<StoryboardMigrationResult>(`${this.base.url}/modules/storyboard/v1/scripts/migrate`, { scripts }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+
+  // Publishing Module API (Application Module)
+  modulePublishingChannels = (): Observable<ModulePublishingChannel[]> => this.http.get<ModulePublishingChannel[]>(`${this.base.url}/modules/publishing/v1/channels`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  modulePublishingChannel = (id: string): Observable<ModulePublishingChannel> => this.http.get<ModulePublishingChannel>(`${this.base.url}/modules/publishing/v1/channels/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreatePublishingChannel = (p: ModulePublishingChannel): Observable<ModulePublishingChannel> => this.http.post<ModulePublishingChannel>(`${this.base.url}/modules/publishing/v1/channels`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdatePublishingChannel = (id: string, p: ModulePublishingChannel): Observable<ModulePublishingChannel> => this.http.put<ModulePublishingChannel>(`${this.base.url}/modules/publishing/v1/channels/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeletePublishingChannel = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/publishing/v1/channels/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  modulePublishingChannelCollaborations = (channelId: string): Observable<ModulePublishingCollaboration[]> => this.http.get<ModulePublishingCollaboration[]>(`${this.base.url}/modules/publishing/v1/channels/${encodeURIComponent(channelId)}/collaborations`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAddPublishingChannelCollaboration = (channelId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModulePublishingCollaboration> => this.http.post<ModulePublishingCollaboration>(`${this.base.url}/modules/publishing/v1/channels/${this.base.enc(channelId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRemovePublishingChannelCollaboration = (channelId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/publishing/v1/channels/${this.base.enc(channelId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  modulePublications = (): Observable<ModulePublication[]> => this.http.get<ModulePublication[]>(`${this.base.url}/modules/publishing/v1/publications`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  modulePublication = (id: string): Observable<ModulePublication> => this.http.get<ModulePublication>(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreatePublication = (p: ModulePublication): Observable<ModulePublication> => this.http.post<ModulePublication>(`${this.base.url}/modules/publishing/v1/publications`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdatePublication = (id: string, p: ModulePublication): Observable<ModulePublication> => this.http.put<ModulePublication>(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeletePublication = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  modulePublishPublication = (id: string, platformChannels: Record<string, string>): Observable<Record<string, unknown>> => this.http.post<Record<string, unknown>>(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(id)}/publish`, { platform_channels: platformChannels }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  modulePublicationCollaborations = (publicationId: string): Observable<ModulePublishingCollaboration[]> => this.http.get<ModulePublishingCollaboration[]>(`${this.base.url}/modules/publishing/v1/publications/${encodeURIComponent(publicationId)}/collaborations`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAddPublicationCollaboration = (publicationId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModulePublishingCollaboration> => this.http.post<ModulePublishingCollaboration>(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(publicationId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRemovePublicationCollaboration = (publicationId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/publishing/v1/publications/${this.base.enc(publicationId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleMigratePublishingChannels = (channels: ModulePublishingChannel[]): Observable<PublishingMigrationResult> => this.http.post<PublishingMigrationResult>(`${this.base.url}/modules/publishing/v1/channels/migrate`, { channels }, { headers: this.h() }).pipe(catchError(this.base.handleError));
 
   brands = (): Observable<Brand[]> => this.http.get<Brand[]>(`${this.base.url}/brands`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   createBrand = (p: BrandCreateDTO): Observable<Brand> => this.http.post<Brand>(`${this.base.url}/brands`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
