@@ -61,6 +61,59 @@ export interface BrandsMigrationResult {
   skipped: number;
 }
 
+export interface ModuleScript {
+  id: string;
+  brand_id: string;
+  title: string;
+  description: string;
+  status: string;
+  script_data: Record<string, unknown>;
+  owner_user_id: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModuleScene {
+  id: string;
+  script_id: string;
+  scene_number: number;
+  title: string;
+  description: string;
+  scene_data: Record<string, unknown>;
+  status: string;
+  generated_assets: any[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModuleStoryboard {
+  id: string;
+  script_id: string;
+  name: string;
+  panels: any[];
+  owner_user_id: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModuleStoryboardCollaboration {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  collaborator_user_id: string;
+  permission_level: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoryboardMigrationResult {
+  migrated: number;
+  skipped: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
@@ -104,6 +157,36 @@ export class ResourcesApiService {
   moduleAddBrandCollaboration = (brandId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModuleBrandCollaboration> => this.http.post<ModuleBrandCollaboration>(`${this.base.url}/modules/brands/v1/brands/${this.base.enc(brandId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleRemoveBrandCollaboration = (brandId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/brands/v1/brands/${this.base.enc(brandId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleMigrateBrands = (brands: ModuleBrand[]): Observable<BrandsMigrationResult> => this.http.post<BrandsMigrationResult>(`${this.base.url}/modules/brands/v1/migrate`, { brands }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+
+  // Storyboard Module API (Application Module)
+  moduleScripts = (): Observable<ModuleScript[]> => this.http.get<ModuleScript[]>(`${this.base.url}/modules/storyboard/v1/scripts`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleScript = (id: string): Observable<ModuleScript> => this.http.get<ModuleScript>(`${this.base.url}/modules/storyboard/v1/scripts/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateScript = (p: ModuleScript): Observable<ModuleScript> => this.http.post<ModuleScript>(`${this.base.url}/modules/storyboard/v1/scripts`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateScript = (id: string, p: ModuleScript): Observable<ModuleScript> => this.http.put<ModuleScript>(`${this.base.url}/modules/storyboard/v1/scripts/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeleteScript = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/storyboard/v1/scripts/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleActivateScript = (id: string): Observable<ModuleScript> => this.http.post<ModuleScript>(`${this.base.url}/modules/storyboard/v1/scripts/${this.base.enc(id)}/activate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeactivateScript = (id: string): Observable<ModuleScript> => this.http.post<ModuleScript>(`${this.base.url}/modules/storyboard/v1/scripts/${this.base.enc(id)}/deactivate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleScriptScenes = (scriptId: string): Observable<ModuleScene[]> => this.http.get<ModuleScene[]>(`${this.base.url}/modules/storyboard/v1/scripts/${encodeURIComponent(scriptId)}/scenes`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleScriptCollaborations = (scriptId: string): Observable<ModuleStoryboardCollaboration[]> => this.http.get<ModuleStoryboardCollaboration[]>(`${this.base.url}/modules/storyboard/v1/scripts/${encodeURIComponent(scriptId)}/collaborations`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAddScriptCollaboration = (scriptId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModuleStoryboardCollaboration> => this.http.post<ModuleStoryboardCollaboration>(`${this.base.url}/modules/storyboard/v1/scripts/${this.base.enc(scriptId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRemoveScriptCollaboration = (scriptId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/storyboard/v1/scripts/${this.base.enc(scriptId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleScenes = (): Observable<ModuleScene[]> => this.http.get<ModuleScene[]>(`${this.base.url}/modules/storyboard/v1/scenes`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleScene = (id: string): Observable<ModuleScene> => this.http.get<ModuleScene>(`${this.base.url}/modules/storyboard/v1/scenes/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateScene = (p: ModuleScene): Observable<ModuleScene> => this.http.post<ModuleScene>(`${this.base.url}/modules/storyboard/v1/scenes`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateScene = (id: string, p: ModuleScene): Observable<ModuleScene> => this.http.put<ModuleScene>(`${this.base.url}/modules/storyboard/v1/scenes/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeleteScene = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/storyboard/v1/scenes/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleSceneCollaborations = (sceneId: string): Observable<ModuleStoryboardCollaboration[]> => this.http.get<ModuleStoryboardCollaboration[]>(`${this.base.url}/modules/storyboard/v1/scenes/${encodeURIComponent(sceneId)}/collaborations`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAddSceneCollaboration = (sceneId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModuleStoryboardCollaboration> => this.http.post<ModuleStoryboardCollaboration>(`${this.base.url}/modules/storyboard/v1/scenes/${this.base.enc(sceneId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRemoveSceneCollaboration = (sceneId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/storyboard/v1/scenes/${this.base.enc(sceneId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleStoryboards = (): Observable<ModuleStoryboard[]> => this.http.get<ModuleStoryboard[]>(`${this.base.url}/modules/storyboard/v1/storyboards`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleStoryboard = (id: string): Observable<ModuleStoryboard> => this.http.get<ModuleStoryboard>(`${this.base.url}/modules/storyboard/v1/storyboards/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateStoryboard = (p: ModuleStoryboard): Observable<ModuleStoryboard> => this.http.post<ModuleStoryboard>(`${this.base.url}/modules/storyboard/v1/storyboards`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateStoryboard = (id: string, p: ModuleStoryboard): Observable<ModuleStoryboard> => this.http.put<ModuleStoryboard>(`${this.base.url}/modules/storyboard/v1/storyboards/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeleteStoryboard = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/storyboard/v1/storyboards/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleStoryboardCollaborations = (storyboardId: string): Observable<ModuleStoryboardCollaboration[]> => this.http.get<ModuleStoryboardCollaboration[]>(`${this.base.url}/modules/storyboard/v1/storyboards/${encodeURIComponent(storyboardId)}/collaborations`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAddStoryboardCollaboration = (storyboardId: string, collaboratorUserId: string, permissionLevel: string): Observable<ModuleStoryboardCollaboration> => this.http.post<ModuleStoryboardCollaboration>(`${this.base.url}/modules/storyboard/v1/storyboards/${this.base.enc(storyboardId)}/collaborations`, { collaborator_user_id: collaboratorUserId, permission_level: permissionLevel }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRemoveStoryboardCollaboration = (storyboardId: string, collabId: number): Observable<{ deleted: boolean }> => this.http.delete(`${this.base.url}/modules/storyboard/v1/storyboards/${this.base.enc(storyboardId)}/collaborations/${collabId}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleMigrateScripts = (scripts: ModuleScript[]): Observable<StoryboardMigrationResult> => this.http.post<StoryboardMigrationResult>(`${this.base.url}/modules/storyboard/v1/scripts/migrate`, { scripts }, { headers: this.h() }).pipe(catchError(this.base.handleError));
 
   brands = (): Observable<Brand[]> => this.http.get<Brand[]>(`${this.base.url}/brands`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   createBrand = (p: BrandCreateDTO): Observable<Brand> => this.http.post<Brand>(`${this.base.url}/brands`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));

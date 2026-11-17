@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Сторіборд - Vertep</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 min-h-screen p-6">
+    <div class="max-w-6xl mx-auto">
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-2xl font-bold text-slate-900">Сторіборд</h1>
+            <div class="flex gap-2">
+                <button id="createScriptBtn" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Новий сценарій</button>
+            </div>
+        </div>
+
+        <!-- Scripts List -->
+        <div id="scriptsView">
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <div id="scriptsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                </div>
+                <div id="emptyScripts" class="hidden text-center text-slate-500 py-6">Сценаріїв не знайдено</div>
+            </div>
+        </div>
+
+        <!-- Script Detail -->
+        <div id="scriptDetailView" class="hidden">
+            <div class="bg-white rounded-xl border border-slate-200 p-5 mb-4">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 id="scriptDetailTitle" class="text-lg font-semibold text-slate-900"></h2>
+                    <div class="flex gap-2">
+                        <button id="backToScriptsBtn" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg">Назад</button>
+                        <button id="editScriptBtn" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Редагувати</button>
+                        <button id="deleteScriptBtn" class="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Видалити</button>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div><span class="text-sm text-slate-500">ID</span><p id="scriptDetailId" class="font-mono text-sm"></p></div>
+                    <div><span class="text-sm text-slate-500">Статус</span><p id="scriptDetailStatus" class="font-medium"></p></div>
+                    <div class="md:col-span-2"><span class="text-sm text-slate-500">Опис</span><p id="scriptDetailDescription"></p></div>
+                    <div class="md:col-span-2"><span class="text-sm text-slate-500">Дані сценарію (JSON)</span><pre id="scriptDetailData" class="text-sm bg-slate-50 p-2 rounded max-h-64 overflow-auto"></pre></div>
+                </div>
+                <div class="border-t pt-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="font-medium">Сцени</h3>
+                        <button id="addSceneBtn" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Додати сцену</button>
+                    </div>
+                    <div id="scenesList" class="space-y-2"></div>
+                </div>
+                <div class="border-t pt-4 mt-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="font-medium">Сторіборди</h3>
+                        <button id="addStoryboardBtn" class="px-3 py-1.5 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700">Додати сторіборд</button>
+                    </div>
+                    <div id="storyboardsList" class="space-y-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scene Detail Modal -->
+        <div id="sceneModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-xl p-6 w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto">
+                <h3 id="sceneModalTitle" class="text-lg font-semibold text-slate-900 mb-4">Нова сцена</h3>
+                <form id="sceneForm" class="space-y-4">
+                    <input type="hidden" name="id" id="sceneId">
+                    <input type="hidden" name="script_id" id="sceneScriptId">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Номер сцени *</label>
+                            <input name="scene_number" id="sceneNumber" type="number" min="1" required class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Назва *</label>
+                            <input name="title" id="sceneTitle" required class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Опис</label>
+                        <textarea name="description" id="sceneDescription" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Дані сцени (JSON)</label>
+                        <textarea name="scene_data" id="sceneData" rows="6" placeholder='{"characters": [], "location": "", "duration_sec": 30, "dialogue": [], "visual_prompts": []}' class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Статус</label>
+                        <select name="status" id="sceneStatus" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            <option value="pending">Очікує</option>
+                            <option value="generating">Генерується</option>
+                            <option value="completed">Завершено</option>
+                            <option value="failed">Помилка</option>
+                        </select>
+                    </div>
+                    <div class="flex justify-end gap-2 pt-4">
+                        <button type="button" id="sceneCancelBtn" class="px-4 py-2 text-slate-600 hover:text-slate-800">Скасувати</button>
+                        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Зберегти</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Storyboard Detail Modal -->
+        <div id="storyboardModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-xl p-6 w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto">
+                <h3 id="storyboardModalTitle" class="text-lg font-semibold text-slate-900 mb-4">Новий сторіборд</h3>
+                <form id="storyboardForm" class="space-y-4">
+                    <input type="hidden" name="id" id="storyboardId">
+                    <input type="hidden" name="script_id" id="storyboardScriptId">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Назва *</label>
+                        <input name="name" id="storyboardName" required class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Панелі (JSON масив)</label>
+                        <textarea name="panels" id="storyboardPanels" rows="8" placeholder='[{"image_ref": "", "description": "", "timing_sec": 5, "scene_id": "", "notes": ""}]' class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"></textarea>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" name="active" id="storyboardActive" checked>
+                        <label for="storyboardActive" class="text-sm text-slate-700">Активний</label>
+                    </div>
+                    <div class="flex justify-end gap-2 pt-4">
+                        <button type="button" id="storyboardCancelBtn" class="px-4 py-2 text-slate-600 hover:text-slate-800">Скасувати</button>
+                        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Зберегти</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Script Form Modal -->
+        <div id="scriptModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-xl p-6 w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+                <h3 id="scriptModalTitle" class="text-lg font-semibold text-slate-900 mb-4">Новий сценарій</h3>
+                <form id="scriptForm" class="space-y-4">
+                    <input type="hidden" name="id" id="scriptId">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Назва *</label>
+                            <input name="title" id="scriptTitle" required class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Бренд ID</label>
+                            <input name="brand_id" id="scriptBrandId" value="vertep" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Опис</label>
+                        <textarea name="description" id="scriptDescription" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Дані сценарію (JSON)</label>
+                        <textarea name="script_data" id="scriptData" rows="6" placeholder='{"acts": [], "characters": [], "settings": {}}' class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"></textarea>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Статус</label>
+                            <select name="status" id="scriptStatus" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <option value="draft">Чорновик</option>
+                                <option value="ready">Готовий</option>
+                                <option value="generating">Генерується</option>
+                                <option value="completed">Завершено</option>
+                                <option value="failed">Помилка</option>
+                            </select>
+                        </div>
+                        <div class="flex items-end">
+                            <div class="flex items-center gap-2">
+                                <input type="checkbox" name="active" id="scriptActive" checked>
+                                <label for="scriptActive" class="text-sm text-slate-700">Активний</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex justify-end gap-2 pt-4">
+                        <button type="button" id="scriptCancelBtn" class="px-4 py-2 text-slate-600 hover:text-slate-800">Скасувати</button>
+                        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Зберегти</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/api/modules/storyboard/v1';
+        let currentScriptId = null;
+
+        async function fetchJSON(url, options = {}) {
+            const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
+            if (!res.ok) throw new Error((await res.json()).error || 'Request failed');
+            return res.json();
+        }
+
+        function showView(view) {
+            document.getElementById('scriptsView').classList.toggle('hidden', view !== 'scripts');
+            document.getElementById('scriptDetailView').classList.toggle('hidden', view !== 'scriptDetail');
+        }
+
+        function showModal(id) {
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        function hideModal(id) {
+            document.getElementById(id).classList.add('hidden');
+        }
+
+        async function loadScripts() {
+            const scripts = await fetchJSON(`${API}/scripts`);
+            const grid = document.getElementById('scriptsGrid');
+            const empty = document.getElementById('emptyScripts');
+            grid.innerHTML = '';
+            if (scripts.length === 0) {
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            scripts.forEach(s => {
+                const card = document.createElement('div');
+                card.className = 'border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer';
+                card.innerHTML = `
+                    <h3 class="font-semibold text-slate-900">${s.title}</h3>
+                    <p class="text-sm text-slate-600 mt-1">${s.id}</p>
+                    <div class="flex flex-wrap gap-2 mt-2">
+                        <span class="px-2 py-0.5 text-xs rounded ${s.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${s.active ? 'Активний' : 'Неактивний'}</span>
+                        <span class="px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-700">${s.status}</span>
+                    </div>
+                `;
+                card.onclick = () => showScriptDetail(s.id);
+                grid.appendChild(card);
+            });
+        }
+
+        async function showScriptDetail(id) {
+            currentScriptId = id;
+            const script = await fetchJSON(`${API}/scripts/${id}`);
+            document.getElementById('scriptDetailTitle').textContent = script.title;
+            document.getElementById('scriptDetailId').textContent = script.id;
+            document.getElementById('scriptDetailStatus').innerHTML = `<span class="px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-700">${script.status}</span> <span class="px-2 py-0.5 text-xs rounded ${script.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${script.active ? 'Активний' : 'Неактивний'}</span>`;
+            document.getElementById('scriptDetailDescription').textContent = script.description || '—';
+            document.getElementById('scriptDetailData').textContent = JSON.stringify(script.script_data, null, 2);
+            loadScenes(id);
+            loadStoryboards(id);
+            showView('scriptDetail');
+        }
+
+        async function loadScenes(scriptId) {
+            const scenes = await fetchJSON(`${API}/scripts/${scriptId}/scenes`);
+            const list = document.getElementById('scenesList');
+            list.innerHTML = '';
+            if (scenes.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-500">Сцен немає</p>';
+                return;
+            }
+            scenes.forEach(s => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-3 border border-slate-200 rounded-lg';
+                div.innerHTML = `
+                    <div>
+                        <p class="font-medium">#${s.scene_number} ${s.title}</p>
+                        <p class="text-sm text-slate-500">${s.description || '—'}</p>
+                        <span class="px-2 py-0.5 text-xs rounded ${s.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : s.status === 'generating' ? 'bg-blue-100 text-blue-700' : s.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'}">${s.status}</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button class="text-sm text-blue-600 hover:text-blue-700" onclick="editScene('${s.id}')">Редагувати</button>
+                        <button class="text-sm text-red-600 hover:text-red-700" onclick="deleteScene('${s.id}')">Видалити</button>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function loadStoryboards(scriptId) {
+            const sbs = await fetchJSON(`${API}/storyboards?script_id=${scriptId}`);
+            const list = document.getElementById('storyboardsList');
+            list.innerHTML = '';
+            if (sbs.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-500">Сторібордів немає</p>';
+                return;
+            }
+            sbs.forEach(sb => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-3 border border-slate-200 rounded-lg';
+                div.innerHTML = `
+                    <div>
+                        <p class="font-medium">${sb.name}</p>
+                        <p class="text-sm text-slate-500">${sb.panels?.length || 0} панелей</p>
+                        <span class="px-2 py-0.5 text-xs rounded ${sb.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${sb.active ? 'Активний' : 'Неактивний'}</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button class="text-sm text-blue-600 hover:text-blue-700" onclick="editStoryboard('${sb.id}')">Редагувати</button>
+                        <button class="text-sm text-red-600 hover:text-red-700" onclick="deleteStoryboard('${sb.id}')">Видалити</button>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        // Script handlers
+        document.getElementById('createScriptBtn').onclick = () => {
+            document.getElementById('scriptForm').reset();
+            document.getElementById('scriptId').value = '';
+            document.getElementById('scriptModalTitle').textContent = 'Новий сценарій';
+            document.getElementById('scriptActive').checked = true;
+            document.getElementById('scriptBrandId').value = 'vertep';
+            document.getElementById('scriptStatus').value = 'draft';
+            showModal('scriptModal');
+        };
+
+        document.getElementById('scriptCancelBtn').onclick = () => hideModal('scriptModal');
+        document.getElementById('backToScriptsBtn').onclick = () => showView('scripts');
+
+        document.getElementById('editScriptBtn').onclick = async () => {
+            const script = await fetchJSON(`${API}/scripts/${currentScriptId}`);
+            document.getElementById('scriptId').value = script.id;
+            document.getElementById('scriptTitle').value = script.title;
+            document.getElementById('scriptBrandId').value = script.brand_id;
+            document.getElementById('scriptDescription').value = script.description;
+            document.getElementById('scriptData').value = JSON.stringify(script.script_data, null, 2);
+            document.getElementById('scriptStatus').value = script.status;
+            document.getElementById('scriptActive').checked = script.active;
+            document.getElementById('scriptModalTitle').textContent = 'Редагувати сценарій';
+            showModal('scriptModal');
+        };
+
+        document.getElementById('deleteScriptBtn').onclick = async () => {
+            if (!confirm('Видалити цей сценарій?')) return;
+            await fetchJSON(`${API}/scripts/${currentScriptId}`, { method: 'DELETE' });
+            showView('scripts');
+            loadScripts();
+        };
+
+        document.getElementById('scriptForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = {
+                title: form.title.value,
+                brand_id: form.brand_id.value || 'vertep',
+                description: form.description.value,
+                script_data: JSON.parse(form.script_data.value || '{}'),
+                status: form.status.value,
+                active: form.active.checked,
+            };
+            const id = form.id.value;
+            if (id) {
+                data.id = id;
+                await fetchJSON(`${API}/scripts/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+            } else {
+                data.id = 'script_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+                await fetchJSON(`${API}/scripts`, { method: 'POST', body: JSON.stringify(data) });
+            }
+            hideModal('scriptModal');
+            loadScripts();
+        };
+
+        // Scene handlers
+        document.getElementById('addSceneBtn').onclick = () => {
+            document.getElementById('sceneForm').reset();
+            document.getElementById('sceneId').value = '';
+            document.getElementById('sceneScriptId').value = currentScriptId;
+            document.getElementById('sceneModalTitle').textContent = 'Нова сцена';
+            document.getElementById('sceneNumber').value = '';
+            document.getElementById('sceneStatus').value = 'pending';
+            showModal('sceneModal');
+        };
+
+        document.getElementById('sceneCancelBtn').onclick = () => hideModal('sceneModal');
+
+        window.editScene = async (id) => {
+            const scene = await fetchJSON(`${API}/scenes/${id}`);
+            document.getElementById('sceneId').value = scene.id;
+            document.getElementById('sceneScriptId').value = scene.script_id;
+            document.getElementById('sceneNumber').value = scene.scene_number;
+            document.getElementById('sceneTitle').value = scene.title;
+            document.getElementById('sceneDescription').value = scene.description;
+            document.getElementById('sceneData').value = JSON.stringify(scene.scene_data, null, 2);
+            document.getElementById('sceneStatus').value = scene.status;
+            document.getElementById('sceneModalTitle').textContent = 'Редагувати сцену';
+            showModal('sceneModal');
+        };
+
+        window.deleteScene = async (id) => {
+            if (!confirm('Видалити цю сцену?')) return;
+            await fetchJSON(`${API}/scenes/${id}`, { method: 'DELETE' });
+            loadScenes(currentScriptId);
+        };
+
+        document.getElementById('sceneForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = {
+                scene_number: parseInt(form.scene_number.value),
+                title: form.title.value,
+                description: form.description.value,
+                scene_data: JSON.parse(form.scene_data.value || '{}'),
+                status: form.status.value,
+            };
+            const id = form.id.value;
+            const scriptId = form.script_id.value;
+            if (id) {
+                data.id = id;
+                await fetchJSON(`${API}/scenes/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+            } else {
+                data.id = 'scene_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+                await fetchJSON(`${API}/scripts/${scriptId}/scenes`, { method: 'POST', body: JSON.stringify(data) });
+            }
+            hideModal('sceneModal');
+            loadScenes(currentScriptId);
+        };
+
+        // Storyboard handlers
+        document.getElementById('addStoryboardBtn').onclick = () => {
+            document.getElementById('storyboardForm').reset();
+            document.getElementById('storyboardId').value = '';
+            document.getElementById('storyboardScriptId').value = currentScriptId;
+            document.getElementById('storyboardModalTitle').textContent = 'Новий сторіборд';
+            document.getElementById('storyboardActive').checked = true;
+            showModal('storyboardModal');
+        };
+
+        document.getElementById('storyboardCancelBtn').onclick = () => hideModal('storyboardModal');
+
+        window.editStoryboard = async (id) => {
+            const sb = await fetchJSON(`${API}/storyboards/${id}`);
+            document.getElementById('storyboardId').value = sb.id;
+            document.getElementById('storyboardScriptId').value = sb.script_id;
+            document.getElementById('storyboardName').value = sb.name;
+            document.getElementById('storyboardPanels').value = JSON.stringify(sb.panels, null, 2);
+            document.getElementById('storyboardActive').checked = sb.active;
+            document.getElementById('storyboardModalTitle').textContent = 'Редагувати сторіборд';
+            showModal('storyboardModal');
+        };
+
+        window.deleteStoryboard = async (id) => {
+            if (!confirm('Видалити цей сторіборд?')) return;
+            await fetchJSON(`${API}/storyboards/${id}`, { method: 'DELETE' });
+            loadStoryboards(currentScriptId);
+        };
+
+        document.getElementById('storyboardForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = {
+                name: form.name.value,
+                panels: JSON.parse(form.panels.value || '[]'),
+                active: form.active.checked,
+            };
+            const id = form.id.value;
+            const scriptId = form.script_id.value;
+            if (id) {
+                data.id = id;
+                await fetchJSON(`${API}/storyboards/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+            } else {
+                data.id = 'storyboard_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+                await fetchJSON(`${API}/storyboards`, { method: 'POST', body: JSON.stringify(data) });
+            }
+            hideModal('storyboardModal');
+            loadStoryboards(currentScriptId);
+        };
+
+        loadScripts();
+    </script>
+</body>
+</html>

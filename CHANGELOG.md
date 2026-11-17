@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.94
+- Storyboard Application Module (#501): повний модуль `modules/storyboard/` (manifest schema 2.0, application, namespace `storyboard`, UI entry `index.html`); залежності від `characters` і `brands`; сценарії (acts, scenes, characters), сцени, сторіборди (панелі з timing/image_ref); власницька модель, співпраця (read/write/admin) на рівні скрипта/сцени/сторіборду, активація/деактивація, міграція legacy даних.
+- Storyboard: CRUD API (`/api/modules/storyboard/v1/scripts`, `/scenes`, `/storyboards`), співпраця, активація/деактивація, міграція; таблиці: `scripts`, `scenes`, `storyboards`, `storyboard_collaborations`, `storyboard_audit`.
+- CORE інтеграція: `"storyboard"` у `BUNDLED` lifecycle та `BUNDLED_LABELS` каталогу; тест `tests/test_storyboard_module.py` (каталог, install/lifecycle, сумісність, залежності).
+- Web UI: оновлено `ResourcesApiService` з методами модуля (`moduleScripts`, `moduleCreateScript`, `moduleUpdateScript`, `moduleDeleteScript`, `moduleActivateScript`, `moduleDeactivateScript`, `moduleScriptScenes`, `moduleScriptCollaborations`, `moduleScenes`, `moduleCreateScene`, `moduleUpdateScene`, `moduleDeleteScene`, `moduleStoryboards`, `moduleCreateStoryboard`, `moduleUpdateStoryboard`, `moduleDeleteStoryboard`, `moduleStoryboardCollaborations`, `moduleMigrateScripts`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.93
 - Brands Application Module (#500): повний модуль `modules/brands/` (manifest schema 2.0, application, namespace `brands`, UI entry `index.html`); власницька модель (один user-власник), співпраця без співвласності (read/write/admin), активація/деактивація блокує нові співпраці, міграція legacy даних.
 - Brands: CRUD API (`/api/modules/brands/v1/brands`), співпраця, активація/деактивація, міграція legacy даних; таблиці: `brands`, `brand_collaborations`, `brand_audit`.

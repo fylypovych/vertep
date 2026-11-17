@@ -1,0 +1,46 @@
+module:
+  name: "storyboard"
+  version: "1.0.0"
+  schema_version: "2.0"
+  kind: "application"
+  namespace: "storyboard"
+  title: "Сторіборд"
+  description: "Управління сценаріями, сценами та сторібордами для генерації контенту"
+  author: "Vertep Team"
+  license: "MIT"
+  homepage: ""
+  repository: ""
+  min_core_version: "0.0.3.93"
+  max_core_version: ""
+  dependencies: ["characters", "brands"]
+  provides_capabilities: ["storyboard_generation"]
+  requires_capabilities: []
+  ui:
+    entry: "index.html"
+    sandbox: true
+    permissions: ["storage", "network"]
+  database:
+    schema: "storyboard"
+    migrations_dir: "migrations"
+    role_prefix: "storyboard"
+  runtime:
+    cpu_arch: ["amd64", "arm64"]
+    memory_mb: 256
+    disk_mb: 100
+    gpu: false
+    network: true
+  configuration:
+    schema: {}
+    defaults: {}
+  secrets: []
+  health_check:
+    path: "/health"
+    interval_sec: 30
+    timeout_sec: 5
+  lifecycle:
+    install_timeout_sec: 60
+    activate_timeout_sec: 30
+    deactivate_timeout_sec: 10
+    update_timeout_sec: 60
+    rollback_timeout_sec: 30
+    uninstall_timeout_sec: 30
