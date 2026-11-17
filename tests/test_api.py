@@ -101,6 +101,49 @@ def _complete_script_task(client, job_id, node_name="text-worker", headers=None)
     return artifact
 
 
+def _complete_assembly_task(client, job_id, node_name="assembly-worker", headers=None):
+    """Register an assembly worker, claim/execute the assembly task, and submit the result."""
+    if headers is None:
+        headers = {}
+    client.post("/api/workers/heartbeat", json={
+        "node_name": node_name, "vram_mb": 0,
+        "capabilities": ["video_assembly"], "supported_tasks": ["assembly"], "role": "gpu",
+    }, headers=headers)
+    task = None
+    for _ in range(100):
+        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0}, headers=headers)
+        task = resp.json().get("task")
+        if task and task.get("task") == "assembly" and task.get("job_id") == job_id:
+            break
+        time.sleep(0.01)
+    assert task and task.get("task") == "assembly"
+    # Create a minimal valid MP4 artifact for testing
+    import base64
+    # Minimal MP4 with ftyp atom (ftypisom)
+    mp4_data = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2avc1mp41" + b"\x00" * 100
+    artifact = {
+        "artifact_id": f"assembly-{job_id}-{task['task_id'][:8]}",
+        "kind": "video",
+        "sha256": "test_sha256",
+        "size": len(mp4_data),
+        "path": f"{job_id}/video.mp4",
+        "contract": {
+            "video_version": task.get("version", 1),
+            "engine_id": "test",
+            "engine_snapshot": task.get("engine_snapshot", {}),
+            "duration_seconds": 1.0,
+            "width": 1920,
+            "height": 1080,
+        },
+        "data_base64": base64.b64encode(mp4_data).decode(),
+    }
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+        "success": True, "artifacts": [artifact]}, headers=headers)
+    assert response.status_code == 200
+    return artifact
+
+
 def _create_job_in_store(topic="Test topic", min_vram_mb=0, character_id="did_samogon", priority=5):
     """Create a Job directly in the store without triggering the pipeline."""
     from core.telegram.handlers import store
@@ -168,6 +211,12 @@ def test_health_and_job_flow():
     _approve_storyboard(client, job_id)
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "ASSEMBLY":
+            _complete_assembly_task(client, job_id)
+            break
+        time.sleep(0.025)
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "VIDEO_PENDING_APPROVAL":
             break
         time.sleep(0.025)
@@ -214,6 +263,8 @@ def test_regenerate_preserves_inputs_and_replaces_generated_artifacts(monkeypatc
     _approve_script_and_storyboard(client, job_id)
     for _ in range(200):
         before = client.get(f"/api/jobs/{job_id}").json()
+        if before["status"] == "ASSEMBLY":
+            _complete_assembly_task(client, job_id)
         if before["status"] == "VIDEO_PENDING_APPROVAL":
             client.post(f"/api/jobs/{job_id}/video/approve",
                         json={"actor": "test", "expected_video_version": before["active_video_version"]})
@@ -239,6 +290,8 @@ def test_job_export_import_and_optimistic_lock(monkeypatch):
     _approve_script_and_storyboard(client, job_id)
     for _ in range(200):
         current = client.get(f"/api/jobs/{job_id}").json()
+        if current["status"] == "ASSEMBLY":
+            _complete_assembly_task(client, job_id)
         if current["status"] == "VIDEO_PENDING_APPROVAL":
             client.post(f"/api/jobs/{job_id}/video/approve",
                         json={"actor": "test", "expected_video_version": current["active_video_version"]})
@@ -633,8 +686,11 @@ def test_distributed_worker_result(monkeypatch):
     monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
     headers = {"X-Vertep-Token": "worker-token"}
+    # Register GPU worker for image generation
     heartbeat = client.post("/api/workers/heartbeat", json={
         "node_name": "gpu-real", "gpu_name": "GTX 1060", "vram_mb": 6144,
+        "capabilities": ["image_generation", "video_generation", "video_assembly"],
+        "supported_tasks": ["image", "video", "assembly"], "role": "gpu",
     }, headers=headers)
     assert heartbeat.status_code == 200
     created = client.post("/api/jobs", json={"topic": "Distributed topic", "min_vram_mb": 128}).json()
@@ -649,6 +705,7 @@ def test_distributed_worker_result(monkeypatch):
     assert job["status"] == "SCRIPT_PENDING_APPROVAL"
     client.post(f"/api/jobs/{job_id}/script/approve", json={"actor": "test"})
     _approve_storyboard(client, job_id)
+    # Complete image generation task
     task = None
     for _ in range(100):
         response = client.post("/api/tasks/claim", json={"node_name": "gpu-real", "gpu_name": "GTX 1060",
@@ -664,6 +721,13 @@ def test_distributed_worker_result(monkeypatch):
                                                        "success": True, "filename": "scene.ppm",
                                                        "image_base64": base64.b64encode(ppm).decode()}, headers=headers)
     assert response.status_code == 200
+    # Complete assembly task
+    for _ in range(200):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "ASSEMBLY":
+            _complete_assembly_task(client, job_id, headers=headers)
+            break
+        time.sleep(0.025)
     for _ in range(200):
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == "VIDEO_PENDING_APPROVAL":

@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.99
+- Виправлено тести CI (`test_health_and_job_flow`, `test_regenerate_preserves_inputs_and_replaces_generated_artifacts`, `test_job_export_import_and_optimistic_lock`, `test_distributed_worker_result`): додано helper `_complete_assembly_task()` для завершення assembly задач; оновлено тести для очікування статусу ASSEMBLY та завершення assembly перед перехідом до VIDEO_PENDING_APPROVAL; `test_distributed_worker_result` реєструє GPU worker з capability `video_assembly`.
+- Виправлено тест API routes snapshot (`test_all_method_path_contracts_match_the_before_extraction_snapshot`): додано відсутній маршрут `GET /api/nodes/module-catalog` до списку execution.
+- Assembly pipeline (#498): всі тести тепер правильно перевіряють job flow через ASSEMBLY статус (Worker з video_assembly capability виконує фінальний монтаж).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.98
 - Виправлено `bundled_manifest()` у `core/module/lifecycle.py` для підтримки обох форматів manifest.yaml (flat та nested `module:`).
 - Оновлено `ModuleManifest.from_dict()` у `core/module/manifest.py` для автоматичного мапінгу nested формат полів (`runtime`, `database`, `health_check`, `namespace`, `provides_capabilities`, `requires_capabilities`) в очікувану flat структуру.
