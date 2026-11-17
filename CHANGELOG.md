@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.98
+- Виправлено `bundled_manifest()` у `core/module/lifecycle.py` для підтримки обох форматів manifest.yaml (flat та nested `module:`).
+- Оновлено `ModuleManifest.from_dict()` у `core/module/manifest.py` для автоматичного мапінгу nested формат полів (`runtime`, `database`, `health_check`, `namespace`, `provides_capabilities`, `requires_capabilities`) в очікувану flat структуру.
+- Виправлено тести модулів (`test_brands_module.py`, `test_monitoring_module.py`, `test_publishing_module.py`, `test_storyboard_module.py`, `test_web_ui_module.py`): використовують `ModuleManifest.from_dict(bundled_manifest(...))` та доступ до атрибутів безпосередньо.
+- Тести модулів проходять: 31 passed, 5 skipped (async lifecycle tests потребують pytest-asyncio).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.97
 - Web UI Application Module (#504): повний модуль `modules/web-ui/` (manifest schema 2.0, application, namespace `web-ui`, UI entry `index.html`); залежності від усіх модулів (`characters`, `brands`, `storyboard`, `publishing`, `monitoring`); уніфікований веб-інтерфейс з боковим меню навігації, дашбордом статистики, інтеграцією всіх модулів через iframe, управління темами, конфігурацією та навігацією.
 - Web UI: API для конфігурації (`/api/modules/web-ui/v1/config`), тем (`/themes`), навігації (`/navigation`), інформації про модулі (`/modules`); таблиці: `ui_config`, `ui_themes`, `ui_navigation`; capabilities: web_ui.

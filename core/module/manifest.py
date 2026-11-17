@@ -354,22 +354,63 @@ class ModuleManifest:
     def from_dict(cls, data: dict) -> "ModuleManifest":
         """Create manifest from dictionary (package, inventory or bundled YAML)."""
         data = data.get("manifest", data)
+        if "module" in data:
+            data = data["module"]
         dependencies = data.get("dependencies")
         if dependencies is None:
-            dependencies = data.get("depends_on", [])  # bundled modules/*/manifest.yaml
+            dependencies = data.get("depends_on", [])
         resources = data.get("resource_requirements")
         if resources is None and isinstance(data.get("resources"), dict):
             legacy = data["resources"]
             resources = {"min_vram_mb": legacy.get("min_vram_mb", 0), "min_cpu_cores": legacy.get("cpu_cores", 0),
                          "min_ram_mb": legacy.get("ram_mb", 0)}
-        extended = {key: data[key] for key in ("module_id", "kind", "core_compatibility", "placement", "provides",
-                                               "requires", "api", "ui", "permissions", "secret_refs", "migrations",
-                                               "services", "health", "publisher", "provenance", "container") if key in data}
+        if resources is None and isinstance(data.get("runtime"), dict):
+            rt = data["runtime"]
+            resources = {"min_vram_mb": 0 if not rt.get("gpu") else rt.get("memory_mb", 0),
+                         "min_cpu_cores": 1, "min_ram_mb": rt.get("memory_mb", 512)}
+        placement = data.get("placement")
+        if placement is None and isinstance(data.get("runtime"), dict):
+            rt = data["runtime"]
+            placement = {"target": "any", "scaling": "single_owner", "requires_gpu": rt.get("gpu", False)}
+        migrations = data.get("migrations")
+        if migrations is None and isinstance(data.get("database"), dict):
+            db = data["database"]
+            migrations_dir = db.get("migrations_dir", "migrations")
+            migrations = [{"id": "m001_initial", "version": "1.0.0"}]
+        health = data.get("health")
+        if health is None and isinstance(data.get("health_check"), dict):
+            hc = data["health_check"]
+            health = {"self_test": "health", "timeout_seconds": hc.get("timeout_sec", 30)}
+        capabilities = data.get("capabilities")
+        if capabilities is None:
+            capabilities = data.get("provides_capabilities", [])
+        requires = data.get("requires")
+        if requires is None and isinstance(data.get("requires_capabilities"), list):
+            requires = [{"type": "capability", "name": cap, "min_version": "0.0"} for cap in data["requires_capabilities"]]
+        container = data.get("container")
+        if container is None and data.get("kind") == "application":
+            container = {"image": f"registry.example/vertep/{data.get('name', 'module')}@sha256:{"0"*64}", "port": 8080}
+        api = data.get("api")
+        if api is None and data.get("namespace"):
+            api = {"namespace": data["namespace"], "version": "1.0", "routes": [f"/{data['namespace']}", f"/{data['namespace']}/{{id}}"]}
+        extended = {key: data[key] for key in ("module_id", "kind", "core_compatibility", "provides",
+                                                "ui", "permissions", "secret_refs", "services",
+                                                "publisher", "provenance") if key in data}
+        if api is not None:
+            extended["api"] = api
+        if placement is not None:
+            extended["placement"] = placement
+        if migrations is not None:
+            extended["migrations"] = migrations
+        if health is not None:
+            extended["health"] = health
+        if container is not None:
+            extended["container"] = container
         return cls(
             name=data["name"],
             version=data["version"],
-            capabilities=data.get("capabilities", []),
-            dependencies=dependencies,
+            capabilities=capabilities or [],
+            dependencies=dependencies or [],
             resource_requirements=resources or {},
             description=data.get("description", "") or "",
             schema_version=data.get("schema_version"),

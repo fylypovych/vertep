@@ -1,6 +1,9 @@
 import pytest
+import yaml
+from pathlib import Path
 from core.module.catalog import BUNDLED_LABELS
 from core.module.lifecycle import BUNDLED, bundled_manifest
+from core.module.manifest import ModuleManifest
 
 
 class TestPublishingModuleCatalog:
@@ -12,36 +15,32 @@ class TestPublishingModuleCatalog:
         assert BUNDLED_LABELS["publishing"] == "Публікація"
 
     def test_publishing_manifest_loads(self):
-        manifest = bundled_manifest("publishing")
+        manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
         assert manifest is not None
-        assert manifest.module.name == "publishing"
-        assert manifest.module.kind == "application"
-        assert manifest.module.namespace == "publishing"
-        assert manifest.module.ui is not None
-        assert manifest.module.ui.entry == "index.html"
-        assert manifest.module.database is not None
-        assert manifest.module.database.schema == "publishing"
-        assert manifest.module.database.migrations_dir == "migrations"
-        assert manifest.module.runtime is not None
-        assert manifest.module.runtime.gpu is False
-        assert manifest.module.health_check is not None
-        assert manifest.module.health_check.path == "/health"
-        assert manifest.module.lifecycle is not None
+        assert manifest.name == "publishing"
+        assert manifest.kind == "application"
+        assert manifest.api is not None
+        assert manifest.api["namespace"] == "publishing"
+        assert manifest.ui is not None
+        assert manifest.ui["entry"] == "index.html"
+        assert manifest.resource_requirements is not None
+        assert manifest.placement["requires_gpu"] is False
+        assert manifest.health is not None
+        assert manifest.health.get("timeout_seconds") is not None
 
 
 class TestPublishingModuleLifecycle:
     @pytest.mark.asyncio
     async def test_publishing_install_activate(self):
         from core.module.lifecycle import ModuleManager
-        from core.module.manifest import ModuleManifest
         import tempfile
-        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmp:
             mgr = ModuleManager(Path(tmp))
             manifest_path = Path("modules/publishing/manifest.yaml")
             assert manifest_path.exists(), "manifest.yaml not found"
-            manifest = ModuleManifest.from_yaml(manifest_path.read_text(encoding="utf-8"))
+            manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            manifest = ModuleManifest.from_dict(manifest_data)
             pkg = {"manifest": manifest, "version": "1.0.0", "sha256": "test"}
             result = await mgr.install("publishing", pkg)
             assert result["status"] == "installed"
@@ -51,18 +50,18 @@ class TestPublishingModuleLifecycle:
 
 class TestPublishingModuleCompatibility:
     def test_publishing_no_gpu_required(self):
-        manifest = bundled_manifest("publishing")
-        assert manifest.module.runtime.gpu is False
+        manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
+        assert manifest.placement["requires_gpu"] is False
 
     def test_publishing_schema_version_2(self):
-        manifest = bundled_manifest("publishing")
-        assert manifest.module.schema_version == "2.0"
+        manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
+        assert manifest.schema_version == "2.0"
 
     def test_publishing_depends_on_storyboard_brands(self):
-        manifest = bundled_manifest("publishing")
-        assert "storyboard" in manifest.module.dependencies
-        assert "brands" in manifest.module.dependencies
+        manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
+        assert "storyboard" in manifest.dependencies
+        assert "brands" in manifest.dependencies
 
     def test_publishing_provides_publishing_capability(self):
-        manifest = bundled_manifest("publishing")
-        assert "publishing" in manifest.module.provides_capabilities
+        manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
+        assert "publishing" in manifest.capabilities

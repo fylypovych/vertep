@@ -47,6 +47,8 @@ def bundled_manifest(name: str) -> dict:
         raise LifecycleError(f"Unknown bundled module: {name}")
     path = Path(__file__).resolve().parents[2] / "modules" / name / "manifest.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if "module" in data:
+        return data["module"]
     return data.get("manifest", data)
 
 
