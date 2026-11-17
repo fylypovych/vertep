@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Бренди - Vertep</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 min-h-screen p-6">
+    <div class="max-w-4xl mx-auto">
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-2xl font-bold text-slate-900">Бренди</h1>
+            <button id="createBtn" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Новий бренд</button>
+        </div>
+
+        <div id="listView">
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <div id="brandsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                </div>
+                <div id="emptyState" class="hidden text-center text-slate-500 py-6">Брендів не знайдено</div>
+            </div>
+        </div>
+
+        <div id="formView" class="hidden">
+            <div class="bg-white rounded-xl border border-slate-200 p-6">
+                <h2 id="formTitle" class="text-lg font-semibold text-slate-900 mb-4">Новий бренд</h2>
+                <form id="brandForm" class="space-y-4">
+                    <input type="hidden" name="id" id="brandId">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Назва *</label>
+                        <input name="name" id="brandName" required class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Опис</label>
+                        <textarea name="description" id="brandDescription" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Логотип (URL)</label>
+                            <input name="logo_url" id="brandLogo" type="url" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">Веб-сайт</label>
+                            <input name="website" id="brandWebsite" type="url" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Соціальні мережі (JSON)</label>
+                        <textarea name="social_links" id="brandSocial" rows="4" placeholder='{"twitter": "https://twitter.com/...", "instagram": "https://instagram.com/..."}' class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"></textarea>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" name="active" id="brandActive" checked>
+                        <label for="brandActive" class="text-sm text-slate-700">Активний</label>
+                    </div>
+                    <div class="flex justify-end gap-2 pt-4">
+                        <button type="button" id="cancelBtn" class="px-4 py-2 text-slate-600 hover:text-slate-800">Скасувати</button>
+                        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Зберегти</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="detailView" class="hidden mt-6">
+            <div class="bg-white rounded-xl border border-slate-200 p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 id="detailTitle" class="text-lg font-semibold text-slate-900"></h2>
+                    <div class="flex gap-2">
+                        <button id="backBtn" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg">Назад</button>
+                        <button id="editBtn" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Редагувати</button>
+                        <button id="deleteBtn" class="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Видалити</button>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div><span class="text-sm text-slate-500">ID</span><p id="detailId" class="font-mono text-sm"></p></div>
+                    <div><span class="text-sm text-slate-500">Статус</span><p id="detailActive" class="font-medium"></p></div>
+                    <div class="md:col-span-2"><span class="text-sm text-slate-500">Опис</span><p id="detailDescription"></p></div>
+                    <div class="md:col-span-2"><span class="text-sm text-slate-500">Логотип</span><img id="detailLogo" class="max-h-32 mt-1" alt="Logo"></div>
+                    <div class="md:col-span-2"><span class="text-sm text-slate-500">Веб-сайт</span><a id="detailWebsite" target="_blank" class="text-blue-600 hover:underline"></a></div>
+                    <div class="md:col-span-2"><span class="text-sm text-slate-500">Соціальні мережі</span><pre id="detailSocial" class="text-sm bg-slate-50 p-2 rounded"></pre></div>
+                </div>
+                <div class="border-t pt-4">
+                    <h3 class="font-medium mb-2">Співпраця</h3>
+                    <div id="collabsList" class="space-y-2"></div>
+                    <button id="addCollabBtn" class="mt-3 px-3 py-1.5 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700">Додати співпрацю</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/api/modules/brands/v1';
+        let currentBrandId = null;
+
+        async function fetchJSON(url, options = {}) {
+            const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
+            if (!res.ok) throw new Error((await res.json()).error || 'Request failed');
+            return res.json();
+        }
+
+        function showView(view) {
+            document.getElementById('listView').classList.toggle('hidden', view !== 'list');
+            document.getElementById('formView').classList.toggle('hidden', view !== 'form');
+            document.getElementById('detailView').classList.toggle('hidden', view !== 'detail');
+        }
+
+        async function loadBrands() {
+            const brands = await fetchJSON(`${API}/brands`);
+            const grid = document.getElementById('brandsGrid');
+            const empty = document.getElementById('emptyState');
+            grid.innerHTML = '';
+            if (brands.length === 0) {
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            brands.forEach(b => {
+                const card = document.createElement('div');
+                card.className = 'border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer';
+                card.innerHTML = `
+                    <h3 class="font-semibold text-slate-900">${b.name}</h3>
+                    <p class="text-sm text-slate-600 mt-1">${b.id}</p>
+                    <span class="inline-block mt-2 px-2 py-0.5 text-xs rounded ${b.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">
+                        ${b.active ? 'Активний' : 'Неактивний'}
+                    </span>
+                `;
+                card.onclick = () => showDetail(b.id);
+                grid.appendChild(card);
+            });
+        }
+
+        async function showDetail(id) {
+            currentBrandId = id;
+            const brand = await fetchJSON(`${API}/brands/${id}`);
+            document.getElementById('detailTitle').textContent = brand.name;
+            document.getElementById('detailId').textContent = brand.id;
+            document.getElementById('detailActive').innerHTML = `<span class="px-2 py-0.5 text-xs rounded ${brand.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${brand.active ? 'Активний' : 'Неактивний'}</span>`;
+            document.getElementById('detailDescription').textContent = brand.description || '—';
+            document.getElementById('detailLogo').src = brand.logo_url || '';
+            document.getElementById('detailLogo').style.display = brand.logo_url ? 'block' : 'none';
+            document.getElementById('detailWebsite').href = brand.website || '#';
+            document.getElementById('detailWebsite').textContent = brand.website || '—';
+            document.getElementById('detailWebsite').style.display = brand.website ? 'inline' : 'none';
+            document.getElementById('detailSocial').textContent = JSON.stringify(brand.social_links, null, 2);
+            loadCollaborations(id);
+            showView('detail');
+        }
+
+        async function loadCollaborations(brandId) {
+            const collabs = await fetchJSON(`${API}/brands/${brandId}/collaborations`);
+            const list = document.getElementById('collabsList');
+            list.innerHTML = '';
+            if (collabs.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-500">Співпраці немає</p>';
+                return;
+            }
+            collabs.forEach(c => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-2 bg-slate-50 rounded';
+                div.innerHTML = `
+                    <div>
+                        <span class="font-medium">${c.collaborator_user_id}</span>
+                        <span class="ml-2 px-2 py-0.5 text-xs rounded ${c.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${c.active ? 'Активна' : 'Неактивна'}</span>
+                        <span class="ml-2 text-xs text-slate-500">(${c.permission_level})</span>
+                    </div>
+                    <button class="text-sm text-red-600" onclick="removeCollab(${c.id})">Видалити</button>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function removeCollab(collabId) {
+            if (!confirm('Видалити цю співпрацю?')) return;
+            await fetchJSON(`${API}/brands/${currentBrandId}/collaborations/${collabId}`, { method: 'DELETE' });
+            loadCollaborations(currentBrandId);
+        }
+
+        document.getElementById('createBtn').onclick = () => {
+            document.getElementById('brandForm').reset();
+            document.getElementById('brandId').value = '';
+            document.getElementById('formTitle').textContent = 'Новий бренд';
+            document.getElementById('brandActive').checked = true;
+            showView('form');
+        };
+
+        document.getElementById('cancelBtn').onclick = () => showView('list');
+
+        document.getElementById('backBtn').onclick = () => showView('list');
+
+        document.getElementById('editBtn').onclick = async () => {
+            const brand = await fetchJSON(`${API}/brands/${currentBrandId}`);
+            document.getElementById('brandId').value = brand.id;
+            document.getElementById('brandName').value = brand.name;
+            document.getElementById('brandDescription').value = brand.description;
+            document.getElementById('brandLogo').value = brand.logo_url || '';
+            document.getElementById('brandWebsite').value = brand.website || '';
+            document.getElementById('brandSocial').value = JSON.stringify(brand.social_links, null, 2);
+            document.getElementById('brandActive').checked = brand.active;
+            document.getElementById('formTitle').textContent = 'Редагувати бренд';
+            showView('form');
+        };
+
+        document.getElementById('deleteBtn').onclick = async () => {
+            if (!confirm('Видалити цей бренд?')) return;
+            await fetchJSON(`${API}/brands/${currentBrandId}`, { method: 'DELETE' });
+            showView('list');
+            loadBrands();
+        };
+
+        document.getElementById('brandForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = {
+                name: form.name.value,
+                description: form.description.value,
+                logo_url: form.logo_url.value || null,
+                website: form.website.value || null,
+                social_links: JSON.parse(form.social_links.value || '{}'),
+                active: form.active.checked,
+            };
+            const id = form.id.value;
+            if (id) {
+                data.id = id;
+                await fetchJSON(`${API}/brands/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+            } else {
+                data.id = 'brand_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+                await fetchJSON(`${API}/brands`, { method: 'POST', body: JSON.stringify(data) });
+            }
+            showView('list');
+            loadBrands();
+        };
+
+        document.getElementById('addCollabBtn').onclick = async () => {
+            const userId = prompt('User ID партнера:');
+            if (!userId) return;
+            const perm = prompt('Рівень доступу (read/write/admin):', 'read');
+            if (!['read', 'write', 'admin'].includes(perm)) return;
+            await fetchJSON(`${API}/brands/${currentBrandId}/collaborations`, {
+                method: 'POST',
+                body: JSON.stringify({ collaborator_user_id: userId, permission_level: perm })
+            });
+            loadCollaborations(currentBrandId);
+        };
+
+        loadBrands();
+    </script>
+</body>
+</html>

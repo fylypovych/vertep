@@ -1,3 +1,9 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.3.93
+- Brands Application Module (#500): повний модуль `modules/brands/` (manifest schema 2.0, application, namespace `brands`, UI entry `index.html`); власницька модель (один user-власник), співпраця без співвласності (read/write/admin), активація/деактивація блокує нові співпраці, міграція legacy даних.
+- Brands: CRUD API (`/api/modules/brands/v1/brands`), співпраця, активація/деактивація, міграція legacy даних; таблиці: `brands`, `brand_collaborations`, `brand_audit`.
+- CORE інтеграція: `"brands"` у `BUNDLED` lifecycle та `BUNDLED_LABELS` каталогу; тест `tests/test_brands_module.py` (каталог, install/lifecycle, сумісність).
+- Web UI: оновлено `ResourcesApiService` з методами модуля (`moduleBrands`, `moduleCreateBrand`, `moduleUpdateBrand`, `moduleDeleteBrand`, `moduleActivateBrand`, `moduleDeactivateBrand`, `moduleBrandCollaborations`, `moduleAddBrandCollaboration`, `moduleRemoveBrandCollaboration`, `moduleMigrateBrands`).
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.3.92
 - Characters Application Module (#499): повний модуль `modules/characters/` (manifest schema 2.0, application, namespace `characters`, UI entry `index.html`); власницька модель (один бренд-власник), співпраця без співвласності (read/write/admin), активація/деактивація блокує нові співпраці, перевірка повноти профілю блокує генерацію, міграція зберігає ID/історію/посилання.
 - Characters: CRUD API (`/api/modules/characters/v1/characters`), референси, співпраця, активація/деактивація, міграція legacy даних (`migrate_existing_characters`); таблиці: `characters`, `character_profiles`, `character_references`, `character_collaborations`, `character_audit`.

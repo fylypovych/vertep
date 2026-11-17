@@ -1,0 +1,46 @@
+module:
+  name: "brands"
+  version: "1.0.0"
+  schema_version: "2.0"
+  kind: "application"
+  namespace: "brands"
+  title: "Бренди"
+  description: "Управління брендами для прив'язки персонажів, сценаріїв та публікацій"
+  author: "Vertep Team"
+  license: "MIT"
+  homepage: ""
+  repository: ""
+  min_core_version: "0.0.3.92"
+  max_core_version: ""
+  dependencies: []
+  provides_capabilities: []
+  requires_capabilities: []
+  ui:
+    entry: "index.html"
+    sandbox: true
+    permissions: ["storage", "network"]
+  database:
+    schema: "brands"
+    migrations_dir: "migrations"
+    role_prefix: "brands"
+  runtime:
+    cpu_arch: ["amd64", "arm64"]
+    memory_mb: 128
+    disk_mb: 50
+    gpu: false
+    network: true
+  configuration:
+    schema: {}
+    defaults: {}
+  secrets: []
+  health_check:
+    path: "/health"
+    interval_sec: 30
+    timeout_sec: 5
+  lifecycle:
+    install_timeout_sec: 60
+    activate_timeout_sec: 30
+    deactivate_timeout_sec: 10
+    update_timeout_sec: 60
+    rollback_timeout_sec: 30
+    uninstall_timeout_sec: 30
