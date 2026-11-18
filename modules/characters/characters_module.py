@@ -42,8 +42,16 @@ def _verify_token(request_headers: dict) -> bool:
 
 
 def _get_brand_id(request_headers: dict) -> str | None:
-    """Extract brand_id from x-vertep-brand header or x-vertep-user context."""
-    # Brand ID can come from x-vertep-brand header (set by CORE gateway)
+    """Extract brand_id from request headers.
+
+    Brand context comes from CORE gateway as x-vertep-user.
+    Fallback to x-vertep-brand for direct module calls (testing).
+    """
+    # Primary: x-vertep-user from CORE gateway (authenticated brand context)
+    brand_id = request_headers.get("x-vertep-user")
+    if brand_id:
+        return brand_id
+    # Fallback: x-vertep-brand for direct calls (testing/admin)
     return request_headers.get("x-vertep-brand")
 
 
@@ -84,7 +92,13 @@ class Handler(BaseHTTPRequestHandler):
                 from core.persistent_data import persistent_characters_root
                 module = CharactersModule()
                 legacy_root = persistent_characters_root()
-                default_owner = body.get("default_owner_brand", "vertep")
+                # AC6: Require explicit owner assignment for migration
+                default_owner = body.get("default_owner_brand")
+                if not default_owner:
+                    return self._send(400, {
+                        "error": "default_owner_brand required for migration",
+                        "details": "AC6: Explicit owner mapping required. Provide default_owner_brand in request body."
+                    })
                 result = migrate_existing_characters(module, legacy_root, default_owner)
                 return self._send(200, result)
             except Exception as error:
@@ -127,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 return self._send(503, {"error": str(error)})
 
-        # Character collaborations
+        # Character collaborations - deprecated, kept for backward compatibility
         if self.path.startswith("/characters/") and "/collaborations" in self.path:
             parts = self.path.split("/")
             char_id = parts[2]
@@ -136,7 +150,8 @@ class Handler(BaseHTTPRequestHandler):
                 char = module.get_character(char_id, brand_id)
                 if not char:
                     return self._send(404, {"error": "Character not found"})
-                return self._send(200, char.get("collaborations", []))
+                # AC3: Active characters are available to all brands, no allowlist needed
+                return self._send(200, [])
             except Exception as error:
                 return self._send(503, {"error": str(error)})
 
@@ -182,8 +197,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not body.get("name"):
                     return self._send(422, {"error": "name is required"})
+                if not brand_id:
+                    return self._send(401, {"error": "brand context required (x-vertep-user header)"})
                 module = CharactersModule()
-                char = module.create_character(brand_id or "unknown", body)
+                char = module.create_character(brand_id, body)
                 return self._send(201, char)
             except ValueError as error:
                 return self._send(409, {"error": str(error)})
@@ -199,38 +216,30 @@ class Handler(BaseHTTPRequestHandler):
                 # For now, expect base64 encoded image in body
                 if "data_base64" not in body:
                     return self._send(422, {"error": "data_base64 required"})
+                if not brand_id:
+                    return self._send(401, {"error": "brand context required"})
                 data = base64.b64decode(body["data_base64"])
                 module = CharactersModule()
-                result = module.upload_reference(char_id, brand_id or "unknown", data)
+                result = module.upload_reference(char_id, brand_id, data)
                 return self._send(201, result)
             except ValueError as error:
                 return self._send(422, {"error": str(error)})
             except Exception as error:
                 return self._send(503, {"error": str(error)})
 
-        # Add collaboration
+        # Add collaboration - deprecated per AC3 (active characters available to all)
         if self.path.startswith("/characters/") and self.path.endswith("/collaborations"):
-            parts = self.path.split("/")
-            char_id = parts[2]
-            try:
-                target_brand = body.get("brand_id")
-                if not target_brand:
-                    return self._send(422, {"error": "brand_id required"})
-                module = CharactersModule()
-                char = module.add_collaboration(char_id, brand_id or "unknown", target_brand)
-                return self._send(200, char)
-            except ValueError as error:
-                return self._send(409, {"error": str(error)})
-            except Exception as error:
-                return self._send(503, {"error": str(error)})
+            return self._send(410, {"error": "Collaboration allowlist removed per AC3. Active characters are available to all brands."})
 
         # Activate character
         if self.path.startswith("/characters/") and self.path.endswith("/activate"):
             parts = self.path.split("/")
             char_id = parts[2]
             try:
+                if not brand_id:
+                    return self._send(401, {"error": "brand context required"})
                 module = CharactersModule()
-                char = module.activate_character(char_id, brand_id or "unknown")
+                char = module.activate_character(char_id, brand_id)
                 return self._send(200, char)
             except ValueError as error:
                 return self._send(409, {"error": str(error)})
@@ -242,8 +251,10 @@ class Handler(BaseHTTPRequestHandler):
             parts = self.path.split("/")
             char_id = parts[2]
             try:
+                if not brand_id:
+                    return self._send(401, {"error": "brand context required"})
                 module = CharactersModule()
-                char = module.deactivate_character(char_id, brand_id or "unknown")
+                char = module.deactivate_character(char_id, brand_id)
                 return self._send(200, char)
             except ValueError as error:
                 return self._send(409, {"error": str(error)})
@@ -263,8 +274,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/characters/"):
             char_id = self.path.split("/")[2]
             try:
+                if not brand_id:
+                    return self._send(401, {"error": "brand context required"})
                 module = CharactersModule()
-                char = module.update_character(char_id, brand_id or "unknown", body)
+                char = module.update_character(char_id, brand_id, body)
                 return self._send(200, char)
             except ValueError as error:
                 return self._send(409, {"error": str(error)})
@@ -283,8 +296,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/characters/") and "/references" not in self.path and "/collaborations" not in self.path and "/activate" not in self.path and "/deactivate" not in self.path and "/can-generate" not in self.path:
             char_id = self.path.split("/")[2]
             try:
+                if not brand_id:
+                    return self._send(401, {"error": "brand context required"})
                 module = CharactersModule()
-                module.delete_character(char_id, brand_id or "unknown")
+                module.delete_character(char_id, brand_id)
                 return self._send(200, {"deleted": char_id})
             except ValueError as error:
                 return self._send(409, {"error": str(error)})
@@ -297,27 +312,19 @@ class Handler(BaseHTTPRequestHandler):
             char_id = parts[2]
             filename = parts[4]
             try:
+                if not brand_id:
+                    return self._send(401, {"error": "brand context required"})
                 module = CharactersModule()
-                module.delete_reference(char_id, brand_id or "unknown", filename)
+                module.delete_reference(char_id, brand_id, filename)
                 return self._send(200, {"deleted": filename})
             except ValueError as error:
                 return self._send(409, {"error": str(error)})
             except Exception as error:
                 return self._send(503, {"error": str(error)})
 
-        # Remove collaboration
+        # Remove collaboration - deprecated per AC3
         if self.path.startswith("/characters/") and "/collaborations/" in self.path:
-            parts = self.path.split("/")
-            char_id = parts[2]
-            target_brand = parts[4]
-            try:
-                module = CharactersModule()
-                module.remove_collaboration(char_id, brand_id or "unknown", target_brand)
-                return self._send(200, {"removed": target_brand})
-            except ValueError as error:
-                return self._send(409, {"error": str(error)})
-            except Exception as error:
-                return self._send(503, {"error": str(error)})
+            return self._send(410, {"error": "Collaboration allowlist removed per AC3. Active characters are available to all brands."})
 
         self._send(404, {"error": "not available"})
 

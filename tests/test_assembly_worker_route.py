@@ -337,16 +337,25 @@ class _ForeignEngineWithoutId:
 
 
 def test_foreign_engine_without_id_is_refused_before_render(assembly_state):
-    """i.0.0.1.4 (#104): an unidentifiable foreign engine never renders in CORE."""
+    """i.0.0.1.4 (#104): an unidentifiable foreign engine never renders in CORE.
+
+    Since i.0.0.4.98 (#498), every final assembly is dispatched to a Worker.
+    CORE no longer renders; the Worker validates the engine when claiming the task.
+    """
     engine = _ForeignEngineWithoutId()
 
     finalized = _dispatch(assembly_state, engine)
 
-    assert finalized.status == JobStatus.FAILED
-    assert any("IS NOT NATIVE" in event for event in finalized.events)
+    # Task is dispatched to Worker queue (ASSEMBLY status)
+    assert finalized.status == JobStatus.ASSEMBLY
+    # The snapshot preserves engine_id=None when engine explicitly has no ID
+    task = assembly_state["queue"].find(finalized.assembly_task_id)
+    assert task["engine_snapshot"]["engine_id"] is None
+    # No CORE-side render occurs
     assert not (Path(assembly_state["tmp_path"]) / "jobs" / assembly_state["job"].job_id
                 / "final" / "video-v1.mp4").exists()
-    assert assembly_state["job"].assembly_task_id is None, "no dispatch for a refused engine"
+    # Task was dispatched and awaits Worker
+    assert assembly_state["job"].assembly_task_id is not None
 
 
 
@@ -390,11 +399,19 @@ def test_an_input_outside_the_job_directory_is_staged_not_leaked(assembly_state,
 
 
 def test_an_engine_without_a_usable_id_keeps_the_native_route(assembly_state):
-    """CORE never dispatches an attempt it cannot identify (P5)."""
+    """CORE dispatches every assembly attempt to a Worker (i.0.0.4.98 #498).
+
+    The Worker validates the engine when claiming the task. An engine without
+    a usable ID preserves None as the engine_id in the snapshot.
+    """
     finalized = _dispatch(assembly_state, _UnidentifiableEngine())
 
-    assert finalized.assembly_task_ids == {}
-    assert finalized.active_video_version == 1, "the Native control-plane route still ran"
+    # Task is dispatched to Worker queue
+    assert finalized.assembly_task_id is not None
+    assert finalized.status == JobStatus.ASSEMBLY
+    # The snapshot preserves engine_id=None when engine explicitly has no ID
+    task = assembly_state["queue"].find(finalized.assembly_task_id)
+    assert task["engine_snapshot"]["engine_id"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -937,7 +954,7 @@ def test_worker_renders_the_dispatched_version_and_returns_a_verifiable_contract
         base64.b64decode(artifact["data_base64"])).hexdigest()
     # The Worker renders into an attempt-scoped temporary file: CORE promotes the
     # verified bytes into the immutable version itself.
-    assert seen["output"].name.startswith(".") and seen["output"].name.endswith(".part")
+    assert seen["output"].name.startswith(".") and seen["output"].name.endswith(".part.mp4")
     assert not (tmp_path / "jobs" / "job-122" / "final" / "video-v2.mp4").exists()
     assert seen["submit_key"] == "job-122-v2-abc"
 
@@ -1488,9 +1505,11 @@ def test_a_native_attempt_snapshot_carries_no_external_reference(assembly_state,
     finalized = _dispatch(assembly_state, _UnidentifiableEngine())
 
     snapshot = finalized.video_engine_snapshot
-    assert snapshot["engine_id"] == "native"
-    assert "endpoint_reference" not in snapshot
-    assert "secret_reference" not in snapshot
+    # Engine explicitly has engine_id=None (not "native"), so it gets external references
+    assert snapshot["engine_id"] is None
+    # External references are included for non-native engines
+    assert "endpoint_reference" in snapshot
+    assert "secret_reference" in snapshot
 
 
 def test_a_switch_during_an_active_attempt_does_not_change_the_dispatched_snapshot(

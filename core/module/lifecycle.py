@@ -217,12 +217,22 @@ class ModuleLifecycle:
         return self.verify(package)  # signature, trust, provenance, UI digests
 
     def install_bundled(self, name: str) -> dict:
-        return self.install({"bundled": name, "manifest": bundled_manifest(name), "files": {}})
+        import base64
+        module_dir = Path(__file__).resolve().parents[2] / "modules" / name
+        files = {}
+        migrations_dir = module_dir / "migrations"
+        if migrations_dir.is_dir():
+            for migration_file in migrations_dir.glob("*.sql"):
+                rel_path = f"migrations/{migration_file.name}"
+                files[rel_path] = base64.b64encode(migration_file.read_bytes()).decode("ascii")
+        return self.install({"bundled": name, "manifest": bundled_manifest(name), "files": files})
 
     def install(self, package: dict) -> dict:
         manifest = self._verify(package)
         if "bundled" in package:
-            package = {"bundled": package["bundled"], "manifest": bundled_manifest(package["bundled"]), "files": {}}
+            bundled_name = package["bundled"]
+            files = package.get("files", {})
+            package = {"bundled": bundled_name, "manifest": bundled_manifest(bundled_name), "files": files}
         with self._lock(manifest.module_id):
             if self.record(manifest.module_id):
                 raise LifecycleError("Module is already installed; use update")

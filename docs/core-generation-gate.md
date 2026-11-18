@@ -51,8 +51,9 @@ fallback у CORE немає. Каталог голосів (`/voices`) лиша�
 
 Дозволені операції, що не є генерацією контенту:
 
-- **FFmpeg assembly** — `providers.video_engine().render()` у `core/pipeline.py:finalize_job()`
-  (AGENTS.md §14: «Не витрачати GPU на те, що нормально робиться звичайним монтажем»).
+- **Підготовка монтажу** — `core/pipeline.py:finalize_job()` лише будує план, незмінний snapshot
+  рушія та submit key і ставить задачу `assembly` у чергу. Сам FFmpeg-монтаж (зокрема native)
+  виконує Worker (i.0.0.4.98 #498); `render()` у CORE не викликається.
 - **Config / metadata запити** — `providers.publisher().available_channels()`,
   `providers.publisher().configured()`, `provider_matrix()`.
 - **Status reporting** — `provider_matrix()` для `/api/status` та Web UI.
@@ -70,11 +71,9 @@ i.0.0.1.4 #104). Production тримає обидва `false`; production-при
 Python AST (i.0.0.1.4 #104), резолвить аліаси (`engine.render()` →
 `video_engine.render`) та перевіряє кожен виклик проти `ALLOWLIST`.
 
-Native FFmpeg assembly у CORE залишається control-plane операцією (AGENTS.md §14).
-Захист від іншого VideoEngine через той самий CORE шлях (i.0.0.1.4 #104):
-зовнішні рушії диспетчеризуються на Worker, а рушій з чужим `provider`
-відмовляється fail-closed guard'ом `_is_native_engine()` у
-`core/pipeline.py:finalize_job()` до будь-якого render.
+Після i.0.0.4.98 (#498) у CORE не лишилося виклику `video_engine.render`: кожен фінальний
+монтаж, зокрема native FFmpeg, диспетчеризується на Worker, а CORE перевіряє й імпортує результат.
+Тому allowlist не містить винятку для монтажу.
 
 Що ще розпізнає gate (i.0.0.4.71 #471):
 
@@ -120,7 +119,6 @@ Gate — евристика за AST, а не універсальний док�
 | `core/api/job_helpers/script.py` | `_generate_script_local` | `ScriptAgent.generate_script` | LOCAL_WORKER_FALLBACK |
 | `core/script_agent.py` | `ScriptAgent._complete` | `get_llm_client` | LLM-реалізація, виконується Text Worker |
 | `core/pipeline.py` | `_do_publish_single` | `publisher.publish` | LOCAL_WORKER_FALLBACK |
-| `core/pipeline.py` | `finalize_job` | `video_engine.render` | control-plane: native FFmpeg assembly |
 | `core/gpu/backends.py` | `OllamaProvider._infer`, `OpenAIProvider._infer` | HTTP inference | shared implementation, виконується Worker GPU router |
 | `core/api/lab_lease.py` | `_unload_model` | `POST /api/generate` з `keep_alive=0` | control-plane: вивантаження моделі, без inference |
 
@@ -149,7 +147,7 @@ Shared implementation у `core/` дозволена лише тоді, коли 
 
 | Файл | Викликання | Класифікація | Дія |
 |---|---|---|---|
-| `core/pipeline.py` · `finalize_job` | `providers.video_engine().render()` | control-plane (assembly) | дозволено, AGENTS.md §14 |
+| `core/pipeline.py` · `finalize_job` | постановка задачі `assembly` у чергу, без `render()` | dispatch на Worker (#498) | виняток не потрібен |
 | `core/pipeline.py` · `_do_publish_single` | `providers.publisher().publish()` (через `_publish_local`) | LOCAL_WORKER_FALLBACK | задокументовано, буде видалено |
 | `core/api/job_helpers/publish.py` · `_enqueue_publish_task` | `_publish_local()` без Publisher Worker (зокрема для публікації з Telegram) | LOCAL_WORKER_FALLBACK, лише dev/demo (`require_no_local_execution`) | задокументовано, буде видалено |
 | `core/api/jobs.py` · `publish_job` | `providers.publisher().available_channels()` | control-plane (metadata) | дозволено |

@@ -292,11 +292,9 @@ ALLOWLIST = {
     ("core/pipeline.py", "_do_publish_single", "publisher.publish"):
         "LOCAL_WORKER_FALLBACK: _do_publish_single() when no Publisher Worker",
 
-    # VIDEO — native FFmpeg assembly in CORE is control-plane (AGENTS.md §20,
-    # i.0.0.1.4 #104). It is reachable only after the _is_native_engine()
-    # fail-closed guard; external engines are dispatched to a Worker above.
-    ("core/pipeline.py", "finalize_job", "video_engine.render"):
-        "Control-plane: native FFmpeg assembly after _is_native_engine() guard (#104)",
+    # VIDEO — no CORE-side render remains: since i.0.0.4.98 (#498) every final
+    # assembly, the native FFmpeg engine included, is dispatched to a Worker by
+    # finalize_job(), so no allowlist entry exists for video_engine.render.
 
     # GPU routing backends — shared implementation imported only by the Worker
     # (worker/gpu_routing.py); TestSharedImplementationBoundary proves no CORE

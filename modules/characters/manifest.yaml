@@ -53,7 +53,7 @@ publisher: vertep
 provenance:
   repository: github.com/fylypovych/vertep
 container:
-  image: "registry.example/vertep/characters@sha256:<64 hex>"
+  image: "registry.example/vertep/characters@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   port: 8080
 description: >
   Characters Application Module: єдина бібліотека персонажів з моделлю ownership/collaboration.

@@ -206,23 +206,26 @@ class CharactersModule:
         )
 
     def list_characters(self, brand_id: str | None = None, include_inactive: bool = False) -> list[dict]:
-        """List characters visible to the brand."""
+        """List characters visible to the brand.
+
+        Per AC3: Active characters are available to all brands without allowlist.
+        Owner sees their characters + all active characters from other owners.
+        """
         if brand_id:
-            # Owner's characters + collaborations
+            # Owner's characters + all active characters (AC3: no allowlist)
             rows = query("""
                 SELECT c.id, c.name, c.language, c.enabled, c.workflow, c.owner_brand_id, c.active, c.created_at, c.updated_at
                 FROM characters c
-                WHERE c.owner_brand_id = %s
-                   OR EXISTS (SELECT 1 FROM character_collaborations cc WHERE cc.character_id = c.id AND cc.brand_id = %s)
+                WHERE c.owner_brand_id = %s OR c.active = TRUE
+                ORDER BY c.owner_brand_id = %s DESC, c.created_at DESC
             """, (brand_id, brand_id))
         else:
-            rows = query("SELECT id, name, language, enabled, workflow, owner_brand_id, active, created_at, updated_at FROM characters")
+            rows = query("SELECT id, name, language, enabled, workflow, owner_brand_id, active, created_at, updated_at FROM characters ORDER BY created_at DESC")
         result = []
         for row in rows:
             char_id = row[0]
             profile = query("SELECT system_prompt, voice, visual, generation, publishing FROM character_profiles WHERE character_id = %s", (char_id,))
             refs = query("SELECT filename, sha256, size FROM character_references WHERE character_id = %s", (char_id,))
-            collabs = query("SELECT brand_id FROM character_collaborations WHERE character_id = %s", (char_id,))
             p = profile[0] if profile else (None, {}, {}, {}, {})
             result.append({
                 "id": char_id,
@@ -240,13 +243,16 @@ class CharactersModule:
                 "generation": p[3] or {},
                 "publishing": p[4] or {},
                 "references": [{"filename": r[0], "sha256": r[1], "size": r[2]} for r in refs],
-                "collaborations": [r[0] for r in collabs],
                 "is_owner": brand_id is not None and row[5] == brand_id,
             })
         return result
 
     def get_character(self, character_id: str, brand_id: str | None = None) -> dict | None:
-        """Get single character with full profile."""
+        """Get single character with full profile.
+
+        Per AC3: Active characters are visible to all brands.
+        Inactive characters are visible only to owner.
+        """
         row = query("""
             SELECT id, name, language, enabled, workflow, owner_brand_id, active, created_at, updated_at
             FROM characters WHERE id = %s
@@ -254,14 +260,11 @@ class CharactersModule:
         if not row:
             return None
         row = row[0]
-        # Check access
-        if brand_id and row[5] != brand_id:
-            collab = query("SELECT 1 FROM character_collaborations WHERE character_id = %s AND brand_id = %s", (character_id, brand_id))
-            if not collab:
-                return None
+        # Check access: owner or active character (AC3)
+        if brand_id and row[5] != brand_id and not row[6]:
+            return None
         profile = query("SELECT system_prompt, voice, visual, generation, publishing FROM character_profiles WHERE character_id = %s", (character_id,))
         refs = query("SELECT filename, sha256, size FROM character_references WHERE character_id = %s", (character_id,))
-        collabs = query("SELECT brand_id FROM character_collaborations WHERE character_id = %s", (character_id,))
         p = profile[0] if profile else (None, {}, {}, {}, {})
         return {
             "id": row[0],
@@ -279,7 +282,6 @@ class CharactersModule:
             "generation": p[3] or {},
             "publishing": p[4] or {},
             "references": [{"filename": r[0], "sha256": r[1], "size": r[2]} for r in refs],
-            "collaborations": [r[0] for r in collabs],
             "is_owner": brand_id is not None and row[5] == brand_id,
         }
 
@@ -349,36 +351,17 @@ class CharactersModule:
         return self.get_character(character_id, brand_id) or {}
 
     def deactivate_character(self, character_id: str, brand_id: str) -> dict:
-        """Deactivate character (blocks new collaborations, keeps references/materials)."""
+        """Deactivate character (blocks new collaborations, keeps references/materials).
+
+        Per AC4: Deactivation blocks new collaborations but preserves references/materials.
+        Already running generation completes, already created pending approval material can be approved/published.
+        Does not automatically revoke approvals.
+        """
         char = self.get_character(character_id, brand_id)
         if not char or char["owner_brand_id"] != brand_id:
             raise ValueError("Not owner or character not found")
         execute("UPDATE characters SET active = FALSE, updated_at = NOW() WHERE id = %s", (character_id,))
         self._audit(character_id, "deactivate", brand_id, {})
-        return self.get_character(character_id, brand_id) or {}
-
-    def add_collaboration(self, character_id: str, brand_id: str, target_brand_id: str) -> dict:
-        """Grant collaboration access to another brand (owner only)."""
-        char = self.get_character(character_id, brand_id)
-        if not char or char["owner_brand_id"] != brand_id:
-            raise ValueError("Not owner or character not found")
-        if not char["active"]:
-            raise ValueError("Character must be active to grant collaboration")
-        execute("""
-            INSERT INTO character_collaborations (character_id, brand_id, granted_by)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (character_id, brand_id) DO NOTHING
-        """, (character_id, target_brand_id, brand_id))
-        self._audit(character_id, "collaborate_add", brand_id, {"target_brand": target_brand_id})
-        return self.get_character(character_id, brand_id) or {}
-
-    def remove_collaboration(self, character_id: str, brand_id: str, target_brand_id: str) -> dict:
-        """Revoke collaboration access (owner only)."""
-        char = self.get_character(character_id, brand_id)
-        if not char or char["owner_brand_id"] != brand_id:
-            raise ValueError("Not owner or character not found")
-        execute("DELETE FROM character_collaborations WHERE character_id = %s AND brand_id = %s", (character_id, target_brand_id))
-        self._audit(character_id, "collaborate_remove", brand_id, {"target_brand": target_brand_id})
         return self.get_character(character_id, brand_id) or {}
 
     def upload_reference(self, character_id: str, brand_id: str, data: bytes) -> dict:
@@ -437,11 +420,15 @@ class CharactersModule:
         return True, []
 
 
-def migrate_existing_characters(module: CharactersModule, legacy_root: Path, default_owner_brand: str = "vertep") -> dict:
+def migrate_existing_characters(module: CharactersModule, legacy_root: Path, default_owner_brand: str | None = None) -> dict:
     """Migrate existing characters from filesystem to module database.
 
     Scans the legacy CHARACTERS_ROOT for complete character directories and imports them
-    into the module's database with the specified default owner brand.
+    into the module's database.
+
+    Per AC6: Ambiguous owner must not be assigned silently. If default_owner_brand is None,
+    migration requires explicit owner mapping and skips characters without clear ownership.
+    Preserves IDs/profiles/references/history and existing jobs.
     """
     from core.configuration import missing_character_files, load_character
     import shutil
@@ -449,6 +436,14 @@ def migrate_existing_characters(module: CharactersModule, legacy_root: Path, def
     results = {"migrated": [], "skipped": [], "errors": []}
 
     if not legacy_root.is_dir():
+        return results
+
+    if default_owner_brand is None:
+        # AC6: No silent default owner assignment
+        results["skipped"].append({
+            "id": "*",
+            "reason": "default_owner_brand not provided. AC6 requires explicit owner mapping for migration."
+        })
         return results
 
     for char_dir in legacy_root.iterdir():

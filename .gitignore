@@ -72,3 +72,4 @@ audit-0311-closed-issues.md
 /web-v2/test-results-*/
 /.swarm
 /.claude-flow
+/.vertep_code_agents

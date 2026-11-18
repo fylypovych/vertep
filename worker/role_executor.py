@@ -656,7 +656,9 @@ def execute_assembly(task: dict) -> list[dict]:
     # The render is written to an attempt-scoped temporary name; CORE promotes it
     # to the immutable version only after it verified the bytes (P3/P6).
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.parent / f".{output.name}.{task['task_id'][:8]}.part"
+    # The name keeps the output suffix last: an engine such as FFmpeg chooses the
+    # container from the extension and refuses a ``.part`` file (#498).
+    temporary = output.parent / f".{output.stem}.{task['task_id'][:8]}.part{output.suffix}"
     try:
         engine.render(
             temporary,

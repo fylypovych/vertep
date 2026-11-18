@@ -102,46 +102,43 @@ def _complete_script_task(client, job_id, node_name="text-worker", headers=None)
 
 
 def _complete_assembly_task(client, job_id, node_name="assembly-worker", headers=None):
-    """Register an assembly worker, claim/execute the assembly task, and submit the result."""
+    """Act as a real assembly Worker: authenticate, claim, render and submit (#498).
+
+    Final assembly runs on a Worker, so CORE only hands the task to a node that is
+    authenticated and reports the exact engine configuration of the attempt. The
+    render itself goes through the Worker executor, not through a fabricated artifact.
+    """
+    from unittest.mock import patch as _patch
+    from worker.service import claim_video_engine_state
+
+    env = {}
     if headers is None:
-        headers = {}
-    client.post("/api/workers/heartbeat", json={
-        "node_name": node_name, "vram_mb": 0,
-        "capabilities": ["video_assembly"], "supported_tasks": ["assembly"], "role": "gpu",
-    }, headers=headers)
-    task = None
-    for _ in range(100):
-        resp = client.post("/api/tasks/claim", json={"node_name": node_name, "vram_mb": 0}, headers=headers)
-        task = resp.json().get("task")
-        if task and task.get("task") == "assembly" and task.get("job_id") == job_id:
-            break
-        time.sleep(0.01)
-    assert task and task.get("task") == "assembly"
-    # Create a minimal valid MP4 artifact for testing
-    import base64
-    # Minimal MP4 with ftyp atom (ftypisom)
-    mp4_data = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2avc1mp41" + b"\x00" * 100
-    artifact = {
-        "artifact_id": f"assembly-{job_id}-{task['task_id'][:8]}",
-        "kind": "video",
-        "sha256": "test_sha256",
-        "size": len(mp4_data),
-        "path": f"{job_id}/video.mp4",
-        "contract": {
-            "video_version": task.get("version", 1),
-            "engine_id": "test",
-            "engine_snapshot": task.get("engine_snapshot", {}),
-            "duration_seconds": 1.0,
-            "width": 1920,
-            "height": 1080,
-        },
-        "data_base64": base64.b64encode(mp4_data).decode(),
-    }
-    response = client.post("/api/tasks/result", json={
-        "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
-        "success": True, "artifacts": [artifact]}, headers=headers)
-    assert response.status_code == 200
-    return artifact
+        token = f"{node_name}-token"
+        env["WORKER_TOKENS"] = ",".join(
+            item for item in (os.getenv("WORKER_TOKENS", ""), f"{node_name}:{token}") if item)
+        headers = {"X-Vertep-Token": token}
+    with _patch.dict(os.environ, env):
+        heartbeat = client.post("/api/workers/heartbeat", json={
+            "node_name": node_name, "vram_mb": 0,
+            "capabilities": ["video_assembly"], "supported_tasks": ["assembly"], "role": "gpu",
+        }, headers=headers)
+        assert heartbeat.status_code == 200, heartbeat.text
+        task = None
+        for _ in range(100):
+            resp = client.post("/api/tasks/claim", json={
+                "node_name": node_name, "vram_mb": 0,
+                "video_engine": claim_video_engine_state()}, headers=headers)
+            task = resp.json().get("task")
+            if task and task.get("task") == "assembly" and task.get("job_id") == job_id:
+                break
+            time.sleep(0.01)
+        assert task and task.get("task") == "assembly", resp.json()
+        artifacts = role_executor.execute_role_task("gpu", task)
+        response = client.post("/api/tasks/result", json={
+            "job_id": job_id, "task_id": task["task_id"], "node_name": node_name,
+            "success": True, "artifacts": artifacts}, headers=headers)
+        assert response.status_code == 200, response.text
+    return artifacts[0]
 
 
 def _create_job_in_store(topic="Test topic", min_vram_mb=0, character_id="did_samogon", priority=5):
