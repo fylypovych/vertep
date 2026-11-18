@@ -22,7 +22,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
         <h3 class="text-lg font-semibold text-slate-900">{{ 'Персонажі' | t }}</h3>
         <div class="flex items-center gap-2">
           @if (policy.can('admin_module_migrate').allowed) {
-            <button (click)="runMigration()" data-testid="migrate-characters-button" class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium">Міграція</button>
+            <button (click)="runMigration()" data-testid="migrate-characters-button" class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium">{{ 'Міграція' | t }}</button>
           }
           <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="(createCharacterReason || 'Новий персонаж') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
             {{ 'Новий персонаж' | t }}

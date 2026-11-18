@@ -445,16 +445,16 @@ def test_core_dispatches_and_a_separate_worker_process_renders_two_revisions(lif
 
 
 @pytest.mark.parametrize("lifecycle", ["native"], indirect=True)
-def test_native_engine_regression_renders_in_core_without_a_worker(lifecycle):
-    """#397 M2: with Native selected the same CORE process assembles the cut itself on
-    the control-plane route; no assembly attempt is dispatched and no node is needed."""
+def test_native_engine_renders_on_a_separate_worker(lifecycle):
+    """With Native selected, the Worker renders and CORE imports the result."""
     api, job_id = lifecycle["api"], lifecycle["job_id"]
+    lifecycle["start_node"]()
     job = _render(api, job_id, 1, timeout=300)
-    assert not job.get("assembly_task_ids"), job.get("assembly_task_ids")
+    assert job["video_engine_snapshot"]["engine_id"] == "native"
     v1 = job["video_versions"][0]
     produced = lifecycle["core_jobs"] / job_id / v1["path"]
     assert hashlib.sha256(produced.read_bytes()).hexdigest() == v1["sha256"]
-    assert not any("ASSEMBLY CLAIMED" in event for event in job.get("events", []))
+    assert any("ASSEMBLY CLAIMED" in event for event in job["events"])
     stand_in = lifecycle["runtime"]["stand_in"]
     if stand_in is not None:
         assert stand_in.submits == [], "Native must not reach the external runtime"
@@ -840,8 +840,7 @@ def test_the_application_reads_back_versions_approvals_receipts_hashes_and_mappi
     deleted through the API, the restarted CORE reports the same versions, approval,
     self-verified artifact hashes and submit-key mapping."""
     api, job_id = lifecycle["api"], lifecycle["job_id"]
-    if lifecycle["engine"] != "native":
-        lifecycle["start_node"]()
+    lifecycle["start_node"]()
     job = _render(api, job_id, 1)
     v1 = job["video_versions"][0]
     approved = api.post(f"/api/jobs/{job_id}/video/approve",

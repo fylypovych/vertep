@@ -21,6 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.media_harness import assembly_worker
+
 from core.models import Job, JobStatus, utc_now, VideoVersion, job_transition_allowed
 from core.artifacts import _digest
 from core.pipeline import JobStore
@@ -114,7 +116,7 @@ class TestImmutableVideoVersioning:
         job = _make_job_for_store(tmp_path)
         store, job = _make_store(tmp_path, job)
         images = [_write_file(tmp_path / "job" / "images" / "img.png")]
-        with patch("core.pipeline.providers") as mock_providers:
+        with assembly_worker(store) as mock_providers:
             mock_providers.video_engine.return_value.render.side_effect = lambda out, **kw: _write_file(out)
             result = finalize_job(store, job, images)
         assert result.active_video_version == 1
@@ -140,7 +142,7 @@ class TestImmutableVideoVersioning:
         v1_file = tmp_path / "jobs" / job.job_id / "final" / "video-v1.mp4"
         _write_file(v1_file, b"v1 content")
         images = [_write_file(tmp_path / "job" / "images" / "img.png")]
-        with patch("core.pipeline.providers") as mock_providers:
+        with assembly_worker(store) as mock_providers:
             mock_providers.video_engine.return_value.render.side_effect = lambda out, **kw: _write_file(out, b"data-v2")
             result = finalize_job(store, job, images)
         assert result.active_video_version == 2
@@ -157,7 +159,7 @@ class TestImmutableVideoVersioning:
         job = _make_job_for_store(tmp_path)
         store, job = _make_store(tmp_path, job)
         images = [_write_file(tmp_path / "job" / "images" / "img.png")]
-        with patch("core.pipeline.providers") as mock_providers:
+        with assembly_worker(store) as mock_providers:
             mock_providers.video_engine.return_value.render.side_effect = lambda out, **kw: _write_file(out, b"test content")
             result = finalize_job(store, job, images)
         vv = result.video_versions[0]
@@ -369,7 +371,7 @@ class TestE2ELifecycle:
         images = [_write_file(tmp_path / "job" / "images" / "img.png")]
 
         # First render
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = lambda out, **kw: _write_file(out, b"v1")
             job = finalize_job(store, job, images)
         assert job.active_video_version == 1
@@ -383,7 +385,7 @@ class TestE2ELifecycle:
 
         # Upstream regeneration completed; re-render (producing version 2)
         job.status = JobStatus.ASSETS_READY
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = lambda out, **kw: _write_file(out, b"v2")
             job = finalize_job(store, job, images)
         assert job.active_video_version == 2

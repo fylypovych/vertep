@@ -71,7 +71,7 @@ PROCESS_LIFECYCLE_TESTS = (
     "tests/test_mpt_process_lifecycle.py"
     "::test_core_dispatches_and_a_separate_worker_process_renders_two_revisions",
     "tests/test_mpt_process_lifecycle.py"
-    "::test_native_engine_regression_renders_in_core_without_a_worker[native]",
+    "::test_native_engine_renders_on_a_separate_worker[native]",
 )
 #: #397 M3: a node killed mid-render loses its lease; the attempt is reassigned and the
 #: runtime reconciles the same submit key. Recorded in the same process-lifecycle JUnit.
@@ -916,7 +916,8 @@ def evaluate_pinned_criteria(evidence: dict[str, Any], *,
         row(m2, PASS,
             "separate CORE and worker.service processes rendered two revisions on the "
             "pinned runtime with validated import, immutable history and stale/duplicate "
-            "approval refusal; the Native route still renders in CORE",
+            "approval refusal. A separate Worker also rendered a Native attempt for CORE "
+            "to import",
             {"measurements": m2_measure})
 
     # M3 — recovery remainder.

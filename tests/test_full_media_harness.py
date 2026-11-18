@@ -18,7 +18,7 @@ Declared acceptance rows (also consumed by ``scripts/media-acceptance-report.py`
 * ``cancel``         -> cancel during render discards the result, no version registered
 * ``stale_result``   -> late worker result after cancel is refused
 * ``lease``          -> expired lease requeues the task and fences the stale result
-* ``restart``        -> restart replays the Job, releases a stale claim, keeps approval
+* ``restart``        -> restart replays the Job and preserves the previous video version
 * ``backup_update``  -> backup snapshot receipt import and update-agent smoke
 * ``evidence``       -> CI evidence: SHA-anchored artifacts and receipts
 """
@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 from datetime import datetime, timezone
@@ -99,11 +100,12 @@ class _RenderGate:
     """Holds one render open so in-flight boundaries are observable from a test.
 
     Only the FFmpeg binary is replaced (allowed by the acceptance rules); the
-    claim, cancel and release paths all stay real and run on the CORE executor
-    thread while the test thread drives the HTTP boundaries.
+    claim, cancel and release paths all stay real. A Worker thread executes the
+    claimed assembly while the test thread drives the HTTP boundaries.
     """
 
     def __init__(self, client, monkeypatch, tmp_path):
+        self.client = client
         self._armed = False
         self.rendering = threading.Event()
         self.release = threading.Event()
@@ -123,12 +125,33 @@ class _RenderGate:
         self.rendering.clear()
         self.release.clear()
 
-    def wait_started(self) -> None:
-        assert self.rendering.wait(timeout=90), "the held render never started"
+    def wait_started(self, job_id: str, *, expected_status: int = 200) -> None:
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.future = self.executor.submit(self._run, job_id, expected_status)
+        for _ in range(harness.WAIT_ATTEMPTS):
+            if self.rendering.wait(harness.WAIT_DELAY):
+                return
+            if self.future.done():
+                self.future.result()
+                break
+        raise AssertionError("the held render never started")
+
+    def _run(self, job_id: str, expected_status: int) -> None:
+        for _ in range(harness.WAIT_ATTEMPTS):
+            if harness.run_assembly(self.client, job_id, expected_status=expected_status):
+                return
+            if self.release.wait(harness.WAIT_DELAY):
+                break
+        raise AssertionError("the assembly task was not claimed")
 
     def open(self) -> None:
         self.release.set()
         self._armed = False
+        if hasattr(self, "executor"):
+            try:
+                self.future.result(timeout=90)
+            finally:
+                self.executor.shutdown()
 
     def abandon(self) -> None:
         self._armed = False
@@ -314,7 +337,7 @@ class TestInFlightBoundaries:
             first = client.post(f"/api/jobs/{job_id}/video/regenerate",
                                 json={"actor": "harness"})
             assert first.status_code == 200, first.text
-            gate.wait_started()
+            gate.wait_started(job_id)
             second = client.post(f"/api/jobs/{job_id}/video/regenerate",
                                  json={"actor": "harness"})
             assert second.status_code == 409, second.text
@@ -346,7 +369,7 @@ class TestInFlightBoundaries:
         try:
             assert client.post(f"/api/jobs/{job_id}/video/regenerate",
                                json={"actor": "harness"}).status_code == 200
-            gate.wait_started()
+            gate.wait_started(job_id, expected_status=409)
             cancelled = client.post(f"/api/jobs/{job_id}/cancel", json={"actor": "harness"})
             assert cancelled.status_code == 200, cancelled.text
         finally:
@@ -460,9 +483,10 @@ class TestInFlightBoundaries:
 
 
 class TestRestartRecovery:
-    def test_restart_releases_a_stale_claim_and_keeps_the_approval(self, client,
-                                                                   monkeypatch, tmp_path):
-        """A CORE restart must not strand an approval nor keep a dead render claim."""
+    def test_restart_preserves_the_previous_version_during_worker_assembly(
+        self, client, monkeypatch, tmp_path
+    ):
+        """Reloading CORE while a Worker renders preserves the previous version."""
         gate = _RenderGate(client, monkeypatch, tmp_path)
         job_id = harness.create_job(client, topic="Restart recovery")
         _run_to_video(client, monkeypatch, job_id)
@@ -473,8 +497,10 @@ class TestRestartRecovery:
         try:
             assert client.post(f"/api/jobs/{job_id}/video/regenerate",
                                json={"actor": "harness"}).status_code == 200
-            gate.wait_started()
-            assert store.jobs[job_id].video_regenerating is True
+            gate.wait_started(job_id)
+            harness.drain_executor()
+            assert store.jobs[job_id].assembly_task_id
+            assert store.jobs[job_id].video_regenerating is False
 
             restarted = harness.restart_store()
             replayed = restarted.jobs[job_id]
@@ -483,15 +509,13 @@ class TestRestartRecovery:
             assert replayed.video_versions[0].sha256 == first_sha
             assert replayed.video_regenerating is False, (
                 "a persisted regeneration claim cannot survive a restart")
-            assert any("STALE VIDEO REGENERATION CLAIM RELEASED" in line
-                       for line in replayed.events)
+            assert any("RECOVERED AFTER RESTART" in line for line in replayed.events)
         finally:
             gate.open()
         harness.drain_executor()
 
-        # The in-process harness cannot kill the executor thread the way a real
-        # CORE restart would, so the abandoned render may still finish; what must
-        # hold is version integrity: v1 is untouched and the next attempt is v2.
+        # Reloading the repository leaves the original CORE running, so it can
+        # still import the held Worker's result.
         job = harness.wait_for_status(client, job_id, "VIDEO_PENDING_APPROVAL")
         assert job["video_versions"][0]["sha256"] == first_sha
         assert [path.name for path in harness.version_paths(job_id)] in (
@@ -510,7 +534,7 @@ class TestRestartRecovery:
         assert len({version.sha256 for version in approved.video_versions}) == \
             len(approved.video_versions), "every version keeps its own artifact"
         harness.record_row("restart", True, approved.video_versions[-1].approved,
-                           job_id=job_id, stale_claim_released=True,
+                           job_id=job_id, previous_version_sha256=first_sha,
                            approved_after_restart=True,
                            video=harness.video_evidence(job_id, job))
 

@@ -17,9 +17,10 @@ from __future__ import annotations
 import core.telegram.handlers as _owner_core_telegram_handlers
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
+
+from tests.media_harness import assembly_worker
 
 from core.artifacts import register_artifact
 from core.models import JobStatus
@@ -73,7 +74,7 @@ def _register_scene_image(store, job) -> Path:
 def _produce_v1(tmp_path):
     store, job = _build_store(tmp_path)
     image = _write_file(store.root / job.job_id / "images" / "img.png")
-    with patch("core.pipeline.providers") as mp:
+    with assembly_worker(store) as mp:
         _render(mp)
         job = finalize_job(store, job, image)
     assert job.status == JobStatus.VIDEO_PENDING_APPROVAL
@@ -90,7 +91,7 @@ class TestClaimLease:
         monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
         assert job.video_regenerating is True
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             _render(mp)
             _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
@@ -171,14 +172,14 @@ class TestRenderFencing:
         _register_scene_image(store, job)
 
         def _cancel_mid_render():
-            with store.lock:
-                store.jobs[job.job_id].status = JobStatus.CANCELLED
-                store._save(store.jobs[job.job_id])
+            from core.api.job_helpers.actions import _job_action
+
+            _job_action(job.job_id, JobStatus.CANCELLED, "JOB CANCELLED")
 
         _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store, expected_status=409) as mp:
             _render(mp, on_render=_cancel_mid_render)
             _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
@@ -188,7 +189,7 @@ class TestRenderFencing:
         assert len(current.video_versions) == 1
         assert current.video_regenerating is False
         assert not (root / job.job_id / "final" / "video-v2.mp4").exists()
-        assert any("ASSEMBLY RESULT DISCARDED" in event for event in current.events)
+        assert any("JOB CANCELLED" in event for event in current.events)
 
     def test_pause_during_render_registers_no_version(self, tmp_path, monkeypatch):
         import core.app as app_module
@@ -196,14 +197,14 @@ class TestRenderFencing:
         _register_scene_image(store, job)
 
         def _pause_mid_render():
-            with store.lock:
-                store.jobs[job.job_id].status = JobStatus.PAUSED
-                store._save(store.jobs[job.job_id])
+            from core.api.job_helpers.actions import _job_action
+
+            _job_action(job.job_id, JobStatus.PAUSED, "JOB PAUSED")
 
         _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
         claim_video_regeneration(store, job, "test")
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store, expected_status=409) as mp:
             _render(mp, on_render=_pause_mid_render)
             _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]

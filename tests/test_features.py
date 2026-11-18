@@ -8,6 +8,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from adapters.ffmpeg import FFmpegAdapter
+from tests import media_harness
+
 from core.app import app
 from core.telegram.handlers import store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
@@ -128,6 +130,9 @@ def _mock_storyboard_for_features(monkeypatch):
 def wait_for(client, job_id, statuses=("READY", "FAILED")):
     for _ in range(600):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if job.get("assembly_task_id"):
+            media_harness.run_assembly(client, job_id)
+            continue
         if job["status"] == "VIDEO_PENDING_APPROVAL":
             client.post(f"/api/jobs/{job_id}/video/approve",
                         json={"actor": "test", "expected_video_version": job["active_video_version"]})
@@ -206,6 +211,7 @@ def test_platform_preset_and_watermark(tmp_path):
 
 
 def test_publisher_never_fakes_success(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
     monkeypatch.setenv("PUBLISHER_MOCK", "false")
     client = TestClient(app)
@@ -470,6 +476,7 @@ def test_character_crud_validation(monkeypatch, tmp_path):
 
 
 def test_job_rejects_workflow_outside_registry(monkeypatch):
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
     client = TestClient(app)
     job_id = client.post("/api/jobs", json={"topic": "Workflow validation"}).json()["job_id"]
@@ -711,7 +718,7 @@ def test_tts_pipeline_routes_to_voice_worker_and_produces_audio(monkeypatch):
 
     def _fake_assemble(self, output, **kwargs):
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(b"ftypmp42" + b"\x00" * 100)
+        output.write_bytes(media_harness.make_mp4(b"voice"))
         return output
 
     def _fake_probe(self, path):

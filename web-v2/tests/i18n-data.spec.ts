@@ -13,7 +13,7 @@ const fixtures: Record<string, unknown> = {
   '/api/nodes': ['READY', 'BUSY', 'OFFLINE'].map((status, index) => worker(status, `w${index}`)),
   '/api/nodes/w0': worker('READY', 'w0'),
   '/api/alerts': ['firing', 'acknowledged', 'resolved'].map((state, index) => ({ id: String(index), severity: ['error', 'warning', 'info'][index], type: ['WORKER_OFFLINE', 'UPDATE_FAILED', 'SYSTEM_STATE'][index], state, message: 'm', created_at: '2026-01-31T15:00:00Z' })),
-  '/api/characters': [{ id: 'c1', character_id: 'c1', name: 'Name', language: 'uk', enabled: true }, { id: 'c2', character_id: 'c2', name: 'Name 2', language: 'en', enabled: false }],
+  '/api/modules/characters/v1/characters': [{ id: 'c1', character_id: 'c1', name: 'Name', language: 'uk', enabled: true }, { id: 'c2', character_id: 'c2', name: 'Name 2', language: 'en', enabled: false }],
   '/api/brands': [{ id: 'b1', name: 'Name', enabled: true, active: true }, { id: 'b2', name: 'Name 2', enabled: false, active: false }],
   '/api/real-tests/scenarios': { scenarios: [{ id: 's', name: 'Name', rt_id: 'S01', rt_issue: 1, description: 'd', checks: ['c'] }], available_checks: ['c'], version: '1' },
   '/api/real-tests/runs': { runs: [{ test_run_id: 'r', rt_id: 'S01', status: 'PASSED', initiator: 'a', progress: 'x', started_at: '2026-01-31T15:00:00Z' }, { test_run_id: 'r2', rt_id: 'S01', status: 'FAILED', initiator: 'a', progress: 'x', started_at: '2026-01-31T15:00:00Z' }] },

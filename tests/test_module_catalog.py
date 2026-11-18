@@ -34,8 +34,10 @@ def entry(client, module_id):
 
 
 def test_catalog_lists_modules_nodes_and_reasons(api):
+    from core.module.lifecycle import BUNDLED
+
     catalog = api.get("/api/nodes/module-catalog").json()
-    assert {m["module_id"] for m in catalog["modules"]} == {"text", "image", "audio", "publisher", "backup"}
+    assert {m["module_id"] for m in catalog["modules"]} == set(BUNDLED)
     assert all(m["state"] == "NOT_INSTALLED" for m in catalog["modules"])
     image = {n["node_id"]: n["compatible_reasons"] for n in entry(api, "image")["nodes"]}
     assert image["gpu-node"] == []

@@ -53,7 +53,7 @@ def test_legacy_manifest_and_bundled_yaml_are_read_unchanged():
     assert manifest.to_dict() == legacy  # legacy consumers see the identical shape
     for path in sorted((ROOT / "modules").glob("*/manifest.yaml")):
         bundled = ModuleManifest.from_dict(yaml.safe_load(path.read_text(encoding="utf-8")))
-        assert bundled.placement["scaling"] == "replicated"
+        assert bundled.placement["scaling"] == ("single_owner" if bundled.kind == "application" else "replicated")
         assert bundled.resource_requirements.keys() == {"min_vram_mb", "min_cpu_cores", "min_ram_mb"}
 
 

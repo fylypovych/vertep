@@ -716,24 +716,15 @@ def approved_narration(job: Job) -> str:
 def effective_engine_id(engine) -> str:
     """Identifier of the effective video engine, ``native`` when there is none.
 
-    Only a real engine id routes an assembly to a Worker; anything else (including
-    a stand-in used in tests) keeps the Native control-plane route, so CORE never
-    dispatches an assembly it cannot identify (Issue #122 P5).
+    Engines without an explicit identity use the Native identifier. The caller
+    must reject an unidentified engine that declares a foreign provider.
     """
     value = getattr(engine, "engine_id", None)
     return value if isinstance(value, str) and value else "native"
 
 
 def _is_native_engine(engine) -> bool:
-    """Fail-closed identity check for the CORE render path (i.0.0.1.4 #104).
-
-    Native FFmpeg assembly in CORE is control-plane (AGENTS.md §20), but the
-    same path must never execute another VideoEngine. An engine that declares a
-    foreign provider is refused before any render, even when its ``engine_id``
-    is missing and the effective id would otherwise resolve to ``native``.
-    Engines without a declared provider (control-plane stand-ins) stay on the
-    Native route.
-    """
+    """Check whether the engine identity and provider permit Native assembly."""
     engine_id = getattr(engine, "engine_id", None)
     if isinstance(engine_id, str) and engine_id and engine_id != "native":
         return False
@@ -783,13 +774,14 @@ def finalize_job(store: JobStore, job: Job, images: Path | list[Path]) -> Job:
     transition_stage(job, StageName.ASSEMBLY, StageStatus.RUNNING)
     store.update(job, JobStatus.ASSEMBLY, "ASSEMBLY STARTED")
     _progress(job, "ASSEMBLY")
+    video_engine = providers.video_engine()
+    if effective_engine_id(video_engine) == "native" and not _is_native_engine(video_engine):
+        transition_stage(job, StageName.ASSEMBLY, StageStatus.FAILED)
+        store.update(job, JobStatus.FAILED, "UNIDENTIFIED VIDEO ENGINE IS NOT NATIVE")
+        return job
     plan = assembly_plan(store, job, image_list)
     subtitles = plan["subtitles"]
-    output = plan["output"]
     next_version = plan["version"]
-    job_dir = store.root / job.job_id
-    final_dir = job_dir / "final"
-    video_engine = providers.video_engine()
     # i.0.0.4.98 (#498): every final assembly, including the native FFmpeg engine,
     # is executed by a Worker. CORE only decides the attempt (immutable
     # engine/config/input snapshot, durable submit key), dispatches it and later

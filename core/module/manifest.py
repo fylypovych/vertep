@@ -388,14 +388,16 @@ class ModuleManifest:
         if requires is None and isinstance(data.get("requires_capabilities"), list):
             requires = [{"type": "capability", "name": cap, "min_version": "0.0"} for cap in data["requires_capabilities"]]
         container = data.get("container")
-        if container is None and data.get("kind") == "application":
-            container = {"image": f"registry.example/vertep/{data.get('name', 'module')}@sha256:{"0"*64}", "port": 8080}
+        if "container" not in data and data.get("kind") == "application" and isinstance(data.get("runtime"), dict):
+            container = {"image": f"registry.example/vertep/{data['name']}@sha256:{'0' * 64}", "port": 8080}
         api = data.get("api")
         if api is None and data.get("namespace"):
             api = {"namespace": data["namespace"], "version": "1.0", "routes": [f"/{data['namespace']}", f"/{data['namespace']}/{{id}}"]}
         extended = {key: data[key] for key in ("module_id", "kind", "core_compatibility", "provides",
                                                 "ui", "permissions", "secret_refs", "services",
                                                 "publisher", "provenance") if key in data}
+        if requires is not None:
+            extended["requires"] = requires
         if api is not None:
             extended["api"] = api
         if placement is not None:

@@ -29,6 +29,8 @@ import time
 import wave
 import uuid
 from pathlib import Path
+from contextlib import contextmanager
+from unittest.mock import Mock
 
 from adapters.ffmpeg import FFmpegAdapter
 from core.script_agent import ScriptAgent
@@ -38,6 +40,7 @@ from worker import role_executor
 TEXT_NODE = "text-worker"
 IMAGE_NODE = "image-worker"
 VOICE_NODE = "voice-worker"
+ASSEMBLY_NODE = "assembly-worker"
 PUBLISHER_NODE = "publisher-worker"
 
 WAIT_ATTEMPTS = 600
@@ -173,15 +176,23 @@ def _storyboard_llm_stub(job_id: str, revision: str | None = None) -> dict:
     }
 
 
+def make_mp4(marker: bytes) -> bytes:
+    def box(kind, contents):
+        return struct.pack(">I4s", len(contents) + 8, kind) + contents
+
+    handler = box(b"hdlr", b"\x00" * 8 + b"vide" + b"\x00" * 13)
+    return (box(b"ftyp", b"isom\x00\x00\x02\x00isomiso2")
+            + box(b"moov", box(b"trak", box(b"mdia", handler)))
+            + box(b"free", marker))
+
+
 def install_generator_stubs(monkeypatch, *, scenes: int = 2, on_render=None) -> None:
     """Replace only generators/providers; the control plane stays real."""
     _SCENE_COUNT["value"] = scenes
 
     def _assemble(self, output, **kwargs):
         output.parent.mkdir(parents=True, exist_ok=True)
-        payload = bytearray(b"ftypmp42" + b"\x00" * 96)
-        payload.extend(_next_render_marker().encode("utf-8")[:32].ljust(32, b"\x00"))
-        output.write_bytes(bytes(payload))
+        output.write_bytes(make_mp4(_next_render_marker().encode("utf-8")))
         if on_render is not None:
             on_render(output)
         return output
@@ -238,6 +249,8 @@ def register_fleet(client, *, characters_root, character_id: str,
               capabilities=["text_generation"])
     heartbeat(client, IMAGE_NODE, supported_tasks=["image"],
               capabilities=["image_generation"])
+    heartbeat(client, ASSEMBLY_NODE, supported_tasks=["assembly"],
+              capabilities=["video_assembly"])
     heartbeat(client, VOICE_NODE, supported_tasks=["voice"], role="voice", vram_mb=0,
               capabilities=["speech_synthesis"],
               voice_catalog={"voices": ["uk"], "models": ["uk_male"]})
@@ -672,6 +685,68 @@ def generate_assets_only(client, job_id: str, monkeypatch, scenes: int = 2) -> N
     wait_for_status(client, job_id, "TTS_GENERATING", "VIDEO_GENERATION")
 
 
+def run_assembly(client, job_id: str, *, expected_status: int = 200) -> bool:
+    from core.engine_config import engine_snapshot_fields
+
+    if ASSEMBLY_NODE not in store.workers:
+        registered = heartbeat(client, ASSEMBLY_NODE, supported_tasks=["assembly"], capabilities=["video_assembly"])
+        assert registered.status_code == 200, registered.text
+    response = client.post("/api/tasks/claim", json={
+        "node_name": ASSEMBLY_NODE, "vram_mb": 0,
+        "supported_tasks": ["assembly"], "capabilities": ["video_assembly"],
+        "video_engine": {**engine_snapshot_fields(role_executor.providers.video_engine()), "ready": True},
+    }, headers=worker_headers())
+    assert response.status_code == 200, response.text
+    task = response.json()["task"]
+    if task is None:
+        return False
+    assert task["job_id"] == job_id and task["task"] == "assembly", task
+    response = client.post("/api/tasks/result", json={
+        "job_id": job_id, "task_id": task["task_id"], "node_name": ASSEMBLY_NODE,
+        "success": True, "artifacts": role_executor.execute_role_task("gpu", task),
+    }, headers=worker_headers())
+    assert response.status_code == expected_status, response.text
+    return True
+
+
+@contextmanager
+def assembly_worker(job_store, *, expected_status: int = 200):
+    """Run queued assembly through the Worker and result API in isolated video tests."""
+    from fastapi.testclient import TestClient
+    from pytest import MonkeyPatch
+    from core.app import app
+    from core.api import job_helpers, jobs, task_results, tasks, workers
+    from core.queue import TaskQueue
+
+    queue = TaskQueue()
+    engine = Mock(engine_id="native", provider="native", contract_profile=None, _url="")
+    providers = Mock()
+    providers.video_engine.return_value = engine
+
+    def render(output, **kwargs):
+        original_render(output, **kwargs)
+        output.write_bytes(make_mp4(output.read_bytes()))
+
+    with MonkeyPatch.context() as patch:
+        for module in (job_helpers.assembly, job_helpers.actions, tasks, task_results, workers, jobs):
+            patch.setattr(module, "store", job_store)
+        for module in (job_helpers.assembly, job_helpers.actions, tasks, task_results):
+            patch.setattr(module, "task_queue", queue)
+        patch.setattr("core.state.task_queue", queue)
+        patch.setattr("tests.media_harness.store", job_store)
+        patch.setattr("core.pipeline.providers", providers)
+        patch.setattr(role_executor, "providers", providers)
+        patch.setenv("NODE_API_TOKEN", "test-assembly-worker")
+        patch.setenv("JOB_ROOT", str(job_store.root))
+        yield providers
+        original_render = engine.render.side_effect
+        engine.render.side_effect = render
+        client = TestClient(app)
+        for job in list(job_store.jobs.values()):
+            if job.assembly_task_id:
+                assert run_assembly(client, job.job_id, expected_status=expected_status)
+
+
 def wait_for_video(client, job_id: str, *, min_version: int = 1,
                    attempts: int = WAIT_ATTEMPTS) -> dict:
     for _ in range(attempts):
@@ -679,6 +754,8 @@ def wait_for_video(client, job_id: str, *, min_version: int = 1,
         if job["status"] == "VIDEO_PENDING_APPROVAL" \
                 and (job.get("active_video_version") or 0) >= min_version:
             return job
+        if job.get("assembly_task_id"):
+            run_assembly(client, job_id)
         time.sleep(WAIT_DELAY)
     raise AssertionError(
         f"job {job_id} never produced video v>={min_version}; "

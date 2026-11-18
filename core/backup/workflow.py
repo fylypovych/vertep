@@ -35,6 +35,7 @@ def capture(snapshot):
     for manifest in modules_root.glob("*/manifest.yaml"):
         definition = yaml.safe_load(manifest.read_text(encoding="utf-8"))
         definition = definition.get("manifest", definition)
+        definition = definition.get("module", definition)
         files = {}
         for name in definition.get("backup", {}).get("paths", []):
             path = safe_path(data_root, name)

@@ -6,6 +6,8 @@ const PNG = Buffer.from(
 );
 const file = { name: 'ref.png', mimeType: 'image/png', buffer: PNG };
 
+const charactersApi = '/api/modules/characters/v1/characters';
+
 function mockApi(page: any, uploads: string[]) {
   const stored: Array<Record<string, unknown>> = [];
   return page.route('**/api/**', async (route: any) => {
@@ -14,8 +16,8 @@ function mockApi(page: any, uploads: string[]) {
     const method = request.method();
     if (path.endsWith('/session')) return route.fulfill({ json: { authenticated: true, username: 'admin', user: 'admin', role: 'admin' } });
     if (path.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL', reason: null }, version: '0' } });
-    if (path.endsWith('/characters') && method === 'GET') return route.fulfill({ json: [{ id: 'old_one', name: 'Старий', language: 'uk' }] });
-    if (path.endsWith('/characters') && method === 'POST') return route.fulfill({ json: JSON.parse(request.postData() || '{}') });
+    if (path === charactersApi && method === 'GET') return route.fulfill({ json: [{ id: 'old_one', name: 'Старий', language: 'uk' }] });
+    if (path === charactersApi && method === 'POST') return route.fulfill({ json: JSON.parse(request.postData() || '{}') });
     if (path.endsWith('/references') && method === 'POST') {
       uploads.push(path);
       stored.push({ filename: `${stored.length}.png`, sha256: 'x', size: PNG.length });
@@ -34,7 +36,7 @@ test('референс старого персонажа завантажуєт�
   await page.getByTestId('edit-character-button').click();
   await page.getByTestId('character-reference-input').setInputFiles(file);
   await expect(page.getByTestId('character-reference')).toHaveCount(1);
-  expect(uploads).toEqual(['/api/characters/old_one/references']);
+  expect(uploads).toEqual([`${charactersApi}/old_one/references`]);
 });
 
 test('референс нового персонажа завантажується лише після збереження', async ({ page }) => {
@@ -48,5 +50,5 @@ test('референс нового персонажа завантажуєть�
   await page.getByRole('button', { name: 'Зберегти' }).click();
   await expect(page.getByTestId('character-modal')).toHaveCount(0);
   expect(uploads).toHaveLength(1);
-  expect(uploads[0]).toMatch(/^\/api\/characters\/character_[0-9a-f]+\/references$/);
+  expect(uploads[0]).toMatch(/^\/api\/modules\/characters\/v1\/characters\/character_[0-9a-f]+\/references$/);
 });

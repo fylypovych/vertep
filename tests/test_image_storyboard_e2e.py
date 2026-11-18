@@ -1,6 +1,8 @@
 import base64, time
 import pytest
 from fastapi.testclient import TestClient
+from tests import media_harness
+
 from core.app import app
 from core.telegram.handlers import store
 from core.models import JobStatus, StoryboardScene, StoryboardVersion
@@ -101,6 +103,9 @@ def test_image_storyboard_e2e(monkeypatch):
     # Need image worker to complete asset generation
     for _ in range(80):
         j=client.get(f"/api/jobs/{job_id}").json()
+        if j.get("assembly_task_id"):
+            media_harness.run_assembly(client, job_id)
+            continue
         if j["status"]=="VIDEO_PENDING_APPROVAL":
             client.post(f"/api/jobs/{job_id}/video/approve",
                         json={"actor":"test","expected_video_version":j["active_video_version"]})

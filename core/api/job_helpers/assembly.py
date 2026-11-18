@@ -47,11 +47,14 @@ def _engine_snapshot(
     """
     from adapters.providers import providers
     from adapters.providers.base import BRIDGE_SCHEMA_VERSION
+    from ...pipeline import effective_engine_id
 
     if engine is None:
         engine = providers.video_engine()
+
+    engine_id = effective_engine_id(engine)
     snapshot: dict = {
-        "engine_id": getattr(engine, "engine_id", "native"),
+        "engine_id": engine_id,
         "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
         "config_revision": engine_config_revision(engine),
         "job_id": job.job_id,
@@ -68,9 +71,9 @@ def _engine_snapshot(
             None),
         "upstream_reference",
         None)
-    if reference:
+    if isinstance(reference, str) and reference:
         snapshot["upstream_reference"] = reference
-    if getattr(engine, "engine_id", "native") != "native":
+    if engine_id != "native":
         # Only the *reference* of the endpoint and the secret travels with the task
         # (P7): a Worker can prove it has the same configuration without the CORE
         # ever handing out a credential.

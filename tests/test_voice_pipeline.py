@@ -31,6 +31,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from adapters.ffmpeg import FFmpegAdapter
+from tests import media_harness
+
 from core.app import app
 from core.telegram.handlers import store
 from core.dispatcher import available_worker
@@ -282,6 +284,9 @@ def _wait_for(client, job_id, statuses=("READY", "FAILED")):
     job = None
     for _ in range(600):
         job = client.get(f"/api/jobs/{job_id}").json()
+        if job.get("assembly_task_id"):
+            media_harness.run_assembly(client, job_id)
+            continue
         if job["status"] == "VIDEO_PENDING_APPROVAL":
             client.post(f"/api/jobs/{job_id}/video/approve",
                         json={"actor": "test", "expected_video_version": job["active_video_version"]})
@@ -363,7 +368,7 @@ def test_full_voice_dispatch_end_to_end(monkeypatch, tmp_path):
 
     def _fake_assemble(self, output, **kwargs):
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(b"ftypmp42" + b"\x00" * 100)
+        output.write_bytes(media_harness.make_mp4(b"voice"))
         return output
 
     def _fake_probe(self, path):

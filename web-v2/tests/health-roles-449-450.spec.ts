@@ -41,63 +41,58 @@ test('Health відокремлює metadata, optional і минулу GPU ві�
   await expect(health).not.toContainText('Система справна');
 });
 
-for (const roles of [['voice'], ['publisher'], ['voice', 'publisher']]) {
+for (const role of ['voice', 'publisher']) {
   for (const terminal of ['SUCCEEDED', 'FAILED']) {
-    test(`ролі ${roles.join('+')}: QUEUED → APPLYING → ${terminal}, reload`, async ({ page }) => {
-      let active: string[] = ['text', 'backup', 'monitoring'];
-      let requested: string[] | null = null;
+    test(`середовище ${role}: QUEUED → APPLYING → ${terminal}, reload`, async ({ page }) => {
+      const active = ['text', 'backup', 'monitoring'];
+      const moduleId = role === 'voice' ? 'audio' : role;
       let state = '';
-      let posts = 0;
+      const requests: string[][] = [];
       await page.route('**/api/**', async route => {
-        const req = route.request();
-        const path = new URL(req.url()).pathname;
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
         if (path.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', username: 'admin', role: 'admin' } });
+        if (path.endsWith('/nodes/module-catalog')) return route.fulfill({ json: {
+          nodes: [{ node_id: 'core', role: 'core' }],
+          modules: [{ module_id: moduleId, label: role, version: '1.0.0', state: 'INSTALLED',
+            runtime_role: role, placement: [], permissions: [],
+            nodes: [{ node_id: 'core', compatible_reasons: [], runtime_missing: state !== 'SUCCEEDED', instance: null }] }],
+        } });
         if (path.endsWith('/system/roles')) {
-          if (req.method() === 'POST') {
-            posts++;
-            requested = req.postDataJSON().roles;
+          if (request.method() === 'POST') {
+            requests.push(request.postDataJSON().roles);
             state = 'QUEUED';
-            return route.fulfill({ json: { state, requested_roles: requested } });
           }
-          return route.fulfill({ json: { node_role: 'core', active_roles: active, requested_roles: requested,
-            queued: !!requested, deployment: { state, phase: state === 'APPLYING' ? 'VERIFYING' : state, error: state === 'FAILED' ? 'Не вдалося запустити службу синтезу мовлення' : undefined },
-            available_roles: ['gpu', 'voice', 'publisher', 'text', 'backup', 'monitoring'].map(id => ({ id, label: id,
-              runtime_status: active.includes(id) ? 'READY' : id === 'gpu' ? 'DEGRADED' : 'READY',
-              runtime_evidence: active.includes(id) ? { source: 'local' } : { source: 'nodes', nodes: [{ node_id: 'remote', live: true }] },
-            })),
+          return route.fulfill({ json: {
+            active_roles: state === 'SUCCEEDED' ? [...active, role] : active,
+            queued: ['QUEUED', 'APPLYING'].includes(state),
+            deployment: { state, phase: state === 'APPLYING' ? 'VERIFYING' : state,
+              error: state === 'FAILED' ? 'Не вдалося запустити службу' : null },
           } });
         }
         return route.fulfill({ json: {} });
       });
-      await page.goto('/settings?tab=roles');
-      await expect(page.getByTestId('role-status-gpu')).toHaveText('Локально вимкнено');
-      for (const role of roles) {
-        await expect(page.getByTestId(`role-status-${role}`)).toHaveText('Локально вимкнено');
-        await page.getByLabel(role, { exact: true }).check();
-      }
-      await page.getByTestId('roles-save-button').click();
-      await expect.poll(() => posts).toBe(1);
-      await expect(page.getByTestId('roles-save-button')).toBeDisabled();
+
+      await page.goto('/modules');
+      const prepare = page.getByTestId(`prepare-core-${moduleId}`);
+      const deployment = page.getByTestId('deployment-state');
+      await prepare.click();
+      await expect.poll(() => requests).toEqual([[...active, role]]);
       await page.reload();
-      for (const role of roles) await expect(page.getByLabel(role, { exact: true })).toBeChecked();
-      await expect(page.getByTestId('deployment-state')).toHaveText('Очікує системного виконавця');
+      await expect(prepare).toBeDisabled();
+      await expect(deployment).toHaveText('Очікує системного виконавця');
       state = 'APPLYING';
-      await expect(page.getByTestId('deployment-state')).toHaveText('Перевірка готовності служб', { timeout: 10000 });
+      await expect(deployment).toHaveText('Перевірка готовності служб', { timeout: 10000 });
       state = terminal;
-      if (terminal === 'SUCCEEDED') active = requested!;
-      requested = null;
-      await expect(page.getByTestId('deployment-state')).toContainText(terminal === 'SUCCEEDED' ? 'Локальне розгортання застосовано' : 'Застосування не вдалося', { timeout: 10000 });
-      for (const role of roles) {
-        if (terminal === 'SUCCEEDED') await expect(page.getByLabel(role, { exact: true })).toBeChecked();
-        else await expect(page.getByLabel(role, { exact: true })).not.toBeChecked();
+      const outcome = terminal === 'SUCCEEDED' ? 'Локальне розгортання застосовано' : 'Застосування не вдалося';
+      await expect(deployment).toContainText(outcome, { timeout: 10000 });
+      if (terminal === 'FAILED') {
+        await expect(page.getByTestId('deployment-error')).toContainText('Не вдалося запустити');
+        await expect(prepare).toBeEnabled();
       }
-      if (terminal === 'FAILED') await expect(page.getByTestId('deployment-error')).toContainText('Не вдалося запустити');
-      await expect(page.getByTestId('role-status-text')).toHaveText('Готовий');
-      await expect(page.getByTestId('role-status-backup')).toHaveText('Готовий');
-      await expect(page.getByTestId('role-status-monitoring')).toHaveText('Готовий');
       await page.reload();
-      await expect(page.getByTestId('deployment-state')).toContainText(terminal === 'SUCCEEDED' ? 'Локальне розгортання застосовано' : 'Застосування не вдалося');
-      expect(posts).toBe(1);
+      await expect(deployment).toContainText(outcome);
+      expect(requests).toHaveLength(1);
     });
   }
 }
@@ -106,13 +101,13 @@ test('застарілий запит показує діагностику exec
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
     const json = path.endsWith('/session') ? { authenticated: true, user: 'admin', username: 'admin', role: 'admin' }
-      : path.endsWith('/system/roles') ? { node_role: 'core', active_roles: [], requested_roles: ['voice'], queued: true,
-        deployment: { state: 'QUEUED', stalled: true, message: 'Системний виконавець не прийняв запит. Перевірте службу розгортання.' },
-        available_roles: [{ id: 'voice', label: 'Voice Node', runtime_status: 'UNKNOWN' }] } : {};
+      : path.endsWith('/nodes/module-catalog') ? { modules: [], nodes: [] }
+      : path.endsWith('/system/roles') ? { active_roles: [], requested_roles: ['voice'], queued: true,
+        deployment: { state: 'QUEUED', stalled: true, message: 'Системний виконавець не прийняв запит. Перевірте службу розгортання.' } } : {};
     return route.fulfill({ json });
   });
-  await page.goto('/settings?tab=roles');
+  await page.goto('/modules');
+  await page.reload();
   await expect(page.getByTestId('deployment-state')).toHaveText('Потрібна перевірка системного виконавця');
-  await expect(page.getByTestId('settings-roles')).toContainText('Системний виконавець не прийняв запит');
-  await expect(page.getByTestId('roles-save-button')).toBeDisabled();
+  await expect(page.getByTestId('core-runtime')).toContainText('Системний виконавець не прийняв запит');
 });

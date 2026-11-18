@@ -44,6 +44,56 @@ def image(api, task):
     assert response.status_code == 200, response.text
 
 
+def assemble_media(contour, job_id):
+    from adapters.providers.video_engines import NativeVertepEngine
+    from core.engine_config import engine_snapshot_fields
+
+    api = contour["api"]
+    node = "process-assembly"
+    worker(api, node, "gpu", ["video_assembly"], ["assembly"])
+    engine = {**engine_snapshot_fields(NativeVertepEngine()), "ready": True}
+
+    def claim_assembly():
+        response = api.post("/api/tasks/claim", json={
+            "node_name": node, "supported_tasks": ["assembly"],
+            "capabilities": ["video_assembly"], "video_engine": engine,
+        })
+        assert response.status_code == 200, response.text
+        return response.json()["task"]
+
+    task = wait(claim_assembly)
+    assert task["job_id"] == job_id
+    with subprocess.Popen(
+        [sys.executable, "-c", "import json, sys; from worker.role_executor import execute_role_task; "
+         "print(json.dumps(execute_role_task('gpu', json.load(sys.stdin))))"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "JOB_ROOT": str(contour["root"] / "jobs")},
+    ) as process:
+        try:
+            payload = json.dumps(task)
+            deadline = time.monotonic() + 60
+            while True:
+                try:
+                    stdout, stderr = process.communicate(payload, timeout=5)
+                    break
+                except subprocess.TimeoutExpired:
+                    assert time.monotonic() < deadline, "Assembly Worker timed out"
+                    payload = None
+                    worker(api, node, "gpu", ["video_assembly"], ["assembly"],
+                           current_job=job_id, current_task=task["task_id"])
+                    renewed = api.post("/api/tasks/renew", json={
+                        "node_name": node, "task_id": task["task_id"],
+                    })
+                    assert renewed.status_code == 200, renewed.text
+            assert process.returncode == 0, stderr
+        finally:
+            if process.poll() is None:
+                process.kill()
+    response = submit(api, task, node, json.loads(stdout))
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "VIDEO_PENDING_APPROVAL"
+
+
 def prepare_media(contour):
     api = contour["api"]
     heartbeat(api)
@@ -124,7 +174,7 @@ def test_actual_voice_audio_assembly_recovery(voiced, case, record_property):
     response = submit(api, task, "process-voice", [artifact])
     assert response.status_code == 200, response.text
     assert submit(api, task, "process-voice", [artifact]).status_code == 409
-    wait(lambda: get_job(api, job_id)["status"] == "VIDEO_PENDING_APPROVAL")
+    assemble_media(voiced, job_id)
     job = get_job(api, job_id)
     root = voiced["root"] / "jobs" / job_id
     audio = [a for a in job["artifacts"] if a["kind"] == "audio"]
@@ -149,7 +199,7 @@ def test_publisher_process_private_delivery_and_lost_ack_restart(contour, tmp_pa
     api = contour["api"]
     contour["script_response"]["platforms"] = {channel: metadata}
     job_id = prepare_media(contour)
-    wait(lambda: get_job(api, job_id)["status"] == "VIDEO_PENDING_APPROVAL")
+    assemble_media(contour, job_id)
     job = get_job(api, job_id)
     approved = api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": job["active_video_version"]})
     assert approved.status_code == 200, approved.text
@@ -227,7 +277,7 @@ def test_partial_publish_retry_preserves_successful_channel_across_restart(conto
     api = contour["api"]
     contour["script_response"]["platforms"] = {"facebook": {"page_id": "controlled-page"}}
     job_id = prepare_media(contour)
-    wait(lambda: get_job(api, job_id)["status"] == "VIDEO_PENDING_APPROVAL")
+    assemble_media(contour, job_id)
     version = get_job(api, job_id)["active_video_version"]
     assert api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": version}).status_code == 200
     worker(api, "process-publisher", "publisher", ["publishing"], ["publish"])
@@ -279,7 +329,7 @@ def test_partial_publish_retry_preserves_successful_channel_across_restart(conto
 def test_core_restart_keeps_live_publisher_lease_and_accepts_its_result(contour):
     api = contour["api"]
     job_id = prepare_media(contour)
-    wait(lambda: get_job(api, job_id)["status"] == "VIDEO_PENDING_APPROVAL")
+    assemble_media(contour, job_id)
     version = get_job(api, job_id)["active_video_version"]
     assert api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": version}).status_code == 200
     worker(api, "process-publisher", "publisher", ["publishing"], ["publish"], runtime_instance_id="still-running")
@@ -301,7 +351,7 @@ def test_core_restart_keeps_live_publisher_lease_and_accepts_its_result(contour)
 def test_lost_upload_response_is_durable_and_never_blindly_uploaded_again(contour, tmp_path):
     api = contour["api"]
     job_id = prepare_media(contour)
-    wait(lambda: get_job(api, job_id)["status"] == "VIDEO_PENDING_APPROVAL")
+    assemble_media(contour, job_id)
     version = get_job(api, job_id)["active_video_version"]
     assert api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": version}).status_code == 200
     worker(api, "process-publisher", "publisher", ["publishing"], ["publish"])

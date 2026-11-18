@@ -21,6 +21,8 @@ import core.telegram.handlers as _owner_core_telegram_handlers
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.media_harness import assembly_worker
+
 from core.models import JobStatus
 from core.pipeline import JobStore, finalize_job
 from core.repository import FileRepository
@@ -53,7 +55,7 @@ def _render(patch_providers):
 def _produce_v1(tmp_path, topic: str = "Regen topic"):
     store, job = _build_store(tmp_path, topic)
     image = _write_file(store.root / job.job_id / "images" / "img.png")
-    with patch("core.pipeline.providers") as mp:
+    with assembly_worker(store) as mp:
         _render(mp)
         job = finalize_job(store, job, image)
     assert job.status == JobStatus.VIDEO_PENDING_APPROVAL
@@ -100,7 +102,7 @@ class TestSharedRegenerationAndApi:
         v1_sha = _digest_file(root / job.job_id / "final" / "video-v1.mp4")
         _owner_core_telegram_handlers.store = store  # shared path reads the module-global store
         monkeypatch.setattr("core.state.store", store)
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             _render(mp)
             _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
@@ -250,7 +252,7 @@ class TestSharedRegenerationAndApi:
             store._save(job)
         _owner_core_telegram_handlers.store = store
         monkeypatch.setattr("core.state.store", store)
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             _render(mp)
             _owner_core_telegram_handlers._finalize_video_regenerate(job)
         current = store.jobs[job.job_id]
@@ -276,7 +278,7 @@ class TestSharedRegenerationAndApi:
         job.script = {"title": "Regen topic", "scenes": [
             {"prompt": "Kadr", "voiceover": "Text", "duration": 5}]}
         image = _register_scene_image(store, job)
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             _render(mp)
             job = finalize_job(store, job, image)
         assert job.active_video_version == 2

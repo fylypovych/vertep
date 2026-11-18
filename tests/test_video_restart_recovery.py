@@ -15,7 +15,8 @@ restart, and that the restart-bypass approval gap is closed:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+
+from tests.media_harness import assembly_worker
 
 from core.artifacts import _digest
 from core.models import JobStatus
@@ -54,7 +55,7 @@ class TestRestartRecovery:
     def test_approved_video_version_survives_restart(self, tmp_path):
         store, job = _build_store(tmp_path)
         image = _image(store, job)
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = (
                 lambda out, **kw: _write_file(out))
             job = finalize_job(store, job, image)
@@ -82,7 +83,7 @@ class TestRestartRecovery:
         VIDEO_PENDING_APPROVAL; the reload must NOT silently promote to READY."""
         store, job = _build_store(tmp_path)
         image = _image(store, job)
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = (
                 lambda out, **kw: _write_file(out))
             job = finalize_job(store, job, image)
@@ -115,7 +116,7 @@ class TestRestartRecovery:
     def test_unapproved_fresh_restart_is_pending_not_publishable(self, tmp_path):
         store, job = _build_store(tmp_path)
         image = _image(store, job)
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = (
                 lambda out, **kw: _write_file(out))
             job = finalize_job(store, job, image)
@@ -141,7 +142,7 @@ class TestRestartRecovery:
     def test_revision_loop_versions_preserved_across_restart(self, tmp_path):
         store, job = _build_store(tmp_path)
         image = _image(store, job)
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = (
                 lambda out, **kw: _write_file(out))
             job = finalize_job(store, job, image)  # v1, unapproved
@@ -149,7 +150,7 @@ class TestRestartRecovery:
         # free-text revision for the upstream script/storyboard path).
         job = request_video_revision(store, job, "regenerate", "test")
         assert job.status == JobStatus.VIDEO_REVISION_REQUESTED
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = (
                 lambda out, **kw: _write_file(out))
             job = finalize_job(store, job, image)  # v2, unapproved

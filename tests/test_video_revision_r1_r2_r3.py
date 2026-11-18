@@ -21,6 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.media_harness import assembly_worker
+
 from core.artifacts import _digest, register_artifact
 from core.models import JobStatus, SceneRecord
 from core.pipeline import JobStore, finalize_job
@@ -47,7 +49,7 @@ def _build_store(tmp_path: Path) -> tuple[JobStore, object]:
 
 def _render_v1(store: JobStore, job):
     image = _write(store.root / job.job_id / "images" / "img.png")
-    with patch("core.pipeline.providers") as mp:
+    with assembly_worker(store) as mp:
         mp.video_engine.return_value.render.side_effect = lambda out, **kw: _write(out, b"v1")
         finalize_job(store, job, image)
     assert job.status == JobStatus.VIDEO_PENDING_APPROVAL
@@ -159,7 +161,7 @@ class TestR1VideoRevisionDrivesGeneration:
         job.script = {"title": "Issue 81", "scenes": [
             {"prompt": "Kadr", "voiceover": "Text", "duration": 5}]}
         scene_image = _register_scene(store, job, 1, "frame.jpg")
-        with patch("core.pipeline.providers") as mp:
+        with assembly_worker(store) as mp:
             mp.video_engine.return_value.render.side_effect = lambda out, **kw: _write(out, b"v2")
             finalize_job(store, job, scene_image)
         assert job.active_video_version == 2
