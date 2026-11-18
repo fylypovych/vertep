@@ -26,7 +26,7 @@ Publisher Node (платформи) │ Backup Node │ Monitoring Node (Prometh
 Сценарій:   CORE → task(script) → Text Worker → result → SCRIPT_PENDING_APPROVAL → approve
 Зображення: CORE → task(image) → GPU Worker (ComfyUI prompt/history/view) → artifact → approval
 Голос:      CORE → task(tts) → Voice Worker → перевірений audio-artifact
-Монтаж:     CORE (AssemblyProvider/FFmpeg) → final/video.mp4 → VIDEO_PENDING_APPROVAL
+Монтаж:     CORE → task(assembly) → CPU-capable Worker (FFmpeg) → verified artifact → VIDEO_PENDING_APPROVAL
 Публікація: approve → task(publish) → Publisher Worker → receipt (remote ID/URL)
 ```
 

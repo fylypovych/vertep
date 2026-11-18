@@ -23,6 +23,7 @@ from tests.test_provider_process_acceptance import config_contour, ROOT, PASSWOR
 from tests.test_text_redis_process import port, wait
 from tests.test_queue_redis_contract import redis_url
 from tests.test_media_browser_e2e import sync_playwright, expect
+from tests.module_postgres import module_postgres
 from tests.telegram_patching import patch_telegram
 
 
@@ -33,39 +34,15 @@ requires_openssl = pytest.mark.skipif(
 
 
 @pytest.fixture
-def node_dependencies(tmp_path, redis_url, record_property):
-    pg_bin = Path(os.getenv("VERTEP_TEST_POSTGRES_BIN", "/usr/lib/postgresql/16/bin"))
-    suffix = ".exe" if os.name == "nt" else ""
-    if not (pg_bin / ("initdb" + suffix)).is_file():
-        if os.getenv("VERTEP_REQUIRE_NODE_PROCESS") == "1":
-            pytest.fail("actual disposable PostgreSQL binaries required")
-        pytest.skip("actual PostgreSQL is unavailable")
-    record_property("postgres_version", subprocess.check_output([str(pg_bin / ("postgres" + suffix)), "--version"], text=True).strip())
-    record_property("postgres_binary_sha256", hashlib.sha256((pg_bin / ("postgres" + suffix)).read_bytes()).hexdigest())
-    record_property("docker_dependency", "controlled external CLI; no container build claim")
-    data = tmp_path / "postgres-data"
-    # PostgreSQL otherwise uses /var/run/postgresql for its Unix socket even
-    # when every client in this acceptance fixture connects through TCP.  The
-    # hosted runner does not grant that directory to the disposable initdb
-    # owner, so use a per-run directory rather than a privileged workaround.
-    socket_dir = tmp_path / "postgres-socket"
-    socket_dir.mkdir(mode=0o700)
-    initialized = subprocess.run([str(pg_bin / ("initdb" + suffix)), "-D", str(data), "-U", "vertep", "-A", "trust", "--encoding=UTF8", "--no-locale"], capture_output=True, text=True)
-    assert initialized.returncode == 0, initialized.stderr
-    pg_port = port()
-    log = (tmp_path / "postgres.log").open("w", encoding="utf-8")
-    pg = subprocess.Popen([str(pg_bin / ("postgres" + suffix)), "-D", str(data),
-                           "-h", "127.0.0.1", "-k", str(socket_dir), "-p", str(pg_port)],
-                          stdout=log, stderr=log)
-    dsn = f"postgresql://vertep@127.0.0.1:{pg_port}/postgres"
-    def postgres_ready():
-        import psycopg
-        try:
-            with psycopg.connect(dsn, connect_timeout=1) as connection:
-                return connection.execute("SELECT 1").fetchone() == (1,)
-        except psycopg.Error:
-            return False
-    wait(postgres_ready)
+def node_dependencies(tmp_path, redis_url, record_property, module_postgres):
+    import psycopg
+
+    dsn = module_postgres
+    with psycopg.connect(dsn) as connection:
+        version = connection.execute("SELECT version()").fetchone()[0]
+    record_property("postgres_version", version)
+    record_property("postgres_backend", "disposable PostgreSQL fixture")
+    record_property("docker_dependency", "controlled external CLI; PostgreSQL is a separate disposable service")
     tools = tmp_path / "external-tools"; tools.mkdir()
     fault = tools / "docker-unavailable"
     external = tools / "docker_protocol.py"
@@ -91,10 +68,7 @@ if 'compose' in args and 'ps' in args:
         maker._write_script({"docker"}, ("#!" + sys.executable + "\n").encode(), external.read_bytes(), [], "py")
     env = {"PATH": str(tools) + os.pathsep + os.environ["PATH"], "DATABASE_URL": dsn,
         "REDIS_URL": redis_url, "OLLAMA_URL": "http://127.0.0.1:1", "NODE_ROLE": "core"}
-    try:
-        yield {"env": env, "fault": fault, "postgres_ready": postgres_ready, "tools": tools}
-    finally:
-        pg.terminate(); pg.wait(timeout=15); log.close()
+    yield {"env": env, "fault": fault, "tools": tools}
 
 
 @requires_openssl

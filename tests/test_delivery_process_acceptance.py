@@ -18,10 +18,15 @@ from worker.role_executor import execute_role_task
 from tests.test_publisher_durable_reconciliation import _PLATFORMS
 
 
-def worker(api, node, role, capabilities, supported, **fields):
+@pytest.fixture(autouse=True)
+def native_engine_for_media_processes(monkeypatch):
+    monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "native")
+
+
+def worker(api, node, role, capabilities, supported, *, vram_mb=4096, **fields):
     from datetime import datetime, timezone
     response = api.post("/api/workers/heartbeat", json={"node_name": node, "role": role,
-        "status": "FREE", "vram_mb": 4096, "capabilities": capabilities, "supported_tasks": supported,
+        "status": "FREE", "vram_mb": vram_mb, "capabilities": capabilities, "supported_tasks": supported,
         "self_test": {"status": "PASSED", "role": role, "checked_at": datetime.now(timezone.utc).isoformat()}, **fields})
     assert response.status_code == 200, response.text
 
@@ -44,13 +49,14 @@ def image(api, task):
     assert response.status_code == 200, response.text
 
 
-def assemble_media(contour, job_id):
+def assemble_media(contour, job_id, *, worker_role="gpu"):
     from adapters.providers.video_engines import NativeVertepEngine
     from core.engine_config import engine_snapshot_fields
 
     api = contour["api"]
     node = "process-assembly"
-    worker(api, node, "gpu", ["video_assembly"], ["assembly"])
+    vram_mb = 0 if worker_role == "text" else 4096
+    worker(api, node, worker_role, ["video_assembly"], ["assembly"], vram_mb=vram_mb)
     engine = {**engine_snapshot_fields(NativeVertepEngine()), "ready": True}
 
     def claim_assembly():
@@ -63,11 +69,21 @@ def assemble_media(contour, job_id):
 
     task = wait(claim_assembly)
     assert task["job_id"] == job_id
+    # These cases verify delivery, leases and audio with real FFmpeg.
+    # A small render keeps concurrent test processes within the lease budget.
+    render = (
+        "import json, sys; from adapters.ffmpeg import FFmpegAdapter; "
+        "from worker.role_executor import execute_role_task; "
+        "task = json.load(sys.stdin); "
+        "FFmpegAdapter.PRESETS[task.get('preset') or ''] = (320, 180, 25); "
+        f"print(json.dumps(execute_role_task({worker_role!r}, task)))"
+    )
     with subprocess.Popen(
-        [sys.executable, "-c", "import json, sys; from worker.role_executor import execute_role_task; "
-         "print(json.dumps(execute_role_task('gpu', json.load(sys.stdin))))"],
+        [sys.executable, "-c", render],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={**os.environ, "JOB_ROOT": str(contour["root"] / "jobs")},
+        env={**os.environ, "JOB_ROOT": str(contour["root"] / "jobs"),
+             "NODE_ROLE": worker_role, "SUPPORTED_TASKS": "assembly",
+             "NODE_CAPABILITIES": "video_assembly", "WORKER_REQUIRE_GPU": "false"},
     ) as process:
         try:
             payload = json.dumps(task)
@@ -174,7 +190,7 @@ def test_actual_voice_audio_assembly_recovery(voiced, case, record_property):
     response = submit(api, task, "process-voice", [artifact])
     assert response.status_code == 200, response.text
     assert submit(api, task, "process-voice", [artifact]).status_code == 409
-    assemble_media(voiced, job_id)
+    assemble_media(voiced, job_id, worker_role="text")
     job = get_job(api, job_id)
     root = voiced["root"] / "jobs" / job_id
     audio = [a for a in job["artifacts"] if a["kind"] == "audio"]

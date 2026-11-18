@@ -230,7 +230,7 @@ def _recover_stale_workers(lost_nodes: set[str] | None = None) -> None:
             # attempt is re-dispatched with the SAME durable submit key, so the
             # retry reconciles to the same upstream work instead of starting a
             # second render.
-            task_queue.release(current_task)
+            task_queue.discard(current_task)
             job.assembly_task_ids.pop(current_task, None)
             if job.assembly_task_id == current_task:
                 job.assembly_task_id = None

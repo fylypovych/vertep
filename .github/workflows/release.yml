@@ -46,7 +46,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run tests
         if: ${{ !inputs.skip_tests }}
         # The Docker-backed standard consumer acceptance is required in CI for this exact SHA

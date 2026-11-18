@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Встановлення залежностей acceptance tests
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Pinned GPU image, inventory delivery, readiness та media trace
         env:
           VERTEP_REQUIRE_GPU_BUILT_INVENTORY: "1"
@@ -126,7 +126,7 @@ jobs:
             ${{ runner.temp }}/local-contracts.xml
             ${{ runner.temp }}/local-contracts/**/backup-process-*.log
       - name: Validate shell syntax
-        run: bash -n bootstrap.sh install.sh installer/*.sh scripts/vertep scripts/restore.sh
+        run: bash -n bootstrap.sh installer/*.sh scripts/vertep scripts/restore.sh
       - name: Повтор паралельного, послідовний прогін і порівняння (#439)
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
         run: |
@@ -217,7 +217,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run PostgreSQL backfill integration and unit tests
         run: python -m pytest -q tests/test_issue_412_postgres_real.py tests/test_backfill_postgres.py tests/test_backfill.py tests/test_persistent_user_data.py tests/test_workflow_postgres_state.py
 
@@ -355,7 +355,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h / /var/lib/docker
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run the rollout half of the fleet matrix
         run: >-
           python -m pytest -v --durations=25 -o junit_family=legacy -o faulthandler_timeout=600
@@ -386,7 +386,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Audit signals sent on the host
         run: |
           sudo apt-get update -qq
@@ -456,7 +456,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Prepare non-secret CI configuration
         run: |
           cp .env.example .env
@@ -516,7 +516,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Prepare non-secret CI configuration
         run: |
           cp .env.example .env
@@ -553,7 +553,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
         if: matrix.architecture == 'arm64'
       - name: Install acceptance dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run disposable bootstrap and update executor acceptance
         run: >-
           python scripts/qualify_bootstrap_lifecycle.py
@@ -621,7 +621,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Prepare non-secret acceptance configuration
         run: |
           cp .env.example .env
@@ -667,7 +667,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install runtime-check dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Verify MPT bridge regressions
         run: >-
           python -m pytest -q tests/test_moneyprinter_runtime.py
@@ -707,7 +707,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install runtime-check dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - uses: actions/download-artifact@v7
         with:
           name: moneyprinter-pinned-image-${{ github.sha }}
@@ -754,7 +754,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install runtime-check dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - uses: actions/download-artifact@v7
         with:
           name: moneyprinter-pinned-image-${{ github.sha }}
@@ -804,7 +804,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install runtime-check dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - uses: actions/download-artifact@v7
         with:
           pattern: "moneyprinter-evidence-*-${{ github.sha }}"

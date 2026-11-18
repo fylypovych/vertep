@@ -25,6 +25,8 @@ from worker.role_executor import execute_role_task
 from worker.node_role import (  # noqa: F401
     configured_role,
     node_capabilities,
+    requires_gpu,
+    supported_tasks as role_supported_tasks,
 )
 from worker.model_commands import (  # noqa: F401
     _MODEL_CATALOG_CACHE,
@@ -265,8 +267,11 @@ def _executor_resolves(key: str, value: str) -> bool:
     executor reads.
     """
     expected = str(value).strip().lower()
-    required = {"VERTEP_VIDEO_ENGINE": "video_generation", "TTS_PROVIDER": "speech_synthesis"}.get(key)
-    if required and required not in node_capabilities():
+    required = {
+        "VERTEP_VIDEO_ENGINE": {"video_assembly", "video_generation"},
+        "TTS_PROVIDER": {"speech_synthesis"},
+    }.get(key)
+    if required and required.isdisjoint(node_capabilities()):
         return True
     from adapters.providers import providers as registry
 
@@ -276,11 +281,11 @@ def _executor_resolves(key: str, value: str) -> bool:
         from adapters.llm_clients import backend_readiness
         return backend_readiness(expected)[1]
     if key == "VERTEP_VIDEO_ENGINE":
-        engine = registry.video_engine()
+        engine = providers.video_engine()
         if str(getattr(engine, "engine_id", "") or "").strip().lower() != expected:
             return False
         from core.engine_config import verify_effective_engine
-        return verify_effective_engine(engine=engine)["ready"] is True
+        return verify_effective_engine(engine=engine, require_native_ffmpeg=True)["ready"] is True
     if key == "TTS_PROVIDER":
         provider = registry.tts()
         if str(getattr(provider, "provider", "") or "").strip().lower() != expected:
@@ -674,7 +679,7 @@ def claim_video_engine_state() -> dict:
         from core.engine_config import engine_snapshot_fields, verify_effective_engine
 
         engine = providers.video_engine()
-        report = verify_effective_engine(probe=True, engine=engine)
+        report = verify_effective_engine(probe=True, engine=engine, require_native_ffmpeg=True)
         return {
             **engine_snapshot_fields(engine),
             "ready": report["ready"],
@@ -690,10 +695,10 @@ def claim_video_engine_state() -> dict:
 
 def main() -> None:
     core = os.getenv("CORE_ADDRESS", "http://localhost:8080")
-    supported_tasks = [item.strip() for item in os.getenv("SUPPORTED_TASKS", "image").split(",") if item.strip()]
+    supported_tasks = role_supported_tasks()
     supported_workflows = [item.strip() for item in os.getenv("SUPPORTED_WORKFLOWS", "*").split(",") if item.strip()]
     metrics = gpu_info()
-    require_gpu = os.getenv("WORKER_REQUIRE_GPU", "true").lower() == "true" and os.getenv("DEMO_MODE", "false").lower() != "true"
+    require_gpu = requires_gpu()
     capabilities = node_capabilities()
     payload = {"node_name": os.getenv("NODE_NAME", "gpu-01"),
                "runtime_instance_id": uuid.uuid4().hex, **metrics, **host_metrics(),

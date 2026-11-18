@@ -63,7 +63,8 @@
       "update-agent"
     ],
     "capabilities": [
-      "text_generation"
+      "text_generation",
+      "video_assembly"
     ],
     "modules": [
       "worker",

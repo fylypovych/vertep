@@ -865,8 +865,10 @@ EXECUTORS = {"text": execute_text, "script": execute_script, "voice": execute_vo
              "image": execute_image, "video": execute_video,
              "assembly": execute_assembly,
              "storyboard": execute_storyboard}
-ROLE_TASKS = {"text": {"text", "script", "storyboard"}, "voice": {"voice"}, "publisher": {"publish"},
-              "backup": {"backup"}, "gpu": {"image", "video", "assembly"}}
+ROLE_TASKS = {"text": {"text", "script", "storyboard", "assembly"},
+              "voice": {"voice"}, "publisher": {"publish"},
+              "backup": {"backup"}, "gpu": {"image", "video", "assembly"},
+              }
 
 
 def execute_role_task(role: str, task: dict, *, _routing: bool = False, _migration: bool = False) -> list[dict]:

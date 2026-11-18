@@ -159,19 +159,21 @@ def test_core_worker_self_test_proves_the_local_runtime(monkeypatch):
     assert service.role_self_test("core", {})["status"] == "FAILED"
 
 
-def test_native_ready_means_ffmpeg_in_core_and_nothing_more(monkeypatch):
+def test_native_ffmpeg_readiness_is_worker_local_not_core_local(monkeypatch):
     from adapters.providers import NativeVertepEngine
     monkeypatch.setattr(engine_config, "native_assembly_available", lambda: False)
-    report = engine_config.effective_engine_config(engine=NativeVertepEngine())
-    assert report["ready"] is False and report["reason"] == "ffmpeg_missing"
-    # The Worker's activation report for Native does not depend on its own FFmpeg.
+    assert engine_config.verify_effective_engine(
+        engine=NativeVertepEngine(), require_native_ffmpeg=True
+    )["reason"] == "ffmpeg_missing"
     assert engine_config.verify_effective_engine(engine=NativeVertepEngine())["ready"] is True
     monkeypatch.setattr(engine_config, "native_assembly_available", lambda: True)
-    assert engine_config.effective_engine_config(engine=NativeVertepEngine())["ready"] is True
+    assert engine_config.verify_effective_engine(
+        engine=NativeVertepEngine(), require_native_ffmpeg=True
+    )["ready"] is True
 
 
-def test_return_to_native_is_never_trapped_by_its_readiness(monkeypatch, tmp_path):
-    """Native is the fallback: missing FFmpeg is reported, not a refusal to switch back."""
+def test_return_to_native_is_not_blocked_by_core_ffmpeg(monkeypatch, tmp_path):
+    """The selected Worker proves its Native FFmpeg readiness; CORE does not."""
     from core import provider_switch
     monkeypatch.setattr(engine_config, "native_assembly_available", lambda: False)
     monkeypatch.setattr(engine_config, "effective_engine_config", lambda probe=False: {

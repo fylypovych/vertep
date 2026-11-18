@@ -14,7 +14,7 @@
 
 - ShortGPT видалено з коду, конфігурації, `.env.example`, документації й UI разом із generic-гілкою `/render`, яку використовував лише він. Збережений вибір `shortgpt` показується непідтримуваним і відхиляється без переходу на Native (`UnsupportedVideoEngine`).
 - MoneyPrinterTurbo: локальний runtime через `engine_runtimes` плану розгортання, локальний Worker із `video_assembly`, автоматична адреса `http://moneyprinter:8098`, без ручного токена; зовнішній runtime лишився окремим варіантом. Деталі — [moneyprinter-runtime.md](../moneyprinter-runtime.md).
-- Готовність Native — наявність FFmpeg у CORE, без вимоги локальної GPU.
+- Готовність Native перевіряє Worker, який виконує assembly: потрібен його локальний FFmpeg, але не GPU. CORE не перевіряє власний FFmpeg і не виконує fallback-render.
 
 ## Докази та межі
 

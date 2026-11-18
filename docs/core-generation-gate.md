@@ -89,8 +89,9 @@ Python AST (i.0.0.1.4 #104), резолвить аліаси (`engine.render()` 
   `execute_text/script/storyboard/voice/image/video/publisher`).
 
 Config/status/probe-запити (`/api/tags`, `/api/pull`, `/models`, `/voices`, `/system_stats`,
-`/health`), `voice_catalog()`, `list_text_models()`, постановка задач у чергу та FFmpeg-монтаж
-не є порушеннями; негативні та контрольні fixtures — у `TestBlindSpots`.
+`/health`), `voice_catalog()`, `list_text_models()` і постановка задач у чергу не є порушеннями.
+Для assembly дозволено лише планування та dispatch; сам FFmpeg render у CORE заборонений.
+Негативні та контрольні fixtures — у `TestBlindSpots`.
 
 ### 3.1 Межі статичного аналізу
 

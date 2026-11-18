@@ -332,12 +332,19 @@ def verify_engine_snapshot(engine, snapshot: dict | None, *,
 
 
 def native_assembly_available() -> bool:
-    """The FFmpeg binary Native assembly runs in CORE."""
-    import shutil
-    return shutil.which("ffmpeg") is not None
+    """Whether this executor process has the FFmpeg binary for Native assembly."""
+    from shutil import which
+    from adapters.ffmpeg import FFmpegAdapter
+
+    try:
+        executable = FFmpegAdapter()._executable()
+    except RuntimeError:
+        return False
+    return which(executable) is not None
 
 
-def verify_effective_engine(*, probe: bool = True, engine=None) -> dict[str, Any]:
+def verify_effective_engine(*, probe: bool = True, engine=None,
+                            require_native_ffmpeg: bool = False) -> dict[str, Any]:
     """Verify the effective engine on the actual executor (P7).
 
     Selection and the provider matrix are not proof: an external engine is only
@@ -359,6 +366,9 @@ def verify_effective_engine(*, probe: bool = True, engine=None) -> dict[str, Any
         "config_revision": engine_config_revision(engine),
     }
     if engine_id == "native":
+        if require_native_ffmpeg and not native_assembly_available():
+            report["ready"] = False
+            report["reason"] = "ffmpeg_missing"
         return report
     if not report["configured"]:
         report["ready"] = False
@@ -414,11 +424,6 @@ def effective_engine_config(*, probe: bool = False, engine=None) -> dict[str, An
     from .provider_switch import executor_backend_mismatches
 
     mismatches = executor_backend_mismatches("video_engine")
-    if engine_id == "native" and not native_assembly_available():
-        # Native assembles in CORE with FFmpeg (control-plane, no GPU): CORE's "ready"
-        # means exactly that binary is present here (#456). A Worker never runs Native,
-        # so its activation report is not tied to its own FFmpeg (#463 follow-up).
-        report = {**report, "ready": False, "reason": "ffmpeg_missing"}
     return {
         "selected": selected,
         "effective": engine_id,

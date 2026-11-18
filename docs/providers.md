@@ -14,6 +14,8 @@
 - `PublisherProvider` — публікація (`publish`, `configured`, `available_channels`).
 - `VideoEngine` — драйвер фінальної збірки (`render`); Job-циклом завжди володіє Vertep.
 
+Фінальний `VideoEngine.render()` виконується у Worker через `assembly` task; CORE лише готує затверджені inputs/snapshot і приймає перевірений immutable result (#498). `video_assembly` — CPU capability, GPU не потрібен.
+
 ## Фабрики
 
 `adapters/providers/__init__.py`: ледачий registry (`providers.llm()`, `providers.tts(name)`, `providers.assembly()`, `providers.compute()`, `providers.publisher()`, `providers.video_engine()`), `get_providers()`, `provider_matrix()` (для Web UI і `/api/status`, без мережевих викликів), `replace(name, provider)` для тестів.

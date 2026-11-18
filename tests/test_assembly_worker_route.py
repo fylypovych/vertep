@@ -20,6 +20,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -240,18 +241,51 @@ def _dispatch(state, engine=None) -> Job:
     return store.jobs[job.job_id]
 
 
-def _register_worker(store, name: str = "gpu-01") -> dict:
+def _register_worker(store, name: str = "gpu-01", role: str = "gpu") -> dict:
+    is_cpu = role == "text"
     worker = {
-        "node_name": name, "role": "gpu", "status": "READY", "desired_state": None,
-        "capabilities": ["video_assembly", "video_generation", "image_generation"],
-        "supported_tasks": ["image", "video", "assembly"], "current_job": None,
+        "node_name": name, "role": role, "status": "READY", "desired_state": None,
+        "capabilities": (["text_generation", "video_assembly"] if is_cpu else
+                         ["video_assembly", "video_generation", "image_generation"]),
+        "supported_tasks": (["text", "script", "storyboard", "assembly"] if is_cpu else
+                            ["image", "video", "assembly"]), "current_job": None,
         "current_task": None, "last_seen": utc_now(),
-        "tested_capabilities": ["video_assembly", "video_generation", "image_generation"],
-        "self_test": {"status": "PASSED", "role": "gpu", "checked_at": utc_now()},
+        "tested_capabilities": (["text_generation", "video_assembly"] if is_cpu else
+                                ["video_assembly", "video_generation", "image_generation"]),
+        "self_test": {"status": "PASSED", "role": role, "checked_at": utc_now()},
+        "vram_mb": 0 if is_cpu else 12288,
     }
     store.workers[name] = worker
     store.save_worker(worker)
     return worker
+
+
+def test_cpu_text_worker_advertises_and_can_execute_assembly(monkeypatch):
+    from worker import node_role, role_executor
+
+    monkeypatch.setenv("NODE_ROLE", "text")
+    monkeypatch.delenv("NODE_CAPABILITIES", raising=False)
+    monkeypatch.delenv("SUPPORTED_TASKS", raising=False)
+    monkeypatch.delenv("WORKER_REQUIRE_GPU", raising=False)
+    assert "video_assembly" in node_role.node_capabilities()
+    assert "assembly" in node_role.supported_tasks()
+    assert not node_role.requires_gpu()
+
+    task = {"task": "assembly", "job_id": "cpu-assembly"}
+    monkeypatch.setitem(role_executor.EXECUTORS, "assembly", lambda value: [value])
+    assert role_executor.execute_role_task("text", task) == [task]
+
+
+def test_cpu_text_worker_rejects_a_mismatched_assembly_engine(monkeypatch):
+    from worker import node_role, service
+
+    monkeypatch.setenv("NODE_ROLE", "text")
+    monkeypatch.delenv("NODE_CAPABILITIES", raising=False)
+    monkeypatch.setattr(service, "providers", type("Providers", (), {
+        "video_engine": staticmethod(_ForeignEngineWithoutId),
+    }))
+    assert "video_assembly" in node_role.node_capabilities()
+    assert service._executor_resolves("VERTEP_VIDEO_ENGINE", "native") is False
 
 
 def _worker_engine_state(engine=None, *, ready: bool = True, reason: str | None = None) -> dict:
@@ -1059,6 +1093,153 @@ def _claimed_attempt(assembly_state):
     task = assembly_state["queue"].find(finalized.assembly_task_id)
     _claim()
     return finalized, task
+
+
+def test_native_ffmpeg_cpu_worker_loss_recovers_the_same_assembly_attempt(
+        assembly_state, monkeypatch, tmp_path_factory):
+    from adapters.providers.video_engines import NativeVertepEngine
+    from core.api.job_helpers import recovery
+    from core.engine_config import engine_snapshot_fields
+
+    store, job, queue = (assembly_state["store"], assembly_state["job"], assembly_state["queue"])
+    job_dir = store.root / job.job_id
+    scene_clip = _real_mp4(job_dir / "video" / "scene-native.mp4", seconds=1.0)
+    artifact = register_artifact(job, store.root, scene_clip, "video_scene", workflow="native")
+    job.scenes[0].artifact_ids = [artifact.artifact_id]
+    assembly_state["materials"] = [scene_clip]
+    _wav(job_dir / "audio" / "voice.wav", seconds=1.0)
+
+    engine = NativeVertepEngine()
+    engine.render = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("CORE must not render assembly"))
+    _register_worker(store, "cpu-first", "text")
+    _register_worker(store, "cpu-second", "text")
+    monkeypatch.setattr(recovery, "store", store)
+    monkeypatch.setattr(recovery, "task_queue", queue)
+    monkeypatch.setattr(tasks_api, "_valid_worker_request", lambda node_name, request: True)
+
+    finalized = _dispatch(assembly_state, engine)
+    submit_key = finalized.video_engine_snapshot["submit_key"]
+    claim = _claim("cpu-first", video_engine={
+        **engine_snapshot_fields(engine), "ready": True, "reason": None,
+    })
+    task = claim["task"]
+    node_root = tmp_path_factory.mktemp("cpu-assembly-worker")
+    binary_dir = node_root / "bin"
+    binary_dir.mkdir()
+    marker = node_root / "ffmpeg-started"
+    release = node_root / "ffmpeg-release"
+    real_ffmpeg = shutil.which("ffmpeg") or __import__("adapters.ffmpeg", fromlist=["FFmpegAdapter"]).FFmpegAdapter()._executable()
+    wrapper = binary_dir / "ffmpeg"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        ": > \"$FFMPEG_STARTED\"\n"
+        "while [ ! -e \"$FFMPEG_RELEASE\" ]; do sleep 0.02; done\n"
+        "exec \"$REAL_FFMPEG\" \"$@\"\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    process_env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONIOENCODING": "utf-8",
+        "CORE_ADDRESS": "http://worker-inputs",
+        "JOB_ROOT": str(node_root / "jobs"),
+        "NODE_NAME": "cpu-first",
+        "NODE_API_TOKEN": "worker-token",
+        "NODE_ROLE": "text",
+        "SUPPORTED_TASKS": "assembly",
+        "NODE_CAPABILITIES": "video_assembly",
+        "WORKER_REQUIRE_GPU": "false",
+        "PATH": f"{binary_dir}:{os.environ.get('PATH', '')}",
+        "FFMPEG_STARTED": str(marker),
+        "FFMPEG_RELEASE": str(release),
+        "REAL_FFMPEG": real_ffmpeg,
+    }
+    program = (
+        "import json, sys; from worker.role_executor import execute_role_task; "
+        "print(json.dumps(execute_role_task('text', json.load(sys.stdin))))"
+    )
+    with _core_input_server([]) as base:
+        process_env["CORE_ADDRESS"] = base
+        process = subprocess.Popen(
+            [sys.executable, "-c", program], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, cwd=str(REPO_ROOT), env=process_env,
+        )
+        process.stdin.write(json.dumps(task))
+        process.stdin.close()
+        process.stdin = None
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not marker.is_file():
+            stdout, stderr = process.communicate(timeout=10)
+            pytest.fail(f"CPU Worker exited before FFmpeg (code={process.returncode}): {stderr or stdout}")
+        process.kill()
+        process.communicate(timeout=10)
+
+    recovery._recover_stale_workers(lost_nodes={"cpu-first"})
+    assert store.jobs[job.job_id].active_video_version is None
+    retry_id = store.jobs[job.job_id].assembly_task_id
+    assert retry_id and retry_id != task["task_id"]
+    assert queue.find(task["task_id"]) is None
+    retry = queue.find(retry_id)
+    assert retry["submit_key"] == submit_key
+
+    second = _claim("cpu-second", video_engine={
+        **engine_snapshot_fields(NativeVertepEngine()), "ready": True, "reason": None,
+    })["task"]
+    assert second["task_id"] == retry_id
+    assert second["submit_key"] == submit_key
+    retry_root = tmp_path_factory.mktemp("cpu-assembly-worker-retry")
+    successful_env = {**process_env, "NODE_NAME": "cpu-second", "JOB_ROOT": str(retry_root / "jobs"),
+                      "PATH": os.environ.get("PATH", "")}
+    served: list[str] = []
+    with _core_input_server(served) as base:
+        successful_env["CORE_ADDRESS"] = base
+        completed = subprocess.run(
+            [sys.executable, "-c", program], input=json.dumps(second), capture_output=True,
+            text=True, cwd=str(REPO_ROOT), env=successful_env, timeout=120,
+        )
+    assert completed.returncode == 0, completed.stderr
+    artifacts = json.loads(completed.stdout)
+    accepted = tasks_api.task_result(TaskResult(
+        job_id=job.job_id, task_id=retry_id, node_name="cpu-second", success=True,
+        artifacts=artifacts,
+    ), _Request())
+    assert accepted.status == JobStatus.VIDEO_PENDING_APPROVAL
+    assert accepted.active_video_version == 1
+    assert accepted.video_versions[0].sha256 == hashlib.sha256(
+        base64.b64decode(artifacts[0]["data_base64"])).hexdigest()
+    output_path = store.root / job.job_id / accepted.video_versions[0].path
+    assert output_path.is_file()
+    assert served, "the CPU Worker must fetch approved inputs through the CORE route"
+
+    reference_path = node_root / "native-reference.mp4"
+    NativeVertepEngine().render(
+        reference_path,
+        clips=[scene_clip],
+        durations=[float(value) for value in second["durations"]],
+        audio=job_dir / "audio" / "voice.wav",
+        subtitles=job_dir / second["subtitles"] if second.get("subtitles") else None,
+        aspect_ratio=second["aspect_ratio"],
+        preset=second["preset"],
+        watermark=job_dir / second["watermark"] if second.get("watermark") else None,
+        task_type=second["task_type"],
+        script=second["script"],
+        submit_key=second["submit_key"],
+    )
+
+    def decoded_stream(path: Path, stream: str) -> bytes:
+        command = [real_ffmpeg, "-v", "error", "-i", str(path), "-map", f"0:{stream}"]
+        if stream == "v:0":
+            command.extend(["-vf", "scale=32:32,fps=2", "-frames:v", "2", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        else:
+            command.extend(["-ac", "1", "-ar", "16000", "-f", "s16le", "-"])
+        return subprocess.run(command, capture_output=True, check=True, timeout=30).stdout
+
+    assert decoded_stream(output_path, "v:0") == decoded_stream(reference_path, "v:0")
+    assert decoded_stream(output_path, "a:0") == decoded_stream(reference_path, "a:0")
 
 
 def test_a_separate_worker_process_renders_the_dispatched_attempt(

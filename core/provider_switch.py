@@ -195,7 +195,7 @@ def _verify_workers(slot: str, revision: str, expected: dict[str, str], targets:
 
 
 _SLOT_CAPABILITY = {"tts": "speech_synthesis", "llm": "text_generation",
-    "video_engine": "video_generation", "compute": "image_generation",
+    "video_engine": "video_assembly", "compute": "image_generation",
     "image": "image_generation", "video": "video_generation"}
 
 
@@ -214,7 +214,10 @@ def _switch_targets(slot: str, env_name: str) -> list[str]:
                 continue
         except (KeyError, ValueError, TypeError):
             continue
-        if _SLOT_CAPABILITY.get(slot) in worker.get("capabilities", []):
+        capabilities = worker.get("capabilities", [])
+        # Older Workers advertise video generation for the engine switch.
+        if (_SLOT_CAPABILITY.get(slot) in capabilities
+                or (slot == "video_engine" and "video_generation" in capabilities)):
             targets.append(name)
     return targets
 

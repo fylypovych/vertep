@@ -14,7 +14,7 @@
 | `backup` | Backup Service + Snapshot Manager + Archive Service + Update Agent. |
 | `monitoring` | Grafana + Prometheus + Logs + Metrics + Update Agent. |
 
-Локальні ролі оператор вибирає в **Налаштування → Ролі вузла**; запит застосовує deployment executor. `NODE_ADDITIONAL_ROLES` у `.env` — параметр runtime, не заміна підтвердження застосування. Перелік ролей і служб — [config/node_roles.json](../config/node_roles.json), застосований набір — `deployment-plan.json`; готовність вимірюється окремо.
+Адміністратор керує встановленням модулів, дозволами та node placement у **Модулі**; окремого user-facing role/module selector немає. `config/node_roles.json`, `NODE_ROLE`, `NODE_ADDITIONAL_ROLES` і `deployment-plan.json` залишаються внутрішнім bootstrap/runtime compatibility контрактом, а не альтернативним каталогом модулів. Готовність вимірюється окремо від сумісності та placement.
 
 ## Capabilities
 
@@ -49,9 +49,9 @@
 - віддалені ролі — з durable self-test (`ONLINE/OFFLINE`) і свіжості heartbeat.
 
 `runtime_status` входить у `GET /api/system/roles` (поле `role_runtime_status`
-та `runtime_status`/`runtime_evidence` у `available_roles`), відображається в
-Web UI (Налаштування → Ролі) і враховується диспетчером: локально розгорнута
-роль зі статусом `OFFLINE`/`DEGRADED` більше не приймає задачі.
+та `runtime_status`/`runtime_evidence` у `available_roles`). Web UI показує
+готовність екземпляра модуля в **Модулях**, а стан підключених вузлів — у
+Workers; декларація ролі сама по собі не означає READY.
 
 ## Спостереження і керування
 

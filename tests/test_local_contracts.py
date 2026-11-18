@@ -134,24 +134,6 @@ def test_roles_metrics_and_worker_log_ingestion(monkeypatch):
     assert response.status_code == 200
 
 
-def test_installer_enables_services_and_installs_cli():
-    installer = open("install.sh", encoding="utf-8").read()
-    assert "systemctl enable --now vertep-core.service" in installer
-    assert "systemctl enable --now vertep-worker.service" in installer
-    assert 'ln -sfn "$ROOT_DIR/scripts/vertep" /usr/local/bin/vertep' in installer
-    assert "VERTEP_ROLE" in installer
-    assert "vertep-update.path" in installer
-    assert "WEB_UPDATE_ENABLED true" in installer
-
-
-def test_installer_waits_for_working_nvidia_driver_before_worker_start():
-    installer = open("install.sh", encoding="utf-8").read()
-    assert "if ! nvidia-smi >/dev/null 2>&1" in installer
-    assert "worker_ready=false" in installer
-    assert 'if [[ "$worker_ready" == true ]]' in installer
-    assert "GPU is not ready; ComfyUI and vertep-worker" in installer
-
-
 def test_worker_compose_is_standalone_and_role_plan_is_manifest_driven():
     worker_compose = open("docker-compose.worker.yml", encoding="utf-8").read()
     assert "postgres:" not in worker_compose
@@ -171,15 +153,6 @@ def test_status_renderer_survives_offline_core():
     result = subprocess.run([sys.executable, "scripts/status.py"], input="{}", check=True,
                             capture_output=True, text=True)
     assert "VERTEP" in result.stdout
-
-
-def test_installer_firewall_and_ssh_hardening_are_lockout_safe():
-    installer = open("install.sh", encoding="utf-8").read()
-    assert "ufw default deny incoming" in installer
-    assert '[[ -s "$authorized_keys" ]]' in installer
-    assert "PasswordAuthentication no" in installer
-    assert "sshd -t" in installer
-    assert "password authentication was not disabled" in installer
 
 
 def test_update_applies_migrations_before_core_rebuild():

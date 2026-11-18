@@ -27,7 +27,7 @@ BOOTSTRAP_SERVICES = {"proxy", "core", "license-manager", "dispatcher", "schedul
                       "certificate-manager", "migrate", "postgres", "redis", "update-agent"}
 SAFE_VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}")
 SAFE_MODEL = re.compile(r"[0-9A-Za-z][0-9A-Za-z._:/+-]{0,127}")
-ROLE_TASKS = {"gpu": {"image", "video"}, "text": {"text"}, "voice": {"voice"},
+ROLE_TASKS = {"gpu": {"image", "video", "assembly"}, "text": {"text", "assembly"}, "voice": {"voice"},
               "publisher": {"publish"}, "backup": {"backup"}}
 
 

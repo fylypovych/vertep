@@ -70,9 +70,9 @@ def fixture(tmp_path, role="gpu"):
         "core": {"services": ["proxy", "core", "postgres", "ollama"],
                  "capabilities": ["scheduling"], "modules": ["core"]},
         "gpu": {"services": ["worker", "comfyui", "update-agent"],
-                "capabilities": ["image_generation"], "modules": ["worker", "comfyui"]},
+            "capabilities": ["image_generation", "video_assembly"], "modules": ["worker", "comfyui"]},
         "text": {"services": ["worker", "ollama", "update-agent"],
-                 "capabilities": ["text_generation"], "modules": ["worker", "ollama"]},
+             "capabilities": ["text_generation", "video_assembly"], "modules": ["worker", "ollama"]},
     }
     (root / "config/node_roles.json").write_text(json.dumps(roles), encoding="utf-8")
     (root / ".env").write_text(
@@ -210,8 +210,8 @@ def test_core_deployment_activates_multiple_local_roles(tmp_path):
     environment = (root / ".env").read_text(encoding="utf-8")
     assert "NODE_ROLE=core" in environment
     assert "NODE_ADDITIONAL_ROLES=gpu,text" in environment
-    assert "NODE_CAPABILITIES=image_generation,text_generation" in environment
-    assert "SUPPORTED_TASKS=image,text,video" in environment
+    assert "NODE_CAPABILITIES=image_generation,text_generation,video_assembly" in environment
+    assert "SUPPORTED_TASKS=assembly,image,text,video" in environment
 
 
 def test_apply_deployment_rejects_environment_injection(tmp_path):

@@ -7,7 +7,7 @@ capability Workers via the task queue.
 Principle: **Vertep does not generate content — it orchestrates tools that
 generate content.**  CORE only creates/orchestrates tasks and accepts results.
 
-Allowed control-plane operations (FFmpeg assembly, config queries, status
+Allowed control-plane operations (assembly planning/dispatch, config queries, status
 reporting) and explicit LOCAL_WORKER_FALLBACK paths are allowlisted below.
 Any new generation call in ``core/`` not in the allowlist fails the suite.
 

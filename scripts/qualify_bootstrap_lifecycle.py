@@ -171,7 +171,7 @@ def executor_command(architecture: str, output: Path) -> list[str]:
         "set -euo pipefail\n"
         "apt-get update -qq >/dev/null\n"
         "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssl >/dev/null\n"
-        "python -m pip install -q --disable-pip-version-check -r requirements.txt\n"
+        "python -m pip install -q --disable-pip-version-check -r requirements.txt -r requirements-dev.txt\n"
         "python -c 'import platform; print(platform.machine())' > /evidence/machine\n"
         "python -m pytest -q -p no:cacheprovider -o junit_family=legacy "
         "--basetemp=/tmp/executor --junitxml=/evidence/executor.xml " + " ".join(EXECUTOR_TARGETS) + "\n"

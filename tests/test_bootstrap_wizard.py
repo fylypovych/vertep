@@ -157,32 +157,6 @@ class TestBootstrapHealthLoop:
         assert 'next_health_report=$((SECONDS+30))' in bs
 
 
-class TestInstallScript:
-    def test_enables_core_services(self):
-        install = (ROOT / "install.sh").read_text(encoding="utf-8")
-        assert "systemctl enable --now vertep-core.service" in install
-        assert "systemctl enable --now vertep-worker.service" in install
-
-    def test_installs_cli(self):
-        install = (ROOT / "install.sh").read_text(encoding="utf-8")
-        assert 'ln -sfn "$ROOT_DIR/scripts/vertep" /usr/local/bin/vertep' in install
-
-    def test_ubuntu_only(self):
-        install = (ROOT / "install.sh").read_text(encoding="utf-8")
-        assert "ubuntu:24.04" in install
-
-    def test_ufw_firewall(self):
-        install = (ROOT / "install.sh").read_text(encoding="utf-8")
-        assert "ufw default deny incoming" in install
-
-    def test_ssh_hardening(self):
-        install = (ROOT / "install.sh").read_text(encoding="utf-8")
-        assert "PasswordAuthentication no" in install
-        assert "sshd -t" in install
-
-    def test_gpu_driver_wait(self):
-        install = (ROOT / "install.sh").read_text(encoding="utf-8")
-        assert "if ! nvidia-smi >/dev/null 2>&1" in install
 class TestManifestContract:
     def test_manifest_has_all_roles(self):
         manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))

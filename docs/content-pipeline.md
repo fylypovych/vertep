@@ -24,7 +24,7 @@ Voice Worker повідомляє catalog/readiness, синтезує з пар�
 
 ## FFmpeg-монтаж
 
-Виконується в CORE через `AssemblyProvider` (`core/pipeline.py:finalize_job()`): відеоряд, pan/zoom, переходи, голос, музика, субтитри, заставки, фінальне кодування. Принцип: GPU не витрачається на те, що робить звичайний монтаж. Довгі операції — поза event loop (ThreadPoolExecutor).
+Фінальний монтаж виконується Worker-ом через `assembly` task і `AssemblyProvider` (`worker/role_executor.py:execute_assembly()`): відеоряд, голос, музика, субтитри, заставки та кодування. `core/pipeline.py:finalize_job()` формує snapshot/inputs і ставить task у чергу; CORE перевіряє, зберігає та версіонує результат. Capability `video_assembly` доступна CPU Text Worker; GPU для звичайного FFmpeg-монтажу не потрібен, fallback-монтажу в CORE немає.
 
 ## Video review і версії
 

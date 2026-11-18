@@ -1751,26 +1751,46 @@ def test_worker_detail_shows_hardware_and_actions():
 
 
 def test_modules_shows_deployment_status():
-    """The Modules page shows CORE deployment and compatibility evidence."""
+    """The Modules page shows compatibility and saves one module-to-node choice."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
+        text_placement = []
+        placement_writes = []
         page.route("**/api/system/roles", lambda route: route.fulfill(json={
             "active_roles": [], "queued": True,
             "deployment": {"state": "APPLYING", "phase": "VERIFYING"},
         }))
-        page.route("**/api/nodes/module-catalog", lambda route: route.fulfill(json={
-            "nodes": [{"node_id": "core", "role": "core"}],
-            "modules": [{
-                "module_id": "image", "label": "Image", "version": "1.0.0",
-                "state": "INSTALLED", "requires_gpu": True, "placement": [], "permissions": [],
-                "nodes": [{"node_id": "core", "compatible_reasons": ["Потрібен GPU"],
-                           "runtime_missing": False, "instance": None}],
-            }],
-        }))
+
+        def catalog(route):
+            route.fulfill(json={
+                "nodes": [{"node_id": "core", "role": "core"}],
+                "modules": [{
+                    "module_id": "image", "label": "Image", "version": "1.0.0",
+                    "state": "INSTALLED", "requires_gpu": True, "placement": [], "permissions": [],
+                    "nodes": [{"node_id": "core", "compatible_reasons": ["Потрібен GPU"],
+                               "runtime_missing": False, "instance": None}],
+                }, {
+                    "module_id": "text", "label": "Text", "version": "1.0.0", "kind": "application",
+                    "bundled": True, "state": "INSTALLED", "runtime_role": None, "requires_gpu": False,
+                    "target": "any", "scaling": "single_owner", "resources": {}, "dependencies": [],
+                    "permissions": [], "approved_permissions": [], "placement": text_placement,
+                    "nodes": [{"node_id": "core", "compatible_reasons": [],
+                               "runtime_missing": False, "instance": None}],
+                }],
+            })
+
+        def save_placement(route):
+            placement = route.request.post_data_json["node_ids"]
+            placement_writes.append(placement)
+            text_placement[:] = placement
+            route.fulfill(json={"module_id": "text", "node_ids": placement})
+
+        page.route("**/api/nodes/module-catalog", catalog)
+        page.route("**/api/nodes/module-registry/placement/text", save_placement)
         page.goto(f"{BASE_URL}/")
         page.locator("nav a[href='/modules']").click()
         expect(page).to_have_url(f"{BASE_URL}/modules")
@@ -1778,6 +1798,11 @@ def test_modules_shows_deployment_status():
         expect(page.get_by_test_id("place-image-core")).to_be_disabled()
         expect(page.get_by_test_id("incompatible-image-core")).to_have_text("Потрібен GPU")
         expect(page.get_by_test_id("ready-image-core")).to_have_text("Вузол не повідомляв модуль")
+        page.get_by_test_id("place-text-core").check()
+        page.get_by_test_id("save-placement-text").click()
+        expect(page.get_by_test_id("place-text-core")).to_be_checked()
+        assert placement_writes == [["core"]]
+        expect(page.get_by_test_id("save-placement-text")).to_be_disabled()
         page.go_back()
         expect(page.get_by_test_id("module-management")).not_to_be_visible()
         page.go_forward()

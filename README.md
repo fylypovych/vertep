@@ -184,13 +184,14 @@ docker compose up --build
 
 Локальне виконання генерації у CORE дозволяється тільки явною комбінацією `LOCAL_WORKER_FALLBACK=true` та `VERTEP_DEMO=true`. Цей режим не є production-конфігурацією та не зараховується як доказ виконання на Worker.
 
-`install.sh` і `docker-compose.worker.yml` залишаються source/legacy-інструментами; production-середовище встановлюється через підписаний Bootstrap-потік.
+Для локального запуску окремого Worker з вихідного коду доступний `docker-compose.worker.yml`.
 
 ## Перевірки
 
 Базові перевірки з кореня репозиторію:
 
 ```bash
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall -q core adapters worker scripts installer tests
 python -m pytest -q
 git diff --check
