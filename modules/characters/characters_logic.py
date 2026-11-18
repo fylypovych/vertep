@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import threading
 import time
 import urllib.error
@@ -103,6 +104,11 @@ def _character_profile_complete(character_id: str, characters_root: Path) -> tup
     """Check if character has all required profile files."""
     directory = characters_root / character_id
     missing = [name for name in REQUIRED_PROFILE_FILES if not (directory / name).is_file()]
+    if not missing:
+        try:
+            _load_character_profile(character_id, characters_root)
+        except (OSError, ValueError) as error:
+            return False, [str(error)]
     return len(missing) == 0, missing
 
 
@@ -113,6 +119,8 @@ def _load_character_profile(character_id: str, characters_root: Path) -> dict | 
         return None
     import json as json_lib
     base = json_lib.loads((directory / "character.json").read_text(encoding="utf-8"))
+    if not isinstance(base, dict):
+        raise ValueError("character.json must contain an object")
     for name in ("system_prompt", "voice", "visual", "generation", "publishing"):
         path = directory / f"{name}.txt" if name == "system_prompt" else directory / f"{name}.json"
         if path.is_file():
@@ -120,6 +128,8 @@ def _load_character_profile(character_id: str, characters_root: Path) -> dict | 
                 base[name] = path.read_text(encoding="utf-8")
             else:
                 base[name] = json_lib.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(base[name], dict):
+                    raise ValueError(f"{path.name} must contain an object")
         else:
             base[name] = {} if name != "system_prompt" else ""
     return base
@@ -303,8 +313,36 @@ class CharactersModule:
         """, (character_id, data.get("system_prompt", ""), json.dumps(data.get("voice", {})),
               json.dumps(data.get("visual", {})), json.dumps(data.get("generation", {})),
               json.dumps(data.get("publishing", {}))))
+        self._write_character_files(character_id, data, creating=True)
         self._audit(character_id, "create", brand_id, {"name": data["name"]})
         return self.get_character(character_id, brand_id) or {"id": character_id}
+
+    def _write_character_files(self, character_id: str, data: dict, *, creating: bool = False) -> None:
+        directory = self.characters_root / character_id
+        directory.mkdir(parents=True, exist_ok=True)
+        current = {}
+        character_path = directory / "character.json"
+        if not creating and character_path.is_file():
+            current = json.loads(character_path.read_text(encoding="utf-8"))
+            if not isinstance(current, dict):
+                raise ValueError("character.json must contain an object")
+        character = {
+            "id": character_id,
+            "name": data.get("name", current.get("name", "")),
+            "language": data.get("language", current.get("language", "uk")),
+            "enabled": data.get("enabled", current.get("enabled", True)),
+            "workflow": data.get("workflow", current.get("workflow")),
+        }
+        character_path.write_text(json.dumps(character, ensure_ascii=False, indent=2), encoding="utf-8")
+        for name in ("system_prompt", "voice", "visual", "generation", "publishing"):
+            if name not in data:
+                continue
+            value = data[name]
+            path = directory / ("system_prompt.txt" if name == "system_prompt" else f"{name}.json")
+            if name == "system_prompt":
+                path.write_text(str(value), encoding="utf-8")
+            else:
+                path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def update_character(self, character_id: str, brand_id: str, data: dict) -> dict:
         """Update character (owner only)."""
@@ -322,6 +360,7 @@ class CharactersModule:
         """, (data.get("system_prompt", char["system_prompt"]), json.dumps(data.get("voice", char["voice"])),
               json.dumps(data.get("visual", char["visual"])), json.dumps(data.get("generation", char["generation"])),
               json.dumps(data.get("publishing", char["publishing"])), character_id))
+        self._write_character_files(character_id, data)
         self._audit(character_id, "update", brand_id, data)
         return self.get_character(character_id, brand_id) or {}
 
@@ -412,11 +451,13 @@ class CharactersModule:
     def check_generation_allowed(self, character_id: str) -> tuple[bool, list[str]]:
         """Check if character can be used for generation (complete profile + active)."""
         char = query("SELECT active FROM characters WHERE id = %s", (character_id,))
-        if not char or not char[0][0]:
-            return False, ["Character is not active"]
+        if not char:
+            return False, ["Character not found"]
         complete, missing = _character_profile_complete(character_id, self.characters_root)
         if not complete:
             return False, [f"Incomplete profile: missing {', '.join(missing)}"]
+        if not char[0][0]:
+            return False, ["Character is not active"]
         return True, []
 
 
@@ -430,21 +471,19 @@ def migrate_existing_characters(module: CharactersModule, legacy_root: Path, def
     migration requires explicit owner mapping and skips characters without clear ownership.
     Preserves IDs/profiles/references/history and existing jobs.
     """
-    from core.configuration import missing_character_files, load_character
-    import shutil
-
     results = {"migrated": [], "skipped": [], "errors": []}
 
     if not legacy_root.is_dir():
         return results
 
-    if default_owner_brand is None:
+    if not isinstance(default_owner_brand, str) or not default_owner_brand.strip():
         # AC6: No silent default owner assignment
         results["skipped"].append({
             "id": "*",
             "reason": "default_owner_brand not provided. AC6 requires explicit owner mapping for migration."
         })
         return results
+    default_owner_brand = default_owner_brand.strip()
 
     for char_dir in legacy_root.iterdir():
         if not char_dir.is_dir():
@@ -453,8 +492,8 @@ def migrate_existing_characters(module: CharactersModule, legacy_root: Path, def
         if character_id == "references":
             continue
 
-        # Check completeness
-        missing = missing_character_files(legacy_root, character_id)
+        # Check completeness without importing CORE code into the isolated module container.
+        missing = [name for name in REQUIRED_PROFILE_FILES if not (char_dir / name).is_file()]
         if missing:
             results["skipped"].append({"id": character_id, "reason": f"incomplete: missing {', '.join(missing)}"})
             continue
@@ -467,29 +506,58 @@ def migrate_existing_characters(module: CharactersModule, legacy_root: Path, def
 
         try:
             # Load character from filesystem
-            config = load_character(legacy_root, character_id, require_complete=True)
+            config = _load_character_profile(character_id, legacy_root)
+            if config is None or config.get("id", character_id) != character_id:
+                raise ValueError("character.json ID does not match its directory")
+            if not isinstance(config.get("name"), str) or not config["name"].strip():
+                raise ValueError("character.json must contain a character name")
+            if not isinstance(config.get("system_prompt"), str):
+                raise ValueError("system_prompt.txt must contain text")
+            module_dir = module.characters_root / character_id
+            same_directory = module_dir.resolve() == char_dir.resolve()
+            if not same_directory:
+                for filename in REQUIRED_PROFILE_FILES:
+                    target = module_dir / filename
+                    source_data = (char_dir / filename).read_bytes()
+                    if target.is_file() and target.read_bytes() != source_data:
+                        raise ValueError(f"Module profile file already differs: {filename}")
+            legacy_refs = char_dir / "references"
+            module_refs = module_dir / "references"
+            if legacy_refs.is_dir() and not same_directory:
+                for ref_file in legacy_refs.iterdir():
+                    target = module_refs / ref_file.name
+                    if ref_file.is_file() and target.is_file() and target.read_bytes() != ref_file.read_bytes():
+                        raise ValueError(f"Module reference already differs: {ref_file.name}")
 
             # Insert into module database
             execute("""
                 INSERT INTO characters (id, name, language, enabled, workflow, owner_brand_id, active, created_at, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s, FALSE, NOW(), NOW())
-            """, (config.id, config.name, config.language, config.enabled, config.workflow, default_owner_brand))
+            """, (character_id, config["name"], config.get("language", "uk"), config.get("enabled", True),
+                  config.get("workflow"), default_owner_brand))
 
             # Insert profile
             execute("""
                 INSERT INTO character_profiles (character_id, system_prompt, voice, visual, generation, publishing, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s, NOW())
-            """, (config.id, config.system_prompt, json.dumps(config.voice), json.dumps(config.visual),
-                  json.dumps(config.generation), json.dumps(config.publishing)))
+            """, (character_id, config["system_prompt"], json.dumps(config["voice"]), json.dumps(config["visual"]),
+                  json.dumps(config["generation"]), json.dumps(config["publishing"])))
+
+            if not same_directory:
+                module_dir.mkdir(parents=True, exist_ok=True)
+                for filename in REQUIRED_PROFILE_FILES:
+                    target = module_dir / filename
+                    if not target.exists():
+                        shutil.copy2(char_dir / filename, target)
 
             # Copy reference images
-            legacy_refs = legacy_root / character_id / "references"
             if legacy_refs.is_dir():
-                module_refs = module.characters_root / character_id / "references"
                 module_refs.mkdir(parents=True, exist_ok=True)
                 for ref_file in legacy_refs.iterdir():
                     if ref_file.is_file():
-                        shutil.copy2(ref_file, module_refs / ref_file.name)
+                        target = module_refs / ref_file.name
+                        if not target.exists():
+                            shutil.copy2(ref_file, target)
                         # Record in database
                         data = ref_file.read_bytes()
                         digest = hashlib.sha256(data).hexdigest()

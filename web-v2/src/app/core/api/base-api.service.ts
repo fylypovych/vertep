@@ -25,7 +25,7 @@ export class BaseApiService {
       status?: number;
       detail?: unknown;
       message?: string;
-      error?: { detail?: unknown; message?: string } | string;
+      error?: { code?: string; detail?: unknown; message?: string } | string;
     } | undefined;
     const responseBody = typeof err?.error === 'object' ? err.error : undefined;
     const detail = responseBody?.detail ?? err?.detail;
@@ -40,6 +40,7 @@ export class BaseApiService {
       || responseBody?.message || err?.message || 'API error');
     const apiError = Object.assign(new Error(message), {
       status: err?.status,
+      code: responseBody?.code,
       detail: structured ?? (typeof detail === 'string' ? detail : undefined),
     });
     return throwError(() => apiError);

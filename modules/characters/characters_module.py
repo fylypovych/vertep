@@ -77,32 +77,12 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode())
 
     def do_GET(self) -> None:
+        if self.path == "/health":
+            return self._send(200, health_check())
         if not self._from_core():
             return self._send(403, {"error": "only through the CORE gateway"})
 
         brand_id = self._get_brand()
-
-        if self.path == "/health":
-            return self._send(200, health_check())
-
-        # Migration endpoint (admin only)
-        if self.path == "/migrate" and self.command == "POST":
-            try:
-                from .characters_logic import migrate_existing_characters, CharactersModule
-                from core.persistent_data import persistent_characters_root
-                module = CharactersModule()
-                legacy_root = persistent_characters_root()
-                # AC6: Require explicit owner assignment for migration
-                default_owner = body.get("default_owner_brand")
-                if not default_owner:
-                    return self._send(400, {
-                        "error": "default_owner_brand required for migration",
-                        "details": "AC6: Explicit owner mapping required. Provide default_owner_brand in request body."
-                    })
-                result = migrate_existing_characters(module, legacy_root, default_owner)
-                return self._send(200, result)
-            except Exception as error:
-                return self._send(503, {"error": str(error)})
 
         if self.path == "/ui/index.html":
             return self._send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
@@ -116,20 +96,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 return self._send(503, {"error": str(error)})
 
-        # Get single character
-        if self.path.startswith("/characters/"):
-            char_id = self.path.split("/")[2]
-            try:
-                module = CharactersModule()
-                char = module.get_character(char_id, brand_id)
-                if not char:
-                    return self._send(404, {"error": "Character not found"})
-                return self._send(200, char)
-            except Exception as error:
-                return self._send(503, {"error": str(error)})
-
         # Character references
-        if self.path.startswith("/characters/") and "/references" in self.path:
+        if self.path.startswith("/characters/") and self.path.endswith("/references"):
             parts = self.path.split("/")
             char_id = parts[2]
             try:
@@ -183,6 +151,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 return self._send(503, {"error": str(error)})
 
+        # Get single character after its nested routes.
+        if self.path.startswith("/characters/") and self.path.count("/") == 2:
+            char_id = self.path.split("/")[2]
+            try:
+                module = CharactersModule()
+                char = module.get_character(char_id, brand_id)
+                if not char:
+                    return self._send(404, {"error": "Character not found"})
+                return self._send(200, char)
+            except Exception as error:
+                return self._send(503, {"error": str(error)})
+
         self._send(404, {"error": "not available"})
 
     def do_POST(self) -> None:
@@ -191,6 +171,23 @@ class Handler(BaseHTTPRequestHandler):
 
         brand_id = self._get_brand()
         body = self._read_body()
+
+        if self.path == "/migrate":
+            if self.headers.get("x-vertep-role") != "admin":
+                return self._send(403, {"error": "administrator role required"})
+            default_owner = body.get("default_owner_brand")
+            if not isinstance(default_owner, str) or not default_owner.strip():
+                return self._send(400, {
+                    "error": "default_owner_brand required for migration",
+                    "details": "AC6: Explicit owner assignment required."
+                })
+            try:
+                from .characters_logic import migrate_existing_characters
+                module = CharactersModule()
+                result = migrate_existing_characters(module, module.characters_root, default_owner.strip())
+                return self._send(200, result)
+            except Exception as error:
+                return self._send(503, {"error": str(error)})
 
         # Create character
         if self.path == "/characters":

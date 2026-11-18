@@ -3,7 +3,7 @@ import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
-import { catchError, concatMap, from, of, toArray } from 'rxjs';
+import { catchError, concatMap, from, Observable, of, tap, throwError, toArray } from 'rxjs';
 import { CharacterReference, ResourcesApiService, ModuleCharacter, MigrationResult } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
@@ -21,7 +21,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">{{ 'Персонажі' | t }}</h3>
         <div class="flex items-center gap-2">
-          @if (policy.can('admin_module_migrate').allowed) {
+          @if (useCharactersModule && policy.can('admin_module_migrate').allowed) {
             <button (click)="runMigration()" data-testid="migrate-characters-button" class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium">{{ 'Міграція' | t }}</button>
           }
           <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="(createCharacterReason || 'Новий персонаж') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
@@ -60,12 +60,14 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               <div class="flex flex-wrap gap-2 mb-2">
                 <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">{{ 'Редагувати' | t }}</button>
                 <button (click)="deleteCharacter(character.id!)" [disabled]="!canDeleteCharacter" [title]="(deleteCharacterReason || 'Видалити') | t" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-character-button">{{ 'Видалити' | t }}</button>
-                @if (character.active !== false) {
-                  <button (click)="deactivateCharacter(character.id!)" class="text-sm text-amber-600 hover:text-amber-700 font-medium" data-testid="deactivate-character-button">{{ 'Деактивувати' | t }}</button>
-                } @else {
-                  <button (click)="activateCharacter(character.id!)" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium" data-testid="activate-character-button">{{ 'Активувати' | t }}</button>
+                @if (useCharactersModule) {
+                  @if (character.active !== false) {
+                    <button (click)="deactivateCharacter(character.id!)" class="text-sm text-amber-600 hover:text-amber-700 font-medium" data-testid="deactivate-character-button">{{ 'Деактивувати' | t }}</button>
+                  } @else {
+                    <button (click)="activateCharacter(character.id!)" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium" data-testid="activate-character-button">{{ 'Активувати' | t }}</button>
+                  }
+                  <button (click)="manageCollaborations(character)" class="text-sm text-violet-600 hover:text-violet-700 font-medium" data-testid="collaborations-button">{{ 'Співпраця' | t }}</button>
                 }
-                <button (click)="manageCollaborations(character)" class="text-sm text-violet-600 hover:text-violet-700 font-medium" data-testid="collaborations-button">{{ 'Співпраця' | t }}</button>
               </div>
             </div>
           } @empty {
@@ -108,22 +110,26 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                   <option value="de">{{ 'Німецька' | t }}</option>
                 </select>
               </div>
-              <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Власник (бренд)' | t }}</label>
-                <input [(ngModel)]="form.owner_brand_id" placeholder="vertep" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
-              </div>
+              @if (useCharactersModule) {
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Власник (бренд)' | t }}</label>
+                  <input [(ngModel)]="form.owner_brand_id" placeholder="vertep" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                </div>
+              }
               <div class="flex items-end">
                 <div class="flex items-center gap-2">
                   <input type="checkbox" [(ngModel)]="form.enabled" id="enabled">
                   <label for="enabled" class="text-sm text-slate-700">{{ 'Персонаж увімкнений (legacy)' | t }}</label>
                 </div>
               </div>
-              <div class="flex items-end">
-                <div class="flex items-center gap-2">
-                  <input type="checkbox" [(ngModel)]="form.active" id="active">
-                  <label for="active" class="text-sm text-slate-700">{{ 'Модуль активний' | t }}</label>
+              @if (useCharactersModule) {
+                <div class="flex items-end">
+                  <div class="flex items-center gap-2">
+                    <input type="checkbox" [(ngModel)]="form.active" id="active">
+                    <label for="active" class="text-sm text-slate-700">{{ 'Модуль активний' | t }}</label>
+                  </div>
                 </div>
-              </div>
+              }
               <div class="md:col-span-2">
                 <label class="block text-sm font-medium text-slate-700 mb-1">Workflow</label>
                 <input [(ngModel)]="form.workflow" placeholder="workflows/image/demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
@@ -144,7 +150,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
             <div class="flex flex-wrap gap-3 mb-3">
               @for (item of references(); track item.filename) {
                 <div class="relative w-24 h-24" data-testid="character-reference">
-                  <img [src]="resources.characterReferenceUrl(editingId!, item.filename)" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
+                  <img [src]="characterApi.characterReferenceUrl(editingId!, item.filename)" alt="Референс персонажа" class="w-24 h-24 object-cover rounded-lg border border-slate-200">
                   <button type="button" (click)="deleteReference(item.filename)" [disabled]="!canSaveCharacter" aria-label="{{ 'Видалити референс' | t }}" class="absolute top-1 right-1 w-6 h-6 rounded-full bg-white border border-slate-300 text-sm">×</button>
                 </div>
               }
@@ -312,6 +318,20 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 })
 export class CharactersComponent implements OnInit {
   characters: Character[] = [];
+  useCharactersModule: boolean | null = null;
+
+  get characterApi() {
+    const api = this.resources;
+    return this.useCharactersModule ? {
+      createCharacter: api.moduleCreateCharacter,
+      updateCharacter: api.moduleUpdateCharacter,
+      deleteCharacter: api.moduleDeleteCharacter,
+      characterReferences: api.moduleCharacterReferences,
+      uploadCharacterReference: api.moduleUploadCharacterReference,
+      deleteCharacterReference: api.moduleDeleteCharacterReference,
+      characterReferenceUrl: api.moduleCharacterReferenceUrl,
+    } : api;
+  }
   loading = signal(false);
   error = signal<string | null>(null);
   showModal = signal(false);
@@ -342,10 +362,10 @@ export class CharactersComponent implements OnInit {
   showCollabModal = signal(false);
   collabCharacterId: string | null = null;
 
-  get canCreateCharacter(): boolean { return this.policy.can('create_character').allowed; }
+  get canCreateCharacter(): boolean { return this.useCharactersModule !== null && this.policy.can('create_character').allowed; }
   get createCharacterReason(): string | null { return this.policy.disabledReason('create_character'); }
   get canSaveCharacter(): boolean {
-    return this.policy.can(this.editingId ? 'update_character' : 'create_character').allowed;
+    return this.useCharactersModule !== null && this.policy.can(this.editingId ? 'update_character' : 'create_character').allowed;
   }
   get saveCharacterReason(): string | null {
     return this.policy.disabledReason(this.editingId ? 'update_character' : 'create_character');
@@ -378,7 +398,19 @@ export class CharactersComponent implements OnInit {
   loadCharacters(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.resources.moduleCharacters().subscribe({
+    const request = this.useCharactersModule === false ? this.resources.characters() :
+      this.resources.moduleCharacters().pipe(
+        tap(() => { this.useCharactersModule = true; }),
+        catchError(err => {
+          const moduleUnavailable = (err.status === 404 && err.code === 'module_api_is_not_available')
+            || (err.status === 409 && err.code === 'workflow_templates_are_not_configured');
+          if (this.useCharactersModule !== null || !moduleUnavailable) {
+            return throwError(() => err);
+          }
+          return this.resources.characters().pipe(tap(() => { this.useCharactersModule = false; }));
+        }),
+      );
+    request.subscribe({
       next: (characters) => {
         this.characters = characters.map(c => ({
           ...c,
@@ -442,7 +474,7 @@ export class CharactersComponent implements OnInit {
   }
 
   private loadReferences(id: string): void {
-    this.resources.moduleCharacterReferences(id).subscribe({
+    this.characterApi.characterReferences(id).subscribe({
       next: (items) => { if (this.editingId === id) this.references.set(items); },
       error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося завантажити референси', 'error'),
     });
@@ -461,7 +493,7 @@ export class CharactersComponent implements OnInit {
       return;
     }
     for (const file of files) {
-      this.resources.moduleUploadCharacterReference(id, file).subscribe({
+      this.characterApi.uploadCharacterReference(id, file).subscribe({
         next: () => this.loadReferences(id),
         error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося завантажити зображення', 'error'),
       });
@@ -476,7 +508,7 @@ export class CharactersComponent implements OnInit {
   deleteReference(name: string): void {
     const id = this.editingId;
     if (!id) return;
-    this.resources.moduleDeleteCharacterReference(id, name).subscribe({
+    this.characterApi.deleteCharacterReference(id, name).subscribe({
       next: () => this.loadReferences(id),
       error: (err) => this.toast.show(err?.error?.detail || err.message || 'Не вдалося видалити зображення', 'error'),
     });
@@ -493,7 +525,7 @@ export class CharactersComponent implements OnInit {
     };
     if (!id || !files.length) { done(files.length); return; }
     from(files).pipe(
-      concatMap((file) => this.resources.moduleUploadCharacterReference(id, file).pipe(
+      concatMap((file) => this.characterApi.uploadCharacterReference(id, file).pipe(
         catchError(() => of(null)),
       )),
       toArray(),
@@ -522,9 +554,9 @@ export class CharactersComponent implements OnInit {
       active: false,
     };
 
-    const request = this.editingId
-      ? this.resources.moduleUpdateCharacter(this.editingId, payload)
-      : this.resources.moduleCreateCharacter(payload);
+    const request: Observable<Character> = this.editingId
+      ? this.characterApi.updateCharacter(this.editingId, payload)
+      : this.characterApi.createCharacter(payload);
 
     request.subscribe({
       next: (saved) => this.finishSave(saved?.id ?? this.form.id),
@@ -540,7 +572,7 @@ export class CharactersComponent implements OnInit {
     if (!this.canDeleteCharacter) return;
     this.confirm.confirm({ title: 'Видалити персонажа', message: `Ви впевнені, що хочете видалити ${id}?` }).subscribe((ok) => {
       if (!ok) return;
-      this.resources.moduleDeleteCharacter(id).subscribe({
+      this.characterApi.deleteCharacter(id).subscribe({
         next: () => {
           this.loadCharacters();
           this.toast.show('Персонаж видалено', 'success');

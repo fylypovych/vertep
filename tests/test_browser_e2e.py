@@ -177,6 +177,7 @@ def test_dashboard_loads_and_navigation_works_without_javascript_errors():
         expect(page.locator("[data-testid='workers-page']")).to_be_visible()
         expect(page.locator("[data-testid='create-worker-button']")).to_contain_text("Додати вузол")
 
+        page.route("**/api/modules/characters/v1/characters", lambda route: route.fulfill(json=[]))
         page.get_by_role("link", name="Персонажі", exact=True).click()
         expect(page).to_have_url(f"{BASE_URL}/characters")
         expect(page.locator("[data-testid='characters-page']")).to_be_visible()
@@ -212,9 +213,9 @@ def test_character_create_and_edit_use_localized_form():
             if route.request.method == "PUT":
                 saved.append(route.request.post_data_json)
             route.fulfill(json=character)
-        page.route("**/api/characters/did_samogon", handle_character)
-        page.route("**/api/characters", lambda route: route.fulfill(json=[character]))
-        page.route("**/api/characters/did_samogon/references", lambda route: route.fulfill(json=[]))
+        page.route("**/api/modules/characters/v1/characters/did_samogon", handle_character)
+        page.route("**/api/modules/characters/v1/characters", lambda route: route.fulfill(json=[character]))
+        page.route("**/api/modules/characters/v1/characters/did_samogon/references", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/characters")
         expect(page.locator("[data-testid='characters-page']")).to_be_visible()
 
@@ -1131,7 +1132,7 @@ def test_characters_page_loads():
         page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
         _mock_status(page)
-        page.route("**/api/characters**", lambda route: route.fulfill(json=[
+        page.route("**/api/modules/characters/v1/characters**", lambda route: route.fulfill(json=[
             {"id": "char1", "name": "Дід Самогон", "language": "uk", "enabled": True,
              "system_prompt": "Test", "voice": {}, "visual": {}, "generation": {}, "publishing": {}},
         ]))
@@ -1749,58 +1750,42 @@ def test_worker_detail_shows_hardware_and_actions():
         browser.close()
 
 
-def test_settings_roles_shows_deployment_status():
-    """V2C-404: Settings roles section shows deployment state."""
+def test_modules_shows_deployment_status():
+    """The Modules page shows CORE deployment and compatibility evidence."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
         _mock_session(page)
-        _mock_status(page, {"update": {"current_version": "0.0.1.99", "state": "IDLE"}})
+        _mock_status(page)
         page.route("**/api/system/roles", lambda route: route.fulfill(json={
-            "node_role": "core", "active_roles": [],
-            "role_runtime_status": {"core": "READY", "gpu": "DEGRADED", "text": "OFFLINE"},
-            "available_roles": [
-                {"id": "gpu", "label": "GPU Node", "services": ["comfyui"],
-                 "capabilities": ["image_generation"], "runtime_status": "DEGRADED",
-                 "runtime_evidence": {"source": "nodes",
-                                       "nodes": [{"node_id": "gpu-01", "runtime_status": "OFFLINE",
-                                                  "heartbeat": "OFFLINE", "live": False}]}},
-                {"id": "text", "label": "Text Node", "services": ["ollama"],
-                 "capabilities": ["text_generation"], "runtime_status": "OFFLINE",
-                 "runtime_evidence": {"source": "nodes", "nodes": []}},
-            ],
-            "deployment": {"state": None, "error": None},
-            "queued": False,
+            "active_roles": [], "queued": True,
+            "deployment": {"state": "APPLYING", "phase": "VERIFYING"},
         }))
-        # Catch-all for other settings API calls
-        for pattern in ["**/api/settings/secrets**", "**/api/system/secrets**", "**/api/secrets**",
-                        "**/api/models/**", "**/api/system/update/**",
-                        "**/api/system/backups**", "**/api/system/settings/**", "**/api/security/**",
-                        "**/api/status**", "**/api/integrations**", "**/api/system/certificates**",
-                        "**/api/system/license**", "**/api/system/installation-manifest**"]:
-            page.route(pattern, lambda route: route.fulfill(json={}))
-        page.goto(f"{BASE_URL}/settings")
-        expect(page.locator("[data-testid='settings-page']")).to_be_visible()
-        page.locator("a[href='/settings?tab=roles']").click()
-        expect(page).to_have_url(f"{BASE_URL}/settings?tab=roles")
-        expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
-        # Measured runtime status per role contract must be rendered, not just declared.
-        expect(page.locator("[data-testid='role-runtime-status-list']")).to_be_visible()
-        # The status is shown in Ukrainian, not as the API code.
-        expect(page.locator("[data-testid='role-status-core']")).to_have_text("Готовий")
-        # #450: a role not applied on this server is "locally disabled"; the measured state of
-        # remote nodes is shown separately, so it never reads as a local activation.
-        expect(page.locator("[data-testid='role-status-gpu']")).to_have_text("Локально вимкнено")
-        gpu_card = page.locator("[data-testid='role-status-gpu']").locator("xpath=..")
-        expect(gpu_card).to_contain_text("Стан віддалених вузлів; локально роль вимкнена: Працює з проблемами")
-        expect(page.locator("[data-testid='role-status-text']")).to_have_text("Локально вимкнено")
-        page.locator("nav a[href='/settings?tab=system']").click()
-        expect(page.locator("[data-testid='roles-save-button']")).not_to_be_visible()
+        page.route("**/api/nodes/module-catalog", lambda route: route.fulfill(json={
+            "nodes": [{"node_id": "core", "role": "core"}],
+            "modules": [{
+                "module_id": "image", "label": "Image", "version": "1.0.0",
+                "state": "INSTALLED", "requires_gpu": True, "placement": [], "permissions": [],
+                "nodes": [{"node_id": "core", "compatible_reasons": ["Потрібен GPU"],
+                           "runtime_missing": False, "instance": None}],
+            }],
+        }))
+        page.goto(f"{BASE_URL}/")
+        page.locator("nav a[href='/modules']").click()
+        expect(page).to_have_url(f"{BASE_URL}/modules")
+        expect(page.get_by_test_id("deployment-state")).to_have_text("Перевірка готовності служб")
+        expect(page.get_by_test_id("place-image-core")).to_be_disabled()
+        expect(page.get_by_test_id("incompatible-image-core")).to_have_text("Потрібен GPU")
+        expect(page.get_by_test_id("ready-image-core")).to_have_text("Вузол не повідомляв модуль")
         page.go_back()
-        expect(page.locator("[data-testid='roles-save-button']")).to_be_visible()
+        expect(page.get_by_test_id("module-management")).not_to_be_visible()
+        page.go_forward()
+        expect(page.get_by_test_id("deployment-state")).to_have_text("Перевірка готовності служб")
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
+
+
 def _script_job(job_id="job-script-01", status="SCRIPT_PENDING_APPROVAL"):
     """Minimal Job in script review state (i.0.0.0.4)."""
     return {

@@ -13,14 +13,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy requirements first for caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt modules/characters/requirements.txt
+RUN pip install --no-cache-dir -r modules/characters/requirements.txt
 
 # Copy module code
-COPY characters_module.py .
-COPY characters_logic.py .
-COPY manifest.yaml .
-COPY ui/ ui/
+COPY __init__.py modules/characters/__init__.py
+COPY characters_module.py modules/characters/
+COPY characters_logic.py modules/characters/
+COPY manifest.yaml modules/characters/
+COPY migrations/ modules/characters/migrations/
+COPY ui/ modules/characters/ui/
 
 # Create directories for persistent data
 RUN mkdir -p /data/characters && chown -R moduleuser:moduleuser /data
@@ -41,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 EXPOSE 8080
 
 # Run module
-CMD ["python", "characters_module.py"]
+CMD ["python", "-m", "modules.characters.characters_module"]
