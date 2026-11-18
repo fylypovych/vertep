@@ -287,7 +287,7 @@ class CharactersModule:
 
     def create_character(self, brand_id: str, data: dict) -> dict:
         """Create a new character owned by brand_id."""
-        character_id = data.get("id") or f"char_{int(time.time() * 1000)}"
+        character_id = data.get("id") or f"character_{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}"
         # Check if exists
         if query("SELECT 1 FROM characters WHERE id = %s", (character_id,)):
             raise ValueError("Character already exists")
