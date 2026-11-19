@@ -1,5 +1,5 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { SidebarService } from '../core/services/sidebar.service';
@@ -92,9 +92,9 @@ const PANEL_API_MAJOR = 1;
         <div class="text-xs text-slate-500 whitespace-nowrap transition-opacity duration-200"
              [class.opacity-0]="collapsed"
              [class.hidden]="collapsed">
-          Vertep v{{ runtimeVersion || '...' }}
-          @if (panelVersion() && panelVersion() !== runtimeVersion) {
-            <div data-testid="panel-version">{{ 'Панель' | t }} v{{ panelVersion() }}</div>
+          Vertep v{{ runtimeVersion() || '...' }}
+          @if (panelVersion() && panelVersion() !== runtimeVersion()) {
+            <div data-testid="panel-version" [attr.title]="panelCommit() || null">{{ 'Панель' | t }} v{{ panelVersion() }}@if (panelCommit()) { · {{ panelCommit()!.slice(0, 12) }} }</div>
           }
           @if (apiIncompatible()) {
             <div class="text-amber-700 whitespace-normal" data-testid="panel-incompatible">{{ 'Панель несумісна з цією версією CORE. Оновіть сторінку або панель.' | t }}</div>
@@ -104,7 +104,7 @@ const PANEL_API_MAJOR = 1;
     </aside>
   `,
 })
-export class SidebarComponent implements OnInit {
+export class SidebarComponent implements OnInit, OnDestroy {
   navGroups: SidebarGroup[] = [
     {
       label: 'Контент',
@@ -231,10 +231,12 @@ export class SidebarComponent implements OnInit {
     return window.innerWidth < 1024;
   }
 
-  runtimeVersion: string | null = null;
+  runtimeVersion = signal<string | null>(null);
   /** #504: build of the separately deployed panel and its API compatibility. */
   panelVersion = signal<string | null>(null);
   apiIncompatible = signal(false);
+  panelCommit = signal<string | null>(null);
+  private statusTimer?: ReturnType<typeof setInterval>;
 
   constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService,
               private modulesApi: ModulesApiService) {}
@@ -242,20 +244,32 @@ export class SidebarComponent implements OnInit {
   ngOnInit(): void {
     fetch('/ui-version.json', { cache: 'no-store' })
       .then((response) => (response.ok ? response.json() : null))
-      .then((identity) => { this.panelVersion.set(identity?.version || null); })
+      .then((identity) => { this.panelVersion.set(identity?.version || null); this.panelCommit.set(identity?.commit_sha || null); })
       .catch(() => { this.panelVersion.set(null); });
-    this.systemApi.status().subscribe({
-      next: (s) => {
-        this.runtimeVersion = s.version || null;
-        this.apiIncompatible.set(s.api_major !== undefined && s.api_major !== PANEL_API_MAJOR);
-      },
-      error: () => { this.runtimeVersion = null; },
-    });
+    this.checkCore();
+    // #504 AC3: CORE may restart or be updated while the panel stays open; the
+    // version and API compatibility are re-checked, so a reconnect clears the
+    // state and an incompatible CORE is reported without reloading the page.
+    this.statusTimer = setInterval(() => this.checkCore(), 30_000);
     this.modulesApi.uiExtensions().subscribe(list => this.moduleItems.set(list.map(extension => ({
       id: 'module-' + extension.module_id,
       path: '/modules/' + extension.module_id,
       label: extension.navigation?.[0]?.label || extension.module_id,
       icon: MODULE_ICON,
     }))));
+  }
+
+  ngOnDestroy(): void {
+    if (this.statusTimer) clearInterval(this.statusTimer);
+  }
+
+  private checkCore(): void {
+    this.systemApi.status().subscribe({
+      next: (s) => {
+        this.runtimeVersion.set(s.version || null);
+        this.apiIncompatible.set(s.api_major !== undefined && s.api_major !== PANEL_API_MAJOR);
+      },
+      error: () => { this.runtimeVersion.set(null); },
+    });
   }
 }

@@ -10,6 +10,22 @@ a brand has an enabled Telegram channel, publishing to Telegram is not configure
 from __future__ import annotations
 
 
+def brand_channel(brand_id: str | None, channel_type: str, target: str | None = None,
+                  channel_id: str | None = None):
+    """The enabled channel record of the brand a publication goes to (#502)."""
+    from .brand_store import list_channels
+    if not brand_id:
+        return None
+    candidates = [channel for channel in list_channels(brand_id)
+                  if channel.enabled and channel.channel_type == channel_type]
+    for wanted in (channel_id, target):
+        if wanted:
+            for channel in candidates:
+                if wanted in (channel.channel_id, channel.target):
+                    return channel
+    return candidates[0] if candidates else None
+
+
 def brand_targets(brand_id: str | None, channel_type: str) -> list[str]:
     """Targets of the enabled channels of ``channel_type`` on a brand, in a stable order."""
     from .brand_store import list_channels

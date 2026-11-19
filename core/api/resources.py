@@ -300,3 +300,43 @@ def delete_channel(channel_id: str):
         raise HTTPException(404, "Channel not found")
     _brand_call(store_delete_channel, channel_id)
     return {"deleted": channel_id}
+
+
+
+@router.get("/api/channels/{channel_id}/credentials")
+def channel_credentials(channel_id: str):
+    """Which credentials a channel publishes with (values are never returned)."""
+    from ..brand_store import get_channel as store_get
+    from ..channel_secrets import describe
+    channel = _brand_call(store_get, channel_id)
+    if not channel:
+        raise HTTPException(404, "Channel not found")
+    return describe(channel)
+
+
+@router.put("/api/channels/{channel_id}/credentials")
+def put_channel_credentials(channel_id: str, payload: dict, request: Request):
+    """Administrator: the channel's own secrets, or the explicit, audited permission to
+    use the installation-wide platform credentials for this existing channel."""
+    from ..brand_store import get_channel as store_get, update_channel as store_update
+    from ..channel_secrets import describe, save
+    from ..module.gateway import audit
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        raise HTTPException(403, "Administrator role required")
+    channel = _brand_call(store_get, channel_id)
+    if not channel:
+        raise HTTPException(404, "Channel not found")
+    if "secrets" in payload:
+        try:
+            names = save(channel, payload["secrets"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        audit("channel.credentials", "stored", channel=channel_id, names=names, actor=identity[0])
+    if "use_global_credentials" in payload:
+        allowed = payload["use_global_credentials"] is True
+        channel.metadata = {**(channel.metadata or {}), "use_global_credentials": allowed}
+        _brand_call(store_update, channel)
+        audit("channel.credentials", "global_allowed" if allowed else "global_revoked", channel=channel_id,
+              actor=identity[0])
+    return describe(channel)

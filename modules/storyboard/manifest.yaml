@@ -1,46 +1,52 @@
-module:
-  name: "storyboard"
-  version: "1.0.0"
-  schema_version: "2.0"
-  kind: "application"
-  namespace: "storyboard"
-  title: "Сторіборд"
-  description: "Управління сценаріями, сценами та сторібордами для генерації контенту"
-  author: "Vertep Team"
-  license: "MIT"
-  homepage: ""
-  repository: ""
-  min_core_version: "0.0.3.93"
-  max_core_version: ""
-  dependencies: ["characters", "brands"]
-  provides_capabilities: ["storyboard_generation"]
-  requires_capabilities: []
-  ui:
-    entry: "index.html"
-    sandbox: true
-    permissions: ["storage", "network"]
-  database:
-    schema: "storyboard"
-    migrations_dir: "migrations"
-    role_prefix: "storyboard"
-  runtime:
-    cpu_arch: ["amd64", "arm64"]
-    memory_mb: 256
-    disk_mb: 100
-    gpu: false
-    network: true
-  configuration:
-    schema: {}
-    defaults: {}
-  secrets: []
-  health_check:
-    path: "/health"
-    interval_sec: 30
-    timeout_sec: 5
-  lifecycle:
-    install_timeout_sec: 60
-    activate_timeout_sec: 30
-    deactivate_timeout_sec: 10
-    update_timeout_sec: 60
-    rollback_timeout_sec: 30
-    uninstall_timeout_sec: 30
+schema_version: "2.0"
+name: storyboard
+module_id: storyboard
+version: "1.0.0"
+kind: application
+label: Сторіборд
+core_compatibility: {min: "0.0.4.11", max: "0.0.9.99"}
+dependencies: []
+capabilities:
+  - storyboard_view
+resource_requirements:
+  min_vram_mb: 0
+  min_cpu_cores: 1
+  min_ram_mb: 64
+placement:
+  target: any
+  scaling: single_owner
+  requires_gpu: false
+provides:
+  - {type: api, name: storyboard, version: "1.0"}
+requires: []
+api:
+  namespace: storyboard
+  version: "1.0"
+  routes:
+    - "/storyboards"
+    - "/storyboards/{job_id}"
+ui:
+  entry: index.html
+  navigation:
+    - {id: storyboard, label: "Сторіборд"}
+  files:
+    index.html: "f3b9bbf7e966a9787f83b7769166beb7d80fd0eae9b4df4fb202fe270888221f"
+# Reads the storyboards that live in the jobs; no database of its own (#501).
+permissions:
+  - storyboard.read
+secret_refs: []
+migrations: []
+services:
+  - {name: api}
+health:
+  self_test: health
+  timeout_seconds: 15
+publisher: vertep
+provenance:
+  repository: github.com/fylypovych/vertep
+container:
+  image: "registry.example/vertep/storyboard@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  port: 8080
+description: >
+  Розкадровки завдань у межах брендів користувача. Дані розкадровок залишаються в завданнях CORE
+  (версії, правки, погодження, генерація через Worker, бекап); модуль власної бази не має.

@@ -492,6 +492,16 @@ def publisher_readiness(request: Request):
     return {"channels": channels, "targets": targets}
 
 
+def _publish_channel(task_id: str, request: Request):
+    names, channel = _publish_secret_scope(task_id, request)
+    worker = store.workers.get(request.headers.get("x-vertep-node", "")) or {}
+    job = store.jobs.get(worker.get("current_job") or "")
+    from ..publishing_targets import brand_channel
+    intent = (getattr(job, "publish_intent", None) or {}).get(channel) or {}
+    return names, brand_channel(getattr(job, "brand_id", None) or "brand01", channel, intent.get("target"),
+                                intent.get("channel_id"))
+
+
 def _publish_secret_scope(task_id: str, request: Request) -> tuple[set[str], str]:
     """Names this node may use: only the channel of the publish task it runs now."""
     from ..first_run import INTAKE_ONLY_SECRET_NAMES, INTEGRATION_SECRET_NAMES
@@ -510,26 +520,40 @@ def _publish_secret_scope(task_id: str, request: Request) -> tuple[set[str], str
 
 @router.get("/api/tasks/{task_id}/secrets")
 def task_secrets(task_id: str, request: Request):
+    """Only the secrets of this task's own channel (#502): never another channel's,
+    the installation-wide ones only when the administrator allowed it on the channel."""
+    from ..channel_secrets import mode, task_secrets as channel_task_secrets
     from ..first_run import ensure_secret_store
-    names, channel = _publish_secret_scope(task_id, request)
+    names, record = _publish_channel(task_id, request)
     stored = ensure_secret_store()
     oauth = stored.get("publisher_oauth", {})
-    return {"secrets": {name: stored[name] for name in names if stored.get(name)},
-            "oauth": {key: value for key, value in oauth.items() if key.lower() in names}}
+    current = mode(record, stored)
+    oauth_key = (lambda name: f"channel:{record.channel_id}:{name}") if current == "own" else (lambda name: name)
+    return {"secrets": channel_task_secrets(record, names, stored),
+            "oauth": {key.split(":")[-1]: value for key, value in oauth.items()
+                      if current != "missing" and key.split(":")[-1].lower() in names
+                      and key == oauth_key(key.split(":")[-1])}}
 
 
 @router.put("/api/tasks/{task_id}/secrets")
 def save_task_secrets(task_id: str, payload: dict, request: Request):
     """Keep tokens a node refreshed during publication in the one store."""
     from ..first_run import _secret_lock, _write_encrypted_secrets, ensure_secret_store
-    names, _ = _publish_secret_scope(task_id, request)
+    from ..channel_secrets import mode, store_names
+    names, record = _publish_channel(task_id, request)
     secrets, oauth = payload.get("secrets") or {}, payload.get("oauth") or {}
     if not set(secrets) <= names or not {key.lower() for key in oauth} <= names:
         raise HTTPException(403, "Secret is outside this task's channel")
     with _secret_lock:
         stored = ensure_secret_store()
-        stored.update(secrets)
-        stored.setdefault("publisher_oauth", {}).update(oauth)
+        if mode(record, stored) == "missing":
+            raise HTTPException(403, "Secret is outside this task's channel")
+        targets = store_names(record, names, stored)
+        for name, value in secrets.items():
+            stored[targets[name]] = value
+        own = mode(record, stored) == "own"
+        for name, value in oauth.items():
+            stored.setdefault("publisher_oauth", {})[f"channel:{record.channel_id}:{name}" if own else name] = value
         _write_encrypted_secrets(stored)
     return {"saved": True}
 

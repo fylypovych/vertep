@@ -734,6 +734,12 @@ jq -e --slurpfile catalog "$INSTALL_ROOT/config/node_roles.json" '
     all($manifest.roles.profiles[$role].services[]; . as $service |
         ($manifest.images[$service].digest | test("^sha256:[0-9a-f]{64}$"))))
 ' "$manifest_tmp" >/dev/null || fail "role catalog is inconsistent with the signed runtime contract"
+# #504: the separate panel container exists from 0.0.4.11 on. A release without
+# a signed web-ui image still serves its panel from CORE, so the service is
+# simply not part of that installation (never a failure, never an unsigned image).
+if ! jq -e '.images["web-ui"].digest // empty' "$manifest_tmp" >/dev/null; then
+  mapfile -t role_services < <(printf '%s\n' "${role_services[@]}" | grep -vx web-ui || true)
+fi
 for service in "${role_services[@]}"; do
   jq -e --arg service "$service" --arg platform "$platform" \
     '.images[$service].platforms | index($platform) != null' "$manifest_tmp" >/dev/null \
@@ -823,7 +829,7 @@ cat > "$env_tmp" <<EOF
 VERTEP_VERSION=$version
 VERTEP_IMAGE_REPOSITORY=${VERTEP_IMAGE_REPOSITORY:-registry.vertep.ai/vertep}
 VERTEP_PROXY_IMAGE=$(resolved_image proxy)
-VERTEP_WEB_UI_IMAGE=$(resolved_image web-ui)
+VERTEP_WEB_UI_IMAGE=$(optional_image web-ui)
 VERTEP_CORE_IMAGE=$(resolved_image core)
 VERTEP_LICENSE_MANAGER_IMAGE=$(resolved_image license-manager)
 VERTEP_DISPATCHER_IMAGE=$(resolved_image dispatcher)
@@ -1031,7 +1037,8 @@ select_bootstrap_health_contract(){
   # An unfinished installation must expose the wizard even when optional roles
   # cannot start. Keep the full gate for updates and legacy signed payloads.
   if [[ $installation_complete == false ]] && grep -q '/api/health/control' "$INSTALL_ROOT/docker-compose.yml"; then
-    health_services=("${BOOTSTRAP_SERVICES[@]}")
+    # Only the bootstrap services this release actually carries (web-ui is new in 0.0.4.11).
+    mapfile -t health_services < <(printf '%s\n' "${BOOTSTRAP_SERVICES[@]}" | grep -Fxf <(printf '%s\n' "${role_services[@]}"))
     bootstrap_health_path=/api/health/control
   fi
 }

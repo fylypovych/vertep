@@ -22,6 +22,21 @@ from tests.test_publisher_durable_reconciliation import _PLATFORMS
 def native_engine_for_media_processes(monkeypatch):
     monkeypatch.setenv("VERTEP_VIDEO_ENGINE", "native")
 
+def _allow_channels(api, job_id, channels):
+    """#502: the job's brand publishes through configured channels; this contour keeps
+    the installation-wide platform credentials, explicitly allowed by the administrator."""
+    brand = api.get(f"/api/jobs/{job_id}").json().get("brand_id") or "brand01"
+    existing = {c["channel_type"] for c in api.get(f"/api/brands/{brand}/channels").json()}
+    for channel in channels:
+        if channel in existing:
+            continue
+        created = api.post(f"/api/brands/{brand}/channels", json={
+            "brand_id": brand, "channel_type": channel,
+            "target": "@vertep_delivery" if channel == "telegram" else f"{channel}-delivery"})
+        assert created.status_code == 200, created.text
+        allowed = api.put(f"/api/channels/{created.json()['channel_id']}/credentials", json={"use_global_credentials": True})
+        assert allowed.status_code == 200, allowed.text
+
 
 def worker(api, node, role, capabilities, supported, *, vram_mb=4096, **fields):
     from datetime import datetime, timezone
@@ -220,6 +235,7 @@ def test_publisher_process_private_delivery_and_lost_ack_restart(contour, tmp_pa
     approved = api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": job["active_video_version"]})
     assert approved.status_code == 200, approved.text
     worker(api, "process-publisher", "publisher", ["publishing"], ["publish"], runtime_instance_id="publisher-first")
+    _allow_channels(api, job_id, [channel])
     assert api.post(f"/api/jobs/{job_id}/publish", json=[channel]).status_code == 200
     task = take(api, "process-publisher", ["publish"])
     assert task and task["channel"] == channel
@@ -297,6 +313,7 @@ def test_partial_publish_retry_preserves_successful_channel_across_restart(conto
     version = get_job(api, job_id)["active_video_version"]
     assert api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": version}).status_code == 200
     worker(api, "process-publisher", "publisher", ["publishing"], ["publish"])
+    _allow_channels(api, job_id, ["youtube", "facebook"])
     assert api.post(f"/api/jobs/{job_id}/publish", json=["youtube", "facebook"]).status_code == 200
     private = tmp_path / "partial-worker"
     private.mkdir()
@@ -349,6 +366,7 @@ def test_core_restart_keeps_live_publisher_lease_and_accepts_its_result(contour)
     version = get_job(api, job_id)["active_video_version"]
     assert api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": version}).status_code == 200
     worker(api, "process-publisher", "publisher", ["publishing"], ["publish"], runtime_instance_id="still-running")
+    _allow_channels(api, job_id, ["youtube"])
     assert api.post(f"/api/jobs/{job_id}/publish", json=["youtube"]).status_code == 200
     task = take(api, "process-publisher", ["publish"])
     assert task
@@ -371,6 +389,7 @@ def test_lost_upload_response_is_durable_and_never_blindly_uploaded_again(contou
     version = get_job(api, job_id)["active_video_version"]
     assert api.post(f"/api/jobs/{job_id}/video/approve", json={"actor": "process", "expected_video_version": version}).status_code == 200
     worker(api, "process-publisher", "publisher", ["publishing"], ["publish"])
+    _allow_channels(api, job_id, ["youtube"])
     assert api.post(f"/api/jobs/{job_id}/publish", json=["youtube"]).status_code == 200
     task = take(api, "process-publisher", ["publish"])
     private = tmp_path / "unknown-upload-worker"

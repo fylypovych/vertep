@@ -46,6 +46,7 @@ def pytest_configure(config):
     """Select writable, isolated host paths before test modules import core.app."""
     global _TEST_STATE_ROOT
     config.addinivalue_line("markers", "stand_in: always render on the MPT stand-in runtime")
+    config.addinivalue_line("markers", "strict_channel_credentials: no legacy channel allowance (#502)")
     config.addinivalue_line("markers", "lease_seconds(n): CORE task lease for a process test")
     config.addinivalue_line("markers", "render_timeout_seconds(n): bridge render timeout for a process test")
     _TEST_STATE_ROOT = Path(tempfile.mkdtemp(prefix="vertep-tests-"))
@@ -662,3 +663,29 @@ def pytest_collection_modifyitems(items):
     for item in items:
         if item.module.__name__.rsplit(".", 1)[-1] in _XDIST_TOGETHER:
             item.add_marker(pytest.mark.xdist_group("together"))
+
+
+
+@pytest.fixture(autouse=True)
+def legacy_channel_allowance(request, monkeypatch):
+    """#502: a brand publishing without a configured channel record is, for the
+    pre-#502 suite, an existing installation whose administrator explicitly
+    allowed the installation-wide platform credentials on that channel. Tests of
+    the strict rule opt out with ``@pytest.mark.strict_channel_credentials``.
+    Production never synthesises this channel (core.publishing_targets)."""
+    if request.node.get_closest_marker("strict_channel_credentials"):
+        yield
+        return
+    from core import publishing_targets
+    from core.models import Channel
+    original = publishing_targets.brand_channel
+
+    def with_allowance(brand_id, channel_type, target=None, channel_id=None):
+        found = original(brand_id, channel_type, target, channel_id)
+        if found is not None or not brand_id:
+            return found
+        return Channel(channel_id=f"legacy-{channel_type}", brand_id=brand_id, channel_type=channel_type,
+                       target=target or "legacy", metadata={"use_global_credentials": True})
+
+    monkeypatch.setattr(publishing_targets, "brand_channel", with_allowance)
+    yield

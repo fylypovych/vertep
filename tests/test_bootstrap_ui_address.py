@@ -6,6 +6,7 @@ addresses are exercised without touching the host network.
 """
 
 import os
+import shutil
 import re
 import subprocess
 from pathlib import Path
@@ -121,3 +122,23 @@ def test_valid_public_urls_keep_the_wizard_path_well_formed(tmp_path, public_url
     out, opened = run(tmp_path, MULTI_NIC, env_file=f"PUBLIC_URL={public_url}\n", installed=False)
     assert opened == f"{base}setup?token=abc123"
     assert f"Open {base}setup?token=abc123 in your browser to complete the First Run Wizard." in out
+
+
+@pytest.mark.parametrize("images, expected", [
+    ({"core": {"digest": "sha256:" + "a" * 64}}, ["proxy", "core"]),  # release before the web-ui container
+    ({"core": {"digest": "sha256:" + "a" * 64}, "web-ui": {"digest": "sha256:" + "b" * 64}}, ["proxy", "web-ui", "core"]),
+])
+def test_bootstrap_installs_web_ui_only_when_the_release_signs_it(tmp_path, images, expected):
+    """#504 / CI ubuntu-bootstrap-lifecycle: an older signed release without a
+    web-ui image installs without it instead of failing."""
+    import json
+    if shutil.which("jq") is None:
+        pytest.skip("bootstrap's jq is not installed on this host (bootstrap installs it on Ubuntu)")
+    start = BOOTSTRAP.index("if ! jq -e '.images[\"web-ui\"].digest // empty'")
+    snippet = BOOTSTRAP[start:BOOTSTRAP.index("fi\n", start) + 3]
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"images": images}))
+    script = f"set -euo pipefail\nmanifest_tmp='{manifest}'\nrole_services=(proxy web-ui core)\n{snippet}printf '%s\\n' \"${{role_services[@]}}\"\n"
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == expected

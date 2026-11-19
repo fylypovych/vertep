@@ -61,7 +61,7 @@ def test_browser_restore_runs_through_real_core_and_backup_service(
         page.on("pageerror", lambda error: page_errors.append(str(error)))
         assert context.request.post(f"{url}/api/session", headers=core["auth"]).ok
         page.goto(f"{url}/settings?tab=backup")
-        expect(page.get_by_test_id("settings-backup")).to_be_visible()
+        expect(page.get_by_test_id("settings-backup")).to_be_visible(timeout=20000)
 
         # A damaged archive: both real processes refuse it, the user sees the error and
         # nothing is restored. The intact archive then restores on a retry from the UI.

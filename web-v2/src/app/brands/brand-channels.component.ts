@@ -1,5 +1,7 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, Input, Output, EventEmitter, ChangeDetectionStrategy, signal } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { BaseApiService } from '../core/api/base-api.service';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ResourcesApiService } from '../core/api/resources.api';
@@ -9,6 +11,8 @@ import { PolicyService } from '../core/services/policy.service';
 import { Channel } from '../core/models';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
+
+interface ChannelCredentials { channel_id: string; mode: 'own' | 'global' | 'missing'; configured: string[]; use_global_credentials: boolean; warning?: string; }
 
 @Component({
   selector: 'app-brand-channels',
@@ -38,8 +42,23 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                 </span>
                 <button (click)="toggleChannel(ch)" [disabled]="!canUpdateChannel" [title]="(updateChannelReason || (ch.enabled ? 'Вимкнути' : 'Увімкнути')) | t" class="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-40" data-testid="channel-toggle">{{ (ch.enabled ? 'Вимкнути' : 'Увімкнути') | t }}</button>
                 <button (click)="deleteChannel(ch)" [disabled]="!canDeleteChannel" [title]="(deleteChannelReason || 'Видалити') | t" class="text-xs text-red-600 hover:text-red-700 disabled:opacity-40" data-testid="channel-delete">{{ 'Видалити' | t }}</button>
+                <button (click)="openCredentials(ch)" [disabled]="!canUpdateChannel" class="text-xs text-indigo-700 disabled:opacity-40" [attr.data-testid]="'channel-credentials-' + ch.channel_id">{{ 'Облікові дані' | t }}</button>
               </div>
             </div>
+            @if (credentialsFor() === ch.channel_id) {
+              <div class="text-xs bg-slate-50 rounded p-2 space-y-2" [attr.data-testid]="'channel-credentials-panel-' + ch.channel_id">
+                <div [attr.data-testid]="'channel-credentials-state-' + ch.channel_id">{{ credentialsText() | t }}</div>
+                @if (credentials()?.warning) { <div class="text-amber-700">{{ credentials()!.warning! | t }}</div> }
+                <div class="flex gap-2">
+                  <input type="password" class="border rounded px-2 py-1 grow" placeholder="{{ 'Токен каналу' | t }}" [(ngModel)]="channelToken" [attr.data-testid]="'channel-token-' + ch.channel_id">
+                  <button class="px-2 py-1 bg-emerald-600 text-white rounded" (click)="saveToken(ch)" [attr.data-testid]="'channel-token-save-' + ch.channel_id">{{ 'Зберегти токен' | t }}</button>
+                </div>
+                <label class="inline-flex items-center gap-1">
+                  <input type="checkbox" [checked]="credentials()?.use_global_credentials" (change)="toggleGlobal(ch, $any($event.target).checked)" [attr.data-testid]="'channel-global-' + ch.channel_id">
+                  {{ 'Дозволити глобальні облікові дані платформи (тимчасово)' | t }}
+                </label>
+              </div>
+            }
           }
         </div>
       }
@@ -71,6 +90,43 @@ import { ErrorStateComponent } from '../shared/error-state.component';
   `,
 })
 export class BrandChannelsComponent implements OnInit {
+  /** #502: one credential set per channel; values are never shown. */
+  credentialsFor = signal<string | null>(null);
+  credentials = signal<ChannelCredentials | null>(null);
+  channelToken = '';
+
+  private credentialName(type: string): string {
+    return ({ telegram: 'telegram_publisher_bot_token', youtube: 'youtube_access_token', tiktok: 'tiktok_access_token',
+              facebook: 'facebook_access_token', instagram: 'instagram_access_token', threads: 'threads_access_token' } as Record<string, string>)[type] || `${type}_access_token`;
+  }
+
+  credentialsText(): string {
+    const mode = this.credentials()?.mode;
+    return mode === 'own' ? 'Власний токен каналу задано' : mode === 'global' ? 'Використовуються глобальні облікові дані платформи' : 'Облікових даних немає — публікацію заблоковано';
+  }
+
+  openCredentials(ch: Channel): void {
+    this.channelToken = '';
+    this.credentialsFor.set(ch.channel_id);
+    this.http.get<ChannelCredentials>(`${this.base.url}/channels/${encodeURIComponent(ch.channel_id)}/credentials`, { headers: this.base.headers() })
+      .subscribe({ next: (value) => this.credentials.set(value), error: (error) => this.toast.show(error?.message || 'Помилка', 'error') });
+  }
+
+  private putCredentials(ch: Channel, body: Record<string, unknown>): void {
+    this.http.put<ChannelCredentials>(`${this.base.url}/channels/${encodeURIComponent(ch.channel_id)}/credentials`, body, { headers: this.base.headers() })
+      .subscribe({ next: (value) => { this.credentials.set(value); this.channelToken = ''; },
+                   error: (error) => this.toast.show(error?.error?.detail || error?.message || 'Помилка', 'error') });
+  }
+
+  saveToken(ch: Channel): void {
+    if (!this.channelToken.trim()) return;
+    this.putCredentials(ch, { secrets: { [this.credentialName(ch.channel_type)]: this.channelToken.trim() } });
+  }
+
+  toggleGlobal(ch: Channel, allowed: boolean): void {
+    this.putCredentials(ch, { use_global_credentials: allowed });
+  }
+
   @Input() brandId = '';
   @Input() channels: Channel[] = [];
   @Input() loading = false;
@@ -87,6 +143,8 @@ export class BrandChannelsComponent implements OnInit {
     private toast: ToastService,
     private confirm: ConfirmService,
     public policy: PolicyService,
+    private http: HttpClient,
+    private base: BaseApiService,
   ) {}
 
   get canCreateChannel(): boolean { return this.policy.can('create_channel').allowed; }

@@ -43,7 +43,9 @@ ui:
     - {id: monitoring, label: "Моніторинг"}
   files:
     index.html: "e638a9b7b8b6b7a575f4bb81ad1458a7ce7f43838ed831f9201c6cdb9aa03b25"
-permissions: []
+permissions:
+  # #503: read-only ingest of CORE metrics, alert states and health checks.
+  - monitoring.read
 secret_refs: []
 migrations:
   - {id: m001_initial, version: "1.0.0"}

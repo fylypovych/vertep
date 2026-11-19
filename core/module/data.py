@@ -199,6 +199,12 @@ class ModuleDatabase:
         self.migrate(module_id, exported["migrations"], sources, schema)
         with self._connect() as connection:
             with connection.transaction():
+                # The export holds each table's full content: rows a migration seeded
+                # (defaults such as a retention setting) are replaced, not duplicated.
+                restored = [table for table in self._tables(connection, schema) if table in exported["tables"]]
+                if restored:
+                    connection.execute(sql.SQL("TRUNCATE {}").format(sql.SQL(", ").join(
+                        sql.SQL("{}.{}").format(sql.Identifier(schema), sql.Identifier(table)) for table in restored)))
                 for table in self._tables(connection, schema):
                     if table not in exported["tables"]:
                         continue

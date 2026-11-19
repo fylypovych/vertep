@@ -23,15 +23,24 @@ import { Router } from '@angular/router';
           <span class="text-slate-500">{{ item.brand_id }} · {{ item.character_id }} · v{{ item.version }}</span>
           <span class="px-2 py-0.5 rounded-full text-xs bg-slate-100">{{ status(item) | t }}</span>
           @if (item.version !== null) {
-            <a class="text-blue-600 text-xs" [href]="'/api/jobs/' + item.job_id + '/final/video.mp4'" target="_blank" rel="noopener">{{ 'Переглянути' | t }}</a>
+            <a class="text-blue-600 text-xs" [attr.data-testid]="'shared-view-' + item.job_id" [href]="'/api/jobs/' + item.job_id + '/videos/' + item.version + '?sha256=' + item.sha256" target="_blank" rel="noopener">{{ 'Переглянути' | t }}</a>
             <button class="text-emerald-700 text-xs" (click)="decide(item, 'approve')">{{ 'Погодити' | t }}</button>
             <button class="text-red-600 text-xs" (click)="decide(item, 'reject')">{{ 'Відхилити' | t }}</button>
             @if (item.owners[brandId] === 'approved') {
               <button class="text-amber-700 text-xs" (click)="revoke(item)">{{ 'Відкликати' | t }}</button>
-              <button class="text-indigo-700 text-xs" (click)="publishOwn(item)" [attr.data-testid]="'own-publication-' + item.job_id">{{ 'Опублікувати у своїх каналах' | t }}</button>
+              <button class="text-indigo-700 text-xs" (click)="openOwn(item)" [attr.data-testid]="'own-publication-' + item.job_id">{{ 'Опублікувати у своїх каналах' | t }}</button>
             }
           }
         </div>
+        @if (ownFor() === item.job_id) {
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm my-2" [attr.data-testid]="'own-form-' + item.job_id">
+            <input class="border rounded px-2 py-1" placeholder="{{ 'Назва' | t }}" [value]="own.title" (input)="own.title = $any($event.target).value" data-testid="own-title">
+            <input class="border rounded px-2 py-1" placeholder="{{ 'Хештеги через кому' | t }}" [value]="own.hashtags" (input)="own.hashtags = $any($event.target).value" data-testid="own-hashtags">
+            <textarea class="border rounded px-2 py-1 md:col-span-2" rows="2" placeholder="{{ 'Опис' | t }}" (input)="own.description = $any($event.target).value" data-testid="own-description"></textarea>
+            <input class="border rounded px-2 py-1 md:col-span-2" placeholder="{{ 'Обкладинка (URL)' | t }}" (input)="own.cover = $any($event.target).value" data-testid="own-cover">
+            <button class="px-3 py-1 bg-indigo-600 text-white rounded md:col-span-2" (click)="publishOwn(item)" data-testid="own-create">{{ 'Створити власну публікацію' | t }}</button>
+          </div>
+        }
       }
     </div>
   `,
@@ -63,9 +72,23 @@ export class BrandSharedContentComponent implements OnChanges {
       .subscribe({ next: () => this.load(), error: (error) => this.toast.show(error?.message || 'Помилка', 'error') });
   }
 
-  /** The same approved video as this brand's own job; titles/texts are set there before publishing. */
+  ownFor = signal<string | null>(null);
+  own = { title: '', description: '', hashtags: '', cover: '' };
+
+  openOwn(item: SharedContentItem): void {
+    this.own = { title: '', description: '', hashtags: '', cover: '' };
+    this.ownFor.set(item.job_id);
+  }
+
+  /** The same approved video as this brand's own job, with this brand's own texts. */
   publishOwn(item: SharedContentItem): void {
-    this.api.sharedPublication(item.job_id, { brand_id: this.brandId })
+    const hashtags = this.own.hashtags.split(',').map((tag) => tag.trim()).filter(Boolean);
+    const body: { brand_id: string; title?: string; description?: string; hashtags?: string[]; cover?: string } = { brand_id: this.brandId };
+    if (this.own.title.trim()) body.title = this.own.title.trim();
+    if (this.own.description.trim()) body.description = this.own.description.trim();
+    if (hashtags.length) body.hashtags = hashtags;
+    if (this.own.cover.trim()) body.cover = this.own.cover.trim();
+    this.api.sharedPublication(item.job_id, body)
       .subscribe({ next: (job) => this.router.navigate(['/jobs', job.job_id]),
                    error: (error) => this.toast.show(error?.message || 'Помилка', 'error') });
   }

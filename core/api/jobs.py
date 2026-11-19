@@ -467,7 +467,9 @@ def approve_video_endpoint(job_id: str, body: VideoApproveAction):
                             expected_sha256=body.expected_sha256)
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
-    return job
+    from ..auto_publish import publish_automatically
+    publish_automatically(job.job_id)  # #502 AC3: channels with the automatic policy
+    return store.jobs.get(job.job_id, job)
 
 
 @router.post("/api/jobs/{job_id}/video/revision")
@@ -561,6 +563,9 @@ def shared_approval(job_id: str, body: dict, http_request: Request = None):
         except SharedContentError as error:
             raise HTTPException(409, str(error)) from error
         store.update(job, job.status, f"SHARED CONTENT {record['decision'].upper()} v{version} BY {owner} ({actor})")
+    if record["decision"] == "approve":
+        from ..auto_publish import publish_automatically
+        publish_automatically(job.job_id)  # the last owner's approval makes it publishable
     return state(job)
 
 
@@ -620,6 +625,12 @@ def publish_job(job_id: str, channels: list[str] | None = None):
     if not allowed:
         raise HTTPException(409, reason)
     targets = channels or ["youtube"]
+    from ..channel_secrets import mock_publishing, mode
+    from ..publishing_targets import brand_channel
+    if not mock_publishing():
+        blocked = [channel for channel in targets if mode(brand_channel(job.brand_id, channel)) == "missing"]
+        if blocked:
+            raise HTTPException(409, f"Channel credentials are not configured for: {', '.join(blocked)}")
     publisher = providers.publisher()
     unknown = [channel for channel in targets if channel not in publisher.available_channels()]
     if unknown:
@@ -661,11 +672,30 @@ def publish_job(job_id: str, channels: list[str] | None = None):
     return job
 
 
+@router.get("/api/jobs/{job_id}/videos/{version}")
+def video_version(job_id: str, version: int, sha256: str | None = None):
+    """Exactly one immutable video version; with ``sha256`` it must be that file (#500)."""
+    from ..pipeline import _digest
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    record = next((item for item in job.video_versions if item.version == version), None)
+    if record is None:
+        raise HTTPException(404, "Video not ready")
+    path = store.root / job_id / record.path
+    if (sha256 is not None and sha256 != record.sha256) or not path.is_file() or _digest(path) != record.sha256:
+        raise HTTPException(409, "Artifact failed its integrity check")
+    return FileResponse(path, media_type="video/mp4")
+
+
 @router.get("/api/jobs/{job_id}/final/video.mp4")
 def video(job_id: str):
     job = store.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    if job.active_video_version is not None and any(v.version == job.active_video_version for v in job.video_versions):
+        # The active version, never just the first video artifact in the list.
+        return video_version(job_id, job.active_video_version)
     artifact = next((item for item in job.artifacts
                       if item.kind == "video" and
                       (item.path == "final/video.mp4" or

@@ -87,6 +87,38 @@ def issue_token(module_id: str, node_id: str) -> str:
     return base64.urlsafe_b64encode(f"{payload}|{signature}".encode()).decode()
 
 
+USER_CONTEXT_SECONDS = 120
+
+
+def issue_user_context(user: str, role: str, module_id: str, now: float | None = None) -> str:
+    """#502: a short-lived, tamper-proof statement of the signed-in user, bound to the
+    one module the Gateway forwards the request to. The module may hand it back to
+    CORE with an action; it never carries rights of its own."""
+    payload = json.dumps({"user": user, "role": role, "aud": module_id,
+                          "exp": int((now if now is not None else time.time()) + USER_CONTEXT_SECONDS),
+                          "nonce": secrets.token_hex(8)}, sort_keys=True, separators=(",", ":"))
+    signature = hmac.new(_token_key(), b"user-context|" + payload.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{payload}|{signature}".encode()).decode()
+
+
+def verify_user_context(token: str, module_id: str, now: float | None = None) -> tuple[str, str]:
+    """(user, role) of a valid context for ``module_id``; raises PermissionError otherwise."""
+    try:
+        payload, signature = base64.urlsafe_b64decode(token.encode()).decode().rsplit("|", 1)
+        expected = hmac.new(_token_key(), b"user-context|" + payload.encode(), hashlib.sha256).hexdigest()
+        data = json.loads(payload)
+    except (ValueError, UnicodeError) as error:
+        raise PermissionError("Invalid user context") from error
+    if not hmac.compare_digest(signature, expected):
+        raise PermissionError("Invalid user context")
+    if data.get("aud") != module_id or int(data.get("exp", 0)) <= (now if now is not None else time.time()):
+        raise PermissionError("Expired or foreign user context")
+    from core.security import _account_role
+    user = str(data.get("user") or "")
+    # The role is re-derived from the account now, never taken from the module.
+    return user, _account_role(user, str(data.get("role") or ""))
+
+
 def token_identity(token: str) -> tuple[str, str] | None:
     try:
         module_id, node_id, signature = base64.urlsafe_b64decode(token.encode()).decode().split("|")
@@ -210,6 +242,146 @@ def module_secrets(request: Request):
             result[item["name"]] = value
     audit("module.secrets", "allowed", module=caller.module_id, node=caller.node_id, names=sorted(result))
     return {"secrets": result}
+
+
+def _storyboard_summary(job) -> dict:
+    active = next((item for item in job.storyboards if item.version == job.active_storyboard_version), None)
+    return {"job_id": job.job_id, "topic": job.topic, "brand_id": job.brand_id, "character_id": job.character_id,
+            "character_owner_brands": sorted(set(job.character_owner_brands
+                                                 + ([job.character_owner_brand] if job.character_owner_brand else []))),
+            "status": str(getattr(job.status, "value", job.status)), "active_version": job.active_storyboard_version,
+            "active_status": active.status if active else None, "versions": len(job.storyboards),
+            "scenes": len(active.scenes) if active else 0}
+
+
+def _require_storyboard_module(request: Request):
+    registry = _registry()
+    caller = _caller_module(request, registry)
+    if caller is None or caller.module_id != "storyboard" or "storyboard.read" not in caller.manifest.permissions:
+        audit("module.storyboards", "denied", module=caller.module_id if caller else None)
+        raise HTTPException(403, "Module may call only APIs it declares")
+    return caller
+
+
+@router.get("/api/modules/self/storyboards")
+def module_storyboards(request: Request):
+    """#501: the Storyboard module reads the storyboards that live in the jobs (CORE
+    stays their owner: versions, revisions, approvals, Worker generation, backup)."""
+    from core.state import store
+    caller = _require_storyboard_module(request)
+    audit("module.storyboards", "allowed", module=caller.module_id)
+    return [_storyboard_summary(job) for job in sorted(store.jobs.values(), key=lambda j: j.job_id) if job.storyboards]
+
+
+@router.get("/api/modules/self/storyboards/{job_id}")
+def module_storyboard(job_id: str, request: Request):
+    from core.state import store
+    caller = _require_storyboard_module(request)
+    job = store.jobs.get(job_id)
+    if job is None or not job.storyboards:
+        raise HTTPException(404, "Storyboard not found")
+    artifacts = {item.artifact_id: item for item in job.artifacts}
+    versions = []
+    for version in job.storyboards:
+        scenes = []
+        for scene in sorted(version.scenes, key=lambda item: item.index):
+            image = artifacts.get(scene.image_artifact_id) if scene.image_artifact_id else None
+            scenes.append({"index": scene.index, "duration": scene.duration, "prompt": scene.prompt,
+                           "voiceover": scene.voiceover, "image_version": scene.image_version,
+                           "image": {"artifact_id": image.artifact_id, "sha256": image.sha256} if image else None})
+        versions.append({"version": version.version, "title": version.title, "status": version.status,
+                         "image_status": version.image_status, "revision_request": version.revision_request,
+                         "decided_by": version.decided_by, "decided_at": version.decided_at, "scenes": scenes})
+    audit("module.storyboards", "allowed", module=caller.module_id, job=job_id)
+    return {**_storyboard_summary(job), "storyboards": versions}
+
+
+def _publications(job, brand_store_channels=None) -> dict:
+    return {"job_id": job.job_id, "topic": job.topic, "brand_id": job.brand_id,
+            "status": str(getattr(job.status, "value", job.status)), "active_video_version": job.active_video_version,
+            "shared_source": job.shared_source,
+            "publications": {channel: {"status": (result or {}).get("status"), "url": (result or {}).get("url"),
+                                       "error": (result or {}).get("error")}
+                             for channel, result in (job.publication_results or {}).items()},
+            "sending": sorted(set((job.publish_task_ids or {}).values()))}
+
+
+def _require_publishing_module(request: Request, permission: str):
+    registry = _registry()
+    caller = _caller_module(request, registry)
+    if caller is None or caller.module_id != "publishing" or permission not in caller.manifest.permissions:
+        audit("module.publications", "denied", module=caller.module_id if caller else None)
+        raise HTTPException(403, "Module may call only APIs it declares")
+    return caller
+
+
+@router.get("/api/modules/self/publications")
+def module_publications(request: Request):
+    """#502: what the Publishing module shows; CORE stays the owner of tasks/statuses/receipts."""
+    from core.state import store
+    caller = _require_publishing_module(request, "publishing.read")
+    audit("module.publications", "allowed", module=caller.module_id)
+    return [_publications(job) for job in sorted(store.jobs.values(), key=lambda j: j.job_id)
+            if job.active_video_version is not None or job.publication_results]
+
+
+@router.post("/api/modules/self/publications/{job_id}/publish")
+async def module_publish(job_id: str, request: Request):
+    """An editor's action from the Publishing module. CORE verifies the Gateway-signed
+    user context, re-derives that user's rights on the job's brand and audits the
+    real user; the module's own token grants nothing by itself."""
+    from core.security import user_brands
+    from core.state import store
+    caller = _require_publishing_module(request, "publishing.publish")
+    try:
+        user, role = verify_user_context(request.headers.get("x-vertep-user-context", ""), caller.module_id)
+    except PermissionError as error:
+        audit("module.publications.publish", "denied", module=caller.module_id, job=job_id, reason=str(error))
+        raise HTTPException(401, "Invalid user context") from error
+    job = store.jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    brands = user_brands(user, role)
+    if brands is not None and job.brand_id not in brands:
+        audit("module.publications.publish", "denied", module=caller.module_id, job=job_id, actor=user, reason="brand")
+        raise HTTPException(403, "Brand access required")
+    body = await request.json()
+    channels = body.get("channels")
+    if not isinstance(channels, list) or not channels or any(not isinstance(item, str) for item in channels):
+        raise HTTPException(422, "channels must be a non-empty list")
+    from core.api.jobs import publish_job
+    try:
+        result = publish_job(job_id, channels)
+    except HTTPException as error:
+        audit("module.publications.publish", "refused", module=caller.module_id, job=job_id, actor=user,
+              channels=channels, status=error.status_code)
+        raise
+    audit("module.publications.publish", "allowed", module=caller.module_id, job=job_id, actor=user, channels=channels)
+    return _publications(result)
+
+
+@router.get("/api/modules/self/observability")
+def module_observability(request: Request):
+    """#503: what the Monitoring module ingests from the existing collectors.
+
+    CORE stays the source of truth (metrics, the persistent alert store with its
+    fire/acknowledge/resolve states, health checks); the module only keeps history.
+    No new thresholds or alert rules are evaluated here.
+    """
+    from datetime import datetime, timezone
+    from core.alert_store import get_alert_store
+    from core.api import observability
+    registry = _registry()
+    caller = _caller_module(request, registry)
+    if caller is None or caller.module_id != "monitoring" or "monitoring.read" not in caller.manifest.permissions:
+        audit("module.observability", "denied", module=caller.module_id if caller else None)
+        raise HTTPException(403, "Module may call only APIs it declares")
+    observability._reconcile_alerts()
+    health = observability.health()
+    audit("module.observability", "allowed", module=caller.module_id, node=caller.node_id)
+    return {"collected_at": datetime.now(timezone.utc).isoformat(), "metrics": observability.metrics(),
+            "alerts": get_alert_store().list(limit=1000),
+            "health": {"status": health["status"], "checks": health["checks"]}}
 
 
 @router.get("/api/modules/self/database")
@@ -357,7 +529,9 @@ def ui_asset(module_id: str, version: str, path: str):
         audit("module.ui", "denied", module=module_id, path=path, reason="not_ready_or_undeclared")
         raise HTTPException(404, "Module UI is not available")
     try:
-        upstream = httpx.get(f"{instance.endpoint}/ui/{path}", timeout=10)
+        # The module answers only CORE: the asset request carries its module token.
+        upstream = httpx.get(f"{instance.endpoint}/ui/{path}", timeout=10,
+                             headers={"x-vertep-module-token": issue_token(instance.module_id, instance.node_id)})
     except httpx.HTTPError:
         audit("module.ui", "failed", module=module_id, path=path, reason="unreachable")
         raise HTTPException(502, "Module UI is unavailable")
@@ -411,6 +585,7 @@ async def module_api(namespace: str, major: int, path: str, request: Request):
         headers["x-vertep-caller-module"] = caller.module_id
     elif actor:
         headers["x-vertep-user"], headers["x-vertep-role"] = actor
+        headers["x-vertep-user-context"] = issue_user_context(actor[0], actor[1], target.module_id)
         brands = getattr(request.state, "vertep_brands", set())
         # "*" = administrator (every brand); otherwise the moderator's own brands.
         headers["x-vertep-brands"] = "*" if brands is None else ",".join(sorted(brands or ()))

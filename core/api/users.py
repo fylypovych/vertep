@@ -153,3 +153,21 @@ def delete_user(username: str, request: Request):
     users.pop(username, None)
     _write("users.json", users)
     return {"deleted": username}
+
+
+@router.get("/api/lab/login")
+def lab_login(request: Request, return_to: str = ""):
+    """#491 L3: the signed-in administrator enters the LAB panel without a separate
+    LAB account; the short-lived assertion goes only to the configured panel."""
+    from fastapi.responses import RedirectResponse
+    from core.lab_identity import allowed_return, issue
+    from core.module.gateway import audit
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        audit("lab.identity", "denied", actor=identity[0] if identity else None, reason="not_admin")
+        raise HTTPException(403, "Administrator role required")
+    if not allowed_return(return_to):
+        audit("lab.identity", "denied", actor=identity[0], reason="return_to")
+        raise HTTPException(422, "Unknown LAB panel address")
+    audit("lab.identity", "allowed", actor=identity[0])
+    return RedirectResponse(f"{return_to}#vertep_identity={issue(identity[0], identity[1])}", status_code=302)

@@ -31,9 +31,16 @@ test('власник погоджує, відкликає й створює вл
   await expect(item).toContainText('Погоджено');
   expect(calls[0]).toEqual({ path: '/api/jobs/job-a1/shared-approval',
     body: { owner_brand: 'brand-b', decision: 'approve', version: 1, expected_sha256: 'ab'.repeat(32) } });
+  await expect(page.getByTestId('shared-view-job-a1')).toHaveAttribute('href', '/api/jobs/job-a1/videos/1?sha256=' + 'ab'.repeat(32));
   await page.getByTestId('own-publication-job-a1').click();
+  await page.getByTestId('own-title').fill('Версія бренду B');
+  await page.getByTestId('own-description').fill('Опис B');
+  await page.getByTestId('own-hashtags').fill('#b, #news');
+  await page.getByTestId('own-cover').fill('https://cdn.example/b.jpg');
+  await page.getByTestId('own-create').click();
   await expect(page).toHaveURL(/\/jobs\/job-b1$/);
-  expect(calls[1]).toEqual({ path: '/api/jobs/job-a1/shared-publications', body: { brand_id: 'brand-b' } });
+  expect(calls[1]).toEqual({ path: '/api/jobs/job-a1/shared-publications', body: {
+    brand_id: 'brand-b', title: 'Версія бренду B', description: 'Опис B', hashtags: ['#b', '#news'], cover: 'https://cdn.example/b.jpg' } });
   await page.goto('/brands');
   await page.getByTestId('shared-job-a1').getByText('Відкликати', { exact: true }).click();
   await expect(page.getByTestId('shared-job-a1')).toContainText('Відкликано');

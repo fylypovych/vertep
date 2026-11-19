@@ -166,6 +166,14 @@ async def _unload_model(lease: dict) -> None:
         pass  # Released anyway; the real-GPU qualification (#329) measures VRAM.
 
 
+@router.get("/identity-key")
+def identity_key(request: Request) -> dict:
+    """CORE's public key for the shared administrator identity (#491 L3)."""
+    _authorize(request)
+    from ..lab_identity import AUDIENCE, ISSUER, public_key_pem
+    return {"algorithm": "Ed25519", "issuer": ISSUER, "audience": AUDIENCE, "public_key": public_key_pem()}
+
+
 @router.get("/status")
 def status(request: Request) -> dict:
     _authorize(request)

@@ -411,7 +411,7 @@ export class ResourcesApiService {
   // #500 Shared content: other brands' material that uses this brand's characters.
   sharedContent = (brandId: string): Observable<{ brand_id: string; items: SharedContentItem[] }> => this.http.get<{ brand_id: string; items: SharedContentItem[] }>(`${this.base.url}/shared-content?brand_id=${encodeURIComponent(brandId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   sharedDecision = (jobId: string, body: { owner_brand: string; decision: 'approve' | 'reject'; version: number; expected_sha256: string }): Observable<SharedContentItem> => this.http.post<SharedContentItem>(`${this.base.url}/jobs/${encodeURIComponent(jobId)}/shared-approval`, body, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  sharedPublication = (jobId: string, body: { brand_id: string; title?: string; description?: string; hashtags?: string[] }): Observable<{ job_id: string }> => this.http.post<{ job_id: string }>(`${this.base.url}/jobs/${encodeURIComponent(jobId)}/shared-publications`, body, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  sharedPublication = (jobId: string, body: { brand_id: string; title?: string; description?: string; hashtags?: string[]; cover?: string }): Observable<{ job_id: string }> => this.http.post<{ job_id: string }>(`${this.base.url}/jobs/${encodeURIComponent(jobId)}/shared-publications`, body, { headers: this.h() }).pipe(catchError(this.base.handleError));
   sharedRevoke = (jobId: string, ownerBrand: string): Observable<SharedContentItem> => this.http.post<SharedContentItem>(`${this.base.url}/jobs/${encodeURIComponent(jobId)}/shared-approval/revoke`, { owner_brand: ownerBrand }, { headers: this.h() }).pipe(catchError(this.base.handleError));
 }
 

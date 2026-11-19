@@ -87,7 +87,19 @@ class IrConsolidateRequest(BaseModel):
 
 
 def _require_owner(raw_request: Request) -> str:
-    """Authenticate an owner act; ``approved_by``/identity never comes from a body."""
+    """Authenticate an owner act; ``approved_by``/identity never comes from a body.
+
+    #491 L3: a Vertep administrator signs in with the same account through a
+    CORE-signed assertion (``X-Vertep-Identity``); the LAB owner token remains
+    for the LAB's own service use.
+    """
+    assertion = raw_request.headers.get("X-Vertep-Identity", "").strip()
+    if assertion:
+        from .identity import IdentityError, verify
+        try:
+            return f"vertep:{verify(assertion)}"
+        except IdentityError as error:
+            raise HTTPException(401, str(error)) from error
     owner_token = os.getenv("LAB_OWNER_TOKEN", "")
     supplied = raw_request.headers.get("X-Lab-Owner-Token", "")
     if not owner_token or supplied != owner_token:

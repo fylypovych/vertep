@@ -53,6 +53,13 @@ class SystemLog:
     timestamp: str
 
 
+def _json(value) -> Dict[str, Any]:
+    """JSONB comes back decoded from pg8000; older rows/drivers may give text."""
+    if not value:
+        return {}
+    return value if isinstance(value, dict) else json.loads(value)
+
+
 DEFAULT_RETENTION_DAYS = 3
 # Technical bound only (keeps the cutoff arithmetic sane); not a product limit.
 MAX_RETENTION_DAYS = 3650
@@ -85,7 +92,7 @@ class MonitoringModule:
             id=row[0],
             name=row[1],
             value=row[2],
-            labels=json.loads(row[3]) if row[3] else {},
+            labels=_json(row[3]),
             timestamp=str(row[4]),
             node_id=row[5],
         )
@@ -100,7 +107,7 @@ class MonitoringModule:
             active=row[5],
             fired_at=row[6],
             resolved_at=row[7],
-            labels=json.loads(row[8]) if row[8] else {},
+            labels=_json(row[8]),
         )
 
     def _row_to_health(self, row) -> HealthCheck:
@@ -109,7 +116,7 @@ class MonitoringModule:
             component=row[1],
             status=row[2],
             message=row[3],
-            details=json.loads(row[4]) if row[4] else {},
+            details=_json(row[4]),
             checked_at=str(row[5]),
         )
 
@@ -119,7 +126,7 @@ class MonitoringModule:
             level=row[1],
             component=row[2],
             message=row[3],
-            context=json.loads(row[4]) if row[4] else {},
+            context=_json(row[4]),
             timestamp=str(row[5]),
         )
 
@@ -317,7 +324,8 @@ class MonitoringModule:
     def get_system_stats(self) -> Dict[str, Any]:
         with self._conn() as conn:
             # Node count
-            nodes = conn.run("SELECT COUNT(*) FROM nodes WHERE status = 'online'")
+            # No "nodes" table in the module schema: the last collected CORE value.
+            nodes = conn.run("SELECT value::bigint FROM metrics WHERE name = 'workers_online' ORDER BY timestamp DESC LIMIT 1")
             # Active alerts
             alerts = conn.run("SELECT COUNT(*) FROM alerts WHERE active = true")
             # Critical alerts
@@ -399,3 +407,104 @@ def migrate_existing_monitoring(db_url: str, legacy_data: Dict[str, Any]) -> Dic
             module.create_alert(alert)
             migrated += 1
     return {"migrated": migrated, "skipped": 0}
+
+# -- ingest from the existing CORE collectors (#503) ------------------------------
+# CORE stays the source of truth; the module keeps history only. No thresholds or
+# alert rules are evaluated here: alert states come from CORE's alert store.
+
+_SEVERITY = {"info": "info", "warning": "warning", "error": "critical", "critical": "critical"}
+
+
+def _flatten_metrics(values: Dict[str, Any]) -> List[tuple]:
+    """Numeric CORE metrics as (name, value, labels); nested counters become labels."""
+    result = []
+    for name, value in values.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            result.append((name, float(value), {}))
+        elif isinstance(value, dict):
+            label = "status" if name.endswith("_by_status") else "key"
+            for key, item in value.items():
+                if isinstance(item, (int, float)) and not isinstance(item, bool):
+                    result.append((name, float(item), {label: str(key)}))
+    return result
+
+
+def _alert_state(alert: Dict[str, Any]) -> str:
+    state = str(alert.get("state") or "firing")
+    return state if state in ("firing", "acknowledged", "resolved") else "firing"
+
+
+def collect(module: "MonitoringModule", snapshot: Dict[str, Any], source: str = "core") -> Dict[str, int]:
+    """Store one CORE observability snapshot: metrics, alert states and health.
+
+    Every alert state change (fire -> acknowledge -> resolve) is also written to
+    ``system_logs`` (component ``alerts``), so the transitions stay in the history
+    even though the alert row itself holds the latest state.
+    """
+    import uuid
+    at = snapshot.get("collected_at") or datetime.utcnow().isoformat()
+    counts = {"metrics": 0, "alerts": 0, "alert_transitions": 0, "health_checks": 0}
+    with module._conn() as conn:
+        conn.run("BEGIN")
+        try:
+            for name, value, labels in _flatten_metrics(snapshot.get("metrics") or {}):
+                conn.run("INSERT INTO metrics (id, name, value, labels, timestamp, node_id) "
+                         "VALUES (:id, :name, :value, :labels, :ts, :node)",
+                         id=f"m_{uuid.uuid4().hex}", name=name[:128], value=value, labels=json.dumps(labels),
+                         ts=at, node=source)
+                counts["metrics"] += 1
+            for alert in snapshot.get("alerts") or []:
+                alert_id = f"{source}-{alert.get('id')}"[:64]
+                state = _alert_state(alert)
+                labels = {"source": source, "core_id": str(alert.get("id")), "state": state}
+                for field in ("type", "node_name", "job_id", "task_id", "acknowledged_by", "acknowledged_at",
+                              "resolved_reason"):
+                    if alert.get(field) is not None:
+                        labels[field] = str(alert[field])
+                previous = conn.run("SELECT labels->>'state' FROM alerts WHERE id = :id", id=alert_id)
+                conn.run("INSERT INTO alerts (id, name, severity, condition, message, active, fired_at, resolved_at, labels) "
+                         "VALUES (:id, :name, :severity, :condition, :message, :active, :fired_at, :resolved_at, :labels) "
+                         "ON CONFLICT (id) DO UPDATE SET severity = EXCLUDED.severity, message = EXCLUDED.message, "
+                         "active = EXCLUDED.active, resolved_at = EXCLUDED.resolved_at, labels = EXCLUDED.labels",
+                         id=alert_id, name=str(alert.get("type") or "UNKNOWN")[:128],
+                         severity=_SEVERITY.get(str(alert.get("severity")), "warning"),
+                         condition=str(alert.get("source") or alert.get("type") or ""),
+                         message=str(alert.get("message") or ""), active=state != "resolved",
+                         fired_at=alert.get("created_at"), resolved_at=alert.get("resolved_at"),
+                         labels=json.dumps(labels))
+                counts["alerts"] += 1
+                before = previous[0][0] if previous else None
+                if before != state:
+                    when = {"firing": alert.get("created_at"), "acknowledged": alert.get("acknowledged_at"),
+                            "resolved": alert.get("resolved_at")}.get(state) or alert.get("updated_at") or at
+                    conn.run("INSERT INTO system_logs (level, component, message, context, timestamp) "
+                             "VALUES (:level, 'alerts', :message, :context, :ts)",
+                             level="info" if state == "resolved" else "warning",
+                             message=f"{alert.get('type') or 'UNKNOWN'} {state}",
+                             context=json.dumps({"alert_id": alert_id, "from": before, "to": state, **labels}), ts=when)
+                    counts["alert_transitions"] += 1
+            health = snapshot.get("health") or {}
+            checks = health.get("checks") or {}
+            for component, value in checks.items():
+                if not isinstance(value, (list, tuple)) or len(value) != 2 or value[0] is None:
+                    continue
+                conn.run("INSERT INTO health_checks (id, component, status, message, details, checked_at) "
+                         "VALUES (:id, :component, :status, :message, :details, :ts)",
+                         id=f"h_{uuid.uuid4().hex}", component=f"{source}.{component}"[:64],
+                         status="healthy" if value[0] is True else "unhealthy", message=str(value[1])[:2000],
+                         details=json.dumps({"source": source}), ts=at)
+                counts["health_checks"] += 1
+            if health.get("status"):
+                conn.run("INSERT INTO health_checks (id, component, status, message, details, checked_at) "
+                         "VALUES (:id, :component, :status, :message, :details, :ts)",
+                         id=f"h_{uuid.uuid4().hex}", component=source,
+                         status="healthy" if health["status"] == "HEALTHY" else "unhealthy",
+                         message=str(health["status"]), details=json.dumps({"source": source}), ts=at)
+                counts["health_checks"] += 1
+            conn.run("COMMIT")
+        except Exception:
+            conn.run("ROLLBACK")
+            raise
+    return counts

@@ -152,3 +152,25 @@ def test_moderators_change_only_their_brands_and_a_silent_module_fails_closed(br
     brands["server"].shutdown()
     brands["server"].server_close()
     assert api.get("/api/brands").status_code == 503  # no silent fallback to stale legacy data
+
+
+@pytest.mark.strict_channel_credentials
+def test_a_shared_channel_has_one_secret_for_every_linked_brand(brands):
+    """#502 AC2: brands reference the channel; the token exists once, no copies."""
+    from core.channel_secrets import mode, task_secrets
+    from core.first_run import ensure_secret_store
+    from core.module.gateway import call_module
+    from core.publishing_targets import brand_channel
+    api = brands["api"]
+    for brand in ("brand-a", "brand-b"):
+        api.post("/api/brands", json={"id": brand, "name": brand})
+    channel_id = api.post("/api/brands/brand-a/channels", json={
+        "brand_id": "brand-a", "channel_type": "telegram", "target": "@shared_news"}).json()["channel_id"]
+    call_module("brands", "PUT", f"/brands/brand-b/channels/{channel_id}", None, {"policy": "inherit"})
+    assert api.put(f"/api/channels/{channel_id}/credentials",
+                   json={"secrets": {"telegram_publisher_bot_token": "SHARED"}}).status_code == 200
+    a, b = brand_channel("brand-a", "telegram"), brand_channel("brand-b", "telegram")
+    assert a.channel_id == b.channel_id == channel_id and mode(a) == mode(b) == "own"
+    stored = ensure_secret_store()
+    assert task_secrets(b, {"telegram_publisher_bot_token"}, stored) == {"telegram_publisher_bot_token": "SHARED"}
+    assert sum(1 for key in stored if key.startswith(f"channel:{channel_id}:")) == 1  # one copy only

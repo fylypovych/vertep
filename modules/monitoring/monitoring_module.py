@@ -5,7 +5,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from typing import Dict, Any, Optional
 import pg8000.native
-from monitoring_logic import MonitoringModule, Metric, Alert, HealthCheck, SystemLog, migrate_existing_monitoring
+from monitoring_logic import MonitoringModule, Metric, Alert, HealthCheck, SystemLog, migrate_existing_monitoring, collect
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,6 +18,7 @@ import urllib.request
 CORE = os.getenv("VERTEP_CORE_URL", "").rstrip("/")
 TOKEN = os.getenv("VERTEP_MODULE_TOKEN", "")
 ROTATE_INTERVAL_SECONDS = float(os.getenv("MONITORING_ROTATE_INTERVAL_SECONDS", "3600"))
+COLLECT_INTERVAL_SECONDS = float(os.getenv("MONITORING_COLLECT_INTERVAL_SECONDS", "60"))
 _module_lock = threading.Lock()
 _module: Dict[str, Any] = {"value": None}
 
@@ -54,6 +55,27 @@ def rotation_loop(stop: threading.Event) -> None:
             logger.info("Monitoring history rotated", extra={"removed": removed})
         except Exception:
             logger.exception("Monitoring rotation failed")
+
+
+def _core_observability() -> Dict[str, Any]:
+    """One snapshot of CORE's existing collectors (permission monitoring.read)."""
+    request = urllib.request.Request(CORE + "/api/modules/self/observability",
+                                     headers={"x-vertep-module-token": TOKEN})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read())
+
+
+def collect_once() -> Dict[str, int]:
+    return collect(module(), _core_observability())
+
+
+def collector_loop(stop: threading.Event) -> None:
+    """Periodic ingest (#503); a failed round is logged and retried next time."""
+    while not stop.wait(COLLECT_INTERVAL_SECONDS):
+        try:
+            collect_once()
+        except Exception:
+            logger.exception("Monitoring collection failed")
 
 
 # Declared gateway routes -> the existing handlers (legacy /api/v1 paths).
@@ -157,8 +179,8 @@ class MonitoringHandler(BaseHTTPRequestHandler):
                 severity = query.get("severity", [None])[0]
                 alerts = MODULE.list_alerts(active_only=active_only, severity=severity)
                 self._json_response([a.__dict__ for a in alerts])
-            elif path.startswith("/api/v1/alerts/") and path.count("/") == 3:
-                alert_id = path.split("/")[3]
+            elif path.startswith("/api/v1/alerts/") and path.count("/") == 4:
+                alert_id = path.split("/")[4]
                 alert = MODULE.get_alert(alert_id)
                 if alert:
                     self._json_response(alert.__dict__)
@@ -169,7 +191,7 @@ class MonitoringHandler(BaseHTTPRequestHandler):
                 health = MODULE.get_latest_health(component=component)
                 self._json_response([h.__dict__ for h in health])
             elif path.startswith("/api/v1/health/") and path.endswith("/history"):
-                component = path.split("/")[3]
+                component = path.split("/")[4]
                 limit = int(query.get("limit", ["100"])[0])
                 history = MODULE.get_health_history(component, limit=limit)
                 self._json_response([h.__dict__ for h in history])
@@ -225,7 +247,7 @@ class MonitoringHandler(BaseHTTPRequestHandler):
                 created = MODULE.create_alert(alert)
                 self._json_response(created.__dict__, 201)
             elif path.startswith("/api/v1/alerts/") and path.endswith("/fire"):
-                alert_id = path.split("/")[3]
+                alert_id = path.split("/")[4]
                 message = body.get("message", "Alert fired")
                 alert = MODULE.fire_alert(alert_id, message)
                 if alert:
@@ -233,7 +255,7 @@ class MonitoringHandler(BaseHTTPRequestHandler):
                 else:
                     self._json_response({"error": "Alert not found"}, 404)
             elif path.startswith("/api/v1/alerts/") and path.endswith("/resolve"):
-                alert_id = path.split("/")[3]
+                alert_id = path.split("/")[4]
                 alert = MODULE.resolve_alert(alert_id)
                 if alert:
                     self._json_response(alert.__dict__)
@@ -282,8 +304,8 @@ class MonitoringHandler(BaseHTTPRequestHandler):
         body = self._parse_body()
 
         try:
-            if path.startswith("/api/v1/alerts/") and path.count("/") == 3:
-                alert_id = path.split("/")[3]
+            if path.startswith("/api/v1/alerts/") and path.count("/") == 4:
+                alert_id = path.split("/")[4]
                 alert = MODULE.update_alert(alert_id, body)
                 if alert:
                     self._json_response(alert.__dict__)
@@ -303,6 +325,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
     server = ThreadingHTTPServer(("", port), MonitoringHandler)
     threading.Thread(target=rotation_loop, args=(threading.Event(),), daemon=True).start()
+    threading.Thread(target=collector_loop, args=(threading.Event(),), daemon=True).start()
     logger.info(f"Monitoring module listening on port {port}")
     server.serve_forever()
 

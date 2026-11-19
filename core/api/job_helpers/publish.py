@@ -61,6 +61,11 @@ def _publish_task_for(job, channel: str, target: str | None = None) -> dict:
         from ...publishing_targets import telegram_target
         telegram_chat_id = telegram_target(job, target)
         intent["target"] = telegram_chat_id
+    from ...publishing_targets import brand_channel
+    record = brand_channel(job.brand_id, channel, intent.get("target"),
+                           ((job.publish_intent or {}).get(channel) or {}).get("channel_id"))
+    if record is not None:
+        intent["channel_id"] = record.channel_id
     job.publish_intent[channel] = intent
     # Threads downloads the video itself; other channels receive the file.
     public_link = _public_video_url(job) if channel == "threads" else {}

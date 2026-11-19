@@ -86,7 +86,17 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["POST", "/api/jobs/{job_id}/shared-approval"],
         ["POST", "/api/jobs/{job_id}/shared-approval/revoke"],
         ["POST", "/api/jobs/{job_id}/shared-publications"],
-        ["POST", "/api/brands/migrate-to-module"],  # owner decision 19.11.2026: brands move into the module.
+        ["POST", "/api/brands/migrate-to-module"],
+        ["GET", "/api/lab/login"],  # #491 L3 shared administrator identity for the LAB panel.
+        ["GET", "/lab-lease/v1/identity-key"],
+        ["GET", "/api/jobs/{job_id}/videos/{version}"],
+        ["GET", "/api/modules/self/storyboards"],  # #501 the Storyboard module reads job storyboards.
+        ["GET", "/api/modules/self/storyboards/{job_id}"],
+        ["GET", "/api/channels/{channel_id}/credentials"],  # #502 one credential set per channel.
+        ["PUT", "/api/channels/{channel_id}/credentials"],
+        ["GET", "/api/modules/self/publications"],  # #502 Publishing module: read and act for a verified user.
+        ["POST", "/api/modules/self/publications/{job_id}/publish"],  # #500 review of the exact version/hash.  # owner decision 19.11.2026: brands move into the module.
+        ["GET", "/api/modules/self/observability"],  # #503 the Monitoring module ingests CORE collectors.
         ["GET", "/api/settings/users"],  # owner decision 19.11.2026: moderators and their brands.
         ["POST", "/api/settings/users"],
         ["PUT", "/api/settings/users/{username}"],

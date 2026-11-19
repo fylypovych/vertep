@@ -29,23 +29,8 @@ class TestStoryboardModuleCatalog:
         assert manifest.health.get("timeout_seconds") is not None
 
 
-class TestStoryboardModuleLifecycle:
-    @pytest.mark.asyncio
-    async def test_storyboard_install_activate(self):
-        from core.module.lifecycle import ModuleManager
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            mgr = ModuleManager(Path(tmp))
-            manifest_path = Path("modules/storyboard/manifest.yaml")
-            assert manifest_path.exists(), "manifest.yaml not found"
-            manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-            manifest = ModuleManifest.from_dict(manifest_data)
-            pkg = {"manifest": manifest, "version": "1.0.0", "sha256": "test"}
-            result = await mgr.install("storyboard", pkg)
-            assert result["status"] == "installed"
-            result = await mgr.activate("storyboard")
-            assert result["status"] == "active"
+# Install/activate without a database and reading job storyboards through CORE:
+# tests/test_storyboard_module_e2e.py.
 
 
 class TestStoryboardModuleCompatibility:
@@ -57,7 +42,8 @@ class TestStoryboardModuleCompatibility:
         manifest = ModuleManifest.from_dict(bundled_manifest("storyboard"))
         assert manifest.schema_version == "2.0"
 
-    def test_storyboard_depends_on_characters_brands(self):
+    def test_storyboard_has_no_database_of_its_own(self):
+        """#501 owner decision: storyboards stay in the jobs; the module reads them."""
         manifest = ModuleManifest.from_dict(bundled_manifest("storyboard"))
-        assert "characters" in manifest.dependencies
-        assert "brands" in manifest.dependencies
+        assert manifest.migrations == [] and manifest.permissions == ["storyboard.read"]
+        assert not Path("modules/storyboard/migrations").exists() or not any(Path("modules/storyboard/migrations").iterdir())

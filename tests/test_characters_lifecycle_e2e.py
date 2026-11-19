@@ -111,7 +111,7 @@ def test_installed_package_has_its_schema_files_api_and_ui(installed):
     assert status == 403  # a moderator of brand-b cannot act for brand-c
 
 
-def test_deactivation_spares_running_and_pending_material_and_archive_restores_everything(installed, tmp_path):
+def test_deactivation_spares_running_and_pending_material_and_archive_restores_everything(installed, tmp_path, monkeypatch):
     from core.models import JobStatus, VideoVersion
     from core.state import store
     from modules.characters.characters_logic import migrate_existing_characters
@@ -160,6 +160,12 @@ def test_deactivation_spares_running_and_pending_material_and_archive_restores_e
     refused = create("brand-a")
     assert refused.status_code == 422 and "not active" in refused.json()["detail"]
     assert store.jobs[running_job.job_id].status == running_status  # not cancelled or re-checked
+    # The generation that was already running finishes its step after the deactivation.
+    from tests.test_features import _complete_script_task
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    _complete_script_task(api, running_job.job_id)
+    finished = store.jobs[running_job.job_id]
+    assert finished.script is not None and finished.status != running_status, finished.status
     decision = api.post(f"/api/jobs/{pending_job.job_id}/shared-approval",
                         json={"owner_brand": "brand-b", "decision": "approve", "version": 1, "expected_sha256": digest})
     assert decision.status_code == 200 and decision.json()["owners"] == {"brand-b": "approved"}

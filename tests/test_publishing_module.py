@@ -29,23 +29,8 @@ class TestPublishingModuleCatalog:
         assert manifest.health.get("timeout_seconds") is not None
 
 
-class TestPublishingModuleLifecycle:
-    @pytest.mark.asyncio
-    async def test_publishing_install_activate(self):
-        from core.module.lifecycle import ModuleManager
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            mgr = ModuleManager(Path(tmp))
-            manifest_path = Path("modules/publishing/manifest.yaml")
-            assert manifest_path.exists(), "manifest.yaml not found"
-            manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-            manifest = ModuleManifest.from_dict(manifest_data)
-            pkg = {"manifest": manifest, "version": "1.0.0", "sha256": "test"}
-            result = await mgr.install("publishing", pkg)
-            assert result["status"] == "installed"
-            result = await mgr.activate("publishing")
-            assert result["status"] == "active"
+# Lifecycle without a database, the verified user context and the Worker send path:
+# tests/test_publishing_module_e2e.py.
 
 
 class TestPublishingModuleCompatibility:
@@ -57,11 +42,9 @@ class TestPublishingModuleCompatibility:
         manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
         assert manifest.schema_version == "2.0"
 
-    def test_publishing_depends_on_storyboard_brands(self):
+    def test_publishing_has_no_database_channels_or_send_path(self):
+        """#502 owner decision: interface and editor actions only."""
         manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
-        assert "storyboard" in manifest.dependencies
-        assert "brands" in manifest.dependencies
-
-    def test_publishing_provides_publishing_capability(self):
-        manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
-        assert "publishing" in manifest.capabilities
+        assert manifest.migrations == [] and manifest.dependencies == []
+        assert manifest.permissions == ["publishing.read", "publishing.publish"]
+        assert not Path("modules/publishing/publishing_logic.py").exists()

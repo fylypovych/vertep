@@ -17,8 +17,10 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-pytestmark = pytest.mark.skipif(shutil.which("docker") is None or shutil.which("openssl") is None,
-                                reason="needs docker and openssl")
+pytestmark = [pytest.mark.skipif(shutil.which("docker") is None or shutil.which("openssl") is None,
+                                 reason="needs docker and openssl"),
+              # One contour, ordered steps (update, then rollback): one xdist worker.
+              pytest.mark.xdist_group("web_ui_container")]
 
 
 def run(*args, check=True, timeout=600):
