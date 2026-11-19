@@ -53,8 +53,8 @@ test('помилка дії показує одне українське пов�
   await expect(page.getByText('Error Code:')).toHaveCount(0);
 });
 
-test('viewer не може редагувати job', async ({ page }) => {
-  await mockApi(page, {}, 'viewer');
+test('модератор не може редагувати job', async ({ page }) => {
+  await mockApi(page, {}, 'moderator');
   await page.goto('/jobs/j1');
   await expect(page.getByTestId('edit-job-button')).toBeDisabled({ timeout: 20000 });
 });

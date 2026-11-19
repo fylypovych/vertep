@@ -82,6 +82,13 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["POST", "/api/modules/self/tasks"],  # #495 shared capability for modules, node assignments.
         ["GET", "/api/modules/self/tasks/{task_id}"],
         ["POST", "/api/modules/node-assignments"],
+        ["GET", "/api/shared-content"],  # #500 Brands «Спільний контент».
+        ["POST", "/api/jobs/{job_id}/shared-approval"],
+        ["POST", "/api/jobs/{job_id}/shared-approval/revoke"],
+        ["GET", "/api/settings/users"],  # owner decision 19.11.2026: moderators and their brands.
+        ["POST", "/api/settings/users"],
+        ["PUT", "/api/settings/users/{username}"],
+        ["DELETE", "/api/settings/users/{username}"],
     ]
     assert after == sorted(before + execution)
 

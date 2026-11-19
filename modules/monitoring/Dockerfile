@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -u 65536 -m monitoring
+RUN useradd -u 65532 -m monitoring
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -15,7 +15,7 @@ COPY monitoring_logic.py monitoring_module.py manifest.yaml ./
 COPY migrations/ ./migrations/
 COPY ui/ ./ui/
 
-USER 65536
+USER 65532
 
 EXPOSE 8080
 

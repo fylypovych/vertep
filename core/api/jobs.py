@@ -68,8 +68,37 @@ def public_video(job_id: str, version: int, expires: int, signature: str):
     return FileResponse(path, media_type="video/mp4")
 
 
+def _check_character_module(character_id: str, brand_id: str) -> str | None:
+    """#499: with the Characters module READY it is the one library. A new job uses
+    a character only if its owner brand runs it or the owner made it active for
+    collaboration, with a complete profile. Existing/running jobs and pending
+    approvals are not re-checked, so deactivation never stops them."""
+    import httpx
+    from urllib.parse import quote
+    from core.module.gateway import call_module
+    try:
+        answer = call_module("characters", "GET", f"/characters/{quote(str(character_id), safe='')}/can-generate",
+                             {"brand_id": brand_id})
+    except (httpx.HTTPError, ValueError) as error:
+        raise HTTPException(503, "Characters module is unavailable") from error
+    if answer is None:
+        return None  # the optional module is not in use: configuration characters only
+    status, body = answer
+    if status != 200 or not isinstance(body, dict):
+        raise HTTPException(503, "Characters module is unavailable")
+    if body.get("allowed") is not True:
+        reasons = [str(item) for item in body.get("reasons") or []] or ["not allowed"]
+        raise HTTPException(422, f"Character {character_id!r} cannot be used by brand {brand_id!r}: {'; '.join(reasons)}")
+    owner = body.get("owner_brand_id")
+    return owner if isinstance(owner, str) and owner else None
+
+
 @router.post("/api/jobs")
-def create_job(request: JobCreate):
+def create_job(request: JobCreate, http_request: Request = None):
+    brands = getattr(getattr(http_request, "state", None), "vertep_brands", None)
+    if brands is not None and request.brand_id not in brands:
+        # A moderator creates jobs only for the brands of its account.
+        raise HTTPException(403, "Brand access required")
     if not jobs_may_be_created():
         raise HTTPException(503, "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.")
     if request.character_id is None:
@@ -82,6 +111,7 @@ def create_job(request: JobCreate):
     missing = missing_character_files(Path(os.getenv("CHARACTERS_ROOT", "characters")), request.character_id)
     if missing and (Path(os.getenv("CHARACTERS_ROOT", "characters")) / request.character_id).is_dir():
         raise HTTPException(422, f"Character {request.character_id!r} is incomplete: missing {', '.join(missing)}")
+    character_owner = _check_character_module(request.character_id, request.brand_id)
     if request.workflow_template:
         from core.workflow.runtime import workflow_runtime
         runtime = workflow_runtime()
@@ -111,6 +141,10 @@ def create_job(request: JobCreate):
                        request.task_type, request.min_vram_mb, request.brand_id, request.workflow,
                        request.aspect_ratio, request.output_preset, request.scheduled_for,
                        request.required_tags)
+    if character_owner and character_owner != job.brand_id:
+        # Material of another brand's character: publication needs that brand's approval.
+        job.character_owner_brand = character_owner
+        store.update(job, job.status, f"SHARED CONTENT: character owned by brand {character_owner}")
     if not dispatch_allowed():
         store.update(job, JobStatus.WAITING_FOR_SYSTEM,
                      f"WAITING FOR SYSTEM: {get_system_state()['state']}")
@@ -482,6 +516,63 @@ def delete_job(job_id: str):
     return {"deleted": job_id}
 
 
+def _require_brand(http_request: Request | None, brand: str) -> str:
+    """Administrator, or a moderator of ``brand``; returns the actor."""
+    identity = getattr(getattr(http_request, "state", None), "vertep_identity", None)
+    brands = getattr(getattr(http_request, "state", None), "vertep_brands", None)
+    if brands is not None and brand not in brands:
+        raise HTTPException(403, "Brand access required")
+    return identity[0] if identity else "api"
+
+
+@router.get("/api/shared-content")
+def shared_content(brand_id: str, http_request: Request = None):
+    """Material of other brands that uses this brand's characters (Brands tab)."""
+    from ..shared_content import state
+    _require_brand(http_request, brand_id)
+    return {"brand_id": brand_id, "items": [state(job) for job in store.jobs.values()
+                                             if job.character_owner_brand == brand_id and job.brand_id != brand_id]}
+
+
+@router.post("/api/jobs/{job_id}/shared-approval")
+def shared_approval(job_id: str, body: dict, http_request: Request = None):
+    from ..shared_content import SharedContentError, decide, state
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    owner = str(body.get("owner_brand", ""))
+    actor = _require_brand(http_request, owner)
+    try:
+        version = int(body.get("version"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "version is required") from None
+    with store.lock:
+        try:
+            record = decide(job, owner, str(body.get("decision", "")), actor, version=version,
+                            sha256=str(body.get("expected_sha256", "")))
+        except SharedContentError as error:
+            raise HTTPException(409, str(error)) from error
+        store.update(job, job.status, f"SHARED CONTENT {record['decision'].upper()} v{version} BY {owner} ({actor})")
+    return state(job)
+
+
+@router.post("/api/jobs/{job_id}/shared-approval/revoke")
+def shared_approval_revoke(job_id: str, body: dict, http_request: Request = None):
+    from ..shared_content import SharedContentError, revoke, state
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    owner = str(body.get("owner_brand", ""))
+    actor = _require_brand(http_request, owner)
+    with store.lock:
+        try:
+            revoke(job, owner, actor)
+        except SharedContentError as error:
+            raise HTTPException(409, str(error)) from error
+        store.update(job, job.status, f"SHARED CONTENT APPROVAL REVOKED BY {owner} ({actor})")
+    return state(job)
+
+
 @router.post("/api/jobs/{job_id}/publish")
 def publish_job(job_id: str, channels: list[str] | None = None):
     job = store.jobs.get(job_id)
@@ -498,6 +589,11 @@ def publish_job(job_id: str, channels: list[str] | None = None):
             raise HTTPException(409, "Job's active video version is not approved for publication")
     if job.status != JobStatus.READY and not retryable_publish_failure:
         raise HTTPException(409, "Job is not ready")
+    from ..shared_content import publication_allowed
+    with store.lock:
+        allowed, reason = publication_allowed(job, store.root)
+    if not allowed:
+        raise HTTPException(409, reason)
     targets = channels or ["youtube"]
     publisher = providers.publisher()
     unknown = [channel for channel in targets if channel not in publisher.available_channels()]

@@ -306,7 +306,11 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             # challenge on its session probe opens a second, native browser login.
             return self._secure(Response("Authentication required", 401))
         actor, role = session_identity or (user, basic_role)
-        if request.method != "GET" and role == "viewer" and not request.url.path.startswith("/api/session"):
+        from core.security import user_brands
+        brands = user_brands(actor, role)
+        if request.method != "GET" and role != "admin" and not _moderator_may_change(request, brands):
+            # A moderator changes only brand-scoped resources; the brand itself is
+            # checked where it is known (module APIs, job creation).
             return Response("Insufficient role", 403)
         if request.method in {"PUT", "DELETE"} and request.url.path.startswith(("/api/characters", "/api/brands", "/api/workflows")) and role != "admin":
             return Response("Administrator role required", 403)
@@ -325,6 +329,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             if not csrf or not secrets.compare_digest(csrf, request.headers.get("x-csrf-token", "")):
                 return Response("Invalid CSRF token", 403)
         request.state.vertep_identity = (actor, role)
+        request.state.vertep_brands = brands
         response = await call_next(request)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             logger.info("Administrative action", extra={"action": f"{request.method} {request.url.path}",
@@ -344,6 +349,36 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
         return response
+
+
+_MODERATOR_PATHS = ("/api/session", "/api/modules/")
+
+
+# Job actions a moderator may take on jobs of its own brands (#500 AC2).
+_MODERATOR_JOB_ACTIONS = re.compile(
+    r"/api/jobs/(?P<job>[^/]+)/(approve|publish|pause|resume|cancel|retry|regenerate"
+    r"|script/(approve|revision|regenerate)|video/(approve|revision|regenerate))")
+
+
+def _moderator_may_change(request, brands) -> bool:
+    """Brand-scoped changes a moderator may request.
+
+    Job creation and shared-content decisions check the brand in the endpoint
+    (the brand is in the body); job actions check the job's own brand here.
+    """
+    path = request.url.path
+    if path.startswith(_MODERATOR_PATHS):
+        return not path.startswith(("/api/modules/token", "/api/modules/self"))
+    if request.method != "POST":
+        return False
+    if path == "/api/jobs" or re.fullmatch(r"/api/jobs/[^/]+/shared-approval(/revoke)?", path):
+        return True
+    match = _MODERATOR_JOB_ACTIONS.fullmatch(path)
+    if match:
+        from core.state import store
+        job = store.jobs.get(match.group("job"))
+        return job is not None and job.brand_id in (brands or set())
+    return False
 
 
 def _json_error(detail: str, status: int, **extra) -> Response:

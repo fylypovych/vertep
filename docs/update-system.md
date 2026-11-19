@@ -21,6 +21,8 @@ Download → Update (контейнери, міграції, рестарт) →
 
 Будь-який провал health check — автоматичний rollback: попередні версія, контейнери, БД, конфігурація. Ручний: `vertep rollback`. Помилка release workflow сама по собі версій не створює і історії не переписує.
 
+Окремо від CORE можна перезапустити, оновити чи відкотити панель: `docker compose up -d web-ui` з іншим `VERTEP_WEB_UI_IMAGE` (#504). API і фонові задачі CORE під час цього працюють; панель після оновлення одразу завантажує нову збірку (shell не кешується).
+
 ## Rolling Update
 
 One-node-at-a-time, порядки `workers-first` / `core-first` / `custom`; canary: перший вузол → self-test → promote/rollback; автоматичний rollback при таймауті/помилці. Координатор — PostgreSQL-backed з global fencing.

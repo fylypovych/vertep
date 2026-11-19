@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-function mockApi(page: any, role: 'admin' | 'viewer', session: () => number = () => 200) {
+function mockApi(page: any, role: 'admin' | 'moderator', session: () => number = () => 200) {
   return page.route('**/api/**', async (route: any) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/session')) {
@@ -17,8 +17,8 @@ function mockApi(page: any, role: 'admin' | 'viewer', session: () => number = ()
   });
 }
 
-test('viewer бачить дію job неактивною, admin активною', async ({ page }) => {
-  await mockApi(page, 'viewer');
+test('модератор бачить дію job неактивною, admin активною', async ({ page }) => {
+  await mockApi(page, 'moderator');
   await page.goto('/jobs/j1');
   await expect(page.getByTestId('delete-job-button')).toBeDisabled({ timeout: 20000 });
 });

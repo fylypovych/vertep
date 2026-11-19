@@ -408,4 +408,18 @@ export class ResourcesApiService {
   logo = (): Observable<Blob> => this.http.get(`${this.base.url}/settings/logo`, { responseType: 'blob' }).pipe(catchError(this.base.handleError));
   uploadLogo = (file: File): Observable<{ saved: boolean }> => { const f = new FormData(); f.append('file', file); return this.http.post<{ saved: boolean }>(`${this.base.url}/settings/logo`, f, { headers: this.h() }).pipe(catchError(this.base.handleError)); };
   deleteLogo = (): Observable<{ deleted: boolean }> => this.http.delete<{ deleted: boolean }>(`${this.base.url}/settings/logo`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  // #500 Shared content: other brands' material that uses this brand's characters.
+  sharedContent = (brandId: string): Observable<{ brand_id: string; items: SharedContentItem[] }> => this.http.get<{ brand_id: string; items: SharedContentItem[] }>(`${this.base.url}/shared-content?brand_id=${encodeURIComponent(brandId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  sharedDecision = (jobId: string, body: { owner_brand: string; decision: 'approve' | 'reject'; version: number; expected_sha256: string }): Observable<SharedContentItem> => this.http.post<SharedContentItem>(`${this.base.url}/jobs/${encodeURIComponent(jobId)}/shared-approval`, body, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  sharedRevoke = (jobId: string, ownerBrand: string): Observable<SharedContentItem> => this.http.post<SharedContentItem>(`${this.base.url}/jobs/${encodeURIComponent(jobId)}/shared-approval/revoke`, { owner_brand: ownerBrand }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+}
+
+export interface SharedContentItem {
+  job_id: string;
+  brand_id: string;
+  character_id: string;
+  version: number | null;
+  sha256: string | null;
+  owners: Record<string, 'pending' | 'approved' | 'rejected' | 'revoked'>;
+  history: { owner_brand: string; version: number; sha256: string; decision: string; actor: string; at: string }[];
 }

@@ -73,7 +73,8 @@ def system_status():
         postgres = "OFFLINE"
     scheduled = sorted((job.scheduled_for for job in store.jobs.values()
                         if job.status == JobStatus.NEW and job.scheduled_for and not _job_is_due(job)))
-    return {"core": "OK", "version": application_version(), "system": get_system_state(), "storage": "OK", "redis": "OK" if task_queue.backend == "redis" else "OFFLINE",
+    # #504 AC3: the separately deployed panel checks it speaks this API major.
+    return {"core": "OK", "version": application_version(), "api_major": 1, "system": get_system_state(), "storage": "OK", "redis": "OK" if task_queue.backend == "redis" else "OFFLINE",
             "postgres": postgres,
             "queue": {"backend": task_queue.backend, "depth": task_queue.depth(),
                       "inflight": task_queue.inflight_depth(),

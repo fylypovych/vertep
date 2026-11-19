@@ -37,6 +37,7 @@
     <div class="container">
         <div class="flex items-center justify-between mb-6">
             <h1>Персонажі</h1>
+            <label>Бренд <input id="brand-id" placeholder="brand01" onchange="loadCharacters()"></label>
             <button class="btn btn-primary" onclick="openCreateModal()">Новий персонаж</button>
         </div>
 
@@ -95,7 +96,10 @@
         const TOKEN = ''; // Will be set by CORE gateway
 
         async function api(path, options = {}) {
-            const response = await fetch(API_BASE + path, {
+            // The brand the administrator acts for; the signed-in user is never a brand.
+            const brand = document.getElementById('brand-id').value.trim();
+            const url = API_BASE + path + (brand ? (path.includes('?') ? '&' : '?') + 'brand_id=' + encodeURIComponent(brand) : '');
+            const response = await fetch(url, {
                 ...options,
                 headers: {
                     'Content-Type': 'application/json',

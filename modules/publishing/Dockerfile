@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -u 65535 -m publishing
+RUN useradd -u 65532 -m publishing
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -15,7 +15,7 @@ COPY publishing_logic.py publishing_module.py manifest.yaml ./
 COPY migrations/ ./migrations/
 COPY ui/ ./ui/
 
-USER 65535
+USER 65532
 
 EXPOSE 8080
 

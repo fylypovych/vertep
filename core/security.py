@@ -17,7 +17,12 @@ from .node_registry import verify_node_certificate, verify_node_token
 from .first_run import configured_user, load_all_users, save_user, session_secret
 
 
-SESSION_ROLES = ("admin", "viewer")
+SESSION_ROLES = ("admin", "moderator")
+# Owner decision 19.11.2026: two access roles. A moderator works within the
+# brands listed in its account (``brands``); the former read-only ``viewer``
+# role no longer exists and stored ``viewer`` accounts become moderators
+# without brands (read-only in effect).
+LEGACY_ROLES = {"viewer": "moderator"}
 PROFILE_FIELDS = ("display_name", "email")
 PASSWORD_MIN_LENGTH = 12
 DISPLAY_NAME_MAX_LENGTH = 80
@@ -176,7 +181,7 @@ def _account_role(user: str, stored_role: str) -> str:
     admin_password = os.getenv("ADMIN_PASSWORD", "")
     if admin_password and user == admin_user:
         return "admin"
-    return _normalize_role(stored_role) or "viewer"
+    return _normalize_role(stored_role) or "moderator"
 
 
 
@@ -208,7 +213,19 @@ def _normalize_role(role) -> str | None:
     back to a privileged default.
     """
     value = str(role or "").strip().lower()
+    value = LEGACY_ROLES.get(value, value)
     return value if value in SESSION_ROLES else None
+
+
+def user_brands(user: str, role: str) -> set[str] | None:
+    """Brands a user may act for: ``None`` means every brand (administrator)."""
+    if role == "admin":
+        return None
+    record = _load_all_users().get(user)
+    brands = record.get("brands") if isinstance(record, dict) else None
+    if not isinstance(brands, list):
+        return set()
+    return {str(item).strip() for item in brands if isinstance(item, str) and item.strip()}
 
 
 def _account_record(user: str) -> tuple[dict, str] | None:
@@ -334,7 +351,10 @@ def session_response(identity: tuple[str, str] | None) -> dict:
     if not profile:
         return {"authenticated": False, "user": None, "role": None,
                 "display_name": None, "email": None, "password_policy": password_policy()}
-    return {"authenticated": True, **profile, "password_policy": password_policy()}
+    brands = user_brands(profile["user"], profile["role"]) if profile.get("user") else set()
+    # The moderator's brands steer permission-aware controls; the backend re-checks.
+    return {"authenticated": True, **profile, "brands": None if brands is None else sorted(brands),
+            "password_policy": password_policy()}
 
 
 def _authenticate_user(user: str, password: str) -> str | None:
@@ -347,7 +367,7 @@ def _authenticate_user(user: str, password: str) -> str | None:
     users = _load_all_users()
     record = users.get(user)
     if isinstance(record, dict) and _verify_hash(password, str(record.get("password_hash", ""))):
-        return _account_role(user, str(record.get("role", "viewer")))
+        return _account_role(user, str(record.get("role", "moderator")))
     admin_user = os.getenv("ADMIN_USER", "admin")
     admin_password = os.getenv("ADMIN_PASSWORD", "")
     if admin_password and _constant_time_equals(user, admin_user) and _constant_time_equals(password, admin_password):

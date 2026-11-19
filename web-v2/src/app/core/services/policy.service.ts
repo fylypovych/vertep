@@ -3,7 +3,7 @@ import { SystemApiService } from '../api/system.api';
 import { SystemStatus } from '../models';
 
 export type SystemMode = 'NORMAL' | 'MAINTENANCE' | 'UPDATING' | 'RECOVERING' | 'READ_ONLY' | 'EMERGENCY' | 'UNAVAILABLE';
-export type UserRole = 'admin' | 'viewer';
+export type UserRole = 'admin' | 'moderator';
 
 export interface PolicyDecision {
   allowed: boolean;
@@ -69,8 +69,15 @@ const MUTATION_BLOCKED_IN: Record<string, SystemMode[]> = {
   start_recovery: BLOCKED_RECOVERY,
 };
 
-const VIEWER_BLOCKED = new Set([
-  'create_job', 'update_job', 'delete_job', 'approve_job', 'publish_job',
+// Job actions a moderator takes on jobs of its own brands (#500 AC2); CORE re-checks.
+const MODERATOR_BRAND_ACTIONS = new Set([
+  'approve_job', 'publish_job', 'pause_job', 'resume_job', 'retry_job', 'regenerate_job', 'cancel_job',
+]);
+
+// A moderator works within its own brands: it may create jobs there (CORE checks
+// the brand); everything else stays with the administrator.
+const MODERATOR_BLOCKED = new Set([
+  'update_job', 'delete_job', 'approve_job', 'publish_job',
   'pause_job', 'resume_job', 'retry_job', 'regenerate_job', 'cancel_job',
   'update_worker', 'drain_worker',
   'create_character', 'update_character', 'delete_character',
@@ -96,7 +103,9 @@ export class PolicyService {
   // Until the first authoritative /api/status answer arrives the policy blocks
   // every guarded mutation instead of optimistically granting it.
   readonly systemState = signal<SystemMode>('UNAVAILABLE');
-  readonly userRole = signal<UserRole>('viewer');
+  readonly userRole = signal<UserRole>('moderator');
+  /** Brands of a moderator (null: administrator, every brand). */
+  readonly userBrands = signal<string[] | null>([]);
   readonly systemReason = signal<string | null>('Стан системи ще не визначено');
   // Distinguishes "still loading" from "loaded as UNAVAILABLE" so the UI can
   // tell a transient wait apart from a real failure.
@@ -141,8 +150,10 @@ export class PolicyService {
     });
   }
 
-  can(action: string): PolicyDecision {
-    if (this.userRole() === 'viewer' && VIEWER_BLOCKED.has(action)) {
+  can(action: string, brandId?: string | null): PolicyDecision {
+    const ownBrand = !!brandId && (this.userBrands() ?? []).includes(brandId);
+    if (this.userRole() === 'moderator' && MODERATOR_BLOCKED.has(action)
+        && !(ownBrand && MODERATOR_BRAND_ACTIONS.has(action))) {
       return { allowed: false, reason: 'Недостатньо прав' };
     }
     // Issue #168.3/#114: while the authoritative state is unknown every guarded
@@ -161,8 +172,8 @@ export class PolicyService {
     return { allowed: true };
   }
 
-  disabledReason(action: string): string | null {
-    const d = this.can(action);
+  disabledReason(action: string, brandId?: string | null): string | null {
+    const d = this.can(action, brandId);
     return d.allowed ? null : d.reason || null;
   }
 }

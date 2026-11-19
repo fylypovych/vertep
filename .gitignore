@@ -73,3 +73,4 @@ audit-0311-closed-issues.md
 /.swarm
 /.claude-flow
 /.vertep_code_agents
+config/module-images.json

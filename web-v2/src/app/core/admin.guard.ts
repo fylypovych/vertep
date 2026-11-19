@@ -14,7 +14,7 @@ export class AdminGuard implements CanActivate {
     return this.auth.getUserProfile().pipe(
       // Issue #75 S1: роль береться лише з валідованої identity; некоректна
       // сесія не потрапляє в адмінські маршрути, а веде на login.
-      tap((profile) => { this.policy.userRole.set(profile.role); }),
+      tap((profile) => { this.policy.userRole.set(profile.role); this.policy.userBrands.set((profile as { brands?: string[] | null }).brands ?? []); }),
       map((profile) => profile.role === 'admin'),
       catchError((error) => of(this.router.createUrlTree([isConnectionFailure(error) ? '/' : '/login'])))
     );

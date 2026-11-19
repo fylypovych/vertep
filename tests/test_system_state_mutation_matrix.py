@@ -404,7 +404,7 @@ def test_viewer_session_operations_keep_working_in_a_restricted_state(
                                                 cookies=actual_backend["viewer_cookies"])
         assert session.status_code == 200, session.text
         assert session.json()["authenticated"] is True
-        assert session.json()["role"] == "viewer"
+        assert session.json()["role"] == "moderator"
 
         profile = actual_backend["client"].put(
             "/api/session/profile", json={"display_name": "Matrix Reader"},

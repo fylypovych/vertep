@@ -12,7 +12,7 @@ INSTALL_ROOT=${VERTEP_INSTALL_ROOT:-/opt/vertep}
 NODE_ROLE=${VERTEP_ROLE:-unassigned}
 CORE_URL=${VERTEP_CORE_URL:-}
 REGISTRATION_TOKEN=${VERTEP_NODE_TOKEN:-}
-BOOTSTRAP_SERVICES=(proxy core license-manager dispatcher scheduler certificate-manager migrate postgres redis update-agent)
+BOOTSTRAP_SERVICES=(proxy web-ui core license-manager dispatcher scheduler certificate-manager migrate postgres redis update-agent)
 MIN_RAM_MB=${VERTEP_MIN_RAM_MB:-4096}
 MIN_DISK_MB=${VERTEP_MIN_DISK_MB:-20480}
 select_host_platform(){
@@ -532,6 +532,76 @@ done
 if [[ -f "$INSTALL_ROOT/scripts/remove-vertep.py" ]]; then
   python3 "$INSTALL_ROOT/scripts/remove-vertep.py" --root "$INSTALL_ROOT" --record
 fi
+# --- UI address (#507) begin ---
+# The address printed after install/update. A configured address wins:
+# PUBLIC_URL, then an explicitly set WEB_DOMAIN (VERTEP_WEB_DOMAIN or a .env
+# value that is not just this host's default name). Without one, every global
+# address of the host is a candidate; several are all shown instead of
+# arbitrarily promoting the first one (multi-NIC hosts).
+ui_url_for_host(){
+  local host=$1
+  if [[ $host == *:* && $host != \[* ]]; then
+    host="[$host]"
+  fi
+  printf 'https://%s:8443/' "$host"
+}
+ui_valid_host(){
+  local host=$1
+  [[ -n $host && ${#host} -le 253 ]] || return 1
+  [[ $host =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && return 0
+  [[ $host =~ ^[0-9A-Fa-f:]+$ && $host == *:* ]] && return 0
+  return 1
+}
+ui_address_candidates(){
+  local -a found=()
+  local line name address
+  if command -v ip >/dev/null 2>&1; then
+    while read -r line; do
+      name=$(awk '{print $2}' <<<"$line")
+      address=$(awk '{print $4}' <<<"$line")
+      address=${address%%/*}
+      case $name in docker*|br-*|veth*|virbr*|cni*|flannel*|lo) continue ;; esac
+      ui_valid_host "$address" && found+=("$address")
+    done < <(ip -o addr show scope global 2>/dev/null)
+  fi
+  if ((${#found[@]} == 0)); then
+    for address in $(hostname -I 2>/dev/null); do
+      case $address in 127.*|::1|fe80:*|172.17.*) continue ;; esac
+      ui_valid_host "$address" && found+=("$address")
+    done
+  fi
+  ((${#found[@]})) && printf '%s\n' "${found[@]}" | awk '!seen[$0]++'
+  return 0
+}
+ui_configured_base(){
+  local public_url web_domain default_name
+  public_url=$(env_value PUBLIC_URL)
+  if [[ $public_url =~ ^https?://[^/[:space:]]+ ]]; then
+    printf '%s/' "${public_url%/}"
+    return 0
+  fi
+  web_domain=${VERTEP_WEB_DOMAIN:-$(env_value WEB_DOMAIN)}
+  default_name=$(hostname -f 2>/dev/null || hostname)
+  if [[ -n $web_domain && ( -n ${VERTEP_WEB_DOMAIN:-} || $web_domain != "$default_name" ) ]] \
+      && ui_valid_host "$web_domain"; then
+    ui_url_for_host "$web_domain"
+    return 0
+  fi
+  return 1
+}
+# Prints the UI base URLs, one per line; the first is opened when it is the only one.
+ui_base_urls(){
+  local configured candidate
+  if configured=$(ui_configured_base); then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+  while read -r candidate; do
+    [[ -n $candidate ]] && printf '%s\n' "$(ui_url_for_host "$candidate")"
+  done < <(ui_address_candidates)
+  return 0
+}
+# --- UI address (#507) end ---
 env_value(){
   local key=$1
   [[ -f "$INSTALL_ROOT/.env" ]] || return 0
@@ -713,6 +783,7 @@ cat > "$env_tmp" <<EOF
 VERTEP_VERSION=$version
 VERTEP_IMAGE_REPOSITORY=${VERTEP_IMAGE_REPOSITORY:-registry.vertep.ai/vertep}
 VERTEP_PROXY_IMAGE=$(resolved_image proxy)
+VERTEP_WEB_UI_IMAGE=$(resolved_image web-ui)
 VERTEP_CORE_IMAGE=$(resolved_image core)
 VERTEP_LICENSE_MANAGER_IMAGE=$(resolved_image license-manager)
 VERTEP_DISPATCHER_IMAGE=$(resolved_image dispatcher)
@@ -1010,20 +1081,37 @@ systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.
 if [[ -f "$INSTALL_ROOT/scripts/remove-vertep.py" ]]; then
   python3 "$INSTALL_ROOT/scripts/remove-vertep.py" --root "$INSTALL_ROOT" --record
 fi
-server_ip=$(hostname -I | awk '{print $1}')
+mapfile -t ui_bases < <(ui_base_urls)
+ui_path="/"
+[[ $installation_complete == true ]] || ui_path="/setup?token=$setup_token"
 if [[ $installation_complete == true ]]; then
-  setup_url="https://$server_ip:8443/"
   printf '\nVertep is healthy and up to date.\n'
-  printf 'Open %s in your browser.\n' "$setup_url"
 else
-  setup_url="https://$server_ip:8443/setup?token=$setup_token"
   printf '\nVertep Setup is ready.\n'
-  printf 'Open %s in your browser to complete the First Run Wizard.\n' "$setup_url"
 fi
-if command -v xdg-open >/dev/null 2>&1; then
-  xdg-open "$setup_url" >/dev/null 2>&1 || true
-elif command -v open >/dev/null 2>&1; then
-  open "$setup_url" >/dev/null 2>&1 || true
+setup_url=""
+if ((${#ui_bases[@]} == 1)); then
+  setup_url="${ui_bases[0]%/}$ui_path"
+  if [[ $installation_complete == true ]]; then
+    printf 'Open %s in your browser.\n' "$setup_url"
+  else
+    printf 'Open %s in your browser to complete the First Run Wizard.\n' "$setup_url"
+  fi
+elif ((${#ui_bases[@]} > 1)); then
+  printf 'This server has several network addresses. Open the one your browser can reach:\n'
+  for base in "${ui_bases[@]}"; do
+    printf '  %s%s\n' "${base%/}" "$ui_path"
+  done
+  printf 'Set PUBLIC_URL in %s/.env to show one address.\n' "$INSTALL_ROOT"
+else
+  printf 'Could not determine the server address. Open https://<server-address>:8443%s in your browser.\n' "$ui_path"
+fi
+if [[ -n $setup_url ]]; then
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$setup_url" >/dev/null 2>&1 || true
+  elif command -v open >/dev/null 2>&1; then
+    open "$setup_url" >/dev/null 2>&1 || true
+  fi
 fi
 [[ -z $setup_token ]] || printf 'Setup code (if needed): %s\n' "$setup_token"
 exit 0

@@ -136,11 +136,11 @@ export class HeaderComponent implements OnInit, OnDestroy {
   }
 
   get roleLabel(): string {
-    return this.policy.userRole() === 'admin' ? 'Адмін' : 'Переглядач';
+    return this.policy.userRole() === 'admin' ? 'Адмін' : 'Модератор';
   }
 
   get roleFullLabel(): string {
-    return this.policy.userRole() === 'admin' ? 'Адміністратор' : 'Переглядач';
+    return this.policy.userRole() === 'admin' ? 'Адміністратор' : 'Модератор';
   }
 
   getSystemStateReason(): string | null {

@@ -387,10 +387,18 @@ def control_node(node_id: str, command: NodeAction):
 
 
 
+def _withdraw_modules(node_id: str) -> None:
+    from core.workflow.runtime import workflow_runtime
+    runtime = workflow_runtime()
+    if runtime is not None:
+        runtime.revoke_node(node_id)
+
+
 @router.post("/api/nodes/{node_id}/revoke")
 def disable_node(node_id: str):
     try:
         record = revoke_node(node_id)
+        _withdraw_modules(node_id)
         worker = store.workers.get(node_id)
         if worker:
             worker.update({"status": "REVOKED", "runtime_status": "REVOKED", "tested_capabilities": [],
@@ -406,6 +414,7 @@ def disable_node(node_id: str):
             raise HTTPException(404, "Node not found")
         worker.update({"status": "REVOKED", "desired_state": "REVOKED", "revoked_at": utc_now()})
         store.save_worker(worker)
+        _withdraw_modules(node_id)
         return {key: value for key, value in worker.items() if key != "secret_hash"}
 
 

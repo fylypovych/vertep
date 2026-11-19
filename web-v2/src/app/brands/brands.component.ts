@@ -9,6 +9,7 @@ import { ConfirmService } from '../core/services/confirm.service';
 import { PolicyService } from '../core/services/policy.service';
 import { Brand, Channel } from '../core/models';
 import { BrandChannelsComponent } from './brand-channels.component';
+import { BrandSharedContentComponent } from './brand-shared-content.component';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { RemoteState } from '../core/state/remote-state';
@@ -16,7 +17,7 @@ import { RemoteState } from '../core/state/remote-state';
 @Component({
   selector: 'app-brands',
   standalone: true,
-  imports: [TPipe, CommonModule, FormsModule, RouterModule, BrandChannelsComponent, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, FormsModule, RouterModule, BrandChannelsComponent, BrandSharedContentComponent, LoadingStateComponent, ErrorStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="space-y-5" data-testid="brands-page">
@@ -52,6 +53,7 @@ import { RemoteState } from '../core/state/remote-state';
               <app-brand-channels [brandId]="brand.id" [channels]="channelStates[brand.id]?.data() || []"
                 [loading]="channelStates[brand.id]?.loading() || false" [error]="channelStates[brand.id]?.error() || null"
                 (retry)="loadChannels(brand.id)" (channelAdded)="onChannelAdded($event)" (channelChanged)="loadChannels(brand.id)" />
+              <app-brand-shared-content [brandId]="brand.id" />
             </div>
           }
         </div>

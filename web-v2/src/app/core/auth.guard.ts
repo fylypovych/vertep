@@ -20,7 +20,7 @@ export class AuthGuard implements CanActivate, CanActivateChild {
       // this point means the server confirmed a complete identity. Меню отримує
       // перевірену роль до створення layout, незалежно від запиту header.
       tap((profile) => {
-        this.policy.userRole.set(profile.role);
+        this.policy.userRole.set(profile.role); this.policy.userBrands.set((profile as { brands?: string[] | null }).brands ?? []);
         this.policy.refresh();
       }),
       map(() => true),

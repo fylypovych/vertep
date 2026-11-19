@@ -170,5 +170,8 @@ def test_shipped_proxy_overwrites_real_ip_and_forwarded_proto():
     root = Path(__file__).resolve().parent.parent
     for name in ("deploy/proxy.conf", "deploy/proxy.conf.template"):
         text = (root / name).read_text(encoding="utf-8")
-        assert text.count("proxy_set_header X-Real-IP $remote_addr;") == 2
-        assert text.count("proxy_set_header X-Forwarded-Proto https;") == 2
+        # Every proxied location (CORE and, since #504, the web-ui panel) overwrites both.
+        locations = text.count("proxy_pass ")
+        assert locations == 3
+        assert text.count("proxy_set_header X-Real-IP $remote_addr;") == locations
+        assert text.count("proxy_set_header X-Forwarded-Proto https;") == locations

@@ -42,13 +42,13 @@ def test_ordinary_viewer_keeps_role(accounts, monkeypatch):
     monkeypatch.setattr(security, "_load_all_users", lambda: {
         "reader": {"password_hash": encoded, "role": "viewer"},
     })
-    assert security._authenticate_user("reader", "viewer-password") == "viewer"
-    assert security._valid_session(security._session_token("reader", "viewer")) == ("reader", "viewer")
+    assert security._authenticate_user("reader", "viewer-password") == "moderator"
+    assert security._valid_session(security._session_token("reader", "viewer")) == ("reader", "moderator")
 
 
 def test_name_admin_alone_does_not_grant_privileges(accounts, monkeypatch):
     monkeypatch.delenv("ADMIN_PASSWORD")
-    assert security._valid_session(security._session_token("admin", "viewer")) == ("admin", "viewer")
+    assert security._valid_session(security._session_token("admin", "viewer")) == ("admin", "moderator")
 
 
 def test_expired_primary_admin_session_is_rejected(accounts, monkeypatch):

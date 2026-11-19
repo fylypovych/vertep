@@ -357,6 +357,10 @@ class Job(BaseModel):
     min_vram_mb: int = 0
     max_retries: int = 3
     brand_id: str = "brand01"
+    # #500 Shared content: brand owning the character (Characters module), when
+    # it differs from ``brand_id``; and the append-only owner decisions.
+    character_owner_brand: str | None = None
+    shared_approvals: list[dict[str, Any]] = Field(default_factory=list)
     workflow: str | None = None
     active_task_id: str | None = None
     active_task_ids: dict[str, str] = Field(default_factory=dict)

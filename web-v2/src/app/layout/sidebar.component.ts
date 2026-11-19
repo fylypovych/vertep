@@ -24,6 +24,9 @@ interface SidebarGroup {
   items: NavItem[];
 }
 
+/** CORE API major this panel build is written for (#504 AC3). */
+const PANEL_API_MAJOR = 1;
+
 @Component({
   selector: 'app-sidebar',
   standalone: true,
@@ -90,6 +93,12 @@ interface SidebarGroup {
              [class.opacity-0]="collapsed"
              [class.hidden]="collapsed">
           Vertep v{{ runtimeVersion || '...' }}
+          @if (panelVersion && panelVersion !== runtimeVersion) {
+            <div data-testid="panel-version">{{ 'Панель' | t }} v{{ panelVersion }}</div>
+          }
+          @if (apiIncompatible) {
+            <div class="text-amber-700 whitespace-normal" data-testid="panel-incompatible">{{ 'Панель несумісна з цією версією CORE. Оновіть сторінку або панель.' | t }}</div>
+          }
         </div>
       </div>
     </aside>
@@ -193,7 +202,8 @@ export class SidebarComponent implements OnInit {
         { id: 'settings-workflow-mode', path: '/settings', label: 'Режим workflow', queryParams: { tab: 'workflow-mode' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/></svg>`, adminOnly: true },
         { id: 'settings-branding', path: '/settings', label: 'Брендинг', queryParams: { tab: 'branding' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12z"/></svg>`, adminOnly: true },
         { id: 'settings-secrets', path: '/settings', label: 'Ключі інтеграцій', queryParams: { tab: 'secrets' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>`, adminOnly: true },
-        { id: 'settings-security', path: '/settings', label: 'Безпека', queryParams: { tab: 'security' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>`, adminOnly: true }
+        { id: 'settings-security', path: '/settings', label: 'Безпека', queryParams: { tab: 'security' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>`, adminOnly: true },
+        { id: 'settings-users', path: '/settings', label: 'Користувачі', queryParams: { tab: 'users' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-5-3.87M9 20H4v-2a4 4 0 015-3.87m8-4.13a4 4 0 11-8 0 4 4 0 018 0z"/></svg>`, adminOnly: true },
       ],
     },
   ];
@@ -222,13 +232,23 @@ export class SidebarComponent implements OnInit {
   }
 
   runtimeVersion: string | null = null;
+  /** #504: build of the separately deployed panel and its API compatibility. */
+  panelVersion: string | null = null;
+  apiIncompatible = false;
 
   constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService,
               private modulesApi: ModulesApiService) {}
 
   ngOnInit(): void {
+    fetch('/ui-version.json', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((identity) => { this.panelVersion = identity?.version || null; })
+      .catch(() => { this.panelVersion = null; });
     this.systemApi.status().subscribe({
-      next: (s) => { this.runtimeVersion = s.version || null; },
+      next: (s) => {
+        this.runtimeVersion = s.version || null;
+        this.apiIncompatible = s.api_major !== undefined && s.api_major !== PANEL_API_MAJOR;
+      },
       error: () => { this.runtimeVersion = null; },
     });
     this.modulesApi.uiExtensions().subscribe(list => this.moduleItems.set(list.map(extension => ({

@@ -71,7 +71,7 @@ def access_backend(actual_backend, monkeypatch):
                 user, password = ("admin", ADMIN_PASSWORD) if role == "admin" else ("reader", VIEWER_PASSWORD)
                 auth = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
                 response = context.request.post(base + "/api/session", headers={"Authorization": auth})
-                assert response.status == 200 and response.json()["role"] == role, response.text()
+                assert response.status == 200 and response.json()["role"] == ("moderator" if role == "viewer" else role), response.text()
                 page = context.new_page()
                 page.set_default_timeout(15000)
                 return context, page

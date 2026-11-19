@@ -10,11 +10,108 @@ from monitoring_logic import MonitoringModule, Metric, Alert, HealthCheck, Syste
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/vertep")
-MODULE = MonitoringModule(DB_URL)
+import hmac
+import threading
+import time
+import urllib.request
+
+CORE = os.getenv("VERTEP_CORE_URL", "").rstrip("/")
+TOKEN = os.getenv("VERTEP_MODULE_TOKEN", "")
+ROTATE_INTERVAL_SECONDS = float(os.getenv("MONITORING_ROTATE_INTERVAL_SECONDS", "3600"))
+_module_lock = threading.Lock()
+_module: Dict[str, Any] = {"value": None}
+
+
+def _core_database() -> Dict[str, Any]:
+    """The module's own schema/role credentials, provisioned by the CORE lifecycle."""
+    request = urllib.request.Request(CORE + "/api/modules/self/database",
+                                     headers={"x-vertep-module-token": TOKEN})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
+def module() -> MonitoringModule:
+    with _module_lock:
+        if _module["value"] is None:
+            _module["value"] = MonitoringModule(_core_database())
+        return _module["value"]
+
+
+class _Lazy:
+    def __getattr__(self, name):
+        return getattr(module(), name)
+
+
+MODULE = _Lazy()
+DB_URL = None  # legacy name; the module never uses the platform DATABASE_URL
+
+
+def rotation_loop(stop: threading.Event) -> None:
+    """Automatic rotation of active history by the stored retention (#503)."""
+    while not stop.wait(ROTATE_INTERVAL_SECONDS):
+        try:
+            removed = module().rotate()
+            logger.info("Monitoring history rotated", extra={"removed": removed})
+        except Exception:
+            logger.exception("Monitoring rotation failed")
+
+
+# Declared gateway routes -> the existing handlers (legacy /api/v1 paths).
+def _legacy_path(path: str) -> str:
+    if path.startswith("/api/v1/"):
+        return path
+    if path == "/health-checks":
+        return "/api/v1/health"
+    return "/api/v1" + path
+
+
+ADMIN_ROUTES = {("POST", "/api/v1/cleanup"), ("POST", "/api/v1/migrate"), ("POST", "/api/v1/rotate"),
+                ("PUT", "/api/v1/settings/retention")}
 
 
 class MonitoringHandler(BaseHTTPRequestHandler):
+    def _guard(self, method: str) -> Optional[str]:
+        """Token from CORE, declared path, administrator for settings; returns the legacy path."""
+        if not TOKEN or not hmac.compare_digest(self.headers.get("x-vertep-module-token", ""), TOKEN):
+            self._json_response({"error": "only through the CORE gateway"}, 403)
+            return None
+        parsed = urlparse(self.path)
+        legacy = _legacy_path(parsed.path)
+        if (method, legacy) in ADMIN_ROUTES and self.headers.get("x-vertep-role") != "admin":
+            self._json_response({"error": "administrator role required"}, 403)
+            return None
+        self.path = legacy + (("?" + parsed.query) if parsed.query else "")
+        return legacy
+
+    def _retention(self, method: str) -> bool:
+        path = urlparse(self.path).path
+        if path == "/api/v1/settings/retention":
+            if method == "GET":
+                self._json_response({"retention_days": MODULE.retention_days()})
+            else:
+                body = self._parse_body()
+                try:
+                    days = MODULE.set_retention_days(body.get("retention_days"), self.headers.get("x-vertep-user"))
+                except ValueError as error:
+                    self._json_response({"error": str(error)}, 422)
+                    return True
+                self._json_response({"retention_days": days})
+            return True
+        if path == "/api/v1/rotate" and method == "POST":
+            self._json_response({"removed": MODULE.rotate()})
+            return True
+        return False
+
+    def do_PUT(self):
+        if self._guard("PUT") is None:
+            return
+        try:
+            if not self._retention("PUT"):
+                self._json_response({"error": "Not found"}, 404)
+        except Exception as e:
+            logger.exception("PUT error")
+            self._json_response({"error": str(e)}, 500)
+
     def _set_headers(self, status: int = 200, content_type: str = "application/json"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -31,6 +128,12 @@ class MonitoringHandler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode())
 
     def do_GET(self):
+        if urlparse(self.path).path == "/health":
+            return self._json_response({"status": "ok"})  # container liveness, no data
+        if self._guard("GET") is None:
+            return
+        if self._retention("GET"):
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
@@ -87,6 +190,10 @@ class MonitoringHandler(BaseHTTPRequestHandler):
             self._json_response({"error": str(e)}, 500)
 
     def do_POST(self):
+        if self._guard("POST") is None:
+            return
+        if self._retention("POST"):
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._parse_body()
@@ -155,11 +262,9 @@ class MonitoringHandler(BaseHTTPRequestHandler):
                 created = MODULE.add_log(log)
                 self._json_response({"id": "logged"}, 201)
             elif path == "/api/v1/cleanup":
-                retention_days = int(body.get("retention_days", 30))
-                MODULE.cleanup_old_data(retention_days)
-                self._json_response({"cleaned": True})
+                self._json_response({"cleaned": True, "removed": MODULE.rotate()})
             elif path == "/api/v1/migrate":
-                result = migrate_existing_monitoring(DB_URL, body.get("data", {}))
+                result = migrate_existing_monitoring(module().credentials, body.get("data", {}))
                 self._json_response(result)
             else:
                 self._json_response({"error": "Not found"}, 404)
@@ -170,6 +275,8 @@ class MonitoringHandler(BaseHTTPRequestHandler):
             self._json_response({"error": str(e)}, 500)
 
     def do_PATCH(self):
+        if self._guard("PATCH") is None:
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._parse_body()
@@ -195,6 +302,7 @@ class MonitoringHandler(BaseHTTPRequestHandler):
 def main():
     port = int(os.getenv("PORT", "8080"))
     server = ThreadingHTTPServer(("", port), MonitoringHandler)
+    threading.Thread(target=rotation_loop, args=(threading.Event(),), daemon=True).start()
     logger.info(f"Monitoring module listening on port {port}")
     server.serve_forever()
 

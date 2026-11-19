@@ -481,7 +481,7 @@ class TestRBACAuthorization:
         assert resp.status_code == 200
         body = resp.json()
         assert body["authenticated"] is True
-        assert body["role"] == "viewer"
+        assert body["role"] == "moderator"  # a stored viewer is a moderator without brands
 
     def test_viewer_can_logout(self, monkeypatch):
         cookies, _ = self._auth(monkeypatch, "reader", "viewer")
@@ -663,7 +663,7 @@ class TestSessionIdentityContract:
         body = client.get("/api/session", cookies=cookies).json()
         assert body["role"] in SESSION_ROLES
         # Невідома роль не підвищується до admin — найменш привілейована.
-        assert body["role"] == "viewer"
+        assert body["role"] == "moderator"
 
     def test_session_exposes_canonical_profile_fields(self, monkeypatch, tmp_path):
         from core.security import _hash_secret
@@ -684,7 +684,7 @@ class TestSessionIdentityContract:
             cookies, _ = self._auth(monkeypatch, tmp_path, user, role)
             body = client.get("/api/session", cookies=cookies).json()
             assert set(body) == {"authenticated", "user", "login", "role",
-                                 "display_name", "email", "password_policy"}
+                                 "display_name", "email", "brands", "password_policy"}
 
 
 class TestSelfServiceAccount:
@@ -715,7 +715,7 @@ class TestSelfServiceAccount:
         assert resp.status_code == 200
         assert resp.json()["display_name"] == "Переглядач Один"
         assert resp.json()["email"] == "reader@example.com"
-        assert resp.json()["role"] == "viewer"
+        assert resp.json()["role"] == "moderator"
         # Значення зберігаються і повертаються наступним запитом сесії.
         body = client.get("/api/session", cookies=cookies).json()
         assert body["display_name"] == "Переглядач Один"
@@ -744,7 +744,7 @@ class TestSelfServiceAccount:
         assert resp.json()["ok"] is True
         # Новий пароль приймається сервером, старий більше ні.
         from core.security import _authenticate_user
-        assert _authenticate_user("reader", "new-reader-password-12") == "viewer"
+        assert _authenticate_user("reader", "new-reader-password-12") == "moderator"
         assert _authenticate_user("reader", "account-contract-password") is None
 
     def test_wrong_current_password_is_recoverable(self, monkeypatch, tmp_path):

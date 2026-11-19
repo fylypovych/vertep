@@ -197,6 +197,8 @@ def test_characters_ac4_deactivation_preserves_references(api, characters_db):
     assert references[0][0] == uploaded["filename"]
     assert (characters_db.characters_root / "character-a" / "references" / uploaded["filename"]).is_file()
     assert characters_db.check_generation_allowed("character-a") == (False, ["Character is not active"])
+    assert characters_db.check_generation_allowed("character-a", "brand-b") == (False, ["Character is not active"])
+    assert characters_db.check_generation_allowed("character-a", "brand-a") == (True, [])  # the owner keeps using it
 
 
 def test_characters_ac5_incomplete_profile_blocks_generation(api, characters_db):
@@ -282,6 +284,8 @@ def test_characters_ac7_module_contract(api):
 
 
 def test_characters_get_nested_routes_and_migration_endpoint(monkeypatch):
+    monkeypatch.setenv("VERTEP_CORE_URL", "http://core.invalid")
+    monkeypatch.setenv("VERTEP_MODULE_TOKEN", "module-token")
     from modules.characters import characters_module
     from modules.characters import characters_logic
 
@@ -291,8 +295,8 @@ def test_characters_get_nested_routes_and_migration_endpoint(monkeypatch):
         def get_character(self, character_id, brand_id):
             return {"id": character_id, "references": [{"filename": "ref.png"}]}
 
-        def check_generation_allowed(self, character_id):
-            return True, []
+        def check_generation_allowed(self, character_id, brand_id=None):
+            return brand_id == "brand-a", [] if brand_id == "brand-a" else ["Character is not active"]
 
     monkeypatch.setattr(characters_module, "TOKEN", "module-token")
     monkeypatch.setattr(characters_module, "health_check", lambda: {"ready": True})
@@ -327,7 +331,13 @@ def test_characters_get_nested_routes_and_migration_endpoint(monkeypatch):
         response = connection.getresponse()
         body = json.loads(response.read())
         assert response.status == 200, body
-        assert body == {"allowed": True, "reasons": []}
+        assert body == {"allowed": False, "reasons": ["Character is not active"], "owner_brand_id": None}  # the user is not a brand
+        connection.request("GET", "/characters/character-a/can-generate?brand_id=brand-a", headers=headers)
+        response = connection.getresponse()
+        body = json.loads(response.read())
+        assert response.status == 200, body
+        assert body == {"allowed": True, "reasons": [], "owner_brand_id": None}
+        assert request_json("POST", "/characters/character-a/activate?brand_id=brand-a", "viewer")[0] == 403
         assert request_json("POST", "/migrate", "editor", {"default_owner_brand": "brand-a"})[0] == 403
         assert request_json("POST", "/migrate", "admin")[0] == 400
         assert request_json("POST", "/migrate", "admin", {"default_owner_brand": " brand-a "}) == (
@@ -338,6 +348,59 @@ def test_characters_get_nested_routes_and_migration_endpoint(monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+
+def test_core_job_creation_follows_owner_and_activation_and_spares_existing_jobs(api, characters_db, monkeypatch):
+    """#499 AC2-AC4/AC7: with the Characters module READY, CORE asks it before a new
+    job: the owner brand may always use its character, another brand only while it
+    is active; deactivation blocks new jobs only, an already created job stays."""
+    from core.module.gateway import issue_token
+    from core.module.manifest import ModuleManifest
+    from modules.characters import characters_module
+    from core.module.lifecycle import bundled_manifest
+
+    monkeypatch.setattr(characters_module, "TOKEN", issue_token("characters", "text-node"))
+    monkeypatch.setattr(characters_module, "CharactersModule", lambda: characters_db)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), characters_module.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        registry = api.runtime.modules
+        manifest = ModuleManifest.from_dict(bundled_manifest("characters"))
+        registry.report_node("text-node", [{**manifest.to_dict(), "ready": True,
+                                            "endpoint": f"http://127.0.0.1:{server.server_address[1]}"}])
+        registry.set_placement("characters", ["text-node"])
+        registry.approve_permissions("characters", list(manifest.permissions))
+        assert registry.ready_instances("characters")
+        monkeypatch.setenv("CHARACTERS_ROOT", str(characters_db.characters_root))
+        characters_db.create_character("brand-a", complete_profile("character-a"))
+
+        def create(brand):
+            return api.post("/api/jobs", json={"topic": "Тест", "character_id": "character-a", "brand_id": brand})
+
+        refused = create("brand-b")
+        assert refused.status_code == 422 and "not active" in refused.json()["detail"], refused.text
+        owner = create("brand-a")  # the owner does not need activation
+        assert owner.status_code == 200, owner.text
+        characters_db.activate_character("character-a", "brand-a")
+        collaborating = create("brand-b")
+        assert collaborating.status_code == 200, collaborating.text
+        before = {job_id for job_id, job in store.jobs.items() if job.character_id == "character-a"}
+        characters_db.deactivate_character("character-a", "brand-a")
+        assert create("brand-b").status_code == 422
+        after = {job_id for job_id, job in store.jobs.items() if job.character_id == "character-a"}
+        assert before <= after  # existing jobs are neither removed nor re-checked
+        # A READY module that does not answer fails closed instead of skipping the check.
+        server.shutdown()
+        server.server_close()
+        assert create("brand-a").status_code == 503
+    finally:
+        try:
+            server.shutdown()
+        except Exception:
+            pass
+        thread.join(timeout=5)
 
 
 if __name__ == "__main__":

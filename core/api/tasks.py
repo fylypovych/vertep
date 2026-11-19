@@ -248,6 +248,17 @@ def _claim_task(payload: TaskClaim):
                     task.get("task_id")) != channel:
                 task_queue.ack(task["task_id"])
                 continue
+            from ..shared_content import publication_allowed
+            with store.lock:
+                allowed, reason = publication_allowed(job, store.root)
+                if not allowed:
+                    # #500 AC6/AC7: revoked or changed before the send started.
+                    task_queue.ack(task["task_id"])
+                    job.publish_task_ids.pop(task["task_id"], None)
+                    store.event(job, f"PUBLISH TASK {task['task_id']} FOR {channel} BLOCKED: {reason}")
+                    if not job.publish_task_ids:
+                        store.update(job, JobStatus.READY, f"PUBLISHING STOPPED: {reason}")
+                    continue
             worker = _select_worker(
                 [worker_data],
                 job,

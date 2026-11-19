@@ -399,6 +399,7 @@ export interface SystemStatus {
   redis: string;
   storage: string;
   version?: string;
+  api_major?: number;
   system?: { state: string; reason?: string; operation_id?: string };
   telegram?: { status: string; bot_username?: string };
   queue?: { depth: number; inflight: number; dead_letter: number };

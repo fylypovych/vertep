@@ -110,13 +110,20 @@ class WorkflowRuntime:
             return job_id
 
     @synchronized
+    def revoke_node(self, name):
+        """A revoked node immediately loses dispatch and every module instance it reported (#496)."""
+        self.dispatcher.unregister_node(name)
+        self.modules.remove_node(name)
+        self._base_capabilities.pop(name, None)
+
+    @synchronized
     def tick(self):
         from datetime import datetime, timezone
         from core.state import store
         from core.system_state import dispatch_allowed
         for name, info in list(self.dispatcher._node_registry.items()):
             worker = store.workers.get(name)
-            if worker is None:
+            if worker is None or worker.get("desired_state") == "REVOKED":
                 self.dispatcher.unregister_node(name)
                 self.modules.remove_node(name)
                 self._base_capabilities.pop(name, None)

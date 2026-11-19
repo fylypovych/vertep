@@ -32,8 +32,8 @@ for (const [action, status, button] of ACTIONS) {
     await page.goto('/jobs/j1');
     await expect(button(page)).toBeEnabled({ timeout: 20000 });
   });
-  test(`${action}: viewer не може`, async ({ page }) => {
-    await mockApi(page, 'viewer', 'NORMAL', { '/jobs/j1': { ...JOB, status } });
+  test(`${action}: модератор не може`, async ({ page }) => {
+    await mockApi(page, 'moderator', 'NORMAL', { '/jobs/j1': { ...JOB, status } });
     await page.goto('/jobs/j1');
     await expect(button(page)).toBeDisabled({ timeout: 20000 });
   });

@@ -135,7 +135,7 @@ def test_permissions_need_admin_approval_and_expansion_needs_new_approval(tmp_pa
     registry.approve_permissions("notes", ["notes.read", "notes.write"])
     assert len(registry.ready_instances("notes")) == 1
     from core.security import SESSION_ROLES
-    assert SESSION_ROLES == ("admin", "viewer")  # access roles are not deployment roles
+    assert SESSION_ROLES == ("admin", "moderator")  # access roles are not deployment roles
 
 
 # -- AC2: application code is not imported; restricted container ----------------------

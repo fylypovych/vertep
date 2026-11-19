@@ -14,6 +14,7 @@ import { SecuritySectionComponent } from './sections/security.section';
 import { BrandingSectionComponent } from './sections/branding.section';
 import { IntegrationsSectionComponent } from './sections/integrations.section';
 import { WorkflowModeSectionComponent } from './sections/workflow-mode.section';
+import { UsersSectionComponent } from './sections/users.section';
 import { VideoEngineSectionComponent } from './sections/video-engine.section';
 
 @Component({
@@ -32,6 +33,7 @@ import { VideoEngineSectionComponent } from './sections/video-engine.section';
     IntegrationsSectionComponent,
     VideoEngineSectionComponent,
     WorkflowModeSectionComponent,
+    UsersSectionComponent,
   ],
   template: `
     <div class="space-y-6" data-testid="settings-page">
@@ -45,6 +47,7 @@ import { VideoEngineSectionComponent } from './sections/video-engine.section';
             @case ('update') { <app-settings-update /> }
             @case ('backup') { <app-settings-backup /> }
             @case ('security') { <app-settings-security /> }
+            @case ('users') { <app-settings-users /> }
             @case ('branding') { <app-settings-branding /> }
             @case ('integrations') { <app-settings-integrations /> }
             @case ('video-engine') { <app-settings-video-engine /> }
@@ -83,6 +86,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     { id: 'update', label: 'Оновлення', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' },
     { id: 'backup', label: 'Бекапи', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>' },
     { id: 'security', label: 'Безпека', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>' },
+    { id: 'users', label: 'Користувачі', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-5-3.87M9 20H4v-2a4 4 0 015-3.87m8-4.13a4 4 0 11-8 0 4 4 0 018 0z"/></svg>' },
     { id: 'branding', label: 'Брендинг', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>' },
     { id: 'video-engine', label: 'Движок відео', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>' },
     { id: 'workflow-mode', label: 'Режим workflow', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>' },

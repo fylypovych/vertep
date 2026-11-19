@@ -9,6 +9,7 @@ from .telegram import handlers
 from . import telegram_pump
 from .api.workflows import router as workflows_router
 from .api.resources import router as resources_router
+from .api.users import router as users_router
 from .api.settings import router as settings_router
 from .api.models import router as models_router
 from .api.setup import router as setup_router
@@ -36,6 +37,7 @@ app.add_middleware(AdminAuthMiddleware)
 app.include_router(workflows_router)
 app.include_router(resources_router)
 app.include_router(settings_router)
+app.include_router(users_router)
 app.include_router(models_router)
 app.include_router(setup_router)
 app.include_router(jobs_router)

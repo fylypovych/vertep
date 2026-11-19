@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 interface RbacMocks {
-  role: 'admin' | 'viewer';
+  role: 'admin' | 'moderator';
   state?: string;
   reason?: string | null;
   jobs?: Array<Record<string, unknown>>;
@@ -46,22 +46,25 @@ test.describe('RBAC — Issue #29', () => {
     expect(await createButton.getAttribute('title')).toBe('Створити нове завдання');
   });
 
-  test('viewer: приховує admin nav та блоковує admin мутацію в UI', async ({ page }) => {
-    await mockApi(page, { role: 'viewer' });
+  test('модератор: приховує admin nav та блоковує admin мутацію в UI', async ({ page }) => {
+    await mockApi(page, { role: 'moderator' });
     await page.goto('/jobs');
     await page.waitForLoadState('networkidle').catch(() => {});
     await expect(page.getByTestId('jobs-page')).toBeVisible({ timeout: 20000 });
     const nav = page.locator('nav').first();
     await expect(nav.locator('a[href="/settings?tab=system"]')).toHaveCount(0, { timeout: 20000 });
-    // Admin mutation заблокована через policy: кнопка неактивна, причина пояснена.
-    const createButton = page.getByTestId('create-job-button');
-    await expect(createButton).toBeVisible();
-    expect(await createButton.isDisabled()).toBe(true);
-    expect(await createButton.getAttribute('title')).toContain('Недостатньо прав');
+    // Модератор створює job своїх брендів (CORE перевіряє бренд), а admin-мутації
+    // (тут — створення бренду) заблоковані policy з поясненням причини.
+    await expect(page.getByTestId('create-job-button')).toBeEnabled();
+    await page.goto('/brands');
+    const createBrand = page.getByTestId('create-brand-button');
+    await expect(createBrand).toBeVisible({ timeout: 20000 });
+    expect(await createBrand.isDisabled()).toBe(true);
+    expect(await createBrand.getAttribute('title')).toContain('Недостатньо прав');
   });
 
-  test('viewer: прямий admin mutation через API повертає 403', async ({ page }) => {
-    await mockApi(page, { role: 'viewer' });
+  test('модератор: прямий admin mutation через API повертає 403', async ({ page }) => {
+    await mockApi(page, { role: 'moderator' });
     await page.goto('/jobs');
     await page.waitForLoadState('networkidle').catch(() => {});
     await expect(page.getByTestId('jobs-page')).toBeVisible({ timeout: 20000 });

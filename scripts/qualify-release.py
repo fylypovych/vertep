@@ -364,7 +364,7 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
         bootstrap = ""
     record("signed_role_catalog_binding",
            ".roles.catalog_sha256" in bootstrap and ".roles.profiles[$role].services" in bootstrap)
-    image_variables = {"VERTEP_PROXY_IMAGE", "VERTEP_CORE_IMAGE", "VERTEP_WORKER_IMAGE",
+    image_variables = {"VERTEP_PROXY_IMAGE", "VERTEP_WEB_UI_IMAGE", "VERTEP_CORE_IMAGE", "VERTEP_WORKER_IMAGE",
                        "VERTEP_COMFYUI_IMAGE", "VERTEP_TTS_IMAGE", "VERTEP_PUBLISHER_WORKER_IMAGE",
                        "VERTEP_BACKUP_SERVICE_IMAGE", "VERTEP_POSTGRES_IMAGE", "VERTEP_REDIS_IMAGE",
                        "VERTEP_OLLAMA_IMAGE", "VERTEP_MONITORING_IMAGE", "VERTEP_GRAFANA_IMAGE",

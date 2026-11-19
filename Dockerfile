@@ -10,13 +10,6 @@ RUN printf '%s\n' "$VERTEP_VERSION" > VERSION \
       '{version:$v, commit_sha:$s, environment:$e}' > RELEASE_IDENTITY.json
 RUN pip install --no-cache-dir -r requirements.txt
 
-FROM node:24-slim AS web-v2
-WORKDIR /app/web-v2
-COPY web-v2/package.json web-v2/package-lock.json ./
-RUN npm ci --silent
-COPY web-v2/ .
-RUN npm run build
-
 FROM backend
 WORKDIR /app
 COPY --from=backend /app .
@@ -29,11 +22,11 @@ COPY characters characters
 COPY publishers publishers
 COPY brands brands
 COPY config config
+COPY modules modules
 COPY db db
 COPY scripts/migrate.py scripts/migrate.py
 COPY scripts/qualify_infrastructure.py scripts/qualify_infrastructure.py
 COPY scripts/update-agent.py scripts/update-agent.py
 COPY scripts/restore.sh scripts/restore.sh
-COPY --from=web-v2 /app/web-v2/dist/vertep-admin-v2 web-v2/dist/vertep-admin-v2
 ENV PYTHONUNBUFFERED=1
 CMD ["uvicorn", "core.app:app", "--host", "0.0.0.0", "--port", "8080"]

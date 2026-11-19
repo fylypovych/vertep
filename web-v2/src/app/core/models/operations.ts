@@ -286,7 +286,7 @@ export interface SelfTestResult {
 export interface UserProfile {
   user: string;
   login: string;
-  role: 'admin' | 'viewer';
+  role: 'admin' | 'moderator';
   display_name: string | null;
   email: string | null;
   password_policy: PasswordPolicy;

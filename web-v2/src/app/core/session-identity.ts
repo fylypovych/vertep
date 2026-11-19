@@ -8,7 +8,7 @@
  * inferred, and a missing/unknown role never falls back to `admin`.
  */
 
-export const SESSION_ROLES = ['admin', 'viewer'] as const;
+export const SESSION_ROLES = ['admin', 'moderator'] as const;
 
 export type SessionRole = (typeof SESSION_ROLES)[number];
 

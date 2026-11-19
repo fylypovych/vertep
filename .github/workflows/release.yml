@@ -82,8 +82,53 @@ jobs:
             --repo "${{ github.repository }}" \
             --wait-timeout 4800 --wait-interval 30
 
-  build-images:
+  build-module-images:
     needs: [prepare, release-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        name: [characters, monitoring, brands, storyboard, publishing]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish module ${{ matrix.name }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: modules/${{ matrix.name }}
+          file: modules/${{ matrix.name }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/vertep-module-${{ matrix.name }}:${{ needs.prepare.outputs.version }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=module-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=module-${{ matrix.name }}
+      - name: Save the pinned module image
+        shell: bash
+        run: |
+          mkdir module-image
+          jq -n --arg name '${{ matrix.name }}' \
+            --arg image 'ghcr.io/${{ github.repository_owner }}/vertep-module-${{ matrix.name }}@${{ steps.build.outputs.digest }}' \
+            '{($name): $image}' > 'module-image/${{ matrix.name }}.json'
+          jq -e --arg name '${{ matrix.name }}' '.[$name] | test("@sha256:[0-9a-f]{64}$")' 'module-image/${{ matrix.name }}.json'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: module-image-${{ matrix.name }}
+          path: module-image/*.json
+          retention-days: 1
+
+  build-images:
+    needs: [prepare, release-gate, build-module-images]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -96,6 +141,7 @@ jobs:
           - {name: publisher-worker, file: docker/publisher/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: backup-service, file: docker/backup/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: proxy, file: docker/proxy/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: web-ui, file: docker/web-ui/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: postgres, file: docker/postgres/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: redis, file: docker/redis/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: ollama, file: docker/ollama/Dockerfile, platforms: "linux/amd64,linux/arm64"}
@@ -115,6 +161,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: module-image-*
+          path: ${{ runner.temp }}/module-images
+          merge-multiple: true
+      - name: Pin module images into the CORE build context
+        shell: bash
+        run: |
+          jq -s 'add' "${{ runner.temp }}"/module-images/*.json > config/module-images.json
+          test "$(jq 'length' config/module-images.json)" -eq 5
       - name: Build and publish ${{ matrix.name }}
         id: build
         uses: docker/build-push-action@v6

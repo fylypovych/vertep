@@ -41,18 +41,30 @@ def _verify_token(request_headers: dict) -> bool:
     return hmac.compare_digest(request_headers.get("x-vertep-module-token", ""), TOKEN)
 
 
-def _get_brand_id(request_headers: dict) -> str | None:
-    """Extract brand_id from request headers.
+def _get_brand_id(request_headers: dict, query: str = "") -> str | None:
+    """The brand the request acts for: the explicit ``brand_id`` query parameter.
 
-    Brand context comes from CORE gateway as x-vertep-user.
-    Fallback to x-vertep-brand for direct module calls (testing).
+    The CORE gateway's ``x-vertep-user`` is a person, never a brand: it is not
+    used as a brand identity (#499).
     """
-    # Primary: x-vertep-user from CORE gateway (authenticated brand context)
-    brand_id = request_headers.get("x-vertep-user")
-    if brand_id:
-        return brand_id
-    # Fallback: x-vertep-brand for direct calls (testing/admin)
-    return request_headers.get("x-vertep-brand")
+    from urllib.parse import parse_qs
+    values = parse_qs(query).get("brand_id") or []
+    brand = values[0].strip() if values else ""
+    return brand or None
+
+
+def _may_change(request_headers: dict, brand_id: str | None) -> bool:
+    """Changes need the administrator, or a moderator of the acting brand.
+
+    The CORE gateway forwards the role and the caller's brands
+    (``x-vertep-brands``: ``*`` for the administrator).
+    """
+    if request_headers.get("x-vertep-role") == "admin":
+        return True
+    if request_headers.get("x-vertep-role") != "moderator" or not brand_id:
+        return False
+    brands = {item.strip() for item in request_headers.get("x-vertep-brands", "").split(",") if item.strip()}
+    return brand_id in brands
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -67,8 +79,12 @@ class Handler(BaseHTTPRequestHandler):
     def _from_core(self) -> bool:
         return _verify_token(self.headers)
 
+    def _route(self) -> str:
+        return self.path.split("?", 1)[0]
+
     def _get_brand(self) -> str | None:
-        return _get_brand_id(self.headers)
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        return _get_brand_id(self.headers, query)
 
     def _read_body(self) -> dict:
         length = int(self.headers.get("content-length", "0"))
@@ -77,18 +93,19 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode())
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        path_ = self._route()
+        if path_ == "/health":
             return self._send(200, health_check())
         if not self._from_core():
             return self._send(403, {"error": "only through the CORE gateway"})
 
         brand_id = self._get_brand()
 
-        if self.path == "/ui/index.html":
+        if path_ == "/ui/index.html":
             return self._send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
 
         # List characters
-        if self.path == "/characters":
+        if path_ == "/characters":
             try:
                 module = CharactersModule()
                 chars = module.list_characters(brand_id)
@@ -97,8 +114,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Character references
-        if self.path.startswith("/characters/") and self.path.endswith("/references"):
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and path_.endswith("/references"):
+            parts = path_.split("/")
             char_id = parts[2]
             try:
                 module = CharactersModule()
@@ -110,8 +127,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Character collaborations - deprecated, kept for backward compatibility
-        if self.path.startswith("/characters/") and "/collaborations" in self.path:
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and "/collaborations" in path_:
+            parts = path_.split("/")
             char_id = parts[2]
             try:
                 module = CharactersModule()
@@ -124,19 +141,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Check generation allowed
-        if self.path.startswith("/characters/") and "/can-generate" in self.path:
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and "/can-generate" in path_:
+            parts = path_.split("/")
             char_id = parts[2]
             try:
                 module = CharactersModule()
-                allowed, reasons = module.check_generation_allowed(char_id)
-                return self._send(200, {"allowed": allowed, "reasons": reasons})
+                allowed, reasons = module.check_generation_allowed(char_id, brand_id)
+                return self._send(200, {"allowed": allowed, "reasons": reasons,
+                                        "owner_brand_id": getattr(module, "last_owner", None)})
             except Exception as error:
                 return self._send(503, {"error": str(error)})
 
         # Reference file
-        if self.path.startswith("/characters/") and "/references/" in self.path and not self.path.endswith("/references"):
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and "/references/" in path_ and not path_.endswith("/references"):
+            parts = path_.split("/")
             char_id = parts[2]
             filename = parts[4]
             try:
@@ -152,8 +170,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Get single character after its nested routes.
-        if self.path.startswith("/characters/") and self.path.count("/") == 2:
-            char_id = self.path.split("/")[2]
+        if path_.startswith("/characters/") and path_.count("/") == 2:
+            char_id = path_.split("/")[2]
             try:
                 module = CharactersModule()
                 char = module.get_character(char_id, brand_id)
@@ -166,13 +184,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not available"})
 
     def do_POST(self) -> None:
+        path_ = self._route()
         if not self._from_core():
             return self._send(403, {"error": "only through the CORE gateway"})
+        if not _may_change(self.headers, self._get_brand()):
+            return self._send(403, {"error": "administrator or moderator of this brand required"})
 
         brand_id = self._get_brand()
         body = self._read_body()
 
-        if self.path == "/migrate":
+        if path_ == "/migrate":
             if self.headers.get("x-vertep-role") != "admin":
                 return self._send(403, {"error": "administrator role required"})
             default_owner = body.get("default_owner_brand")
@@ -190,12 +211,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Create character
-        if self.path == "/characters":
+        if path_ == "/characters":
             try:
                 if not body.get("name"):
                     return self._send(422, {"error": "name is required"})
                 if not brand_id:
-                    return self._send(401, {"error": "brand context required (x-vertep-user header)"})
+                    return self._send(422, {"error": "brand_id (owner brand) is required"})
                 module = CharactersModule()
                 char = module.create_character(brand_id, body)
                 return self._send(201, char)
@@ -205,8 +226,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Upload reference
-        if self.path.startswith("/characters/") and self.path.endswith("/references"):
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and path_.endswith("/references"):
+            parts = path_.split("/")
             char_id = parts[2]
             try:
                 # For multipart/form-data, we'd need more complex parsing
@@ -214,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                 if "data_base64" not in body:
                     return self._send(422, {"error": "data_base64 required"})
                 if not brand_id:
-                    return self._send(401, {"error": "brand context required"})
+                    return self._send(422, {"error": "brand_id (owner brand) is required"})
                 data = base64.b64decode(body["data_base64"])
                 module = CharactersModule()
                 result = module.upload_reference(char_id, brand_id, data)
@@ -225,16 +246,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Add collaboration - deprecated per AC3 (active characters available to all)
-        if self.path.startswith("/characters/") and self.path.endswith("/collaborations"):
+        if path_.startswith("/characters/") and path_.endswith("/collaborations"):
             return self._send(410, {"error": "Collaboration allowlist removed per AC3. Active characters are available to all brands."})
 
         # Activate character
-        if self.path.startswith("/characters/") and self.path.endswith("/activate"):
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and path_.endswith("/activate"):
+            parts = path_.split("/")
             char_id = parts[2]
             try:
                 if not brand_id:
-                    return self._send(401, {"error": "brand context required"})
+                    return self._send(422, {"error": "brand_id (owner brand) is required"})
                 module = CharactersModule()
                 char = module.activate_character(char_id, brand_id)
                 return self._send(200, char)
@@ -244,12 +265,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Deactivate character
-        if self.path.startswith("/characters/") and self.path.endswith("/deactivate"):
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and path_.endswith("/deactivate"):
+            parts = path_.split("/")
             char_id = parts[2]
             try:
                 if not brand_id:
-                    return self._send(401, {"error": "brand context required"})
+                    return self._send(422, {"error": "brand_id (owner brand) is required"})
                 module = CharactersModule()
                 char = module.deactivate_character(char_id, brand_id)
                 return self._send(200, char)
@@ -261,18 +282,21 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not available"})
 
     def do_PUT(self) -> None:
+        path_ = self._route()
         if not self._from_core():
             return self._send(403, {"error": "only through the CORE gateway"})
+        if not _may_change(self.headers, self._get_brand()):
+            return self._send(403, {"error": "administrator or moderator of this brand required"})
 
         brand_id = self._get_brand()
         body = self._read_body()
 
         # Update character
-        if self.path.startswith("/characters/"):
-            char_id = self.path.split("/")[2]
+        if path_.startswith("/characters/"):
+            char_id = path_.split("/")[2]
             try:
                 if not brand_id:
-                    return self._send(401, {"error": "brand context required"})
+                    return self._send(422, {"error": "brand_id (owner brand) is required"})
                 module = CharactersModule()
                 char = module.update_character(char_id, brand_id, body)
                 return self._send(200, char)
@@ -284,17 +308,20 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not available"})
 
     def do_DELETE(self) -> None:
+        path_ = self._route()
         if not self._from_core():
             return self._send(403, {"error": "only through the CORE gateway"})
+        if not _may_change(self.headers, self._get_brand()):
+            return self._send(403, {"error": "administrator or moderator of this brand required"})
 
         brand_id = self._get_brand()
 
         # Delete character
-        if self.path.startswith("/characters/") and "/references" not in self.path and "/collaborations" not in self.path and "/activate" not in self.path and "/deactivate" not in self.path and "/can-generate" not in self.path:
-            char_id = self.path.split("/")[2]
+        if path_.startswith("/characters/") and "/references" not in path_ and "/collaborations" not in path_ and "/activate" not in path_ and "/deactivate" not in path_ and "/can-generate" not in path_:
+            char_id = path_.split("/")[2]
             try:
                 if not brand_id:
-                    return self._send(401, {"error": "brand context required"})
+                    return self._send(422, {"error": "brand_id (owner brand) is required"})
                 module = CharactersModule()
                 module.delete_character(char_id, brand_id)
                 return self._send(200, {"deleted": char_id})
@@ -304,13 +331,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Delete reference
-        if self.path.startswith("/characters/") and "/references/" in self.path and not self.path.endswith("/references"):
-            parts = self.path.split("/")
+        if path_.startswith("/characters/") and "/references/" in path_ and not path_.endswith("/references"):
+            parts = path_.split("/")
             char_id = parts[2]
             filename = parts[4]
             try:
                 if not brand_id:
-                    return self._send(401, {"error": "brand context required"})
+                    return self._send(422, {"error": "brand_id (owner brand) is required"})
                 module = CharactersModule()
                 module.delete_reference(char_id, brand_id, filename)
                 return self._send(200, {"deleted": filename})
@@ -320,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": str(error)})
 
         # Remove collaboration - deprecated per AC3
-        if self.path.startswith("/characters/") and "/collaborations/" in self.path:
+        if path_.startswith("/characters/") and "/collaborations/" in path_:
             return self._send(410, {"error": "Collaboration allowlist removed per AC3. Active characters are available to all brands."})
 
         self._send(404, {"error": "not available"})

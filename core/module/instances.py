@@ -226,6 +226,10 @@ class ModuleInstanceRegistry:
             if state is None:
                 self._lifecycle.pop(module_id, None)
                 self._installed.pop(module_id, None)
+            elif state == "UNINSTALLED":
+                # Tombstone: a node still reporting the removed module gets no access.
+                self._lifecycle[module_id] = state
+                self._installed.pop(module_id, None)
             else:
                 self._lifecycle[module_id] = state
                 if manifest is not None:

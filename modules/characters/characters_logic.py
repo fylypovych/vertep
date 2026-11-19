@@ -448,15 +448,24 @@ class CharactersModule:
         execute("DELETE FROM character_references WHERE character_id = %s AND filename = %s", (character_id, filename))
         self._audit(character_id, "reference_delete", brand_id, {"filename": filename})
 
-    def check_generation_allowed(self, character_id: str) -> tuple[bool, list[str]]:
-        """Check if character can be used for generation (complete profile + active)."""
-        char = query("SELECT active FROM characters WHERE id = %s", (character_id,))
+    def check_generation_allowed(self, character_id: str, brand_id: str | None = None) -> tuple[bool, list[str]]:
+        """Whether a NEW generation of ``brand_id`` may use the character.
+
+        The owner brand always may (complete profile); another brand only while
+        the owner keeps the character active for collaboration (AC2/AC3).
+        Running generations and pending material are never re-checked (AC4).
+        """
+        char = query("SELECT active, owner_brand_id FROM characters WHERE id = %s", (character_id,))
         if not char:
             return False, ["Character not found"]
         complete, missing = _character_profile_complete(character_id, self.characters_root)
         if not complete:
             return False, [f"Incomplete profile: missing {', '.join(missing)}"]
-        if not char[0][0]:
+        active, owner = char[0]
+        self.last_owner = owner
+        if brand_id is not None and brand_id == owner:
+            return True, []
+        if not active:
             return False, ["Character is not active"]
         return True, []
 

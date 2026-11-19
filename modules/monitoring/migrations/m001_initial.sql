@@ -1,6 +1,5 @@
-CREATE SCHEMA IF NOT EXISTS monitoring;
 
-CREATE TABLE IF NOT EXISTS monitoring.metrics (
+CREATE TABLE IF NOT EXISTS metrics (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     value DOUBLE PRECISION NOT NULL,
@@ -9,12 +8,12 @@ CREATE TABLE IF NOT EXISTS monitoring.metrics (
     node_id VARCHAR(64)
 );
 
-CREATE INDEX IF NOT EXISTS idx_metrics_name ON monitoring.metrics(name);
-CREATE INDEX IF NOT EXISTS idx_metrics_node ON monitoring.metrics(node_id);
-CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON monitoring.metrics(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_metrics_name_node_time ON monitoring.metrics(name, node_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name);
+CREATE INDEX IF NOT EXISTS idx_metrics_node ON metrics(node_id);
+CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_metrics_name_node_time ON metrics(name, node_id, timestamp DESC);
 
-CREATE TABLE IF NOT EXISTS monitoring.alerts (
+CREATE TABLE IF NOT EXISTS alerts (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     severity VARCHAR(16) NOT NULL CHECK (severity IN ('info', 'warning', 'critical')),
@@ -26,11 +25,11 @@ CREATE TABLE IF NOT EXISTS monitoring.alerts (
     labels JSONB DEFAULT '{}'
 );
 
-CREATE INDEX IF NOT EXISTS idx_alerts_active ON monitoring.alerts(active);
-CREATE INDEX IF NOT EXISTS idx_alerts_severity ON monitoring.alerts(severity);
-CREATE INDEX IF NOT EXISTS idx_alerts_fired ON monitoring.alerts(fired_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(active);
+CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity);
+CREATE INDEX IF NOT EXISTS idx_alerts_fired ON alerts(fired_at DESC);
 
-CREATE TABLE IF NOT EXISTS monitoring.health_checks (
+CREATE TABLE IF NOT EXISTS health_checks (
     id VARCHAR(64) PRIMARY KEY,
     component VARCHAR(64) NOT NULL,
     status VARCHAR(16) NOT NULL CHECK (status IN ('healthy', 'degraded', 'unhealthy')),
@@ -39,11 +38,11 @@ CREATE TABLE IF NOT EXISTS monitoring.health_checks (
     checked_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_health_component ON monitoring.health_checks(component);
-CREATE INDEX IF NOT EXISTS idx_health_checked ON monitoring.health_checks(checked_at DESC);
-CREATE INDEX IF NOT EXISTS idx_health_status ON monitoring.health_checks(status);
+CREATE INDEX IF NOT EXISTS idx_health_component ON health_checks(component);
+CREATE INDEX IF NOT EXISTS idx_health_checked ON health_checks(checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_health_status ON health_checks(status);
 
-CREATE TABLE IF NOT EXISTS monitoring.system_logs (
+CREATE TABLE IF NOT EXISTS system_logs (
     id BIGSERIAL PRIMARY KEY,
     level VARCHAR(16) NOT NULL CHECK (level IN ('debug', 'info', 'warning', 'error', 'critical')),
     component VARCHAR(64) NOT NULL,
@@ -52,6 +51,6 @@ CREATE TABLE IF NOT EXISTS monitoring.system_logs (
     timestamp TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_logs_level ON monitoring.system_logs(level);
-CREATE INDEX IF NOT EXISTS idx_logs_component ON monitoring.system_logs(component);
-CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON monitoring.system_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_level ON system_logs(level);
+CREATE INDEX IF NOT EXISTS idx_logs_component ON system_logs(component);
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp DESC);

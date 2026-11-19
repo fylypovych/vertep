@@ -21,10 +21,25 @@ import psycopg
 from psycopg import sql
 
 MIGRATION_TABLE = "_vertep_migrations"
+OWNER_MARK = "vertep-module:"
+
+
+class ModuleDataConflict(ValueError):
+    """The schema or role a module ID maps to belongs to another module."""
 
 
 def schema_name(module_id: str) -> str:
     return "mod_" + re.sub(r"[^a-z0-9_]", "_", module_id.lower())[:55]
+
+
+def storage_conflict(module_id: str, other_id: str) -> bool:
+    """Distinct module IDs whose schema or role would coincide (``a-b``/``a_b``,
+    case, or a shared truncated prefix). The mapping itself stays unchanged so
+    existing schemas keep their names; such a pair is rejected instead."""
+    if module_id == other_id:
+        return False
+    first, second = schema_name(module_id), schema_name(other_id)
+    return first == second or first[:50] == second[:50]
 
 
 class ModuleDatabase:
@@ -45,6 +60,28 @@ class ModuleDatabase:
         # UTF8 even on SQL_ASCII databases: identifiers and text come back as str.
         return psycopg.connect(self.admin_dsn, autocommit=True, client_encoding="UTF8")
 
+    # -- ownership -------------------------------------------------------------
+    @staticmethod
+    def _owners(connection, schema: str, role: str) -> list[str | None]:
+        """Module IDs recorded on the existing schema and role (None: unmarked)."""
+        owners = []
+        row = connection.execute("SELECT obj_description(oid, 'pg_namespace') FROM pg_namespace WHERE nspname=%s",
+                                 (schema,)).fetchone()
+        if row is not None:
+            owners.append(row[0])
+        row = connection.execute("SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname=%s",
+                                 (role,)).fetchone()
+        if row is not None:
+            owners.append(row[0])
+        return owners
+
+    def _check_owner(self, connection, module_id: str, schema: str, role: str) -> None:
+        """Fail closed before any change when the schema/role is marked for another module."""
+        mark = OWNER_MARK + module_id
+        for owner in self._owners(connection, schema, role):
+            if owner is not None and owner.startswith(OWNER_MARK) and owner != mark:
+                raise ModuleDataConflict(f"Schema/role of module {module_id} belongs to {owner[len(OWNER_MARK):]}")
+
     # -- provisioning -----------------------------------------------------------
     def ensure(self, module_id: str, schema: str | None = None) -> dict:
         """Create role + schema if missing. Returns credentials for the platform secret store."""
@@ -52,6 +89,7 @@ class ModuleDatabase:
         role = self.role_name(module_id)
         password = secrets.token_urlsafe(24)
         with self._connect() as connection:
+            self._check_owner(connection, module_id, schema, role)
             exists = connection.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,)).fetchone()
             if exists:
                 password = None  # existing credentials stay valid; restore never rotates them
@@ -62,6 +100,9 @@ class ModuleDatabase:
             connection.execute(sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(sql.Identifier(role)))
             connection.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {} AUTHORIZATION {}").format(sql.Identifier(schema), sql.Identifier(role)))
             connection.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(sql.Identifier(schema)))
+            mark = sql.Literal(OWNER_MARK + module_id)
+            connection.execute(sql.SQL("COMMENT ON SCHEMA {} IS {}").format(sql.Identifier(schema), mark))
+            connection.execute(sql.SQL("COMMENT ON ROLE {} IS {}").format(sql.Identifier(role), mark))
             connection.execute(sql.SQL("ALTER ROLE {} SET search_path = {}").format(sql.Identifier(role), sql.Identifier(schema)))
             database = connection.execute("SELECT current_database()").fetchone()[0]
             connection.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(database), sql.Identifier(role)))
@@ -153,7 +194,7 @@ class ModuleDatabase:
     def restore(self, module_id: str, exported: dict, sources: dict[str, str], schema: str | None = None) -> None:
         """Recreate the schema from migrations, then load table data, in one rebuild."""
         schema = schema or schema_name(module_id)
-        self.drop_schema(schema)
+        self.drop_schema(schema, module_id)
         self.ensure(module_id, schema)
         self.migrate(module_id, exported["migrations"], sources, schema)
         with self._connect() as connection:
@@ -187,13 +228,15 @@ class ModuleDatabase:
                 for table, content in exported["tables"].items()}
 
     # -- removal -----------------------------------------------------------------
-    def drop_schema(self, schema: str) -> None:
+    def drop_schema(self, schema: str, module_id: str | None = None) -> None:
         with self._connect() as connection:
+            if module_id is not None:
+                self._check_owner(connection, module_id, schema, self.role_name(module_id))
             connection.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
 
     def drop(self, module_id: str) -> None:
         role = self.role_name(module_id)
-        self.drop_schema(schema_name(module_id))
+        self.drop_schema(schema_name(module_id), module_id)
         with self._connect() as connection:
             if connection.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,)).fetchone():
                 database = connection.execute("SELECT current_database()").fetchone()[0]

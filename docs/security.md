@@ -21,7 +21,8 @@
 
 ## Доступ (RBAC)
 
-- Ролі: admin / viewer; backend забороняє viewer-мутації незалежно від UI; system-state guards — для всіх mutation-ресурсів (jobs/nodes/settings/system/characters/brands/workflows/models/channels).
+- Ролі (рішення власника 19.11.2026): **admin** і **moderator**; роль viewer прибрано — збережений обліковий запис `viewer` стає модератором без брендів (лише читання). Модератор працює в межах брендів свого облікового запису (`brands` у USERS_JSON/сховищі користувачів): створює job своїх брендів, погоджує/публікує/переглядає матеріали своїх job, ухвалює рішення «Спільного контенту» за свої бренди та змінює дані модулів (Characters) своїх брендів. Налаштування, вузли, оновлення, бекапи, моделі й інші системні дії — лише admin. Backend перевіряє бренд незалежно від UI (`core/api/auth.py`, `core/api/jobs.py`); модулям Gateway передає `x-vertep-role` і `x-vertep-brands` (`*` для admin). System-state guards — для всіх mutation-ресурсів (jobs/nodes/settings/system/characters/brands/workflows/models/channels).
+- «Спільний контент» (#500): job бренду A з персонажем бренду B фіксує B як власника (`character_owner_brand`). Публікація потребує погодження B саме активної версії (version + sha256); pending не має строку і публікацію не дозволяє. Рішення — append-only історія (actor/time/decision/version/hash/brand). Перевірка повторюється на межі старту відправлення: revoke чи зміна файлу зупиняють ще не розпочаті відправлення, розпочате завершується, опубліковане не видаляється.
 - UI не дає admin-прав за невідомої/нечинної політики: loading/unavailable замість дозвільного fallback.
 - OAuth платформ: scopes/expiry/refresh/revoke/reconnect з readiness і зрозумілими помилками.
 

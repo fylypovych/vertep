@@ -14,7 +14,7 @@
 | `backup` | Backup Service + Snapshot Manager + Archive Service + Update Agent. |
 | `monitoring` | Grafana + Prometheus + Logs + Metrics + Update Agent. |
 
-Адміністратор керує встановленням модулів, дозволами та node placement у **Модулі**; окремого user-facing role/module selector немає. `config/node_roles.json`, `NODE_ROLE`, `NODE_ADDITIONAL_ROLES` і `deployment-plan.json` залишаються внутрішнім bootstrap/runtime compatibility контрактом, а не альтернативним каталогом модулів. Готовність вимірюється окремо від сумісності та placement.
+Адміністратор керує встановленням модулів, дозволами та node placement у **Модулі**; окремого user-facing role/module selector немає. `config/node_roles.json`, `NODE_ROLE`, `NODE_ADDITIONAL_ROLES` і `deployment-plan.json` залишаються внутрішнім bootstrap/runtime compatibility контрактом, а не альтернативним каталогом модулів. Готовність вимірюється окремо від сумісності та placement. Відкликаний вузол (`POST /api/nodes/<id>/revoke`) одразу втрачає dispatch і всі звітовані ним екземпляри модулів; наскрізний сценарій first install → join/retry → вибір модуля й вузла → readiness → revoke перевіряє `tests/test_install_join_modules_e2e.py`.
 
 ## Capabilities
 

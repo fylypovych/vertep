@@ -7,7 +7,7 @@ import { test, expect, type Page } from '@playwright/test';
  * - AuthGuard пропускає ЛИШЕ справжню авторизовану сесію (authenticated:true).
  * - Неавторизований/некоректний profile веде на login.
  * - admin зберігає роль і бачить Settings.
- * - Справжній viewer не отримує admin прав.
+ * - Справжній модератор не отримує admin прав.
  * - createSession надсилає Basic Authorization (не JSON body).
  */
 
@@ -104,15 +104,15 @@ test('admin: бачить Settings та header показує «Адмін»', a
     await expect(page.getByTestId('settings-page')).toBeVisible();
   });
 
-  test('viewer: не отримує admin прав — Settings приховано, header показує «Переглядач»', async ({ page }) => {
+  test('модератор: не отримує admin прав — Settings приховано, header показує «Модератор»', async ({ page }) => {
     await mockStatus(page);
-    await mockSession(page, { authenticated: true, user: 'cireader', role: 'viewer' });
+    await mockSession(page, { authenticated: true, user: 'cireader', role: 'moderator' });
     await mockPageApi(page);
     const nav = page.locator('nav').first();
     await page.goto('/jobs');
     await page.waitForLoadState('networkidle').catch(() => {});
     await expect(nav.locator('a[href="/settings?tab=system"]')).toHaveCount(0, { timeout: 20000 });
-    await expect(page.getByText('Переглядач', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('Модератор', { exact: false }).first()).toBeVisible();
   });
 
   test('createSession надсилає Basic Authorization (не JSON body)', async ({ page }) => {

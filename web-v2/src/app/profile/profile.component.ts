@@ -27,9 +27,9 @@ import { UserProfile, ChangePasswordRequest, UpdateProfileRequest } from '../cor
             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium" data-testid="profile-role"
                   [class.bg-emerald-100]="profile()?.role === 'admin'"
                   [class.text-emerald-800]="profile()?.role === 'admin'"
-                  [class.bg-blue-100]="profile()?.role === 'viewer'"
-                  [class.text-blue-800]="profile()?.role === 'viewer'">
-              {{ (profile()?.role === 'admin' ? 'Адміністратор' : 'Переглядач') | t }}
+                  [class.bg-blue-100]="profile()?.role === 'moderator'"
+                  [class.text-blue-800]="profile()?.role === 'moderator'">
+              {{ (profile()?.role === 'admin' ? 'Адміністратор' : 'Модератор') | t }}
             </span>
           </div>
         </div>
@@ -211,7 +211,7 @@ export class ProfileComponent implements OnInit {
   }
 
   private getPermittedActions(): string[] {
-    const role = this.profile()?.role || 'viewer';
+    const role = this.profile()?.role || 'moderator';
     if (role === 'admin') {
       return [
         'Створення завдань',
@@ -230,6 +230,8 @@ export class ProfileComponent implements OnInit {
       ];
     }
     return [
+      'Створення завдань для своїх брендів',
+      'Керування персонажами своїх брендів',
       'Перегляд дашборду',
       'Перегляд завдань',
       'Перегляд опублікованих',

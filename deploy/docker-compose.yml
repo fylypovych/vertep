@@ -16,6 +16,17 @@ services:
       timeout: 5s
       retries: 30
     restart: unless-stopped
+  web-ui:
+    image: ${VERTEP_WEB_UI_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/web-ui:${VERTEP_VERSION}}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/var/cache/nginx:rw,size=16m", "/var/run:rw,size=1m", "/tmp:rw,noexec,nosuid,size=16m"]
+    security_opt: ["no-new-privileges:true"]
   license-manager:
     image: ${VERTEP_LICENSE_MANAGER_IMAGE:-${VERTEP_CORE_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/core:${VERTEP_VERSION}}}
     command: ["uvicorn", "services.license_service:app", "--host", "0.0.0.0", "--port", "8093"]

@@ -78,7 +78,7 @@ def test_role_access_is_unchanged_and_choice_is_admin_only(api, monkeypatch):
     from fastapi.testclient import TestClient
     from core.app import app
     from core.security import SESSION_ROLES, _session_token, session_secret
-    assert SESSION_ROLES == ("admin", "viewer")
+    assert SESSION_ROLES == ("admin", "moderator")
     monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "viewer"}}))
     session = _session_token("reader", "viewer")
     secret = session_secret()

@@ -113,6 +113,31 @@ def _ready_instance(registry, module_id: str, node_id: str | None = None):
     return None
 
 
+def call_module(module_id: str, method: str, route: str, params: dict | None = None) -> tuple[int, object] | None:
+    """CORE-internal call to a READY module's declared API route.
+
+    None when the module has no READY instance (optional module not in use);
+    raises httpx.HTTPError when a READY instance does not answer (fail closed).
+    """
+    from core.workflow.runtime import workflow_runtime
+    runtime = workflow_runtime()
+    if runtime is None:
+        return None
+    instance = _ready_instance(runtime.modules, module_id)
+    if instance is None or not instance.endpoint:
+        return None
+    if not instance.manifest.api or not _route_matches(instance.manifest.api["routes"], route.split("?", 1)[0]):
+        raise ValueError(f"Route {route} is not declared by module {module_id}")
+    response = httpx.request(method, f"{instance.endpoint}{route}", params=params, timeout=10,
+                             headers={"x-vertep-module-token": issue_token(instance.module_id, instance.node_id),
+                                      "x-vertep-caller": "core"})
+    audit("module.core_call", "allowed", module=module_id, path=route, status=response.status_code)
+    try:
+        return response.status_code, response.json()
+    except ValueError:
+        return response.status_code, None
+
+
 def _caller_module(request: Request, registry):
     """Module identity of a module-token caller; only while its instance is READY."""
     token = request.headers.get("x-vertep-module-token", "")
@@ -385,6 +410,9 @@ async def module_api(namespace: str, major: int, path: str, request: Request):
         headers["x-vertep-caller-module"] = caller.module_id
     elif actor:
         headers["x-vertep-user"], headers["x-vertep-role"] = actor
+        brands = getattr(request.state, "vertep_brands", set())
+        # "*" = administrator (every brand); otherwise the moderator's own brands.
+        headers["x-vertep-brands"] = "*" if brands is None else ",".join(sorted(brands or ()))
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             upstream = await client.request(request.method, f"{target.endpoint}{route}", params=request.query_params,

@@ -10,6 +10,7 @@ from pathlib import Path
 
 IMAGE_KEYS = {
     "proxy": "VERTEP_PROXY_IMAGE",
+    "web-ui": "VERTEP_WEB_UI_IMAGE",
     "core": "VERTEP_CORE_IMAGE",
     "license-manager": "VERTEP_LICENSE_MANAGER_IMAGE",
     "dispatcher": "VERTEP_DISPATCHER_IMAGE",

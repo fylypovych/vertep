@@ -1,46 +1,65 @@
-module:
-  name: "monitoring"
-  version: "1.0.0"
-  schema_version: "2.0"
-  kind: "application"
-  namespace: "monitoring"
-  title: "Моніторинг"
-  description: "Модуль моніторингу системи, метрик, логів та алертів"
-  author: "Vertep Team"
-  license: "MIT"
-  homepage: ""
-  repository: ""
-  min_core_version: "0.0.3.95"
-  max_core_version: ""
-  dependencies: []
-  provides_capabilities: ["monitoring", "metrics", "alerting"]
-  requires_capabilities: []
-  ui:
-    entry: "index.html"
-    sandbox: true
-    permissions: ["storage", "network"]
-  database:
-    schema: "monitoring"
-    migrations_dir: "migrations"
-    role_prefix: "monitoring"
-  runtime:
-    cpu_arch: ["amd64", "arm64"]
-    memory_mb: 128
-    disk_mb: 500
-    gpu: false
-    network: true
-  configuration:
-    schema: {}
-    defaults: {}
-  secrets: []
-  health_check:
-    path: "/health"
-    interval_sec: 15
-    timeout_sec: 5
-  lifecycle:
-    install_timeout_sec: 60
-    activate_timeout_sec: 30
-    deactivate_timeout_sec: 10
-    update_timeout_sec: 60
-    rollback_timeout_sec: 30
-    uninstall_timeout_sec: 30
+schema_version: "2.0"
+name: monitoring
+module_id: monitoring
+version: "1.0.0"
+kind: application
+label: Моніторинг
+core_compatibility: {min: "0.0.3.95", max: "0.0.9.99"}
+dependencies: []
+capabilities:
+  - monitoring
+  - metrics
+  - alerting
+resource_requirements:
+  min_vram_mb: 0
+  min_cpu_cores: 1
+  min_ram_mb: 128
+# Any compatible node chosen by the administrator; no "CORE only" restriction (#503 AC1).
+placement:
+  target: any
+  scaling: single_owner
+  requires_gpu: false
+provides:
+  - {type: api, name: monitoring, version: "1.0"}
+requires: []
+api:
+  namespace: monitoring
+  version: "1.0"
+  routes:
+    - "/metrics"
+    - "/metrics/latest"
+    - "/alerts"
+    - "/alerts/{id}"
+    - "/alerts/{id}/fire"
+    - "/alerts/{id}/resolve"
+    - "/health-checks"
+    - "/logs"
+    - "/stats"
+    - "/settings/retention"
+    - "/rotate"
+ui:
+  entry: index.html
+  navigation:
+    - {id: monitoring, label: "Моніторинг"}
+  files:
+    index.html: "e638a9b7b8b6b7a575f4bb81ad1458a7ce7f43838ed831f9201c6cdb9aa03b25"
+permissions: []
+secret_refs: []
+migrations:
+  - {id: m001_initial, version: "1.0.0"}
+  - {id: m002_retention, version: "1.0.0"}
+services:
+  - {name: api}
+health:
+  self_test: health
+  timeout_seconds: 15
+publisher: vertep
+provenance:
+  repository: github.com/fylypovych/vertep
+container:
+  image: "registry.example/vertep/monitoring@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  port: 8080
+description: >
+  Необов'язковий модуль моніторингу: історія метрик, алертів, перевірок і журналів у власній
+  schema спільного PostgreSQL. Типово 3 дні історії з автоматичною ротацією; адміністратор
+  може збільшити строк.

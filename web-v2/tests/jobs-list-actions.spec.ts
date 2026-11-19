@@ -54,8 +54,8 @@ test('редагування зі списку відкриває форму job
   await expect(page.getByTestId('edit-job-button')).toHaveCount(0, { timeout: 20000 });
 });
 
-test('viewer бачить дії вимкненими', async ({ page }) => {
-  await mock(page, 'viewer');
+test('модератор бачить дії вимкненими', async ({ page }) => {
+  await mock(page, 'moderator');
   await page.goto('/jobs');
   const running = page.locator('tr', { hasText: 'running' });
   await expect(running.getByTestId('list-edit-job')).toBeDisabled({ timeout: 20000 });

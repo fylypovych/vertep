@@ -5,6 +5,7 @@
     "label": "Core Node",
     "services": [
       "proxy",
+      "web-ui",
       "core",
       "license-manager",
       "dispatcher",

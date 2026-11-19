@@ -53,13 +53,28 @@ class SystemLog:
     timestamp: str
 
 
+DEFAULT_RETENTION_DAYS = 3
+# Technical bound only (keeps the cutoff arithmetic sane); not a product limit.
+MAX_RETENTION_DAYS = 3650
+
+
 class MonitoringModule:
-    def __init__(self, db_url: str):
-        self.db_url = db_url
+    def __init__(self, db: "str | Dict[str, Any]"):
+        """``db``: the module's own credentials from CORE (role/password/host/port/
+        database, ``search_path`` pinned to its schema) or a postgresql:// URL."""
+        if isinstance(db, str):
+            from urllib.parse import unquote, urlparse
+            parsed = urlparse(db)
+            db = {"role": unquote(parsed.username or ""), "password": unquote(parsed.password or ""),
+                  "host": parsed.hostname or "localhost", "port": parsed.port or 5432,
+                  "database": parsed.path.lstrip("/")}
+        self.credentials = dict(db)
 
     @contextmanager
     def _conn(self):
-        conn = pg8000.native.Connection(self.db_url)
+        c = self.credentials
+        conn = pg8000.native.Connection(user=c["role"], password=c.get("password"), host=c.get("host", "localhost"),
+                                        port=int(c.get("port", 5432)), database=c["database"])
         try:
             yield conn
         finally:
@@ -321,15 +336,57 @@ class MonitoringModule:
                 "health_summary": health_map,
             }
 
-    def cleanup_old_data(self, retention_days: int = 30):
+    # -- retention (#503) ---------------------------------------------------------
+    def retention_days(self) -> int:
+        """Stored retention; 3 days unless the administrator extended it."""
         with self._conn() as conn:
-            cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
-            conn.run("DELETE FROM metrics WHERE timestamp < :cutoff", cutoff=cutoff)
-            conn.run("DELETE FROM health_checks WHERE checked_at < :cutoff", cutoff=cutoff)
-            conn.run("DELETE FROM system_logs WHERE timestamp < :cutoff", cutoff=cutoff)
-            # Keep alerts longer
-            alert_cutoff = (datetime.utcnow() - timedelta(days=90)).isoformat()
-            conn.run("DELETE FROM alerts WHERE resolved_at IS NOT NULL AND resolved_at < :cutoff", cutoff=alert_cutoff)
+            rows = conn.run("SELECT value FROM settings WHERE key = 'retention_days'")
+        try:
+            days = int(rows[0][0]) if rows else DEFAULT_RETENTION_DAYS
+        except (TypeError, ValueError):
+            days = DEFAULT_RETENTION_DAYS
+        return min(max(days, DEFAULT_RETENTION_DAYS), MAX_RETENTION_DAYS)
+
+    def set_retention_days(self, days: Any, actor: Optional[str] = None) -> int:
+        if isinstance(days, bool) or not isinstance(days, int):
+            raise ValueError("retention_days must be an integer")
+        if days < DEFAULT_RETENTION_DAYS or days > MAX_RETENTION_DAYS:
+            raise ValueError(f"retention_days must be between {DEFAULT_RETENTION_DAYS} and {MAX_RETENTION_DAYS}")
+        with self._conn() as conn:
+            conn.run("INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('retention_days', :value, now(), :actor) "
+                     "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by",
+                     value=str(days), actor=actor)
+        return days
+
+    def rotate(self, now: Optional[datetime] = None) -> Dict[str, int]:
+        """Delete active history older than the retention period (one transaction).
+
+        Only the module's live tables are touched; uninstall archives made by the
+        platform lifecycle live outside this schema and are never rotated here.
+        Unresolved alerts are kept whatever their age.
+        """
+        cutoff = (now or datetime.utcnow()) - timedelta(days=self.retention_days())
+        removed = {}
+        with self._conn() as conn:
+            conn.run("BEGIN")
+            try:
+                for table, column, extra in (("metrics", "timestamp", ""), ("health_checks", "checked_at", ""),
+                                             ("system_logs", "timestamp", ""),
+                                             ("alerts", "resolved_at", " AND resolved_at IS NOT NULL")):
+                    rows = conn.run(f"WITH gone AS (DELETE FROM {table} WHERE {column} < :cutoff{extra} RETURNING 1) "
+                                    "SELECT count(*) FROM gone", cutoff=cutoff)
+                    removed[table] = int(rows[0][0])
+                conn.run("COMMIT")
+            except Exception:
+                conn.run("ROLLBACK")
+                raise
+        return removed
+
+    def cleanup_old_data(self, retention_days: Optional[int] = None):
+        """Compatibility entry point: rotation by the stored retention."""
+        if retention_days is not None:
+            self.set_retention_days(retention_days)
+        return self.rotate()
 
 
 def migrate_existing_monitoring(db_url: str, legacy_data: Dict[str, Any]) -> Dict[str, int]:

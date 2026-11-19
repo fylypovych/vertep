@@ -13,7 +13,18 @@ server {
   ssl_verify_client optional;
   ssl_protocols TLSv1.2 TLSv1.3;
   client_max_body_size 256m;
+  # #504: the panel is a separate web-ui container. Docker DNS is resolved per
+  # request, so a stopped or missing web-ui never stops the proxy or CORE.
+  resolver 127.0.0.11 valid=10s ipv6=off;
   location / {
+    set $vertep_web_ui http://web-ui:8080;
+    proxy_pass $vertep_web_ui;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+  }
+  location ~ ^/api/(workers/heartbeat|tasks/(claim|renew|cancellations|result)|logs/ingest|node/status|nodes/[a-z0-9-]+/renew) {
+    if ($ssl_client_verify != SUCCESS) { return 401; }
     proxy_pass http://core:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Vertep-Client-DN $vertep_client_dn;
@@ -21,8 +32,9 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Proto https;
   }
-  location ~ ^/api/(workers/heartbeat|tasks/(claim|renew|cancellations|result)|logs/ingest|node/status|nodes/[a-z0-9-]+/renew) {
-    if ($ssl_client_verify != SUCCESS) { return 401; }
+  # CORE: the API and its other HTTP surfaces (job files, LAB lease, metrics,
+  # status, API docs, the /admin alias).
+  location ~ ^/(api/|jobs/[^/]+/files/|lab-lease/|metrics$|status$|docs|redoc$|openapi\.json$|admin$) {
     proxy_pass http://core:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Vertep-Client-DN $vertep_client_dn;

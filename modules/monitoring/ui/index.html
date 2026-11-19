@@ -17,6 +17,14 @@
             </div>
         </div>
 
+        <!-- History retention (#503): 3 days by default, the administrator may extend it -->
+        <div class="bg-white rounded-lg shadow p-4 mb-6 flex items-center gap-3" id="retentionPanel">
+            <label for="retentionDays" class="text-sm text-slate-700">Зберігати історію, днів</label>
+            <input id="retentionDays" type="number" min="3" step="1" class="w-24 px-2 py-1 border rounded">
+            <button id="retentionSave" class="px-3 py-1 bg-blue-600 text-white rounded">Зберегти</button>
+            <span id="retentionStatus" class="text-sm text-slate-500"></span>
+        </div>
+
         <!-- Stats Cards -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6" id="statsCards">
             <div class="bg-white rounded-xl border border-slate-200 p-5">
@@ -187,6 +195,22 @@
             document.getElementById(id).classList.add('hidden');
         }
 
+        async function loadRetention() {
+            const data = await fetchJSON(`${API}/settings/retention`);
+            document.getElementById('retentionDays').value = data.retention_days;
+        }
+
+        document.getElementById('retentionSave').addEventListener('click', async () => {
+            const status = document.getElementById('retentionStatus');
+            try {
+                const days = parseInt(document.getElementById('retentionDays').value, 10);
+                const data = await fetchJSON(`${API}/settings/retention`, { method: 'PUT', body: JSON.stringify({ retention_days: days }) });
+                status.textContent = `Збережено: ${data.retention_days}`;
+            } catch (error) {
+                status.textContent = error.message;
+            }
+        });
+
         async function loadStats() {
             const stats = await fetchJSON(`${API}/stats`);
             document.getElementById('statNodes').textContent = stats.online_nodes || 0;
@@ -307,7 +331,7 @@
         }
 
         async function loadHealth() {
-            const health = await fetchJSON(`${API}/health`);
+            const health = await fetchJSON(`${API}/health-checks`);
             const list = document.getElementById('healthList');
             list.innerHTML = '';
             if (health.length === 0) {
@@ -445,6 +469,7 @@
         }, 30000);
 
         // Initial load
+        loadRetention().catch(() => {});
         loadStats();
         loadMetrics();
         loadAlerts();

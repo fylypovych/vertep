@@ -357,3 +357,70 @@ def test_admin_api_requires_admin_and_confirmation(tmp_path, key, module_postgre
     from core.module.gateway import read_audit
     actions = {(e["action"], e.get("outcome")) for e in read_audit()}
     assert ("module.lifecycle", "allowed") in actions and ("module.archive.download", "allowed") in actions
+
+
+def test_module_ids_sharing_a_schema_or_role_never_share_data(tmp_path, key, module_postgres):
+    """#493 AC2/AC3/AC7, #494: ``a-b``/``a_b`` and long IDs with one truncated
+    prefix map onto one schema/role; the second module is rejected before
+    provisioning and the first module's data stays intact."""
+    from core.module.data import ModuleDataConflict
+    lifecycle = make(tmp_path, key, module_postgres)
+    long_id = "x" * 60
+    for module_id in ("a-b", long_id):
+        lifecycle.install(package(key, name=module_id))
+        lifecycle.activate(module_id)
+    with psycopg.connect(module_postgres, autocommit=True, client_encoding="UTF8") as connection:
+        connection.execute("INSERT INTO mod_a_b.items (body) VALUES ('a-b data')")
+    for other in ("a_b", "A-B", "a.b", long_id + "y"):
+        with pytest.raises(LifecycleError, match="conflicts"):
+            lifecycle.install(package(key, name=other))
+        assert lifecycle.record(other) is None
+    # Defence in depth below the lifecycle: the database itself refuses a
+    # foreign module on a marked schema/role, for provisioning and removal.
+    database = lifecycle.database
+    for operation in (lambda: database.ensure("a_b"), lambda: database.drop("a_b"),
+                      lambda: database.restore("a_b", {"migrations": [], "tables": {}}, {})):
+        with pytest.raises(ModuleDataConflict):
+            operation()
+    assert rows(module_postgres, "SELECT body FROM mod_a_b.items") == [("a-b data",)]
+    assert lifecycle.database.ensure("a-b")["password"] is None  # the owner keeps its account
+    # A module named like the old archive-verification scratch schema keeps its
+    # data when the other module is uninstalled.
+    lifecycle.install(package(key, name="a-b__verify"))
+    lifecycle.activate("a-b__verify")
+    with psycopg.connect(module_postgres, autocommit=True, client_encoding="UTF8") as connection:
+        connection.execute("INSERT INTO mod_a_b__verify.items (body) VALUES ('kept')")
+    lifecycle.uninstall("a-b", confirmed=True)
+    assert rows(module_postgres, "SELECT body FROM mod_a_b__verify.items") == [("kept",)]
+    assert not rows(module_postgres, "SELECT 1 FROM pg_namespace WHERE nspname LIKE 'vtmp_verify_%'")
+    # After the owner is gone the ID is free again, with a fresh schema.
+    lifecycle.install(package(key, name="a_b"))
+    lifecycle.activate("a_b")
+    assert rows(module_postgres, "SELECT count(*) FROM mod_a_b.items") == [(0,)]
+
+
+def test_uninstall_withholds_a_stale_instance_until_reinstalled(tmp_path, key, module_postgres):
+    """#493 AC3/AC4, #494: a node still reporting a READY instance after uninstall
+    gets no API/UI/dispatch access, also after a CORE restart."""
+    lifecycle = make(tmp_path, key, module_postgres)
+    lifecycle.install(package(key))
+    report = lambda registry: registry.report_node("n", [{**package(key)["manifest"], "ready": True,
+                                                          "endpoint": "http://127.0.0.1:9"}])
+    report(lifecycle.registry)
+    lifecycle.registry.set_placement("notes", ["n"])
+    lifecycle.activate("notes")
+    assert len(lifecycle.registry.ready_instances("notes")) == 1
+    lifecycle.uninstall("notes", confirmed=True)
+    assert lifecycle.registry.ready_instances("notes") == []
+    assert "lifecycle_uninstalled" in lifecycle.registry.instances("notes")[0].reasons
+    report(lifecycle.registry)  # the old instance reports again
+    assert lifecycle.registry.ready_instances("notes") == []
+    from core.module.gateway import _ready_instance  # API, secrets, module tokens and UI assets
+    assert _ready_instance(lifecycle.registry, "notes") is None
+    restarted = make(tmp_path, key, module_postgres)  # same lifecycle root and placement, new CORE process state
+    report(restarted.registry)
+    assert restarted.registry.ready_instances("notes") == []
+    assert "lifecycle_uninstalled" in restarted.registry.instances("notes")[0].reasons
+    restarted.install(package(key))
+    restarted.activate("notes")
+    assert len(restarted.registry.ready_instances("notes")) == 1

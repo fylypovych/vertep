@@ -27,7 +27,7 @@ test('меню адміністратора: Контент, Система й �
   const menu = await groups(page);
   expect(Object.keys(menu)).toEqual(['Контент', 'Система', 'Налаштування']);
   expect(menu['Система']).toEqual(['Вузли', 'Стан системи', 'Стан підключень', 'Алерти', 'Логи', 'Оновлення', 'Бекапи', 'Модулі', 'Реальні тести']);
-  expect(menu['Налаштування']).toEqual(['Загальне', 'Публікація', 'Telegram-бот', 'Моделі', 'Движок відео', 'Режим workflow', 'Брендинг', 'Ключі інтеграцій', 'Безпека']);
+  expect(menu['Налаштування']).toEqual(['Загальне', 'Публікація', 'Telegram-бот', 'Моделі', 'Движок відео', 'Режим workflow', 'Брендинг', 'Ключі інтеграцій', 'Безпека', 'Користувачі']);
   const labels = Object.values(menu).flat();
   expect(new Set(labels).size).toBe(labels.length);
   expect(labels.filter(label => Object.keys(menu).includes(label))).toEqual([]);
@@ -46,8 +46,8 @@ test('нові пункти меню відкривають свої сторі�
   await expect(page).toHaveURL(/\/settings\?tab=workflow-mode$/);
 });
 
-test('переглядач не бачить групи Налаштування', async ({ page }) => {
-  await open(page, 'viewer');
+test('модератор не бачить групи Налаштування', async ({ page }) => {
+  await open(page, 'moderator');
   const nav = page.locator('nav').first();
   await expect(nav.getByText('Вузли', { exact: true })).toBeVisible({ timeout: 20000 });
   await expect(nav.getByText('Налаштування', { exact: true })).toHaveCount(0);
