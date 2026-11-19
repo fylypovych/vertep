@@ -152,6 +152,10 @@ export class PolicyService {
 
   can(action: string, brandId?: string | null): PolicyDecision {
     const ownBrand = !!brandId && (this.userBrands() ?? []).includes(brandId);
+    if (this.userRole() === 'moderator' && action === 'create_job' && !(this.userBrands() ?? []).length) {
+      // A moderator without brands has nothing to create jobs for (CORE refuses it too).
+      return { allowed: false, reason: 'Недостатньо прав' };
+    }
     if (this.userRole() === 'moderator' && MODERATOR_BLOCKED.has(action)
         && !(ownBrand && MODERATOR_BRAND_ACTIONS.has(action))) {
       return { allowed: false, reason: 'Недостатньо прав' };

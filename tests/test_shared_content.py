@@ -141,3 +141,86 @@ def test_material_of_the_own_brand_needs_no_shared_approval(shared):
     with store.lock:
         job.character_owner_brand = None
     assert a.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"]).status_code == 200
+
+
+def _approve(client, job, owner, digest):
+    return client.post(f"/api/jobs/{job.job_id}/shared-approval",
+                       json={"owner_brand": owner, "decision": "approve", "version": 1, "expected_sha256": digest})
+
+
+def test_every_foreign_owner_must_approve(shared, monkeypatch):
+    """AC4: material using characters of brands B and C needs both decisions."""
+    from tests.test_shared_content import _session
+    a, b, job = shared["a"], shared["b"], shared["job"]
+    with store.lock:
+        job.character_owner_brands = ["brand-b", "brand-c"]
+    c = _session(monkeypatch, {"mod-c": {"password_hash": "x", "role": "moderator", "brands": ["brand-c"]},
+                               "mod-b": {"password_hash": "x", "role": "moderator", "brands": ["brand-b"]},
+                               "mod-a": {"password_hash": "x", "role": "moderator", "brands": ["brand-a"]}}, "mod-c")
+    assert _approve(b, job, "brand-b", shared["digest"]).json()["owners"] == {"brand-b": "approved", "brand-c": "pending"}
+    blocked = a.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"])
+    assert blocked.status_code == 409 and "brand-c" in blocked.json()["detail"]
+    assert _approve(c, job, "brand-c", shared["digest"]).json()["owners"] == {"brand-b": "approved", "brand-c": "approved"}
+    assert a.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"]).status_code == 200
+
+
+def test_owner_publishes_the_same_artifact_independently_with_its_own_texts(shared):
+    """AC5/AC6: B gets its own job with the identical file and its own metadata;
+    no automatic cross-post; revoking or changing the source stops B's unsent copy."""
+    import hashlib
+    a, b, job = shared["a"], shared["b"], shared["job"]
+    early = b.post(f"/api/jobs/{job.job_id}/shared-publications", json={"brand_id": "brand-b", "title": "B"})
+    assert early.status_code == 409  # pending: nothing to publish yet
+    assert _approve(b, job, "brand-b", shared["digest"]).status_code == 200
+    assert a.post(f"/api/jobs/{job.job_id}/shared-publications", json={"brand_id": "brand-b"}).status_code == 403
+    created = b.post(f"/api/jobs/{job.job_id}/shared-publications", json={
+        "brand_id": "brand-b", "title": "Наша версія", "description": "Опис бренду B", "hashtags": ["#b"]})
+    assert created.status_code == 200, created.text
+    derived = store.jobs[created.json()["job_id"]]
+    assert derived.brand_id == "brand-b" and derived.status == JobStatus.READY and derived.topic == "Наша версія"
+    copy = store.root / derived.job_id / derived.video_versions[0].path
+    assert hashlib.sha256(copy.read_bytes()).hexdigest() == shared["digest"] == derived.shared_source["sha256"]
+    assert derived.publication_metadata == {"title": "Наша версія", "description": "Опис бренду B", "hashtags": ["#b"]}
+    assert store.jobs[job.job_id].shared_publications[-1]["actor"] == "mod-b"
+    assert not store.jobs[job.job_id].publish_task_ids  # no automatic cross-post of A's job
+    published = b.post(f"/api/jobs/{derived.job_id}/publish", json=["youtube"])
+    assert published.status_code == 200 and published.json()["status"] == "PUBLISHING"
+    task = _claim_publish(derived.job_id)
+    assert task["metadata"]["description"] == "Опис бренду B" and task["metadata"]["brand_id"] == "brand-b"
+    # A second owner withdraws: B's next, not yet started send is stopped.
+    with store.lock:
+        job.character_owner_brands = ["brand-b", "brand-c"]
+    assert b.post(f"/api/jobs/{derived.job_id}/publish", json=["youtube"]).status_code == 409
+
+
+def test_revoke_and_send_start_race_never_hands_out_a_send_after_the_revocation(shared):
+    """AC6/AC7/AC8: concurrent revoke vs claim. Either the send started first (it may
+    finish) or the revocation came first (the send never starts)."""
+    import threading
+    a, b, job = shared["a"], shared["b"], shared["job"]
+    for _ in range(5):
+        assert _approve(b, job, "brand-b", shared["digest"]).status_code == 200
+        with store.lock:
+            job.publish_task_ids.clear()
+            store.update(job, JobStatus.READY, "READY (race round)")
+        assert a.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"]).status_code == 200
+        results = {}
+        threads = [threading.Thread(target=lambda: results.__setitem__("task", _claim_publish(job.job_id))),
+                   threading.Thread(target=lambda: results.__setitem__("revoke", b.post(
+                       f"/api/jobs/{job.job_id}/shared-approval/revoke", json={"owner_brand": "brand-b"})))]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert results["revoke"].status_code == 200
+        events = store.jobs[job.job_id].events
+        revoked_at = max(i for i, event in enumerate(events) if "APPROVAL REVOKED" in event)
+        claimed = [i for i, event in enumerate(events) if "PUBLISH CLAIMED" in event]
+        if results["task"] is not None:
+            assert claimed and claimed[-1] < revoked_at  # started before the revocation
+        else:
+            assert not claimed or claimed[-1] < revoked_at
+        from core.state import task_queue
+        if results["task"] is not None:
+            task_queue.ack(results["task"]["task_id"])
+            store.workers.get("pub-worker", {}).update({"status": "READY", "current_task": None, "current_job": None})

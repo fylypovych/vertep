@@ -994,6 +994,7 @@ export const EN: Record<string, string> = {
   "Перегляд стану системи": "Viewing system state",
   "Перегляд сценаріїв": "Viewing scenarios",
   "Модератор": "Moderator",
+  "Опублікувати у своїх каналах": "Publish on own channels",
   "Панель несумісна з цією версією CORE. Оновіть сторінку або панель.": "The panel is not compatible with this CORE version. Reload the page or update the panel.",
   "Панель": "Panel",
   "Видалити користувача": "Delete user",

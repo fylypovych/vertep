@@ -13,6 +13,7 @@ forwarder to LAB_GPU_ENDPOINT; CORE itself executes no generation.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import threading
@@ -21,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.routing import APIRoute
 
 from ..state import store, task_queue
 from ..system_state import dispatch_allowed
@@ -28,7 +30,44 @@ from ..system_state import dispatch_allowed
 CONTRACT_VERSION = "1"
 GPU_CAPABILITIES = {"image_generation", "video_generation", "text_generation"}
 
-router = APIRouter(prefix="/lab-lease/v1")
+class _AuditedRoute(APIRoute):
+    """#493 AC6 / #491 L7: every LAB call to CORE is audited, including status
+    probes and refusals, in the platform audit trail (module-audit.jsonl)."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def audited(request: Request):
+            from core.module.gateway import audit
+            details = {"path": request.url.path, "method": request.method}
+            try:
+                response = await handler(request)
+            except HTTPException as error:
+                audit("lab.lease", "denied" if error.status_code in {401, 403, 409} else "failed",
+                      status=error.status_code, reason=str(error.detail), **details)
+                raise
+            except Exception as error:
+                audit("lab.lease", "failed", status=500, reason=type(error).__name__, **details)
+                raise
+            outcome, reason = "allowed", None
+            try:
+                body = json.loads(bytes(response.body or b"{}"))
+            except (ValueError, AttributeError, TypeError):
+                body = {}
+            if isinstance(body, dict):
+                for key in ("granted", "released", "active"):
+                    if key in body and body[key] is False:
+                        outcome = "denied"
+                reason = body.get("reason") or None
+                lease = body.get("lease") if isinstance(body.get("lease"), dict) else {}
+                details["lease"] = lease.get("lease_id") or None
+            audit("lab.lease", outcome, status=response.status_code, reason=reason, **details)
+            return response
+
+        return audited
+
+
+router = APIRouter(prefix="/lab-lease/v1", route_class=_AuditedRoute)
 # ponytail: in-memory, one CORE; after a CORE restart the lease is unknown, so the next
 # heartbeat stops the laboratory. Use shared storage if CORE ever runs as replicas.
 _leases: dict[str, dict] = {}

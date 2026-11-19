@@ -3,6 +3,7 @@ import { Component, Input, OnChanges, signal, ChangeDetectionStrategy } from '@a
 import { CommonModule } from '@angular/common';
 import { ResourcesApiService, SharedContentItem } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
+import { Router } from '@angular/router';
 
 /** #500: «Спільний контент» — material of other brands with this brand's characters. */
 @Component({
@@ -27,6 +28,7 @@ import { ToastService } from '../core/services/toast.service';
             <button class="text-red-600 text-xs" (click)="decide(item, 'reject')">{{ 'Відхилити' | t }}</button>
             @if (item.owners[brandId] === 'approved') {
               <button class="text-amber-700 text-xs" (click)="revoke(item)">{{ 'Відкликати' | t }}</button>
+              <button class="text-indigo-700 text-xs" (click)="publishOwn(item)" [attr.data-testid]="'own-publication-' + item.job_id">{{ 'Опублікувати у своїх каналах' | t }}</button>
             }
           }
         </div>
@@ -38,7 +40,7 @@ export class BrandSharedContentComponent implements OnChanges {
   @Input({ required: true }) brandId!: string;
   items = signal<SharedContentItem[]>([]);
 
-  constructor(private api: ResourcesApiService, private toast: ToastService) {}
+  constructor(private api: ResourcesApiService, private toast: ToastService, private router: Router) {}
 
   ngOnChanges(): void {
     this.load();
@@ -59,6 +61,13 @@ export class BrandSharedContentComponent implements OnChanges {
     if (item.version === null || !item.sha256) return;
     this.api.sharedDecision(item.job_id, { owner_brand: this.brandId, decision, version: item.version, expected_sha256: item.sha256 })
       .subscribe({ next: () => this.load(), error: (error) => this.toast.show(error?.message || 'Помилка', 'error') });
+  }
+
+  /** The same approved video as this brand's own job; titles/texts are set there before publishing. */
+  publishOwn(item: SharedContentItem): void {
+    this.api.sharedPublication(item.job_id, { brand_id: this.brandId })
+      .subscribe({ next: (job) => this.router.navigate(['/jobs', job.job_id]),
+                   error: (error) => this.toast.show(error?.message || 'Помилка', 'error') });
   }
 
   revoke(item: SharedContentItem): void {

@@ -82,6 +82,7 @@ def _publish_task_for(job, channel: str, target: str | None = None) -> dict:
                          **(job.script or {}),
                          **((job.script or {}).get("platforms",
                                                    {}).get(channel) or {}),
+                         **(getattr(job, "publication_metadata", None) or {}),
                          **public_link},
             "task_type": "publish"}
 

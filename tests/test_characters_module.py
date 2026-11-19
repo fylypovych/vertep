@@ -113,18 +113,8 @@ def test_characters_module_install_and_lifecycle(api):
     resp = api.put("/api/nodes/module-registry/approval/characters", json={"permissions": ["characters.read", "characters.write", "characters.collaborate"]})
     assert resp.status_code == 200
 
-    # Activation requires a database (VERTEP_MODULE_DATABASE_URL) which is not configured in test environment
-    # This test verifies install, placement, and approval work; activation is skipped without DB
-    pytest.skip("Activation requires database (VERTEP_MODULE_DATABASE_URL) not configured in test environment")
-
-    resp = api.post("/api/nodes/module-registry/lifecycle/activate", json={"module_id": "characters"})
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "ACTIVE"
-
-    # Deactivate
-    resp = api.post("/api/nodes/module-registry/lifecycle/deactivate", json={"module_id": "characters"})
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "INACTIVE"
+    # Activation with the module's own schema, API/UI, archive and restore runs on a
+    # disposable PostgreSQL in tests/test_characters_lifecycle_e2e.py.
 
 
 def test_characters_module_catalog_entry(api):
@@ -337,7 +327,7 @@ def test_characters_get_nested_routes_and_migration_endpoint(monkeypatch):
         body = json.loads(response.read())
         assert response.status == 200, body
         assert body == {"allowed": True, "reasons": [], "owner_brand_id": None}
-        assert request_json("POST", "/characters/character-a/activate?brand_id=brand-a", "viewer")[0] == 403
+        assert request_json("POST", "/characters/character-a/activate?brand_id=brand-a", "moderator")[0] == 403
         assert request_json("POST", "/migrate", "editor", {"default_owner_brand": "brand-a"})[0] == 403
         assert request_json("POST", "/migrate", "admin")[0] == 400
         assert request_json("POST", "/migrate", "admin", {"default_owner_brand": " brand-a "}) == (

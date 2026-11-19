@@ -60,12 +60,34 @@ def contour(tmp_path_factory):
     network = f"vertep-test-{suffix}"
     names = {"core": f"core-{suffix}", "web-ui": f"web-ui-{suffix}", "proxy": f"proxy-{suffix}"}
     run("docker", "network", "create", network)
-    core_script = ("import http.server,json\n"
-                   "class H(http.server.BaseHTTPRequestHandler):\n"
-                   "  def do_GET(s):\n"
-                   "    b=json.dumps({'core':True,'path':s.path}).encode();s.send_response(200)\n"
-                   "    s.send_header('content-type','application/json');s.end_headers();s.wfile.write(b)\n"
-                   "http.server.ThreadingHTTPServer(('',8080),H).serve_forever()\n")
+    # Stand-in CORE: a session cookie owned by CORE (not by the panel), a status with
+    # the API major, and a background task whose counter keeps advancing.
+    core_script = (
+        "import http.server,json,threading,time\n"
+        "ticks=[0]\n"
+        "def work():\n"
+        "  while True:\n"
+        "    time.sleep(0.2); ticks[0]+=1\n"
+        "threading.Thread(target=work,daemon=True).start()\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        "  def log_message(s,*a): pass\n"
+        "  def reply(s,b,cookie=None):\n"
+        "    d=json.dumps(b).encode();s.send_response(200)\n"
+        "    s.send_header('content-type','application/json')\n"
+        "    if cookie: s.send_header('set-cookie',cookie)\n"
+        "    s.end_headers();s.wfile.write(d)\n"
+        "  def authed(s): return 'vertep_session=core-session' in (s.headers.get('cookie') or '')\n"
+        "  def do_POST(s):\n"
+        "    if s.path=='/api/session': return s.reply({'authenticated':True,'user':'admin','login':'admin','role':'admin','brands':None},"
+        "'vertep_session=core-session; Path=/; HttpOnly; SameSite=Strict')\n"
+        "    s.reply({})\n"
+        "  def do_GET(s):\n"
+        "    if s.path=='/api/session': return s.reply({'authenticated':True,'user':'admin','login':'admin','role':'admin','brands':None} if s.authed() else {'authenticated':False})\n"
+        "    if s.path=='/api/status': return s.reply({'core':'OK','version':'0.0.4.12','api_major':1,'system':{'state':'NORMAL'}})\n"
+        "    if s.path=='/api/background': return s.reply({'ticks':ticks[0]})\n"
+        "    if s.path.startswith('/api/jobs') or s.path.startswith('/api/workers') or s.path.startswith('/api/modules'): return s.reply([])\n"
+        "    s.reply({'core':True,'path':s.path})\n"
+        "http.server.ThreadingHTTPServer(('',8080),H).serve_forever()\n")
     try:
         run("docker", "run", "-d", "--name", names["core"], "--network", network, "--network-alias", "core",
             "python:3.12-slim", "python", "-c", core_script)
@@ -104,7 +126,7 @@ def test_panel_and_core_paths_are_routed_to_their_own_containers(contour):
     assert "no-cache" in shell.headers.get("cache-control", "")
     deep = get(contour, "/jobs/2026-000123")  # an Angular deep link, not a CORE path
     assert deep.status_code == 200 and "<app-root" in deep.text
-    assert get(contour, "/api/session").json() == {"core": True, "path": "/api/session"}
+    assert get(contour, "/api/health").json() == {"core": True, "path": "/api/health"}
     assert get(contour, "/jobs/j1/files/final/video.mp4").json()["core"] is True
     assert get(contour, "/status").json()["core"] is True
     identity = get(contour, "/ui-version.json").json()
@@ -128,4 +150,45 @@ def test_stopping_the_panel_leaves_core_and_the_proxy_working_and_a_new_build_re
     assert get(contour, "/ui-version.json").json()["version"] == "1.0.1-test"
     core_started = run("docker", "inspect", "-f", "{{.State.StartedAt}}", names["core"]).stdout
     assert core_started == run("docker", "inspect", "-f", "{{.State.StartedAt}}", names["core"]).stdout
-    assert get(contour, "/api/session").json()["core"] is True
+    assert get(contour, "/api/health").json()["core"] is True
+
+
+def test_rolling_the_panel_back_keeps_the_session_core_work_and_reports_the_old_build(contour):
+    """AC3/AC5/AC7: the newer panel (left by the update test) is rolled back to the
+    previous image while a browser session stays signed in; CORE and its background
+    work run on; the old build identity, image digest and fresh shell are served."""
+    from tests.test_media_browser_e2e import sync_playwright, expect
+    names, images = contour["names"], contour["images"]
+    assert get(contour, "/ui-version.json").json()["version"] == "1.0.1-test"
+    core_started = run("docker", "inspect", "-f", "{{.State.StartedAt}}", names["core"]).stdout
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context(ignore_https_errors=True)
+        page = context.new_page()
+        try:
+            assert page.request.post(contour["base"] + "/api/session").status == 200
+            page.goto(contour["base"] + "/jobs")
+            expect(page.get_by_test_id("panel-version")).to_contain_text("1.0.1-test", timeout=20000)
+            ticks_before = page.request.get(contour["base"] + "/api/background").json()["ticks"]
+            # Rollback: the previous panel image replaces the current one.
+            run("docker", "rm", "-f", names["web-ui"])
+            contour["start_web_ui"](images["web-ui"])
+            for _ in range(40):
+                response = get(contour, "/ui-version.json")
+                if response.status_code == 200 and response.json()["version"] == "1.0.0-test":
+                    break
+                time.sleep(0.5)
+            page.reload()
+            expect(page.get_by_test_id("panel-version")).to_contain_text("1.0.0-test", timeout=20000)
+            expect(page.get_by_role("heading", name="Вхід")).to_have_count(0)  # still signed in
+            assert page.request.get(contour["base"] + "/api/session").json()["authenticated"] is True
+            assert page.request.get(contour["base"] + "/api/background").json()["ticks"] > ticks_before
+        finally:
+            browser.close()
+    assert run("docker", "inspect", "-f", "{{.State.StartedAt}}", names["core"]).stdout == core_started
+    running_image = run("docker", "inspect", "-f", "{{.Image}}", names["web-ui"]).stdout.strip()
+    assert running_image == run("docker", "image", "inspect", "-f", "{{.Id}}", images["web-ui"]).stdout.strip()
+    identity = get(contour, "/ui-version.json")
+    assert identity.json()["version"] == "1.0.0-test" and "commit_sha" in identity.json()
+    assert "no-cache" in identity.headers.get("cache-control", "")
+    assert "no-cache" in get(contour, "/").headers.get("cache-control", "")

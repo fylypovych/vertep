@@ -76,7 +76,7 @@ def test_admin_changes_brands_role_and_password_and_deletes(setup):
 
 @pytest.mark.parametrize("payload, detail", [
     ({"user": "x", "role": "moderator", "password": "long-enough-password"}, "Invalid username"),
-    ({"user": "bob", "role": "viewer2", "password": "long-enough-password"}, "role must be admin or moderator"),
+    ({"user": "bob", "role": "moderator2", "password": "long-enough-password"}, "role must be admin or moderator"),
     ({"user": "bob", "role": "moderator", "brands": ["ghost"], "password": "long-enough-password"}, "Unknown brands: ghost"),
     ({"user": "bob", "role": "moderator", "brands": ["brand-a"], "password": "short"}, None),
     ({"user": "root", "role": "moderator", "password": "long-enough-password"}, "User already exists"),

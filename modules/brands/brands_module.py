@@ -1,186 +1,225 @@
-import os
+"""Brands Application Module container entrypoint (#500 AC1/AC2, #502).
+
+Only requests carrying the module token issued by CORE are served. Users come
+through the CORE Gateway (``x-vertep-role`` and ``x-vertep-brands``); CORE's own
+internal calls carry no user role. Administrators manage every brand; a
+moderator reads everything and changes only the brands of its account.
+"""
+
+from __future__ import annotations
+
+import hmac
 import json
-import logging
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
-from typing import Dict, Any, Optional
-import pg8000.native
-from brands_logic import BrandsModule, Brand, BrandCollaboration, migrate_existing_brands
+import os
+import re
+import threading
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from brands_logic import BrandsError, BrandsStore, Conflict, NotFound, health_check
 
-DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/vertep")
-MODULE = BrandsModule(DB_URL)
+CORE = os.getenv("VERTEP_CORE_URL", "").rstrip("/")
+TOKEN = os.getenv("VERTEP_MODULE_TOKEN", "")
+UI_DIR = Path(__file__).with_name("ui")
+_lock = threading.Lock()
+_state: dict[str, Any] = {"connection": None, "store": None}
 
 
-class BrandsHandler(BaseHTTPRequestHandler):
-    def _set_headers(self, status: int = 200, content_type: str = "application/json"):
+def _core_database() -> dict:
+    request = urllib.request.Request(CORE + "/api/modules/self/database", headers={"x-vertep-module-token": TOKEN})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
+def _connect():
+    with _lock:
+        if _state["connection"] is None:
+            import pg8000.dbapi
+            credentials = _core_database()
+            connection = pg8000.dbapi.connect(user=credentials["role"], password=credentials["password"],
+                                              host=credentials["host"], port=credentials["port"],
+                                              database=credentials["database"])
+            connection.autocommit = True
+            _state["connection"] = connection
+        return _state["connection"]
+
+
+def store() -> BrandsStore:
+    if _state["store"] is None:
+        _state["store"] = BrandsStore(_connect)
+    return _state["store"]
+
+
+ROUTE_BRAND = re.compile(r"/brands/([a-z0-9][a-z0-9_-]{1,63})")
+ROUTE_BRAND_CHANNELS = re.compile(r"/brands/([a-z0-9][a-z0-9_-]{1,63})/channels")
+ROUTE_BRAND_CHANNEL = re.compile(r"/brands/([a-z0-9][a-z0-9_-]{1,63})/channels/([A-Za-z0-9_-]{1,64})")
+ROUTE_POLICY = re.compile(r"/brands/([a-z0-9][a-z0-9_-]{1,63})/channels/([A-Za-z0-9_-]{1,64})/policy")
+ROUTE_CHANNEL = re.compile(r"/channels/([A-Za-z0-9_-]{1,64})")
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args) -> None:
+        pass
+
+    def _send(self, status: int, body: Any, kind: str = "application/json") -> None:
+        data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
         self.send_response(status)
-        self.send_header("Content-Type", content_type)
+        self.send_header("content-type", kind)
+        self.send_header("content-length", str(len(data)))
         self.end_headers()
+        self.wfile.write(data)
 
-    def _json_response(self, data: Any, status: int = 200):
-        self._set_headers(status)
-        self.wfile.write(json.dumps(data, default=str).encode())
-
-    def _parse_body(self) -> Dict[str, Any]:
-        length = int(self.headers.get("Content-Length", 0))
-        if length == 0:
+    def _body(self) -> dict:
+        length = int(self.headers.get("content-length", "0") or 0)
+        if not length:
             return {}
-        return json.loads(self.rfile.read(length).decode())
+        value = json.loads(self.rfile.read(length).decode())
+        return value if isinstance(value, dict) else {}
 
-    def _get_actor_user_id(self) -> str:
-        return self.headers.get("X-User-ID", "system")
+    # -- identity -----------------------------------------------------------------------
+    def _from_core(self) -> bool:
+        return bool(TOKEN) and hmac.compare_digest(self.headers.get("x-vertep-module-token", ""), TOKEN)
 
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        path = parsed.path
-        query = parse_qs(parsed.query)
+    def _role(self) -> str | None:
+        return self.headers.get("x-vertep-role")
 
+    def _system(self) -> bool:
+        """CORE's own call: no user role is forwarded by the Gateway."""
+        return self._role() is None and self.headers.get("x-vertep-caller") == "core"
+
+    def _admin(self) -> bool:
+        return self._role() == "admin" or self._system()
+
+    def _may_edit(self, brand_id: str) -> bool:
+        if self._admin():
+            return True
+        brands = {item.strip() for item in self.headers.get("x-vertep-brands", "").split(",") if item.strip()}
+        return self._role() == "moderator" and brand_id in brands
+
+    def _actor(self) -> str:
+        return self.headers.get("x-vertep-user") or ("core" if self._system() else "unknown")
+
+    # -- dispatch -----------------------------------------------------------------------
+    def _handle(self, method: str) -> None:
+        path = urlparse(self.path).path
+        if method == "GET" and path == "/health":
+            return self._send(200, health_check())
+        if not self._from_core():
+            return self._send(403, {"error": "only through the CORE gateway"})
         try:
-            if path == "/health":
-                self._json_response({"status": "ok"})
-            elif path == "/api/v1/brands":
-                owner = query.get("owner_user_id", [None])[0]
-                active_only = query.get("active_only", ["false"])[0].lower() == "true"
-                brands = MODULE.list_brands(owner_user_id=owner, active_only=active_only)
-                self._json_response([b.__dict__ for b in brands])
-            elif path.startswith("/api/v1/brands/") and path.count("/") == 3:
-                brand_id = path.split("/")[3]
-                brand = MODULE.get_brand(brand_id)
-                if brand:
-                    self._json_response(brand.__dict__)
-                else:
-                    self._json_response({"error": "Brand not found"}, 404)
-            elif path.startswith("/api/v1/brands/") and path.endswith("/collaborations"):
-                brand_id = path.split("/")[3]
-                collabs = MODULE.list_collaborations(brand_id)
-                self._json_response([c.__dict__ for c in collabs])
-            else:
-                self._json_response({"error": "Not found"}, 404)
-        except Exception as e:
-            logger.exception("GET error")
-            self._json_response({"error": str(e)}, 500)
+            result = self._route(method, path, parse_qs(urlparse(self.path).query))
+        except NotFound as error:
+            return self._send(404, {"error": str(error)})
+        except PermissionError as error:
+            return self._send(403, {"error": str(error)})
+        except Conflict as error:
+            return self._send(409, {"error": str(error)})
+        except (BrandsError, ValueError) as error:
+            return self._send(422, {"error": str(error)})
+        if result is None:
+            return self._send(404, {"error": "not available"})
+        status, body = result
+        if isinstance(body, bytes):
+            return self._send(status, body, "text/html; charset=utf-8")
+        return self._send(status, body)
 
-    def do_POST(self):
-        parsed = urlparse(self.path)
-        path = parsed.path
-        body = self._parse_body()
-        actor = self._get_actor_user_id()
+    def _require(self, allowed: bool) -> None:
+        if not allowed:
+            raise PermissionError("administrator or moderator of this brand required")
 
-        try:
-            if path == "/api/v1/brands":
-                brand = Brand(
-                    id=body.get("id"),
-                    name=body.get("name", ""),
-                    description=body.get("description", ""),
-                    logo_url=body.get("logo_url"),
-                    website=body.get("website"),
-                    social_links=body.get("social_links", {}),
-                    owner_user_id=actor,
-                    active=body.get("active", True),
-                    created_at=body.get("created_at") or __import__("datetime").datetime.utcnow().isoformat(),
-                    updated_at=body.get("updated_at") or __import__("datetime").datetime.utcnow().isoformat(),
-                )
-                created = MODULE.create_brand(brand)
-                self._json_response(created.__dict__, 201)
-            elif path.startswith("/api/v1/brands/") and path.endswith("/collaborations"):
-                brand_id = path.split("/")[3]
-                collab = MODULE.add_collaboration(
-                    brand_id,
-                    body.get("collaborator_user_id"),
-                    body.get("permission_level", "read"),
-                    actor,
-                )
-                self._json_response(collab.__dict__, 201)
-            elif path == "/api/v1/brands/migrate":
-                result = migrate_existing_brands(DB_URL, body.get("brands", []))
-                self._json_response(result)
-            else:
-                self._json_response({"error": "Not found"}, 404)
-        except PermissionError as e:
-            self._json_response({"error": str(e)}, 403)
-        except ValueError as e:
-            self._json_response({"error": str(e)}, 400)
-        except Exception as e:
-            logger.exception("POST error")
-            self._json_response({"error": str(e)}, 500)
+    def _route(self, method: str, path: str, query: dict):
+        data = store()
+        if method == "GET" and path == "/ui/index.html":
+            return 200, (UI_DIR / "index.html").read_bytes()
+        if path == "/brands":
+            if method == "GET":
+                return 200, data.list_brands()
+            if method == "POST":
+                self._require(self._admin())
+                return 201, data.create_brand(self._body(), self._actor())
+        if path == "/channels" and method == "GET":
+            brand = (query.get("brand_id") or [None])[0]
+            return 200, data.list_channels(brand)
+        if path == "/migrate" and method == "POST":
+            self._require(self._admin())
+            body = self._body()
+            return 200, data.import_legacy(body.get("brands") or [], body.get("channels") or [], self._actor())
+        if path == "/audit" and method == "GET":
+            self._require(self._admin())
+            return 200, data.audit_records((query.get("brand_id") or [None])[0])
+        match = ROUTE_POLICY.fullmatch(path)
+        if match:
+            brand_id, channel_id = match.groups()
+            if method == "GET":
+                return 200, {"brand_id": brand_id, "channel_id": channel_id,
+                             "policy": data.effective_policy(brand_id, channel_id)}
+            return None
+        match = ROUTE_BRAND_CHANNEL.fullmatch(path)
+        if match:
+            brand_id, channel_id = match.groups()
+            if method == "PUT":  # share an existing channel with this brand
+                self._require(self._may_edit(brand_id))
+                return 200, data.link_channel(brand_id, channel_id, self._body().get("policy", "inherit"), self._actor())
+            return None
+        match = ROUTE_BRAND_CHANNELS.fullmatch(path)
+        if match:
+            brand_id = match.group(1)
+            if method == "GET":
+                return 200, data.list_channels(brand_id)
+            if method == "POST":
+                self._require(self._may_edit(brand_id))
+                return 201, data.create_channel(brand_id, self._body(), self._actor())
+            return None
+        match = ROUTE_CHANNEL.fullmatch(path)
+        if match:
+            channel_id = match.group(1)
+            channel = data.get_channel(channel_id)
+            if channel is None:
+                raise NotFound("Channel not found")
+            if method == "GET":
+                return 200, channel
+            self._require(all(self._may_edit(brand) for brand in channel.get("brands", [])))
+            if method == "PUT":
+                return 200, data.update_channel(channel_id, self._body(), self._actor())
+            if method == "DELETE":
+                data.delete_channel(channel_id, self._actor())
+                return 200, {"deleted": channel_id}
+            return None
+        match = ROUTE_BRAND.fullmatch(path)
+        if match:
+            brand_id = match.group(1)
+            if method == "GET":
+                brand = data.get_brand(brand_id)
+                if brand is None:
+                    raise NotFound("Brand not found")
+                return 200, brand
+            if method == "PUT":
+                self._require(self._may_edit(brand_id))
+                return 200, data.update_brand(brand_id, self._body(), self._actor())
+            if method == "DELETE":
+                self._require(self._admin())
+                data.delete_brand(brand_id, self._actor())
+                return 200, {"deleted": brand_id}
+        return None
 
-    def do_PATCH(self):
-        parsed = urlparse(self.path)
-        path = parsed.path
-        body = self._parse_body()
-        actor = self._get_actor_user_id()
+    def do_GET(self) -> None:
+        self._handle("GET")
 
-        try:
-            if path.startswith("/api/v1/brands/") and path.count("/") == 3:
-                brand_id = path.split("/")[3]
-                brand = MODULE.update_brand(brand_id, body, actor)
-                if brand:
-                    self._json_response(brand.__dict__)
-                else:
-                    self._json_response({"error": "Brand not found"}, 404)
-            elif path.startswith("/api/v1/brands/") and path.endswith("/activate"):
-                brand_id = path.split("/")[3]
-                brand = MODULE.activate_brand(brand_id, actor)
-                if brand:
-                    self._json_response(brand.__dict__)
-                else:
-                    self._json_response({"error": "Brand not found"}, 404)
-            elif path.startswith("/api/v1/brands/") and path.endswith("/deactivate"):
-                brand_id = path.split("/")[3]
-                brand = MODULE.deactivate_brand(brand_id, actor)
-                if brand:
-                    self._json_response(brand.__dict__)
-                else:
-                    self._json_response({"error": "Brand not found"}, 404)
-            else:
-                self._json_response({"error": "Not found"}, 404)
-        except PermissionError as e:
-            self._json_response({"error": str(e)}, 403)
-        except ValueError as e:
-            self._json_response({"error": str(e)}, 400)
-        except Exception as e:
-            logger.exception("PATCH error")
-            self._json_response({"error": str(e)}, 500)
+    def do_POST(self) -> None:
+        self._handle("POST")
 
-    def do_DELETE(self):
-        parsed = urlparse(self.path)
-        path = parsed.path
-        actor = self._get_actor_user_id()
+    def do_PUT(self) -> None:
+        self._handle("PUT")
 
-        try:
-            if path.startswith("/api/v1/brands/") and path.count("/") == 3:
-                brand_id = path.split("/")[3]
-                if MODULE.delete_brand(brand_id, actor):
-                    self._json_response({"deleted": True})
-                else:
-                    self._json_response({"error": "Brand not found"}, 404)
-            elif path.startswith("/api/v1/brands/") and "/collaborations/" in path:
-                parts = path.split("/")
-                brand_id = parts[3]
-                collab_id = int(parts[5])
-                if MODULE.remove_collaboration(brand_id, collab_id, actor):
-                    self._json_response({"deleted": True})
-                else:
-                    self._json_response({"error": "Collaboration not found"}, 404)
-            else:
-                self._json_response({"error": "Not found"}, 404)
-        except PermissionError as e:
-            self._json_response({"error": str(e)}, 403)
-        except Exception as e:
-            logger.exception("DELETE error")
-            self._json_response({"error": str(e)}, 500)
-
-    def log_message(self, format, *args):
-        logger.info("%s - %s", self.address_string(), format % args)
+    def do_DELETE(self) -> None:
+        self._handle("DELETE")
 
 
-def main():
-    port = int(os.getenv("PORT", "8080"))
-    server = ThreadingHTTPServer(("", port), BrandsHandler)
-    logger.info(f"Brands module listening on port {port}")
+def main() -> None:
+    server = ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Handler)
     server.serve_forever()
 
 

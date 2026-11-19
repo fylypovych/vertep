@@ -441,7 +441,7 @@ class TestWorkflowAPI:
             import core.state
             core.state.workflow_registry = WorkflowRegistry()
 class TestRBACAuthorization:
-    """Issue #29: RBAC UX — viewer must never perform admin mutations,
+    """Issue #29: RBAC UX — moderator must never perform admin mutations,
     while profile/password/logout stay available without shell access."""
 
     def _auth(self, monkeypatch, user, role, password="rbac-fallback-password"):
@@ -455,42 +455,42 @@ class TestRBACAuthorization:
         return ({"vertep_session": token, "vertep_csrf": csrf},
                 {"x-csrf-token": csrf})
 
-    def test_viewer_forbidden_admin_mutation(self, monkeypatch):
-        cookies, headers = self._auth(monkeypatch, "reader", "viewer")
+    def test_moderator_forbidden_admin_mutation(self, monkeypatch):
+        cookies, headers = self._auth(monkeypatch, "reader", "moderator")
         monkeypatch.setenv("USERS_JSON", json.dumps(
-            {"reader": {"password_hash": "x", "role": "viewer"}}))
+            {"reader": {"password_hash": "x", "role": "moderator"}}))
         resp = client.delete("/api/characters/some_char", cookies=cookies, headers=headers)
         assert resp.status_code == 403
         assert "Insufficient role" in resp.text
 
-    def test_viewer_forbidden_job_create(self, monkeypatch):
-        cookies, headers = self._auth(monkeypatch, "reader", "viewer")
+    def test_moderator_forbidden_job_create(self, monkeypatch):
+        cookies, headers = self._auth(monkeypatch, "reader", "moderator")
         resp = client.post("/api/jobs", json={"topic": "blocked"}, cookies=cookies, headers=headers)
         assert resp.status_code == 403
 
-    def test_viewer_cannot_mutate_settings(self, monkeypatch):
-        cookies, headers = self._auth(monkeypatch, "reader", "viewer")
+    def test_moderator_cannot_mutate_settings(self, monkeypatch):
+        cookies, headers = self._auth(monkeypatch, "reader", "moderator")
         resp = client.post("/api/settings/logo", cookies=cookies, headers=headers)
         assert resp.status_code == 403
 
-    def test_viewer_read_allowed(self, monkeypatch):
-        cookies, _ = self._auth(monkeypatch, "reader", "viewer")
+    def test_moderator_read_allowed(self, monkeypatch):
+        cookies, _ = self._auth(monkeypatch, "reader", "moderator")
         monkeypatch.setenv("USERS_JSON", json.dumps(
-            {"reader": {"password_hash": "x", "role": "viewer"}}))
+            {"reader": {"password_hash": "x", "role": "moderator"}}))
         resp = client.get("/api/session", cookies=cookies)
         assert resp.status_code == 200
         body = resp.json()
         assert body["authenticated"] is True
-        assert body["role"] == "moderator"  # a stored viewer is a moderator without brands
+        assert body["role"] == "moderator"  # a stored moderator is a moderator without brands
 
-    def test_viewer_can_logout(self, monkeypatch):
-        cookies, _ = self._auth(monkeypatch, "reader", "viewer")
+    def test_moderator_can_logout(self, monkeypatch):
+        cookies, _ = self._auth(monkeypatch, "reader", "moderator")
         resp = client.delete("/api/session", cookies=cookies)
         assert resp.status_code == 200
         assert resp.json()["authenticated"] is False
 
-    def test_viewer_change_password_reaches_validation(self, monkeypatch):
-        cookies, headers = self._auth(monkeypatch, "reader", "viewer")
+    def test_moderator_change_password_reaches_validation(self, monkeypatch):
+        cookies, headers = self._auth(monkeypatch, "reader", "moderator")
         resp = client.put("/api/session/password",
                           json={"old_password": "old", "new_password": "short"},
                           cookies=cookies, headers=headers)
@@ -499,18 +499,18 @@ class TestRBACAuthorization:
         # Issue #75 S3: the policy is reported by the server in the UI language.
         assert "12" in resp.json()["detail"]
 
-    def test_viewer_change_password_wrong_old_rejected(self, monkeypatch):
-        cookies, headers = self._auth(monkeypatch, "reader", "viewer")
+    def test_moderator_change_password_wrong_old_rejected(self, monkeypatch):
+        cookies, headers = self._auth(monkeypatch, "reader", "moderator")
         import hashlib
         import hmac
         from core.security import _hash_secret, _session_token
-        token = _session_token("reader", "viewer")
+        token = _session_token("reader", "moderator")
         csrf = hmac.new("rbac-fallback-password".encode(), token.encode(),
                         hashlib.sha256).hexdigest()
         cookies = {"vertep_session": token, "vertep_csrf": csrf}
         headers = {"x-csrf-token": csrf}
         monkeypatch.setenv("USERS_JSON", json.dumps({
-            "reader": {"password_hash": _hash_secret("correct-old"), "role": "viewer"}}))
+            "reader": {"password_hash": _hash_secret("correct-old"), "role": "moderator"}}))
         resp = client.put("/api/session/password",
                           json={"old_password": "wrong-old", "new_password": "newlongpassword12"},
                           cookies=cookies, headers=headers)
@@ -616,13 +616,13 @@ class TestSessionIdentityContract:
 
 
     def test_configured_installation_rejects_anonymous_session_read(self, monkeypatch, tmp_path):
-        cookies, _ = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        cookies, _ = self._auth(monkeypatch, tmp_path, "reader", "moderator")
         assert cookies
         # Middleware не пропускає анонімний запит, коли встановлено пароль.
         assert client.get("/api/session").status_code == 401
 
     def test_login_shell_is_public_while_api_stays_protected(self, monkeypatch, tmp_path):
-        self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        self._auth(monkeypatch, tmp_path, "reader", "moderator")
         # Issue #75 S1: без публічної оболонки сторінка /login не рендериться і
         # guard-redirect не має куди вести. Дані лишаються за автентифікацією.
         # На CI збірки web-v2/dist ще немає, тому 200 вимагається лише коли
@@ -669,8 +669,8 @@ class TestSessionIdentityContract:
         from core.security import _hash_secret
         monkeypatch.setenv("USERS_JSON", json.dumps({
             "reader": {"password_hash": _hash_secret("reader-secret"),
-                       "role": "viewer", "display_name": " Reader ", "email": " reader@example.com "}}))
-        cookies, _ = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+                       "role": "moderator", "display_name": " Reader ", "email": " reader@example.com "}}))
+        cookies, _ = self._auth(monkeypatch, tmp_path, "reader", "moderator")
         body = client.get("/api/session", cookies=cookies).json()
         assert body["authenticated"] is True
         assert body["user"] == "reader"
@@ -679,8 +679,8 @@ class TestSessionIdentityContract:
         assert body["email"] == "reader@example.com"
         assert body["password_policy"] == {"min_length": 12, "require_different_from_current": True}
 
-    def test_viewer_sees_the_same_contract_as_admin(self, monkeypatch, tmp_path):
-        for user, role in (("reader", "viewer"), ("root-admin", "admin")):
+    def test_moderator_sees_the_same_contract_as_admin(self, monkeypatch, tmp_path):
+        for user, role in (("reader", "moderator"), ("root-admin", "admin")):
             cookies, _ = self._auth(monkeypatch, tmp_path, user, role)
             body = client.get("/api/session", cookies=cookies).json()
             assert set(body) == {"authenticated", "user", "login", "role",
@@ -707,22 +707,22 @@ class TestSelfServiceAccount:
         return ({"vertep_session": token, "vertep_csrf": csrf},
                 {"x-csrf-token": csrf})
 
-    def test_viewer_can_update_own_profile_fields(self, monkeypatch, tmp_path):
-        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+    def test_moderator_can_update_own_profile_fields(self, monkeypatch, tmp_path):
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "moderator")
         resp = client.put("/api/session/profile",
-                          json={"display_name": "Переглядач Один", "email": "reader@example.com"},
+                          json={"display_name": "Модератор Один", "email": "reader@example.com"},
                           cookies=cookies, headers=headers)
         assert resp.status_code == 200
-        assert resp.json()["display_name"] == "Переглядач Один"
+        assert resp.json()["display_name"] == "Модератор Один"
         assert resp.json()["email"] == "reader@example.com"
         assert resp.json()["role"] == "moderator"
         # Значення зберігаються і повертаються наступним запитом сесії.
         body = client.get("/api/session", cookies=cookies).json()
-        assert body["display_name"] == "Переглядач Один"
+        assert body["display_name"] == "Модератор Один"
         assert body["email"] == "reader@example.com"
 
     def test_profile_rejects_invalid_fields(self, monkeypatch, tmp_path):
-        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "moderator")
         resp = client.put("/api/session/profile",
                           json={"display_name": "x" * 81, "email": "not-an-email"},
                           cookies=cookies, headers=headers)
@@ -730,12 +730,12 @@ class TestSelfServiceAccount:
         assert set(resp.json()["fields"]) == {"display_name", "email"}
 
     def test_profile_requires_a_session(self, monkeypatch, tmp_path):
-        self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        self._auth(monkeypatch, tmp_path, "reader", "moderator")
         resp = client.put("/api/session/profile", json={"display_name": "X"})
         assert resp.status_code == 401
 
     def test_password_change_is_persisted_and_old_password_stops_working(self, monkeypatch, tmp_path):
-        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "moderator")
         resp = client.put("/api/session/password",
                           json={"old_password": "account-contract-password",
                                 "new_password": "new-reader-password-12"},
@@ -748,7 +748,7 @@ class TestSelfServiceAccount:
         assert _authenticate_user("reader", "account-contract-password") is None
 
     def test_wrong_current_password_is_recoverable(self, monkeypatch, tmp_path):
-        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "moderator")
         resp = client.put("/api/session/password",
                           json={"old_password": "not-the-password",
                                 "new_password": "another-password-12"},
@@ -764,7 +764,7 @@ class TestSelfServiceAccount:
         assert retry.status_code == 200
 
     def test_policy_is_enforced_and_reported(self, monkeypatch, tmp_path):
-        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "viewer")
+        cookies, headers = self._auth(monkeypatch, tmp_path, "reader", "moderator")
         same = client.put("/api/session/password",
                           json={"old_password": "account-contract-password",
                                 "new_password": "account-contract-password"},

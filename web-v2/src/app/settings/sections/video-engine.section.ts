@@ -119,7 +119,7 @@ export class VideoEngineSectionComponent implements OnInit, OnDestroy {
 
   /** The operator may change the engine only with rights and in a state that permits it.
 
-      Both guards already exist elsewhere: ``update_settings`` is refused for viewers and
+      Both guards already exist elsewhere: ``update_settings`` is refused for moderators and
       for the system states that block configuration, so the section asks the same policy
       the API enforces instead of hiding the control behind a second rule of its own. */
   readonly canEdit = computed(() => {

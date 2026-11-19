@@ -1,43 +1,45 @@
-CREATE SCHEMA IF NOT EXISTS brands;
+-- Brands Application Module (#500 AC1/AC2, #502): the single owner of brands,
+-- channels and publication policies. Tables live in the module's own schema
+-- (search_path is pinned by the platform), never in a fixed schema name.
 
-CREATE TABLE IF NOT EXISTS brands.brands (
-    id VARCHAR(64) PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    description TEXT DEFAULT '',
-    logo_url VARCHAR(512),
-    website VARCHAR(512),
-    social_links JSONB DEFAULT '{}',
-    owner_user_id VARCHAR(64) NOT NULL,
-    active BOOLEAN DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS brands (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    metadata JSONB NOT NULL DEFAULT '{}',
+    publishing JSONB NOT NULL DEFAULT '{}',
+    -- automatic | approval_required (#502 AC3)
+    publication_policy TEXT NOT NULL DEFAULT 'approval_required'
+        CHECK (publication_policy IN ('automatic', 'approval_required')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_brands_owner ON brands.brands(owner_user_id);
-CREATE INDEX IF NOT EXISTS idx_brands_active ON brands.brands(active);
-
-CREATE TABLE IF NOT EXISTS brands.brand_collaborations (
-    id SERIAL PRIMARY KEY,
-    brand_id VARCHAR(64) NOT NULL REFERENCES brands.brands(id) ON DELETE CASCADE,
-    collaborator_user_id VARCHAR(64) NOT NULL,
-    permission_level VARCHAR(16) NOT NULL CHECK (permission_level IN ('read', 'write', 'admin')),
-    active BOOLEAN DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (brand_id, collaborator_user_id)
+-- One physical channel (connection/target); credentials stay in the platform
+-- secret store and are never copied here.
+CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY,
+    channel_type TEXT NOT NULL,
+    target TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    metadata JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_brand_collabs_brand ON brands.brand_collaborations(brand_id);
-CREATE INDEX IF NOT EXISTS idx_brand_collabs_user ON brands.brand_collaborations(collaborator_user_id);
+-- Channel <-> Brands is M:N: a shared channel is linked, not duplicated.
+-- policy: inherit | automatic | approval_required (#502 AC3).
+CREATE TABLE IF NOT EXISTS brand_channels (
+    brand_id TEXT NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    policy TEXT NOT NULL DEFAULT 'inherit' CHECK (policy IN ('inherit', 'automatic', 'approval_required')),
+    PRIMARY KEY (brand_id, channel_id)
+);
 
-CREATE TABLE IF NOT EXISTS brands.brand_audit (
+CREATE TABLE IF NOT EXISTS brand_audit (
     id BIGSERIAL PRIMARY KEY,
-    brand_id VARCHAR(64) NOT NULL REFERENCES brands.brands(id) ON DELETE CASCADE,
-    action VARCHAR(32) NOT NULL,
-    actor_user_id VARCHAR(64) NOT NULL,
-    details JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    brand_id TEXT,
+    action TEXT NOT NULL,
+    actor TEXT,
+    details JSONB NOT NULL DEFAULT '{}',
+    at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE INDEX IF NOT EXISTS idx_brand_audit_brand ON brands.brand_audit(brand_id);
-CREATE INDEX IF NOT EXISTS idx_brand_audit_actor ON brands.brand_audit(actor_user_id);

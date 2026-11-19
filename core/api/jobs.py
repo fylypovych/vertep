@@ -255,6 +255,14 @@ def edit_job(job_id: str, request: JobUpdate):
         raise HTTPException(409, f"Job changed; current version is {job.version}")
     prompt = changes.pop("prompt", None)
     script_changed = "script" in changes
+    if "character_id" in changes and changes["character_id"] != job.character_id:
+        # A changed character is checked like a new job's; its owner joins the
+        # brands whose approval the material needs (#499/#500).
+        owner = _check_character_module(changes["character_id"], job.brand_id)
+        if owner and owner != job.brand_id and owner not in job.character_owner_brands:
+            job.character_owner_brands.append(owner)
+            if job.character_owner_brand and job.character_owner_brand not in job.character_owner_brands:
+                job.character_owner_brands.insert(0, job.character_owner_brand)
     if "workflow" in changes:
         try:
             changes["workflow"] = _validate_workflow_reference(changes["workflow"], job.task_type)
@@ -571,6 +579,23 @@ def shared_approval_revoke(job_id: str, body: dict, http_request: Request = None
             raise HTTPException(409, str(error)) from error
         store.update(job, job.status, f"SHARED CONTENT APPROVAL REVOKED BY {owner} ({actor})")
     return state(job)
+
+
+@router.post("/api/jobs/{job_id}/shared-publications")
+def shared_publication(job_id: str, body: dict, http_request: Request = None):
+    """A foreign owner brand publishes the approved material on its own channels."""
+    from ..shared_content import SharedContentError, create_owner_publication
+    job = store.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    brand = str(body.get("brand_id", ""))
+    actor = _require_brand(http_request, brand)
+    with store.lock:
+        try:
+            derived = create_owner_publication(store, job, brand, actor, body)
+        except SharedContentError as error:
+            raise HTTPException(409, str(error)) from error
+    return derived
 
 
 @router.post("/api/jobs/{job_id}/publish")

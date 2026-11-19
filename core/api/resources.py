@@ -180,52 +180,54 @@ def character_usage(character_id: str):
     }
 
 
+def _brand_call(operation, *args):
+    """Brands live in the Brands module when it runs, else in the legacy store (#500)."""
+    from ..brand_store import BrandStoreError
+    try:
+        return operation(*args)
+    except BrandStoreError as error:
+        raise HTTPException(error.status, error.detail) from error
+
+
 @router.post("/api/brands")
 def create_brand(config: BrandConfig):
+    from ..brand_store import create_brand as store_create
     if not config.id:
         raise HTTPException(400, "Brand ID is required")
     if not SAFE_ID.fullmatch(config.id):
         raise HTTPException(400, "Invalid brand ID")
-    directory = Path(os.getenv("BRANDS_ROOT", "brands")) / config.id
-    if directory.exists():
-        raise HTTPException(409, "Brand already exists")
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "brand.json").write_text(config.model_dump_json(indent=2), encoding="utf-8")
-    return config
+    return _brand_call(store_create, config.model_dump())
 
 
 @router.get("/api/brands")
 def brands():
-    root = Path(os.getenv("BRANDS_ROOT", "brands"))
-    result = []
-    for path in root.glob("*/brand.json"):
-        try:
-            result.append(BrandConfig.model_validate(read_json(path)).model_dump())
-        except ValueError:
-            continue
-    return result
+    from ..brand_store import list_brands
+    return _brand_call(list_brands)
+
+
+@router.post("/api/brands/migrate-to-module")
+def migrate_brands_to_module():
+    """Administrator: copy legacy brands/channels into the running Brands module."""
+    from ..brand_store import migrate_to_module
+    return _brand_call(migrate_to_module)
 
 
 @router.put("/api/brands/{brand_id}")
 def put_brand(brand_id: str, config: BrandConfig):
+    from ..brand_store import update_brand
     if brand_id != config.id:
         raise HTTPException(400, "Brand ID cannot be changed")
-    directory = Path(os.getenv("BRANDS_ROOT", "brands")) / brand_id
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "brand.json").write_text(config.model_dump_json(indent=2), encoding="utf-8")
-    return config
+    return _brand_call(update_brand, brand_id, config.model_dump())
 
 
 @router.delete("/api/brands/{brand_id}")
 def delete_brand(brand_id: str):
+    from ..brand_store import delete_brand as store_delete
     if any(job.brand_id == brand_id for job in store.jobs.values()):
         raise HTTPException(409, "Бренд використовується у завданнях")
     if not SAFE_ID.fullmatch(brand_id):
         raise HTTPException(400, "Invalid brand ID")
-    directory = Path(os.getenv("BRANDS_ROOT", "brands")) / brand_id
-    if not directory.is_dir():
-        raise HTTPException(404, "Brand not found")
-    shutil.rmtree(directory)
+    _brand_call(store_delete, brand_id)
     return {"deleted": brand_id}
 
 
@@ -238,12 +240,14 @@ def channel_types():
 def list_brand_channels(brand_id: str):
     if not SAFE_ID.fullmatch(brand_id):
         raise HTTPException(400, "Invalid brand ID")
-    return [ch.model_dump() for ch in store.repository.list_channels(brand_id)]
+    from ..brand_store import list_channels
+    return [ch.model_dump() for ch in _brand_call(list_channels, brand_id)]
 
 
 @router.get("/api/channels/{channel_id}")
 def get_channel(channel_id: str):
-    channel = store.repository.get_channel(channel_id)
+    from ..brand_store import get_channel as store_get
+    channel = _brand_call(store_get, channel_id)
     if not channel:
         raise HTTPException(404, "Channel not found")
     return channel.model_dump()
@@ -268,13 +272,14 @@ def create_channel(brand_id: str, config: ChannelCreate):
     channel = Channel(channel_id=f"ch-{uuid.uuid4().hex[:12]}", brand_id=config.brand_id,
                       channel_type=config.channel_type, target=config.target,
                       enabled=config.enabled, metadata=config.metadata)
-    store.repository.save_channel(channel)
-    return channel.model_dump()
+    from ..brand_store import create_channel as store_create_channel
+    return _brand_call(store_create_channel, channel).model_dump()
 
 
 @router.put("/api/channels/{channel_id}")
 def update_channel(channel_id: str, config: ChannelUpdate):
-    existing = store.repository.get_channel(channel_id)
+    from ..brand_store import get_channel as store_get, update_channel as store_update
+    existing = _brand_call(store_get, channel_id)
     if not existing:
         raise HTTPException(404, "Channel not found")
     if config.target is not None:
@@ -284,14 +289,14 @@ def update_channel(channel_id: str, config: ChannelUpdate):
         existing.enabled = config.enabled
     if config.metadata is not None:
         existing.metadata = config.metadata
-    store.repository.save_channel(existing)
-    return existing.model_dump()
+    return _brand_call(store_update, existing).model_dump()
 
 
 @router.delete("/api/channels/{channel_id}")
 def delete_channel(channel_id: str):
-    existing = store.repository.get_channel(channel_id)
+    from ..brand_store import delete_channel as store_delete_channel, get_channel as store_get
+    existing = _brand_call(store_get, channel_id)
     if not existing:
         raise HTTPException(404, "Channel not found")
-    store.repository.delete_channel(channel_id)
+    _brand_call(store_delete_channel, channel_id)
     return {"deleted": channel_id}

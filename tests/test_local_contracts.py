@@ -120,9 +120,9 @@ def test_workflow_registry_usage_lists_dependent_jobs_and_characters(tmp_path, m
 
 
 def test_roles_metrics_and_worker_log_ingestion(monkeypatch):
-    password = "viewer-password-long"
+    password = "moderator-password-long"
     monkeypatch.setenv("ADMIN_PASSWORD", "fallback-admin-password")
-    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": _hash_secret(password), "role": "viewer"}}))
+    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": _hash_secret(password), "role": "moderator"}}))
     monkeypatch.setenv("WORKER_TOKENS", "log-worker:log-secret")
     client = TestClient(app)
     metrics = client.get("/api/metrics", auth=("reader", password))
@@ -337,7 +337,7 @@ def test_frontend_session_identity_has_a_single_validator_without_role_fallback(
     """Issue #75 S1: обидва clients мають ділити один валідатор identity.
 
     `SessionApiService.profile` раніше перетворював будь-яку відповідь із role,
-    відмінною від viewer, на admin. Оскільки цей client не підключений до
+    відмінною від moderator, на admin. Оскільки цей client не підключений до
     компонентів, дефект не ловив жоден UI-тест — контракт перевіряється
     статично, разом із забороною будь-якого role-fallback у clients.
     """
@@ -350,8 +350,8 @@ def test_frontend_session_identity_has_a_single_validator_without_role_fallback(
     for client in ("core/api/session.api.ts", "core/api/auth.api.ts"):
         source = (root / client).read_text(encoding="utf-8")
         assert "session-identity" in source, f"{client} does not use the shared identity validator"
-        # Жодного «все, що не viewer, — це admin».
-        assert not re.search(r"role\s*===\s*['\"]viewer['\"]\s*\?\s*['\"]viewer['\"]\s*:\s*['\"]admin['\"]",
-                             source), f"{client} still promotes a non-viewer role to admin"
+        # Жодного «все, що не moderator, — це admin».
+        assert not re.search(r"role\s*===\s*['\"]moderator['\"]\s*\?\s*['\"]moderator['\"]\s*:\s*['\"]admin['\"]",
+                             source), f"{client} still promotes a non-moderator role to admin"
         assert not re.search(r"role\s*:\s*['\"]admin['\"]\s*(\)|,|\})", source), \
             f"{client} hardcodes an admin role instead of reading the validated one"

@@ -414,7 +414,7 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
         "id": "browser",
         "title": "Browser: Native default, MPT configure/apply/error/rollback, "
                  "явне повернення Native, reload/restart, активний Job при switch, "
-                 "admin/viewer, system-state lock",
+                 "admin/moderator, system-state lock",
         "owner": "#122 §6 Browser, #82/#99",
         "needs": (BROWSER,),
         # §6 Browser evidence must not substitute a mocked Settings mutation for the
@@ -427,7 +427,7 @@ _ACCEPTANCE_ROWS: tuple[dict[str, Any], ...] = (
             "tests/test_browser_e2e.py::test_real_backend_video_engine_shows_the_effective_executor",
             "tests/test_browser_e2e.py::test_real_backend_video_engine_refuses_a_runtime_it_cannot_prove",
             "tests/test_browser_e2e.py::test_real_backend_video_engine_applies_a_runtime_and_returns_to_native",
-            "tests/test_browser_e2e.py::test_real_backend_viewer_cannot_change_the_video_engine",
+            "tests/test_browser_e2e.py::test_real_backend_moderator_cannot_change_the_video_engine",
             "tests/test_browser_e2e.py::test_real_backend_system_state_locks_the_video_engine",
         ),
     },

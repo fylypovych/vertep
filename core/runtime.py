@@ -93,7 +93,8 @@ def handle_expired_storyboard_lease(store, task: dict) -> bool:
         import os as _os
         from pathlib import Path as _Path
         character = load_character(_Path(_os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
-        brand = read_json(_Path(_os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
+        from .brand_store import get_brand
+        brand = get_brand(job.brand_id) or {}
         active_revision = getattr(job, "storyboard_active_revision", None)
         prompt = build_storyboard_prompt(job, character, brand, active_revision)
         version = (job.storyboards[-1].version + 1 if job.storyboards else 1)

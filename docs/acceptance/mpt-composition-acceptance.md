@@ -112,7 +112,7 @@ callback ID у двох наявних node-test handlers. Нових проду
 
 Відомий до refactor baseline `test_backup_browser_telegram_rbac` шукав `auth`
 у `services/backup_service.py`, хоча guard належить API/Telegram. Перевірку
-замінено фактичними TestClient і Telegram callback викликами: viewer 403,
+замінено фактичними TestClient і Telegram callback викликами: moderator 403,
 READ_ONLY 423 без зовнішнього backup call, admin 200, Telegram non-admin denied,
 admin success та authenticated internal call 423 у READ_ONLY. Контролюється лише
 зовнішній Backup Service/Telegram transport; тест не підміняє CORE guards.

@@ -59,7 +59,7 @@ export class PostSetupDialogComponent {
   private checked = false;
 
   constructor(private system: SystemApiService, private policy: PolicyService) {
-    // Until the policy has loaded everyone looks like a viewer, so wait for it.
+    // Until the policy has loaded everyone looks like a moderator, so wait for it.
     effect(() => {
       if (this.checked || !this.policy.stateLoaded() || !this.policy.can('update_settings').allowed) return;
       this.checked = true;

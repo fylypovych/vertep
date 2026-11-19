@@ -93,10 +93,10 @@ const PANEL_API_MAJOR = 1;
              [class.opacity-0]="collapsed"
              [class.hidden]="collapsed">
           Vertep v{{ runtimeVersion || '...' }}
-          @if (panelVersion && panelVersion !== runtimeVersion) {
-            <div data-testid="panel-version">{{ 'Панель' | t }} v{{ panelVersion }}</div>
+          @if (panelVersion() && panelVersion() !== runtimeVersion) {
+            <div data-testid="panel-version">{{ 'Панель' | t }} v{{ panelVersion() }}</div>
           }
-          @if (apiIncompatible) {
+          @if (apiIncompatible()) {
             <div class="text-amber-700 whitespace-normal" data-testid="panel-incompatible">{{ 'Панель несумісна з цією версією CORE. Оновіть сторінку або панель.' | t }}</div>
           }
         </div>
@@ -233,8 +233,8 @@ export class SidebarComponent implements OnInit {
 
   runtimeVersion: string | null = null;
   /** #504: build of the separately deployed panel and its API compatibility. */
-  panelVersion: string | null = null;
-  apiIncompatible = false;
+  panelVersion = signal<string | null>(null);
+  apiIncompatible = signal(false);
 
   constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService,
               private modulesApi: ModulesApiService) {}
@@ -242,12 +242,12 @@ export class SidebarComponent implements OnInit {
   ngOnInit(): void {
     fetch('/ui-version.json', { cache: 'no-store' })
       .then((response) => (response.ok ? response.json() : null))
-      .then((identity) => { this.panelVersion = identity?.version || null; })
-      .catch(() => { this.panelVersion = null; });
+      .then((identity) => { this.panelVersion.set(identity?.version || null); })
+      .catch(() => { this.panelVersion.set(null); });
     this.systemApi.status().subscribe({
       next: (s) => {
         this.runtimeVersion = s.version || null;
-        this.apiIncompatible = s.api_major !== undefined && s.api_major !== PANEL_API_MAJOR;
+        this.apiIncompatible.set(s.api_major !== undefined && s.api_major !== PANEL_API_MAJOR);
       },
       error: () => { this.runtimeVersion = null; },
     });

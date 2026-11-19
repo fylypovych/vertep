@@ -69,6 +69,8 @@ class BrandConfig(BaseModel):
     enabled: bool = True
     metadata: dict = Field(default_factory=dict)
     publishing: dict = Field(default_factory=dict)
+    # #502 AC3: brand publication policy (channels may override it).
+    publication_policy: str = Field(default="approval_required", pattern="^(automatic|approval_required)$")
 
 
 def read_json(path: Path, default: dict | None = None) -> dict:

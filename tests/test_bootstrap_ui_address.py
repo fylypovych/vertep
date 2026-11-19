@@ -90,3 +90,34 @@ def test_ipv6_is_bracketed_and_missing_addresses_give_a_clear_message(tmp_path):
 
 def test_bootstrap_no_longer_takes_the_first_hostname_address():
     assert "hostname -I | awk '{print $1}'" not in BOOTSTRAP
+
+
+@pytest.mark.parametrize("public_url", [
+    "https://10.10.10.999:8443",            # not an IPv4 address
+    "https://vertep.lan:8443/?next=/x",      # a query would break the Wizard path
+    "https://vertep.lan:8443/#frag",
+    "https://user:secret@vertep.lan:8443",   # credentials never become the printed address
+    "https://vertep.lan:70000",              # invalid port
+    "ftp://vertep.lan",
+    "https://-bad-.lan:8443",
+])
+def test_an_invalid_public_url_is_ignored_and_candidates_are_shown(tmp_path, public_url):
+    out, opened = run(tmp_path, "2: eth0    inet 192.168.1.20/24 scope global eth0", env_file=f"PUBLIC_URL={public_url}\n")
+    assert "Open https://192.168.1.20:8443/ in your browser." in out and opened == "https://192.168.1.20:8443/"
+    assert public_url.split("://", 1)[1].split("/")[0] not in out
+
+
+def test_an_invalid_ipv6_candidate_is_never_printed(tmp_path):
+    out, _ = run(tmp_path, "2: eth0    inet6 a:::f/64 scope global eth0\n3: eth1    inet 10.0.0.7/24 scope global eth1")
+    assert "a:::f" not in out and "Open https://10.0.0.7:8443/ in your browser." in out
+
+
+@pytest.mark.parametrize("public_url, base", [
+    ("https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443/"),
+    ("https://vertep.lan/panel/", "https://vertep.lan/panel/"),
+    ("http://10.10.10.10:8080", "http://10.10.10.10:8080/"),
+])
+def test_valid_public_urls_keep_the_wizard_path_well_formed(tmp_path, public_url, base):
+    out, opened = run(tmp_path, MULTI_NIC, env_file=f"PUBLIC_URL={public_url}\n", installed=False)
+    assert opened == f"{base}setup?token=abc123"
+    assert f"Open {base}setup?token=abc123 in your browser to complete the First Run Wizard." in out

@@ -85,6 +85,8 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/shared-content"],  # #500 Brands «Спільний контент».
         ["POST", "/api/jobs/{job_id}/shared-approval"],
         ["POST", "/api/jobs/{job_id}/shared-approval/revoke"],
+        ["POST", "/api/jobs/{job_id}/shared-publications"],
+        ["POST", "/api/brands/migrate-to-module"],  # owner decision 19.11.2026: brands move into the module.
         ["GET", "/api/settings/users"],  # owner decision 19.11.2026: moderators and their brands.
         ["POST", "/api/settings/users"],
         ["PUT", "/api/settings/users/{username}"],

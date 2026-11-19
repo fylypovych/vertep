@@ -103,7 +103,7 @@ def config_contour(tmp_path, request, record_property):
         "PIPER_URL": endpoint, "POSTGRES_HOST": "127.0.0.2", "PROVIDER_ACTIVATION_TIMEOUT_SECONDS": "8",
         "LOCAL_WORKER_FALLBACK": "false", "RATE_LIMIT_PER_MINUTE": "10000"}
     from core.security import _hash_secret
-    env["USERS_JSON"] = json.dumps({"reader": {"password_hash": _hash_secret("config-viewer-password"), "role": "viewer"}})
+    env["USERS_JSON"] = json.dumps({"reader": {"password_hash": _hash_secret("config-moderator-password"), "role": "moderator"}})
     if fresh or getattr(request, "param", None) == "dependencies":
         env.update(request.getfixturevalue("node_dependencies")["env"])
     if fresh:
@@ -317,7 +317,7 @@ def test_deferred_activation_is_not_success_and_late_failure_rolls_back(config_c
     wait(lambda: c["observation"]().get("observed", {}).get("TTS_PROVIDER") == "none")
 
 
-@pytest.mark.parametrize("role,mode,status", [("viewer", "NORMAL", 403), ("admin", "READ_ONLY", 423), ("admin", "RECOVERING", 423)])
+@pytest.mark.parametrize("role,mode,status", [("moderator", "NORMAL", 403), ("admin", "READ_ONLY", 423), ("admin", "RECOVERING", 423)])
 def test_actual_settings_permissions_and_state_preserve_selection(config_contour, role, mode, status):
     c = config_contour
     if mode != "NORMAL":
@@ -325,7 +325,7 @@ def test_actual_settings_permissions_and_state_preserve_selection(config_contour
         (c["root"] / "update/system-state.json").write_text(json.dumps({"state": mode}), encoding="utf-8")
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(); context = browser.new_context(base_url=c["url"])
-        user, password = ("admin", PASSWORD) if role == "admin" else ("reader", "config-viewer-password")
+        user, password = ("admin", PASSWORD) if role == "admin" else ("reader", "config-moderator-password")
         response = context.request.post("/api/session", headers={"Authorization": "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()})
         assert response.status == 200
         page = context.new_page()

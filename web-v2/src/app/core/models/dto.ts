@@ -243,7 +243,7 @@ export interface RouteMetadata {
   title?: string;
   icon?: string;
   adminOnly?: boolean;
-  roles?: string[]; // ['admin', 'viewer'] or similar
+  roles?: string[]; // ['admin', 'moderator'] or similar
   exact?: boolean;
   [key: string]: unknown; // Allow custom metadata
 }

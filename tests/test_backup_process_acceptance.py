@@ -290,7 +290,7 @@ def test_core_caller_surfaces_restore_refusals_without_mutation(backup_process):
     (config / "users.json").write_text("{}", encoding="utf-8")
     (config / "installation.json").write_text('{"completed_at":"2026-01-01"}', encoding="utf-8")
     from core.security import _hash_secret
-    viewer_password = "refusal-viewer-password"
+    moderator_password = "refusal-moderator-password"
     with socket.socket() as socket_probe:
         socket_probe.bind(("127.0.0.1", 0))
         core_port = socket_probe.getsockname()[1]
@@ -307,11 +307,11 @@ def test_core_caller_surfaces_restore_refusals_without_mutation(backup_process):
         "ADMIN_PASSWORD": "refusal-process-admin", "DATABASE_URL": "", "REDIS_URL": "",
         "CORE_ADDRESS": "", "OLLAMA_URL": "http://127.0.0.1:1", "PROMETHEUS_URL": "",
         "USERS_JSON": json.dumps({
-            "reader": {"password_hash": _hash_secret(viewer_password), "role": "viewer"}}),
+            "reader": {"password_hash": _hash_secret(moderator_password), "role": "moderator"}}),
     }
     admin_auth = "Basic " + base64.b64encode(b"admin:refusal-process-admin").decode()
-    viewer_auth = "Basic " + base64.b64encode(
-        f"reader:{viewer_password}".encode("utf-8")).decode()
+    moderator_auth = "Basic " + base64.b64encode(
+        f"reader:{moderator_password}".encode("utf-8")).decode()
     _, api = backup_process["launch"](core_env, core_port, "core.app:app", "/api/session",
                                       {"Authorization": admin_auth})
     data = backup_process["storage"] / "refusal-record.json"
@@ -322,8 +322,8 @@ def test_core_caller_surfaces_restore_refusals_without_mutation(backup_process):
     # RBAC rejects before the Backup Service is asked and before any fence.
     with httpx.Client(base_url=api.base_url, timeout=30) as anonymous:
         assert anonymous.post(f"/api/system/backups/{missing}/restore").status_code == 401
-    with httpx.Client(base_url=api.base_url, timeout=30, headers={"Authorization": viewer_auth}) as viewer:
-        assert viewer.post(f"/api/system/backups/{missing}/restore").status_code == 403
+    with httpx.Client(base_url=api.base_url, timeout=30, headers={"Authorization": moderator_auth}) as moderator:
+        assert moderator.post(f"/api/system/backups/{missing}/restore").status_code == 403
     state = api.get("/api/system/state").json()
     assert state["state"] == "NORMAL" and state["operation_id"] is None
 

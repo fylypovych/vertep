@@ -441,10 +441,10 @@ def test_fleet_browser_token_enrollment_retry_and_forbidden_mutations(config_con
             page.reload()
             expect(page.get_by_test_id("workers-page")).to_contain_text("fleet-backup")
             assert next(node for node in api.get("/api/nodes").json() if node["node_id"] == "fleet-backup")["runtime_status"] == "ONLINE"
-            for role, mode, status in [("viewer", "NORMAL", 403), ("admin", "READ_ONLY", 423)]:
+            for role, mode, status in [("moderator", "NORMAL", 403), ("admin", "READ_ONLY", 423)]:
                 state_file.write_text(json.dumps({"state": mode}), encoding="utf-8")
                 limited = browser.new_context(base_url=c["url"])
-                user, password = ("reader", "config-viewer-password") if role == "viewer" else ("admin", PASSWORD)
+                user, password = ("reader", "config-moderator-password") if role == "moderator" else ("admin", PASSWORD)
                 assert limited.request.post("/api/session", headers={"Authorization": "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()}).status == 200
                 denied_page = limited.new_page(); denied_page.goto(c["url"] + "/workers")
                 expect(denied_page.get_by_test_id("create-worker-button")).to_be_disabled()

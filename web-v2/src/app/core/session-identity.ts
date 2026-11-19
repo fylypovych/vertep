@@ -18,6 +18,8 @@ export interface SessionIdentity {
   role: SessionRole;
   display_name: string | null;
   email: string | null;
+  /** Brands of a moderator; null for the administrator (every brand). */
+  brands: string[] | null;
 }
 
 export interface PasswordPolicy {
@@ -33,6 +35,7 @@ export interface SessionEnvelope {
   role?: string | null;
   display_name?: string | null;
   email?: string | null;
+  brands?: string[] | null;
   password_policy?: Partial<PasswordPolicy> | null;
 }
 
@@ -109,6 +112,8 @@ export function resolveSessionIdentity(payload: unknown): SessionIdentity | null
     role: session.role,
     display_name: asText(session.display_name) || null,
     email: asText(session.email) || null,
+    brands: session.role === 'admin' ? null
+      : (Array.isArray(session.brands) ? session.brands.filter((item): item is string => typeof item === 'string') : []),
   };
 }
 

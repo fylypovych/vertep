@@ -104,14 +104,14 @@ def test_restore_is_not_misclassified_as_backup(monkeypatch, tmp_path):
 # The table above pins the route -> operation classification against the
 # central policy.  The cells that were still missing are the ones that need a
 # real request against the real application: a forbidden mutation (blocked
-# system state or the viewer role) must leave the resource exactly as it was,
+# system state or the moderator role) must leave the resource exactly as it was,
 # the allowed recovery/session operations must keep working, and the
 # method/path contract of every remaining probe is pinned by an executable
 # request instead of a source-string check.
 # ---------------------------------------------------------------------------
 
 ADMIN_PASSWORD = "matrix-admin-password"
-VIEWER_PASSWORD = "matrix-viewer-password"
+MODERATOR_PASSWORD = "matrix-moderator-password"
 
 CHARACTER_BODY = {"id": "matrix_char", "name": "Matrix Character"}
 BRAND_BODY = {"id": "matrix_brand", "name": "Matrix Brand"}
@@ -125,7 +125,7 @@ def _basic(user: str, password: str) -> dict:
 
 @pytest.fixture
 def actual_backend(monkeypatch, tmp_path):
-    """A configured installation with isolated resource roots and a viewer account."""
+    """A configured installation with isolated resource roots and a moderator account."""
     import core.state
     from core.security import _hash_secret, _session_token
     from core.workflows import WorkflowRegistry
@@ -149,18 +149,18 @@ def actual_backend(monkeypatch, tmp_path):
     monkeypatch.setenv("ADMIN_USER", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("USERS_JSON", json.dumps({
-        "reader": {"password_hash": _hash_secret(VIEWER_PASSWORD), "role": "viewer"}}))
+        "reader": {"password_hash": _hash_secret(MODERATOR_PASSWORD), "role": "moderator"}}))
 
     original_registry = core.state.workflow_registry
     core.state.workflow_registry = WorkflowRegistry(workflows)
-    token = _session_token("reader", "viewer")
+    token = _session_token("reader", "moderator")
     csrf = hmac.new(ADMIN_PASSWORD.encode(), token.encode(), hashlib.sha256).hexdigest()
     try:
         yield {
             "client": TestClient(app, raise_server_exceptions=False),
             "admin": _basic("admin", ADMIN_PASSWORD),
-            "viewer_cookies": {"vertep_session": token, "vertep_csrf": csrf},
-            "viewer_headers": {"x-csrf-token": csrf},
+            "moderator_cookies": {"vertep_session": token, "vertep_csrf": csrf},
+            "moderator_headers": {"x-csrf-token": csrf},
             "characters": characters,
             "brands": brands,
             "workflows": workflows,
@@ -170,8 +170,8 @@ def actual_backend(monkeypatch, tmp_path):
 
 
 def _request(ctx, method: str, path: str, body, *, role: str = "admin"):
-    headers = ctx["admin"] if role == "admin" else ctx["viewer_headers"]
-    cookies = None if role == "admin" else ctx["viewer_cookies"]
+    headers = ctx["admin"] if role == "admin" else ctx["moderator_headers"]
+    cookies = None if role == "admin" else ctx["moderator_cookies"]
     if method == "DELETE":
         return ctx["client"].delete(path, headers=headers, cookies=cookies)
     return ctx["client"].request(method, path, json=body, headers=headers, cookies=cookies)
@@ -292,9 +292,9 @@ def test_a_blocked_state_leaves_the_resource_unchanged(label, actual_backend, mo
 
 
 @pytest.mark.parametrize("label", sorted(PROBES))
-def test_a_viewer_mutation_is_refused_and_leaves_the_resource_unchanged(
+def test_a_moderator_mutation_is_refused_and_leaves_the_resource_unchanged(
         label, actual_backend, monkeypatch, tmp_path):
-    """Issue #168.4: the viewer role is refused by the API, not only by the UI."""
+    """Issue #168.4: the moderator role is refused by the API, not only by the UI."""
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "update"))
     probe = PROBES[label](actual_backend)
     previous = get_system_state()["state"]
@@ -302,7 +302,7 @@ def test_a_viewer_mutation_is_refused_and_leaves_the_resource_unchanged(
         set_system_state(SystemState.NORMAL, "matrix normal")
         before = probe["snapshot"]()
         response = _request(actual_backend, probe["method"], probe["path"], probe["body"],
-                            role="viewer")
+                            role="moderator")
         assert response.status_code == 403, response.text
         assert "Insufficient role" in response.text
         assert probe["snapshot"]() == before
@@ -393,7 +393,7 @@ def test_create_job_is_blocked_and_creates_no_job(state, actual_backend, monkeyp
 
 @pytest.mark.parametrize("state", [SystemState.MAINTENANCE, SystemState.RECOVERING,
                                    SystemState.READ_ONLY, SystemState.EMERGENCY])
-def test_viewer_session_operations_keep_working_in_a_restricted_state(
+def test_moderator_session_operations_keep_working_in_a_restricted_state(
         state, actual_backend, monkeypatch, tmp_path):
     """Issue #168.3: session operations stay available in every restricted state."""
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path / "update"))
@@ -401,19 +401,19 @@ def test_viewer_session_operations_keep_working_in_a_restricted_state(
     try:
         set_system_state(state, f"matrix {state.value}")
         session = actual_backend["client"].get("/api/session",
-                                                cookies=actual_backend["viewer_cookies"])
+                                                cookies=actual_backend["moderator_cookies"])
         assert session.status_code == 200, session.text
         assert session.json()["authenticated"] is True
         assert session.json()["role"] == "moderator"
 
         profile = actual_backend["client"].put(
             "/api/session/profile", json={"display_name": "Matrix Reader"},
-            cookies=actual_backend["viewer_cookies"], headers=actual_backend["viewer_headers"])
+            cookies=actual_backend["moderator_cookies"], headers=actual_backend["moderator_headers"])
         assert profile.status_code == 200, profile.text
         assert profile.json()["display_name"] == "Matrix Reader"
 
         logout = actual_backend["client"].delete("/api/session",
-                                                  cookies=actual_backend["viewer_cookies"])
+                                                  cookies=actual_backend["moderator_cookies"])
         assert logout.status_code == 200, logout.text
         assert logout.json()["authenticated"] is False
     finally:

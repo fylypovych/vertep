@@ -360,7 +360,16 @@ class Job(BaseModel):
     # #500 Shared content: brand owning the character (Characters module), when
     # it differs from ``brand_id``; and the append-only owner decisions.
     character_owner_brand: str | None = None
+    # Every brand whose character the material used (e.g. after a character change).
+    character_owner_brands: list[str] = Field(default_factory=list)
     shared_approvals: list[dict[str, Any]] = Field(default_factory=list)
+    # A foreign owner's own, independent publication of the same immutable
+    # artifact: {job_id, version, sha256} of the source material (#500 AC5).
+    shared_source: dict[str, Any] | None = None
+    # Brand-specific title/description/hashtags/cover; the video stays identical.
+    publication_metadata: dict[str, Any] = Field(default_factory=dict)
+    # Audit of independent publications created from this material.
+    shared_publications: list[dict[str, Any]] = Field(default_factory=list)
     workflow: str | None = None
     active_task_id: str | None = None
     active_task_ids: dict[str, str] = Field(default_factory=dict)

@@ -2418,13 +2418,14 @@ def test_update_center_renders_progress_recovery_and_localized_controls():
         browser.close()
 
 
-def test_viewer_cannot_see_or_open_admin_settings():
-    """#106: role/permission UI hides Settings and its route from viewers."""
+def test_moderator_cannot_see_or_open_admin_settings():
+    """#106: role/permission UI hides Settings and its route from non-admins
+    (since 19.11.2026 the moderator; the former moderator role is gone)."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
-        _mock_session(page, role="viewer")
+        _mock_session(page, role="moderator")
         _mock_status(page)
         page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
         page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
@@ -2604,8 +2605,8 @@ def test_loading_state_resolves_to_content_or_error():
 # щоб ротація пароля не залишала другий дійсний шлях входу).
 ADMIN_USER = os.getenv("VERTEP_E2E_ADMIN_USER", "e2e-admin")
 ADMIN_PASSWORD = os.getenv("VERTEP_E2E_ADMIN_PASSWORD", "e2e-admin-password-12")
-VIEWER_USER = os.getenv("VERTEP_E2E_VIEWER_USER", "e2e-viewer")
-VIEWER_PASSWORD = os.getenv("VERTEP_E2E_VIEWER_PASSWORD", "e2e-viewer-password-12")
+MODERATOR_USER = os.getenv("VERTEP_E2E_MODERATOR_USER", "e2e-moderator")
+MODERATOR_PASSWORD = os.getenv("VERTEP_E2E_MODERATOR_PASSWORD", "e2e-moderator-password-12")
 ROTATED_ADMIN_PASSWORD = os.getenv("VERTEP_E2E_ROTATED_PASSWORD", "e2e-admin-rotated-12")
 # tests/conftest.py перенаправляє UPDATE_STATE_DIR у герметичний тимчасовий каталог,
 # тому стан керованої системи задається окремим шляхом до каталогу, який читає
@@ -2748,39 +2749,39 @@ def _restore_admin_password(browser):
         context.close()
 
 
-def test_real_backend_viewer_has_no_admin_access():
-    """Issue #75 S1/S6: справжній viewer не отримує admin UI та admin API."""
+def test_real_backend_moderator_has_no_admin_access():
+    """Issue #75 S1/S6: справжній moderator не отримує admin UI та admin API."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
         try:
-            _ui_login(page, VIEWER_USER, VIEWER_PASSWORD)
-            expect(page.get_by_text("Переглядач", exact=False).first).to_be_visible(timeout=20000)
+            _ui_login(page, MODERATOR_USER, MODERATOR_PASSWORD)
+            expect(page.get_by_text("Модератор", exact=False).first).to_be_visible(timeout=20000)
             expect(page.locator("nav").first.get_by_text("Налаштування", exact=True)).to_have_count(0)
 
             body = page.request.get(f"{BASE_URL}/api/session").json()
             assert body["authenticated"] is True
-            assert body["user"] == VIEWER_USER
-            assert body["role"] == "viewer"
+            assert body["user"] == MODERATOR_USER
+            assert body["role"] == "moderator" and body["brands"] == []  # no brands: read-only
 
             # Прямі API-негативні перевірки: UI не є доказом серверного RBAC.
-            create = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": "viewer probe"})
-            assert create.status == 403, f"viewer job create returned {create.status}"
+            create = page.request.post(f"{BASE_URL}/api/jobs", data={"topic": "moderator probe"})
+            assert create.status == 403, f"moderator job create returned {create.status}"
             settings = page.request.post(f"{BASE_URL}/api/settings/logo")
-            assert settings.status == 403, f"viewer settings mutation returned {settings.status}"
+            assert settings.status == 403, f"moderator settings mutation returned {settings.status}"
 
-            # Власний профіль і власний пароль viewer недоступні адміністратору,
+            # Власний профіль і власний пароль moderator недоступні адміністратору,
             # але доступні самому власнику акаунта.
             page.goto(f"{BASE_URL}/profile")
             expect(page.get_by_test_id("profile-page")).to_be_visible(timeout=20000)
-            expect(page.get_by_test_id("profile-role")).to_have_text("Переглядач")
-            page.get_by_test_id("display-name-input").fill("Browser E2E Viewer")
-            page.get_by_test_id("email-input").fill("browser-e2e-viewer@example.com")
+            expect(page.get_by_test_id("profile-role")).to_have_text("Модератор")
+            page.get_by_test_id("display-name-input").fill("Browser E2E Moderator")
+            page.get_by_test_id("email-input").fill("browser-e2e-moderator@example.com")
             page.get_by_test_id("account-save").click()
             page.wait_for_timeout(500)
             page.reload()
-            expect(page.get_by_test_id("display-name-input")).to_have_value("Browser E2E Viewer")
+            expect(page.get_by_test_id("display-name-input")).to_have_value("Browser E2E Moderator")
 
             _ui_logout(page)
             expect(page.get_by_role("heading", name="Вхід")).to_be_visible()
@@ -2931,10 +2932,10 @@ def test_real_backend_video_engine_refuses_a_runtime_it_cannot_prove():
             browser.close()
 
 
-def test_real_backend_viewer_cannot_change_the_video_engine():
+def test_real_backend_moderator_cannot_change_the_video_engine():
     """P8 RBAC: the engine controls are admin-only in the UI and in the API.
 
-    ``/settings`` is behind the existing admin guard, so a viewer is redirected away
+    ``/settings`` is behind the existing admin guard, so a moderator is redirected away
     instead of being offered the control; the API refuses the same switch even if the
     request is made directly.
     """
@@ -2943,11 +2944,11 @@ def test_real_backend_viewer_cannot_change_the_video_engine():
         page = browser.new_page()
         page_errors, console_errors = _attach_error_collector(page)
         try:
-            _ui_login(page, VIEWER_USER, VIEWER_PASSWORD)
+            _ui_login(page, MODERATOR_USER, MODERATOR_PASSWORD)
             page.goto(f"{BASE_URL}/settings?tab=video-engine")
             expect(page.get_by_test_id("settings-video-engine")).not_to_be_visible(timeout=20000)
             assert "/settings" not in page.url, \
-                f"a viewer reached the admin settings screen: {page.url}"
+                f"a moderator reached the admin settings screen: {page.url}"
 
             before = _engine_state(page)
             refused = page.request.post(
@@ -2955,7 +2956,7 @@ def test_real_backend_viewer_cannot_change_the_video_engine():
                 data={"backend": "money-printer", "endpoint": "http://127.0.0.1:9"},
                 headers=_csrf_headers(page.context),
             )
-            assert refused.status == 403, f"viewer engine switch returned {refused.status}"
+            assert refused.status == 403, f"moderator engine switch returned {refused.status}"
             after = _engine_state(page)
             assert after["effective"] == before["effective"]
             assert after["config_revision"] == before["config_revision"]

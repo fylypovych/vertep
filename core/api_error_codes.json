@@ -167,6 +167,8 @@
  "Characters module is unavailable": "characters_module_is_unavailable",
  "Brand access required": "brand_access_required",
  "version is required": "version_is_required",
+ "Brands module is unavailable": "brands_module_is_unavailable",
+ "Brands module is not active": "brands_module_is_not_active",
  "brands must be a list of brand ids": "brands_must_be_a_list",
  "role must be admin or moderator": "role_must_be_admin_or_moderator",
  "Invalid username": "invalid_username",

@@ -1,241 +1,257 @@
-import os
+"""Brands Application Module logic (#500 AC1/AC2, #502).
+
+The module is the single owner of brands, channels (M:N with brands) and
+publication policies. It runs in its own container with its own schema/role;
+the platform provisions the database and hands the credentials to the module.
+"""
+
+from __future__ import annotations
+
 import json
-import logging
-import pg8000.native
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, asdict
-from datetime import datetime
-from contextlib import contextmanager
+import re
+import uuid
+from typing import Any
 
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class Brand:
-    id: str
-    name: str
-    description: str
-    logo_url: Optional[str]
-    website: Optional[str]
-    social_links: Dict[str, str]
-    owner_user_id: str
-    active: bool
-    created_at: str
-    updated_at: str
+SAFE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{1,63}")
+CHANNEL_TYPES = {"youtube", "tiktok", "facebook", "instagram", "threads", "telegram"}
+BRAND_POLICIES = {"automatic", "approval_required"}
+CHANNEL_POLICIES = {"inherit", "automatic", "approval_required"}
 
 
-@dataclass
-class BrandCollaboration:
-    id: int
-    brand_id: str
-    collaborator_user_id: str
-    permission_level: str  # read, write, admin
-    active: bool
-    created_at: str
-    updated_at: str
+class BrandsError(ValueError):
+    """Invalid request (422)."""
 
 
-class BrandsModule:
-    def __init__(self, db_url: str):
-        self.db_url = db_url
-        self._pool = None
+class NotFound(LookupError):
+    """Unknown brand/channel (404)."""
 
-    @contextmanager
-    def _conn(self):
-        conn = pg8000.native.Connection(self.db_url)
+
+class Conflict(RuntimeError):
+    """State conflict (409)."""
+
+
+def _json(value) -> str:
+    return json.dumps(value if value is not None else {}, ensure_ascii=False)
+
+
+def _obj(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
         try:
-            yield conn
-        finally:
-            conn.close()
-
-    def _row_to_brand(self, row) -> Brand:
-        return Brand(
-            id=row[0],
-            name=row[1],
-            description=row[2] or "",
-            logo_url=row[3],
-            website=row[4],
-            social_links=json.loads(row[5]) if row[5] else {},
-            owner_user_id=row[6],
-            active=row[7],
-            created_at=str(row[8]),
-            updated_at=str(row[9]),
-        )
-
-    def _row_to_collab(self, row) -> BrandCollaboration:
-        return BrandCollaboration(
-            id=row[0],
-            brand_id=row[1],
-            collaborator_user_id=row[2],
-            permission_level=row[3],
-            active=row[4],
-            created_at=str(row[5]),
-            updated_at=str(row[6]),
-        )
-
-    def create_brand(self, brand: Brand) -> Brand:
-        with self._conn() as conn:
-            conn.run(
-                """
-                INSERT INTO brands (id, name, description, logo_url, website, social_links, owner_user_id, active, created_at, updated_at)
-                VALUES (:id, :name, :description, :logo_url, :website, :social_links, :owner_user_id, :active, :created_at, :updated_at)
-                """,
-                id=brand.id,
-                name=brand.name,
-                description=brand.description,
-                logo_url=brand.logo_url,
-                website=brand.website,
-                social_links=json.dumps(brand.social_links),
-                owner_user_id=brand.owner_user_id,
-                active=brand.active,
-                created_at=brand.created_at,
-                updated_at=brand.updated_at,
-            )
-            self._audit(conn, brand.id, "create", brand.owner_user_id, asdict(brand))
-            return brand
-
-    def get_brand(self, brand_id: str) -> Optional[Brand]:
-        with self._conn() as conn:
-            rows = conn.run("SELECT * FROM brands WHERE id = :id", id=brand_id)
-            return self._row_to_brand(rows[0]) if rows else None
-
-    def list_brands(self, owner_user_id: Optional[str] = None, active_only: bool = False) -> List[Brand]:
-        with self._conn() as conn:
-            sql = "SELECT * FROM brands"
-            params = {}
-            conditions = []
-            if owner_user_id:
-                conditions.append("owner_user_id = :owner_user_id")
-                params["owner_user_id"] = owner_user_id
-            if active_only:
-                conditions.append("active = true")
-            if conditions:
-                sql += " WHERE " + " AND ".join(conditions)
-            sql += " ORDER BY created_at DESC"
-            rows = conn.run(sql, **params)
-            return [self._row_to_brand(r) for r in rows]
-
-    def update_brand(self, brand_id: str, updates: Dict[str, Any], actor_user_id: str) -> Optional[Brand]:
-        with self._conn() as conn:
-            brand = self.get_brand(brand_id)
-            if not brand:
-                return None
-            if brand.owner_user_id != actor_user_id:
-                raise PermissionError("Only owner can update brand")
-
-            allowed = {"name", "description", "logo_url", "website", "social_links", "active"}
-            set_clauses = []
-            params = {"id": brand_id, "updated_at": datetime.utcnow().isoformat()}
-            for k, v in updates.items():
-                if k in allowed:
-                    set_clauses.append(f"{k} = :{k}")
-                    params[k] = json.dumps(v) if k == "social_links" else v
-            if not set_clauses:
-                return brand
-            params["updated_at"] = datetime.utcnow().isoformat()
-            set_clauses.append("updated_at = :updated_at")
-            conn.run(f"UPDATE brands SET {', '.join(set_clauses)} WHERE id = :id", **params)
-            self._audit(conn, brand_id, "update", actor_user_id, updates)
-            return self.get_brand(brand_id)
-
-    def delete_brand(self, brand_id: str, actor_user_id: str) -> bool:
-        with self._conn() as conn:
-            brand = self.get_brand(brand_id)
-            if not brand:
-                return False
-            if brand.owner_user_id != actor_user_id:
-                raise PermissionError("Only owner can delete brand")
-            conn.run("DELETE FROM brands WHERE id = :id", id=brand_id)
-            self._audit(conn, brand_id, "delete", actor_user_id, {})
-            return True
-
-    def activate_brand(self, brand_id: str, actor_user_id: str) -> Optional[Brand]:
-        return self.update_brand(brand_id, {"active": True}, actor_user_id)
-
-    def deactivate_brand(self, brand_id: str, actor_user_id: str) -> Optional[Brand]:
-        return self.update_brand(brand_id, {"active": False}, actor_user_id)
-
-    def add_collaboration(self, brand_id: str, collaborator_user_id: str, permission_level: str, actor_user_id: str) -> BrandCollaboration:
-        with self._conn() as conn:
-            brand = self.get_brand(brand_id)
-            if not brand:
-                raise ValueError("Brand not found")
-            if brand.owner_user_id != actor_user_id:
-                raise PermissionError("Only owner can add collaborations")
-            if not brand.active:
-                raise ValueError("Cannot add collaboration to inactive brand")
-            if permission_level not in ("read", "write", "admin"):
-                raise ValueError("Invalid permission level")
-            now = datetime.utcnow().isoformat()
-            conn.run(
-                """
-                INSERT INTO brand_collaborations (brand_id, collaborator_user_id, permission_level, active, created_at, updated_at)
-                VALUES (:brand_id, :collaborator_user_id, :permission_level, true, :created_at, :updated_at)
-                RETURNING id
-                """,
-                brand_id=brand_id,
-                collaborator_user_id=collaborator_user_id,
-                permission_level=permission_level,
-                created_at=now,
-                updated_at=now,
-            )
-            row = conn.run("SELECT * FROM brand_collaborations WHERE brand_id = :brand_id AND collaborator_user_id = :collaborator_user_id ORDER BY created_at DESC LIMIT 1", brand_id=brand_id, collaborator_user_id=collaborator_user_id)
-            self._audit(conn, brand_id, "add_collaboration", actor_user_id, {"collaborator_user_id": collaborator_user_id, "permission_level": permission_level})
-            return self._row_to_collab(row[0])
-
-    def remove_collaboration(self, brand_id: str, collab_id: int, actor_user_id: str) -> bool:
-        with self._conn() as conn:
-            brand = self.get_brand(brand_id)
-            if not brand:
-                return False
-            if brand.owner_user_id != actor_user_id:
-                raise PermissionError("Only owner can remove collaborations")
-            conn.run("DELETE FROM brand_collaborations WHERE id = :id AND brand_id = :brand_id", id=collab_id, brand_id=brand_id)
-            self._audit(conn, brand_id, "remove_collaboration", actor_user_id, {"collab_id": collab_id})
-            return True
-
-    def list_collaborations(self, brand_id: str) -> List[BrandCollaboration]:
-        with self._conn() as conn:
-            rows = conn.run("SELECT * FROM brand_collaborations WHERE brand_id = :brand_id ORDER BY created_at DESC", brand_id=brand_id)
-            return [self._row_to_collab(r) for r in rows]
-
-    def _audit(self, conn, brand_id: str, action: str, actor_user_id: str, details: Dict[str, Any]):
-        conn.run(
-            """
-            INSERT INTO brand_audit (brand_id, action, actor_user_id, details, created_at)
-            VALUES (:brand_id, :action, :actor_user_id, :details, :created_at)
-            """,
-            brand_id=brand_id,
-            action=action,
-            actor_user_id=actor_user_id,
-            details=json.dumps(details),
-            created_at=datetime.utcnow().isoformat(),
-        )
-
-    def migrate_existing_brands(self, legacy_brands: List[Dict[str, Any]]) -> Dict[str, int]:
-        migrated = 0
-        skipped = 0
-        for legacy in legacy_brands:
-            if self.get_brand(legacy["id"]):
-                skipped += 1
-                continue
-            brand = Brand(
-                id=legacy["id"],
-                name=legacy.get("name", "Unnamed Brand"),
-                description=legacy.get("description", ""),
-                logo_url=legacy.get("logo_url"),
-                website=legacy.get("website"),
-                social_links=legacy.get("social_links", {}),
-                owner_user_id=legacy.get("owner_user_id", "system"),
-                active=legacy.get("active", True),
-                created_at=legacy.get("created_at", datetime.utcnow().isoformat()),
-                updated_at=legacy.get("updated_at", datetime.utcnow().isoformat()),
-            )
-            self.create_brand(brand)
-            migrated += 1
-        return {"migrated": migrated, "skipped": skipped}
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            return {}
+    return {}
 
 
-def migrate_existing_brands(db_url: str, legacy_brands: List[Dict[str, Any]]) -> Dict[str, int]:
-    module = BrandsModule(db_url)
-    return module.migrate_existing_brands(legacy_brands)
+class BrandsStore:
+    """Data access over a DB-API connection whose search_path is the module schema."""
+
+    def __init__(self, connect):
+        self._connect = connect
+
+    def _run(self, sql: str, args: tuple = ()) -> list:
+        connection = self._connect()
+        cursor = connection.cursor()
+        cursor.execute(sql, args)
+        return [list(row) for row in cursor.fetchall()] if cursor.description else []
+
+    def _audit(self, brand_id: str | None, action: str, actor: str | None, details: dict) -> None:
+        self._run("INSERT INTO brand_audit (brand_id, action, actor, details) VALUES (%s, %s, %s, %s)",
+                  (brand_id, action, actor, _json(details)))
+
+    # -- brands ----------------------------------------------------------------------
+    @staticmethod
+    def _brand(row) -> dict:
+        return {"id": row[0], "name": row[1], "enabled": row[2], "metadata": _obj(row[3]),
+                "publishing": _obj(row[4]), "publication_policy": row[5]}
+
+    def list_brands(self) -> list[dict]:
+        return [self._brand(row) for row in self._run(
+            "SELECT id, name, enabled, metadata, publishing, publication_policy FROM brands ORDER BY id")]
+
+    def get_brand(self, brand_id: str) -> dict | None:
+        rows = self._run("SELECT id, name, enabled, metadata, publishing, publication_policy FROM brands WHERE id = %s",
+                         (brand_id,))
+        return self._brand(rows[0]) if rows else None
+
+    @staticmethod
+    def _validate_brand(body: dict) -> dict:
+        brand_id = str(body.get("id", ""))
+        if not SAFE_ID.fullmatch(brand_id):
+            raise BrandsError("Invalid brand ID")
+        name = str(body.get("name", "")).strip()
+        if not name or len(name) > 120:
+            raise BrandsError("Brand name is required (up to 120 characters)")
+        policy = body.get("publication_policy", "approval_required")
+        if policy not in BRAND_POLICIES:
+            raise BrandsError("publication_policy must be automatic or approval_required")
+        for key in ("metadata", "publishing"):
+            if not isinstance(body.get(key, {}), dict):
+                raise BrandsError(f"{key} must be an object")
+        return {"id": brand_id, "name": name, "enabled": bool(body.get("enabled", True)),
+                "metadata": body.get("metadata") or {}, "publishing": body.get("publishing") or {},
+                "publication_policy": policy}
+
+    def create_brand(self, body: dict, actor: str | None) -> dict:
+        brand = self._validate_brand(body)
+        if self.get_brand(brand["id"]):
+            raise Conflict("Brand already exists")
+        self._run("INSERT INTO brands (id, name, enabled, metadata, publishing, publication_policy) "
+                  "VALUES (%s, %s, %s, %s, %s, %s)",
+                  (brand["id"], brand["name"], brand["enabled"], _json(brand["metadata"]),
+                   _json(brand["publishing"]), brand["publication_policy"]))
+        self._audit(brand["id"], "create", actor, {"name": brand["name"]})
+        return self.get_brand(brand["id"])
+
+    def update_brand(self, brand_id: str, body: dict, actor: str | None) -> dict:
+        current = self.get_brand(brand_id)
+        if current is None:
+            raise NotFound("Brand not found")
+        if body.get("id", brand_id) != brand_id:
+            raise BrandsError("Brand ID cannot be changed")
+        brand = self._validate_brand({**current, **body, "id": brand_id})
+        self._run("UPDATE brands SET name = %s, enabled = %s, metadata = %s, publishing = %s, "
+                  "publication_policy = %s, updated_at = now() WHERE id = %s",
+                  (brand["name"], brand["enabled"], _json(brand["metadata"]), _json(brand["publishing"]),
+                   brand["publication_policy"], brand_id))
+        self._audit(brand_id, "update", actor, {key: body[key] for key in body if key != "id"})
+        return self.get_brand(brand_id)
+
+    def delete_brand(self, brand_id: str, actor: str | None) -> None:
+        if self.get_brand(brand_id) is None:
+            raise NotFound("Brand not found")
+        self._run("DELETE FROM brands WHERE id = %s", (brand_id,))
+        # A channel no brand uses any more stays as a record for history; it is
+        # simply not offered to any brand.
+        self._audit(brand_id, "delete", actor, {})
+
+    # -- channels (M:N) ---------------------------------------------------------------
+    @staticmethod
+    def _channel(row, brand_id: str) -> dict:
+        return {"channel_id": row[0], "brand_id": brand_id, "channel_type": row[1], "target": row[2],
+                "enabled": row[3], "metadata": _obj(row[4]), "created_at": row[5].isoformat() if row[5] else None,
+                "policy": row[6]}
+
+    def list_channels(self, brand_id: str | None = None) -> list[dict]:
+        sql = ("SELECT c.id, c.channel_type, c.target, c.enabled, c.metadata, c.created_at, l.policy, l.brand_id "
+               "FROM channels c JOIN brand_channels l ON l.channel_id = c.id")
+        rows = self._run(sql + (" WHERE l.brand_id = %s" if brand_id else "") + " ORDER BY l.brand_id, c.id",
+                         (brand_id,) if brand_id else ())
+        return [self._channel(row, row[7]) for row in rows]
+
+    def get_channel(self, channel_id: str) -> dict | None:
+        rows = self._run("SELECT c.id, c.channel_type, c.target, c.enabled, c.metadata, c.created_at, l.policy, l.brand_id "
+                         "FROM channels c JOIN brand_channels l ON l.channel_id = c.id WHERE c.id = %s "
+                         "ORDER BY l.brand_id LIMIT 1", (channel_id,))
+        if not rows:
+            return None
+        channel = self._channel(rows[0], rows[0][7])
+        channel["brands"] = [row[0] for row in self._run(
+            "SELECT brand_id FROM brand_channels WHERE channel_id = %s ORDER BY brand_id", (channel_id,))]
+        return channel
+
+    def create_channel(self, brand_id: str, body: dict, actor: str | None, channel_id: str | None = None) -> dict:
+        if self.get_brand(brand_id) is None:
+            raise NotFound("Brand not found")
+        channel_type = str(body.get("channel_type", ""))
+        if channel_type not in CHANNEL_TYPES:
+            raise BrandsError(f"Invalid channel type. Allowed: {', '.join(sorted(CHANNEL_TYPES))}")
+        target = str(body.get("target", "")).strip()
+        if not target or len(target) > 256:
+            raise BrandsError("Channel target is required")
+        policy = body.get("policy", "inherit")
+        if policy not in CHANNEL_POLICIES:
+            raise BrandsError("policy must be inherit, automatic or approval_required")
+        if not isinstance(body.get("metadata", {}), dict):
+            raise BrandsError("metadata must be an object")
+        channel_id = channel_id or f"ch-{uuid.uuid4().hex[:12]}"
+        self._run("INSERT INTO channels (id, channel_type, target, enabled, metadata) VALUES (%s, %s, %s, %s, %s)",
+                  (channel_id, channel_type, target, bool(body.get("enabled", True)), _json(body.get("metadata"))))
+        self._run("INSERT INTO brand_channels (brand_id, channel_id, policy) VALUES (%s, %s, %s)",
+                  (brand_id, channel_id, policy))
+        self._audit(brand_id, "channel_create", actor, {"channel_id": channel_id, "channel_type": channel_type})
+        return self.get_channel(channel_id) | {"brand_id": brand_id, "policy": policy}
+
+    def link_channel(self, brand_id: str, channel_id: str, policy: str, actor: str | None) -> dict:
+        """Share an existing physical channel with another brand (no copy of it or its token)."""
+        if self.get_brand(brand_id) is None:
+            raise NotFound("Brand not found")
+        if self.get_channel(channel_id) is None:
+            raise NotFound("Channel not found")
+        if policy not in CHANNEL_POLICIES:
+            raise BrandsError("policy must be inherit, automatic or approval_required")
+        self._run("INSERT INTO brand_channels (brand_id, channel_id, policy) VALUES (%s, %s, %s) "
+                  "ON CONFLICT (brand_id, channel_id) DO UPDATE SET policy = EXCLUDED.policy",
+                  (brand_id, channel_id, policy))
+        self._audit(brand_id, "channel_link", actor, {"channel_id": channel_id, "policy": policy})
+        return self.get_channel(channel_id)
+
+    def update_channel(self, channel_id: str, body: dict, actor: str | None) -> dict:
+        current = self.get_channel(channel_id)
+        if current is None:
+            raise NotFound("Channel not found")
+        target = str(body.get("target", current["target"])).strip()
+        if not target or len(target) > 256:
+            raise BrandsError("Channel target is required")
+        metadata = body.get("metadata", current["metadata"])
+        if not isinstance(metadata, dict):
+            raise BrandsError("metadata must be an object")
+        self._run("UPDATE channels SET target = %s, enabled = %s, metadata = %s WHERE id = %s",
+                  (target, bool(body.get("enabled", current["enabled"])), _json(metadata), channel_id))
+        self._audit(current["brand_id"], "channel_update", actor, {"channel_id": channel_id})
+        return self.get_channel(channel_id)
+
+    def delete_channel(self, channel_id: str, actor: str | None) -> None:
+        current = self.get_channel(channel_id)
+        if current is None:
+            raise NotFound("Channel not found")
+        self._run("DELETE FROM channels WHERE id = %s", (channel_id,))
+        self._audit(current["brand_id"], "channel_delete", actor, {"channel_id": channel_id})
+
+    def effective_policy(self, brand_id: str, channel_id: str) -> str:
+        """Channel override, else the brand's policy (#502 AC3)."""
+        rows = self._run("SELECT l.policy, b.publication_policy FROM brand_channels l JOIN brands b ON b.id = l.brand_id "
+                         "WHERE l.brand_id = %s AND l.channel_id = %s", (brand_id, channel_id))
+        if not rows:
+            raise NotFound("Channel is not linked to this brand")
+        return rows[0][1] if rows[0][0] == "inherit" else rows[0][0]
+
+    # -- migration from CORE ------------------------------------------------------------
+    def import_legacy(self, brands: list[dict], channels: list[dict], actor: str | None) -> dict:
+        """Idempotent import of CORE's legacy brands/channels, keeping their IDs."""
+        result = {"brands": [], "channels": [], "skipped": []}
+        for item in brands:
+            try:
+                if self.get_brand(str(item.get("id", ""))):
+                    result["skipped"].append({"brand": item.get("id"), "reason": "exists"})
+                    continue
+                self.create_brand(item, actor)
+                result["brands"].append(item["id"])
+            except (BrandsError, Conflict) as error:
+                result["skipped"].append({"brand": item.get("id"), "reason": str(error)})
+        for item in channels:
+            channel_id = str(item.get("channel_id", ""))
+            try:
+                if self.get_channel(channel_id):
+                    result["skipped"].append({"channel": channel_id, "reason": "exists"})
+                    continue
+                self.create_channel(str(item.get("brand_id", "")), item, actor, channel_id=channel_id or None)
+                result["channels"].append(channel_id)
+            except (BrandsError, NotFound) as error:
+                result["skipped"].append({"channel": channel_id, "reason": str(error)})
+        self._audit(None, "migrate", actor, {"brands": len(result["brands"]), "channels": len(result["channels"])})
+        return result
+
+    def audit_records(self, brand_id: str | None = None, limit: int = 200) -> list[dict]:
+        rows = self._run("SELECT brand_id, action, actor, details, at FROM brand_audit"
+                         + (" WHERE brand_id = %s" if brand_id else "") + " ORDER BY id DESC LIMIT %s",
+                         ((brand_id, limit) if brand_id else (limit,)))
+        return [{"brand_id": r[0], "action": r[1], "actor": r[2], "details": _obj(r[3]),
+                 "at": r[4].isoformat() if r[4] else None} for r in rows]
+
+
+def health_check() -> dict[str, Any]:
+    return {"ready": True}

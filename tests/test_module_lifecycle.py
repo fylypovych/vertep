@@ -344,16 +344,16 @@ def test_admin_api_requires_admin_and_confirmation(tmp_path, key, module_postgre
     assert client.post(f"{base}/lifecycle/uninstall", json={"module_id": "notes", "confirm": True}).status_code == 200
     names = [a["name"] for a in client.get(f"{base}/archives").json()["archives"]]
     assert len(names) == 1 and client.get(f"{base}/archives/{names[0]}").status_code == 200
-    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "viewer"}}))
-    session = _session_token("reader", "viewer")
+    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "moderator"}}))
+    session = _session_token("reader", "moderator")
     secret = session_secret()
     csrf = hmac.new(secret.encode() if isinstance(secret, str) else secret, session.encode(), hashlib.sha256).hexdigest()
-    viewer = TestClient(app, headers={"Authorization": ""})
-    viewer.cookies.set("vertep_session", session)
-    viewer.cookies.set("vertep_csrf", csrf)
-    assert viewer.get(f"{base}/archives").status_code == 403
-    assert viewer.get(f"{base}/archives/{names[0]}").status_code == 403
-    assert viewer.post(f"{base}/lifecycle/install", json={"package": package(key)}, headers={"x-csrf-token": csrf}).status_code == 403
+    moderator = TestClient(app, headers={"Authorization": ""})
+    moderator.cookies.set("vertep_session", session)
+    moderator.cookies.set("vertep_csrf", csrf)
+    assert moderator.get(f"{base}/archives").status_code == 403
+    assert moderator.get(f"{base}/archives/{names[0]}").status_code == 403
+    assert moderator.post(f"{base}/lifecycle/install", json={"package": package(key)}, headers={"x-csrf-token": csrf}).status_code == 403
     from core.module.gateway import read_audit
     actions = {(e["action"], e.get("outcome")) for e in read_audit()}
     assert ("module.lifecycle", "allowed") in actions and ("module.archive.download", "allowed") in actions

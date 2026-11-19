@@ -371,7 +371,7 @@ def _moderator_may_change(request, brands) -> bool:
         return not path.startswith(("/api/modules/token", "/api/modules/self"))
     if request.method != "POST":
         return False
-    if path == "/api/jobs" or re.fullmatch(r"/api/jobs/[^/]+/shared-approval(/revoke)?", path):
+    if path == "/api/jobs" or re.fullmatch(r"/api/jobs/[^/]+/(shared-approval(/revoke)?|shared-publications)", path):
         return True
     match = _MODERATOR_JOB_ACTIONS.fullmatch(path)
     if match:

@@ -6,8 +6,8 @@ from tests.acceptance_provenance import acceptance_provenance
 from core.system_state import SystemState, set_system_state, _path, get_system_state
 
 
-REMAINING = [("admin", "RECOVERING", 423), ("viewer", "READ_ONLY", 423),
-             ("viewer", "RECOVERING", 423)]
+REMAINING = [("admin", "RECOVERING", 423), ("moderator", "READ_ONLY", 423),
+             ("moderator", "RECOVERING", 423)]
 
 
 @pytest.mark.parametrize("role,mode,status", REMAINING)

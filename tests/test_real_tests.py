@@ -2226,7 +2226,7 @@ def test_backup_browser_telegram_rbac(monkeypatch, tmp_path):
     monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
     monkeypatch.setenv("INTERNAL_API_KEY", "disposable-backup-rbac-key")
     monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {
-        "password_hash": _hash_secret("backup-reader-password"), "role": "viewer"}}))
+        "password_hash": _hash_secret("backup-reader-password"), "role": "moderator"}}))
     save_telegram_settings(allowed_chat_ids="42,99", admin_chat_ids="42")
     calls = []
     async def backup_service(method, environment, path, payload=None, params=None):
@@ -2254,7 +2254,7 @@ def test_backup_browser_telegram_rbac(monkeypatch, tmp_path):
     def callback(identifier, chat):
         return {"id": identifier, "data": "sys_backup_confirm", "from": {"id": int(chat)},
                 "message": {"chat": {"id": chat}}}
-    handlers._handle_telegram_callback(callback("backup-viewer", "99"))
+    handlers._handle_telegram_callback(callback("backup-moderator", "99"))
     assert "заборонено" in adapter.answer_callback.call_args.args[1].lower()
     assert len(calls) == 1
     handlers._handle_telegram_callback(callback("backup-admin", "42"))

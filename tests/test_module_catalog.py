@@ -79,15 +79,15 @@ def test_role_access_is_unchanged_and_choice_is_admin_only(api, monkeypatch):
     from core.app import app
     from core.security import SESSION_ROLES, _session_token, session_secret
     assert SESSION_ROLES == ("admin", "moderator")
-    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "viewer"}}))
-    session = _session_token("reader", "viewer")
+    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "moderator"}}))
+    session = _session_token("reader", "moderator")
     secret = session_secret()
     csrf = hmac.new(secret.encode() if isinstance(secret, str) else secret, session.encode(), hashlib.sha256).hexdigest()
-    viewer = TestClient(app, headers={"Authorization": ""})
-    viewer.cookies.set("vertep_session", session)
-    viewer.cookies.set("vertep_csrf", csrf)
-    assert viewer.get("/api/nodes/module-catalog").status_code == 200  # read-only view
-    assert viewer.post("/api/nodes/module-registry/lifecycle/install", json={"bundled": "text"},
+    moderator = TestClient(app, headers={"Authorization": ""})
+    moderator.cookies.set("vertep_session", session)
+    moderator.cookies.set("vertep_csrf", csrf)
+    assert moderator.get("/api/nodes/module-catalog").status_code == 200  # read-only view
+    assert moderator.post("/api/nodes/module-registry/lifecycle/install", json={"bundled": "text"},
                        headers={"x-csrf-token": csrf}).status_code == 403
-    assert viewer.put("/api/nodes/module-registry/placement/text", json={"node_ids": ["text-node"]},
+    assert moderator.put("/api/nodes/module-registry/placement/text", json={"node_ids": ["text-node"]},
                       headers={"x-csrf-token": csrf}).status_code == 403

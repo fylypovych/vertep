@@ -15,7 +15,7 @@ function mockApi(page: any, opts: RbacMocks = { role: 'admin' }) {
     const p = new URL(r.url()).pathname;
     const m = r.method();
     if (p.endsWith('/session')) {
-      return route.fulfill({ json: { authenticated: true, username: opts.role === 'admin' ? 'admin' : 'reader', user: opts.role === 'admin' ? 'admin' : 'reader', role: opts.role } });
+      return route.fulfill({ json: { authenticated: true, username: opts.role === 'admin' ? 'admin' : 'reader', user: opts.role === 'admin' ? 'admin' : 'reader', role: opts.role, brands: opts.role === 'admin' ? null : ['brand01'] } });
     }
     if (p.endsWith('/status')) {
       return route.fulfill({ json: { system: { state, reason }, version: '0.0.1.52' } });

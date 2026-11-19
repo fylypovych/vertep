@@ -393,20 +393,20 @@ def test_admin_only_governance_and_complete_audit(gateway, monkeypatch):
     client.get("/api/modules/notes/v1/items")
     client.get("/api/modules/notes/v1/nope")
     client.get("/api/modules/ui/notes/1.0.0/index.html")
-    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "viewer"}}))
-    session = _session_token("reader", "viewer")
+    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "moderator"}}))
+    session = _session_token("reader", "moderator")
     from core.security import session_secret
-    viewer = TestClient(app, headers={"Authorization": ""})
-    viewer.cookies.set("vertep_session", session)
+    moderator = TestClient(app, headers={"Authorization": ""})
+    moderator.cookies.set("vertep_session", session)
     csrf = hmac.new(session_secret().encode() if isinstance(session_secret(), str) else session_secret(),
                     session.encode(), hashlib.sha256).hexdigest()
-    viewer.cookies.set("vertep_csrf", csrf)
+    moderator.cookies.set("vertep_csrf", csrf)
     for path, body in (("/api/nodes/module-registry/approval/notes", {"permissions": []}),
                        ("/api/nodes/module-registry/secrets/notes", {"secrets": {"api_key": "x"}}),
                        ("/api/nodes/module-registry/placement/notes", {"node_ids": []})):
-        assert viewer.put(path, json=body, headers={"x-csrf-token": csrf}).status_code == 403
-    assert viewer.get("/api/nodes/module-registry/audit").status_code == 403
-    assert viewer.get("/api/modules/notes/v1/items").json()["user"] == "reader"  # same Vertep identity
+        assert moderator.put(path, json=body, headers={"x-csrf-token": csrf}).status_code == 403
+    assert moderator.get("/api/nodes/module-registry/audit").status_code == 403
+    assert moderator.get("/api/modules/notes/v1/items").json()["user"] == "reader"  # same Vertep identity
     trail = client.get("/api/nodes/module-registry/audit").json()["events"]
     outcomes = {(e["action"], e["outcome"], e.get("reason")) for e in trail}
     assert ("module.api", "allowed", None) in outcomes

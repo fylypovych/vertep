@@ -53,7 +53,8 @@ class StoryboardService:
         self.store.update(job, JobStatus.STORYBOARD_QUEUED, "STORYBOARD QUEUED")
 
         character = load_character(Path(os.getenv("CHARACTERS_ROOT", "characters")), job.character_id).model_dump()
-        brand = read_json(Path(os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json")
+        from .brand_store import get_brand
+        brand = get_brand(job.brand_id) or {}
         prompt = build_storyboard_prompt(job, character, brand, job.storyboard_active_revision)
 
         version = (job.storyboards[-1].version + 1 if job.storyboards else 1)

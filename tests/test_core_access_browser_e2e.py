@@ -16,7 +16,7 @@ from core.app import app
 from core.state import store
 from core.system_state import SystemState, set_system_state, get_system_state, _path
 from tests.acceptance_provenance import acceptance_provenance
-from tests.test_system_state_mutation_matrix import actual_backend, PROBES, ADMIN_PASSWORD, VIEWER_PASSWORD
+from tests.test_system_state_mutation_matrix import actual_backend, PROBES, ADMIN_PASSWORD, MODERATOR_PASSWORD
 from tests.test_media_browser_e2e import _free_port, _wait_until, _web_dist, sync_playwright, expect
 from tests.test_queue_redis_contract import redis_url, redis_queue, _bind_queue
 
@@ -28,8 +28,8 @@ VIEWS = {
     "models": ("/settings?tab=models", "pull-model-button"),
     "channels": ("/brands", "channel-delete"),
 }
-CELLS = [("viewer", "NORMAL", 403), ("admin", "READ_ONLY", 423),
-         ("viewer", "READ_ONLY", 423), ("admin", "RECOVERING", 423), ("viewer", "RECOVERING", 423)]
+CELLS = [("moderator", "NORMAL", 403), ("admin", "READ_ONLY", 423),
+         ("moderator", "READ_ONLY", 423), ("admin", "RECOVERING", 423), ("moderator", "RECOVERING", 423)]
 
 
 @pytest.fixture(autouse=True)
@@ -68,10 +68,10 @@ def access_backend(actual_backend, monkeypatch):
             def login(role, base=None):
                 base = base or url
                 context = browser.new_context(base_url=base)
-                user, password = ("admin", ADMIN_PASSWORD) if role == "admin" else ("reader", VIEWER_PASSWORD)
+                user, password = ("admin", ADMIN_PASSWORD) if role == "admin" else ("reader", MODERATOR_PASSWORD)
                 auth = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
                 response = context.request.post(base + "/api/session", headers={"Authorization": auth})
-                assert response.status == 200 and response.json()["role"] == ("moderator" if role == "viewer" else role), response.text()
+                assert response.status == 200 and response.json()["role"] == ("moderator" if role == "moderator" else role), response.text()
                 page = context.new_page()
                 page.set_default_timeout(15000)
                 return context, page
@@ -112,9 +112,9 @@ def test_browser_role_state_resource_matrix(access_backend, tmp_path, role, mode
     set_system_state(SystemState(mode), "Browser access acceptance")
     context, page = ctx["login"](role)
     try:
-        # Settings are admin-only; a viewer still exercises its canonical model
+        # Settings are admin-only; a moderator still exercises its canonical model
         # endpoint from an authenticated public resource page.
-        view = "/brands" if resource == "models" and role == "viewer" else VIEWS[resource][0]
+        view = "/brands" if resource == "models" and role == "moderator" else VIEWS[resource][0]
         page.goto(ctx["url"] + view)
         expect(page.get_by_role("button", name="Меню користувача", exact=True)).to_be_visible()
         label = {"NORMAL": "Нормальний", "READ_ONLY": "Тільки читання", "RECOVERING": "Відновлення"}[mode]
@@ -127,7 +127,7 @@ def test_browser_role_state_resource_matrix(access_backend, tmp_path, role, mode
         if control.count():
             expect(control.first).to_be_disabled()
         else:
-            assert role == "viewer", "admin resource view must expose its guarded control"
+            assert role == "moderator", "admin resource view must expose its guarded control"
         before = resources(ctx)
         response = browser_request(page, probe["method"], probe["path"], probe["body"])
         assert response["status"] == expected, response
@@ -139,7 +139,7 @@ def test_browser_role_state_resource_matrix(access_backend, tmp_path, role, mode
         context.close()
 
 
-@pytest.mark.parametrize("role", ["admin", "viewer"])
+@pytest.mark.parametrize("role", ["admin", "moderator"])
 @pytest.mark.parametrize("mode", ["RECOVERING", "READ_ONLY", "EMERGENCY"])
 def test_browser_session_profile_csrf_logout_in_restricted_mode(access_backend, role, mode):
     set_system_state(SystemState(mode), "session Browser acceptance")
@@ -213,7 +213,7 @@ def test_browser_create_job_waits_without_dispatch(access_backend, mode):
 
 
 @pytest.mark.parametrize("role,mode,expected", [("admin", "READ_ONLY", 423),
-    ("admin", "EMERGENCY", 423), ("viewer", "NORMAL", 403)])
+    ("admin", "EMERGENCY", 423), ("moderator", "NORMAL", 403)])
 def test_browser_create_job_denied_without_persistence(access_backend, role, mode, expected):
     set_system_state(mode, "Browser denied job acceptance")
     context, page = access_backend["login"](role)
@@ -231,7 +231,7 @@ def test_browser_create_job_denied_without_persistence(access_backend, role, mod
 
 
 @pytest.mark.parametrize("role,mode,expected", [("admin", "RECOVERING", 423),
-    ("admin", "READ_ONLY", 423), ("viewer", "EMERGENCY", 403)])
+    ("admin", "READ_ONLY", 423), ("moderator", "EMERGENCY", 403)])
 def test_browser_recovery_denied_preserves_state(access_backend, role, mode, expected):
     set_system_state(mode, "Browser recovery forbidden acceptance")
     context, page = access_backend["login"](role)

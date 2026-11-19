@@ -62,11 +62,11 @@ jobs:
           from core.first_run import password_hash
           print("VERTEP_E2E_ADMIN_USER=e2e-admin")
           print("VERTEP_E2E_ADMIN_PASSWORD=e2e-admin-password-12")
-          print("VERTEP_E2E_VIEWER_USER=e2e-viewer")
-          print("VERTEP_E2E_VIEWER_PASSWORD=e2e-viewer-password-12")
+          print("VERTEP_E2E_MODERATOR_USER=e2e-moderator")
+          print("VERTEP_E2E_MODERATOR_PASSWORD=e2e-moderator-password-12")
           print("USERS_JSON=" + json.dumps({
               "e2e-admin": {"password_hash": password_hash("e2e-admin-password-12"), "role": "admin"},
-              "e2e-viewer": {"password_hash": password_hash("e2e-viewer-password-12"), "role": "viewer"},
+              "e2e-moderator": {"password_hash": password_hash("e2e-moderator-password-12"), "role": "moderator", "brands": []},
           }))
           PY
           # Runner не має прав на /data, тому всі виконувані каталоги живуть у
@@ -129,8 +129,8 @@ jobs:
           set -euo pipefail
           basic() { printf '%s' "$1:$2" | base64 -w0; }
           admin_auth=$(basic "$VERTEP_E2E_ADMIN_USER" "$VERTEP_E2E_ADMIN_PASSWORD")
-          viewer_auth=$(basic "$VERTEP_E2E_VIEWER_USER" "$VERTEP_E2E_VIEWER_PASSWORD")
-          for auth in "$admin_auth" "$viewer_auth"; do
+          moderator_auth=$(basic "$VERTEP_E2E_MODERATOR_USER" "$VERTEP_E2E_MODERATOR_PASSWORD")
+          for auth in "$admin_auth" "$moderator_auth"; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/api/session \
               -H "Authorization: Basic $auth")
             if [ "$code" != "200" ]; then

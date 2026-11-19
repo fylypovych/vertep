@@ -294,11 +294,11 @@ def test_placement_api_is_admin_only_and_validates(runtime, monkeypatch):
     assert ok.status_code == 200 and ok.json()["node_ids"] == ["node-a"]
     monkeypatch.setenv("ADMIN_PASSWORD", "rbac-fallback-password")
     monkeypatch.delenv("CONFIG_ROOT", raising=False)
-    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "viewer"}}))
-    token = _session_token("reader", "viewer")
+    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "moderator"}}))
+    token = _session_token("reader", "moderator")
     csrf = hmac.new(b"rbac-fallback-password", token.encode(), hashlib.sha256).hexdigest()
-    viewer = TestClient(app, headers={"Authorization": ""})
-    denied = viewer.put("/api/nodes/module-registry/placement/imagemod", json={"node_ids": []},
+    moderator = TestClient(app, headers={"Authorization": ""})
+    denied = moderator.put("/api/nodes/module-registry/placement/imagemod", json={"node_ids": []},
                         cookies={"vertep_session": token, "vertep_csrf": csrf}, headers={"x-csrf-token": csrf})
     assert denied.status_code == 403
     assert instance.modules.placement.placement == {"imagemod": ["node-a"]}

@@ -209,14 +209,14 @@ def _session(monkeypatch, tmp_path, role):
     monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
     (tmp_path / "installation.json").write_text(
         json.dumps({"installation_id": "test", "completed_at": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
-    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "viewer"},
+    monkeypatch.setenv("USERS_JSON", json.dumps({"reader": {"password_hash": "x", "role": "moderator"},
                                                  "primary-admin": {"password_hash": "x", "role": "admin"}}))
-    user = "reader" if role == "viewer" else "primary-admin"
+    user = "reader" if role == "moderator" else "primary-admin"
     token = _session_token(user, role)
     return {"vertep_session": token, "vertep_csrf": hmac.new(password.encode(), token.encode(), hashes.sha256).hexdigest()}
 
 
-@pytest.mark.parametrize("role,status", [(None, 401), ("viewer", 403)])
+@pytest.mark.parametrize("role,status", [(None, 401), ("moderator", 403)])
 def test_only_an_administrator_gets_the_file(monkeypatch, tmp_path, role, status):
     from core.app import app
     cookies = _session(monkeypatch, tmp_path, role) if role else {}

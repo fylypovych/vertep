@@ -18,11 +18,9 @@ from .first_run import configured_user, load_all_users, save_user, session_secre
 
 
 SESSION_ROLES = ("admin", "moderator")
-# Owner decision 19.11.2026: two access roles. A moderator works within the
-# brands listed in its account (``brands``); the former read-only ``viewer``
-# role no longer exists and stored ``viewer`` accounts become moderators
-# without brands (read-only in effect).
-LEGACY_ROLES = {"viewer": "moderator"}
+# Owner decision 19.11.2026: exactly two access roles. A moderator works within
+# the brands listed in its account (``brands``); any other stored role is
+# unknown and degrades to a moderator without brands (read-only in effect).
 PROFILE_FIELDS = ("display_name", "email")
 PASSWORD_MIN_LENGTH = 12
 DISPLAY_NAME_MAX_LENGTH = 80
@@ -213,7 +211,6 @@ def _normalize_role(role) -> str | None:
     back to a privileged default.
     """
     value = str(role or "").strip().lower()
-    value = LEGACY_ROLES.get(value, value)
     return value if value in SESSION_ROLES else None
 
 

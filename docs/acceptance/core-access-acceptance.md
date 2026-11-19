@@ -6,47 +6,47 @@
 
 ## Погоджена матриця AC2
 
-Клітинки нижче обмежені ресурсами й станами #168.3–4/#222. Viewer у READ_ONLY/RECOVERING отримує 423: центральний state guard виконується раніше role guard. Це чинний порядок, а не новий дозвіл.
+Клітинки нижче обмежені ресурсами й станами #168.3–4/#222. Moderator у READ_ONLY/RECOVERING отримує 423: центральний state guard виконується раніше role guard. Це чинний порядок, а не новий дозвіл.
 
 Позначення API (усі в `tests/test_system_state_mutation_matrix.py`, крім remaining):
 - `existing-positive` → `test_the_administrator_probe_changes_the_resource_it_guards[resource]`; models → `test_the_model_pull_probe_keeps_its_method_and_path` плюс чинний `test_model_lifecycle.py::test_model_pull_endpoint_is_idempotent_for_active_operation` (200/та сама активна operation), `test_node_pull_command_progress_and_completion` і `test_model_pull_http.py::test_local_http_stream_success_completes_pull` (реальний HTTP stream зовнішнього model service).
-- `existing-viewer` → `test_a_viewer_mutation_is_refused_and_leaves_the_resource_unchanged[resource]`.
+- `existing-moderator` → `test_a_moderator_mutation_is_refused_and_leaves_the_resource_unchanged[resource]`.
 - `existing-readonly` → `test_a_blocked_state_leaves_the_resource_unchanged[resource]`.
 - `remaining` → `tests/test_core_access_acceptance.py::test_remaining_resource_cells_preserve_actual_state[resource-role-state-423]`.
-- `B` → `tests/test_core_access_browser_e2e.py::test_browser_role_state_resource_matrix`. Browser використовує справжні cookies/CSRF, HTTP CORE, перевіряє guard і повторює canonical mutation; перед/після порівнює вміст resource files, channels repository і model operations. Для viewer models адмінський Settings недоступний; запит виконується з автентифікованої сторінки брендів. Готова API реалізація не переписується.
+- `B` → `tests/test_core_access_browser_e2e.py::test_browser_role_state_resource_matrix`. Browser використовує справжні cookies/CSRF, HTTP CORE, перевіряє guard і повторює canonical mutation; перед/після порівнює вміст resource files, channels repository і model operations. Для moderator models адмінський Settings недоступний; запит виконується з автентифікованої сторінки брендів. Готова API реалізація не переписується.
 
 | Ресурс | Роль | Стан | Expected status / mutation | API test ID | Browser test ID |
 |---|---|---|---|---|---|
 | characters | admin | NORMAL | 200; зміна дозволена | existing-positive | Чинний API positive; Browser не дублюється |
-| characters | viewer | NORMAL | 403; без зміни | existing-viewer | B[characters-viewer-NORMAL-403] |
+| characters | moderator | NORMAL | 403; без зміни | existing-moderator | B[characters-moderator-NORMAL-403] |
 | characters | admin | READ_ONLY | 423; без зміни | existing-readonly | B[characters-admin-READ_ONLY-423] |
-| characters | viewer | READ_ONLY | 423; без зміни | remaining | B[characters-viewer-READ_ONLY-423] |
+| characters | moderator | READ_ONLY | 423; без зміни | remaining | B[characters-moderator-READ_ONLY-423] |
 | characters | admin | RECOVERING | 423; без зміни | remaining | B[characters-admin-RECOVERING-423] |
-| characters | viewer | RECOVERING | 423; без зміни | remaining | B[characters-viewer-RECOVERING-423] |
+| characters | moderator | RECOVERING | 423; без зміни | remaining | B[characters-moderator-RECOVERING-423] |
 | brands | admin | NORMAL | 200; зміна дозволена | existing-positive | Чинний API positive; Browser не дублюється |
-| brands | viewer | NORMAL | 403; без зміни | existing-viewer | B[brands-viewer-NORMAL-403] |
+| brands | moderator | NORMAL | 403; без зміни | existing-moderator | B[brands-moderator-NORMAL-403] |
 | brands | admin | READ_ONLY | 423; без зміни | existing-readonly | B[brands-admin-READ_ONLY-423] |
-| brands | viewer | READ_ONLY | 423; без зміни | remaining | B[brands-viewer-READ_ONLY-423] |
+| brands | moderator | READ_ONLY | 423; без зміни | remaining | B[brands-moderator-READ_ONLY-423] |
 | brands | admin | RECOVERING | 423; без зміни | remaining | B[brands-admin-RECOVERING-423] |
-| brands | viewer | RECOVERING | 423; без зміни | remaining | B[brands-viewer-RECOVERING-423] |
+| brands | moderator | RECOVERING | 423; без зміни | remaining | B[brands-moderator-RECOVERING-423] |
 | workflows | admin | NORMAL | 200; зміна дозволена | existing-positive | Чинний API positive; Browser не дублюється |
-| workflows | viewer | NORMAL | 403; без зміни | existing-viewer | B[workflows-viewer-NORMAL-403] |
+| workflows | moderator | NORMAL | 403; без зміни | existing-moderator | B[workflows-moderator-NORMAL-403] |
 | workflows | admin | READ_ONLY | 423; без зміни | existing-readonly | B[workflows-admin-READ_ONLY-423] |
-| workflows | viewer | READ_ONLY | 423; без зміни | remaining | B[workflows-viewer-READ_ONLY-423] |
+| workflows | moderator | READ_ONLY | 423; без зміни | remaining | B[workflows-moderator-READ_ONLY-423] |
 | workflows | admin | RECOVERING | 423; без зміни | remaining | B[workflows-admin-RECOVERING-423] |
-| workflows | viewer | RECOVERING | 423; без зміни | remaining | B[workflows-viewer-RECOVERING-423] |
+| workflows | moderator | RECOVERING | 423; без зміни | remaining | B[workflows-moderator-RECOVERING-423] |
 | models | admin | NORMAL | 200; зміна дозволена | existing-positive | Чинний API positive; Browser не дублюється |
-| models | viewer | NORMAL | 403; без зміни | existing-viewer | B[models-viewer-NORMAL-403] |
+| models | moderator | NORMAL | 403; без зміни | existing-moderator | B[models-moderator-NORMAL-403] |
 | models | admin | READ_ONLY | 423; без зміни | existing-readonly | B[models-admin-READ_ONLY-423] |
-| models | viewer | READ_ONLY | 423; без зміни | remaining | B[models-viewer-READ_ONLY-423] |
+| models | moderator | READ_ONLY | 423; без зміни | remaining | B[models-moderator-READ_ONLY-423] |
 | models | admin | RECOVERING | 423; без зміни | remaining | B[models-admin-RECOVERING-423] |
-| models | viewer | RECOVERING | 423; без зміни | remaining | B[models-viewer-RECOVERING-423] |
+| models | moderator | RECOVERING | 423; без зміни | remaining | B[models-moderator-RECOVERING-423] |
 | channels | admin | NORMAL | 200; зміна дозволена | existing-positive | Чинний API positive; Browser не дублюється |
-| channels | viewer | NORMAL | 403; без зміни | existing-viewer | B[channels-viewer-NORMAL-403] |
+| channels | moderator | NORMAL | 403; без зміни | existing-moderator | B[channels-moderator-NORMAL-403] |
 | channels | admin | READ_ONLY | 423; без зміни | existing-readonly | B[channels-admin-READ_ONLY-423] |
-| channels | viewer | READ_ONLY | 423; без зміни | remaining | B[channels-viewer-READ_ONLY-423] |
+| channels | moderator | READ_ONLY | 423; без зміни | remaining | B[channels-moderator-READ_ONLY-423] |
 | channels | admin | RECOVERING | 423; без зміни | remaining | B[channels-admin-RECOVERING-423] |
-| channels | viewer | RECOVERING | 423; без зміни | remaining | B[channels-viewer-RECOVERING-423] |
+| channels | moderator | RECOVERING | 423; без зміни | remaining | B[channels-moderator-RECOVERING-423] |
 
 Models NORMAL: 200 стосується чинного configured-node pull acceptance. Локальний `/api/models/text/pull` probe без model service доводить method/path, а не успішне завантаження моделі. Негативні клітинки цього endpoint перевіряють також відсутність нових operation/файлів. Успішна модельна orchestration зараховується чинними lifecycle/HTTP tests, не підміняється green route assertion.
 
@@ -67,10 +67,10 @@ Session/router extraction не виконується: власник #366.
 
 | Test ID | Expected status / persisted outcome / UI |
 |---|---|
-| `test_browser_session_profile_csrf_logout_in_restricted_mode[mode-role]`, mode=RECOVERING/READ_ONLY/EMERGENCY, role=admin/viewer | Справжній POST session 200; UI PUT profile 200 з українським ім’ям; без CSRF 403 без запису; DELETE session 200; наступний GET 401 |
+| `test_browser_session_profile_csrf_logout_in_restricted_mode[mode-role]`, mode=RECOVERING/READ_ONLY/EMERGENCY, role=admin/moderator | Справжній POST session 200; UI PUT profile 200 з українським ім’ям; без CSRF 403 без запису; DELETE session 200; наступний GET 401 |
 | `test_browser_create_job_waits_without_dispatch[mode]`, mode=MAINTENANCE/UPDATING/RECOVERING | UI POST jobs 200; persisted WAITING_FOR_SYSTEM; queue depth не зростає; UI «Очікує систему» |
-| `test_browser_create_job_denied_without_persistence[admin-READ_ONLY-423]`, `[admin-EMERGENCY-423]`, `[viewer-NORMAL-403]` | Кнопка disabled; canonical POST має вказаний статус, нового job немає |
-| `test_browser_recovery_denied_preserves_state[admin-RECOVERING-423]`, `[admin-READ_ONLY-423]`, `[viewer-EMERGENCY-403]` | Disabled recovery для admin; viewer не має Settings; canonical POST відхилено, state file byte-exact незмінний |
+| `test_browser_create_job_denied_without_persistence[admin-READ_ONLY-423]`, `[admin-EMERGENCY-423]`, `[moderator-NORMAL-403]` | Кнопка disabled; canonical POST має вказаний статус, нового job немає |
+| `test_browser_recovery_denied_preserves_state[admin-RECOVERING-423]`, `[admin-READ_ONLY-423]`, `[moderator-EMERGENCY-403]` | Disabled recovery для admin; moderator не має Settings; canonical POST відхилено, state file byte-exact незмінний |
 | `test_browser_recovery_health_gate_and_success` | EMERGENCY admin: справжній health check 409 при недоступному Postgres; state незмінний, UI показує помилку. Після доступності залежностей 200, persisted NORMAL, дозволений brand POST 200 і файл створено |
 | `test_browser_status_transport_fault_and_recovery[loading]` / `[error]` | Справжній reverse proxy затримує /api/status або повертає HTTP503 без фальшивого JSON; UI «Невизначений»/«Недоступний», guard disabled, немає mutation HTTP/записів. Після відновлення мережі NORMAL, guard enabled, brand POST 200 із записом |
 | `test_unknown_backend_record_is_visible_and_does_not_grant_writes` | Фактичний невідомий persisted state → EMERGENCY, UI «Аварія» з причиною; canonical brand POST 423, ресурси незмінні |

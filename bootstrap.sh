@@ -545,12 +545,22 @@ ui_url_for_host(){
   fi
   printf 'https://%s:8443/' "$host"
 }
+# A host is a valid IPv4/IPv6 address (each octet 0-255, a well-formed IPv6) or
+# a DNS name (labels of 1-63 letters/digits/hyphens); anything else is refused.
 ui_valid_host(){
-  local host=$1
-  [[ -n $host && ${#host} -le 253 ]] || return 1
-  [[ $host =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && return 0
-  [[ $host =~ ^[0-9A-Fa-f:]+$ && $host == *:* ]] && return 0
-  return 1
+  python3 - "$1" <<'PY'
+import ipaddress, re, sys
+host = sys.argv[1]
+try:
+    ipaddress.ip_address(host)
+    sys.exit(0)
+except ValueError:
+    pass
+label = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
+looks_numeric = re.fullmatch(r"[0-9.]+", host) is not None
+ok = 0 < len(host) <= 253 and not looks_numeric and all(label.fullmatch(part) for part in host.split("."))
+sys.exit(0 if ok else 1)
+PY
 }
 ui_address_candidates(){
   local -a found=()
@@ -573,11 +583,41 @@ ui_address_candidates(){
   ((${#found[@]})) && printf '%s\n' "${found[@]}" | awk '!seen[$0]++'
   return 0
 }
+# PUBLIC_URL -> "<scheme>://<host>[:port][/path]/", or failure for anything that
+# is not a plain http(s) base URL (credentials, query, fragment, invalid host or port).
+ui_normalize_public_url(){
+  python3 - "$1" <<'PY'
+import ipaddress, re, sys
+from urllib.parse import urlsplit
+value = sys.argv[1].strip()
+try:
+    parts = urlsplit(value)
+    port = parts.port
+except ValueError:
+    sys.exit(1)
+host = parts.hostname or ""
+if parts.scheme not in {"http", "https"} or not host or parts.username or parts.password \
+        or parts.query or parts.fragment or "?" in value or "#" in value or (port is not None and not 0 < port < 65536):
+    sys.exit(1)
+try:
+    address = ipaddress.ip_address(host)
+    shown = f"[{address.compressed}]" if address.version == 6 else address.compressed
+except ValueError:
+    label = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
+    if re.fullmatch(r"[0-9.]+", host) or len(host) > 253 or not all(label.fullmatch(p) for p in host.split(".")):
+        sys.exit(1)
+    shown = host
+path = parts.path.rstrip("/")
+if path and not re.fullmatch(r"(/[A-Za-z0-9._~-]+)+", path):
+    sys.exit(1)
+print(f"{parts.scheme}://{shown}{':' + str(port) if port else ''}{path}/", end="")
+PY
+}
 ui_configured_base(){
   local public_url web_domain default_name
   public_url=$(env_value PUBLIC_URL)
-  if [[ $public_url =~ ^https?://[^/[:space:]]+ ]]; then
-    printf '%s/' "${public_url%/}"
+  if [[ -n $public_url ]] && public_url=$(ui_normalize_public_url "$public_url"); then
+    printf '%s' "$public_url"
     return 0
   fi
   web_domain=${VERTEP_WEB_DOMAIN:-$(env_value WEB_DOMAIN)}

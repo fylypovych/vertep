@@ -29,23 +29,8 @@ class TestBrandsModuleCatalog:
         assert manifest.health.get("timeout_seconds") is not None
 
 
-class TestBrandsModuleLifecycle:
-    @pytest.mark.asyncio
-    async def test_brands_install_activate(self):
-        from core.module.lifecycle import ModuleManager
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            mgr = ModuleManager(Path(tmp))
-            manifest_path = Path("modules/brands/manifest.yaml")
-            assert manifest_path.exists(), "manifest.yaml not found"
-            manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-            manifest = ModuleManifest.from_dict(manifest_data)
-            pkg = {"manifest": manifest, "version": "1.0.0", "sha256": "test"}
-            result = await mgr.install("brands", pkg)
-            assert result["status"] == "installed"
-            result = await mgr.activate("brands")
-            assert result["status"] == "active"
+# Install/activate with the module's own schema, the CORE brand API through the
+# module, migration and permissions: tests/test_brands_module_e2e.py.
 
 
 class TestBrandsModuleCompatibility:

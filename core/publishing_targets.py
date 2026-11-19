@@ -12,20 +12,20 @@ from __future__ import annotations
 
 def brand_targets(brand_id: str | None, channel_type: str) -> list[str]:
     """Targets of the enabled channels of ``channel_type`` on a brand, in a stable order."""
-    from .state import store
+    from .brand_store import list_channels
 
     if not brand_id:
         return []
-    return [channel.target for channel in store.repository.list_channels(brand_id)
+    return [channel.target for channel in list_channels(brand_id)
             if channel.enabled and channel.channel_type == channel_type and channel.target]
 
 
 def all_targets(channel_type: str) -> list[str]:
     """Enabled targets of ``channel_type`` over all brands (for readiness)."""
-    from .state import store
+    from .brand_store import list_channels
 
     seen: list[str] = []
-    for channel in store.repository.list_channels():
+    for channel in list_channels():
         if channel.enabled and channel.channel_type == channel_type and channel.target \
                 and channel.target not in seen:
             seen.append(channel.target)

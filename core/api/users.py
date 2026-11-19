@@ -43,8 +43,8 @@ def _brands(value) -> list[str]:
         return []
     if not isinstance(value, list) or any(not isinstance(item, str) or not BRAND_ID.fullmatch(item) for item in value):
         raise HTTPException(422, "brands must be a list of brand ids")
-    root = Path(os.getenv("BRANDS_ROOT", "brands"))
-    unknown = [item for item in value if not (root / item / "brand.json").is_file()]
+    from core.brand_store import brand_exists
+    unknown = [item for item in value if not brand_exists(item)]
     if unknown:
         raise HTTPException(422, f"Unknown brands: {', '.join(sorted(set(unknown)))}")
     return sorted(set(value))

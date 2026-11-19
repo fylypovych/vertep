@@ -75,7 +75,7 @@ socket або Windows feature installation. VM вимкнена після пе�
 | Остаточна Compose isolation/config перевірка | 28 passed; обидва build contexts/Dockerfile paths коректні | `issue-370-compose-final.log` |
 
 Повний діагностичний `pytest` (`issue-369-370-full.log`) зупинено після 8 failures
-у загальному `tests/test_browser_e2e.py` (admin/viewer/video engine/tests run/character
+у загальному `tests/test_browser_e2e.py` (admin/moderator/video engine/tests run/character
 сценарії); це **не green full suite**. Причини цих Browser failures цим звітом не
 кваліфікуються; наявні сторонні зміни `tests/test_browser_e2e.py` збережені.
 Дочірні процеси саме зупиненого запуску завершено; сторонній CORE не зупинявся.

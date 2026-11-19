@@ -39,7 +39,7 @@ def test_env_only_fallback_is_reported_as_its_own_source(config, monkeypatch):
 
 
 def test_missing_credentials_are_not_reported_as_set(config):
-    (config / "users.json").write_text(json.dumps({"viewer": {"password_hash": password_hash("viewer-password-1"), "role": "viewer"}}))
+    (config / "users.json").write_text(json.dumps({"moderator": {"password_hash": password_hash("moderator-password-1"), "role": "moderator"}}))
     summary = _effective_config_summary()
     # A user that exists but is not an administrator does not count.
     assert summary["admin_password_set"] is False

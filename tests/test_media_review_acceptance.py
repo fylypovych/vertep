@@ -62,11 +62,11 @@ def test_stale_image_and_storyboard_approval_do_not_change_persisted_files(fleet
         assert response.status_code == 409, response.text
         assert snapshot() == before
     from core.first_run import password_hash
-    auth = "Basic " + base64.b64encode(b"review-viewer:review-viewer-password").decode()
+    auth = "Basic " + base64.b64encode(b"review-moderator:review-moderator-password").decode()
     with monkeypatch.context() as context:
-        context.setenv("USERS_JSON", json.dumps({"review-viewer": {
-            "password_hash": password_hash("review-viewer-password"), "role": "viewer"}}))
+        context.setenv("USERS_JSON", json.dumps({"review-moderator": {
+            "password_hash": password_hash("review-moderator-password"), "role": "moderator"}}))
         response = api.post(f"/api/jobs/{job_id}/storyboards/images/approve", headers={"Authorization": auth},
-            json={"version": board["version"], "image_version": board["image_version"], "actor": "viewer"})
+            json={"version": board["version"], "image_version": board["image_version"], "actor": "moderator"})
         assert response.status_code == 403, response.text
     assert snapshot() == before

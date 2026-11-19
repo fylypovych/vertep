@@ -169,6 +169,8 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "characters_module_is_unavailable": { uk: "Модуль персонажів не відповідає; нове завдання не створено", en: "Characters module is unavailable" },
   "brand_access_required": { uk: "Потрібен доступ до цього бренду", en: "Brand access required" },
   "version_is_required": { uk: "Потрібно вказати версію", en: "version is required" },
+  "brands_module_is_unavailable": { uk: "Модуль брендів не відповідає", en: "Brands module is unavailable" },
+  "brands_module_is_not_active": { uk: "Модуль брендів не активний", en: "Brands module is not active" },
   "brands_must_be_a_list": { uk: "Бренди мають бути списком ідентифікаторів брендів", en: "brands must be a list of brand ids" },
   "role_must_be_admin_or_moderator": { uk: "Роль має бути admin або moderator", en: "role must be admin or moderator" },
   "invalid_username": { uk: "Недопустиме ім'я користувача", en: "Invalid username" },

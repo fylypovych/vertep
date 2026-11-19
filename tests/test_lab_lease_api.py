@@ -229,3 +229,20 @@ def test_install_script_is_valid_and_keeps_isolation():
     bash = shutil.which("bash")
     if bash:
         subprocess.run([bash, "-n", str(ROOT / "bootstrap-lab.sh")], check=True)
+
+
+def test_every_lab_call_is_audited_including_probes_and_refusals(client, monkeypatch, tmp_path):
+    """#493 AC6 / #491 L7: LAB calls into CORE leave a platform audit record."""
+    from core.module.gateway import read_audit
+    monkeypatch.setenv("VERTEP_MODULE_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
+    assert client.get("/lab-lease/v1/status").status_code == 401  # unauthenticated probe
+    assert client.get("/lab-lease/v1/status", headers=HEADERS).status_code == 200  # page-open probe
+    monkeypatch.delenv("LAB_IDLE_SHARING_ENABLED")
+    assert client.post("/lab-lease/v1/lease/request", headers=HEADERS, json={}).json()["granted"] is False
+    events = [event for event in read_audit() if event["action"] == "lab.lease"]
+    assert [(event["path"], event["outcome"], event["status"]) for event in events] == [
+        ("/lab-lease/v1/status", "denied", 401),
+        ("/lab-lease/v1/status", "allowed", 200),
+        ("/lab-lease/v1/lease/request", "denied", 200),
+    ]
+    assert events[2]["reason"] == "idle sharing is disabled by policy"

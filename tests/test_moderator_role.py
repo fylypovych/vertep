@@ -1,5 +1,5 @@
 """Owner decision 19.11.2026 (#499/#500/#502): two access roles, admin and a brand
-moderator; the former viewer role is gone (stored ``viewer`` = moderator, no brands)."""
+moderator; the former moderator role is gone (stored ``moderator`` = moderator, no brands)."""
 
 import hashlib
 import hmac
@@ -24,11 +24,11 @@ def _client(monkeypatch, user, role, brands=None):
     return client
 
 
-def test_roles_are_admin_and_moderator_and_a_stored_viewer_is_a_moderator_without_brands(monkeypatch):
+def test_roles_are_admin_and_moderator_and_a_stored_moderator_is_a_moderator_without_brands(monkeypatch):
     from core.security import SESSION_ROLES, _normalize_role, user_brands
     assert SESSION_ROLES == ("admin", "moderator")
-    assert _normalize_role("viewer") == "moderator"
-    monkeypatch.setenv("USERS_JSON", json.dumps({"old": {"role": "viewer"}, "mod": {"role": "moderator", "brands": ["brand-a"]}}))
+    assert _normalize_role("moderator") == "moderator"
+    monkeypatch.setenv("USERS_JSON", json.dumps({"old": {"role": "moderator"}, "mod": {"role": "moderator", "brands": ["brand-a"]}}))
     assert user_brands("old", "moderator") == set()
     assert user_brands("mod", "moderator") == {"brand-a"}
     assert user_brands("root", "admin") is None
@@ -45,8 +45,8 @@ def test_moderator_creates_jobs_only_for_its_brands_and_no_admin_actions(monkeyp
                          ("post", "/api/system/backups"), ("delete", "/api/brands/brand-a")):
         response = moderator.request(method.upper(), path, json={})
         assert response.status_code == 403, path
-    former_viewer = _client(monkeypatch, "old", "viewer")
-    assert former_viewer.post("/api/jobs", json={"topic": "Тест", "brand_id": "brand-a"}).status_code == 403
+    former_moderator = _client(monkeypatch, "old", "moderator")
+    assert former_moderator.post("/api/jobs", json={"topic": "Тест", "brand_id": "brand-a"}).status_code == 403
 
 
 def test_characters_module_accepts_a_moderator_only_for_its_brand(monkeypatch):
@@ -58,7 +58,7 @@ def test_characters_module_accepts_a_moderator_only_for_its_brand(monkeypatch):
     assert _may_change(moderator, "brand-b") is False
     assert _may_change(moderator, None) is False
     assert _may_change({"x-vertep-role": "admin", "x-vertep-brands": "*"}, "brand-b") is True
-    assert _may_change({"x-vertep-role": "viewer", "x-vertep-brands": "brand-a"}, "brand-a") is False
+    assert _may_change({"x-vertep-brands": "brand-a"}, "brand-a") is False  # no role from the gateway
 
 
 def test_session_reports_the_moderator_brands_and_job_actions_follow_the_job_brand(monkeypatch):

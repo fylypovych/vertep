@@ -674,11 +674,8 @@ def assembly_plan(job_store: JobStore, job: Job, images: list[Path]) -> dict:
     voice = next((path for path in audio_files if path.stem.startswith("voice")), None)
     music = next((path for path in audio_files if path.stem.startswith("music")), None)
     subtitles = _write_subtitles(job_store, job)
-    brand_path = Path(os.getenv("BRANDS_ROOT", "brands")) / job.brand_id / "brand.json"
-    try:
-        brand = json.loads(brand_path.read_text(encoding="utf-8")) if brand_path.exists() else {}
-    except ValueError:
-        brand = {}
+    from .brand_store import get_brand
+    brand = get_brand(job.brand_id) or {}
     watermark_value = brand.get("metadata", {}).get("watermark")
     existing = [int(v.version) for v in job.video_versions if v.version is not None]
     next_version = max(existing, default=0) + 1

@@ -382,11 +382,12 @@ def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: d
             return TelegramAdapter().send_message(chat_id, f"❌ Помилка: {error}")
     attachments = {key: message.get(key) for key in ("photo", "video", "document", "audio") if message.get(key)}
     _telegram_pending_brands[chat_id] = {"text": text, "source_id": source_id, "message": message, "attachments": attachments}
-    brands_dir = Path(os.getenv("BRANDS_ROOT", "brands"))
+    from ..brand_store import list_brands
     brands = []
-    for path in brands_dir.glob("*/brand.json"):
+    for item in list_brands():
         try:
-            brands.append(BrandConfig.model_validate(read_json(path)))
+            brands.append(BrandConfig.model_validate({key: item.get(key) for key in BrandConfig.model_fields
+                                                      if item.get(key) is not None}))
         except ValueError:
             continue
     if not brands:

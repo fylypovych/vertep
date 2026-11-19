@@ -113,7 +113,8 @@ def _ready_instance(registry, module_id: str, node_id: str | None = None):
     return None
 
 
-def call_module(module_id: str, method: str, route: str, params: dict | None = None) -> tuple[int, object] | None:
+def call_module(module_id: str, method: str, route: str, params: dict | None = None,
+                json_body: object | None = None) -> tuple[int, object] | None:
     """CORE-internal call to a READY module's declared API route.
 
     None when the module has no READY instance (optional module not in use);
@@ -128,7 +129,7 @@ def call_module(module_id: str, method: str, route: str, params: dict | None = N
         return None
     if not instance.manifest.api or not _route_matches(instance.manifest.api["routes"], route.split("?", 1)[0]):
         raise ValueError(f"Route {route} is not declared by module {module_id}")
-    response = httpx.request(method, f"{instance.endpoint}{route}", params=params, timeout=10,
+    response = httpx.request(method, f"{instance.endpoint}{route}", params=params, json=json_body, timeout=10,
                              headers={"x-vertep-module-token": issue_token(instance.module_id, instance.node_id),
                                       "x-vertep-caller": "core"})
     audit("module.core_call", "allowed", module=module_id, path=route, status=response.status_code)

@@ -109,7 +109,7 @@ ui:
 - Fork — інший репозиторій: довіра upstream не успадковується, навіть якщо fork підписано ключем upstream. Fork довіряється лише через власний запис видавця, доданий адміністратором.
 - Підписані digest `ui.files` перевіряються під час встановлення і повторно перед кожною видачею UI.
 - Сумісність із CORE перевіряється до встановлення/активації.
-- Погодження: `PUT /api/nodes/module-registry/approval/{module_id}` `{"permissions": [...]}` (лише адміністратор; лише задекларовані права). Новий або розширений набір прав робить екземпляр `NOT_READY` до нового погодження. Ролі доступу (admin/viewer) — не deployment-ролі й модульним lifecycle не змінюються.
+- Погодження: `PUT /api/nodes/module-registry/approval/{module_id}` `{"permissions": [...]}` (лише адміністратор; лише задекларовані права). Новий або розширений набір прав робить екземпляр `NOT_READY` до нового погодження. Ролі доступу (admin/moderator) — не deployment-ролі й модульним lifecycle не змінюються.
 
 9. Ізоляція application-коду
 ---------------------------------
@@ -120,7 +120,7 @@ ui:
 
 10. API gateway, extensions і secrets
 ---------------------------------
-- `/api/modules/{namespace}/v{major}/{path}` → READY екземпляр модуля з цим `api.namespace`, лише задекларовані `routes` і лише major з `api.version`. Користувачі проходять автентифікацію/RBAC платформи (viewer — лише читання); модулю передаються `x-vertep-user`/`x-vertep-role`, cookies і `Authorization` не передаються.
+- `/api/modules/{namespace}/v{major}/{path}` → READY екземпляр модуля з цим `api.namespace`, лише задекларовані `routes` і лише major з `api.version`. Користувачі проходять автентифікацію/RBAC платформи (moderator — лише читання); модулю передаються `x-vertep-user`/`x-vertep-role`, cookies і `Authorization` не передаються.
 - Модуль викликає інший модуль лише з власним токеном і лише API, задекларований у його `requires` з сумісною версією; інакше `403`. Деактивований/непогоджений модуль втрачає API, токен, secrets і UI.
 - Secrets: адміністратор зберігає значення лише задекларованих посилань — `PUT /api/nodes/module-registry/secrets/{module_id}`; модуль читає `GET /api/modules/self/secrets` зі своїм токеном і отримує тільки власні посилання з зашифрованого сховища платформи.
 

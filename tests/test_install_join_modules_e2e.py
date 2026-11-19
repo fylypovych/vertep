@@ -137,3 +137,137 @@ def test_first_install_join_retry_module_placement_readiness_and_revoke(module_r
     assert _ready(text) == [], text["nodes"]
     extensions = api.get("/api/modules/ui-extensions")
     assert extensions.status_code == 200 and extensions.json()["extensions"] == []
+
+
+@pytest.fixture
+def publisher_health(monkeypatch):
+    """The selected Publishing module's local service answers its health probe
+    (a controlled stand-in: the real service is a separate container)."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Health(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("PUBLISHER_HEALTH_URL", f"http://127.0.0.1:{server.server_port}/health")
+    yield
+    server.shutdown()
+
+
+@requires_openssl
+@pytest.mark.parametrize("config_contour", ["fresh"], indirect=True)
+def test_browser_first_install_module_choice_join_and_placement(module_runtime_env, publisher_health, config_contour,
+                                                                 tmp_path, monkeypatch):
+    """#496 AC1/AC2/AC3/AC6 through the panel: the administrator picks modules in the
+    First Run Wizard, gets the join token in «Вузли», the node enrolls (with a lost
+    response retried), and the administrator places and activates the module in
+    «Модулі» until the node reports it ready; a moderator cannot do any of it."""
+    import base64
+    from tests.test_media_browser_e2e import sync_playwright, expect
+    from tests.test_provider_process_acceptance import PASSWORD
+    c = config_contour
+    url = c["url"]
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            # -- First Run Wizard: CORE with the Text module ---------------------------
+            page.goto(url + "/setup?token=setup-acceptance-code")
+            expect(page.locator("#nodeRole")).to_be_visible(timeout=20000)
+            page.locator("#nodeRole").select_option("core")
+            expect(page.locator("#additionalRoles")).to_be_visible()
+            # The selected module's service must pass the health step before completion.
+            page.locator("#setup-role-publisher").check()
+            page.locator("#next").click()
+            page.locator("#name").fill("Перша машина")
+            page.locator("#next").click()
+            page.locator("#username").fill("admin")
+            page.locator("#password").fill(PASSWORD)
+            page.locator("#confirmation").fill(PASSWORD)
+            page.locator("#next").click(); page.locator("#next").click(); page.locator("#next").click()
+            page.locator("#backend").select_option("skip")
+            page.locator("#next").click()
+            expect(page.locator("#telegramAdmins")).to_be_visible()
+            page.locator("#next").click()
+            expect(page.locator("#next")).to_be_enabled(timeout=30000)
+            with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/api/setup/complete")) as done:
+                page.locator("#next").click()
+            assert done.value.status == 200, done.value.text()
+            request = json.loads((c["config"] / "deployment-request.json").read_text())
+            assert request["role"] == "core" and request["additional_roles"] == ["publisher"]  # no second CORE/LAB
+
+            # -- the administrator signs in and creates the join token in «Вузли» ------
+            admin = browser.new_context()
+            admin_page = admin.new_page()
+            auth = "Basic " + base64.b64encode(f"admin:{PASSWORD}".encode()).decode()
+            assert admin_page.request.post(url + "/api/session", headers={"Authorization": auth}).status == 200
+            admin_page.goto(url + "/workers")
+            admin_page.get_by_test_id("create-worker-button").click(timeout=20000)
+            admin_page.get_by_test_id("worker-role-select").select_option("text")
+            admin_page.get_by_test_id("generate-token-button").click()
+            display = admin_page.get_by_test_id("token-display").first
+            expect(display).to_be_visible(timeout=20000)
+            token = display.inner_text().split("Токен:")[1].split()[0].strip()
+            assert token
+
+            # -- the new machine enrolls (its own process), a lost response is retried --
+            from core.node_registry import create_node_csr
+            enroll = {"registration_token": token, "node_id": "cpu-node",
+                      "csr": create_node_csr("cpu-node", tmp_path / "joining" / "pki"),
+                      "capabilities": ["text_generation"], "version": "test", "enrollment_id": "cpu-node-browser",
+                      "hardware": {"gpu_available": False, "vram_mb": 0, "cpu_cores": 4, "ram_mb": 8192}}
+            assert httpx.post(url + "/api/nodes/register", json=enroll, timeout=30).status_code == 200
+            retried = httpx.post(url + "/api/nodes/register", json=enroll, timeout=30)
+            assert retried.status_code == 200, retried.text
+            monkeypatch.setenv("NODE_ROLE", "text")
+            from worker.migration import inventory
+            beat = lambda: httpx.post(url + "/api/workers/heartbeat", timeout=30,
+                headers={"X-Vertep-Token": retried.json()["jwt"]}, json={
+                    "node_name": "cpu-node", "role": "text", "status": "FREE", "runtime_instance_id": "cpu-1",
+                    "capabilities": ["text_generation"], "gpu_available": False, "vram_mb": 0, "cpu_cores": 4,
+                    "ram_mb": 8192, "module_inventory": inventory(),
+                    "self_test": {"status": "PASSED", "role": "text", "checked_at": datetime.now(timezone.utc).isoformat()}})
+            assert beat().status_code == 200
+            nodes = c["api"].get("/api/nodes").json()
+            assert [n["role"] for n in nodes if n["node_id"] == "cpu-node"] == ["text"]  # legacy role config read
+
+            # -- «Модулі»: install, honest GPU refusal, placement, activation, ready ----
+            admin_page.goto(url + "/modules")
+            expect(admin_page.get_by_test_id("module-text")).to_be_visible(timeout=20000)
+            admin_page.get_by_test_id("install-text").click()
+            expect(admin_page.get_by_test_id("module-state-text")).not_to_have_text("Не встановлено", timeout=20000)
+            expect(admin_page.get_by_test_id("incompatible-image-cpu-node").first).to_contain_text("GPU")
+            expect(admin_page.get_by_test_id("place-image-cpu-node")).to_be_disabled()
+            admin_page.get_by_test_id("place-text-cpu-node").check()
+            admin_page.get_by_test_id("save-placement-text").click()
+            expect(admin_page.get_by_test_id("activate-text")).to_be_enabled(timeout=20000)
+            assert beat().status_code == 200
+            admin_page.get_by_test_id("activate-text").click()
+            expect(admin_page.get_by_test_id("ready-text-cpu-node")).to_contain_text("Готовий", timeout=60000)
+
+            # -- access control: a moderator sees no module controls and is refused -----
+            moderator = browser.new_context()
+            moderator_page = moderator.new_page()
+            moderator_auth = "Basic " + base64.b64encode(b"reader:config-moderator-password").decode()
+            assert moderator_page.request.post(url + "/api/session", headers={"Authorization": moderator_auth}).status == 200
+            moderator_page.goto(url + "/modules")
+            expect(moderator_page.get_by_test_id("module-text")).to_be_visible(timeout=20000)
+            expect(moderator_page.get_by_test_id("deactivate-text")).to_have_count(0)
+            expect(moderator_page.get_by_test_id("place-text-cpu-node")).to_be_disabled()
+            csrf = next(cookie["value"] for cookie in moderator.cookies() if cookie["name"] == "vertep_csrf")
+            refused = moderator_page.request.post(url + "/api/nodes/module-registry/lifecycle/deactivate",
+                                                  data={"module_id": "text"}, headers={"x-csrf-token": csrf})
+            assert refused.status == 403
+            assert errors == []
+        finally:
+            browser.close()

@@ -19,7 +19,7 @@ JUnit зберігає SHA бази, digest diff і SHA допоміжних pro
 | Persist → deliver → apply → verify, task, restart | `test_supported_switch_task_restart_and_failed_activation_rollback`: окремі CORE/Worker, stock heartbeat, фактичний speech task, нові PID після restart, повторний task |
 | Невдала активація і rollback | Той самий тест: CORE overrides та Worker повертаються до попереднього backend; повторний task. `test_deferred_activation_is_not_success_and_late_failure_rolls_back`: без Worker повертається 202; пізня помилка не стає успіхом |
 | MPT, snapshot, секрети | `test_actual_settings_mpt_task_restart_rollback_and_native`: фактичний FFmpeg render через HTTP runtime, snapshot із CORE, restart, відмова пошкодженого результату й недоступного MPT без Native fallback, rollback та явний Native. Наявні `test_assembly_worker_route.py` перевіряють незмінність dispatched attempt |
-| Browser / RBAC / state | Справжні Settings та encrypted secret form, HTTP mutations без `page.route`; admin/viewer, 403/423, redaction DOM/API/jobs/logs, pageerror/console |
+| Browser / RBAC / state | Справжні Settings та encrypted secret form, HTTP mutations без `page.route`; admin/moderator, 403/423, redaction DOM/API/jobs/logs, pageerror/console |
 
 Змінено спільний `core/provider_switch.py`, heartbeat models/API та `worker/service.py`,
 engine secret-reference comparison, Settings API/UI. Транзакція має журнал;
