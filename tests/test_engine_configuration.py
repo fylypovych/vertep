@@ -121,7 +121,7 @@ def registry(monkeypatch, tmp_path):
     # Unit boundary: executor delivery is covered by the separate-process suite.
     # These tests exercise runtime verification and persistence after delivery.
     monkeypatch.setattr("core.provider_switch._switch_targets", lambda *args: ["unit-executor"])
-    def acknowledge(slot, revision, expected, targets):
+    def acknowledge(slot, revision, expected, targets, *, restoring=False):
         from core.provider_switch import provider_config_revision
         assert revision == provider_config_revision(expected)
         assert targets == ["unit-executor"]

@@ -171,7 +171,8 @@ def reconcile_provider_activation(node_name: str, worker: dict) -> None:
         _switch_lock.release()
 
 
-def _verify_workers(slot: str, revision: str, expected: dict[str, str], targets: list[str]) -> None:
+def _verify_workers(slot: str, revision: str, expected: dict[str, str], targets: list[str],
+                    *, restoring: bool = False) -> None:
     from .state import store
     deadline = time.monotonic() + float(os.getenv("PROVIDER_ACTIVATION_TIMEOUT_SECONDS", "45"))
     pending = set(targets)
@@ -186,6 +187,10 @@ def _verify_workers(slot: str, revision: str, expected: dict[str, str], targets:
                 from .engine_config import engine_config_revision
                 engine_mismatch = worker.get("provider_engine_revision") != engine_config_revision()
             if worker.get("provider_activation_error") or engine_mismatch or any(observed.get(k, "") != v for k, v in expected.items()):
+                # A rollback reuses the previous revision. Its last heartbeat
+                # can still report a failure from before the rollback.
+                if restoring:
+                    continue
                 raise ProviderSwitchError(409, f"Worker не підтвердив активацію слота '{slot}'; попередню конфігурацію відновлено")
             pending.remove(name)
         if pending and time.monotonic() >= deadline:
@@ -414,7 +419,7 @@ def _switch_provider(slot: str, backend: str, actor: str = "web",
         _activation_record({**transaction, "status": "ROLLED_BACK"})
         restored = provider_executor_config()
         try:
-            _verify_workers(slot, provider_config_revision(restored), restored, targets)
+            _verify_workers(slot, provider_config_revision(restored), restored, targets, restoring=True)
         except ProviderSwitchError as rollback_error:
             raise ProviderSwitchError(503, "Попередню конфігурацію збережено; відновлення на Worker ще не підтверджено") from rollback_error
         raise error

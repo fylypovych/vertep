@@ -18,6 +18,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -107,6 +108,29 @@ def test_failed_rollback_persistence_is_not_reported_as_restored(isolated_config
     apply_provider_overrides()
     assert load_provider_overrides() == {}
     assert json.loads((isolated_config / "provider-activation.json").read_text())["status"] == "ROLLED_BACK"
+
+
+def test_rollback_waits_for_worker_to_replace_previous_failed_ack(monkeypatch):
+    from core import provider_switch, state
+
+    expected = {"TTS_PROVIDER": "mock"}
+    revision = provider_switch.provider_config_revision(expected)
+    ack = {
+        "provider_config_revision": revision,
+        "provider_config": expected,
+        "provider_activation_error": True,
+    }
+    monkeypatch.setattr(state, "store", SimpleNamespace(workers={"voice-01": ack}))
+
+    def acknowledge_restored_config(_delay):
+        ack["provider_activation_error"] = False
+
+    monkeypatch.setattr(provider_switch.time, "sleep", acknowledge_restored_config)
+
+    with pytest.raises(ProviderSwitchError, match="Worker не підтвердив"):
+        provider_switch._verify_workers("tts", revision, expected, ["voice-01"])
+    provider_switch._verify_workers("tts", revision, expected, ["voice-01"], restoring=True)
+    assert ack["provider_activation_error"] is False
 
 
 def test_switch_persists_applies_and_verifies(isolated_config):
