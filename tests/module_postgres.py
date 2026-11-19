@@ -58,7 +58,7 @@ def module_postgres(tmp_path):
     if (pg_bin / "initdb").is_file():
         data, sockets = tmp_path / "pg", tmp_path / "sock"
         sockets.mkdir()
-        subprocess.run([str(pg_bin / "initdb"), "-D", str(data), "-U", "vertep", "-A", "trust", "--no-locale"],
+        subprocess.run([str(pg_bin / "initdb"), "-D", str(data), "-U", "vertep", "-A", "trust", "--encoding=UTF8", "--no-locale"],
                        check=True, capture_output=True)
         port = _port()
         process = subprocess.Popen([str(pg_bin / "postgres"), "-D", str(data), "-h", "127.0.0.1", "-p", str(port),

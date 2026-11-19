@@ -2483,6 +2483,8 @@ def _mock_chrome_data(page):
     page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
     page.route("**/api/workers*", lambda route: route.fulfill(json=[]))
     page.route("**/api/characters", lambda route: route.fulfill(json=[]))
+    page.route("**/api/modules/characters/v1/characters", lambda route: route.fulfill(json=[]))
+    page.route("**/api/modules/ui-extensions", lambda route: route.fulfill(json={"extensions": []}))
     page.route("**/api/workflows", lambda route: route.fulfill(json=[]))
     page.route("**/api/brands", lambda route: route.fulfill(json=[]))
     # This UI-only smoke has a mocked session, hence no backend cookie. Letting
