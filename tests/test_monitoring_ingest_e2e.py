@@ -124,7 +124,9 @@ def test_placed_on_a_non_core_node_it_ingests_metrics_health_and_the_alert_histo
     assert status == 200 and alert["active"] is False and alert["resolved_at"]
     assert alert["labels"]["state"] == "resolved" and alert["labels"]["acknowledged_by"] == "admin"
     status, logs = _get(monitoring, "/logs?component=alerts")
-    history = [entry["context"]["to"] for entry in reversed(logs) if entry["context"]["alert_id"] == f"core-{core_id}"]
+    # Insertion order of the transitions (ids), not timestamps that may coincide.
+    history = [entry["context"]["to"] for entry in sorted(logs, key=lambda entry: entry["id"])
+               if entry["context"]["alert_id"] == f"core-{core_id}"]
     assert history == ["firing", "acknowledged", "resolved"]
     # CORE stays the source of truth: its own store has the same states.
     assert get_alert_store().list(state="resolved")[0]["id"] == core_id

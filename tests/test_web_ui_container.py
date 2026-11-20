@@ -99,16 +99,29 @@ def contour(tmp_path_factory):
     (core_root / "config" / "installation.json").write_text('{"completed_at": "2026-01-01"}', encoding="utf-8")
     write_character(core_root / "characters", "uichar")
     core_port = _free_port()
-    core_env = {**os.environ, "PYTHONPATH": str(ROOT), "CONFIG_ROOT": str(core_root / "config"),
+    # A clean environment: nothing leaked into os.environ by earlier tests reaches CORE.
+    base_env = {name: os.environ[name] for name in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")
+                if name in os.environ}
+    # Every CORE state root lives in this contour; nothing is shared with the repository
+    # working tree (relative defaults such as logs/ or module_state/) or earlier tests.
+    isolated = {name: str(core_root / folder) for name, folder in (
+        ("HOME", "home"), ("LOG_ROOT", "logs"), ("MODULE_STATE_ROOT", "module_state"), ("BACKUP_ROOT", "backups"),
+        ("WORKFLOW_STATE_ROOT", "workflow_state"), ("BRANDS_ROOT", "brands"), ("STORAGE_ROOT", "storage"),
+        ("VERTEP_MODULE_LIFECYCLE_ROOT", "modules"), ("ALERTS_FILE", "config/alerts.json"),
+        ("VERTEP_MODULE_PLACEMENT_FILE", "config/placement.json"), ("VERTEP_MODULE_AUDIT_FILE", "logs/audit.jsonl"))}
+    core_env = {**base_env, **isolated, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", "CONFIG_ROOT": str(core_root / "config"),
                 "JOB_ROOT": str(core_root / "jobs"), "CHARACTERS_ROOT": str(core_root / "characters"),
                 "UPDATE_STATE_DIR": str(core_root / "update"), "ADMIN_USER": ADMIN[0], "ADMIN_PASSWORD": ADMIN[1],
                 "USERS_JSON": "{}", "NODE_API_TOKEN": NODE_TOKEN, "DATABASE_URL": "", "REDIS_URL": "",
                 "SYSTEM_STATE_BACKEND": "file", "STATE_BACKEND": "file", "LOCAL_WORKER_FALLBACK": "false",
                 "DEMO_MODE": "true", "RATE_LIMIT_PER_MINUTE": "10000", "OLLAMA_URL": "http://127.0.0.1:1"}
     core_log = (work / "core.log").open("w", encoding="utf-8")
-    core = subprocess.Popen([sys.executable, "-m", "uvicorn", "core.app:app", "--host", "0.0.0.0",
-                             "--port", str(core_port)], cwd=ROOT, env=core_env, stdout=core_log,
-                            stderr=subprocess.STDOUT)
+    # SIGUSR1 dumps every thread's stack into the log if CORE ever fails to come up.
+    launcher = ("import faulthandler,runpy,signal,sys; faulthandler.register(signal.SIGUSR1, all_threads=True); "
+                "sys.argv=['uvicorn','core.app:app','--host','0.0.0.0','--port',sys.argv[1]]; "
+                "runpy.run_module('uvicorn', run_name='__main__')")
+    core = subprocess.Popen([sys.executable, "-c", launcher, str(core_port)], cwd=ROOT, env=core_env,
+                            stdout=core_log, stderr=subprocess.STDOUT)
     import httpx
     direct = httpx.Client(base_url=f"http://127.0.0.1:{core_port}", auth=ADMIN, timeout=30,
                           headers={"x-vertep-token": NODE_TOKEN})
@@ -121,9 +134,42 @@ def contour(tmp_path_factory):
         except httpx.HTTPError:
             pass
         time.sleep(0.5)
-    if core.poll() is not None or direct.get("/api/status").status_code != 200:
+    started, last = False, None
+    if core.poll() is None:
+        try:
+            answer = direct.get("/api/status")
+            started, last = answer.status_code == 200, f"HTTP {answer.status_code}: {answer.text[:300]}"
+        except httpx.HTTPError as error:
+            last = repr(error)
+    if not started:
+        returncode = core.poll()
+        proc = ""
+        if returncode is None:
+            import signal
+            try:
+                status = Path(f"/proc/{core.pid}/status").read_text()
+                proc = " | ".join(line for line in status.splitlines() if line.split(":")[0] in {
+                    "State", "Threads", "Cpus_allowed_list", "SigBlk", "SigIgn", "voluntary_ctxt_switches",
+                    "nonvoluntary_ctxt_switches", "VmRSS"})
+                proc += " | sched=" + " ".join(Path(f"/proc/{core.pid}/sched").read_text().split())[:600]
+                proc += " | limits=" + " ".join(line for line in Path(f"/proc/{core.pid}/limits").read_text().splitlines()
+                                                 if "open files" in line or "processes" in line or "cpu time" in line)
+                proc += " | wchan=" + Path(f"/proc/{core.pid}/wchan").read_text()
+                proc += " | children=" + Path(f"/proc/{core.pid}/task/{core.pid}/children").read_text()
+                proc += " | cmdline=" + Path(f"/proc/{core.pid}/cmdline").read_text().replace("\0", " ")[:300]
+                proc += " | syscall=" + Path(f"/proc/{core.pid}/syscall").read_text().strip()
+                cpu = lambda: sum(int(x) for x in Path(f"/proc/{core.pid}/stat").read_text().split(")")[1].split()[11:13])
+                before = cpu(); time.sleep(1); proc += f" | cpu_ticks_per_s={cpu() - before}"
+                fds = Path(f"/proc/{core.pid}/fd")
+                proc += " | fds=" + ", ".join(sorted(os.readlink(fd) for fd in fds.iterdir()))[:1500]
+            except OSError as error:
+                proc += repr(error)
+            core.send_signal(signal.SIGUSR1)
+            time.sleep(2)
         core.kill()
-        raise AssertionError("CORE did not start: " + (work / "core.log").read_text()[-3000:])
+        core_log.flush()
+        raise AssertionError(f"CORE did not start (exit={returncode}, last={last}, proc={proc}): "
+                             + (work / "core.log").read_text()[-4000:])
     try:
         run("docker", "run", "-d", "--name", names["core"], "--network", network, "--network-alias", "core",
             "--add-host", "host.docker.internal:host-gateway",
