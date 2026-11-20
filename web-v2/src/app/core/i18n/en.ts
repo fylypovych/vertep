@@ -1307,7 +1307,19 @@ export const EN: Record<string, string> = {
   "Модулі на центральній машині": "Modules on the central machine",
   "Зображення та відео (потрібен GPU)": "Images and video (GPU required)",
   "Vertep із CORE (центральна машина)": "Vertep with CORE (central machine)",
-  "Вузол для підключення": "Node to connect"
+  "Вузол для підключення": "Node to connect",
+  "Оновлення модулів": "Module updates",
+  "Доступно": "Available",
+  "Ризик": "Risk",
+  "безпека": "security",
+  "Немає модулів із закріпленим джерелом": "No modules with a pinned source",
+  "План": "Plan",
+  "Журнал UPDATE": "UPDATE journal",
+  "Точки rollback": "Rollback points",
+  "Погоджуюся з втратою пізніших записів БД": "I accept losing later database writes",
+  "Повернути": "Restore",
+  "Непридатна точка": "Unsuitable point",
+  "Модуль повернуто до вибраної точки": "Module restored to the selected point"
 };
 /** Texts built at run time: the values stay as they are. */
 export const EN_PATTERNS: [RegExp, string][] = [

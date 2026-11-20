@@ -1,5 +1,5 @@
 name: image
-version: "0.0.2.74"
+version: "0.0.2.91"
 label: Image Module
 role: gpu
 capabilities:

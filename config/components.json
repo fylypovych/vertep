@@ -1,0 +1,139 @@
+{
+  "format_version": 1,
+  "source_repository": "fylypovych/vertep",
+  "full_suite": ["python", "-m", "pytest", "-q", "-n", "8", "--dist", "loadgroup"],
+  "shared_contracts": [
+    "core/module/**",
+    "core/protocol/**",
+    "worker/protocol/**",
+    "worker/module_runtime.py",
+    "worker/application_container.py",
+    "worker/application_supervisor.py",
+    "modules/__init__.py",
+    "modules/execution.py",
+    "config/module-trust/**",
+    "config/components.json",
+    "docs/architecture/contracts/**",
+    "web-v2/src/app/modules/**",
+    "web-v2/src/app/core/api/modules.api.ts"
+  ],
+  "compatibility_tests": [
+    "tests/test_module_contract.py",
+    "tests/test_module_lifecycle.py",
+    "tests/test_module_registry.py",
+    "tests/test_module_catalog.py",
+    "tests/test_role_module_migration.py",
+    "tests/test_release_module_images.py",
+    "tests/test_modules_static_workflow_mode.py",
+    "tests/test_components.py"
+  ],
+  "no_test_impact": [
+    "CHANGELOG.md",
+    "README.md",
+    "releases/**",
+    "audit/**",
+    "docs/*.md",
+    "docs/issues/**"
+  ],
+  "components": {
+    "core": {
+      "kind": "core",
+      "version_source": "VERSION",
+      "transition": "Continues the shared Vertep sequence (VERSION); runtime releases keep the existing `реліз` workflow and plain A.B.C.D tags.",
+      "paths": ["core/**", "services/**", "db/**", "worker/**", "adapters/**", "VERSION", "Dockerfile",
+                "requirements.txt", "requirements-dev.txt", "bootstrap.sh", "installer/**", "deploy/**",
+                "scripts/**", "docker/**", "monitoring/**", "config/node_roles.json", ".github/**"],
+      "full_suite": true
+    },
+    "web-ui": {
+      "kind": "module",
+      "version_source": "modules/web-ui/manifest.yaml",
+      "paths": ["modules/web-ui/**", "web-v2/**", "docker/web-ui/**"],
+      "history_exclude": ["modules/web-ui/**"],
+      "tests": ["tests/test_web_ui_container.py", "tests/test_web_ui_contracts.py", "tests/test_web_ui_module.py",
+                "tests/test_module_ui_browser_e2e.py"],
+      "transition_base": "0.0.4.18",
+      "legacy_versions": {"1.0.0": "0.0.4.11"}
+    },
+    "text": {
+      "kind": "module",
+      "version_source": "modules/text/manifest.yaml",
+      "paths": ["modules/text/**"],
+      "tests": ["tests/test_text_module.py", "tests/test_text_redis_process.py"],
+      "transition_base": "0.0.2.90"
+    },
+    "image": {
+      "kind": "module",
+      "version_source": "modules/image/manifest.yaml",
+      "paths": ["modules/image/**"],
+      "tests": ["tests/test_image_module.py", "tests/test_image_storyboard_e2e.py"],
+      "transition_base": "0.0.2.90"
+    },
+    "audio": {
+      "kind": "module",
+      "version_source": "modules/audio/manifest.yaml",
+      "paths": ["modules/audio/**"],
+      "tests": ["tests/test_audio_module.py"],
+      "transition_base": "0.0.2.90"
+    },
+    "backup": {
+      "kind": "module",
+      "version_source": "modules/backup/manifest.yaml",
+      "paths": ["modules/backup/**"],
+      "tests": ["tests/test_backup_module_state.py", "tests/test_backup_commands_488.py", "tests/test_backup_restore.py"],
+      "transition_base": "0.0.3.90"
+    },
+    "publisher": {
+      "kind": "module",
+      "version_source": "modules/publisher/manifest.yaml",
+      "paths": ["modules/publisher/**", "publishers/**"],
+      "tests": ["tests/test_publisher_durable_reconciliation.py", "tests/test_publisher_http_boundary.py",
+                "tests/test_publisher_live_adapters.py", "tests/test_publisher_oauth_state.py",
+                "tests/test_issue_411_publisher_channels.py", "tests/test_delivery_process_acceptance.py"],
+      "transition_base": "0.0.3.90"
+    },
+    "brands": {
+      "kind": "module",
+      "version_source": "modules/brands/manifest.yaml",
+      "paths": ["modules/brands/**"],
+      "tests": ["tests/test_brands_module.py", "tests/test_brands_module_e2e.py"],
+      "transition_base": "0.0.4.14",
+      "legacy_versions": {"1.0.0": "0.0.4.14"}
+    },
+    "characters": {
+      "kind": "module",
+      "version_source": "modules/characters/manifest.yaml",
+      "paths": ["modules/characters/**"],
+      "tests": ["tests/test_characters_module.py", "tests/test_characters_lifecycle_e2e.py",
+                "tests/test_characters_browser_rbac.py"],
+      "transition_base": "0.0.4.14",
+      "legacy_versions": {"1.0.0": "0.0.4.14"}
+    },
+    "monitoring": {
+      "kind": "module",
+      "version_source": "modules/monitoring/manifest.yaml",
+      "paths": ["modules/monitoring/**"],
+      "tests": ["tests/test_monitoring_module.py", "tests/test_monitoring_retention.py",
+                "tests/test_monitoring_ingest_e2e.py"],
+      "transition_base": "0.0.4.14",
+      "legacy_versions": {"1.0.0": "0.0.4.14"}
+    },
+    "publishing": {
+      "kind": "module",
+      "version_source": "modules/publishing/manifest.yaml",
+      "paths": ["modules/publishing/**"],
+      "tests": ["tests/test_publishing_module.py", "tests/test_publishing_module_e2e.py"],
+      "transition_base": "0.0.4.14",
+      "legacy_versions": {"1.0.0": "0.0.4.14"}
+    },
+    "storyboard": {
+      "kind": "module",
+      "version_source": "modules/storyboard/manifest.yaml",
+      "paths": ["modules/storyboard/**"],
+      "tests": ["tests/test_storyboard_module.py", "tests/test_storyboard_module_e2e.py",
+                "tests/test_storyboard_module_restore_e2e.py", "tests/test_storyboard_module_browser_e2e.py"],
+      "transition_base": "0.0.4.14",
+      "legacy_versions": {"1.0.0": "0.0.4.14"}
+    }
+  }
+}

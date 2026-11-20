@@ -5,6 +5,7 @@ UI and the node registry.
 """
 import json
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -181,6 +182,8 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
             # Preserve legacy heartbeat while withholding an invalid module or
             # untested worker from the workflow dispatcher.
             workflow.dispatcher.unregister_node(payload.node_name)
+    if (previous or {}).get("status") in {None, "OFFLINE"}:
+        _resume_deferred_module_rollout(payload.node_name)
     rollout = reconcile_rollout(store.workers)
     data = store.workers[payload.node_name]
     store.save_worker(data)
@@ -344,3 +347,22 @@ def workers_health():
             checks["free_vram_mb"] = worker.get("free_vram_mb")
         result.append({"node_id": worker.get("node_id"), "node_name": worker.get("node_name"), "checks": checks})
     return {"status": _health_status({item["node_name"]: tuple(item["checks"].values())[0] for item in result}), "workers": result}
+
+
+def _resume_deferred_module_rollout(node_name: str) -> None:
+    """#512: a node that reconnects continues the module rollouts deferred while it was offline."""
+    import threading
+    from core.workflow.runtime import module_runtime
+    runtime = module_runtime()
+    plans = Path(runtime.lifecycle.root) / "plans" if runtime is not None and runtime.lifecycle else None
+    if plans is None or not plans.is_dir():
+        return
+
+    def resume() -> None:
+        try:
+            from core.api.nodes import _update_manager
+            _update_manager().resume_node(node_name)
+        except Exception:  # noqa: BLE001 - a rollout problem never breaks the heartbeat
+            import logging
+            logging.getLogger("vertep").warning("Deferred module rollout did not resume", exc_info=True)
+    threading.Thread(target=resume, daemon=True).start()

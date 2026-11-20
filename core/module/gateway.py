@@ -481,6 +481,8 @@ async def node_assignments(request: Request):
     if runtime is None:
         return {"modules": []}
     registry = runtime.modules
+    from core.module.update_manager import RolloutGates
+    gates = RolloutGates(runtime.lifecycle.root / "rollout-gates.json")
     result = []
     for module_id, record in runtime.lifecycle.records().items():
         if node_name not in registry.placement.placement.get(module_id, []):
@@ -490,7 +492,11 @@ async def node_assignments(request: Request):
             continue
         if not set(manifest.permissions) <= set(registry.placement.approvals.get(module_id, [])):
             continue
-        result.append({"module_id": module_id, "version": record["version"], "package": record["package"]})
+        package, version = record["package"], record["version"]
+        if not gates.allowed(module_id, node_name) and record.get("previous"):
+            # #512 sequential rollout: this node keeps the previous version until released.
+            package, version = record["previous"]["package"], record["previous"]["version"]
+        result.append({"module_id": module_id, "version": version, "package": package})
     audit("module.assignments", "allowed", node=node_name, modules=[item["module_id"] for item in result])
     return {"modules": result}
 

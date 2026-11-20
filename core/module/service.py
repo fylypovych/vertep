@@ -46,6 +46,16 @@ def store_credentials(module_id: str, credentials: dict) -> None:
         _write_encrypted_secrets(stored)
 
 
+def _notify_administrator(message: str, details: dict) -> None:
+    """#513: a stopped automatic update becomes a CORE alert the administrator sees."""
+    try:
+        from core.alert_store import get_alert_store
+        get_alert_store().record({"severity": "critical", "type": "MODULE_UPDATE_STOPPED", "message": message,
+                                  "details": details, "operation_id": details.get("operation")})
+    except Exception:  # noqa: BLE001 - notification never breaks recovery
+        pass
+
+
 def attach(runtime) -> ModuleLifecycle:
     """Create the lifecycle for a WorkflowRuntime and recover unfinished operations."""
     from .data import ModuleDatabase
@@ -83,7 +93,8 @@ def attach(runtime) -> ModuleLifecycle:
                                 database=ModuleDatabase(dsn) if dsn else None, registry=registry,
                                 self_test=self_test, active_tasks=running, cancel_tasks=cancel,
                                 store_credentials=store_credentials, system_versions=registry.system_versions,
-                                drain_timeout=float(os.getenv("VERTEP_MODULE_DRAIN_SECONDS", "60")))
+                                drain_timeout=float(os.getenv("VERTEP_MODULE_DRAIN_SECONDS", "60")),
+                                notify=_notify_administrator)
     recovered = lifecycle.recover()
     if recovered:
         from .gateway import audit

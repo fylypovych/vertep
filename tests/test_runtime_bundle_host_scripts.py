@@ -19,7 +19,7 @@ from tests.test_environment_readiness import load_script
 ROOT = Path(__file__).resolve().parents[1]
 # Executed on the host by systemd units or the `vertep` CLI (migrate.py runs in its container).
 HOST_SCRIPTS = ("apply-deployment.py", "startup-recovery.py", "update-agent.py", "host-health.py",
-                "remove-vertep.py", "status.py", "watchdog.py")
+                "remove-vertep.py", "status.py", "watchdog.py", "agent-slots.py")
 SYSTEM_PYTHON = shutil.which("python3", path="/usr/bin:/bin")
 
 

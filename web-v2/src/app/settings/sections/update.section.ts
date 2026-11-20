@@ -10,11 +10,12 @@ import { UpdateStatus, UpdateReadiness, RollingStatus } from '../../core/models'
 import { LoadingStateComponent } from '../../shared/loading-state.component';
 import { ErrorStateComponent } from '../../shared/error-state.component';
 import { systemStateLabel, updateStateLabel } from '../../core/presentation';
+import { ModuleUpdatesComponent } from './module-updates.component';
 
 @Component({
   selector: 'app-settings-update',
   standalone: true,
-  imports: [TPipe, CommonModule, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, LoadingStateComponent, ErrorStateComponent, ModuleUpdatesComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-update">
       <h3 class="text-lg font-semibold text-slate-900 mb-4">{{ 'Оновлення' | t }}</h3>
@@ -100,6 +101,7 @@ import { systemStateLabel, updateStateLabel } from '../../core/presentation';
           <button (click)="recoverToNormal()" [disabled]="!policy.can('start_recovery').allowed" [title]="(policy.disabledReason('start_recovery') || 'Відновити нормальний стан') | t" data-testid="update-recover-normal" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">{{ 'Відновити нормальний стан' | t }}</button>
         </div>
       }
+      <app-module-updates />
     </div>
   `,
 })

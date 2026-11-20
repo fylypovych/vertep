@@ -1,0 +1,141 @@
+name: Component releases
+
+# #510 (VAR #509): independent, signed releases of changed official components.
+# Every push to main is classified by scripts/component-release.py impact: the changed
+# component's tests, compatibility with supported CORE and install/update/rollback run;
+# a shared contract pulls in every dependent component; an unknown impact runs the full
+# suite. Only after the required tests pass are changed modules published as stable
+# signed releases tagged <component>.<version>. Publication stays off until the owner
+# sets the repository variable COMPONENT_RELEASES_ENABLED=true (AGENTS.md §2.13).
+# CORE itself keeps the shared VERSION and the existing «реліз» runtime release.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Base commit for the impact (empty: the previous commit)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: component-releases
+  cancel-in-progress: false
+
+jobs:
+  impact:
+    runs-on: ubuntu-24.04
+    outputs:
+      full_suite: ${{ steps.impact.outputs.full_suite }}
+      components: ${{ steps.impact.outputs.components }}
+      tests: ${{ steps.impact.outputs.tests }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install pyyaml
+      - name: Classify the change
+        id: impact
+        env:
+          BASE: ${{ inputs.base || github.event.before }}
+        run: |
+          set -euo pipefail
+          base="${BASE:-}"
+          [ -n "$base" ] || base="$(git rev-parse HEAD~1 2>/dev/null || true)"
+          python scripts/component-release.py impact --base "$base" --head "$GITHUB_SHA" > impact.json
+          cat impact.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          impact = json.load(open("impact.json"))
+          print("full_suite=" + ("true" if impact["full_suite"] else "false"))
+          print("components=" + ",".join(impact["components"]))
+          print("tests=" + " ".join(impact["tests"]))
+          PY
+
+  tests:
+    needs: impact
+    if: needs.impact.outputs.full_suite == 'true' || needs.impact.outputs.components != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Required tests for this change
+        env:
+          FULL: ${{ needs.impact.outputs.full_suite }}
+          TESTS: ${{ needs.impact.outputs.tests }}
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = "true" ]; then
+            python -m pytest -q -n 8 --dist loadgroup \
+              --ignore=tests/test_standard_host_consumer_docker.py \
+              --ignore=tests/test_standard_core_consumer_docker.py \
+              --ignore=tests/test_browser_e2e.py
+          else
+            # shellcheck disable=SC2086
+            python -m pytest -q -n 4 --dist loadgroup $TESTS
+          fi
+
+  publish:
+    needs: [impact, tests]
+    if: vars.COMPONENT_RELEASES_ENABLED == 'true' && needs.impact.outputs.components != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install pyyaml cryptography
+      - name: Plan versions (collisions and forward-only checks)
+        env:
+          COMPONENTS: ${{ needs.impact.outputs.components }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          python scripts/component-release.py plan --components "$COMPONENTS" --sha "$GITHUB_SHA" | tee plan.json
+          python - <<'PY'
+          import json, sys
+          plan = json.load(open("plan.json"))
+          errors = {name: entry["error"] for name, entry in plan.items() if "error" in entry}
+          if errors:
+              print("Component release refused:", errors)
+              sys.exit(1)
+          PY
+      - name: Sign and publish stable component releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNING_KEY: ${{ secrets.RUNTIME_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          key="${RUNNER_TEMP}/component-signing.pem"
+          printf '%s' "$SIGNING_KEY" > "$key"
+          chmod 600 "$key"
+          for component in $(python -c 'import json; print(" ".join(n for n, e in json.load(open("plan.json")).items() if e["publish"]))'); do
+            tag="$(python -c "import json; print(json.load(open('plan.json'))['$component']['tag'])")"
+            out="${RUNNER_TEMP}/${tag}.manifest.json"
+            python scripts/component-release.py manifest --component "$component" --sha "$GITHUB_SHA" \
+              --private-key "$key" --output "$out"
+            git tag -a "$tag" "$GITHUB_SHA" -m "Vertep component $tag"
+            git push origin "refs/tags/$tag"
+            # Never "latest": bootstrap and the update agent resolve the runtime from releases/latest.
+            gh release create "$tag" "$out" --title "$tag" --notes "Stable signed component release $tag" \
+              --verify-tag --latest=false
+          done
+          rm -f "$key"

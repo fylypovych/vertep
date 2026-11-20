@@ -1,7 +1,7 @@
 schema_version: "2.0"
 name: characters
 module_id: characters
-version: "1.0.0"
+version: "0.0.4.15"
 kind: application
 core_compatibility: {min: "0.0.3.91", max: "0.0.9.99"}
 dependencies: []

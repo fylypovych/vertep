@@ -1,5 +1,5 @@
 name: audio
-version: "0.0.2.74"
+version: "0.0.2.91"
 label: Audio Module
 role: voice
 capabilities:

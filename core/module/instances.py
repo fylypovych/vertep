@@ -424,7 +424,7 @@ class ModuleInstanceRegistry:
         ready = self.ready_instances(module_id)
         if not ready:
             return None
-        return max((i.manifest for i in ready), key=lambda m: Version(m.version))
+        return max((i.manifest for i in ready), key=lambda m: _ordering(m.module_id, m.version, Version))
 
     def dispatch_targets(self, module_id: str) -> dict[str, dict]:
         """node_id -> assigned version/requirements for READY placed instances."""
@@ -448,3 +448,13 @@ class ModuleInstanceRegistry:
                     "placement": dict(self.placement.placement),
                     "approvals": dict(self.placement.approvals),
                     "conflicts": self.conflicts()}
+
+
+def _ordering(module_id: str, version: str, version_type):
+    """Component ordering (#510): legacy manifest values such as ``1.0.0`` rank at their
+    recorded transition base, below the first independent ``A.B.C.D`` release."""
+    try:
+        from core.components import ComponentError, version_key
+        return (1, version_key(module_id, version))
+    except (ComponentError, KeyError, OSError, ValueError):
+        return (0, version_type(version).release)

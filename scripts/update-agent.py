@@ -723,6 +723,32 @@ def reset_replay_state(state_dir: Path, reason: str) -> None:
             "message": f"Update replay state reset by operator: {reason}; previous={previous}"})
 
 
+def self_test(root: Path, state_dir: Path) -> int:
+    """Readiness of this agent copy from local facts only (#514).
+
+    The modules it needs import from this copy, the update trust key is readable and the
+    state directory is usable. CORE, the network and the CORE package cache are not
+    consulted, so an unreachable CORE never rejects a working agent.
+    """
+    import importlib
+    problems = []
+    for name in ("core.logging_config", "core.system_state", "core.update_lease", "core.update_protocol",
+                 "core.update_trust", "core.version"):
+        try:
+            importlib.import_module(name)
+        except Exception as error:  # noqa: BLE001 - every import problem is a readiness failure
+            problems.append(f"{name}: {error}")
+    key = root / "installer" / "update-public.pem"
+    if not key.is_file() or not os.access(key, os.R_OK):
+        problems.append(f"update trust key is not readable: {key}")
+    usable = state_dir if state_dir.exists() else state_dir.parent
+    if not os.access(usable, os.W_OK):
+        problems.append(f"update state directory is not writable: {usable}")
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    return 1 if problems else 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Process signed Vertep update requests")
     parser.add_argument("--root", type=Path, required=True)
@@ -732,8 +758,12 @@ def main() -> None:
                         help="Forget the accepted release sequence (audited operator action)")
     parser.add_argument("--reason", default="",
                         help="Why the replay state is reset (required with --reset-replay-state)")
+    parser.add_argument("--self-test", action="store_true",
+                        help="Local readiness of this agent copy (#514); never contacts CORE")
     args = parser.parse_args()
     root, state_dir = args.root.resolve(), args.state_dir.resolve()
+    if args.self_test:
+        raise SystemExit(self_test(root, state_dir))
     sys.path.insert(0, str(root))
     if not (root / "scripts" / "vertep").is_file():
         raise SystemExit("Invalid Vertep installation root")

@@ -205,11 +205,15 @@ def test_restart_recovery_after_a_killed_update(tmp_path, key, module_postgres):
     assert json.loads((tmp_path / "lc/journal/notes.json").read_text())["phase"] == "applied"
     assert "tags" in tables(module_postgres, "mod_notes")  # the dead process left a half-applied update
     restarted = make(tmp_path, key, module_postgres)
-    assert restarted.recover() == [{"module_id": "notes", "op": "update", "outcome": "rolled_back"}]
-    assert (restarted.record("notes")["version"], restarted.record("notes")["state"]) == ("1.0.0", "ACTIVE")
-    assert tables(module_postgres, "mod_notes") == ["_vertep_migrations", "items"]
-    assert rows(url, "SELECT body FROM items") == [("before",)]
-    assert restarted.recover() == []  # idempotent, no double effects
+    # #513: the unknown state is restored from the verified snapshot, the previous version is
+    # checked, then the approved update is retried exactly once (owner decision in #509).
+    assert restarted.recover() == [{"module_id": "notes", "op": "update", "outcome": "retried"}]
+    record = restarted.record("notes")
+    assert (record["version"], record["state"]) == ("1.1.0", "ACTIVE")
+    assert tables(module_postgres, "mod_notes") == ["_vertep_migrations", "items", "tags"]
+    assert rows(module_postgres, "SELECT id FROM mod_notes._vertep_migrations ORDER BY id") == [("m1",), ("m2",)]
+    assert rows(url, "SELECT body FROM items") == [("before",)]  # no double effect, data kept
+    assert restarted.recover() == []  # idempotent, nothing left to recover
 
 
 def test_restart_recovery_completes_an_uninstall_after_a_verified_archive(tmp_path, key, module_postgres):

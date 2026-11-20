@@ -137,6 +137,8 @@
  "Workflow not found": "workflow_not_found",
  "Workflow result failed validation or task deadline": "workflow_result_failed_validation_or_task_deadline",
  "Module platform is not available": "module_platform_is_not_available",
+ "Unknown module source action": "unknown_module_source_action",
+ "Unknown update plan action": "unknown_update_plan_action",
  "Shared Worker capabilities need the dynamic workflow mode": "shared_worker_capabilities_need_the_dynamic_workflow_mode",
  "Workflow templates are not configured": "workflow_templates_are_not_configured",
  "model is required": "model_is_required",

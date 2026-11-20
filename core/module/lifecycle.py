@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import tarfile
 import threading
@@ -118,7 +119,8 @@ class ModuleLifecycle:
                  cancel_tasks: Callable[[str], None] = lambda module_id: None,
                  store_credentials: Callable[[str, dict], None] = lambda module_id, credentials: None,
                  system_versions: dict | None = None, drain_timeout: float = 30.0,
-                 fault: Callable[[str], None] = lambda point: None) -> None:
+                 fault: Callable[[str], None] = lambda point: None,
+                 notify: Callable[[str, dict], None] = lambda message, details: None) -> None:
         self.root = Path(root)
         self.verify = verify
         self.database = database
@@ -130,6 +132,7 @@ class ModuleLifecycle:
         self.system_versions = system_versions or {}
         self.drain_timeout = drain_timeout
         self.fault = fault  # test hook: raises/exits at a named point
+        self.notify = notify  # administrator notification (#513)
         self._locks: dict[str, threading.RLock] = {}
         self._guard = threading.Lock()
         archives = self.root / "archives"
@@ -231,14 +234,39 @@ class ModuleLifecycle:
         exported = None
         if self.database is not None and self.database.exists(module_id):
             exported = self.database.export(module_id)
-        _write_json(folder / "snapshot.json", {"record": record, "database": exported})
+        _write_json(folder / "snapshot.json", {"record": record, "database": exported, "operation": operation,
+                                               "version": record["version"] if record else None,
+                                               "created_at": time.time()})
         source = self.data_dir(module_id)
         if source.exists():
             shutil.copytree(source, folder / "data", symlinks=True)
+        # Bound to the operation and version, and verifiable before it is ever used (#513).
+        _write_json(folder / "checksum.json", {"snapshot": _sha256((folder / "snapshot.json").read_bytes()),
+                                               "files": self._tree_digest(folder / "data")})
+        self._verify_snapshot(folder)
         return folder
 
+    @staticmethod
+    def _tree_digest(folder: Path) -> str:
+        digest = hashlib.sha256()
+        for path in sorted(folder.rglob("*")) if folder.exists() else []:
+            if path.is_file() and not path.is_symlink():
+                digest.update(path.relative_to(folder).as_posix().encode() + b"\0" + path.read_bytes())
+        return digest.hexdigest()
+
+    def _verify_snapshot(self, folder: Path) -> dict:
+        try:
+            checksum = json.loads((folder / "checksum.json").read_text(encoding="utf-8"))
+            raw = (folder / "snapshot.json").read_bytes()
+        except (OSError, ValueError) as error:
+            raise LifecycleError("Snapshot is incomplete") from error
+        if _sha256(raw) != checksum["snapshot"] or self._tree_digest(folder / "data") != checksum["files"]:
+            raise LifecycleError("Snapshot does not match its checksum")
+        return json.loads(raw)
+
     def _restore_snapshot(self, module_id: str, folder: Path) -> dict | None:
-        snapshot = json.loads((folder / "snapshot.json").read_text(encoding="utf-8"))
+        snapshot = (self._verify_snapshot(folder) if (folder / "checksum.json").exists()
+                    else json.loads((folder / "snapshot.json").read_text(encoding="utf-8")))
         record = snapshot["record"]
         if self.database is not None:
             if snapshot["database"] is not None:
@@ -313,6 +341,10 @@ class ModuleLifecycle:
                 raise LifecycleError("Module is not installed")
             if record["state"] == ACTIVE:
                 return {"module_id": module_id, "state": ACTIVE}
+            if record.get("blocked"):
+                # #511: a confirmed critical threat blocks the module until a fixed version
+                # is installed or the administrator lifts the block.
+                raise LifecycleError(f"Module is blocked: {record['blocked'].get('reason')}")
             manifest = self._manifest(record)
             self._active_registry(exclude=module_id, extra=manifest)
             if self.registry is not None:
@@ -336,6 +368,26 @@ class ModuleLifecycle:
             self._journal_path(module_id).unlink()
             return {"module_id": module_id, "state": ACTIVE}
 
+    def block(self, module_id: str, reason: str) -> dict:
+        """Protective block (#511): stop the module now; activation is refused until lifted."""
+        with self._lock(module_id):
+            record = self.record(module_id)
+            if record is None:
+                raise LifecycleError("Module is not installed")
+            record["blocked"] = {"reason": str(reason), "at": time.time()}
+            self._save(record)
+            self._drain(record)
+            return {"module_id": module_id, "state": record["state"], "blocked": record["blocked"]}
+
+    def unblock(self, module_id: str, *, reason: str) -> dict:
+        with self._lock(module_id):
+            record = self.record(module_id)
+            if record is None:
+                raise LifecycleError("Module is not installed")
+            previous = record.pop("blocked", None)
+            self._save(record)
+            return {"module_id": module_id, "state": record["state"], "unblocked": bool(previous), "reason": reason}
+
     def deactivate(self, module_id: str, *, force: bool = False) -> dict:
         with self._lock(module_id):
             record = self.record(module_id)
@@ -358,14 +410,34 @@ class ModuleLifecycle:
         if self.active_tasks(record["module_id"]):
             self.cancel_tasks(record["module_id"])
 
-    def update(self, package: dict, *, confirmed: bool) -> dict:
+    def _result_path(self, operation: str) -> Path:
+        return self.root / "results" / f"{operation}.json"
+
+    def _lock_writes(self, module_id: str) -> None:
+        if self.database is not None and self.database.exists(module_id):
+            self.database.lock_writes(module_id)
+
+    def _unlock_writes(self, module_id: str) -> None:
+        if self.database is not None and self.database.exists(module_id):
+            self.database.unlock_writes(module_id)
+
+    def update(self, package: dict, *, confirmed: bool, operation_id: str | None = None, _retry: int = 0) -> dict:
+        """Approved update; a repeated delivery of the same operation returns its stored result (#513)."""
         if confirmed is not True:
             raise LifecycleError("Update requires explicit administrator confirmation")
         if "bundled" in package:
             raise LifecycleError("Bundled modules are updated with the Vertep release")
+        operation = operation_id or uuid.uuid4().hex
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", operation):
+            raise LifecycleError("Invalid operation id")
+        stored = self._result_path(operation)
+        if stored.exists():
+            return json.loads(stored.read_text(encoding="utf-8"))
         manifest = self.verify(package)
         module_id = manifest.module_id
         with self._lock(module_id):
+            if stored.exists():
+                return json.loads(stored.read_text(encoding="utf-8"))
             record = self.record(module_id)
             if record is None:
                 raise LifecycleError("Module is not installed")
@@ -377,20 +449,24 @@ class ModuleLifecycle:
             self._active_registry(exclude=module_id, extra=manifest)
             if self.registry is not None and not set(manifest.permissions) <= set(self.registry.placement.approvals.get(module_id, [])):
                 raise LifecycleError("Expanded permissions need administrator approval before update")
-            operation = uuid.uuid4().hex
             self._drain(record)
+            self._lock_writes(module_id)  # after drain: no writes while snapshot and migrations run
             snapshot = self._snapshot(module_id, operation)
-            self._journal(module_id, op="update", phase="snapshot_taken", snapshot=str(snapshot),
-                          from_version=record["version"], to_version=manifest.version, was_active=was_active, at=time.time())
+            journal = dict(op="update", phase="snapshot_taken", snapshot=str(snapshot), operation=operation,
+                           from_version=record["version"], to_version=manifest.version, was_active=was_active,
+                           package=package, retries=_retry, at=time.time())
+            self._journal(module_id, **journal)
             previous = {key: record[key] for key in ("version", "package")}
             try:
                 updated = {"module_id": module_id, "version": manifest.version, "state": INACTIVE,
-                           "package": package, "previous": {**previous, "snapshot": str(snapshot)}}
+                           "package": package, "previous": {**previous, "snapshot": str(snapshot)},
+                           "operation": operation}
+                if record.get("blocked"):
+                    updated["blocked"] = record["blocked"]  # lifted only explicitly (#511)
                 self._save(updated)
                 self.fault("after_record")
-                self._prepare_data(updated)
-                self._journal(module_id, op="update", phase="applied", snapshot=str(snapshot),
-                              from_version=record["version"], to_version=manifest.version, was_active=was_active, at=time.time())
+                self._prepare_data(updated)  # local settings in data/config are kept as they are
+                self._journal(module_id, **{**journal, "phase": "applied"})
                 self.fault("after_apply")
                 if not self.self_test(manifest):
                     raise LifecycleError("Updated module self-test failed")
@@ -398,10 +474,16 @@ class ModuleLifecycle:
                 self._save(updated)
             except BaseException:
                 self._rollback_to(module_id, snapshot, reactivate=was_active)
+                self._unlock_writes(module_id)  # the previous version is verified again
                 self._journal_path(module_id).unlink(missing_ok=True)  # undone: nothing left to recover
                 raise
+            self._unlock_writes(module_id)  # final state verified: writes open again
             self._journal_path(module_id).unlink()
-            return {"module_id": module_id, "state": updated["state"], "version": manifest.version}
+            result = {"module_id": module_id, "state": updated["state"], "version": manifest.version,
+                      "operation": operation}
+            _write_json(stored, result)
+            self.prune(module_id)
+            return result
 
     def rollback(self, module_id: str) -> dict:
         """Return to the version before the last update, with its data snapshot."""
@@ -448,12 +530,139 @@ class ModuleLifecycle:
                         if record:
                             self._save({**record, "state": INACTIVE})
                         outcome = "uninstall_aborted"
+                elif journal["op"] == "update" and journal.get("package") is not None:
+                    outcome = self._recover_update(module_id, journal, path)
                 else:
                     self._rollback_to(module_id, Path(journal["snapshot"]), reactivate=bool(journal.get("was_active")))
                     outcome = "rolled_back"
-                path.unlink()
+                path.unlink(missing_ok=True)
                 results.append({"module_id": module_id, "op": journal["op"], "outcome": outcome})
         return results
+
+    def _recover_update(self, module_id: str, journal: dict, path: Path) -> str:
+        """Unknown state after an interruption (#513): restore the verified snapshot, verify the
+        previous version, then make exactly one automatic retry of the approved update."""
+        try:
+            self._rollback_to(module_id, Path(journal["snapshot"]), reactivate=bool(journal.get("was_active")))
+            record = self.record(module_id)
+            if record is None or record.get("state") == FAILED or not self.self_test(self._manifest(record)):
+                raise LifecycleError("previous version did not pass its check after restore")
+        except Exception as error:  # noqa: BLE001 - writes stay locked, nothing runs automatically
+            self.notify("Module update stopped: restore was not verified",
+                        {"module_id": module_id, "operation": journal.get("operation"), "error": str(error)})
+            record = self.record(module_id)
+            if record is not None:
+                self._save({**record, "attention": {"operation": journal.get("operation"), "error": str(error)}})
+            return "restore_failed"
+        self._unlock_writes(module_id)
+        if int(journal.get("retries", 0)) >= 1:
+            self.notify("Module update failed after its automatic retry",
+                        {"module_id": module_id, "operation": journal.get("operation")})
+            return "retry_failed"
+        path.unlink(missing_ok=True)
+        try:
+            self.update(journal["package"], confirmed=True, operation_id=journal.get("operation"), _retry=1)
+        except Exception as error:  # noqa: BLE001 - the one retry failed: stop and tell the administrator
+            self.notify("Module update failed after its automatic retry",
+                        {"module_id": module_id, "operation": journal.get("operation"), "error": str(error)})
+            return "retry_failed"
+        return "retried"
+
+    # -- rollback points, retention, purge (#513) ----------------------------------------------
+    def rollback_points(self, module_id: str) -> list[dict]:
+        """Verified snapshots the administrator may return to, newest first."""
+        points = []
+        folder = self.root / "snapshots" / module_id
+        current = self.record(module_id)
+        for path in sorted(folder.iterdir()) if folder.is_dir() else []:
+            try:
+                snapshot = self._verify_snapshot(path)
+            except LifecycleError:
+                continue
+            record = snapshot.get("record")
+            if not record or (current and record.get("version") == current.get("version")):
+                continue
+            try:
+                compatible = self._manifest(record).core_compatible(self.system_versions.get("core_runtime"))
+            except Exception:  # noqa: BLE001
+                compatible = False
+            points.append({"operation": path.name, "version": record["version"],
+                           "created_at": snapshot.get("created_at"), "package_available": bool(record.get("package")),
+                           "compatible": compatible, "database": snapshot.get("database") is not None})
+        newest: dict[str, dict] = {}
+        for point in sorted(points, key=lambda item: item.get("created_at") or 0, reverse=True):
+            newest.setdefault(point["version"], point)  # one point per version: its latest copy
+        return list(newest.values())
+
+    def rollback_to_point(self, module_id: str, operation: str, *, accept_data_loss: bool = False) -> dict:
+        """Manual rollback to a suitable point; later database writes are lost only when confirmed."""
+        with self._lock(module_id):
+            point = next((item for item in self.rollback_points(module_id) if item["operation"] == operation), None)
+            if point is None or not point["package_available"] or not point["compatible"]:
+                raise LifecycleError("No suitable rollback point")
+            if point["database"] and not accept_data_loss:
+                stamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(point["created_at"] or 0))
+                raise LifecycleError(f"Restoring the database copy of {stamp} drops later writes; confirm data loss")
+            record = self.record(module_id)
+            was_active = bool(record and record["state"] == ACTIVE)
+            if record:
+                self._drain(record)
+            self._lock_writes(module_id)
+            self._rollback_to(module_id, self.root / "snapshots" / module_id / operation, reactivate=was_active)
+            self._unlock_writes(module_id)
+            restored = self.record(module_id)
+            return {"module_id": module_id, "version": restored["version"], "state": restored["state"]}
+
+    def prune(self, module_id: str, keep: int = 3) -> list[str]:
+        """Keep snapshots of the active and two previous successful versions; never one an
+        unfinished operation or the current record still needs."""
+        folder = self.root / "snapshots" / module_id
+        if not folder.is_dir():
+            return []
+        record = self.record(module_id) or {}
+        protected = {Path((record.get("previous") or {}).get("snapshot", "")).name}
+        journal = self._journal_path(module_id)
+        if journal.exists():
+            protected.add(Path(json.loads(journal.read_text(encoding="utf-8")).get("snapshot", "")).name)
+        entries = []
+        for path in folder.iterdir():
+            try:
+                meta = json.loads((path / "snapshot.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            entries.append((meta.get("created_at") or 0, meta.get("version"), path))
+        kept_versions: list[str] = [record.get("version")] if record.get("version") else []
+        removed = []
+        for _, version, path in sorted(entries, reverse=True):
+            if path.name in protected:
+                if version not in kept_versions:
+                    kept_versions.append(version)  # protected copies count toward the kept versions
+                continue
+            if version in kept_versions or len(kept_versions) < keep:
+                if version not in kept_versions:
+                    kept_versions.append(version)
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path.name)
+        return removed
+
+    def purge(self, module_id: str, *, confirmed: bool) -> dict:
+        """Full cleanup after uninstall: the archives of the module are deleted (separate action)."""
+        if confirmed is not True:
+            raise LifecycleError("Purge requires explicit administrator confirmation")
+        if self.record(module_id) is not None:
+            raise LifecycleError("Uninstall the module first; its archive is the restore point")
+        removed = []
+        for path in sorted((self.root / "archives").glob("*.tar")):
+            try:
+                index, _ = self.read_archive(path)
+            except (LifecycleError, OSError, ValueError, tarfile.TarError):
+                continue
+            if index.get("module_id") == module_id:  # never another module with a longer id
+                path.unlink()
+                removed.append(path.name)
+        shutil.rmtree(self.root / "snapshots" / module_id, ignore_errors=True)
+        return {"module_id": module_id, "purged": removed}
 
     # -- uninstall + archive ---------------------------------------------------------------
     def uninstall(self, module_id: str, *, confirmed: bool) -> dict:

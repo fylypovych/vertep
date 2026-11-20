@@ -190,7 +190,8 @@ def _rotation_order(path: Path) -> tuple[int, str]:
 
 
 def read_logs(limit: int = 200, level: str | None = None, job_id: str | None = None,
-              node_name: str | None = None, before: str | None = None) -> list[dict]:
+              node_name: str | None = None, before: str | None = None, category: str | None = None,
+              operation_id: str | None = None) -> list[dict]:
     """Return structured log records newest-first.
 
     Reads both the active ``*.jsonl`` files and their size-rotated backups
@@ -230,6 +231,10 @@ def read_logs(limit: int = 200, level: str | None = None, job_id: str | None = N
             if job_id and item.get("job_id") != job_id:
                 continue
             if node_name and item.get("node_name") != node_name:
+                continue
+            if category and item.get("category") != category.upper():
+                continue
+            if operation_id and item.get("operation_id") != operation_id:
                 continue
             timestamp = item.get("timestamp", "")
             digest = hashlib.sha256(json.dumps(item, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "description": "#511: access profile of a module from its declared permissions. The highest profile any permission needs is the module's profile; an unknown permission, a secret reference or a shared Worker capability is elevated.",
+  "order": ["minimal", "standard", "elevated"],
+  "profiles": {
+    "minimal": ["characters.read", "brands.read"],
+    "standard": ["characters.write", "characters.collaborate", "brands.write", "storyboard.read", "publishing.read"],
+    "elevated": ["publishing.publish", "monitoring.read"]
+  }
+}

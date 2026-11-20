@@ -8,7 +8,8 @@ Type=oneshot
 WorkingDirectory=@VERTEP_ROOT@
 EnvironmentFile=-@VERTEP_ROOT@/.env
 EnvironmentFile=-/etc/vertep/node.conf
-ExecStart=/usr/bin/python3 @VERTEP_ROOT@/scripts/update-agent.py --root @VERTEP_ROOT@ --state-dir @VERTEP_ROOT@/config/update
+# #514: the agent runs from its verified A/B slot (agent-slots.py keeps a ready slot active).
+ExecStart=/usr/bin/python3 @VERTEP_ROOT@/scripts/agent-slots.py run --root @VERTEP_ROOT@ -- --root @VERTEP_ROOT@ --state-dir @VERTEP_ROOT@/config/update
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

@@ -213,6 +213,10 @@ def module_lifecycle_action(action: str, request: Request, payload: dict = Body(
         "update": lambda: lifecycle.update(payload.get("package") or {}, confirmed=payload.get("confirm") is True),
         "rollback": lambda: lifecycle.rollback(module_id),
         "uninstall": lambda: lifecycle.uninstall(module_id, confirmed=payload.get("confirm") is True),
+        # #513: manual rollback to a suitable point (later writes lost only when confirmed) and purge.
+        "rollback_point": lambda: lifecycle.rollback_to_point(
+            module_id, str(payload.get("operation", "")), accept_data_loss=payload.get("accept_data_loss") is True),
+        "purge": lambda: lifecycle.purge(module_id, confirmed=payload.get("confirm") is True),
     }
     if action not in operations:
         raise HTTPException(404, "Unknown module lifecycle action")
@@ -223,6 +227,180 @@ def module_lifecycle_action(action: str, request: Request, payload: dict = Body(
         raise HTTPException(409, f"Module lifecycle action failed: {error}") from error
     audit("module.lifecycle", "allowed", operation=action, module=result.get("module_id"), actor=actor, state=result.get("state"))
     return result
+
+
+def _advisories() -> list[dict]:
+    """Signed advisory feed (#511): a local copy in the config root or the configured https URL."""
+    import json as _json
+    from core.first_run import config_root
+    from core.module.sources import _default_fetch, verify_advisories
+    local = config_root() / "module-advisories.json"
+    if local.is_file():
+        return verify_advisories(_json.loads(local.read_text(encoding="utf-8")))
+    url = os.getenv("VERTEP_MODULE_ADVISORIES_URL", "")
+    return verify_advisories(_json.loads(_default_fetch(url))) if url else []
+
+
+def _module_sources():
+    from core.module.sources import ModuleSources
+    from core.version import application_version
+    return ModuleSources(_lifecycle(), core_version=application_version(), advisories=_advisories)
+
+
+@router.post("/api/nodes/module-registry/sources/{action}")
+def module_source_action(action: str, request: Request, payload: dict = Body(default_factory=dict)):
+    """assess | install | update from the Module Registry or a GitHub URL (#511, administrator only).
+
+    ``assess`` installs nothing; install/update need the approved access profile shown by assess.
+    """
+    from core.module.gateway import audit
+    from core.module.lifecycle import LifecycleError
+    from core.module.sources import SourceError
+    actor = _require_admin(request)
+    module_id = str(payload.get("module_id", ""))
+    try:
+        sources = _module_sources()
+        operations = {
+            "assess": lambda: sources.assess(payload.get("source"), module_id, payload.get("version")),
+            "install": lambda: sources.install(payload.get("source"), module_id, payload.get("version"),
+                                               approved_profile=payload.get("approved_profile")),
+            "update": lambda: sources.update(module_id, payload.get("version"),
+                                             approved_profile=payload.get("approved_profile"),
+                                             source=payload.get("source")),
+        }
+        if action not in operations:
+            raise HTTPException(404, "Unknown module source action")
+        result = operations[action]()
+    except (SourceError, LifecycleError, ValueError, KeyError, OSError) as error:
+        audit("module.source", "failed", operation=action, module=module_id or None, actor=actor, reason=str(error))
+        raise HTTPException(409, f"Module source action failed: {error}") from error
+    audit("module.source", "allowed", operation=action, module=module_id, actor=actor,
+          version=result.get("version"), profile=result.get("profile"))
+    return result
+
+
+def _update_manager():
+    """#512: the platform Update Manager with the production checks."""
+    import httpx
+    from core.module.update_manager import UpdateManager
+    from core.state import store
+    from core.update_manager import request_update
+    from core.version import application_version
+    from core.workflow.runtime import module_runtime
+    runtime = module_runtime()
+    lifecycle, registry = runtime.lifecycle, runtime.modules
+    sources = _module_sources()
+
+    def package_for(module_id: str, version: str) -> dict:
+        record = lifecycle.record(module_id) or {}
+        if record.get("version") == version:
+            return record["package"]
+        data = sources.cache.get(module_id, version)
+        if data is None:
+            pin = sources.pin(module_id)
+            if pin is None:
+                raise ValueError(f"No verified package of {module_id} {version} in the CORE cache")
+            from core.module.sources import parse_source
+            _, data, _ = sources._fetch(parse_source(pin["source"]), module_id, version)
+            sources.cache.put(module_id, version, data)
+        return json.loads(data)
+
+    def health(module_id: str, node_id: str, version: str) -> dict:
+        instance = next((i for i in registry.instances(module_id) if i.node_id == node_id), None)
+        checks = {"container": bool(instance and instance.reported_ready and instance.manifest.version == version)}
+        try:
+            checks["api"] = bool(instance and instance.endpoint
+                                 and httpx.get(f"{instance.endpoint}/health", timeout=5).status_code == 200)
+        except httpx.HTTPError:
+            checks["api"] = False
+        manifest = instance.manifest if instance else None
+        checks["database"] = not (manifest and manifest.migrations) or bool(
+            lifecycle.database is not None and lifecycle.database.exists(module_id))
+        checks["dependencies"] = bool(instance) and not [r for r in instance.reasons if "depend" in r]
+        return checks
+
+    def node_online(node_id: str) -> bool:
+        return (store.workers.get(node_id) or {}).get("status") not in {None, "OFFLINE", "REVOKED"}
+
+    return UpdateManager(lifecycle.root, lifecycle,
+                         placement=lambda module_id: registry.placement.placement.get(module_id, []),
+                         package_for=package_for, core_version=application_version,
+                         request_core_update=lambda version: request_update("update"),
+                         health=health, node_online=node_online)
+
+
+@router.post("/api/nodes/module-registry/updates/plan")
+def module_update_plan(request: Request, payload: dict = Body(default_factory=dict)):
+    """Plan concrete versions, dependency stages and nodes; nothing runs before approval (#512)."""
+    from core.module.gateway import audit
+    from core.module.lifecycle import LifecycleError
+    from core.module.update_manager import PlanError
+    actor = _require_admin(request)
+    try:
+        plan = _update_manager().plan(dict(payload.get("targets") or {}), payload.get("core_version"))
+    except (PlanError, LifecycleError, ValueError, KeyError) as error:
+        raise HTTPException(409, f"Update plan refused: {error}") from error
+    audit("module.update.plan", "allowed", actor=actor, plan=plan["id"])
+    return plan
+
+
+@router.get("/api/nodes/module-registry/updates/recommendations")
+def module_update_recommendations(request: Request):
+    """#515: newer stable releases found in the pinned sources, with compatibility and risk."""
+    _require_admin(request)
+    return {"recommendations": _module_sources().recommendations()}
+
+
+@router.get("/api/nodes/module-registry/updates")
+def module_update_plans(request: Request):
+    _require_admin(request)
+    return {"plans": _update_manager().plans()}
+
+
+@router.post("/api/nodes/module-registry/updates/{plan_id}/{action}")
+def module_update_action(plan_id: str, action: str, request: Request):
+    """approve | execute an update plan (administrator only); execute runs in the background."""
+    import threading
+    from core.module.gateway import audit
+    from core.module.update_manager import PlanError
+    actor = _require_admin(request)
+    manager = _update_manager()
+    try:
+        if action == "approve":
+            plan = manager.approve(plan_id, actor)
+        elif action == "execute":
+            plan = manager.get(plan_id)
+            if plan["status"] not in {"APPROVED", "WAITING_CORE"}:
+                raise PlanError("Only an approved plan is executed")
+            threading.Thread(target=manager.execute, args=(plan_id,), daemon=True).start()
+        else:
+            raise HTTPException(404, "Unknown update plan action")
+    except PlanError as error:
+        raise HTTPException(409, f"Update plan action failed: {error}") from error
+    audit("module.update", "allowed", actor=actor, plan=plan_id, operation=action)
+    return manager.get(plan_id)
+
+
+@router.post("/api/nodes/module-registry/advisories/enforce")
+def module_advisories_enforce(request: Request):
+    """Apply the signed advisory feed now: confirmed critical threats block at once (#511)."""
+    from core.module.gateway import audit
+    from core.module.sources import SourceError
+    actor = _require_admin(request)
+    try:
+        blocked = _module_sources().enforce()
+    except (SourceError, OSError, ValueError) as error:
+        raise HTTPException(409, f"Advisory feed refused: {error}") from error
+    for item in blocked:
+        audit("module.block", "allowed", module=item["module_id"], actor=actor, advisory=item["advisory"])
+    return {"blocked": blocked}
+
+
+@router.get("/api/nodes/module-registry/rollback-points/{module_id}")
+def module_rollback_points(module_id: str, request: Request):
+    """#513: verified points with version, copy date and whether the package is available."""
+    _require_admin(request)
+    return {"module_id": module_id, "points": _lifecycle().rollback_points(module_id)}
 
 
 @router.get("/api/nodes/module-registry/archives")

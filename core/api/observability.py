@@ -299,8 +299,9 @@ def _effective_config_summary() -> dict:
 
 @router.get("/api/logs")
 def logs(limit: int = 200, level: str | None = None, job_id: str | None = None,
-         node_name: str | None = None, before: str | None = None):
-    return read_logs(min(max(limit, 1), 1000), level, job_id, node_name, before)
+         node_name: str | None = None, before: str | None = None, category: str | None = None,
+         operation_id: str | None = None):
+    return read_logs(min(max(limit, 1), 1000), level, job_id, node_name, before, category, operation_id)
 
 
 

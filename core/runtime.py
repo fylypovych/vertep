@@ -167,6 +167,29 @@ def advance_rollout() -> None:
         reconcile_rollout(store.workers)
 
 
+_last_advisory_check = 0.0
+
+
+def _enforce_module_advisories() -> None:
+    """#511: a confirmed critical threat blocks the affected module without waiting for approval."""
+    global _last_advisory_check
+    interval = float(os.getenv("VERTEP_ADVISORY_INTERVAL", "600"))
+    if time.monotonic() - _last_advisory_check < interval:
+        return
+    _last_advisory_check = time.monotonic()
+    from core.first_run import config_root
+    if not os.getenv("VERTEP_MODULE_ADVISORIES_URL") and not (config_root() / "module-advisories.json").is_file():
+        return  # no advisory feed configured
+    try:
+        from core.api.nodes import _module_sources
+        from core.module.gateway import audit
+        for item in _module_sources().enforce():
+            audit("module.block", "allowed", module=item["module_id"], actor="advisory-feed", advisory=item["advisory"])
+    except Exception:  # noqa: BLE001 - a feed problem never stops the watchdog
+        import logging
+        logging.getLogger("vertep").warning("Module advisory check failed", exc_info=True)
+
+
 async def _watchdog() -> None:
     global last_maintenance
     while True:
@@ -175,6 +198,7 @@ async def _watchdog() -> None:
         workflow = workflow_runtime()
         if workflow is not None:
             await asyncio.to_thread(workflow.tick)
+        await asyncio.to_thread(_enforce_module_advisories)
         if not dispatch_allowed():
             continue
         if not task_queue.acquire_watchdog_lock(max(2, int(float(os.getenv("WATCHDOG_INTERVAL", "5")) * 2))):

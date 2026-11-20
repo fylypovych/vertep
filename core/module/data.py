@@ -227,6 +227,31 @@ class ModuleDatabase:
                                                .format(sql.Identifier(column), sql.Identifier(schema), sql.Identifier(table)),
                                                (sequence,))
 
+    # -- write lock (#513) ---------------------------------------------------------
+    def lock_writes(self, module_id: str) -> None:
+        """After drain: the module's own sessions become read-only until the operation ends.
+
+        New logins of the module role start read-only; its open sessions are ended so
+        none keeps writing. Migrations run through the platform connection (SET ROLE),
+        which this setting does not affect.
+        """
+        role = self.role_name(module_id)
+        with self._connect() as connection:
+            connection.execute(sql.SQL("ALTER ROLE {} SET default_transaction_read_only = on").format(sql.Identifier(role)))
+            connection.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s "
+                               "AND pid <> pg_backend_pid()", (role,))
+
+    def unlock_writes(self, module_id: str) -> None:
+        role = self.role_name(module_id)
+        with self._connect() as connection:
+            connection.execute(sql.SQL("ALTER ROLE {} RESET default_transaction_read_only").format(sql.Identifier(role)))
+
+    def writes_locked(self, module_id: str) -> bool:
+        role = self.role_name(module_id)
+        with self._connect() as connection:
+            rows = connection.execute("SELECT unnest(rolconfig) FROM pg_roles WHERE rolname = %s", (role,)).fetchall()
+        return any(row[0] == "default_transaction_read_only=on" for row in rows)
+
     def fingerprint(self, module_id: str, schema: str | None = None) -> dict:
         exported = self.export(module_id, schema)
         import hashlib

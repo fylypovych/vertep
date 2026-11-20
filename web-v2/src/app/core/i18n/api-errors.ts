@@ -156,6 +156,8 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "workflow_result_failed_validation_or_task_deadline": { uk: "Результат workflow не пройшов перевірку або запізнився", en: "Workflow result failed validation or task deadline" },
   "workflow_templates_are_not_configured": { uk: "Шаблони workflow не налаштовано", en: "Workflow templates are not configured" },
   "module_platform_is_not_available": { uk: "Платформа модулів недоступна", en: "Module platform is not available" },
+  "unknown_module_source_action": { uk: "Невідома дія з джерелом модуля", en: "Unknown module source action" },
+  "unknown_update_plan_action": { uk: "Невідома дія з планом оновлення", en: "Unknown update plan action" },
   "shared_worker_capabilities_need_the_dynamic_workflow_mode": { uk: "Спільні можливості Worker для модулів потребують динамічного режиму workflow", en: "Shared Worker capabilities need the dynamic workflow mode" },
   "administrator_role_required": { uk: "Потрібна роль адміністратора", en: "Administrator role required" },
   "module_token_is_not_valid": { uk: "Токен модуля недійсний", en: "Module token is not valid" },

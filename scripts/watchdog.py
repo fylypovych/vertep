@@ -83,6 +83,24 @@ def check_update_agent() -> dict:
         return {"update_agent": False}
 
 
+def check_agent_slot(root: Path) -> dict:
+    """#514: keep a ready Update Agent slot active; local only, CORE is not needed."""
+    script = root / "scripts" / "agent-slots.py"
+    if not script.is_file():
+        return {}
+    import subprocess
+    result = subprocess.run([sys.executable, str(script), "check", "--root", str(root)],
+                            capture_output=True, text=True, timeout=180)
+    try:
+        report = json.loads(result.stdout or "{}")
+    except ValueError:
+        report = {}
+    if report.get("reverted_from"):
+        print(f"{now()} WATCHDOG: update agent slot {report['reverted_from']} failed; "
+              f"returned to slot {report.get('active')}", file=sys.stderr)
+    return {"agent_slot": bool(report.get("ok"))}
+
+
 def update_in_progress() -> bool:
     root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
     state_dir = Path(os.getenv("UPDATE_STATE_DIR", str(root / "config" / "update")))
@@ -205,6 +223,7 @@ def main() -> None:
     if role != "core":
         checks.update(check_core_api(core_url))
     checks.update(check_update_agent())
+    checks.update(check_agent_slot(root))
     # A failed update is reported, not healed: restarting cannot fix it and would undo a rollback.
     failed = [name for name, ok in checks.items() if ok is False and name != "update_agent"]
     if update_in_progress():

@@ -97,6 +97,13 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/modules/self/publications"],  # #502 Publishing module: read and act for a verified user.
         ["POST", "/api/modules/self/publications/{job_id}/publish"],  # #500 review of the exact version/hash.  # owner decision 19.11.2026: brands move into the module.
         ["GET", "/api/modules/self/observability"],  # #503 the Monitoring module ingests CORE collectors.
+        ["POST", "/api/nodes/module-registry/sources/{action}"],  # #511 Registry/GitHub sources, pinned updates.
+        ["POST", "/api/nodes/module-registry/advisories/enforce"],  # #511 protective block on a confirmed threat.
+        ["POST", "/api/nodes/module-registry/updates/plan"],  # #512 Update Manager plans and approvals.
+        ["GET", "/api/nodes/module-registry/updates"],
+        ["POST", "/api/nodes/module-registry/updates/{plan_id}/{action}"],
+        ["GET", "/api/nodes/module-registry/rollback-points/{module_id}"],  # #513 rollback points.
+        ["GET", "/api/nodes/module-registry/updates/recommendations"],  # #515 Updates panel.
         ["GET", "/api/settings/users"],  # owner decision 19.11.2026: moderators and their brands.
         ["POST", "/api/settings/users"],
         ["PUT", "/api/settings/users/{username}"],
