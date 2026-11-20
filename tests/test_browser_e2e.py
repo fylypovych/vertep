@@ -93,6 +93,11 @@ def _mock_session(page, role="admin"):
     page.route("**/api/brands/*/channels", lambda route: (
         route.fulfill(json=[]) if route.request.method == "GET" else route.fallback()
     ))
+    # The Brands page also shows the brand's «Спільний контент» (#500); unmocked, the real
+    # CORE answers 401 to this cookie-less smoke page and the panel leaves for /login.
+    page.route("**/api/shared-content?**", lambda route: (
+        route.fulfill(json={"brand_id": "", "items": []}) if route.request.method == "GET" else route.fallback()
+    ))
     page.route("**/api/session", lambda route: route.fulfill(json={
         "authenticated": True, "user": "ci", "role": role,
     }))
