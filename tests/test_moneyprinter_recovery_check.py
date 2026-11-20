@@ -75,10 +75,16 @@ class FakeRuntime:
         self.restarted = True
 
 
+@pytest.fixture(autouse=True)
+def _no_waiting(monkeypatch):
+    """The scenario's waits are skipped for this test only; ``recovery.time`` is the
+    stdlib module, so a plain assignment would disable time.sleep for every later test."""
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+
 def run(fault=None):
     recovery = module()
     runtime = FakeRuntime(recovery, fault)
-    recovery.time.sleep = lambda _seconds: None
     evidence = {}
     recovery.scenario(runtime, runtime.restart, evidence)
     return evidence

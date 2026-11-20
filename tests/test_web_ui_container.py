@@ -116,16 +116,14 @@ def contour(tmp_path_factory):
                 "SYSTEM_STATE_BACKEND": "file", "STATE_BACKEND": "file", "LOCAL_WORKER_FALLBACK": "false",
                 "DEMO_MODE": "true", "RATE_LIMIT_PER_MINUTE": "10000", "OLLAMA_URL": "http://127.0.0.1:1"}
     core_log = (work / "core.log").open("w", encoding="utf-8")
-    # SIGUSR1 dumps every thread's stack into the log if CORE ever fails to come up.
-    launcher = ("import faulthandler,runpy,signal,sys; faulthandler.register(signal.SIGUSR1, all_threads=True); "
-                "sys.argv=['uvicorn','core.app:app','--host','0.0.0.0','--port',sys.argv[1]]; "
-                "runpy.run_module('uvicorn', run_name='__main__')")
-    core = subprocess.Popen([sys.executable, "-c", launcher, str(core_port)], cwd=ROOT, env=core_env,
-                            stdout=core_log, stderr=subprocess.STDOUT)
+    core = subprocess.Popen([sys.executable, "-m", "uvicorn", "core.app:app", "--host", "0.0.0.0",
+                             "--port", str(core_port)], cwd=ROOT, env=core_env, stdout=core_log,
+                            stderr=subprocess.STDOUT)
     import httpx
     direct = httpx.Client(base_url=f"http://127.0.0.1:{core_port}", auth=ADMIN, timeout=30,
                           headers={"x-vertep-token": NODE_TOKEN})
-    for _ in range(240):
+    deadline = time.monotonic() + 120  # a deadline, not a count of sleeps
+    while time.monotonic() < deadline:
         if core.poll() is not None:
             break
         try:
@@ -143,32 +141,9 @@ def contour(tmp_path_factory):
             last = repr(error)
     if not started:
         returncode = core.poll()
-        proc = ""
-        if returncode is None:
-            import signal
-            try:
-                status = Path(f"/proc/{core.pid}/status").read_text()
-                proc = " | ".join(line for line in status.splitlines() if line.split(":")[0] in {
-                    "State", "Threads", "Cpus_allowed_list", "SigBlk", "SigIgn", "voluntary_ctxt_switches",
-                    "nonvoluntary_ctxt_switches", "VmRSS"})
-                proc += " | sched=" + " ".join(Path(f"/proc/{core.pid}/sched").read_text().split())[:600]
-                proc += " | limits=" + " ".join(line for line in Path(f"/proc/{core.pid}/limits").read_text().splitlines()
-                                                 if "open files" in line or "processes" in line or "cpu time" in line)
-                proc += " | wchan=" + Path(f"/proc/{core.pid}/wchan").read_text()
-                proc += " | children=" + Path(f"/proc/{core.pid}/task/{core.pid}/children").read_text()
-                proc += " | cmdline=" + Path(f"/proc/{core.pid}/cmdline").read_text().replace("\0", " ")[:300]
-                proc += " | syscall=" + Path(f"/proc/{core.pid}/syscall").read_text().strip()
-                cpu = lambda: sum(int(x) for x in Path(f"/proc/{core.pid}/stat").read_text().split(")")[1].split()[11:13])
-                before = cpu(); time.sleep(1); proc += f" | cpu_ticks_per_s={cpu() - before}"
-                fds = Path(f"/proc/{core.pid}/fd")
-                proc += " | fds=" + ", ".join(sorted(os.readlink(fd) for fd in fds.iterdir()))[:1500]
-            except OSError as error:
-                proc += repr(error)
-            core.send_signal(signal.SIGUSR1)
-            time.sleep(2)
         core.kill()
         core_log.flush()
-        raise AssertionError(f"CORE did not start (exit={returncode}, last={last}, proc={proc}): "
+        raise AssertionError(f"CORE did not start (exit={returncode}, last={last}): "
                              + (work / "core.log").read_text()[-4000:])
     try:
         run("docker", "run", "-d", "--name", names["core"], "--network", network, "--network-alias", "core",
@@ -185,7 +160,8 @@ def contour(tmp_path_factory):
             "--entrypoint", "/usr/local/bin/vertep-proxy-entrypoint", images["proxy"])
         port = run("docker", "port", names["proxy"], "8443").stdout.split(":")[-1].strip()
         # Ready only when the proxy reaches the real CORE through the relay (no 502 race).
-        for _ in range(120):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
             try:
                 if httpx.get(f"https://127.0.0.1:{port}/api/session", verify=False, timeout=5).status_code == 401:
                     break
