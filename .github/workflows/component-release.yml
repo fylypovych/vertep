@@ -127,6 +127,9 @@ jobs:
           key="${RUNNER_TEMP}/component-signing.pem"
           printf '%s' "$SIGNING_KEY" > "$key"
           chmod 600 "$key"
+          # Annotated tags need a committer identity on the runner.
+          git config user.name "vertep-release[bot]"
+          git config user.email "vertep-release[bot]@users.noreply.github.com"
           for component in $(python -c 'import json; print(" ".join(n for n, e in json.load(open("plan.json")).items() if e["publish"]))'); do
             tag="$(python -c "import json; print(json.load(open('plan.json'))['$component']['tag'])")"
             out="${RUNNER_TEMP}/${tag}.manifest.json"

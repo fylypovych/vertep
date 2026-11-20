@@ -213,6 +213,8 @@ def test_the_component_workflow_publishes_only_after_tests_and_never_as_latest()
     assert jobs["tests"]["needs"] == "impact"
     script = "\n".join(step.get("run", "") for step in jobs["publish"]["steps"])
     assert "--latest=false" in script and "plan" in script and "--verify-tag" in script
+    # An annotated tag on a runner needs a committer identity before the first "git tag -a" (#510).
+    assert script.index("git config user.email") < script.index("git tag -a")
 
 
 def test_the_transition_record_matches_the_registry_and_the_manifests():
