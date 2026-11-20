@@ -1,6 +1,7 @@
 import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
+import { BACKGROUND_REQUEST } from '../../core/interceptors/auth.interceptor';
 import { catchError } from 'rxjs/operators';
 import { TPipe } from '../../core/i18n/t.pipe';
 import { BaseApiService } from '../../core/api/base-api.service';
@@ -125,6 +126,8 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
   constructor(private http: HttpClient, private base: BaseApiService, private toast: ToastService) {}
 
   private get api(): string { return `${this.base.url}/nodes/module-registry`; }
+  /** Reads of this embedded panel never navigate away from the Update section on 401/403. */
+  private get background() { return { headers: this.base.headers(), context: new HttpContext().set(BACKGROUND_REQUEST, true) }; }
   private fail = (error: { message?: string; error?: { detail?: string } }) => {
     this.error.set(error?.error?.detail || error?.message || 'Помилка');
     return [];
@@ -139,13 +142,13 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void { if (this.timer) clearInterval(this.timer); }
 
   refresh(): void {
-    this.http.get<{ recommendations: Recommendation[] }>(`${this.api}/updates/recommendations`, { headers: this.base.headers() })
+    this.http.get<{ recommendations: Recommendation[] }>(`${this.api}/updates/recommendations`, this.background)
       .pipe(catchError(this.fail)).subscribe((value) => this.recommendations.set((value as { recommendations: Recommendation[] }).recommendations || []));
     this.loadPlans();
   }
 
   loadPlans(): void {
-    this.http.get<{ plans: Plan[] }>(`${this.api}/updates`, { headers: this.base.headers() })
+    this.http.get<{ plans: Plan[] }>(`${this.api}/updates`, this.background)
       .pipe(catchError(() => [])).subscribe((value) => {
         const plans = (value as { plans: Plan[] }).plans;
         if (plans) this.plans.set([...plans].reverse());
@@ -176,12 +179,12 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
 
   private loadLog(planId: string): void {
     this.http.get<LogEntry[]>(`${this.base.url}/logs?category=UPDATE&operation_id=${encodeURIComponent(planId)}&limit=200`,
-      { headers: this.base.headers() }).pipe(catchError(() => [])).subscribe((entries) => this.log.set((entries as LogEntry[]) || []));
+      this.background).pipe(catchError(() => [])).subscribe((entries) => this.log.set((entries as LogEntry[]) || []));
   }
 
   loadPoints(moduleId: string): void {
     this.pointsFor.set(moduleId);
-    this.http.get<{ points: RollbackPoint[] }>(`${this.api}/rollback-points/${encodeURIComponent(moduleId)}`, { headers: this.base.headers() })
+    this.http.get<{ points: RollbackPoint[] }>(`${this.api}/rollback-points/${encodeURIComponent(moduleId)}`, this.background)
       .pipe(catchError(this.fail)).subscribe((value) => this.points.set((value as { points: RollbackPoint[] }).points || []));
   }
 
