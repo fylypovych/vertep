@@ -794,6 +794,7 @@ export const EN: Record<string, string> = {
   "Дозволені chat ID:": "Allowed chat IDs:",
   "Доступне": "Available",
   "Діагностика системи": "System diagnostics",
+  "Модулі та вузли": "Modules and nodes",
   "Дію заблоковано станом системи": "The action is blocked by the system state",
   "Дію застосовано": "Action applied",
   "Дію не виконано": "Action not performed",

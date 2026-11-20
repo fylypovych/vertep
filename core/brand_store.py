@@ -51,8 +51,8 @@ def _module(method: str, route: str, *, params: dict | None = None, body: object
 
 def module_active() -> bool:
     from .module.gateway import _ready_instance
-    from .workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
+    from .workflow.runtime import module_runtime
+    runtime = module_runtime()
     return bool(runtime and _ready_instance(runtime.modules, "brands"))
 
 

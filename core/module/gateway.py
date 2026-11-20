@@ -131,9 +131,9 @@ def token_identity(token: str) -> tuple[str, str] | None:
 # -- helpers -------------------------------------------------------------------------
 
 def _modules_or_none():
-    """The module registry of the workflow runtime, or None when none is configured."""
-    from core.workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
+    """The module registry; it exists in both workflow modes (static is the default)."""
+    from core.workflow.runtime import module_runtime
+    runtime = module_runtime()
     return None if runtime is None else runtime.modules
 
 
@@ -433,6 +433,10 @@ async def module_submit_task(request: Request):
     if not isinstance(params, dict) or any(key in params for key in ("module_owner", "owner", "acl")):
         raise HTTPException(422, "Invalid module task input")
     runtime = workflow_runtime()
+    if runtime is None:
+        # Shared Worker capabilities run through the workflow engine; Workers take
+        # those tasks only when dynamic workflows are on.
+        raise HTTPException(409, "Shared Worker capabilities need the dynamic workflow mode")
     definition = {"name": f"module:{caller.module_id}", "version": "1.0.0",
                   "tasks": [{"id": "task", "type": task_type, "capabilities_required": [capability],
                              "timeout_minutes": int(payload.get("timeout_minutes", 10))}]}
@@ -452,7 +456,7 @@ def module_task_status(task_id: str, request: Request):
     if caller is None:
         raise HTTPException(401, "Module token is not valid")
     runtime = workflow_runtime()
-    job = runtime.engine._jobs.get(task_id)
+    job = runtime.engine._jobs.get(task_id) if runtime is not None else None
     if job is None or job["params"].get("module_owner") != caller.module_id:
         audit("module.task.read", "denied", module=caller.module_id, job=task_id)
         raise HTTPException(404, "Module task not found")
@@ -472,8 +476,8 @@ async def node_assignments(request: Request):
     if not node_name or not _valid_worker_request(node_name, request):
         audit("module.assignments", "denied", node=node_name, reason="worker_auth")
         raise HTTPException(401, "Token is not valid for this worker")
-    from core.workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
+    from core.workflow.runtime import module_runtime
+    runtime = module_runtime()
     if runtime is None:
         return {"modules": []}
     registry = runtime.modules

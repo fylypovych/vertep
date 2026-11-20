@@ -52,6 +52,10 @@ FILES = {
     "deploy/proxy.conf": "runtime/proxy.conf",
     "config/node_roles.json": "config/node_roles.json",
     "core/deployment_plan.py": "runtime/deployment-plan.py",
+    # apply-deployment.py (vertep-deployment.service) runs on the host and imports it;
+    # stdlib-only, so it travels without the rest of adapters/.
+    "adapters/__init__.py": "adapters/__init__.py",
+    "adapters/comfyui_runtime.py": "adapters/comfyui_runtime.py",
     "VERSION": "VERSION",
     "docs/runtime-readiness.md": "docs/runtime-readiness.md",
 }

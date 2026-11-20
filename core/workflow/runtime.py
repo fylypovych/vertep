@@ -227,3 +227,30 @@ def workflow_runtime():
         if _runtime is None or _runtime.root != Path(root):
             _runtime = WorkflowRuntime(Path(root))
         return _runtime
+
+
+_platform = None
+
+
+def module_runtime():
+    """The module platform (registry, lifecycle, node reports) in both workflow modes.
+
+    Modules are part of every installation; the static pipeline (the default) must not
+    disable them. With dynamic workflows the one WorkflowRuntime serves both; otherwise
+    a platform instance without workflow templates keeps the registry and lifecycle.
+    Workflow execution and role routing stay bound to ``workflow_runtime()``.
+    """
+    global _platform
+    runtime = workflow_runtime()
+    if runtime is not None:
+        return runtime
+    # Recreated when the configured locations change (another installation root/test).
+    key = tuple(os.getenv(name) for name in ("CONFIG_ROOT", "VERTEP_MODULE_PLACEMENT_FILE",
+                                              "VERTEP_MODULE_LIFECYCLE_ROOT", "WORKFLOW_STATE_ROOT",
+                                              "VERTEP_MODULE_DATABASE_URL", "DATABASE_URL"))
+    with _runtime_lock:
+        if _platform is None or _platform[0] != key:
+            # No templates: definitions() is empty, nothing is executed here.
+            _platform = (key, WorkflowRuntime(Path(os.getenv("VERTEP_MODULE_PLATFORM_ROOT",
+                                                             "/nonexistent-workflow-templates"))))
+        return _platform[1]

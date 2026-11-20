@@ -93,10 +93,10 @@ def nodes():
 
 
 def _module_registry():
-    from core.workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
+    from core.workflow.runtime import module_runtime
+    runtime = module_runtime()
     if runtime is None:
-        raise HTTPException(409, "Workflow templates are not configured")
+        raise HTTPException(409, "Module platform is not available")
     return runtime.modules
 
 
@@ -156,11 +156,11 @@ async def module_secret_values(module_id: str, request: Request):
 @router.get("/api/nodes/module-catalog")
 def module_catalog():
     """Modules x nodes with state, readiness and honest compatibility reasons (#496)."""
-    from core.workflow.runtime import workflow_runtime
+    from core.workflow.runtime import module_runtime
     from core.module.catalog import catalog
-    runtime = workflow_runtime()
+    runtime = module_runtime()
     if runtime is None:
-        raise HTTPException(409, "Workflow templates are not configured")
+        raise HTTPException(409, "Module platform is not available")
     return catalog(runtime)
 
 
@@ -172,10 +172,10 @@ def module_audit(request: Request):
 
 
 def _lifecycle():
-    from core.workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
+    from core.workflow.runtime import module_runtime
+    runtime = module_runtime()
     if runtime is None:
-        raise HTTPException(409, "Workflow templates are not configured")
+        raise HTTPException(409, "Module platform is not available")
     return runtime.lifecycle
 
 
@@ -388,8 +388,8 @@ def control_node(node_id: str, command: NodeAction):
 
 
 def _withdraw_modules(node_id: str) -> None:
-    from core.workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
+    from core.workflow.runtime import module_runtime
+    runtime = module_runtime()
     if runtime is not None:
         runtime.revoke_node(node_id)
 

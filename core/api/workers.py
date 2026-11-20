@@ -170,8 +170,10 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     store.workers[payload.node_name] = data
     store.save_worker(data)
     reconcile_provider_activation(payload.node_name, data)
-    from core.workflow.runtime import workflow_runtime
-    workflow = workflow_runtime()
+    from core.workflow.runtime import module_runtime, workflow_runtime
+    # Module instances a node reports reach the module registry in both workflow
+    # modes; with dynamic workflows the same runtime also takes the node for dispatch.
+    workflow = module_runtime()
     if workflow:
         try:
             workflow.register(data)
