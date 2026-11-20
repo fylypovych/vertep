@@ -30,7 +30,7 @@ ui:
   navigation:
     - {id: publishing, label: "Публікації"}
   files:
-    index.html: "4f882f7d5b296a692cef0a61c21c4ea3d758e29c6f4ea35a091383b8e6ebaac5"
+    index.html: "82c4887a8475e5e1e76bf986f2583ae923248d8c10a1fb6b653749f6184b0c89"
 # Interface and editor actions only (#502): no database, channels or send path.
 permissions:
   - publishing.read

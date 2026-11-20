@@ -30,7 +30,7 @@ ui:
   navigation:
     - {id: storyboard, label: "Сторіборд"}
   files:
-    index.html: "f3b9bbf7e966a9787f83b7769166beb7d80fd0eae9b4df4fb202fe270888221f"
+    index.html: "3257bb53e4646882ac4f11477244217a8ce2187dbd581cd19ca539f8c998f348"
 # Reads the storyboards that live in the jobs; no database of its own (#501).
 permissions:
   - storyboard.read

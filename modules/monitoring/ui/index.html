@@ -165,12 +165,33 @@
     </div>
 
     <script>
+    // The extension has no network of its own (CSP default-src 'none'); the panel relays
+    // requests to this module's Gateway API with the user's session (#493/#501).
+    const vertepFetch = (() => {
+      let next = 0;
+      const pending = new Map();
+      window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (event.source !== window.parent || !data || data.type !== 'vertep-module-response' || !pending.has(data.id)) return;
+        const resolve = pending.get(data.id);
+        pending.delete(data.id);
+        resolve({ ok: data.status >= 200 && data.status < 300, status: data.status, json: async () => data.body });
+      });
+      return (path, options = {}) => new Promise((resolve) => {
+        const id = ++next;
+        pending.set(id, resolve);
+        let body;
+        if (options.body !== undefined) { try { body = JSON.parse(options.body); } catch (error) { body = options.body; } }
+        window.parent.postMessage({ type: 'vertep-module-request', id, method: options.method || 'GET', path, body }, '*');
+      });
+    })();
+
         const API = '/api/modules/monitoring/v1';
         let metricsChart = null;
         let currentMetricName = null;
 
         async function fetchJSON(url, options = {}) {
-            const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
+            const res = await vertepFetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
             if (!res.ok) throw new Error((await res.json()).error || 'Request failed');
             return res.json();
         }

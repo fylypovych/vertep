@@ -36,7 +36,7 @@ ui:
   navigation:
     - {id: characters, label: "Персонажі"}
   files:
-    index.html: "02c5e4de839666013f00d6ef2f02464dfc421bb604704488c922d98b4a73bd5f"
+    index.html: "2e36f0521ed450009e9fa6e2810c86e178d80a409759b2c118833298edf01b2f"
 permissions:
   - characters.read
   - characters.write

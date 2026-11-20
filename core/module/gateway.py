@@ -130,12 +130,18 @@ def token_identity(token: str) -> tuple[str, str] | None:
 
 # -- helpers -------------------------------------------------------------------------
 
-def _registry():
+def _modules_or_none():
+    """The module registry of the workflow runtime, or None when none is configured."""
     from core.workflow.runtime import workflow_runtime
     runtime = workflow_runtime()
-    if runtime is None:
+    return None if runtime is None else runtime.modules
+
+
+def _registry():
+    registry = _modules_or_none()
+    if registry is None:
         raise HTTPException(409, "Workflow templates are not configured")
-    return runtime.modules
+    return registry
 
 
 def _ready_instance(registry, module_id: str, node_id: str | None = None):
@@ -152,11 +158,10 @@ def call_module(module_id: str, method: str, route: str, params: dict | None = N
     None when the module has no READY instance (optional module not in use);
     raises httpx.HTTPError when a READY instance does not answer (fail closed).
     """
-    from core.workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
-    if runtime is None:
+    registry = _modules_or_none()
+    if registry is None:
         return None
-    instance = _ready_instance(runtime.modules, module_id)
+    instance = _ready_instance(registry, module_id)
     if instance is None or not instance.endpoint:
         return None
     if not instance.manifest.api or not _route_matches(instance.manifest.api["routes"], route.split("?", 1)[0]):
@@ -503,20 +508,22 @@ def store_module_secrets(registry, module_id: str, values: dict) -> list[str]:
 
 @router.get("/api/modules/ui-extensions")
 def ui_extensions():
-    from core.workflow.runtime import workflow_runtime
-    runtime = workflow_runtime()
-    if runtime is None:
+    registry = _modules_or_none()
+    if registry is None:
         # No module registry configured means no extensions, not an error for the panel.
         return {"extensions": []}
-    registry = runtime.modules
     result = []
     for instance in registry.instances():
         manifest = instance.manifest
         if instance.state != "READY" or not manifest.ui or not manifest.ui["files"]:
             continue
+        api = manifest.api or {}
         result.append({"module_id": manifest.module_id, "version": manifest.version,
                        "navigation": manifest.ui["navigation"],
-                       "url": f"/api/modules/ui/{manifest.module_id}/{manifest.version}/{manifest.ui['entry']}"})
+                       "url": f"/api/modules/ui/{manifest.module_id}/{manifest.version}/{manifest.ui['entry']}",
+                       # The only API the panel relays for this UI (it has no network of its own).
+                       "api_base": (f"/api/modules/{api['namespace']}/v{str(api['version']).split('.')[0]}"
+                                    if api.get("namespace") else None)})
     return {"extensions": sorted(result, key=lambda item: item["module_id"])}
 
 

@@ -1,4 +1,5 @@
-import { Component, OnDestroy, OnInit, signal } from '@angular/core';
+import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild, signal } from '@angular/core';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
@@ -28,7 +29,7 @@ type ExtensionState = 'loading' | 'ready' | 'unavailable';
           {{ 'Розширення модуля недоступне. Інші розділи панелі працюють.' | t }}
         </div>
       } @else {
-        <iframe data-testid="module-extension-frame" class="w-full h-[70vh] rounded-lg border border-slate-200 dark:border-slate-700"
+        <iframe #frame data-testid="module-extension-frame" class="w-full h-[70vh] rounded-lg border border-slate-200 dark:border-slate-700"
                 sandbox="allow-scripts" referrerpolicy="no-referrer" [src]="frameUrl()" [title]="moduleId()"></iframe>
       }
     </div>
@@ -38,9 +39,12 @@ export class ModuleExtensionComponent implements OnInit, OnDestroy {
   state = signal<ExtensionState>('loading');
   frameUrl = signal<SafeResourceUrl | null>(null);
   moduleId = signal('');
+  private apiBase: string | null = null;
   private subscription?: Subscription;
+  @ViewChild('frame') private frame?: ElementRef<HTMLIFrameElement>;
 
-  constructor(private route: ActivatedRoute, private modules: ModulesApiService, private sanitizer: DomSanitizer) {}
+  constructor(private route: ActivatedRoute, private modules: ModulesApiService, private sanitizer: DomSanitizer,
+              private http: HttpClient) {}
 
   ngOnInit(): void {
     this.subscription = this.route.paramMap.pipe(
@@ -50,9 +54,12 @@ export class ModuleExtensionComponent implements OnInit, OnDestroy {
         this.state.set('loading');
         return this.modules.uiExtensions().pipe(
           map(list => list.find(item => item.module_id === moduleId && item.url.startsWith('/api/modules/ui/'))),
-          switchMap(extension => extension
-            ? this.modules.entryAvailable(extension.url).pipe(map(ok => ok ? extension.url : null))
-            : of(null)));
+          switchMap(extension => {
+            this.apiBase = extension?.api_base || null;
+            return extension
+              ? this.modules.entryAvailable(extension.url).pipe(map(ok => ok ? extension.url : null))
+              : of(null);
+          }));
       }),
     ).subscribe(url => {
       if (url) {
@@ -67,5 +74,34 @@ export class ModuleExtensionComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.subscription?.unsubscribe();
+  }
+
+  /**
+   * The extension has no network of its own (CSP default-src 'none', opaque origin).
+   * It asks the panel by postMessage; the panel answers only its own frame and only
+   * for paths inside this module's Gateway API, sent with the user's session — the
+   * Gateway and CORE still decide every permission.
+   */
+  @HostListener('window:message', ['$event'])
+  relay(event: MessageEvent): void {
+    const source = this.frame?.nativeElement.contentWindow;
+    const data = event.data;
+    if (!source || event.source !== source || !data || data.type !== 'vertep-module-request') return;
+    const reply = (status: number, body: unknown) =>
+      source.postMessage({ type: 'vertep-module-response', id: data.id, status, body }, '*');
+    const method = String(data.method || 'GET').toUpperCase();
+    const path = typeof data.path === 'string' ? data.path : '';
+    const base = this.apiBase;
+    const pathOnly = path.split('?')[0];
+    if (!base || !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+        || !(pathOnly === base || pathOnly.startsWith(base + '/'))
+        || pathOnly.includes('..') || pathOnly.slice(base.length).includes('//') || path.includes('#')) {
+      reply(403, { detail: 'Request outside this module API' });
+      return;
+    }
+    this.http.request(method, path, { body: data.body ?? null, observe: 'response' }).subscribe({
+      next: (response) => reply(response.status, response.body),
+      error: (error: HttpErrorResponse) => reply(error.status || 503, error.error ?? null),
+    });
   }
 }

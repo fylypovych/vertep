@@ -127,7 +127,7 @@ ui:
 11. UI extensions
 ---------------------------------
 - Список READY розширень — `GET /api/modules/ui-extensions`; файли — `GET /api/modules/ui/{module_id}/{version}/{path}` лише для підписаних `ui.files`, з перевіркою sha256 перед видачею, CSP `sandbox allow-scripts` і `X-Frame-Options: SAMEORIGIN`. Файли UI — код без даних, як і статичний bundle панелі.
-- Web UI показує розширення в `<iframe sandbox="allow-scripts">` (opaque origin): немає доступу до DOM панелі, cookies чи session. Відсутнє, вимкнене, змінене або недоступне розширення показує повідомлення лише у своєму розділі; навігація й інші розділи працюють. Канал даних між UI розширення та API модуля цим контрактом не визначено.
+- Web UI показує розширення в `<iframe sandbox="allow-scripts">` (opaque origin): немає доступу до DOM панелі, cookies чи session. Відсутнє, вимкнене, змінене або недоступне розширення показує повідомлення лише у своєму розділі; навігація й інші розділи працюють. Канал даних (#501/#504): власної мережі розширення не має (CSP `default-src 'none'`). Воно надсилає панелі `postMessage({type: 'vertep-module-request', id, method, path, body})`; панель приймає повідомлення лише від свого iframe і лише для шляхів у межах `api_base` цього модуля (`/api/modules/{namespace}/v{major}/…`, без `..`, `//`, `#`), виконує запит із сесією користувача через Gateway і відповідає `{type: 'vertep-module-response', id, status, body}`. Будь-який інший шлях — 403 без запиту. Права, бренди й аудит вирішують Gateway і CORE, як для будь-якого запиту користувача; `api_base` повертає `GET /api/modules/ui-extensions`.
 
 12. Audit і LAB
 ---------------------------------

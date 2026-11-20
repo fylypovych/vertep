@@ -42,7 +42,7 @@ ui:
   navigation:
     - {id: monitoring, label: "Моніторинг"}
   files:
-    index.html: "e638a9b7b8b6b7a575f4bb81ad1458a7ce7f43838ed831f9201c6cdb9aa03b25"
+    index.html: "6634bf683f2896f458beeb0eb17f879a54391524e7f490fa19a743f891d380f7"
 permissions:
   # #503: read-only ingest of CORE metrics, alert states and health checks.
   - monitoring.read

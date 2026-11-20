@@ -37,7 +37,7 @@ ui:
   navigation:
     - {id: brands, label: "Бренди"}
   files:
-    index.html: "3c2c97674f6f46ed38bfc931c0bc549ffa59c9f4ef8c26e4fea249e5b3a855d8"
+    index.html: "73441c514747b1694c70bdd1f2c8675b558d5ecf94ac325bb815a1736335941c"
 permissions: []
 secret_refs: []
 migrations:

@@ -10,6 +10,8 @@ export interface ModuleUiExtension {
   version: string;
   url: string;
   navigation: { id: string; label?: string }[];
+  /** The module's own Gateway API; the only place the panel relays its UI's requests to. */
+  api_base?: string | null;
 }
 
 /** Signed module UI extensions (#493). A failure yields no extensions, never a broken panel. */

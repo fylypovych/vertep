@@ -816,6 +816,10 @@ def _publish_with_a_receipt(api, job_id) -> None:
             "capabilities": ["publishing"], "supported_tasks": ["publish"],
             "self_test": {"status": "PASSED", "role": "publisher", "checked_at": utc_now()}})
         assert heartbeat.status_code == 200, heartbeat.text
+        # #502: a channel without credentials blocks publication; the administrator
+        # configures the brand's channel through the real API (explicit global credentials).
+        from tests.test_delivery_process_acceptance import _allow_channels
+        _allow_channels(api, job_id, ["youtube"])
         published = api.post(f"/api/jobs/{job_id}/publish", json=["youtube"])
         assert published.status_code == 200, published.text
         task = _wait(lambda: node.post("/api/tasks/claim", json={

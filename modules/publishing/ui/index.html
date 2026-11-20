@@ -16,13 +16,34 @@
   <p class="muted">Статуси публікацій ваших брендів. Відправляє Worker; канали й політики задаються в «Брендах».</p>
   <div id="list"></div>
   <script>
+    // The extension has no network of its own (CSP default-src 'none'); the panel relays
+    // requests to this module's Gateway API with the user's session (#493/#501).
+    const vertepFetch = (() => {
+      let next = 0;
+      const pending = new Map();
+      window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (event.source !== window.parent || !data || data.type !== 'vertep-module-response' || !pending.has(data.id)) return;
+        const resolve = pending.get(data.id);
+        pending.delete(data.id);
+        resolve({ ok: data.status >= 200 && data.status < 300, status: data.status, json: async () => data.body });
+      });
+      return (path, options = {}) => new Promise((resolve) => {
+        const id = ++next;
+        pending.set(id, resolve);
+        let body;
+        if (options.body !== undefined) { try { body = JSON.parse(options.body); } catch (error) { body = options.body; } }
+        window.parent.postMessage({ type: 'vertep-module-request', id, method: options.method || 'GET', path, body }, '*');
+      });
+    })();
+
     const API = '/api/modules/publishing/v1';
     const CHANNELS = ['youtube', 'tiktok', 'facebook', 'instagram', 'threads', 'telegram'];
     function text(value) { const span = document.createElement('span'); span.textContent = value == null ? '' : String(value); return span.innerHTML; }
     async function load() {
       const root = document.getElementById('list');
       try {
-        const response = await fetch(API + '/publications');
+        const response = await vertepFetch(API + '/publications');
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const items = await response.json();
         root.innerHTML = items.map(item => {
@@ -35,7 +56,7 @@
         }).join('') || '<p class="muted">Публікацій ще немає.</p>';
         for (const button of root.querySelectorAll('button')) {
           button.addEventListener('click', async () => {
-            const result = await fetch(API + '/publications/' + encodeURIComponent(button.dataset.job) + '/publish', {
+            const result = await vertepFetch(API + '/publications/' + encodeURIComponent(button.dataset.job) + '/publish', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ channels: [button.dataset.channel] }) });
             const body = await result.json().catch(() => ({}));
