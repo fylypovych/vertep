@@ -138,6 +138,17 @@ def contour(tmp_path_factory):
             "-e", "WEB_DOMAIN=vertep.test", "-v", f"{tls}:/etc/vertep/tls:ro", "-v", f"{revocation}:/etc/vertep/revocation:ro",
             "--entrypoint", "/usr/local/bin/vertep-proxy-entrypoint", images["proxy"])
         port = run("docker", "port", names["proxy"], "8443").stdout.split(":")[-1].strip()
+        # Ready only when the proxy reaches the real CORE through the relay (no 502 race).
+        for _ in range(120):
+            try:
+                if httpx.get(f"https://127.0.0.1:{port}/api/session", verify=False, timeout=5).status_code == 401:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.5)
+        else:
+            raise AssertionError("the proxy never reached CORE: "
+                                 + run("docker", "logs", names["core"], check=False).stderr[-2000:])
         yield {"base": f"https://127.0.0.1:{port}", "names": names, "images": images, "start_web_ui": start_web_ui,
                "core": core, "direct": direct}
     finally:
