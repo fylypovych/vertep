@@ -124,12 +124,14 @@ jobs:
           python scripts/component-release.py plan --components "$COMPONENTS" --sha "$GITHUB_SHA" \
             --releases releases.json | tee plan.json
           python - <<'PY'
-          import json, sys
+          import json
           plan = json.load(open("plan.json"))
           errors = {name: entry["error"] for name, entry in plan.items() if "error" in entry}
+          # A refused component (e.g. changed without a new version) no longer blocks the others;
+          # the job still fails at the end so the refusal is visible.
+          open("refused.json", "w").write(json.dumps(errors))
           if errors:
-              print("Component release refused:", errors)
-              sys.exit(1)
+              print("::error::Component release refused:", errors)
           PY
       - name: Build images, sign packages and publish stable component releases
         env:
@@ -184,3 +186,7 @@ jobs:
                 --notes "Stable signed component release $tag" --verify-tag --latest=false
             fi
           done
+          if [ "$(cat refused.json)" != "{}" ]; then
+            echo "Refused components: $(cat refused.json)"
+            exit 1
+          fi

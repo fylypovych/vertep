@@ -78,13 +78,17 @@ def cmd_plan(args) -> dict:
             entry["publish"] = False
         entry["backfill"] = False
         tag = c.tag_name(component, version)
-        if spec["kind"] == "module" and tag in tags and tag in assets and "package.json" not in assets[tag]:
-            # A release published before packages existed (#510): add its package when the
-            # component files of the tagged commit are exactly those of this commit.
+        if tag in tags:
             changed = _git("diff", "--name-only", tags[tag], args.sha).split()
             if not [path for path in changed if any(fnmatch.fnmatch(path, pattern) for pattern in spec["paths"])]:
-                entry.update(backfill=True, commit=tags[tag])
+                # Same files as the published release: nothing to publish and nothing refused
+                # (a shared change elsewhere only pulled the component into the run).
                 entry.pop("error", None)
+                entry["publish"] = False
+                if (spec["kind"] == "module" and spec.get("image") and tag in assets
+                        and "package.json" not in assets[tag]):
+                    # Published before packages existed (#510): add its package, no new tag.
+                    entry.update(backfill=True, commit=tags[tag])
         plan[component] = entry
     return plan
 
