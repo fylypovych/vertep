@@ -17,10 +17,10 @@ from tests.test_module_trust_isolation import CONTAINER, pem, sign
 OK = {"container": True, "api": True, "database": True, "dependencies": True}
 
 
-def package(key, name, version, dependencies=(), core_min="0.0.4.0"):
+def package(key, name, version, dependencies=(), core_min="0.0.4.0", permissions=()):
     manifest = {"schema_version": "2.0", "name": name, "version": version, "capabilities": [], "kind": "application",
                 "publisher": "acme", "provenance": {"repository": "github.com/acme/mods"}, "container": CONTAINER,
-                "core_compatibility": {"min": core_min, "max": "0.0.9.99"},
+                "core_compatibility": {"min": core_min, "max": "0.0.9.99"}, "permissions": list(permissions),
                 "dependencies": [{"name": d} for d in dependencies], "migrations": []}
     return sign(key, manifest, {})
 
@@ -177,3 +177,56 @@ def test_rollout_gates_release_nodes_one_by_one(tmp_path):
     assert gates.allowed("b", "n1") and not gates.allowed("b", "n2")
     gates.close("b")
     assert gates.allowed("b", "n2")
+
+
+def test_a_different_core_than_approved_stops_the_plan_before_modules(world):
+    """Audit #512: `current >= target` let modules run on a CORE the plan never approved."""
+    world["publish"]("c", "0.0.0.2", core_min="0.0.4.25")
+    plan = world["manager"].plan({"c": "0.0.0.2"}, core_target="0.0.4.25")
+    world["manager"].approve(plan["id"], "admin")
+    assert world["manager"].execute(plan["id"])["status"] == "WAITING_CORE"
+    world["core"]["version"] = "0.0.4.26"  # another (newer) release got installed meanwhile
+    world["lifecycle"].system_versions["core_runtime"] = "0.0.4.26"
+    stopped = world["manager"].execute(plan["id"])
+    core = next(s for s in stopped["steps"] if s["kind"] == "core")
+    assert stopped["status"] == "FAILED" and core["status"] == "FAILED" and "0.0.4.26" in core["error"]
+    assert world["lifecycle"].record("c")["version"] == "0.0.0.1"  # no module step ran
+
+
+@pytest.mark.parametrize("agent_state", ["FAILED", "ROLLED_BACK"])
+def test_an_update_agent_failure_ends_the_waiting_core_step(world, agent_state):
+    """Audit #512: after an Agent failure the REQUESTED step stayed in WAITING_CORE forever."""
+    world["publish"]("c", "0.0.0.2", core_min="0.0.4.25")
+    status = {"request_id": "req-1", "state": "RUNNING"}
+    manager = world["manager"]
+    manager.request_core_update = lambda version: {"request_id": "req-1"}
+    manager.core_request_status = lambda request_id: dict(status) if request_id == status["request_id"] else None
+    plan = manager.plan({"c": "0.0.0.2"}, core_target="0.0.4.25")
+    manager.approve(plan["id"], "admin")
+    assert manager.execute(plan["id"])["status"] == "WAITING_CORE"
+    assert manager.execute(plan["id"])["status"] == "WAITING_CORE"  # agent still running
+    status.update(state=agent_state, message="Health check failed; rolling back")
+    stopped = manager.execute(plan["id"])
+    core = next(s for s in stopped["steps"] if s["kind"] == "core")
+    assert stopped["status"] == "FAILED" and core["error"] == "Health check failed; rolling back"
+    assert world["lifecycle"].record("c")["version"] == "0.0.0.1"
+    events = manager.get(plan["id"])["events"]
+    assert events[-1]["message"] == "core update failed; module steps not started"
+    assert events[-1]["error"] == "Health check failed; rolling back"
+
+
+
+def test_permissions_a_new_version_adds_are_shown_in_the_plan_and_granted_by_approving_it(world, tmp_path):
+    """Publisher moving into its container gains publishing.publish (21.11.2026)."""
+    from core.module.instances import ModuleInstanceRegistry, PlacementStore
+    registry = ModuleInstanceRegistry({"core_runtime": "0.0.4.20"}, PlacementStore(tmp_path / "placement.json"))
+    world["lifecycle"].registry = registry
+    world["publish"]("c", "0.0.0.2", permissions=["c.publish"])
+    plan = world["manager"].plan({"c": "0.0.0.2"})
+    step = next(s for s in plan["steps"] if s["component"] == "c")
+    assert step["new_permissions"] == ["c.publish"]
+    assert registry.placement.approvals.get("c") is None  # nothing granted before approval
+    world["manager"].approve(plan["id"], "admin")
+    assert registry.placement.approvals["c"] == ["c.publish"]
+    events = [event["message"] for event in world["manager"].get(plan["id"])["events"]]
+    assert "permissions approved with the plan" in events

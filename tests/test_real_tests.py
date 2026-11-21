@@ -2407,7 +2407,7 @@ if __name__ == "__main__":
 
 class TestIssue451:
     # Compared with `gh issue list --state open` on 2026-11-13 (#460).
-    OPEN_IR = {441, 442, 516}
+    OPEN_IR = {441, 442}
 
     def _client(self, monkeypatch):
         from fastapi import FastAPI
@@ -2425,7 +2425,6 @@ class TestIssue451:
         issues = {item["number"]: item for item in body["issues"]}
         assert set(issues) == self.OPEN_IR
         assert issues[442]["scenarios"] == ["S01", "S04", "S05", "S06"]  # several scenarios, one Issue
-        assert issues[516]["coverage"] == "none" and issues[516]["scenarios"] == [] and issues[516]["note"]
         assert all(item["coverage"] != "full" for item in issues.values())
         assert body["issues_snapshot"]["verified_at"] == "2026-11-21"
         for scenario in body["scenarios"]:
@@ -2462,7 +2461,7 @@ def test_registry_drift_against_github_is_detected_not_assumed():
     current = sorted(q.IR_COVERAGE)
     assert q.open_ir_drift(current) == {"missing": [], "stale": []}
     assert q.open_ir_drift([*current, 999]) == {"missing": [999], "stale": []}
-    assert q.open_ir_drift([n for n in current if n != 516]) == {"missing": [], "stale": [516]}
+    assert q.open_ir_drift([n for n in current if n != 441]) == {"missing": [], "stale": [441]}
     listing = [{"number": 459, "title": "ir.0.0.4.59 — remove"}, {"number": 460, "title": "i.0.0.4.60 — catalog"},
                {"number": 35, "title": "ri.0.0.0.35 — legacy alias"}]
     fake = lambda *a, **k: SimpleNamespace(stdout=json.dumps(listing))

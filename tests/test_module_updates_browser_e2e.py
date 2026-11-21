@@ -54,7 +54,9 @@ def test_recommend_approve_run_progress_journal_and_rollback_in_the_panel(core, 
             manifest = {"schema_version": "2.0", "name": "notes", "version": version, "capabilities": [],
                         "kind": "application", "publisher": "acme", "provenance": {"repository": "github.com/acme/notes"},
                         "container": CONTAINER, "core_compatibility": {"min": "0.0.4.0", "max": "0.0.9.99"},
-                        "migrations": []}
+                        "health": {"self_test": "health", "timeout_seconds": 4}, "migrations": [],
+                        # The newer version asks for one more permission: shown and granted with the plan.
+                        "permissions": [] if version == "0.0.0.1" else ["notes.read"]}
             data = json.dumps(sign(key, manifest, {})).encode()
             network[f"https://registry.example/vertep/notes-{version}.pkg"] = data
             entries.append({"version": version, "channel": "stable", "package_url": f"notes-{version}.pkg",
@@ -72,6 +74,7 @@ def test_recommend_approve_run_progress_journal_and_rollback_in_the_panel(core, 
     endpoint = f"http://127.0.0.1:{health.server_address[1]}"
     api, url = core["api"], core["url"]
     stop = threading.Event()
+    broken = set()  # versions the node reports as not ready (a restored version failing its check)
 
     def node():
         """The node, like the Worker supervisor: heartbeat, assignments from CORE, report."""
@@ -85,7 +88,8 @@ def test_recommend_approve_run_progress_journal_and_rollback_in_the_panel(core, 
                 assigned = worker.post("/api/modules/node-assignments", json={"node_name": "n1"}).json()
                 registry = _modules_or_none()
                 if registry is not None:
-                    registry.report_node("n1", [{**item["package"]["manifest"], "ready": True, "endpoint": endpoint}
+                    registry.report_node("n1", [{**item["package"]["manifest"], "endpoint": endpoint,
+                                                 "ready": item["package"]["manifest"]["version"] not in broken}
                                                 for item in assigned.get("modules", [])])
             except (httpx.HTTPError, ValueError):
                 pass
@@ -114,9 +118,11 @@ def test_recommend_approve_run_progress_journal_and_rollback_in_the_panel(core, 
         row = page.get_by_test_id("update-recommendation-notes")
         expect(row).to_contain_text("0.0.0.1")
         expect(row).to_contain_text("0.0.0.2")
-        expect(page.get_by_test_id("update-risk-notes")).to_contain_text("low")
+        # The new version adds a permission: its access profile changes, so the risk is medium.
+        expect(page.get_by_test_id("update-risk-notes")).to_contain_text("medium")
         page.get_by_test_id("update-plan-notes").click()
         expect(page.get_by_test_id("update-plan-status").first).to_have_text("PENDING_APPROVAL")
+        expect(page.get_by_test_id("update-new-permissions-notes")).to_contain_text("notes.read")
         page.get_by_test_id("update-approve").click()
         expect(page.get_by_test_id("update-plan-status").first).to_have_text("APPROVED")
         page.get_by_test_id("update-execute").click()
@@ -151,6 +157,36 @@ def test_recommend_approve_run_progress_journal_and_rollback_in_the_panel(core, 
         assert "UPDATE rollback to point requested" in messages and "UPDATE rollback to point completed" in messages
         assert all(r["operation_id"] == rollback_id and r["category"] == "UPDATE" for r in records)
         assert any(r.get("component") == "notes" and r.get("version") == "0.0.0.1" for r in records)
+
+        # #515 negative: the restored version fails its own check — a failed rollback, not "completed".
+        plan = api.post("/api/nodes/module-registry/updates/plan", json={"targets": {"notes": "0.0.0.2"}}).json()
+        assert api.post(f"/api/nodes/module-registry/updates/{plan['id']}/approve").status_code == 200
+        api.post(f"/api/nodes/module-registry/updates/{plan['id']}/execute")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and api.get(
+                "/api/nodes/module-registry/updates").json()["plans"][-1]["status"] != "DONE":
+            time.sleep(0.5)
+        assert api.get("/api/nodes/module-registry/updates").json()["plans"][-1]["status"] == "DONE"
+        broken.add("0.0.0.1")
+        page.reload()
+        page.get_by_test_id("rollback-points-notes").click()
+        expect(page.get_by_test_id("rollback-point-0.0.0.1")).to_be_visible()
+        page.get_by_test_id("rollback-accept-loss").check()
+        with page.expect_response(lambda r: r.url.endswith("/lifecycle/rollback_point")) as failed:
+            page.get_by_test_id("rollback-to-point").click()
+        assert failed.value.status == 409, failed.value.text()
+        body = failed.value.json()
+        assert body["ok"] is False and body["state"] == "FAILED" and body["operation_id"].startswith("rollback-")
+        expect(page.get_by_test_id("module-updates-error")).to_contain_text("failed its check")
+        expect(page.get_by_test_id("rollback-log")).to_contain_text("UPDATE rollback to point failed", timeout=30_000)
+        failed_records = api.get(f"/api/logs?category=UPDATE&operation_id={body['operation_id']}").json()
+        messages = [r["message"] for r in failed_records]
+        assert "UPDATE rollback to point failed" in messages
+        assert "UPDATE rollback to point completed" not in messages
+        # Chromium logs the expected 409 of this refused rollback; anything else stays an error.
+        expected = [e for e in browser["console_errors"] if "status of 409" in e]
+        assert len(expected) == 1, browser["console_errors"]
+        browser["console_errors"].remove(expected[0])
     finally:
         stop.set()
         thread.join(timeout=5)

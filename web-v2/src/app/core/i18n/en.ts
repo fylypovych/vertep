@@ -1326,6 +1326,7 @@ export const EN: Record<string, string> = {
   "Шаблони обробки": "Processing templates",
   "Workflow обробки контенту": "Content processing workflows",
   "Шаблонів обробки не знайдено": "No processing templates found",
+  "Нові права (погоджуються разом із планом)": "New permissions (granted with the plan)",
   "Workflow не вибрано — використано вбудований демонстраційний": "No workflow chosen: the built-in demo workflow is used",
   "Завантажити ключ шифрування": "Download the encryption key",
   "Пароль адміністратора": "Administrator password",

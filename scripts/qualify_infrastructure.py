@@ -52,9 +52,6 @@ IR_COVERAGE = {
     442: {"id": "ir.0.0.4.42", "coverage": "partial",
           "note": "S01, S04, S05, S06 перевіряють bootstrap, backup, міграцію та переривання оновлення; "
                   "rolling/canary update, Update Center і MPT recovery (#131) не мають сценарію."},
-    516: {"id": "ir.0.0.5.16", "coverage": "none",
-          "note": "Оновлення модулів на реальному стенді без GPU (rollout, відновлення, A/B агент); "
-                  "приймання виконує тестовий агент за AGENTS-NOGPU.md, сценарію в каталозі немає."},
 }
 #: The registry is a manual snapshot of the open real-server Issues, not a live GitHub
 #: sync (#460). ``--check-open-ir`` compares it with GitHub and fails on any drift.

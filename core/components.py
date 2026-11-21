@@ -397,7 +397,10 @@ def module_manifest_document(component: str, root: Path | None = None, registry:
     spec = registry["components"].get(component)
     if not spec or spec["kind"] != "module":
         raise ComponentError(f"{component} is not a module component")
-    data = yaml.safe_load(((root or ROOT) / spec["version_source"]).read_text(encoding="utf-8"))
+    # A role module that moved into its own container (Publisher, 21.11.2026) keeps the role
+    # manifest for the release it ships with and packages its application manifest.
+    source = spec.get("package_manifest") or spec["version_source"]
+    data = yaml.safe_load(((root or ROOT) / source).read_text(encoding="utf-8"))
     return data.get("module") if isinstance(data.get("module"), dict) else data.get("manifest", data)
 
 

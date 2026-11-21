@@ -230,6 +230,12 @@ def module_lifecycle_action(action: str, request: Request, payload: dict = Body(
     except (LifecycleError, ValueError, KeyError) as error:
         audit("module.lifecycle", "failed", operation=action, module=module_id or None, actor=actor, reason=str(error))
         raise HTTPException(409, f"Module lifecycle action failed: {error}") from error
+    if result.get("ok") is False:
+        # A rollback whose restored version failed its check (#515): a failure with its operation id.
+        from fastapi.responses import JSONResponse
+        audit("module.lifecycle", "failed", operation=action, module=result.get("module_id"), actor=actor,
+              reason=result.get("error"))
+        return JSONResponse(status_code=409, content={**result, "detail": result.get("error")})
     audit("module.lifecycle", "allowed", operation=action, module=result.get("module_id"), actor=actor, state=result.get("state"))
     return result
 
@@ -284,6 +290,13 @@ def module_source_action(action: str, request: Request, payload: dict = Body(def
     return result
 
 
+def _agent_request_status(request_id: str) -> dict | None:
+    """The Update Agent's final status of exactly this request (#512), else None (still running)."""
+    from core.update_manager import update_status
+    status = update_status()
+    return status if status.get("request_id") == request_id else None
+
+
 def _update_manager():
     """#512: the platform Update Manager with the production checks."""
     import httpx
@@ -332,6 +345,7 @@ def _update_manager():
                          package_for=package_for, core_version=application_version,
                          # #512: the agent installs exactly the version of the approved plan.
                          request_core_update=lambda version: request_update("update", target_version=version),
+                         core_request_status=_agent_request_status,
                          health=health, node_online=node_online)
 
 

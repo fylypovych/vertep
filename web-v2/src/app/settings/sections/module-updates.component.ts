@@ -12,7 +12,7 @@ interface Recommendation {
   profile?: string; current_profile?: string; urgent?: boolean; reasons: string[]; warnings?: string[];
 }
 interface PlanNode { node: string; status: string; }
-interface PlanStep { kind: string; component: string; from: string; to: string; status: string; nodes?: PlanNode[]; stage?: number; }
+interface PlanStep { kind: string; component: string; from: string; to: string; status: string; nodes?: PlanNode[]; stage?: number; new_permissions?: string[]; }
 interface Plan { id: string; status: string; steps: PlanStep[]; stages: string[][]; approved_by: string | null; }
 interface RollbackPoint { operation: string; version: string; created_at: number; compatible: boolean; package_available: boolean; database: boolean; }
 interface LogEntry { timestamp?: string; message?: string; operation_id?: string; component?: string; }
@@ -69,6 +69,9 @@ interface LogEntry { timestamp?: string; message?: string; operation_id?: string
           @for (step of plan.steps; track step.component) {
             <div class="text-xs py-1" [attr.data-testid]="'update-step-' + step.component">
               <b>{{ step.component }}</b> {{ step.from }} → {{ step.to }} · {{ step.status | t }}
+              @if (step.new_permissions?.length) {
+                <span class="ml-2 text-amber-700" [attr.data-testid]="'update-new-permissions-' + step.component">{{ 'Нові права (погоджуються разом із планом)' | t }}: {{ step.new_permissions!.join(', ') }}</span>
+              }
               @for (node of step.nodes || []; track node.node) {
                 <span class="ml-2" [attr.data-testid]="'update-node-' + step.component + '-' + node.node">{{ node.node }}: {{ node.status | t }}</span>
               }
@@ -200,17 +203,26 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
     if (!moduleId) return;
     this.http.post(`${this.api}/lifecycle/rollback_point`,
       { module_id: moduleId, operation: point.operation, accept_data_loss: this.acceptLoss() }, { headers: this.base.headers() })
-      .pipe(catchError(this.fail)).subscribe((result) => {
+      .pipe(catchError((error: { message?: string; error?: { detail?: string; operation_id?: string } }) => {
+        // A rollback whose restored version failed its check (#515) still has its journal.
+        this.loadRollbackLog(error?.error?.operation_id);
+        this.refresh();
+        this.loadPoints(moduleId);
+        return this.fail(error);
+      })).subscribe((result) => {
         if (result && !Array.isArray(result)) {
           this.toast.show('Модуль повернуто до вибраної точки', 'success');
           this.refresh();
           this.loadPoints(moduleId);
-          const operation = (result as { operation_id?: string }).operation_id;
-          if (operation) {
-            this.http.get<LogEntry[]>(`${this.base.url}/logs?category=UPDATE&operation_id=${encodeURIComponent(operation)}&limit=50`,
-              this.background).pipe(catchError(() => [])).subscribe((entries) => this.rollbackLog.set((entries as LogEntry[]) || []));
-          }
+          this.loadRollbackLog((result as { operation_id?: string }).operation_id);
         }
       });
+  }
+
+  private loadRollbackLog(operation: string | undefined): void {
+    this.rollbackLog.set([]);
+    if (!operation) return;
+    this.http.get<LogEntry[]>(`${this.base.url}/logs?category=UPDATE&operation_id=${encodeURIComponent(operation)}&limit=50`,
+      this.background).pipe(catchError(() => [])).subscribe((entries) => this.rollbackLog.set((entries as LogEntry[]) || []));
   }
 }

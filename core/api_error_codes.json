@@ -142,6 +142,7 @@
  "Unknown update plan action": "unknown_update_plan_action",
  "Shared Worker capabilities need the dynamic workflow mode": "shared_worker_capabilities_need_the_dynamic_workflow_mode",
  "System component is deployed and updated with the Vertep release": "system_component_is_deployed_and_updated_with_the_vertep_release",
+ "Restored version failed its check; writes stay locked": "restored_version_failed_its_check_writes_stay_locked",
  "Workflow templates are not configured": "workflow_templates_are_not_configured",
  "model is required": "model_is_required",
  "node_id is required for worker restart": "node_id_is_required_for_worker_restart",

@@ -370,153 +370,57 @@ def _task_secret_source(task: dict):
 
 
 def execute_publisher(task: dict) -> list[dict]:
-    """Publish a video to a platform via the Publisher Worker.
+    """Publish a video to a platform (the code lives in ``publishers.runner``).
 
-    Runs the platform adapter directly (YoutubePublisher, TikTokPublisher, etc.)
-    using ``PUBLISHER_MOCK`` for sandbox mode.  Returns a ``publication_receipt``
-    artifact carrying platform, remote_id, url, timestamp, status/error.
-
-    Transient failures (network errors, rate limits) raise exceptions so the
-    worker marks the task as failed and CORE retries with backoff.
-    Permanent failures (NOT_CONFIGURED) return a receipt with status=NOT_CONFIGURED
-    and the worker marks success=True; CORE will not retry these.
+    The helpers are looked up at call time, so the Worker's configuration (and tests that
+    replace them) apply exactly as before the extraction.
     """
-    import time as _time
+    from publishers.runner import run_publication
+    return run_publication(
+        task,
+        artifact=lambda filename, kind, data: _artifact(filename, kind, data),
+        core_base_url=lambda: _core_base_url(),
+        fetch_input=lambda item, relative, destination, sha: _fetch_approved_input(item, relative, destination, sha),
+        secret_source=lambda item: _task_secret_source(item),
+        use_task_secrets=lambda source: task_secrets(source),
+        upload=lambda publisher, channel, path, metadata: _upload_publication(publisher, channel, path, metadata))
 
-    channel = task["channel"]
-    video_path = task.get("video_path", "")
-    metadata = task.get("metadata", {})
-    delivery_contract = task.get("delivery_contract") or {}
-    publish_intent = task.get("publish_intent") or {}
-    ledger_path = None
-    identity = {"job_id": task["job_id"], "channel": channel,
-                "video_version": publish_intent.get("video_version"),
-                "video_sha256": publish_intent.get("video_sha256")}
-    if task.get("task_id") and identity["video_version"] is not None and identity["video_sha256"]:
-        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-        ledger_path = Path(os.getenv("JOB_ROOT", "/data/jobs")) / task["job_id"] / "publication-ledger" / f"{key}.json"
-        if ledger_path.is_file():
-            previous = json.loads(ledger_path.read_text(encoding="utf-8"))
-            if previous.get("intent") != identity:
-                raise RuntimeError("Publication ledger intent mismatch")
-            if previous.get("state") == "UPLOADING":
-                raise RuntimeError("Unknown upload outcome; reconciliation required before another upload")
-            cached_receipt = previous.get("receipt")
-        else:
-            cached_receipt = None
-    else:
-        cached_receipt = None
-    def save_ledger(state, receipt=None):
-        if ledger_path is None:
-            return
-        ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = ledger_path.with_name(f".{ledger_path.name}.{uuid.uuid4().hex}.tmp")
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump({"intent": identity, "state": state, "receipt": receipt}, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, ledger_path)
-    def receipt_artifact(receipt):
-        receipt.update({"job_id": task["job_id"], "task_id": task.get("task_id"),
-                        "channel": channel,
-                        "video_version": publish_intent.get("video_version"),
-                        "video_sha256": publish_intent.get("video_sha256")})
-        return [_artifact("publication.json", "publication_receipt",
-                          json.dumps(receipt, sort_keys=True).encode("utf-8"))]
-    if cached_receipt and cached_receipt.get("status") == "PUBLISHED":
-        return receipt_artifact(cached_receipt)
-    from publishers.base import publisher_mock_enabled
-    if publisher_mock_enabled():
-        receipt = {
-            "channel": channel, "status": "PUBLISHED",
-            "id": f"mock-{uuid.uuid4().hex[:12]}",
-            "remote_id": f"mock-{uuid.uuid4().hex[:12]}",
-            "url": f"https://example.invalid/{channel}/mock-{uuid.uuid4().hex[:8]}",
-            "timestamp": _time.time(),
-            "video_version": publish_intent.get("video_version"),
-            "video_sha256": publish_intent.get("video_sha256"),
-            "upload": {"mode": "mock", "bytes": os.path.getsize(video_path) if video_path and os.path.isfile(video_path) else 0},
-        }
-        return receipt_artifact(receipt)
-    from publishers import LIVE_PUBLISHERS
-    publisher = LIVE_PUBLISHERS.get(channel)
-    if publisher is None or not publisher.configured():
-        receipt = {"channel": channel, "status": "NOT_CONFIGURED",
-                   "error": f"{publisher.credential_env if publisher else 'unknown'} is missing",
-                   "timestamp": _time.time()}
-        return receipt_artifact(receipt)
-    # Issue #199/#166.4: verify the approved artifact against the delivery
-    # contract before any upload.  A missing/corrupt/mismatched file must not
-    # reach the adapter.  If the file is not available locally (disposable
-    # Publisher with separate filesystem), fetch it from CORE.
+
+def _upload_publication(publisher, channel: str, video_path: str, metadata: dict) -> dict:
+    """Upload through the Publisher module container when it runs on this node (stage 3).
+
+    Only the upload moves: this Worker still owns the task, verified the approved video and
+    keeps the publication ledger. The container gets the video bytes and this task's own
+    credentials from CORE; refreshed tokens come back and are saved in CORE as before.
+    Credentials kept in this node's environment, or no running container: local adapter.
+    """
+    from publishers.task_secrets import TaskSecrets, current_task_secrets
+    from worker.application_supervisor import local_module
+    source = current_task_secrets()
+    container = local_module("publisher") if isinstance(source, TaskSecrets) else None
+    if container is None:
+        return publisher.publish(video_path, metadata)
+    endpoint, token = container
+    credentials = source._load()
+    request = base64.b64encode(json.dumps({"channel": channel, "metadata": metadata,
+                                           "credentials": {"secrets": credentials.get("secrets") or {},
+                                                           "oauth": credentials.get("oauth") or {}}}).encode()).decode()
+    with open(video_path, "rb") as video:
+        response = httpx.post(f"{endpoint}/api/v1/publish", content=video,
+                              headers={"x-vertep-module-token": token, "x-vertep-publish": request,
+                                       "Content-Length": str(os.path.getsize(video_path))},
+                              timeout=float(os.getenv("PUBLISHER_MODULE_TIMEOUT_SECONDS", "3600")))
     try:
-        expected_sha = (delivery_contract.get("sha256") or delivery_contract.get("video_sha256"))
-        expected_size = delivery_contract.get("size_bytes") or delivery_contract.get("size")
-        if task.get("task_id") and publish_intent:
-            expected_version = delivery_contract.get("version", delivery_contract.get("video_version"))
-            if (not expected_sha or expected_size is None or expected_version is None
-                    or str(expected_version) != str(publish_intent.get("video_version"))
-                    or expected_sha != publish_intent.get("video_sha256")
-                    or publish_intent.get("job_id") != task["job_id"]
-                    or publish_intent.get("channel") != channel):
-                raise ValueError("delivery contract does not match issued publish intent")
-        if task.get("task_id") and delivery_contract and _core_base_url():
-            # A Publisher host never writes to CORE's absolute filesystem path.
-            # Its disposable copy is authenticated and checked before upload.
-            source_name = Path(video_path).name
-            video_path = str(Path(os.getenv("JOB_ROOT", "/data/jobs")) / task["job_id"] / "publish-inputs" / source_name)
-            if not os.path.isfile(video_path):
-                _fetch_approved_input(task, source_name, Path(video_path), str(expected_sha or ""))
-        if video_path and not os.path.isfile(video_path):
-            # Fetch approved video from CORE for disposable Publisher node
-            from pathlib import Path as _Path
-            video_path_obj = _Path(video_path)
-            video_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            _fetch_approved_input(task, video_path_obj.name, video_path_obj, str(expected_sha) if expected_sha else "")
-        if video_path and os.path.isfile(video_path):
-            if expected_sha:
-                import hashlib as _hashlib
-                actual_sha = _hashlib.sha256(open(video_path, "rb").read()).hexdigest()
-                if actual_sha != str(expected_sha).removeprefix("sha256:"):
-                    raise ValueError("delivery contract sha256 mismatch")
-            if expected_size is not None and os.path.getsize(video_path) != int(expected_size):
-                raise ValueError("delivery contract size mismatch")
-    except ValueError as error:
-        receipt = {"channel": channel, "status": "FAILED", "error": str(error),
-                   "timestamp": _time.time()}
-        return receipt_artifact(receipt)
-    except (OSError, RuntimeError) as error:
-        receipt = {"channel": channel, "status": "FAILED", "error": str(error),
-                   "timestamp": _time.time()}
-        return receipt_artifact(receipt)
-    try:
-        save_ledger("UPLOADING")
-        with task_secrets(_task_secret_source(task)):
-            result = publisher.publish(video_path, metadata)
-    except Exception as error:
-        # Transient failures (network, rate limit) should raise so worker retries
-        # Permanent failures should be caught by publisher and returned in result
-        error_str = str(error).lower()
-        if any(keyword in error_str for keyword in ("timeout", "network", "connection", "rate limit", "429", "503", "504")):
-            raise  # Transient - let worker retry
-        # Other exceptions treated as permanent failure
-        from core.logging_config import secret_redact
-        result = {"channel": channel, "status": "FAILED", "error": secret_redact(str(error))}
-    if isinstance(result, dict) and "error" in result:
-        from core.logging_config import secret_redact
-        result["error"] = secret_redact(result["error"])
-    result.setdefault("channel", channel)
-    result.setdefault("timestamp", _time.time())
-    # Correlate the receipt back to the durable delivery contract so CORE can
-    # match it to the publish intent (owner/lease/version) on the next attempt.
-    if publish_intent.get("video_version") is not None:
-        result.setdefault("video_version", publish_intent["video_version"])
-    if publish_intent.get("video_sha256"):
-        result.setdefault("video_sha256", publish_intent["video_sha256"])
-    result.setdefault("remote_id", result.get("id"))
-    save_ledger("UPLOADING" if result.get("outcome_unknown") else
-                "PUBLISHED" if result.get("status") == "PUBLISHED" else "FAILED", result)
-    return receipt_artifact(result)
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.status_code != 200:
+        # Same classification as a local adapter error: the runner decides retry or failure.
+        raise RuntimeError(body.get("error") or f"Publisher module answered {response.status_code}")
+    updates = body.get("credential_updates") or {}
+    if updates.get("secrets") or updates.get("oauth"):
+        source.save(updates.get("secrets") or {}, updates.get("oauth") or {})
+    return body.get("result") or {"channel": channel, "status": "FAILED", "error": "empty module answer"}
 
 
 def execute_backup(task: dict) -> list[dict]:

@@ -51,3 +51,27 @@ def task_secrets(source: TaskSecrets | None):
         yield
     finally:
         _current.reset(token)
+
+
+class InMemoryTaskSecrets:
+    """Task-scoped credentials handed to the Publisher module container by the Worker that
+    owns the task (#510/#511, stage 2). The container never asks CORE itself; tokens an
+    adapter refreshes are collected and returned to the Worker, which saves them in CORE."""
+
+    def __init__(self, data: dict | None) -> None:
+        data = data or {}
+        self._secrets = {str(key).lower(): value for key, value in (data.get("secrets") or {}).items()}
+        self._oauth = dict(data.get("oauth") or {})
+        self.updates: dict = {"secrets": {}, "oauth": {}}
+
+    def get(self, name: str):
+        return self._secrets.get(name.lower())
+
+    def oauth(self, credential_env: str) -> dict:
+        return self._oauth.get(credential_env, {})
+
+    def save(self, secrets: dict, oauth: dict) -> None:
+        self._secrets.update({str(key).lower(): value for key, value in secrets.items()})
+        self._oauth.update(oauth)
+        self.updates["secrets"].update(secrets)
+        self.updates["oauth"].update(oauth)

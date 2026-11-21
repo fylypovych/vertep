@@ -171,3 +171,28 @@ def test_an_interruption_between_restore_and_retry_keeps_writes_locked_and_grant
     assert not second.database.writes_locked("notes")  # verified previous version: writes open
     assert second.recover() == []
     insert(url, "after")
+
+
+def test_a_failed_retry_whose_restored_version_fails_its_check_keeps_writes_locked(tmp_path, key, module_postgres):
+    """Audit #513: the fence was lifted for any exception of the retry, even when the restored
+    previous version did not pass its own check (state FAILED)."""
+    lifecycle, url = installed(tmp_path, key, module_postgres)
+    _crash(tmp_path, key, module_postgres, "after_apply", "update")
+    calls, notes = {"1.0.0": 0}, []
+
+    def self_test(manifest):
+        if manifest.version == "1.0.0":
+            calls["1.0.0"] += 1
+            return calls["1.0.0"] <= 2  # verified after the first restore (two checks), then broken
+        return False  # the retried new version fails too
+    restarted = make(tmp_path, key, module_postgres, self_test=self_test,
+                     notify=lambda message, details: notes.append(message))
+    assert restarted.recover() == [{"module_id": "notes", "op": "update", "outcome": "retry_failed"}]
+    record = restarted.record("notes")
+    assert record["version"] == "1.0.0" and record["state"] == "FAILED"
+    assert restarted.database.writes_locked("notes")  # not verified: the fence stays
+    assert record["attention"]["error"].startswith("restored version is not verified")
+    assert notes.count("Module update stopped: restore was not verified") == 1
+    assert "Module update failed after its automatic retry" in notes
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        insert(url, "after a failed retry")

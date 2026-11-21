@@ -284,7 +284,17 @@ def test_every_module_with_a_container_gets_a_signed_package_core_accepts(tmp_pa
         manifest = verify_package(package, trust)
         assert manifest.version == c.declared_version(module)
         assert manifest.to_dict()["container"]["image"] == image
-        assert "index.html" in package["files"]  # the UI bundle travels with its signed digest
+        if manifest.ui and manifest.ui.get("files"):
+            assert "index.html" in package["files"]  # the UI bundle travels with its signed digest
+
+
+def test_a_role_module_packages_its_container_manifest_with_the_same_version():
+    """Publisher (21.11.2026): the release keeps the role manifest, the package the container one."""
+    import yaml
+    spec = REGISTRY["components"]["publisher"]
+    app = yaml.safe_load((ROOT / spec["package_manifest"]).read_text(encoding="utf-8"))
+    assert app["version"] == c.declared_version("publisher") and app["kind"] == "application"
+    assert spec["image"]["file"] == "modules/publisher/app/Dockerfile" and spec["image"]["context"] == "."
 
 
 def test_a_package_refuses_an_unpinned_image_and_a_tampered_file(tmp_path):

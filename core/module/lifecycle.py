@@ -474,7 +474,9 @@ class ModuleLifecycle:
                 self._save(updated)
             except BaseException:
                 self._rollback_to(module_id, snapshot, reactivate=was_active)
-                self._unlock_writes(module_id)  # the previous version is verified again
+                # Writes open only when the restored previous version is verified (audit #513):
+                # a restored module that fails its own check keeps the fence for the administrator.
+                self._unlock_if_verified(module_id, previous["version"], operation)
                 self._journal_path(module_id).unlink(missing_ok=True)  # undone: nothing left to recover
                 raise
             self._unlock_writes(module_id)  # final state verified: writes open again
@@ -568,13 +570,32 @@ class ModuleLifecycle:
         try:
             self.update(journal["package"], confirmed=True, operation_id=journal.get("operation"), _retry=1)
         except Exception as error:  # noqa: BLE001 - the one retry failed: stop and tell the administrator
-            # update() restored and re-verified the previous version (or refused before changing
-            # anything after the verified restore above): that is the final state.
-            self._unlock_writes(module_id)
+            # Open writes only for a verified previous version; the exception may come from the
+            # restore itself, or the restored version may have failed its check (audit #513).
+            record = self.record(module_id) or {}
+            if (record.get("attention") or {}).get("operation") != journal.get("operation"):
+                # (update() itself already kept the fence and reported an unverified restore)
+                self._unlock_if_verified(module_id, journal.get("from_version"), journal.get("operation"))
             self.notify("Module update failed after its automatic retry",
                         {"module_id": module_id, "operation": journal.get("operation"), "error": str(error)})
             return "retry_failed"
         return "retried"
+
+    def _unlock_if_verified(self, module_id: str, version: str | None, operation: str | None) -> bool:
+        """Lift the write fence only when the module is back on ``version`` and not FAILED;
+        otherwise keep it, mark the record for attention and tell the administrator."""
+        record = self.record(module_id)
+        verified = (record is not None and record.get("state") != FAILED
+                    and (version is None or record.get("version") == version))
+        if verified:
+            self._unlock_writes(module_id)
+            return True
+        if record is not None:
+            self._save({**record, "attention": {"operation": operation,
+                                                "error": "restored version is not verified; writes stay locked"}})
+        self.notify("Module update stopped: restore was not verified",
+                    {"module_id": module_id, "operation": operation})
+        return False
 
     # -- rollback points, retention, purge (#513) ----------------------------------------------
     def rollback_points(self, module_id: str) -> list[dict]:
@@ -617,7 +638,8 @@ class ModuleLifecycle:
                 self._drain(record)
             self._lock_writes(module_id)
             self._rollback_to(module_id, self.root / "snapshots" / module_id / operation, reactivate=was_active)
-            self._unlock_writes(module_id)
+            # The fence opens only for a verified restored version (audits #513/#515).
+            self._unlock_if_verified(module_id, point["version"], operation)
             restored = self.record(module_id)
             return {"module_id": module_id, "version": restored["version"], "state": restored["state"]}
 

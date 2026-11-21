@@ -402,6 +402,14 @@ class ModuleSources:
         report = assess(package, release, verify=self.lifecycle.verify, core_version=self.core_version,
                         active=self._active(), advisories=self.advisories(), data=data)
         self._approved(report, approved_profile)
+        # The administrator approved this package's access profile: its declared permissions
+        # are granted with it (a role module moving into its own container gains some).
+        registry = getattr(self.lifecycle, "registry", None)
+        if registry is not None:
+            declared = self.lifecycle.verify(package).permissions
+            approved = set(registry.placement.approvals.get(module_id, []))
+            if set(declared) - approved:
+                registry.placement.set_approval(module_id, sorted(approved | set(declared)))
         digest = self.cache.put(module_id, report["version"], data)
         result = self.lifecycle.update(package, confirmed=True)
         self._save_pin(module_id, pinned, report["version"], digest)

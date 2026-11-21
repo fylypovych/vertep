@@ -42,6 +42,45 @@ def _save_ports(ports: dict) -> None:
     temporary.replace(path)
 
 
+def _tokens_file() -> Path:
+    return _ports_file().with_name("application-module-tokens.json")
+
+
+def _tokens() -> dict:
+    path = _tokens_file()
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_token(module_id: str, token: str) -> None:
+    """The token the running container accepts, so the Worker can call it after a restart."""
+    tokens = {**_tokens(), module_id: token}
+    path = _tokens_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(tokens, sort_keys=True), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
+def local_module(module_id: str) -> tuple[str, str] | None:
+    """(endpoint, module token) of an application module running and ready on this node."""
+    if not enabled():
+        return None
+    port, token = _ports().get(module_id), _tokens().get(module_id)
+    if not port or not token:
+        return None
+    endpoint = f"http://{os.getenv('VERTEP_NODE_ADDRESS', '127.0.0.1')}:{port}"
+    try:
+        if httpx.get(f"{endpoint}/health", timeout=3).json().get("ready") is not True:
+            return None
+    except (httpx.HTTPError, ValueError):
+        return None
+    return endpoint, token
+
+
 def _running() -> dict[str, str]:
     result = subprocess.run(["docker", "ps", "--filter", "label=vertep.module", "--format",
                              '{{.Label "vertep.module"}} {{.Label "vertep.module.version"}}'],
@@ -92,6 +131,7 @@ def reconcile(client: httpx.Client, core_url: str, node_name: str) -> list[dict]
                 continue
             containers.start(manifest, core_url=container_core, module_token=token.json()["token"],
                              host_port=ports[module_id], bind_address=bind_address)
+            _save_token(module_id, token.json()["token"])
         endpoint = f"http://{node_address}:{ports[module_id]}"
         try:
             ready = httpx.get(f"{endpoint}/health", timeout=3).json().get("ready") is True

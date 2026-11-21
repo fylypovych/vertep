@@ -86,6 +86,8 @@
     "publisher": {
       "kind": "module",
       "version_source": "modules/publisher/manifest.yaml",
+      "image": {"name": "vertep-module-publisher", "context": ".", "file": "modules/publisher/app/Dockerfile"},
+      "package_manifest": "modules/publisher/app/manifest.yaml",
       "paths": ["modules/publisher/**", "publishers/**"],
       "tests": ["tests/test_publisher_durable_reconciliation.py", "tests/test_publisher_http_boundary.py",
                 "tests/test_publisher_live_adapters.py", "tests/test_publisher_oauth_state.py",

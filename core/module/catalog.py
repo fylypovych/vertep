@@ -81,7 +81,8 @@ def check_placement(registry, module_id: str, node_ids: list[str]) -> None:
     for node_id in node_ids:
         if node_id not in known:
             raise ValueError(f"Вузол {node_id} не зареєстрований")
-        reasons = compatibility(manifest, known[node_id], registry.placement.node_profile(node_id), bundled_role(module_id))
+        role = bundled_role(module_id) if manifest.kind != "application" else None  # container: no role needed
+        reasons = compatibility(manifest, known[node_id], registry.placement.node_profile(node_id), role)
         if reasons:
             raise ValueError(f"Вузол {node_id}: " + "; ".join(reasons))
 
@@ -118,6 +119,10 @@ def catalog(runtime) -> dict:
     for module_id, record in records.items():
         if module_id not in entries:
             entries[module_id] = (ModuleManifest.from_dict(record["package"]["manifest"]), False)
+        elif "bundled" not in (record.get("package") or {"bundled": True}):
+            # An official module updated from its own release (Monitoring, Publisher in its
+            # container): the catalog shows the installed package, not the release copy.
+            entries[module_id] = (ModuleManifest.from_dict(record["package"]["manifest"]), True)
     known = nodes()
     result = []
     for module_id, (manifest, bundled) in sorted(entries.items()):
@@ -132,10 +137,12 @@ def catalog(runtime) -> dict:
                            "nodes": []})
             continue
         instances = {i.node_id: i.to_dict() for i in registry.instances(module_id)}
+        # A role module now running from its own container (Publisher package) needs no role.
+        role = bundled_role(module_id) if bundled and manifest.kind != "application" else None
         result.append({
             "module_id": module_id, "label": BUNDLED_LABELS.get(module_id) or (manifest.ui or {}).get("navigation", [{}])[0].get("label") or module_id,
             "version": manifest.version, "kind": manifest.kind, "bundled": bundled,
-            "runtime_role": bundled_role(module_id) if bundled else None,
+            "runtime_role": role,
             "state": record["state"] if record else "NOT_INSTALLED",
             "requires_gpu": manifest.placement["requires_gpu"], "target": manifest.placement["target"],
             "scaling": manifest.placement["scaling"], "resources": manifest.resource_requirements,
@@ -144,9 +151,9 @@ def catalog(runtime) -> dict:
             "placement": registry.placement.placement.get(module_id, []),
             "nodes": [{"node_id": node["node_id"],
                        "compatible_reasons": compatibility(manifest, node, registry.placement.node_profile(node["node_id"]),
-                                                           bundled_role(module_id) if bundled else None),
+                                                           role),
                        # Only the runtime of the function is missing (the node could deploy it).
-                       "runtime_missing": bool(bundled) and bundled_role(module_id) not in _deployed_roles(node)
+                       "runtime_missing": bool(role) and role not in _deployed_roles(node)
                        and not compatibility(manifest, node, registry.placement.node_profile(node["node_id"])),
                        "instance": instances.get(node["node_id"])} for node in known],
         })

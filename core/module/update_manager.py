@@ -39,6 +39,8 @@ class PlanError(ValueError):
 _log_lock = threading.Lock()
 
 
+ROLLBACK_NOT_VERIFIED = "Restored version failed its check; writes stay locked"
+
 _apply_locks: dict[str, threading.Lock] = {}
 _apply_locks_guard = threading.Lock()
 
@@ -125,6 +127,7 @@ class UpdateManager:
                  health: Callable[[str, str, str], dict[str, bool]],
                  node_online: Callable[[str], bool],
                  maintenance: Callable[[str, bool], None] = lambda module_id, on: None,
+                 core_request_status: Callable[[str], dict | None] = lambda request_id: None,
                  wait_seconds: float = 120.0, poll: float = 0.5) -> None:
         self.root = Path(root)
         self.lifecycle = lifecycle
@@ -135,6 +138,7 @@ class UpdateManager:
         self.health = health
         self.node_online = node_online
         self.maintenance = maintenance
+        self.core_request_status = core_request_status  # agent status of a CORE update request (#512)
         self.wait_seconds = wait_seconds
         self.poll = poll
         self.gates = RolloutGates(self.root / "rollout-gates.json")
@@ -219,6 +223,10 @@ class UpdateManager:
                 steps.append({"kind": "module", "component": module_id, "stage": index,
                               "from": record["version"], "to": targets[module_id],
                               "depends_on": sorted(set(_dependency_names(manifests[module_id])) & set(targets)),
+                              # Permissions the new version adds (e.g. Publisher moving from a role into
+                              # its own container): shown in the plan, granted by approving it.
+                              "new_permissions": sorted(set(manifests[module_id].permissions)
+                                                        - set(self._approved_permissions(module_id))),
                               "nodes": [{"node": node, "status": "PENDING"} for node in sorted(self.placement(module_id))],
                               "status": "PENDING"})
         plan = {"id": uuid.uuid4().hex, "status": PENDING, "created_at": time.time(), "steps": steps,
@@ -233,8 +241,23 @@ class UpdateManager:
             if plan["status"] != PENDING:
                 raise PlanError(f"Plan is {plan['status']}, not waiting for approval")
             plan.update(status=APPROVED, approved_by=actor, approved_at=time.time())
+            for step in plan["steps"]:
+                if step["kind"] == "module" and step.get("new_permissions"):
+                    granted = sorted(set(self._approved_permissions(step["component"])) | set(step["new_permissions"]))
+                    self._grant_permissions(step["component"], granted)
+                    self._event(plan, "permissions approved with the plan", module=step["component"],
+                                permissions=step["new_permissions"], actor=actor)
             self._event(plan, "approved", actor=actor)
             return plan
+
+    def _approved_permissions(self, module_id: str) -> list[str]:
+        registry = getattr(self.lifecycle, "registry", None)
+        return list(registry.placement.approvals.get(module_id, [])) if registry is not None else []
+
+    def _grant_permissions(self, module_id: str, permissions: list[str]) -> None:
+        registry = getattr(self.lifecycle, "registry", None)
+        if registry is not None:
+            registry.placement.set_approval(module_id, permissions)
 
     # -- execution ------------------------------------------------------------------------
     def execute(self, plan_id: str) -> dict:
@@ -247,13 +270,25 @@ class UpdateManager:
         core = next((s for s in plan["steps"] if s["kind"] == "core"), None)
         if core and core["status"] != "DONE":
             from packaging.version import Version
-            if Version(self.core_version()) >= Version(core["to"]):
+            current = self.core_version()
+            if Version(current) == Version(core["to"]):
                 core["status"] = "DONE"
                 self._event(plan, "core updated", version=core["to"])
+            elif Version(current) > Version(core["to"]):
+                # #512: modules were approved against exactly this CORE; a different running
+                # version (another release got installed) must not carry the plan on.
+                return self._core_failed(plan, core, f"CORE runs {current}, not the approved {core['to']}")
             else:
+                status = self.core_request_status(core["request_id"]) if core.get("request_id") else None
+                if core["status"] == "REQUESTED" and status and status.get("state") in {"FAILED", "ROLLED_BACK"}:
+                    return self._core_failed(plan, core, status.get("message") or "Update Agent failed")
+                if core["status"] == "REQUESTED" and status and status.get("state") == "SUCCEEDED":
+                    return self._core_failed(plan, core, f"Update Agent finished, but CORE runs {current}")
                 if core["status"] == "PENDING":
-                    self.request_core_update(core["to"])
+                    request = self.request_core_update(core["to"])
                     core["status"] = "REQUESTED"
+                    if isinstance(request, dict) and request.get("request_id"):
+                        core["request_id"] = request["request_id"]
                 plan["status"] = WAITING_CORE
                 self._event(plan, "core update requested from the independent Update Agent", version=core["to"])
                 return plan
@@ -267,6 +302,14 @@ class UpdateManager:
         deferred = any(n["status"] == "DEFERRED" for s in plan["steps"] if s["kind"] == "module" for n in s["nodes"])
         plan["status"] = "DEFERRED_NODES" if deferred else DONE
         self._event(plan, "finished", status=plan["status"])
+        return plan
+
+    def _core_failed(self, plan: dict, core: dict, reason: str) -> dict:
+        """The CORE step did not reach the approved version: stop before any module step."""
+        core["status"] = FAILED
+        core["error"] = reason
+        plan["status"] = FAILED
+        self._event(plan, "core update failed; module steps not started", version=core["to"], error=reason)
         return plan
 
     def _module(self, plan: dict, step: dict) -> bool:
@@ -369,9 +412,14 @@ class UpdateManager:
         except Exception as error:
             update_log("rollback to point failed", operation, module=module_id, point=point, error=str(error))
             raise
+        if result.get("state") == FAILED:
+            # Audit #515: the restored version did not pass its own check — not a completed rollback.
+            update_log("rollback to point failed", operation, module=module_id, point=point, from_version=before,
+                       version=result.get("version"), state=FAILED, error=ROLLBACK_NOT_VERIFIED)
+            return {**result, "operation_id": operation, "ok": False, "error": ROLLBACK_NOT_VERIFIED}
         update_log("rollback to point completed", operation, module=module_id, point=point,
                    from_version=before, version=result.get("version"), state=result.get("state"))
-        return {**result, "operation_id": operation}
+        return {**result, "operation_id": operation, "ok": True}
 
     def resume_node(self, node_id: str) -> list[dict]:
         """A deferred node reconnected: re-check the plan still applies, then release it."""
