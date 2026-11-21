@@ -1125,6 +1125,13 @@ if [[ $installation_complete == true ]]; then
   mv -f "$installation_tmp" "$INSTALL_ROOT/config/installation.json"
 fi
 systemctl enable --now vertep-update.path vertep-update.timer vertep-deployment.path vertep-watchdog.timer
+# #517: the runtime is healthy, so this version counts as installed; old Vertep images outside
+# the last three successful versions are removed (best effort, never fails the bootstrap).
+if [[ -f "$INSTALL_ROOT/scripts/prune-images.py" ]]; then
+  python3 "$INSTALL_ROOT/scripts/prune-images.py" record --root "$INSTALL_ROOT" --version "$version" >/dev/null 2>&1 \
+    && python3 "$INSTALL_ROOT/scripts/prune-images.py" prune --root "$INSTALL_ROOT" \
+      --keep "${VERTEP_IMAGE_KEEP_VERSIONS:-3}" 2>/dev/null || true
+fi
 if [[ -f "$INSTALL_ROOT/scripts/remove-vertep.py" ]]; then
   python3 "$INSTALL_ROOT/scripts/remove-vertep.py" --root "$INSTALL_ROOT" --record
 fi

@@ -45,7 +45,8 @@ sync_host_runtime(){
   local release_root=$1
   install -d -m 0750 "$ROOT/scripts" "$ROOT/core"
   for executor in update-agent.py update-runtime-env.py vertep vertep-cli.py safe-extract.py \
-                  release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py host-health.py remove-vertep.py; do
+                  release-layout.py startup-recovery.py watchdog.py status.py apply-deployment.py host-health.py remove-vertep.py \
+                  prune-images.py; do
     [[ -f "$release_root/scripts/$executor" ]] || continue
     install -m 0750 "$release_root/scripts/$executor" "$ROOT/scripts/$executor"
   done
@@ -108,6 +109,15 @@ open_update_backup(){
   local directory=$1 opened=$2
   openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$ROOT/.update-backup.key" -in "$directory/backup.tar.enc" \
     | tar -xzf - -C "$opened"
+}
+# #517: after a successful update only — a failed one keeps every version for rollback.
+# Best effort: cleanup never turns a successful update into a failure.
+prune_old_images(){
+  local version=$1
+  [[ -f "$ROOT/scripts/prune-images.py" ]] || return 0
+  python3 "$ROOT/scripts/prune-images.py" record --root "$ROOT" --version "$version" >/dev/null 2>&1 || return 0
+  python3 "$ROOT/scripts/prune-images.py" prune --root "$ROOT" \
+    --keep "${VERTEP_IMAGE_KEEP_VERSIONS:-3}" 2>/dev/null || true
 }
 prune_update_backups(){
   local keep=$1 current=$2 old
@@ -458,9 +468,10 @@ print("\x1f".join(str(s.get(k, "")) for k in ("request_id", "state", "progress",
     update_progress 90 VERIFYING "Server restarted; waiting for health checks"
     for attempt in {1..120}; do
       if [[ "$role" == "worker" ]]; then
-        "${compose[@]}" ps --status running --services | grep -qx worker && exit 0
+        "${compose[@]}" ps --status running --services | grep -qx worker && { prune_old_images "$target_version"; exit 0; }
       elif curl -fsS "${core_tls[@]}" -u "${ADMIN_USER:-admin}:${ADMIN_PASSWORD:-}" "$core_url/api/health" \
           && data_services_ready; then
+        prune_old_images "$target_version"
         exit 0
       fi
       sleep 5
