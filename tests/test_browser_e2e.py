@@ -1118,7 +1118,7 @@ def test_worker_detail_page_loads():
         page.route("**/api/nodes/n1**", lambda route: route.fulfill(json={
             "node_id": "n1", "node_name": "GPU-Node-1", "role": "gpu", "status": "ONLINE",
             "capabilities": ["image_generation"], "vram_mb": 8192, "gpu_name": "RTX 4090",
-            "ram_mb": 16384, "disk_free_mb": 500000, "cpu_load": 15, "gpu_load": 45,
+            "ram_mb": 16384, "disk_free_mb": 500000, "cpu_load": 1.34765625, "gpu_load": 45,
             "temperature": 65, "version": "0.0.1.22", "current_job": None, "current_task": None,
             "supported_tasks": ["image"], "supported_workflows": ["*"],
             "hardware": {"gpu_arch": "Ada Lovelace"}, "update_state": {},
@@ -1126,6 +1126,9 @@ def test_worker_detail_page_loads():
         page.goto(f"{BASE_URL}/workers/n1")
         expect(page.locator("[data-testid='worker-detail-page']")).to_be_visible()
         expect(page.locator("[data-testid='worker-detail-page']")).to_contain_text("GPU-Node-1")
+        # Raw load like 1.34765625 is shown as a short percentage.
+        expect(page.locator("[data-testid='worker-detail-page']")).to_contain_text("1.3%")
+        expect(page.locator("[data-testid='worker-detail-page']")).not_to_contain_text("1.347")
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 

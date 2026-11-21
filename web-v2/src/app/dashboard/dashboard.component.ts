@@ -7,7 +7,7 @@ import { SystemApiService } from '../core/api/system.api';
 import { WorkersApiService } from '../core/api/workers.api';
 import { JobsApiService } from '../core/api/jobs.api';
 import { Worker, Job } from '../core/models';
-import { JOB_STATUS_GROUPS, roleLabel, workerStatusLabel, computeJobStatistics } from '../core/presentation';
+import { JOB_STATUS_GROUPS, percentLabel, roleLabel, workerStatusLabel, computeJobStatistics } from '../core/presentation';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
 import { RemoteState } from '../core/state/remote-state';
@@ -213,7 +213,7 @@ function usedOfCores(used?: number, total?: number): string | null {
                         {{ (workerStatusLabel(worker.status)) | t }}
                       </span>
                     </td>
-                    <td class="px-4 py-3">{{ (worker.gpu_load ?? worker.cpu_load == null ? 'Немає даних' : (worker.gpu_load ?? worker.cpu_load) + '%') | t }}{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
+                    <td class="px-4 py-3">{{ workerLoad(worker) | t }}{{ worker.temperature ? ' · ' + worker.temperature + '°C' : '' }}</td>
                     <td class="px-4 py-3">
                       <a routerLink="/workers" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">{{ 'Налаштування' | t }}</a>
                     </td>
@@ -355,6 +355,9 @@ export class DashboardComponent implements OnInit {
 
   roleLabel(role: string): string { return roleLabel(role); }
   workerStatusLabel(status: string): string { return workerStatusLabel(status); }
+  workerLoad(worker: { gpu_load?: number | null; cpu_load?: number | null }): string {
+    return percentLabel(worker.gpu_load ?? worker.cpu_load) ?? 'Немає даних';
+  }
   private i18n = inject(I18nService);
   metric(value: number | null): string { return value == null ? 'Немає даних' : value.toLocaleString(this.i18n.locale); }
 }

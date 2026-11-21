@@ -9,7 +9,7 @@ import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
 import { PolicyService } from '../core/services/policy.service';
 import { Worker, RegistrationTokenResponse, NodeActionPayload, WizardState } from '../core/models';
-import { roleLabel, runtimeStatusLabel, workerStatusLabel } from '../core/presentation';
+import { percentLabel, roleLabel, runtimeStatusLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 import { LoadingStateComponent } from '../shared/loading-state.component';
 import { ErrorStateComponent } from '../shared/error-state.component';
@@ -71,7 +71,7 @@ import { RemoteState } from '../core/state/remote-state';
                       {{ (runtimeStatusLabel(worker.runtime_status)) | t }}
                     </span>
                     @if (worker.last_self_test_at) {
-                      <div class="text-xs text-slate-400 mt-0.5">self-test: {{ worker.last_self_test_at }}</div>
+                      <div class="text-xs text-slate-400 mt-0.5">self-test: {{ worker.last_self_test_at | vertepDate }}</div>
                     }
                   </td>
                   <td class="px-4 py-3">
@@ -92,7 +92,9 @@ import { RemoteState } from '../core/state/remote-state';
                   <td class="px-4 py-3">{{ nodeLoad(worker) | t }}{{ worker.temperature != null ? ' · ' + worker.temperature + '°C' : '' }}</td>
                   <td class="px-4 py-3">
                     <button (click)="openSettings(worker)" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium mr-2">{{ 'Налаштування' | t }}</button>
-                    <button (click)="deleteWorker(worker)" class="text-red-600 hover:text-red-700 text-sm font-medium">{{ 'Видалити' | t }}</button>
+                    @if (worker.role !== 'core') {
+                      <button (click)="deleteWorker(worker)" class="text-red-600 hover:text-red-700 text-sm font-medium">{{ 'Видалити' | t }}</button>
+                    }
                   </td>
                 </tr>
               } @empty {
@@ -287,7 +289,7 @@ export class WorkersComponent implements OnInit {
   runtimeStatusLabel(runtimeStatus: string | undefined): string { return runtimeStatusLabel(runtimeStatus); }
   nodeLoad(worker: Worker): string {
     const value = worker.gpu_load ?? worker.cpu_load;
-    return value == null ? 'Немає даних' : `${value}%`;
+    return percentLabel(value) ?? 'Немає даних';
   }
 
   openWizard(): void {

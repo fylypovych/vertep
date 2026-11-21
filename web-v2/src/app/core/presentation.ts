@@ -38,6 +38,10 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export function statusLabel(status?: string): string { return STATUS_LABELS[status || ''] || status || 'Невідомо'; }
+/** Load as a short percentage: at most one decimal (1.34765625 -> "1.3%"). */
+export function percentLabel(value?: number | null): string | null {
+  return value == null ? null : `${Math.round(value * 10) / 10}%`;
+}
 export function roleLabel(role?: string): string { return ROLE_LABELS[role || ''] || role || 'Не визначено'; }
 export function inStatusGroup(status: string, group: keyof typeof JOB_STATUS_GROUPS): boolean {
   return (JOB_STATUS_GROUPS[group] as readonly string[]).includes(status);

@@ -8,7 +8,7 @@ import { timer, Subscription } from 'rxjs';
 import { WorkersApiService } from '../core/api/workers.api';
 import { ToastService } from '../core/services/toast.service';
 import { NodeDetail, NodeActionPayload, SelfTestResult, SystemRole, SystemRolesResponse } from '../core/models';
-import { roleLabel, workerStatusLabel } from '../core/presentation';
+import { percentLabel, roleLabel, workerStatusLabel } from '../core/presentation';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
 
 @Component({
@@ -48,8 +48,8 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
                 <div><dt class="text-slate-500">{{ 'Runtime версія' | t }}</dt><dd>{{ node()!.runtime_version || node()!.version || '—' }}</dd></div>
                 <div><dt class="text-slate-500">GPU</dt><dd>{{ node()!.gpu_name || '—' }}</dd></div>
                 <div><dt class="text-slate-500">VRAM</dt><dd>{{ node()!.vram_mb ? (node()!.vram_mb + ' MB') : '—' }}@if (node()!.free_vram_mb) { ({{ node()!.free_vram_mb }} MB вільно) }</div>
-                <div><dt class="text-slate-500">{{ 'CPU навантаження' | t }}</dt><dd>{{ node()!.cpu_load != null ? (node()!.cpu_load + '%') : '—' }}</dd></div>
-                <div><dt class="text-slate-500">{{ 'GPU навантаження' | t }}</dt><dd>{{ node()!.gpu_load != null ? (node()!.gpu_load + '%') : '—' }}</dd></div>
+                <div><dt class="text-slate-500">{{ 'CPU навантаження' | t }}</dt><dd>{{ percent(node()!.cpu_load) }}</dd></div>
+                <div><dt class="text-slate-500">{{ 'GPU навантаження' | t }}</dt><dd>{{ percent(node()!.gpu_load) }}</dd></div>
                 <div><dt class="text-slate-500">{{ 'Температура' | t }}</dt><dd>{{ node()!.temperature != null ? (node()!.temperature + '°C') : '—' }}</dd></div>
                 <div><dt class="text-slate-500">RAM</dt><dd>{{ node()!.ram_mb ? (node()!.ram_mb + ' MB') : '—' }}</dd></div>
                 <div><dt class="text-slate-500">{{ 'Диск вільно' | t }}</dt><dd>{{ node()!.disk_free_mb ? (node()!.disk_free_mb + ' MB') : '—' }}</dd></div>
@@ -218,6 +218,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
 
   roleName(role: string): string { return roleLabel(role); }
   nodeStatus(status: string): string { return workerStatusLabel(status); }
+  percent(value?: number | null): string { return percentLabel(value) ?? '—'; }
   capabilityBackends(): Array<{ capability: string; backend: string }> {
     return Object.entries(this.node()?.capability_backends || {}).map(([capability, backend]) => ({ capability, backend }));
   }
